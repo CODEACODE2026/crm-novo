@@ -29,5 +29,6 @@ function getJwtExpiresIn(config: ConfigService): JwtExpiresIn {
   ],
   controllers: [AuthController],
   providers: [AuthService],
+  exports: [AuthService],
 })
 export class AuthModule {}

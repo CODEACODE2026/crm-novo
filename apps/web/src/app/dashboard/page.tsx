@@ -1,22 +1,51 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   Bell,
   CreditCard,
   LayoutDashboard,
   MessageCircle,
+  Pencil,
+  Plus,
   RefreshCcw,
+  Search,
   Settings,
+  ToggleLeft,
   Users,
 } from 'lucide-react';
 import type { AuthenticatedUser } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
+import { ClientForm } from '../../components/clients/client-form';
+import { StatusBadge } from '../../components/clients/status-badge';
+import { PlanForm } from '../../components/plans/plan-form';
+import {
+  createClient,
+  createPlan,
+  deletePlan,
+  formatCurrency,
+  formatDate,
+  listClients,
+  listPlans,
+  updateClient,
+  updateClientStatus,
+  updatePlan,
+  type Client,
+  type ClientStatus,
+  type PaginatedClients,
+  type Plan,
+} from '../../lib/crm-api';
+
+type View = 'dashboard' | 'clients' | 'plans';
 
 const navItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, active: true },
-  { label: 'Clientes', icon: Users },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'clients', label: 'Clientes', icon: Users },
+  { id: 'plans', label: 'Planos', icon: ToggleLeft },
+] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
+
+const futureNavItems = [
   { label: 'Renovacoes', icon: RefreshCcw },
   { label: 'Financeiro', icon: CreditCard },
   { label: 'Cobrancas', icon: Bell },
@@ -25,16 +54,65 @@ const navItems = [
   { label: 'Configuracoes', icon: Settings },
 ];
 
-const metrics = [
-  { label: 'Clientes ativos', value: '-' },
-  { label: 'A receber', value: '-' },
-  { label: 'Vencimentos hoje', value: '-' },
-  { label: 'Pendentes WhatsApp', value: '-' },
-];
-
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loadingSession, setLoadingSession] = useState(true);
+  const [view, setView] = useState<View>('clients');
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [clientsPayload, setClientsPayload] = useState<PaginatedClients | null>(null);
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
+  const [clientFormOpen, setClientFormOpen] = useState(false);
+  const [planFormOpen, setPlanFormOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState<ClientStatus | ''>('');
+  const [planId, setPlanId] = useState('');
+  const [statusReason, setStatusReason] = useState('');
+  const [error, setError] = useState('');
+  const [dataLoading, setDataLoading] = useState(false);
+
+  const clients = clientsPayload?.items ?? [];
+
+  const metrics = useMemo(() => {
+    const active = clients.filter((client) => client.status === 'ATIVO').length;
+    const inactive = clients.filter((client) => client.status === 'INATIVO').length;
+    const cancelled = clients.filter((client) => client.status === 'CANCELADO').length;
+
+    return [
+      { label: 'Clientes filtrados', value: String(clientsPayload?.pagination.total ?? 0) },
+      { label: 'Ativos nesta lista', value: String(active) },
+      { label: 'Inativos nesta lista', value: String(inactive) },
+      { label: 'Cancelados nesta lista', value: String(cancelled) },
+    ];
+  }, [clients, clientsPayload?.pagination.total]);
+
+  const loadData = useCallback(async () => {
+    setDataLoading(true);
+    setError('');
+
+    try {
+      const [nextPlans, nextClients] = await Promise.all([
+        listPlans(),
+        listClients({ search: search.trim() || undefined, status, planId: planId || undefined }),
+      ]);
+
+      setPlans(nextPlans);
+      setClientsPayload(nextClients);
+      setSelectedClient((current) => {
+        if (!current) return nextClients.items[0] ?? null;
+        return (
+          nextClients.items.find((client) => client.id === current.id) ??
+          nextClients.items[0] ??
+          null
+        );
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar clientes e planos.');
+    } finally {
+      setDataLoading(false);
+    }
+  }, [planId, search, status]);
 
   useEffect(() => {
     async function loadSession() {
@@ -51,14 +129,36 @@ export default function DashboardPage() {
       } catch {
         window.location.assign('/login');
       } finally {
-        setLoading(false);
+        setLoadingSession(false);
       }
     }
 
     void loadSession();
   }, []);
 
-  if (loading) {
+  useEffect(() => {
+    if (!loadingSession && user) {
+      void loadData();
+    }
+  }, [loadData, loadingSession, user]);
+
+  async function reloadAfterMutation() {
+    await loadData();
+    setClientFormOpen(false);
+    setPlanFormOpen(false);
+    setEditingClient(null);
+    setEditingPlan(null);
+  }
+
+  async function handleStatusChange(nextStatus: ClientStatus) {
+    if (!selectedClient) return;
+
+    await updateClientStatus(selectedClient.id, nextStatus, statusReason.trim() || undefined);
+    setStatusReason('');
+    await loadData();
+  }
+
+  if (loadingSession) {
     return (
       <main className="login-page">
         <section className="login-panel">Carregando area administrativa...</section>
@@ -77,7 +177,21 @@ export default function DashboardPage() {
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
-              <span className={`nav-item ${item.active ? 'active' : ''}`} key={item.label}>
+              <button
+                className={`nav-item ${view === item.id ? 'active' : ''}`}
+                key={item.id}
+                type="button"
+                onClick={() => setView(item.id)}
+              >
+                <Icon aria-hidden="true" size={18} />
+                {item.label}
+              </button>
+            );
+          })}
+          {futureNavItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <span className="nav-item muted" key={item.label}>
                 <Icon aria-hidden="true" size={18} />
                 {item.label}
               </span>
@@ -88,35 +202,413 @@ export default function DashboardPage() {
 
       <main className="main-area">
         <header className="topbar">
-          <h1>Dashboard</h1>
+          <h1>{view === 'plans' ? 'Planos' : view === 'dashboard' ? 'Dashboard' : 'Clientes'}</h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
 
         <section className="content">
-          <div className="metric-grid">
-            {metrics.map((metric) => (
-              <article className="metric-card" key={metric.label}>
-                <span className="metric-label">{metric.label}</span>
-                <strong className="metric-value">{metric.value}</strong>
-              </article>
-            ))}
-          </div>
-
-          <div className="status-row">
-            <span className="status-pill">Fundacao tecnica</span>
-            <span className="status-pill">Autenticacao inicial</span>
-            <span className="status-pill">Layout administrativo</span>
-          </div>
-
-          <section className="panel">
-            <h2>Base operacional pronta para evoluir</h2>
-            <p>
-              Esta tela e estrutural. Dados reais de clientes, financeiro, cobrancas e WhatsApp
-              entram nas proximas Sprints homologadas.
-            </p>
-          </section>
+          {error ? <div className="notice danger">{error}</div> : null}
+          {view === 'dashboard' ? (
+            <DashboardSummary dataLoading={dataLoading} metrics={metrics} />
+          ) : null}
+          {view === 'clients' ? (
+            <ClientsView
+              clientFormOpen={clientFormOpen}
+              clients={clients}
+              dataLoading={dataLoading}
+              editingClient={editingClient}
+              onApplyFilters={() => void loadData()}
+              onCreate={async (payload) => {
+                const client = await createClient(payload);
+                setSelectedClient(client);
+                await reloadAfterMutation();
+              }}
+              onEdit={(client) => {
+                setEditingClient(client);
+                setClientFormOpen(true);
+              }}
+              onNew={() => {
+                setEditingClient(null);
+                setClientFormOpen((open) => !open);
+              }}
+              onSelect={setSelectedClient}
+              onStatusChange={(nextStatus) => void handleStatusChange(nextStatus)}
+              onUpdate={async (payload) => {
+                if (!editingClient) return;
+                const client = await updateClient(editingClient.id, payload);
+                setSelectedClient(client);
+                await reloadAfterMutation();
+              }}
+              planId={planId}
+              plans={plans}
+              search={search}
+              selectedClient={selectedClient}
+              setPlanId={setPlanId}
+              setSearch={setSearch}
+              setStatus={setStatus}
+              setStatusReason={setStatusReason}
+              status={status}
+              statusReason={statusReason}
+            />
+          ) : null}
+          {view === 'plans' ? (
+            <PlansView
+              editingPlan={editingPlan}
+              onCreate={async (payload) => {
+                await createPlan(payload);
+                await reloadAfterMutation();
+              }}
+              onDelete={async (id) => {
+                await deletePlan(id);
+                await reloadAfterMutation();
+              }}
+              onEdit={(plan) => {
+                setEditingPlan(plan);
+                setPlanFormOpen(true);
+              }}
+              onNew={() => {
+                setEditingPlan(null);
+                setPlanFormOpen((open) => !open);
+              }}
+              onUpdate={async (payload) => {
+                if (!editingPlan) return;
+                await updatePlan(editingPlan.id, payload);
+                await reloadAfterMutation();
+              }}
+              planFormOpen={planFormOpen}
+              plans={plans}
+            />
+          ) : null}
         </section>
       </main>
     </div>
+  );
+}
+
+function DashboardSummary({
+  dataLoading,
+  metrics,
+}: {
+  dataLoading: boolean;
+  metrics: Array<{ label: string; value: string }>;
+}) {
+  return (
+    <>
+      <div className="metric-grid">
+        {metrics.map((metric) => (
+          <article className="metric-card" key={metric.label}>
+            <span className="metric-label">{metric.label}</span>
+            <strong className="metric-value">{dataLoading ? '-' : metric.value}</strong>
+          </article>
+        ))}
+      </div>
+      <section className="panel">
+        <h2>Modulo homologavel da Sprint 2</h2>
+        <p>Clientes, planos, filtros, status com justificativa e timeline operacional.</p>
+      </section>
+    </>
+  );
+}
+
+function ClientsView({
+  clientFormOpen,
+  clients,
+  dataLoading,
+  editingClient,
+  onApplyFilters,
+  onCreate,
+  onEdit,
+  onNew,
+  onSelect,
+  onStatusChange,
+  onUpdate,
+  planId,
+  plans,
+  search,
+  selectedClient,
+  setPlanId,
+  setSearch,
+  setStatus,
+  setStatusReason,
+  status,
+  statusReason,
+}: {
+  clientFormOpen: boolean;
+  clients: Client[];
+  dataLoading: boolean;
+  editingClient: Client | null;
+  onApplyFilters: () => void;
+  onCreate: Parameters<typeof ClientForm>[0]['onSubmit'];
+  onEdit: (client: Client) => void;
+  onNew: () => void;
+  onSelect: (client: Client) => void;
+  onStatusChange: (status: ClientStatus) => void;
+  onUpdate: Parameters<typeof ClientForm>[0]['onSubmit'];
+  planId: string;
+  plans: Plan[];
+  search: string;
+  selectedClient: Client | null;
+  setPlanId: (value: string) => void;
+  setSearch: (value: string) => void;
+  setStatus: (value: ClientStatus | '') => void;
+  setStatusReason: (value: string) => void;
+  status: ClientStatus | '';
+  statusReason: string;
+}) {
+  return (
+    <div className="workspace-grid">
+      <section className="workspace-main">
+        <div className="toolbar">
+          <div className="search-row">
+            <Search aria-hidden="true" size={18} />
+            <input
+              placeholder="Buscar por nome, referencia ou telefone"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as ClientStatus | '')}
+          >
+            <option value="">Todos os status</option>
+            <option value="ATIVO">Ativo</option>
+            <option value="INATIVO">Inativo</option>
+            <option value="CANCELADO">Cancelado</option>
+          </select>
+          <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
+            <option value="">Todos os planos</option>
+            {plans.map((plan) => (
+              <option key={plan.id} value={plan.id}>
+                {plan.name}
+              </option>
+            ))}
+          </select>
+          <button className="secondary-button" type="button" onClick={onApplyFilters}>
+            Aplicar
+          </button>
+          <button className="primary-button" type="button" onClick={onNew}>
+            <Plus aria-hidden="true" size={17} />
+            Cliente
+          </button>
+        </div>
+
+        {clientFormOpen ? (
+          <ClientForm
+            client={editingClient ?? undefined}
+            plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
+            submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
+            onSubmit={editingClient ? onUpdate : onCreate}
+          />
+        ) : null}
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Referencia</th>
+                <th>Plano</th>
+                <th>Vencimento</th>
+                <th>Status</th>
+                <th>Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clients.map((client) => (
+                <tr
+                  className={selectedClient?.id === client.id ? 'selected-row' : ''}
+                  key={client.id}
+                  onClick={() => onSelect(client)}
+                >
+                  <td>
+                    <strong>{client.name}</strong>
+                    <span>{client.phoneNormalized}</span>
+                  </td>
+                  <td>{client.reference}</td>
+                  <td>{client.plan.name}</td>
+                  <td>{formatDate(client.dueDate)}</td>
+                  <td>
+                    <StatusBadge status={client.status} />
+                  </td>
+                  <td>{formatCurrency(client.recurringValue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!clients.length ? (
+            <div className="empty-state">
+              {dataLoading ? 'Carregando...' : 'Nenhum cliente encontrado.'}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <aside className="detail-panel">
+        {selectedClient ? (
+          <>
+            <div className="detail-header">
+              <div>
+                <h2>{selectedClient.name}</h2>
+                <span>{selectedClient.reference}</span>
+              </div>
+              <button
+                className="icon-button"
+                title="Editar cliente"
+                type="button"
+                onClick={() => onEdit(selectedClient)}
+              >
+                <Pencil aria-hidden="true" size={17} />
+              </button>
+            </div>
+            <dl className="detail-list">
+              <div>
+                <dt>WhatsApp</dt>
+                <dd>{selectedClient.phone}</dd>
+              </div>
+              <div>
+                <dt>E-mail</dt>
+                <dd>{selectedClient.email ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>Plano</dt>
+                <dd>{selectedClient.plan.name}</dd>
+              </div>
+              <div>
+                <dt>Recorrencia</dt>
+                <dd>{formatCurrency(selectedClient.recurringValue)}</dd>
+              </div>
+              <div>
+                <dt>Cobranca</dt>
+                <dd>{selectedClient.billingNoticeDays} dias antes</dd>
+              </div>
+            </dl>
+
+            <div className="status-actions">
+              <textarea
+                placeholder="Justificativa para inativar ou cancelar"
+                value={statusReason}
+                onChange={(event) => setStatusReason(event.target.value)}
+              />
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => onStatusChange('ATIVO')}
+                >
+                  Ativar
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => onStatusChange('INATIVO')}
+                >
+                  Inativar
+                </button>
+                <button
+                  className="danger-button"
+                  type="button"
+                  onClick={() => onStatusChange('CANCELADO')}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+
+            <h3>Timeline</h3>
+            <ol className="timeline">
+              {(selectedClient.events ?? []).map((event) => (
+                <li key={event.id}>
+                  <strong>{event.title}</strong>
+                  <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
+                  {event.description ? <p>{event.description}</p> : null}
+                </li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          <div className="empty-state">Selecione um cliente para visualizar detalhes.</div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function PlansView({
+  editingPlan,
+  onCreate,
+  onDelete,
+  onEdit,
+  onNew,
+  onUpdate,
+  planFormOpen,
+  plans,
+}: {
+  editingPlan: Plan | null;
+  onCreate: Parameters<typeof PlanForm>[0]['onSubmit'];
+  onDelete: (id: string) => Promise<void>;
+  onEdit: (plan: Plan) => void;
+  onNew: () => void;
+  onUpdate: Parameters<typeof PlanForm>[0]['onSubmit'];
+  planFormOpen: boolean;
+  plans: Plan[];
+}) {
+  return (
+    <section className="workspace-main">
+      <div className="toolbar">
+        <button className="primary-button" type="button" onClick={onNew}>
+          <Plus aria-hidden="true" size={17} />
+          Plano
+        </button>
+      </div>
+
+      {planFormOpen ? (
+        <PlanForm
+          plan={editingPlan ?? undefined}
+          submitLabel={editingPlan ? 'Atualizar plano' : 'Criar plano'}
+          onSubmit={editingPlan ? onUpdate : onCreate}
+        />
+      ) : null}
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Plano</th>
+              <th>Duracao</th>
+              <th>Valor padrao</th>
+              <th>Status</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plans.map((plan) => (
+              <tr key={plan.id}>
+                <td>
+                  <strong>{plan.name}</strong>
+                </td>
+                <td>{plan.durationMonths} meses</td>
+                <td>{formatCurrency(plan.defaultValue)}</td>
+                <td>{plan.active ? 'Ativo' : 'Inativo'}</td>
+                <td>
+                  <div className="button-row">
+                    <button className="secondary-button" type="button" onClick={() => onEdit(plan)}>
+                      Editar
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void onDelete(plan.id)}
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

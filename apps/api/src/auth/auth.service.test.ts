@@ -9,11 +9,7 @@ describe('AuthService cookie policy', () => {
       cookie: (_name: string, _value: string, options: unknown) => cookies.push(options),
     } as unknown as Response;
 
-    const service = new AuthService(
-      {} as never,
-      {} as never,
-      { get: () => 'production' } as never,
-    );
+    const service = new AuthService({} as never, {} as never, { get: () => 'production' } as never);
 
     service.setAuthCookie(response, 'token');
 

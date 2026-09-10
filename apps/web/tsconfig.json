@@ -5,11 +5,7 @@
     "incremental": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-      "ES2022"
-    ],
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
@@ -19,10 +15,7 @@
         "name": "next"
       }
     ],
-    "types": [
-      "node",
-      "vitest"
-    ]
+    "types": ["node", "vitest"]
   },
   "include": [
     "next-env.d.ts",
@@ -31,7 +24,5 @@
     "src/**/*.tsx",
     ".next/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules"
-  ]
+  "exclude": ["node_modules"]
 }

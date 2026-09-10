@@ -6,6 +6,7 @@ import { ClientsModule } from './clients/clients.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
+import { RenewalsModule } from './renewals/renewals.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -17,6 +18,7 @@ import { UsersModule } from './users/users.module';
     AuthModule,
     PlansModule,
     ClientsModule,
+    RenewalsModule,
     HealthModule,
   ],
 })

@@ -28,11 +28,13 @@ export interface Client {
   plan: Plan;
   events?: ClientEvent[];
   statusHistory?: ClientStatusHistory[];
+  renewals?: Renewal[];
+  receivables?: Receivable[];
 }
 
 export interface ClientEvent {
   id: string;
-  type: 'CLIENT_CREATED' | 'CLIENT_UPDATED' | 'STATUS_CHANGED';
+  type: 'CLIENT_CREATED' | 'CLIENT_UPDATED' | 'STATUS_CHANGED' | 'CLIENT_RENEWED';
   title: string;
   description: string | null;
   createdAt: string;
@@ -44,6 +46,37 @@ export interface ClientStatusHistory {
   newStatus: ClientStatus;
   reason: string | null;
   createdAt: string;
+}
+
+export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
+export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
+
+export interface Renewal {
+  id: string;
+  clientId: string;
+  planId: string;
+  planName: string;
+  durationMonths: number;
+  previousDueDate: string;
+  newDueDate: string;
+  amount: string;
+  createdAt: string;
+  receivable?: Receivable | null;
+}
+
+export interface Receivable {
+  id: string;
+  clientId: string;
+  renewalId: string;
+  description: string;
+  amount: string;
+  dueDate: string;
+  status: ReceivableStatus;
+  displayStatus: ReceivableDisplayStatus;
+  paidAt: string | null;
+  canceledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PaginatedClients {
@@ -79,6 +112,28 @@ export interface ClientListFilters {
   search?: string | undefined;
   status?: ClientStatus | '' | undefined;
   planId?: string | undefined;
+}
+
+export interface RenewalPreview {
+  clientId: string;
+  clientName: string;
+  clientStatus: ClientStatus;
+  currentPlan: Pick<Plan, 'id' | 'name' | 'durationMonths'>;
+  selectedPlan: Pick<Plan, 'id' | 'name' | 'durationMonths'>;
+  planChanged: boolean;
+  amount: string;
+  previousDueDate: string;
+  newDueDate: string;
+  billingAnchorDay: number;
+  receivableDescription: string;
+}
+
+export interface RenewalResult {
+  idempotentReplay: boolean;
+  client: Client;
+  renewal: Renewal;
+  receivable: Receivable;
+  newDueDate: string;
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -171,5 +226,22 @@ export function updateClientStatus(id: string, status: ClientStatus, reason?: st
   return apiFetch<Client>(`/clients/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status, ...(reason ? { reason } : {}) }),
+  });
+}
+
+export function previewRenewal(clientId: string, payload: { planId: string; amount: number }) {
+  return apiFetch<RenewalPreview>(`/clients/${clientId}/renewals/preview`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmRenewal(
+  clientId: string,
+  payload: { planId: string; amount: number; idempotencyKey: string },
+) {
+  return apiFetch<RenewalResult>(`/clients/${clientId}/renewals`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }

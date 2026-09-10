@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   Bell,
+  CalendarClock,
   CreditCard,
   LayoutDashboard,
   MessageCircle,
@@ -14,6 +15,7 @@ import {
   Settings,
   ToggleLeft,
   Users,
+  X,
 } from 'lucide-react';
 import type { AuthenticatedUser } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
@@ -21,13 +23,16 @@ import { ClientForm } from '../../components/clients/client-form';
 import { StatusBadge } from '../../components/clients/status-badge';
 import { PlanForm } from '../../components/plans/plan-form';
 import {
+  confirmRenewal,
   createClient,
   createPlan,
   deletePlan,
   formatCurrency,
   formatDate,
+  getClient,
   listClients,
   listPlans,
+  previewRenewal,
   updateClient,
   updateClientStatus,
   updatePlan,
@@ -35,6 +40,7 @@ import {
   type ClientStatus,
   type PaginatedClients,
   type Plan,
+  type RenewalPreview,
 } from '../../lib/crm-api';
 
 type View = 'dashboard' | 'clients' | 'plans';
@@ -65,6 +71,8 @@ export default function DashboardPage() {
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [clientFormOpen, setClientFormOpen] = useState(false);
   const [planFormOpen, setPlanFormOpen] = useState(false);
+  const [renewalClient, setRenewalClient] = useState<Client | null>(null);
+  const [renewalNotice, setRenewalNotice] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ClientStatus | ''>('');
   const [planId, setPlanId] = useState('');
@@ -158,6 +166,20 @@ export default function DashboardPage() {
     await loadData();
   }
 
+  async function handleRenewalConfirm(
+    client: Client,
+    payload: { planId: string; amount: number; idempotencyKey: string },
+  ) {
+    const result = await confirmRenewal(client.id, payload);
+    await loadData();
+    const detailed = await getClient(client.id);
+    setSelectedClient(detailed);
+    setRenewalClient(null);
+    setRenewalNotice(
+      `Cliente renovado com sucesso. Novo vencimento: ${formatDate(result.newDueDate)}. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
+    );
+  }
+
   if (loadingSession) {
     return (
       <main className="login-page">
@@ -231,6 +253,7 @@ export default function DashboardPage() {
                 setEditingClient(null);
                 setClientFormOpen((open) => !open);
               }}
+              onRenew={setRenewalClient}
               onSelect={setSelectedClient}
               onStatusChange={(nextStatus) => void handleStatusChange(nextStatus)}
               onUpdate={async (payload) => {
@@ -249,6 +272,7 @@ export default function DashboardPage() {
               setStatusReason={setStatusReason}
               status={status}
               statusReason={statusReason}
+              renewalNotice={renewalNotice}
             />
           ) : null}
           {view === 'plans' ? (
@@ -280,6 +304,14 @@ export default function DashboardPage() {
             />
           ) : null}
         </section>
+        {renewalClient ? (
+          <RenewalModal
+            client={renewalClient}
+            plans={plans.filter((plan) => plan.active || plan.id === renewalClient.planId)}
+            onClose={() => setRenewalClient(null)}
+            onConfirm={async (payload) => handleRenewalConfirm(renewalClient, payload)}
+          />
+        ) : null}
       </main>
     </div>
   );
@@ -319,6 +351,7 @@ function ClientsView({
   onCreate,
   onEdit,
   onNew,
+  onRenew,
   onSelect,
   onStatusChange,
   onUpdate,
@@ -332,6 +365,7 @@ function ClientsView({
   setStatusReason,
   status,
   statusReason,
+  renewalNotice,
 }: {
   clientFormOpen: boolean;
   clients: Client[];
@@ -341,6 +375,7 @@ function ClientsView({
   onCreate: Parameters<typeof ClientForm>[0]['onSubmit'];
   onEdit: (client: Client) => void;
   onNew: () => void;
+  onRenew: (client: Client) => void;
   onSelect: (client: Client) => void;
   onStatusChange: (status: ClientStatus) => void;
   onUpdate: Parameters<typeof ClientForm>[0]['onSubmit'];
@@ -354,10 +389,14 @@ function ClientsView({
   setStatusReason: (value: string) => void;
   status: ClientStatus | '';
   statusReason: string;
+  renewalNotice: string;
 }) {
+  const [detailTab, setDetailTab] = useState<'timeline' | 'renewals' | 'receivables'>('timeline');
+
   return (
     <div className="workspace-grid">
       <section className="workspace-main">
+        {renewalNotice ? <div className="notice success">{renewalNotice}</div> : null}
         <div className="toolbar">
           <div className="search-row">
             <Search aria-hidden="true" size={18} />
@@ -412,6 +451,7 @@ function ClientsView({
                 <th>Vencimento</th>
                 <th>Status</th>
                 <th>Valor</th>
+                <th>Acoes</th>
               </tr>
             </thead>
             <tbody>
@@ -432,6 +472,19 @@ function ClientsView({
                     <StatusBadge status={client.status} />
                   </td>
                   <td>{formatCurrency(client.recurringValue)}</td>
+                  <td>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRenew(client);
+                      }}
+                    >
+                      <CalendarClock aria-hidden="true" size={16} />
+                      Renovar
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -459,6 +512,16 @@ function ClientsView({
                 onClick={() => onEdit(selectedClient)}
               >
                 <Pencil aria-hidden="true" size={17} />
+              </button>
+            </div>
+            <div className="button-row detail-actions">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => onRenew(selectedClient)}
+              >
+                <CalendarClock aria-hidden="true" size={16} />
+                Renovar
               </button>
             </div>
             <dl className="detail-list">
@@ -515,21 +578,245 @@ function ClientsView({
               </div>
             </div>
 
-            <h3>Timeline</h3>
-            <ol className="timeline">
-              {(selectedClient.events ?? []).map((event) => (
-                <li key={event.id}>
-                  <strong>{event.title}</strong>
-                  <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
-                  {event.description ? <p>{event.description}</p> : null}
-                </li>
-              ))}
-            </ol>
+            <div className="tabs">
+              <button
+                className={detailTab === 'timeline' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('timeline')}
+              >
+                Timeline
+              </button>
+              <button
+                className={detailTab === 'renewals' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('renewals')}
+              >
+                Renovacoes
+              </button>
+              <button
+                className={detailTab === 'receivables' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('receivables')}
+              >
+                Financeiro
+              </button>
+            </div>
+
+            {detailTab === 'timeline' ? (
+              <ol className="timeline">
+                {(selectedClient.events ?? []).map((event) => (
+                  <li key={event.id}>
+                    <strong>{event.title}</strong>
+                    <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
+                    {event.description ? <p>{event.description}</p> : null}
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+
+            {detailTab === 'renewals' ? (
+              <div className="mini-list">
+                {(selectedClient.renewals ?? []).map((renewal) => (
+                  <article key={renewal.id}>
+                    <strong>{renewal.planName}</strong>
+                    <span>{new Date(renewal.createdAt).toLocaleString('pt-BR')}</span>
+                    <p>
+                      {formatCurrency(renewal.amount)} | {formatDate(renewal.previousDueDate)} para{' '}
+                      {formatDate(renewal.newDueDate)}
+                    </p>
+                  </article>
+                ))}
+                {!selectedClient.renewals?.length ? (
+                  <div className="empty-state">Sem renovacoes.</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {detailTab === 'receivables' ? (
+              <div className="mini-list">
+                {(selectedClient.receivables ?? []).map((receivable) => (
+                  <article key={receivable.id}>
+                    <strong>{receivable.description}</strong>
+                    <span>{formatDate(receivable.dueDate)}</span>
+                    <p>
+                      {formatCurrency(receivable.amount)} | {receivable.displayStatus}
+                    </p>
+                  </article>
+                ))}
+                {!selectedClient.receivables?.length ? (
+                  <div className="empty-state">Sem contas a receber.</div>
+                ) : null}
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="empty-state">Selecione um cliente para visualizar detalhes.</div>
         )}
       </aside>
+    </div>
+  );
+}
+
+function RenewalModal({
+  client,
+  plans,
+  onClose,
+  onConfirm,
+}: {
+  client: Client;
+  plans: Plan[];
+  onClose: () => void;
+  onConfirm: (payload: { planId: string; amount: number; idempotencyKey: string }) => Promise<void>;
+}) {
+  const [planId, setPlanId] = useState(client.planId);
+  const [amount, setAmount] = useState(client.recurringValue);
+  const [preview, setPreview] = useState<RenewalPreview | null>(null);
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    const parsedAmount = Number(amount);
+
+    if (!planId || Number.isNaN(parsedAmount)) {
+      setPreview(null);
+      return;
+    }
+
+    async function loadPreview() {
+      setLoadingPreview(true);
+      setError('');
+
+      try {
+        const nextPreview = await previewRenewal(client.id, { planId, amount: parsedAmount });
+        if (active) setPreview(nextPreview);
+      } catch (err) {
+        if (active) {
+          setPreview(null);
+          setError(err instanceof Error ? err.message : 'Nao foi possivel calcular a renovacao.');
+        }
+      } finally {
+        if (active) setLoadingPreview(false);
+      }
+    }
+
+    void loadPreview();
+
+    return () => {
+      active = false;
+    };
+  }, [amount, client.id, planId]);
+
+  async function handleConfirm() {
+    setError('');
+    setSaving(true);
+
+    try {
+      await onConfirm({ planId, amount: Number(amount), idempotencyKey });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel confirmar a renovacao.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="renewal-title">
+        <header className="modal-header">
+          <h2 id="renewal-title">Renovar cliente</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <dl className="detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{client.name}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{client.status}</dd>
+          </div>
+          <div>
+            <dt>Plano atual</dt>
+            <dd>{client.plan.name}</dd>
+          </div>
+          <div>
+            <dt>Vencimento atual</dt>
+            <dd>{formatDate(client.dueDate)}</dd>
+          </div>
+          <div>
+            <dt>Valor atual</dt>
+            <dd>{formatCurrency(client.recurringValue)}</dd>
+          </div>
+        </dl>
+
+        {client.status === 'CANCELADO' ? (
+          <div className="notice warning">
+            Este cliente está CANCELADO. Ao confirmar a renovação, ele será reativado e voltará para
+            o status ATIVO.
+          </div>
+        ) : null}
+
+        <div className="form-grid">
+          <label className="field">
+            <span>Plano</span>
+            <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
+              {plans.map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Valor</span>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <section className="preview-box">
+          {loadingPreview ? <span>Calculando...</span> : null}
+          {preview ? (
+            <>
+              <strong>Novo vencimento: {formatDate(preview.newDueDate)}</strong>
+              <span>Sera criada uma conta a receber de {formatCurrency(preview.amount)}.</span>
+              {preview.planChanged ? (
+                <span>
+                  Plano alterado de {preview.currentPlan.name} para {preview.selectedPlan.name}.
+                </span>
+              ) : null}
+            </>
+          ) : null}
+        </section>
+
+        <div className="form-actions">
+          <span className="error-message">{error}</span>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              className="primary-button"
+              disabled={saving || !preview}
+              type="button"
+              onClick={() => void handleConfirm()}
+            >
+              {saving ? 'Confirmando...' : 'Confirmar renovacao'}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

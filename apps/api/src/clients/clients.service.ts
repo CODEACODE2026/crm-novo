@@ -8,11 +8,12 @@ import {
 import { ClientStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PlansService } from '../plans/plans.service';
+import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CreateClientDto } from './dto/create-client.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientStatusDto } from './dto/update-client-status.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
-import { formatBusinessDate, parseBusinessDate } from './utils/business-date';
+import { formatBusinessDate, getBusinessDateDay, parseBusinessDate } from './utils/business-date';
 import { normalizeBrazilPhone } from './utils/phone-normalizer';
 
 const pageSizeLimit = 100;
@@ -22,6 +23,8 @@ const allowedSortDirections = ['asc', 'desc'] as const;
 type ClientWithRelations = Prisma.ClientGetPayload<{
   include: {
     plan: true;
+    renewals: { orderBy: { createdAt: 'desc' }; include: { receivable: true } };
+    receivables: { orderBy: { createdAt: 'desc' } };
     statusHistory: { orderBy: { createdAt: 'desc' } };
     events: { orderBy: { createdAt: 'desc' } };
   };
@@ -45,6 +48,8 @@ export class ClientsService {
         where,
         include: {
           plan: true,
+          renewals: { orderBy: { createdAt: 'desc' }, include: { receivable: true } },
+          receivables: { orderBy: { createdAt: 'desc' } },
           statusHistory: { orderBy: { createdAt: 'desc' } },
           events: { orderBy: { createdAt: 'desc' } },
         },
@@ -71,6 +76,8 @@ export class ClientsService {
       where: { id },
       include: {
         plan: true,
+        renewals: { orderBy: { createdAt: 'desc' }, include: { receivable: true } },
+        receivables: { orderBy: { createdAt: 'desc' } },
         statusHistory: { orderBy: { createdAt: 'desc' } },
         events: { orderBy: { createdAt: 'desc' } },
       },
@@ -101,6 +108,7 @@ export class ClientsService {
             planId: dto.planId,
             recurringValue: dto.recurringValue,
             dueDate,
+            billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
             notes: this.optionalTrim(dto.notes),
           },
@@ -157,7 +165,9 @@ export class ClientsService {
     }
 
     if (dto.dueDate !== undefined) {
-      data.dueDate = parseBusinessDate(dto.dueDate);
+      const dueDate = parseBusinessDate(dto.dueDate);
+      data.dueDate = dueDate;
+      data.billingAnchorDay = getBusinessDateDay(dueDate);
     }
 
     if (dto.billingNoticeDays !== undefined) {
@@ -301,6 +311,33 @@ export class ClientsService {
         ...client.plan,
         defaultValue: client.plan.defaultValue.toString(),
       },
+      ...('renewals' in client
+        ? {
+            renewals: client.renewals.map((renewal) => ({
+              ...renewal,
+              previousDueDate: formatBusinessDate(renewal.previousDueDate),
+              newDueDate: formatBusinessDate(renewal.newDueDate),
+              amount: renewal.amount.toString(),
+              receivable: renewal.receivable
+                ? {
+                    ...renewal.receivable,
+                    amount: renewal.receivable.amount.toString(),
+                    dueDate: formatBusinessDate(renewal.receivable.dueDate),
+                    displayStatus: getReceivableDisplayStatus(
+                      renewal.receivable.status,
+                      renewal.receivable.dueDate,
+                    ),
+                  }
+                : null,
+            })),
+            receivables: client.receivables.map((receivable) => ({
+              ...receivable,
+              amount: receivable.amount.toString(),
+              dueDate: formatBusinessDate(receivable.dueDate),
+              displayStatus: getReceivableDisplayStatus(receivable.status, receivable.dueDate),
+            })),
+          }
+        : {}),
     };
   }
 

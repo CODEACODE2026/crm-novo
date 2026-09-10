@@ -6,6 +6,7 @@ import {
   Bell,
   CalendarClock,
   CreditCard,
+  DollarSign,
   LayoutDashboard,
   MessageCircle,
   Pencil,
@@ -23,37 +24,57 @@ import { ClientForm } from '../../components/clients/client-form';
 import { StatusBadge } from '../../components/clients/status-badge';
 import { PlanForm } from '../../components/plans/plan-form';
 import {
+  cancelReceivable,
   confirmRenewal,
   createClient,
+  createFinancialCategory,
+  createManualEntry,
+  createManualExpense,
   createPlan,
   deletePlan,
+  deleteFinancialCategory,
+  deleteFinancialTransaction,
   formatCurrency,
   formatDate,
   getClient,
+  getFinancialSummary,
+  listFinancialCategories,
   listClients,
+  listFinancialTransactions,
   listPlans,
+  listReceivables,
+  payReceivable,
   previewRenewal,
   updateClient,
+  updateFinancialCategory,
+  updateFinancialTransaction,
   updateClientStatus,
   updatePlan,
   type Client,
   type ClientStatus,
+  type FinancialCategory,
+  type FinancialSummary,
+  type FinancialTransaction,
+  type FinancialTransactionPayload,
+  type FinancialTransactionType,
   type PaginatedClients,
+  type Receivable,
+  type ReceivableDisplayStatus,
   type Plan,
   type RenewalPreview,
 } from '../../lib/crm-api';
 
-type View = 'dashboard' | 'clients' | 'plans';
+type View = 'dashboard' | 'clients' | 'finance' | 'plans';
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'clients', label: 'Clientes', icon: Users },
+  { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
 const futureNavItems = [
   { label: 'Renovacoes', icon: RefreshCcw },
-  { label: 'Financeiro', icon: CreditCard },
   { label: 'Cobrancas', icon: Bell },
   { label: 'WhatsApp', icon: MessageCircle },
   { label: 'Relatorios', icon: BarChart3 },
@@ -224,7 +245,15 @@ export default function DashboardPage() {
 
       <main className="main-area">
         <header className="topbar">
-          <h1>{view === 'plans' ? 'Planos' : view === 'dashboard' ? 'Dashboard' : 'Clientes'}</h1>
+          <h1>
+            {view === 'plans'
+              ? 'Planos'
+              : view === 'dashboard'
+                ? 'Dashboard'
+                : view === 'finance'
+                  ? 'Financeiro'
+                  : 'Clientes'}
+          </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
 
@@ -275,6 +304,7 @@ export default function DashboardPage() {
               renewalNotice={renewalNotice}
             />
           ) : null}
+          {view === 'finance' ? <FinanceView clients={clients} /> : null}
           {view === 'plans' ? (
             <PlansView
               editingPlan={editingPlan}
@@ -813,6 +843,748 @@ function RenewalModal({
               onClick={() => void handleConfirm()}
             >
               {saving ? 'Confirmando...' : 'Confirmar renovacao'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function FinanceView({ clients }: { clients: Client[] }) {
+  const [tab, setTab] = useState<'summary' | 'receivables' | 'entries' | 'expenses' | 'categories'>(
+    'summary',
+  );
+  const [summary, setSummary] = useState<FinancialSummary | null>(null);
+  const [categories, setCategories] = useState<FinancialCategory[]>([]);
+  const [receivables, setReceivables] = useState<Receivable[]>([]);
+  const [entries, setEntries] = useState<FinancialTransaction[]>([]);
+  const [expenses, setExpenses] = useState<FinancialTransaction[]>([]);
+  const [receivableStatus, setReceivableStatus] = useState<ReceivableDisplayStatus | ''>('');
+  const [financeSearch, setFinanceSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [paymentReceivable, setPaymentReceivable] = useState<Receivable | null>(null);
+  const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
+
+  const loadFinance = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const receivableFilters: Parameters<typeof listReceivables>[0] = {
+        status: receivableStatus,
+        pageSize: 50,
+      };
+      const trimmedSearch = financeSearch.trim();
+
+      if (trimmedSearch) {
+        receivableFilters.search = trimmedSearch;
+      }
+
+      const [nextSummary, nextCategories, nextReceivables, nextEntries, nextExpenses] =
+        await Promise.all([
+          getFinancialSummary(),
+          listFinancialCategories(),
+          listReceivables(receivableFilters),
+          listFinancialTransactions({ type: 'ENTRADA', pageSize: 50 }),
+          listFinancialTransactions({ type: 'SAIDA', pageSize: 50 }),
+        ]);
+
+      setSummary(nextSummary);
+      setCategories(nextCategories);
+      setReceivables(nextReceivables.items);
+      setEntries(nextEntries.items);
+      setExpenses(nextExpenses.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar financeiro.');
+    } finally {
+      setLoading(false);
+    }
+  }, [financeSearch, receivableStatus]);
+
+  useEffect(() => {
+    void loadFinance();
+  }, [loadFinance]);
+
+  async function reloadWithNotice(message: string) {
+    setNotice(message);
+    await loadFinance();
+  }
+
+  const entryCategories = categories.filter((category) => category.type === 'ENTRADA');
+  const expenseCategories = categories.filter((category) => category.type === 'SAIDA');
+
+  return (
+    <section className="workspace-main">
+      {error ? <div className="notice danger">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
+
+      <div className="tabs finance-tabs">
+        <button
+          className={tab === 'summary' ? 'active' : ''}
+          type="button"
+          onClick={() => setTab('summary')}
+        >
+          Visao Geral
+        </button>
+        <button
+          className={tab === 'receivables' ? 'active' : ''}
+          type="button"
+          onClick={() => setTab('receivables')}
+        >
+          Contas a Receber
+        </button>
+        <button
+          className={tab === 'entries' ? 'active' : ''}
+          type="button"
+          onClick={() => setTab('entries')}
+        >
+          Entradas
+        </button>
+        <button
+          className={tab === 'expenses' ? 'active' : ''}
+          type="button"
+          onClick={() => setTab('expenses')}
+        >
+          Saidas
+        </button>
+        <button
+          className={tab === 'categories' ? 'active' : ''}
+          type="button"
+          onClick={() => setTab('categories')}
+        >
+          Categorias
+        </button>
+      </div>
+
+      {tab === 'summary' && summary ? (
+        <div className="metric-grid">
+          {(
+            [
+              ['Recebido', summary.received],
+              ['A receber', summary.receivablePending],
+              ['Vencido', summary.receivableOverdue],
+              ['Entradas', summary.entries],
+              ['Saidas', summary.expenses],
+              ['Saldo', summary.balance],
+            ] satisfies Array<[string, string]>
+          ).map(([label, value]) => (
+            <article className="metric-card" key={label}>
+              <span className="metric-label">{label}</span>
+              <strong className="metric-value">{loading ? '-' : formatCurrency(value)}</strong>
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      {tab === 'receivables' ? (
+        <>
+          <div className="toolbar">
+            <div className="search-row">
+              <Search aria-hidden="true" size={18} />
+              <input
+                placeholder="Buscar cliente, referencia ou descricao"
+                value={financeSearch}
+                onChange={(event) => setFinanceSearch(event.target.value)}
+              />
+            </div>
+            <select
+              value={receivableStatus}
+              onChange={(event) =>
+                setReceivableStatus(event.target.value as ReceivableDisplayStatus | '')
+              }
+            >
+              <option value="">Todas as situacoes</option>
+              <option value="PENDENTE">Pendente</option>
+              <option value="VENCIDO">Vencido</option>
+              <option value="PAGO">Pago</option>
+              <option value="CANCELADO">Cancelado</option>
+            </select>
+            <button className="secondary-button" type="button" onClick={() => void loadFinance()}>
+              Aplicar
+            </button>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Referencia</th>
+                  <th>Descricao</th>
+                  <th>Vencimento</th>
+                  <th>Valor</th>
+                  <th>Situacao</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {receivables.map((receivable) => (
+                  <tr key={receivable.id}>
+                    <td>{receivable.client?.name ?? '-'}</td>
+                    <td>{receivable.client?.reference ?? '-'}</td>
+                    <td>{receivable.description}</td>
+                    <td>{formatDate(receivable.dueDate)}</td>
+                    <td>{formatCurrency(receivable.amount)}</td>
+                    <td>{receivable.displayStatus}</td>
+                    <td>
+                      <div className="button-row">
+                        <button
+                          className="secondary-button"
+                          disabled={receivable.status !== 'PENDENTE'}
+                          type="button"
+                          onClick={() => setPaymentReceivable(receivable)}
+                        >
+                          Dar baixa
+                        </button>
+                        <button
+                          className="danger-button"
+                          disabled={receivable.status !== 'PENDENTE'}
+                          type="button"
+                          onClick={() => setCancelingReceivable(receivable)}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!receivables.length ? (
+              <div className="empty-state">
+                {loading ? 'Carregando...' : 'Nenhuma conta a receber encontrada.'}
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+
+      {tab === 'entries' ? (
+        <TransactionSection
+          categories={entryCategories}
+          clients={clients}
+          items={entries}
+          kind="ENTRADA"
+          onCreate={async (payload) => {
+            await createManualEntry(payload);
+            await reloadWithNotice('Entrada registrada.');
+          }}
+          onDelete={async (id) => {
+            await deleteFinancialTransaction(id);
+            await reloadWithNotice('Entrada removida.');
+          }}
+          onUpdate={async (id, payload) => {
+            await updateFinancialTransaction(id, payload);
+            await reloadWithNotice('Entrada atualizada.');
+          }}
+        />
+      ) : null}
+
+      {tab === 'expenses' ? (
+        <TransactionSection
+          categories={expenseCategories}
+          clients={clients}
+          items={expenses}
+          kind="SAIDA"
+          onCreate={async (payload) => {
+            await createManualExpense(payload);
+            await reloadWithNotice('Saida registrada.');
+          }}
+          onDelete={async (id) => {
+            await deleteFinancialTransaction(id);
+            await reloadWithNotice('Saida removida.');
+          }}
+          onUpdate={async (id, payload) => {
+            await updateFinancialTransaction(id, payload);
+            await reloadWithNotice('Saida atualizada.');
+          }}
+        />
+      ) : null}
+
+      {tab === 'categories' ? (
+        <FinancialCategoriesView
+          categories={categories}
+          onCreate={async (payload) => {
+            await createFinancialCategory(payload);
+            await reloadWithNotice('Categoria criada.');
+          }}
+          onDelete={async (id) => {
+            await deleteFinancialCategory(id);
+            await reloadWithNotice('Categoria removida ou inativada.');
+          }}
+          onUpdate={async (id, payload) => {
+            await updateFinancialCategory(id, payload);
+            await reloadWithNotice('Categoria atualizada.');
+          }}
+        />
+      ) : null}
+
+      {paymentReceivable ? (
+        <PayReceivableModal
+          categories={entryCategories}
+          receivable={paymentReceivable}
+          onClose={() => setPaymentReceivable(null)}
+          onConfirm={async (payload) => {
+            await payReceivable(paymentReceivable.id, payload);
+            setPaymentReceivable(null);
+            await reloadWithNotice('Pagamento registrado.');
+          }}
+        />
+      ) : null}
+
+      {cancelingReceivable ? (
+        <CancelReceivableModal
+          receivable={cancelingReceivable}
+          onClose={() => setCancelingReceivable(null)}
+          onConfirm={async (reason) => {
+            await cancelReceivable(cancelingReceivable.id, { reason });
+            setCancelingReceivable(null);
+            await reloadWithNotice('Conta a receber cancelada.');
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function TransactionSection({
+  categories,
+  clients,
+  items,
+  kind,
+  onCreate,
+  onDelete,
+  onUpdate,
+}: {
+  categories: FinancialCategory[];
+  clients: Client[];
+  items: FinancialTransaction[];
+  kind: FinancialTransactionType;
+  onCreate: (payload: FinancialTransactionPayload) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  onUpdate: (id: string, payload: Partial<FinancialTransactionPayload>) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<FinancialTransaction | null>(null);
+  const [form, setForm] = useState({
+    description: '',
+    categoryId: categories[0]?.id ?? '',
+    amount: '',
+    transactionDate: new Date().toISOString().slice(0, 10),
+    clientId: '',
+    notes: '',
+  });
+
+  useEffect(() => {
+    setForm((current) => ({
+      ...current,
+      categoryId: current.categoryId || categories[0]?.id || '',
+    }));
+  }, [categories]);
+
+  function startEdit(transaction: FinancialTransaction) {
+    setEditing(transaction);
+    setForm({
+      description: transaction.description,
+      categoryId: transaction.categoryId,
+      amount: transaction.amount,
+      transactionDate: transaction.transactionDate,
+      clientId: transaction.clientId ?? '',
+      notes: transaction.notes ?? '',
+    });
+  }
+
+  function resetForm() {
+    setEditing(null);
+    setForm({
+      description: '',
+      categoryId: categories[0]?.id ?? '',
+      amount: '',
+      transactionDate: new Date().toISOString().slice(0, 10),
+      clientId: '',
+      notes: '',
+    });
+  }
+
+  async function submitForm() {
+    const payload = {
+      description: form.description,
+      categoryId: form.categoryId,
+      amount: Number(form.amount),
+      transactionDate: form.transactionDate,
+      ...(form.clientId ? { clientId: form.clientId } : {}),
+      ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
+    };
+
+    if (editing) {
+      await onUpdate(editing.id, payload);
+    } else {
+      await onCreate(payload);
+    }
+
+    resetForm();
+  }
+
+  return (
+    <>
+      <div className="entity-form">
+        <label className="field">
+          <span>Descricao</span>
+          <input
+            value={form.description}
+            onChange={(event) => setForm({ ...form, description: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Categoria</span>
+          <select
+            value={form.categoryId}
+            onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
+          >
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Valor</span>
+          <input
+            min="0.01"
+            step="0.01"
+            type="number"
+            value={form.amount}
+            onChange={(event) => setForm({ ...form, amount: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Data</span>
+          <input
+            type="date"
+            value={form.transactionDate}
+            onChange={(event) => setForm({ ...form, transactionDate: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Cliente</span>
+          <select
+            value={form.clientId}
+            onChange={(event) => setForm({ ...form, clientId: event.target.value })}
+          >
+            <option value="">Sem cliente</option>
+            {clients.map((client) => (
+              <option key={client.id} value={client.id}>
+                {client.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Observacao</span>
+          <input
+            value={form.notes}
+            onChange={(event) => setForm({ ...form, notes: event.target.value })}
+          />
+        </label>
+        <div className="form-actions">
+          <span />
+          <div className="button-row">
+            {editing ? (
+              <button className="secondary-button" type="button" onClick={resetForm}>
+                Cancelar edicao
+              </button>
+            ) : null}
+            <button className="primary-button" type="button" onClick={() => void submitForm()}>
+              <DollarSign aria-hidden="true" size={16} />
+              {editing ? 'Atualizar' : kind === 'ENTRADA' ? 'Nova entrada' : 'Nova saida'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Descricao</th>
+              <th>Categoria</th>
+              <th>Cliente</th>
+              <th>Valor</th>
+              <th>Origem</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((transaction) => (
+              <tr key={transaction.id}>
+                <td>{formatDate(transaction.transactionDate)}</td>
+                <td>{transaction.description}</td>
+                <td>{transaction.category.name}</td>
+                <td>{transaction.client?.name ?? '-'}</td>
+                <td>{formatCurrency(transaction.amount)}</td>
+                <td>{transaction.origin}</td>
+                <td>
+                  <div className="button-row">
+                    <button
+                      className="secondary-button"
+                      disabled={
+                        transaction.origin !== 'MANUAL' || Boolean(transaction.receivableId)
+                      }
+                      type="button"
+                      onClick={() => startEdit(transaction)}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      className="danger-button"
+                      disabled={
+                        transaction.origin !== 'MANUAL' || Boolean(transaction.receivableId)
+                      }
+                      type="button"
+                      onClick={() => void onDelete(transaction.id)}
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length ? <div className="empty-state">Nenhuma movimentacao encontrada.</div> : null}
+      </div>
+    </>
+  );
+}
+
+function FinancialCategoriesView({
+  categories,
+  onCreate,
+  onDelete,
+  onUpdate,
+}: {
+  categories: FinancialCategory[];
+  onCreate: (payload: {
+    name: string;
+    type: FinancialTransactionType;
+    active?: boolean;
+  }) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  onUpdate: (
+    id: string,
+    payload: Partial<{ name: string; type: FinancialTransactionType; active: boolean }>,
+  ) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<FinancialTransactionType>('ENTRADA');
+
+  async function submitCategory() {
+    await onCreate({ name, type, active: true });
+    setName('');
+    setType('ENTRADA');
+  }
+
+  return (
+    <>
+      <div className="compact-form">
+        <label className="field">
+          <span>Nome</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Tipo</span>
+          <select
+            value={type}
+            onChange={(event) => setType(event.target.value as FinancialTransactionType)}
+          >
+            <option value="ENTRADA">Entrada</option>
+            <option value="SAIDA">Saida</option>
+          </select>
+        </label>
+        <button className="primary-button" type="button" onClick={() => void submitCategory()}>
+          <Plus aria-hidden="true" size={16} />
+          Categoria
+        </button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Tipo</th>
+              <th>Status</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {categories.map((category) => (
+              <tr key={category.id}>
+                <td>{category.name}</td>
+                <td>{category.type}</td>
+                <td>{category.active ? 'Ativa' : 'Inativa'}</td>
+                <td>
+                  <div className="button-row">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void onUpdate(category.id, { active: !category.active })}
+                    >
+                      {category.active ? 'Inativar' : 'Ativar'}
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void onDelete(category.id)}
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function PayReceivableModal({
+  categories,
+  receivable,
+  onClose,
+  onConfirm,
+}: {
+  categories: FinancialCategory[];
+  receivable: Receivable;
+  onClose: () => void;
+  onConfirm: (payload: {
+    paymentDate: string;
+    categoryId?: string;
+    notes?: string;
+  }) => Promise<void>;
+}) {
+  const renewalCategory = categories.find((category) => category.name === 'Renovação');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [categoryId, setCategoryId] = useState(renewalCategory?.id ?? categories[0]?.id ?? '');
+  const [notes, setNotes] = useState('');
+
+  useEffect(() => {
+    setCategoryId(renewalCategory?.id ?? categories[0]?.id ?? '');
+  }, [categories, renewalCategory?.id]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="payment-title">
+        <header className="modal-header">
+          <h2 id="payment-title">Dar baixa</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+        <dl className="detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{receivable.client?.name ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Descricao</dt>
+            <dd>{receivable.description}</dd>
+          </div>
+          <div>
+            <dt>Valor</dt>
+            <dd>{formatCurrency(receivable.amount)}</dd>
+          </div>
+          <div>
+            <dt>Vencimento</dt>
+            <dd>{formatDate(receivable.dueDate)}</dd>
+          </div>
+        </dl>
+        <div className="form-grid">
+          <label className="field">
+            <span>Data do pagamento</span>
+            <input
+              type="date"
+              value={paymentDate}
+              onChange={(event) => setPaymentDate(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Categoria</span>
+            <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Observacao</span>
+            <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </label>
+        </div>
+        <div className="form-actions">
+          <span>Confirme para registrar a entrada financeira vinculada a esta conta.</span>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void onConfirm({ paymentDate, categoryId, notes })}
+            >
+              Confirmar pagamento
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CancelReceivableModal({
+  receivable,
+  onClose,
+  onConfirm,
+}: {
+  receivable: Receivable;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState('');
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="cancel-receivable-title">
+        <header className="modal-header">
+          <h2 id="cancel-receivable-title">Cancelar recebivel</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+        <p>{receivable.description}</p>
+        <label className="field">
+          <span>Motivo do cancelamento</span>
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
+        <div className="form-actions">
+          <span />
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              className="danger-button"
+              disabled={!reason.trim()}
+              type="button"
+              onClick={() => void onConfirm(reason)}
+            >
+              Confirmar cancelamento
             </button>
           </div>
         </div>

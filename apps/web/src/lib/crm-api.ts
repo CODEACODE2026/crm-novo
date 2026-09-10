@@ -50,6 +50,8 @@ export interface ClientStatusHistory {
 
 export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
 export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
+export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
+export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL';
 
 export interface Renewal {
   id: string;
@@ -75,8 +77,63 @@ export interface Receivable {
   displayStatus: ReceivableDisplayStatus;
   paidAt: string | null;
   canceledAt: string | null;
+  cancelReason?: string | null;
+  paymentTransactionId?: string | null;
   createdAt: string;
   updatedAt: string;
+  client?: Pick<Client, 'id' | 'name' | 'reference'>;
+}
+
+export interface FinancialCategory {
+  id: string;
+  name: string;
+  type: FinancialTransactionType;
+  active: boolean;
+}
+
+export interface FinancialTransaction {
+  id: string;
+  type: FinancialTransactionType;
+  origin: FinancialTransactionOrigin;
+  categoryId: string;
+  clientId: string | null;
+  receivableId: string | null;
+  description: string;
+  amount: string;
+  transactionDate: string;
+  notes: string | null;
+  category: FinancialCategory;
+  client: Pick<Client, 'id' | 'name' | 'reference'> | null;
+}
+
+export interface PaginatedReceivables {
+  items: Receivable[];
+  pagination: PaginatedClients['pagination'];
+}
+
+export interface PaginatedFinancialTransactions {
+  items: FinancialTransaction[];
+  pagination: PaginatedClients['pagination'];
+}
+
+export interface FinancialSummary {
+  startDate: string;
+  endDate: string;
+  received: string;
+  receivablePending: string;
+  receivableOverdue: string;
+  entries: string;
+  expenses: string;
+  balance: string;
+}
+
+export interface FinancialTransactionPayload {
+  description: string;
+  categoryId: string;
+  amount: number;
+  transactionDate: string;
+  clientId?: string | undefined;
+  notes?: string | undefined;
 }
 
 export interface PaginatedClients {
@@ -244,4 +301,124 @@ export function confirmRenewal(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function listFinancialCategories() {
+  return apiFetch<FinancialCategory[]>('/financial-categories');
+}
+
+export function createFinancialCategory(payload: {
+  name: string;
+  type: FinancialTransactionType;
+  active?: boolean;
+}) {
+  return apiFetch<FinancialCategory>('/financial-categories', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateFinancialCategory(
+  id: string,
+  payload: Partial<{ name: string; type: FinancialTransactionType; active: boolean }>,
+) {
+  return apiFetch<FinancialCategory>(`/financial-categories/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteFinancialCategory(id: string) {
+  return apiFetch<FinancialCategory>(`/financial-categories/${id}`, { method: 'DELETE' });
+}
+
+export function getFinancialSummary() {
+  return apiFetch<FinancialSummary>('/finance/summary');
+}
+
+export function listReceivables(
+  filters: {
+    status?: ReceivableDisplayStatus | '';
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set('status', filters.status);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+
+  const query = params.toString();
+  return apiFetch<PaginatedReceivables>(`/receivables${query ? `?${query}` : ''}`);
+}
+
+export function payReceivable(
+  id: string,
+  payload: { paymentDate: string; categoryId?: string; notes?: string },
+) {
+  return apiFetch<FinancialTransaction>(`/receivables/${id}/payment`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function cancelReceivable(id: string, payload: { reason: string }) {
+  return apiFetch<Receivable>(`/receivables/${id}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listFinancialTransactions(
+  filters: {
+    type?: FinancialTransactionType;
+    origin?: FinancialTransactionOrigin;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.type) params.set('type', filters.type);
+  if (filters.origin) params.set('origin', filters.origin);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+
+  const query = params.toString();
+  return apiFetch<PaginatedFinancialTransactions>(
+    `/financial-transactions${query ? `?${query}` : ''}`,
+  );
+}
+
+export function createManualEntry(payload: FinancialTransactionPayload) {
+  return apiFetch<FinancialTransaction>('/financial-transactions/entries', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createManualExpense(payload: FinancialTransactionPayload) {
+  return apiFetch<FinancialTransaction>('/financial-transactions/expenses', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateFinancialTransaction(
+  id: string,
+  payload: Partial<FinancialTransactionPayload>,
+) {
+  return apiFetch<FinancialTransaction>(`/financial-transactions/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteFinancialTransaction(id: string) {
+  return apiFetch<FinancialTransaction>(`/financial-transactions/${id}`, { method: 'DELETE' });
 }

@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { ClientsModule } from './clients/clients.module';
 import { PrismaModule } from './common/prisma/prisma.module';
+import { FinanceModule } from './finance/finance.module';
 import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
 import { RenewalsModule } from './renewals/renewals.module';
@@ -19,6 +20,7 @@ import { UsersModule } from './users/users.module';
     PlansModule,
     ClientsModule,
     RenewalsModule,
+    FinanceModule,
     HealthModule,
   ],
 })

@@ -12,11 +12,17 @@ import {
   MessageCircle,
   Pencil,
   Plus,
+  Power,
+  QrCode,
   RefreshCcw,
   Search,
+  Send,
   Settings,
+  ShieldCheck,
   ToggleLeft,
   Users,
+  Wifi,
+  WifiOff,
   X,
 } from 'lucide-react';
 import type { AuthenticatedUser } from '@crm-novo/shared';
@@ -40,18 +46,29 @@ import {
   getClient,
   getDashboardSummary,
   getFinancialSummary,
+  getWhatsAppConnection,
+  getWhatsAppProviderHealth,
+  getWhatsAppQrCode,
   listFinancialCategories,
   listClients,
   listFinancialTransactions,
   listPlans,
   listReceivables,
+  listWhatsAppMessages,
+  logoutWhatsApp,
   payReceivable,
   previewRenewal,
+  refreshWhatsAppStatus,
+  sendWhatsAppMessage,
   updateClient,
   updateFinancialCategory,
   updateFinancialTransaction,
   updateClientStatus,
   updatePlan,
+  connectWhatsApp,
+  createWhatsAppConnection,
+  disconnectWhatsApp,
+  configureWhatsAppWebhook,
   type Client,
   type ClientStatus,
   type DashboardSummary as DashboardSummaryPayload,
@@ -65,9 +82,12 @@ import {
   type ReceivableDisplayStatus,
   type Plan,
   type RenewalPreview,
+  type MessageDispatch,
+  type WhatsAppConnection,
+  type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
 
-type View = 'dashboard' | 'clients' | 'finance' | 'plans';
+type View = 'dashboard' | 'clients' | 'finance' | 'plans' | 'whatsapp';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
 const navItems = [
@@ -75,12 +95,12 @@ const navItems = [
   { id: 'clients', label: 'Clientes', icon: Users },
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
+  { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
 const futureNavItems = [
   { label: 'Renovacoes', icon: RefreshCcw },
   { label: 'Cobrancas', icon: Bell },
-  { label: 'WhatsApp', icon: MessageCircle },
   { label: 'Relatorios', icon: BarChart3 },
   { label: 'Configuracoes', icon: Settings },
 ];
@@ -244,7 +264,9 @@ export default function DashboardPage() {
                 ? 'Dashboard'
                 : view === 'finance'
                   ? 'Financeiro'
-                  : 'Clientes'}
+                  : view === 'whatsapp'
+                    ? 'WhatsApp'
+                    : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -296,6 +318,10 @@ export default function DashboardPage() {
               onRenew={setRenewalClient}
               onSelect={setSelectedClient}
               onStatusChange={(nextStatus) => void handleStatusChange(nextStatus)}
+              onWhatsAppSent={async (clientId) => {
+                const detailed = await getClient(clientId);
+                setSelectedClient(detailed);
+              }}
               onUpdate={async (payload) => {
                 if (!editingClient) return;
                 const client = await updateClient(editingClient.id, payload);
@@ -346,6 +372,7 @@ export default function DashboardPage() {
               plans={plans}
             />
           ) : null}
+          {view === 'whatsapp' ? <WhatsAppView /> : null}
         </section>
         {renewalClient ? (
           <RenewalModal
@@ -779,6 +806,7 @@ function ClientsView({
   onRenew,
   onSelect,
   onStatusChange,
+  onWhatsAppSent,
   onUpdate,
   planId,
   plans,
@@ -803,6 +831,7 @@ function ClientsView({
   onRenew: (client: Client) => void;
   onSelect: (client: Client) => void;
   onStatusChange: (status: ClientStatus) => void;
+  onWhatsAppSent: (clientId: string) => Promise<void>;
   onUpdate: Parameters<typeof ClientForm>[0]['onSubmit'];
   planId: string;
   plans: Plan[];
@@ -817,6 +846,7 @@ function ClientsView({
   renewalNotice: string;
 }) {
   const [detailTab, setDetailTab] = useState<'timeline' | 'renewals' | 'receivables'>('timeline');
+  const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
 
   return (
     <div className="workspace-grid">
@@ -948,6 +978,14 @@ function ClientsView({
                 <CalendarClock aria-hidden="true" size={16} />
                 Renovar
               </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setWhatsAppClient(selectedClient)}
+              >
+                <Send aria-hidden="true" size={16} />
+                Enviar WhatsApp
+              </button>
             </div>
             <dl className="detail-list">
               <div>
@@ -1078,7 +1116,461 @@ function ClientsView({
           <div className="empty-state">Selecione um cliente para visualizar detalhes.</div>
         )}
       </aside>
+      {whatsAppClient ? (
+        <SendWhatsAppModal
+          client={whatsAppClient}
+          onClose={() => setWhatsAppClient(null)}
+          onSent={async () => {
+            await onWhatsAppSent(whatsAppClient.id);
+            setWhatsAppClient(null);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function SendWhatsAppModal({
+  client,
+  onClose,
+  onSent,
+}: {
+  client: Client;
+  onClose: () => void;
+  onSent: () => Promise<void>;
+}) {
+  const [connection, setConnection] = useState<WhatsAppConnection | null>(null);
+  const [body, setBody] = useState('');
+  const [requestId] = useState(() => crypto.randomUUID());
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadConnection() {
+      setLoading(true);
+      setError('');
+
+      try {
+        const nextConnection = await getWhatsAppConnection();
+        if (active) setConnection(nextConnection);
+      } catch (err) {
+        if (active) {
+          setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadConnection();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleSend() {
+    setError('');
+    setNotice('');
+    setSending(true);
+
+    try {
+      const dispatch = await sendWhatsAppMessage({ clientId: client.id, body, requestId });
+      if (dispatch.status === 'SENT') {
+        setNotice('Mensagem enviada com sucesso.');
+        await onSent();
+        return;
+      }
+
+      setError(dispatch.errorMessage ?? 'Nao foi possivel enviar a mensagem.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel enviar a mensagem.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const canSend =
+    !loading && connection?.status === 'CONNECTED' && body.trim().length > 0 && !sending;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="whatsapp-send-title">
+        <header className="modal-header">
+          <h2 id="whatsapp-send-title">Enviar WhatsApp</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <dl className="detail-list">
+          <div>
+            <dt>Nome</dt>
+            <dd>{client.name}</dd>
+          </div>
+          <div>
+            <dt>Telefone</dt>
+            <dd>{client.phoneNormalized}</dd>
+          </div>
+          <div>
+            <dt>Conexao</dt>
+            <dd>{loading ? 'Carregando...' : (connection?.name ?? 'Nenhuma conexao')}</dd>
+          </div>
+        </dl>
+
+        <label className="field">
+          <span>Mensagem</span>
+          <textarea
+            maxLength={2000}
+            rows={7}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+          />
+        </label>
+
+        {connection && connection.status !== 'CONNECTED' ? (
+          <div className="notice warning">A conexao WhatsApp nao esta operacional.</div>
+        ) : null}
+        {notice ? <div className="notice success">{notice}</div> : null}
+
+        <div className="form-actions">
+          <span className="error-message">{error}</span>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              className="primary-button"
+              disabled={!canSend}
+              type="button"
+              onClick={() => void handleSend()}
+            >
+              {sending ? 'Enviando...' : 'Enviar mensagem'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WhatsAppView() {
+  const [connection, setConnection] = useState<WhatsAppConnection | null>(null);
+  const [messages, setMessages] = useState<MessageDispatch[]>([]);
+  const [health, setHealth] = useState<WhatsAppProviderHealth | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [connectionName, setConnectionName] = useState('CRM Principal');
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrCode, setQrCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [working, setWorking] = useState('');
+  const [error, setError] = useState('');
+
+  const loadWhatsApp = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const [nextConnection, nextMessages, nextHealth] = await Promise.all([
+        getWhatsAppConnection(),
+        listWhatsAppMessages(),
+        getWhatsAppProviderHealth(),
+      ]);
+      setConnection(nextConnection);
+      setMessages(nextMessages);
+      setHealth(nextHealth);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadWhatsApp();
+  }, [loadWhatsApp]);
+
+  useEffect(() => {
+    if (!qrOpen) return;
+
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const nextConnection = await refreshWhatsAppStatus();
+          setConnection(nextConnection);
+
+          if (nextConnection.status === 'CONNECTED') {
+            setQrOpen(false);
+            setQrCode('');
+          }
+        } catch {
+          window.clearInterval(timer);
+        }
+      })();
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+  }, [qrOpen]);
+
+  async function runAction(action: string, operation: () => Promise<WhatsAppConnection>) {
+    setWorking(action);
+    setError('');
+
+    try {
+      const nextConnection = await operation();
+      setConnection(nextConnection);
+      await loadMessagesOnly();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel concluir a operacao.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function loadMessagesOnly() {
+    const nextMessages = await listWhatsAppMessages();
+    setMessages(nextMessages);
+  }
+
+  async function handleCreateConnection() {
+    await runAction('create', () => createWhatsAppConnection({ name: connectionName }));
+    setCreateOpen(false);
+  }
+
+  async function handleShowQr() {
+    setWorking('qr');
+    setError('');
+
+    try {
+      const payload = await getWhatsAppQrCode();
+      setQrCode(payload.qrCode);
+      setQrOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'QR Code nao disponivel.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  const connected = connection?.status === 'CONNECTED';
+
+  return (
+    <>
+      {error ? <div className="notice danger">{error}</div> : null}
+      <div className="whatsapp-grid">
+        <section className="panel whatsapp-panel">
+          <div className="panel-header">
+            <h2>Conexao WhatsApp</h2>
+            <button className="secondary-button" type="button" onClick={() => void loadWhatsApp()}>
+              <RefreshCcw aria-hidden="true" size={16} />
+              Atualizar
+            </button>
+          </div>
+
+          <div className={`provider-health ${health?.online ? 'online' : 'offline'}`}>
+            <ShieldCheck aria-hidden="true" size={16} />
+            API Kirago: {health?.online ? 'Online' : 'Indisponivel'}
+            {health?.version ? <span>v{health.version}</span> : null}
+          </div>
+
+          {!connection ? (
+            <div className="empty-card">
+              <MessageCircle aria-hidden="true" size={28} />
+              <strong>Nenhuma conexão WhatsApp configurada.</strong>
+              <span>Crie uma conexão para integrar o CRM ao WhatsApp.</span>
+              <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}>
+                Criar conexão
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="connection-status">
+                {connected ? (
+                  <Wifi aria-hidden="true" size={18} />
+                ) : (
+                  <WifiOff aria-hidden="true" size={18} />
+                )}
+                <strong>{connected ? 'WhatsApp conectado' : 'WhatsApp aguardando conexão'}</strong>
+                <span>{connection.status}</span>
+              </div>
+
+              <dl className="detail-list">
+                <div>
+                  <dt>Conexao</dt>
+                  <dd>{connection.name}</dd>
+                </div>
+                <div>
+                  <dt>Provider</dt>
+                  <dd>{connection.provider}</dd>
+                </div>
+                <div>
+                  <dt>Telefone</dt>
+                  <dd>{connection.phone ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>Ultima verificacao</dt>
+                  <dd>
+                    {connection.lastStatusAt
+                      ? new Date(connection.lastStatusAt).toLocaleString('pt-BR')
+                      : '-'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Webhook</dt>
+                  <dd>{connection.webhookConfigured ? 'Configurado' : 'Pendente'}</dd>
+                </div>
+              </dl>
+
+              <div className="button-row wrap">
+                <button
+                  className="primary-button"
+                  disabled={working === 'connect'}
+                  type="button"
+                  onClick={() => void runAction('connect', connectWhatsApp)}
+                >
+                  <Power aria-hidden="true" size={16} />
+                  Conectar
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={working === 'qr'}
+                  type="button"
+                  onClick={() => void handleShowQr()}
+                >
+                  <QrCode aria-hidden="true" size={16} />
+                  Exibir QR Code
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void runAction('status', refreshWhatsAppStatus)}
+                >
+                  Atualizar status
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void runAction('webhook', configureWhatsAppWebhook)}
+                >
+                  Configurar webhook
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void runAction('disconnect', disconnectWhatsApp)}
+                >
+                  Desconectar
+                </button>
+                <button
+                  className="danger-button"
+                  type="button"
+                  onClick={() => {
+                    const confirmed = window.confirm(
+                      'Isso encerrará a sessão atual do WhatsApp e será necessário conectar novamente.',
+                    );
+                    if (confirmed) void runAction('logout', logoutWhatsApp);
+                  }}
+                >
+                  Deslogar WhatsApp
+                </button>
+              </div>
+            </>
+          )}
+
+          {loading ? <div className="empty-state">Carregando...</div> : null}
+        </section>
+
+        <section className="panel whatsapp-panel">
+          <h2>Últimos envios</h2>
+          <div className="message-history">
+            {messages.map((message) => (
+              <article key={message.id}>
+                <div>
+                  <strong>{message.client?.name ?? 'Cliente nao vinculado'}</strong>
+                  <span>{message.phone}</span>
+                </div>
+                <p>{message.body}</p>
+                <footer>
+                  <span>{message.origin}</span>
+                  <span>{message.status}</span>
+                  <span>{new Date(message.createdAt).toLocaleString('pt-BR')}</span>
+                </footer>
+              </article>
+            ))}
+            {!messages.length ? <div className="empty-state">Nenhum envio registrado.</div> : null}
+          </div>
+        </section>
+      </div>
+
+      {createOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" aria-labelledby="create-whatsapp-title">
+            <header className="modal-header">
+              <h2 id="create-whatsapp-title">Criar conexão</h2>
+              <button className="icon-button" type="button" onClick={() => setCreateOpen(false)}>
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <label className="field">
+              <span>Nome da conexão</span>
+              <input
+                placeholder="CRM Principal"
+                value={connectionName}
+                onChange={(event) => setConnectionName(event.target.value)}
+              />
+            </label>
+            <div className="form-actions">
+              <span className="error-message">{error}</span>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setCreateOpen(false)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={!connectionName.trim() || working === 'create'}
+                  type="button"
+                  onClick={() => void handleCreateConnection()}
+                >
+                  Criar conexão
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {qrOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal qr-modal" aria-labelledby="qr-title">
+            <header className="modal-header">
+              <h2 id="qr-title">Conectar WhatsApp</h2>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => {
+                  setQrOpen(false);
+                  setQrCode('');
+                }}
+              >
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <p>Abra o WhatsApp no celular, acesse Aparelhos conectados e escaneie o QR Code.</p>
+            {/* QR Code vem como Data URI temporario da Kirago; next/image nao otimiza esse caso. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {qrCode ? <img alt="QR Code do WhatsApp" className="qr-image" src={qrCode} /> : null}
+          </section>
+        </div>
+      ) : null}
+    </>
   );
 }
 

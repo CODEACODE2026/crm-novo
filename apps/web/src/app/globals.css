@@ -93,7 +93,9 @@ a {
   font-size: 14px;
 }
 
-.field input {
+.field input,
+.field textarea,
+.field select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -101,6 +103,11 @@ a {
   color: var(--text);
   padding: 12px 14px;
   outline: none;
+}
+
+.field textarea {
+  min-height: 130px;
+  resize: vertical;
 }
 
 .field input:focus,
@@ -435,6 +442,120 @@ a {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.whatsapp-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  gap: 16px;
+}
+
+.whatsapp-panel {
+  padding: 18px;
+}
+
+.provider-health,
+.connection-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 8px 10px;
+}
+
+.provider-health.online,
+.connection-status svg {
+  color: var(--accent);
+}
+
+.provider-health.offline {
+  color: var(--warning);
+}
+
+.connection-status {
+  display: flex;
+}
+
+.connection-status strong {
+  color: var(--text);
+}
+
+.connection-status span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty-card {
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+  align-content: center;
+  justify-items: start;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 18px;
+}
+
+.empty-card span {
+  color: var(--muted);
+}
+
+.button-row.wrap {
+  flex-wrap: wrap;
+}
+
+.message-history {
+  display: grid;
+  gap: 12px;
+}
+
+.message-history article {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.message-history article div,
+.message-history footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.message-history span,
+.message-history footer {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-history p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qr-modal {
+  text-align: center;
+}
+
+.qr-image {
+  width: min(100%, 320px);
+  border: 12px solid #fff;
+  border-radius: 8px;
+  background: #fff;
 }
 
 .status-row {
@@ -898,7 +1019,8 @@ tbody tr:hover,
 
   .finance-kpis,
   .dashboard-grid,
-  .operational-grid {
+  .operational-grid,
+  .whatsapp-grid {
     grid-template-columns: 1fr;
   }
 

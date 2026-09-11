@@ -25,6 +25,7 @@ enum ClientEventType {
   PAYMENT_REGISTERED
   RECEIVABLE_CANCELED
   FINANCIAL_TRANSACTION_CREATED
+  WHATSAPP_MESSAGE_SENT
 }
 
 enum ReceivableStatus {
@@ -41,6 +42,30 @@ enum FinancialTransactionType {
 enum FinancialTransactionOrigin {
   RECEIVABLE_PAYMENT
   MANUAL
+}
+
+enum WhatsAppProvider {
+  KIRAGO
+}
+
+enum WhatsAppConnectionStatus {
+  DISCONNECTED
+  CONNECTING
+  QR_REQUIRED
+  CONNECTED
+  ERROR
+}
+
+enum MessageDispatchOrigin {
+  MANUAL
+  BILLING
+  RECOVERY
+}
+
+enum MessageDispatchStatus {
+  PENDING
+  SENT
+  FAILED
 }
 
 model User {
@@ -96,12 +121,61 @@ model Client {
   renewals              Renewal[]
   receivables           Receivable[]
   financialTransactions FinancialTransaction[]
+  messageDispatches     MessageDispatch[]
 
   @@index([status])
   @@index([planId])
   @@index([dueDate])
   @@index([createdAt])
   @@map("clients")
+}
+
+model WhatsAppConnection {
+  id                     String                   @id @default(uuid()) @db.Uuid
+  name                   String
+  provider               WhatsAppProvider         @default(KIRAGO)
+  providerUserId         String?
+  providerTokenEncrypted String
+  phone                  String?
+  status                 WhatsAppConnectionStatus @default(DISCONNECTED)
+  connected              Boolean                  @default(false)
+  loggedIn               Boolean                  @default(false)
+  webhookConfigured      Boolean                  @default(false)
+  lastStatusAt           DateTime?
+  connectedAt            DateTime?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  messageDispatches      MessageDispatch[]
+
+  @@index([provider])
+  @@index([status])
+  @@index([createdAt])
+  @@map("whatsapp_connections")
+}
+
+model MessageDispatch {
+  id                   String                @id @default(uuid()) @db.Uuid
+  clientId             String?               @db.Uuid
+  whatsAppConnectionId String                @db.Uuid
+  phone                String
+  body                 String
+  origin               MessageDispatchOrigin @default(MANUAL)
+  status               MessageDispatchStatus @default(PENDING)
+  requestId            String                @unique
+  providerMessageId    String?
+  errorMessage         String?
+  sentAt               DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  client               Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  whatsAppConnection   WhatsAppConnection    @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+
+  @@index([clientId])
+  @@index([whatsAppConnectionId])
+  @@index([status])
+  @@index([origin])
+  @@index([createdAt])
+  @@map("message_dispatches")
 }
 
 model Renewal {

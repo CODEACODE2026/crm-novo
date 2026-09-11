@@ -207,6 +207,48 @@ export interface DashboardActivity {
   client: Pick<Client, 'id' | 'name' | 'reference'>;
 }
 
+export type WhatsAppConnectionStatus =
+  'DISCONNECTED' | 'CONNECTING' | 'QR_REQUIRED' | 'CONNECTED' | 'ERROR';
+
+export interface WhatsAppConnection {
+  id: string;
+  name: string;
+  provider: 'KIRAGO';
+  providerUserId: string | null;
+  phone: string | null;
+  status: WhatsAppConnectionStatus;
+  connected: boolean;
+  loggedIn: boolean;
+  webhookConfigured: boolean;
+  lastStatusAt: string | null;
+  connectedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageDispatch {
+  id: string;
+  clientId: string | null;
+  whatsAppConnectionId: string;
+  phone: string;
+  body: string;
+  origin: 'MANUAL' | 'BILLING' | 'RECOVERY';
+  status: 'PENDING' | 'SENT' | 'FAILED';
+  requestId: string;
+  providerMessageId: string | null;
+  errorMessage: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  client: Pick<Client, 'id' | 'name' | 'reference'> | null;
+  connection: Pick<WhatsAppConnection, 'id' | 'name' | 'provider'> | null;
+}
+
+export interface WhatsAppProviderHealth {
+  online: boolean;
+  version?: string | null;
+}
+
 export interface FinancialTransactionPayload {
   description: string;
   categoryId: string;
@@ -511,4 +553,58 @@ export function updateFinancialTransaction(
 
 export function deleteFinancialTransaction(id: string) {
   return apiFetch<FinancialTransaction>(`/financial-transactions/${id}`, { method: 'DELETE' });
+}
+
+export function getWhatsAppConnection() {
+  return apiFetch<WhatsAppConnection | null>('/whatsapp/connection');
+}
+
+export function createWhatsAppConnection(payload: { name: string }) {
+  return apiFetch<WhatsAppConnection>('/whatsapp/connection', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function connectWhatsApp() {
+  return apiFetch<WhatsAppConnection>('/whatsapp/connection/connect', { method: 'POST' });
+}
+
+export function refreshWhatsAppStatus() {
+  return apiFetch<WhatsAppConnection>('/whatsapp/connection/status');
+}
+
+export function getWhatsAppQrCode() {
+  return apiFetch<{ qrCode: string }>('/whatsapp/connection/qr');
+}
+
+export function disconnectWhatsApp() {
+  return apiFetch<WhatsAppConnection>('/whatsapp/connection/disconnect', { method: 'POST' });
+}
+
+export function logoutWhatsApp() {
+  return apiFetch<WhatsAppConnection>('/whatsapp/connection/logout', { method: 'POST' });
+}
+
+export function configureWhatsAppWebhook() {
+  return apiFetch<WhatsAppConnection>('/whatsapp/connection/webhook', { method: 'POST' });
+}
+
+export function sendWhatsAppMessage(payload: {
+  clientId: string;
+  body: string;
+  requestId: string;
+}) {
+  return apiFetch<MessageDispatch>('/whatsapp/messages', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listWhatsAppMessages() {
+  return apiFetch<MessageDispatch[]>('/whatsapp/messages');
+}
+
+export function getWhatsAppProviderHealth() {
+  return apiFetch<WhatsAppProviderHealth>('/whatsapp/provider/health');
 }

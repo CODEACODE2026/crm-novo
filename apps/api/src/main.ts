@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { json } from 'express';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -11,6 +12,7 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const corsOrigin = config.getOrThrow<string>('CORS_ORIGIN');
 
+  app.use('/whatsapp/webhook/kirago', json({ limit: '32kb' }));
   app.use(helmet());
   app.use(cookieParser());
   app.enableCors({

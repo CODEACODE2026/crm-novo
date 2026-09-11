@@ -10,6 +10,7 @@ import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
 import { RenewalsModule } from './renewals/renewals.module';
 import { UsersModule } from './users/users.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { UsersModule } from './users/users.module';
     RenewalsModule,
     FinanceModule,
     DashboardModule,
+    WhatsAppModule,
     HealthModule,
   ],
 })

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
 import { ClientsModule } from './clients/clients.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -25,6 +26,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     FinanceModule,
     DashboardModule,
     WhatsAppModule,
+    BillingModule,
     HealthModule,
   ],
 })

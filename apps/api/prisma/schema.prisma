@@ -64,8 +64,16 @@ enum MessageDispatchOrigin {
 
 enum MessageDispatchStatus {
   PENDING
+  SCHEDULED
+  PROCESSING
   SENT
   FAILED
+  CANCELED
+  IGNORED
+}
+
+enum MessageTemplateType {
+  BILLING_DUE
 }
 
 enum WhatsAppPendingContactStatus {
@@ -189,26 +197,56 @@ model WhatsAppConnection {
 model MessageDispatch {
   id                   String                @id @default(uuid()) @db.Uuid
   clientId             String?               @db.Uuid
-  whatsAppConnectionId String                @db.Uuid
+  receivableId         String?               @db.Uuid
+  templateId           String?               @db.Uuid
+  whatsAppConnectionId String?               @db.Uuid
   phone                String
   body                 String
+  renderedContent      String?
   origin               MessageDispatchOrigin @default(MANUAL)
   status               MessageDispatchStatus @default(PENDING)
   requestId            String                @unique
+  idempotencyKey       String?               @unique
+  scheduledFor         DateTime?
+  nextAttemptAt        DateTime?
+  attempts             Int                   @default(0)
   providerMessageId    String?
+  errorCode            String?
   errorMessage         String?
   sentAt               DateTime?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   client               Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  whatsAppConnection   WhatsAppConnection    @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  receivable           Receivable?           @relation(fields: [receivableId], references: [id], onDelete: SetNull)
+  template             MessageTemplate?      @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  whatsAppConnection   WhatsAppConnection?   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: SetNull)
 
   @@index([clientId])
+  @@index([receivableId])
+  @@index([templateId])
   @@index([whatsAppConnectionId])
   @@index([status])
   @@index([origin])
+  @@index([scheduledFor])
+  @@index([nextAttemptAt])
   @@index([createdAt])
   @@map("message_dispatches")
+}
+
+model MessageTemplate {
+  id                String                @id @default(uuid()) @db.Uuid
+  name              String
+  type              MessageTemplateType
+  content           String
+  active            Boolean               @default(true)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  messageDispatches MessageDispatch[]
+
+  @@unique([type, name])
+  @@index([type])
+  @@index([active])
+  @@map("message_templates")
 }
 
 model WhatsAppPendingContact {
@@ -317,6 +355,7 @@ model Receivable {
   client             Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
   renewal            Renewal               @relation(fields: [renewalId], references: [id], onDelete: Restrict)
   paymentTransaction FinancialTransaction?
+  messageDispatches  MessageDispatch[]
 
   @@index([clientId])
   @@index([dueDate])

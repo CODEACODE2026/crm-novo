@@ -229,19 +229,58 @@ export interface WhatsAppConnection {
 export interface MessageDispatch {
   id: string;
   clientId: string | null;
-  whatsAppConnectionId: string;
+  receivableId?: string | null;
+  templateId?: string | null;
+  whatsAppConnectionId: string | null;
   phone: string;
   body: string;
+  renderedContent?: string | null;
   origin: 'MANUAL' | 'BILLING' | 'RECOVERY';
-  status: 'PENDING' | 'SENT' | 'FAILED';
+  status: 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
   requestId: string;
+  idempotencyKey?: string | null;
+  scheduledFor?: string | null;
+  nextAttemptAt?: string | null;
+  attempts?: number;
   providerMessageId: string | null;
+  errorCode?: string | null;
   errorMessage: string | null;
   sentAt: string | null;
   createdAt: string;
   updatedAt: string;
-  client: Pick<Client, 'id' | 'name' | 'reference'> | null;
+  client:
+    (Pick<Client, 'id' | 'name' | 'reference' | 'status'> & { planName?: string | null }) | null;
+  receivable?: Pick<Receivable, 'id' | 'amount' | 'dueDate' | 'status'> | null;
+  template?: {
+    id: string;
+    name: string;
+    type: 'BILLING_DUE';
+    active: boolean;
+  } | null;
   connection: Pick<WhatsAppConnection, 'id' | 'name' | 'provider'> | null;
+}
+
+export interface BillingSummary {
+  scheduled: number;
+  sent: number;
+  failed: number;
+  ignoredOrCanceled: number;
+}
+
+export interface MessageTemplate {
+  id: string;
+  name: string;
+  type: 'BILLING_DUE';
+  content: string;
+  active: boolean;
+  variables: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaginatedBillingDispatches {
+  items: MessageDispatch[];
+  pagination: PaginatedClients['pagination'];
 }
 
 export interface WhatsAppProviderHealth {
@@ -683,6 +722,80 @@ export function sendWhatsAppMessage(payload: {
 
 export function listWhatsAppMessages() {
   return apiFetch<MessageDispatch[]>('/whatsapp/messages');
+}
+
+export function getBillingSummary() {
+  return apiFetch<BillingSummary>('/billing/summary');
+}
+
+export function listBillingDispatches(
+  filters: {
+    status?: MessageDispatch['status'] | '';
+    search?: string;
+    dueDate?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set('status', filters.status);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.dueDate) params.set('dueDate', filters.dueDate);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+
+  const query = params.toString();
+  return apiFetch<PaginatedBillingDispatches>(`/billing/dispatches${query ? `?${query}` : ''}`);
+}
+
+export function getBillingDispatch(id: string) {
+  return apiFetch<MessageDispatch>(`/billing/dispatches/${id}`);
+}
+
+export function reconcileBilling() {
+  return apiFetch<{ created: number; kept: number; canceled: number; skipped: number }>(
+    '/billing/reconcile',
+    { method: 'POST' },
+  );
+}
+
+export function sendBillingNow(id: string) {
+  return apiFetch<{ processed: number; results: MessageDispatch[] }>(
+    `/billing/dispatches/${id}/send-now`,
+    { method: 'POST' },
+  );
+}
+
+export function listMessageTemplates() {
+  return apiFetch<MessageTemplate[]>('/billing/templates');
+}
+
+export function updateMessageTemplate(id: string, payload: { content?: string; active?: boolean }) {
+  return apiFetch<MessageTemplate>(`/billing/templates/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewMessageTemplate(
+  id: string,
+  payload: {
+    content?: string;
+    name?: string;
+    value?: string;
+    dueDate?: string;
+    plan?: string;
+    reference?: string;
+  },
+) {
+  return apiFetch<{ templateId: string; renderedContent: string }>(
+    `/billing/templates/${id}/preview`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function getWhatsAppProviderHealth() {

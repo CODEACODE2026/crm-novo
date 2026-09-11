@@ -77,6 +77,15 @@ import {
   disconnectWhatsApp,
   configureWhatsAppWebhook,
   approveWhatsAppPendingContact,
+  getBillingDispatch,
+  getBillingSummary,
+  listBillingDispatches,
+  listMessageTemplates,
+  previewMessageTemplate,
+  reconcileBilling,
+  sendBillingNow,
+  updateMessageTemplate,
+  type BillingSummary,
   type Client,
   type ClientStatus,
   type DashboardSummary as DashboardSummaryPayload,
@@ -91,6 +100,7 @@ import {
   type Plan,
   type RenewalPreview,
   type MessageDispatch,
+  type MessageTemplate,
   type WhatsAppConnection,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
@@ -99,7 +109,7 @@ import {
   type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
 
-type View = 'dashboard' | 'clients' | 'finance' | 'plans' | 'whatsapp' | 'waitlist';
+type View = 'dashboard' | 'clients' | 'finance' | 'plans' | 'whatsapp' | 'waitlist' | 'billing';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
 const navItems = [
@@ -107,13 +117,13 @@ const navItems = [
   { id: 'clients', label: 'Clientes', icon: Users },
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
+  { id: 'billing', label: 'Cobrancas', icon: Bell },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
 const futureNavItems = [
   { label: 'Renovacoes', icon: RefreshCcw },
-  { label: 'Cobrancas', icon: Bell },
   { label: 'Relatorios', icon: BarChart3 },
   { label: 'Configuracoes', icon: Settings },
 ];
@@ -279,9 +289,11 @@ export default function DashboardPage() {
                   ? 'Financeiro'
                   : view === 'whatsapp'
                     ? 'WhatsApp'
-                    : view === 'waitlist'
-                      ? 'Lista de Espera'
-                      : 'Clientes'}
+                    : view === 'billing'
+                      ? 'Cobrancas'
+                      : view === 'waitlist'
+                        ? 'Lista de Espera'
+                        : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -388,6 +400,7 @@ export default function DashboardPage() {
             />
           ) : null}
           {view === 'whatsapp' ? <WhatsAppView /> : null}
+          {view === 'billing' ? <BillingView /> : null}
           {view === 'waitlist' ? (
             <WaitlistView
               plans={plans}
@@ -1283,6 +1296,433 @@ function SendWhatsAppModal({
   );
 }
 
+function BillingView() {
+  const [summary, setSummary] = useState<BillingSummary | null>(null);
+  const [dispatches, setDispatches] = useState<MessageDispatch[]>([]);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [selected, setSelected] = useState<MessageDispatch | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<MessageTemplate | null>(null);
+  const [templateContent, setTemplateContent] = useState('');
+  const [preview, setPreview] = useState('');
+  const [status, setStatus] = useState<MessageDispatch['status'] | ''>('');
+  const [search, setSearch] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [working, setWorking] = useState('');
+  const [error, setError] = useState('');
+
+  const loadBilling = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const filters: Parameters<typeof listBillingDispatches>[0] = { status, pageSize: 50 };
+      const searchTerm = search.trim();
+
+      if (searchTerm) filters.search = searchTerm;
+      if (dueDate) filters.dueDate = dueDate;
+
+      const [nextSummary, nextDispatches, nextTemplates] = await Promise.all([
+        getBillingSummary(),
+        listBillingDispatches(filters),
+        listMessageTemplates(),
+      ]);
+      setSummary(nextSummary);
+      setDispatches(nextDispatches.items);
+      setTemplates(nextTemplates);
+      setSelected((current) => {
+        if (!current) return nextDispatches.items[0] ?? null;
+        return (
+          nextDispatches.items.find((dispatch) => dispatch.id === current.id) ??
+          nextDispatches.items[0] ??
+          null
+        );
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar cobrancas.');
+    } finally {
+      setLoading(false);
+    }
+  }, [dueDate, search, status]);
+
+  useEffect(() => {
+    void loadBilling();
+  }, [loadBilling]);
+
+  async function selectDispatch(dispatch: MessageDispatch) {
+    setError('');
+
+    try {
+      setSelected(await getBillingDispatch(dispatch.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel abrir a cobranca.');
+    }
+  }
+
+  async function runReconcile() {
+    setWorking('reconcile');
+    setError('');
+
+    try {
+      await reconcileBilling();
+      await loadBilling();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel reconciliar cobrancas.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function runSendNow(dispatch: MessageDispatch) {
+    setWorking(dispatch.id);
+    setError('');
+
+    try {
+      await sendBillingNow(dispatch.id);
+      await loadBilling();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel processar a cobranca.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  function openTemplate(template: MessageTemplate) {
+    setEditingTemplate(template);
+    setTemplateContent(template.content);
+    setPreview('');
+  }
+
+  async function saveTemplate() {
+    if (!editingTemplate) return;
+    setWorking('template');
+    setError('');
+
+    try {
+      await updateMessageTemplate(editingTemplate.id, { content: templateContent });
+      setEditingTemplate(null);
+      await loadBilling();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar o template.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function toggleTemplate(template: MessageTemplate) {
+    setWorking(template.id);
+    setError('');
+
+    try {
+      await updateMessageTemplate(template.id, { active: !template.active });
+      await loadBilling();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel alterar o template.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function loadPreview() {
+    if (!editingTemplate) return;
+    setWorking('preview');
+    setError('');
+
+    try {
+      const result = await previewMessageTemplate(editingTemplate.id, { content: templateContent });
+      setPreview(result.renderedContent);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel gerar preview.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  return (
+    <>
+      {error ? <div className="notice danger">{error}</div> : null}
+      <div className="metric-grid billing-kpis">
+        {[
+          ['Agendadas', summary?.scheduled ?? 0],
+          ['Enviadas', summary?.sent ?? 0],
+          ['Falhas', summary?.failed ?? 0],
+          ['Ignoradas/canceladas', summary?.ignoredOrCanceled ?? 0],
+        ].map(([label, value]) => (
+          <article className="metric-card compact" key={label}>
+            <span className="metric-label">{label}</span>
+            <strong className="metric-value">{loading ? '-' : value}</strong>
+          </article>
+        ))}
+      </div>
+
+      <div className="workspace-grid billing-grid">
+        <section className="workspace-main">
+          <div className="toolbar">
+            <div className="search-row">
+              <Search aria-hidden="true" size={18} />
+              <input
+                placeholder="Buscar por cliente, referencia ou telefone"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as MessageDispatch['status'] | '')}
+            >
+              <option value="">Todos os status</option>
+              <option value="SCHEDULED">Agendadas</option>
+              <option value="PROCESSING">Processando</option>
+              <option value="SENT">Enviadas</option>
+              <option value="FAILED">Falhas</option>
+              <option value="CANCELED">Canceladas</option>
+              <option value="IGNORED">Ignoradas</option>
+            </select>
+            <input
+              aria-label="Vencimento"
+              type="date"
+              value={dueDate}
+              onChange={(event) => setDueDate(event.target.value)}
+            />
+            <button className="secondary-button" type="button" onClick={() => void loadBilling()}>
+              <RefreshCcw aria-hidden="true" size={16} />
+              Atualizar
+            </button>
+            <button
+              className="primary-button"
+              disabled={working === 'reconcile'}
+              type="button"
+              onClick={() => void runReconcile()}
+            >
+              <CalendarClock aria-hidden="true" size={16} />
+              Reconciliar
+            </button>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Telefone</th>
+                  <th>Vencimento</th>
+                  <th>Agendada para</th>
+                  <th>Tentativas</th>
+                  <th>Status</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dispatches.map((dispatch) => (
+                  <tr
+                    className={selected?.id === dispatch.id ? 'selected-row' : ''}
+                    key={dispatch.id}
+                    onClick={() => void selectDispatch(dispatch)}
+                  >
+                    <td>{dispatch.client?.name ?? 'Cliente nao vinculado'}</td>
+                    <td>{dispatch.phone}</td>
+                    <td>
+                      {dispatch.receivable?.dueDate ? formatDate(dispatch.receivable.dueDate) : '-'}
+                    </td>
+                    <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
+                    <td>{dispatch.attempts ?? 0}/3</td>
+                    <td>
+                      <span className={`pill ${dispatch.status.toLowerCase()}`}>
+                        {billingStatusLabel(dispatch.status)}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="secondary-button"
+                        disabled={
+                          working === dispatch.id ||
+                          !['SCHEDULED', 'FAILED'].includes(dispatch.status)
+                        }
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void runSendNow(dispatch);
+                        }}
+                      >
+                        <Send aria-hidden="true" size={16} />
+                        Enviar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!dispatches.length ? (
+              <div className="empty-state">
+                {loading ? 'Carregando...' : 'Nenhuma cobranca encontrada.'}
+              </div>
+            ) : null}
+          </div>
+
+          <section className="panel template-panel">
+            <PanelHeader title="Templates" />
+            <div className="mini-list">
+              {templates.map((template) => (
+                <article key={template.id}>
+                  <strong>{template.name}</strong>
+                  <span>
+                    {template.type} | {template.active ? 'Ativo' : 'Inativo'}
+                  </span>
+                  <p>{template.content}</p>
+                  <div className="button-row">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => openTemplate(template)}
+                    >
+                      <Pencil aria-hidden="true" size={16} />
+                      Editar
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={working === template.id}
+                      type="button"
+                      onClick={() => void toggleTemplate(template)}
+                    >
+                      {template.active ? 'Desativar' : 'Ativar'}
+                    </button>
+                  </div>
+                </article>
+              ))}
+              {!templates.length ? (
+                <div className="empty-state">Nenhum template cadastrado.</div>
+              ) : null}
+            </div>
+          </section>
+        </section>
+
+        <aside className="detail-panel">
+          {selected ? (
+            <>
+              <div className="detail-header">
+                <div>
+                  <h2>{selected.client?.name ?? 'Cobranca'}</h2>
+                  <span>{selected.idempotencyKey ?? selected.requestId}</span>
+                </div>
+                <span className={`pill ${selected.status.toLowerCase()}`}>
+                  {billingStatusLabel(selected.status)}
+                </span>
+              </div>
+              <dl className="detail-list">
+                <div>
+                  <dt>Referencia</dt>
+                  <dd>{selected.client?.reference ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>Plano</dt>
+                  <dd>{selected.client?.planName ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>Valor</dt>
+                  <dd>
+                    {selected.receivable?.amount ? formatCurrency(selected.receivable.amount) : '-'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Proxima tentativa</dt>
+                  <dd>{selected.nextAttemptAt ? formatDateTime(selected.nextAttemptAt) : '-'}</dd>
+                </div>
+                <div>
+                  <dt>Provider</dt>
+                  <dd>{selected.providerMessageId ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>Enviada em</dt>
+                  <dd>{selected.sentAt ? formatDateTime(selected.sentAt) : '-'}</dd>
+                </div>
+              </dl>
+              <div className="preview-box">
+                <span>Mensagem renderizada</span>
+                <strong>{selected.renderedContent ?? selected.body}</strong>
+              </div>
+              {selected.errorMessage ? (
+                <div className="notice warning">
+                  {selected.errorCode ? `${selected.errorCode}: ` : ''}
+                  {selected.errorMessage}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="empty-state">Selecione uma cobranca para visualizar detalhes.</div>
+          )}
+        </aside>
+      </div>
+
+      {editingTemplate ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" aria-labelledby="billing-template-title">
+            <header className="modal-header">
+              <h2 id="billing-template-title">Editar template</h2>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setEditingTemplate(null)}
+              >
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <label className="field">
+              <span>Conteudo</span>
+              <textarea
+                rows={7}
+                value={templateContent}
+                onChange={(event) => setTemplateContent(event.target.value)}
+              />
+            </label>
+            <div className="mini-list">
+              <article>
+                <strong>Variaveis</strong>
+                <span>
+                  {editingTemplate.variables.map((variable) => `{{${variable}}}`).join(' ')}
+                </span>
+              </article>
+            </div>
+            {preview ? (
+              <div className="preview-box">
+                <span>Preview</span>
+                <strong>{preview}</strong>
+              </div>
+            ) : null}
+            <div className="form-actions">
+              <span className="error-message">{error}</span>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void loadPreview()}
+                >
+                  <Eye aria-hidden="true" size={16} />
+                  Preview
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setEditingTemplate(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={working === 'template' || !templateContent.trim()}
+                  type="button"
+                  onClick={() => void saveTemplate()}
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function WhatsAppView() {
   const [connection, setConnection] = useState<WhatsAppConnection | null>(null);
   const [messages, setMessages] = useState<MessageDispatch[]>([]);
@@ -2077,6 +2517,20 @@ function messageTypePreview(type: WhatsAppInboundMessageType) {
 
 function messageTypeLabel(type: WhatsAppInboundMessageType) {
   return messageTypePreview(type).replace('[', '').replace(']', '');
+}
+
+function billingStatusLabel(status: MessageDispatch['status']) {
+  const labels: Record<MessageDispatch['status'], string> = {
+    PENDING: 'Pendente',
+    SCHEDULED: 'Agendada',
+    PROCESSING: 'Processando',
+    SENT: 'Enviada',
+    FAILED: 'Falha',
+    CANCELED: 'Cancelada',
+    IGNORED: 'Ignorada',
+  };
+
+  return labels[status];
 }
 
 function formatDateTime(value: string) {

@@ -249,6 +249,75 @@ export interface WhatsAppProviderHealth {
   version?: string | null;
 }
 
+export type WhatsAppPendingContactStatus = 'PENDENTE' | 'APROVADO' | 'IGNORADO';
+export type WhatsAppInboundMessageType =
+  | 'text'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'document'
+  | 'sticker'
+  | 'location'
+  | 'live_location'
+  | 'contact'
+  | 'contacts'
+  | 'reaction'
+  | 'button_response'
+  | 'list_response'
+  | 'interactive_response'
+  | 'unknown';
+
+export interface WhatsAppInboundMessage {
+  id: string;
+  providerMessageId: string | null;
+  phoneNormalized: string | null;
+  direction: 'INCOMING' | 'OUTGOING';
+  messageType: WhatsAppInboundMessageType;
+  text: string | null;
+  messageTimestamp: string | null;
+  receivedAt: string;
+  contactName: string | null;
+  mediaMetadata: Record<string, unknown> | null;
+}
+
+export interface WhatsAppPendingContact {
+  id: string;
+  whatsAppConnectionId: string;
+  phone: string;
+  phoneNormalized: string;
+  contactName: string | null;
+  status: WhatsAppPendingContactStatus;
+  firstMessageText: string | null;
+  lastMessageText: string | null;
+  firstMessageType: WhatsAppInboundMessageType;
+  lastMessageType: WhatsAppInboundMessageType;
+  firstMessageId: string | null;
+  lastMessageId: string | null;
+  firstContactAt: string;
+  lastContactAt: string;
+  messageCount: number;
+  clientId: string | null;
+  approvedAt: string | null;
+  ignoredAt: string | null;
+  ignoreReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  connection: Pick<WhatsAppConnection, 'id' | 'name' | 'provider'>;
+  client: Pick<Client, 'id' | 'name' | 'reference'> | null;
+  inboundMessages?: WhatsAppInboundMessage[];
+}
+
+export interface WhatsAppPendingContactsSummary {
+  pending: number;
+  approvedToday: number;
+  ignored: number;
+}
+
+export interface PaginatedWhatsAppPendingContacts {
+  items: WhatsAppPendingContact[];
+  pagination: PaginatedClients['pagination'];
+}
+
 export interface FinancialTransactionPayload {
   description: string;
   categoryId: string;
@@ -271,6 +340,17 @@ export interface PaginatedClients {
 export interface ClientPayload {
   name: string;
   phone: string;
+  email?: string | undefined;
+  reference: string;
+  planId: string;
+  recurringValue: number;
+  dueDate: string;
+  billingNoticeDays: number;
+  notes?: string | undefined;
+}
+
+export interface ApproveWhatsAppPendingContactPayload {
+  name: string;
   email?: string | undefined;
   reference: string;
   planId: string;
@@ -607,4 +687,58 @@ export function listWhatsAppMessages() {
 
 export function getWhatsAppProviderHealth() {
   return apiFetch<WhatsAppProviderHealth>('/whatsapp/provider/health');
+}
+
+export function listWhatsAppPendingContacts(
+  filters: {
+    status?: WhatsAppPendingContactStatus | '';
+    search?: string;
+    connectionId?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set('status', filters.status);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.connectionId) params.set('connectionId', filters.connectionId);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+
+  const query = params.toString();
+  return apiFetch<PaginatedWhatsAppPendingContacts>(
+    `/whatsapp/pending-contacts${query ? `?${query}` : ''}`,
+  );
+}
+
+export function getWhatsAppPendingContactsSummary() {
+  return apiFetch<WhatsAppPendingContactsSummary>('/whatsapp/pending-contacts/summary');
+}
+
+export function getWhatsAppPendingContact(id: string) {
+  return apiFetch<WhatsAppPendingContact>(`/whatsapp/pending-contacts/${id}`);
+}
+
+export function ignoreWhatsAppPendingContact(id: string, reason?: string) {
+  return apiFetch<WhatsAppPendingContact>(`/whatsapp/pending-contacts/${id}/ignore`, {
+    method: 'POST',
+    body: JSON.stringify(reason ? { reason } : {}),
+  });
+}
+
+export function reopenWhatsAppPendingContact(id: string) {
+  return apiFetch<WhatsAppPendingContact>(`/whatsapp/pending-contacts/${id}/reopen`, {
+    method: 'POST',
+  });
+}
+
+export function approveWhatsAppPendingContact(
+  id: string,
+  payload: ApproveWhatsAppPendingContactPayload,
+) {
+  return apiFetch<Client>(`/whatsapp/pending-contacts/${id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

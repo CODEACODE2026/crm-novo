@@ -68,6 +68,35 @@ enum MessageDispatchStatus {
   FAILED
 }
 
+enum WhatsAppPendingContactStatus {
+  PENDENTE
+  APROVADO
+  IGNORADO
+}
+
+enum WhatsAppMessageDirection {
+  INCOMING
+  OUTGOING
+}
+
+enum WhatsAppInboundMessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  LOCATION
+  LIVE_LOCATION
+  CONTACT
+  CONTACTS
+  REACTION
+  BUTTON_RESPONSE
+  LIST_RESPONSE
+  INTERACTIVE_RESPONSE
+  UNKNOWN
+}
+
 model User {
   id                    String                 @id @default(uuid()) @db.Uuid
   name                  String
@@ -100,28 +129,30 @@ model Plan {
 }
 
 model Client {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  name                  String
-  phone                 String
-  phoneNormalized       String                 @unique
-  email                 String?
-  reference             String                 @unique
-  planId                String                 @db.Uuid
-  recurringValue        Decimal                @db.Decimal(12, 2)
-  dueDate               DateTime               @db.Date
-  billingAnchorDay      Int
-  billingNoticeDays     Int
-  notes                 String?
-  status                ClientStatus           @default(ATIVO)
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
-  plan                  Plan                   @relation(fields: [planId], references: [id], onDelete: Restrict)
-  statusHistory         ClientStatusHistory[]
-  events                ClientEvent[]
-  renewals              Renewal[]
-  receivables           Receivable[]
-  financialTransactions FinancialTransaction[]
-  messageDispatches     MessageDispatch[]
+  id                      String                   @id @default(uuid()) @db.Uuid
+  name                    String
+  phone                   String
+  phoneNormalized         String                   @unique
+  email                   String?
+  reference               String                   @unique
+  planId                  String                   @db.Uuid
+  recurringValue          Decimal                  @db.Decimal(12, 2)
+  dueDate                 DateTime                 @db.Date
+  billingAnchorDay        Int
+  billingNoticeDays       Int
+  notes                   String?
+  status                  ClientStatus             @default(ATIVO)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  plan                    Plan                     @relation(fields: [planId], references: [id], onDelete: Restrict)
+  statusHistory           ClientStatusHistory[]
+  events                  ClientEvent[]
+  renewals                Renewal[]
+  receivables             Receivable[]
+  financialTransactions   FinancialTransaction[]
+  messageDispatches       MessageDispatch[]
+  whatsappPendingContacts WhatsAppPendingContact[]
+  whatsappInboundMessages WhatsAppInboundMessage[]
 
   @@index([status])
   @@index([planId])
@@ -146,6 +177,8 @@ model WhatsAppConnection {
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
   messageDispatches      MessageDispatch[]
+  pendingContacts        WhatsAppPendingContact[]
+  inboundMessages        WhatsAppInboundMessage[]
 
   @@index([provider])
   @@index([status])
@@ -176,6 +209,72 @@ model MessageDispatch {
   @@index([origin])
   @@index([createdAt])
   @@map("message_dispatches")
+}
+
+model WhatsAppPendingContact {
+  id                   String                       @id @default(uuid()) @db.Uuid
+  whatsAppConnectionId String                       @db.Uuid
+  phone                String
+  phoneNormalized      String
+  contactName          String?
+  status               WhatsAppPendingContactStatus @default(PENDENTE)
+  firstMessageText     String?
+  lastMessageText      String?
+  firstMessageType     WhatsAppInboundMessageType
+  lastMessageType      WhatsAppInboundMessageType
+  firstMessageId       String?
+  lastMessageId        String?
+  firstContactAt       DateTime
+  lastContactAt        DateTime
+  messageCount         Int                          @default(1)
+  clientId             String?                      @db.Uuid
+  approvedAt           DateTime?
+  ignoredAt            DateTime?
+  ignoreReason         String?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  whatsAppConnection   WhatsAppConnection           @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  client               Client?                      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  inboundMessages      WhatsAppInboundMessage[]
+
+  @@unique([whatsAppConnectionId, phoneNormalized])
+  @@index([status])
+  @@index([phoneNormalized])
+  @@index([lastContactAt])
+  @@index([whatsAppConnectionId])
+  @@index([clientId])
+  @@map("whatsapp_pending_contacts")
+}
+
+model WhatsAppInboundMessage {
+  id                   String                     @id @default(uuid()) @db.Uuid
+  whatsAppConnectionId String                     @db.Uuid
+  pendingContactId     String?                    @db.Uuid
+  clientId             String?                    @db.Uuid
+  providerMessageId    String?
+  phoneNormalized      String?
+  direction            WhatsAppMessageDirection
+  messageType          WhatsAppInboundMessageType
+  text                 String?
+  messageTimestamp     DateTime?
+  receivedAt           DateTime                   @default(now())
+  contactName          String?
+  instanceName         String?
+  providerUserId       String?
+  mediaMetadata        Json?
+  createdAt            DateTime                   @default(now())
+  whatsAppConnection   WhatsAppConnection         @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  pendingContact       WhatsAppPendingContact?    @relation(fields: [pendingContactId], references: [id], onDelete: SetNull)
+  client               Client?                    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@unique([whatsAppConnectionId, providerMessageId])
+  @@index([phoneNormalized])
+  @@index([messageTimestamp])
+  @@index([receivedAt])
+  @@index([whatsAppConnectionId])
+  @@index([pendingContactId])
+  @@index([clientId])
+  @@map("whatsapp_inbound_messages")
 }
 
 model Renewal {

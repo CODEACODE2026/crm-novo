@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   BarChart3,
@@ -8,7 +8,9 @@ import {
   CalendarClock,
   CreditCard,
   DollarSign,
+  Eye,
   LayoutDashboard,
+  ListChecks,
   MessageCircle,
   Pencil,
   Plus,
@@ -47,18 +49,23 @@ import {
   getDashboardSummary,
   getFinancialSummary,
   getWhatsAppConnection,
+  getWhatsAppPendingContact,
+  getWhatsAppPendingContactsSummary,
   getWhatsAppProviderHealth,
   getWhatsAppQrCode,
+  ignoreWhatsAppPendingContact,
   listFinancialCategories,
   listClients,
   listFinancialTransactions,
   listPlans,
   listReceivables,
+  listWhatsAppPendingContacts,
   listWhatsAppMessages,
   logoutWhatsApp,
   payReceivable,
   previewRenewal,
   refreshWhatsAppStatus,
+  reopenWhatsAppPendingContact,
   sendWhatsAppMessage,
   updateClient,
   updateFinancialCategory,
@@ -69,6 +76,7 @@ import {
   createWhatsAppConnection,
   disconnectWhatsApp,
   configureWhatsAppWebhook,
+  approveWhatsAppPendingContact,
   type Client,
   type ClientStatus,
   type DashboardSummary as DashboardSummaryPayload,
@@ -84,10 +92,14 @@ import {
   type RenewalPreview,
   type MessageDispatch,
   type WhatsAppConnection,
+  type WhatsAppInboundMessageType,
+  type WhatsAppPendingContact,
+  type WhatsAppPendingContactStatus,
+  type WhatsAppPendingContactsSummary,
   type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
 
-type View = 'dashboard' | 'clients' | 'finance' | 'plans' | 'whatsapp';
+type View = 'dashboard' | 'clients' | 'finance' | 'plans' | 'whatsapp' | 'waitlist';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
 const navItems = [
@@ -96,6 +108,7 @@ const navItems = [
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
+  { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
 const futureNavItems = [
@@ -266,7 +279,9 @@ export default function DashboardPage() {
                   ? 'Financeiro'
                   : view === 'whatsapp'
                     ? 'WhatsApp'
-                    : 'Clientes'}
+                    : view === 'waitlist'
+                      ? 'Lista de Espera'
+                      : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -373,6 +388,16 @@ export default function DashboardPage() {
             />
           ) : null}
           {view === 'whatsapp' ? <WhatsAppView /> : null}
+          {view === 'waitlist' ? (
+            <WaitlistView
+              plans={plans}
+              onClientCreated={async (client) => {
+                await loadData();
+                setSelectedClient(client);
+                setView('clients');
+              }}
+            />
+          ) : null}
         </section>
         {renewalClient ? (
           <RenewalModal
@@ -1572,6 +1597,490 @@ function WhatsAppView() {
       ) : null}
     </>
   );
+}
+
+function WaitlistView({
+  plans,
+  onClientCreated,
+}: {
+  plans: Plan[];
+  onClientCreated: (client: Client) => Promise<void>;
+}) {
+  const [summary, setSummary] = useState<WhatsAppPendingContactsSummary | null>(null);
+  const [contacts, setContacts] = useState<WhatsAppPendingContact[]>([]);
+  const [selected, setSelected] = useState<WhatsAppPendingContact | null>(null);
+  const [status, setStatus] = useState<WhatsAppPendingContactStatus | ''>('PENDENTE');
+  const [search, setSearch] = useState('');
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [ignoreReason, setIgnoreReason] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadWaitlist = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const filters: Parameters<typeof listWhatsAppPendingContacts>[0] = { status, pageSize: 50 };
+      const searchTerm = search.trim();
+
+      if (searchTerm) {
+        filters.search = searchTerm;
+      }
+
+      const [nextSummary, nextContacts] = await Promise.all([
+        getWhatsAppPendingContactsSummary(),
+        listWhatsAppPendingContacts(filters),
+      ]);
+      setSummary(nextSummary);
+      setContacts(nextContacts.items);
+      setSelected((current) => {
+        if (!current) return nextContacts.items[0] ?? null;
+        return (
+          nextContacts.items.find((contact) => contact.id === current.id) ??
+          nextContacts.items[0] ??
+          null
+        );
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar a lista.');
+    } finally {
+      setLoading(false);
+    }
+  }, [search, status]);
+
+  useEffect(() => {
+    void loadWaitlist();
+  }, [loadWaitlist]);
+
+  async function selectContact(contact: WhatsAppPendingContact) {
+    setError('');
+
+    try {
+      const detail = await getWhatsAppPendingContact(contact.id);
+      setSelected(detail);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel abrir o contato.');
+    }
+  }
+
+  async function handleIgnore(contact: WhatsAppPendingContact) {
+    setError('');
+
+    try {
+      const updated = await ignoreWhatsAppPendingContact(
+        contact.id,
+        ignoreReason.trim() || undefined,
+      );
+      setIgnoreReason('');
+      setSelected(updated);
+      await loadWaitlist();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel ignorar o contato.');
+    }
+  }
+
+  async function handleReopen(contact: WhatsAppPendingContact) {
+    setError('');
+
+    try {
+      const updated = await reopenWhatsAppPendingContact(contact.id);
+      setSelected(updated);
+      await loadWaitlist();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel reabrir o contato.');
+    }
+  }
+
+  return (
+    <>
+      {error ? <div className="notice danger">{error}</div> : null}
+      <div className="metric-grid waitlist-kpis">
+        {[
+          ['Pendentes', summary?.pending ?? 0],
+          ['Aprovados hoje', summary?.approvedToday ?? 0],
+          ['Ignorados', summary?.ignored ?? 0],
+        ].map(([label, value]) => (
+          <article className="metric-card compact" key={label}>
+            <span className="metric-label">{label}</span>
+            <strong className="metric-value">{loading ? '-' : value}</strong>
+          </article>
+        ))}
+      </div>
+
+      <div className="workspace-grid waitlist-grid">
+        <section className="workspace-main">
+          <div className="toolbar">
+            <div className="search-row">
+              <Search aria-hidden="true" size={18} />
+              <input
+                placeholder="Buscar por nome ou telefone"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <select
+              value={status}
+              onChange={(event) =>
+                setStatus(event.target.value as WhatsAppPendingContactStatus | '')
+              }
+            >
+              <option value="">Todos os status</option>
+              <option value="PENDENTE">Pendentes</option>
+              <option value="APROVADO">Aprovados</option>
+              <option value="IGNORADO">Ignorados</option>
+            </select>
+            <button className="secondary-button" type="button" onClick={() => void loadWaitlist()}>
+              <RefreshCcw aria-hidden="true" size={16} />
+              Atualizar
+            </button>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>WhatsApp</th>
+                  <th>Ultima mensagem</th>
+                  <th>Primeiro contato</th>
+                  <th>Ultimo contato</th>
+                  <th>Mensagens</th>
+                  <th>Status</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contacts.map((contact) => (
+                  <tr
+                    className={selected?.id === contact.id ? 'selected-row' : ''}
+                    key={contact.id}
+                    onClick={() => void selectContact(contact)}
+                  >
+                    <td>{contact.contactName ?? 'Contato sem nome'}</td>
+                    <td>{contact.phoneNormalized}</td>
+                    <td>{waitlistMessagePreview(contact)}</td>
+                    <td>{formatDateTime(contact.firstContactAt)}</td>
+                    <td>{formatDateTime(contact.lastContactAt)}</td>
+                    <td>{contact.messageCount}</td>
+                    <td>
+                      <span className={`pill ${contact.status.toLowerCase()}`}>
+                        {contact.status}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void selectContact(contact);
+                        }}
+                      >
+                        <Eye aria-hidden="true" size={16} />
+                        Ver
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!contacts.length ? (
+              <div className="empty-state">
+                {loading ? 'Carregando...' : 'Nenhum contato na lista de espera.'}
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <aside className="detail-panel">
+          {selected ? (
+            <>
+              <div className="detail-header">
+                <div>
+                  <h2>{selected.contactName ?? 'Contato WhatsApp'}</h2>
+                  <span>{selected.phoneNormalized}</span>
+                </div>
+                <span className={`pill ${selected.status.toLowerCase()}`}>{selected.status}</span>
+              </div>
+              <dl className="detail-list">
+                <div>
+                  <dt>Instancia</dt>
+                  <dd>{selected.connection.name}</dd>
+                </div>
+                <div>
+                  <dt>Primeiro contato</dt>
+                  <dd>{formatDateTime(selected.firstContactAt)}</dd>
+                </div>
+                <div>
+                  <dt>Ultimo contato</dt>
+                  <dd>{formatDateTime(selected.lastContactAt)}</dd>
+                </div>
+                <div>
+                  <dt>Mensagens</dt>
+                  <dd>{selected.messageCount}</dd>
+                </div>
+              </dl>
+
+              <div className="button-row detail-actions">
+                <button
+                  className="primary-button"
+                  disabled={selected.status === 'APROVADO'}
+                  type="button"
+                  onClick={() => setApproveOpen(true)}
+                >
+                  <Plus aria-hidden="true" size={16} />
+                  Aprovar
+                </button>
+                {selected.status === 'IGNORADO' ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void handleReopen(selected)}
+                  >
+                    Reabrir
+                  </button>
+                ) : (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void handleIgnore(selected)}
+                  >
+                    Ignorar
+                  </button>
+                )}
+              </div>
+
+              {selected.status !== 'IGNORADO' ? (
+                <label className="field">
+                  <span>Motivo para ignorar</span>
+                  <textarea
+                    value={ignoreReason}
+                    onChange={(event) => setIgnoreReason(event.target.value)}
+                  />
+                </label>
+              ) : null}
+
+              <div className="mini-list">
+                {(selected.inboundMessages ?? []).map((message) => (
+                  <article key={message.id}>
+                    <strong>{messageTypeLabel(message.messageType)}</strong>
+                    <span>{formatDateTime(message.messageTimestamp ?? message.receivedAt)}</span>
+                    <p>{message.text ?? messageTypePreview(message.messageType)}</p>
+                  </article>
+                ))}
+                {!selected.inboundMessages?.length ? (
+                  <div className="empty-state">Abra um contato para ver o historico minimo.</div>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">Selecione um contato para visualizar detalhes.</div>
+          )}
+        </aside>
+      </div>
+
+      {approveOpen && selected ? (
+        <ApprovePendingContactModal
+          contact={selected}
+          plans={plans}
+          onClose={() => setApproveOpen(false)}
+          onApproved={async (client) => {
+            setApproveOpen(false);
+            await onClientCreated(client);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ApprovePendingContactModal({
+  contact,
+  plans,
+  onClose,
+  onApproved,
+}: {
+  contact: WhatsAppPendingContact;
+  plans: Plan[];
+  onClose: () => void;
+  onApproved: (client: Client) => Promise<void>;
+}) {
+  const initialPlan = plans[0];
+  const [name, setName] = useState(contact.contactName ?? '');
+  const [phone] = useState(contact.phoneNormalized);
+  const [email, setEmail] = useState('');
+  const [reference, setReference] = useState('');
+  const [planId, setPlanId] = useState(initialPlan?.id ?? '');
+  const [recurringValue, setRecurringValue] = useState(initialPlan?.defaultValue ?? '0.00');
+  const [dueDate, setDueDate] = useState('');
+  const [billingNoticeDays, setBillingNoticeDays] = useState('0');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  function handlePlanChange(nextPlanId: string) {
+    setPlanId(nextPlanId);
+    const selectedPlan = plans.find((plan) => plan.id === nextPlanId);
+    if (selectedPlan) setRecurringValue(selectedPlan.defaultValue);
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      const client = await approveWhatsAppPendingContact(contact.id, {
+        name,
+        email: email || undefined,
+        reference,
+        planId,
+        recurringValue: Number(recurringValue),
+        dueDate,
+        billingNoticeDays: Number(billingNoticeDays),
+        notes: notes || undefined,
+      });
+      await onApproved(client);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel aprovar o contato.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="approve-pending-title">
+        <header className="modal-header">
+          <h2 id="approve-pending-title">Transformar contato em cliente</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+        <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
+          <div className="form-grid">
+            <label className="field">
+              <span>Nome</span>
+              <input required value={name} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>WhatsApp</span>
+              <input readOnly value={phone} />
+            </label>
+            <label className="field">
+              <span>E-mail</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Referencia</span>
+              <input
+                required
+                value={reference}
+                onChange={(event) => setReference(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Plano</span>
+              <select
+                required
+                value={planId}
+                onChange={(event) => handlePlanChange(event.target.value)}
+              >
+                {plans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Valor</span>
+              <input
+                min="0"
+                step="0.01"
+                type="number"
+                value={recurringValue}
+                onChange={(event) => setRecurringValue(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Vencimento</span>
+              <input
+                required
+                type="date"
+                value={dueDate}
+                onChange={(event) => setDueDate(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Avisar cobranca</span>
+              <input
+                min="0"
+                type="number"
+                value={billingNoticeDays}
+                onChange={(event) => setBillingNoticeDays(event.target.value)}
+              />
+            </label>
+          </div>
+          <label className="field">
+            <span>Observacoes</span>
+            <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </label>
+          <div className="form-actions">
+            <span className="error-message">{error}</span>
+            <div className="button-row">
+              <button className="secondary-button" type="button" onClick={onClose}>
+                Cancelar
+              </button>
+              <button className="primary-button" disabled={loading} type="submit">
+                {loading ? 'Criando...' : 'Criar cliente'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function waitlistMessagePreview(contact: WhatsAppPendingContact) {
+  const text = contact.lastMessageText ?? messageTypePreview(contact.lastMessageType);
+  return text.length > 42 ? `${text.slice(0, 42)}...` : text;
+}
+
+function messageTypePreview(type: WhatsAppInboundMessageType) {
+  const labels: Record<WhatsAppInboundMessageType, string> = {
+    text: '[Texto]',
+    image: '[Imagem]',
+    video: '[Video]',
+    audio: '[Audio]',
+    document: '[Documento]',
+    sticker: '[Figurinha]',
+    location: '[Localizacao]',
+    live_location: '[Localizacao ao vivo]',
+    contact: '[Contato]',
+    contacts: '[Contatos]',
+    reaction: '[Reacao]',
+    button_response: '[Resposta de botao]',
+    list_response: '[Resposta de lista]',
+    interactive_response: '[Resposta interativa]',
+    unknown: '[Mensagem]',
+  };
+
+  return labels[type] ?? '[Mensagem]';
+}
+
+function messageTypeLabel(type: WhatsAppInboundMessageType) {
+  return messageTypePreview(type).replace('[', '').replace(']', '');
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString('pt-BR');
 }
 
 function RenewalModal({

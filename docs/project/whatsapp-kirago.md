@@ -48,3 +48,19 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - Se Kirago aceitar `Id`, o CRM envia o proprio `requestId`.
 - Em sucesso: `MessageDispatch` fica `SENT` e a timeline recebe evento compacto.
 - Em falha: `MessageDispatch` fica `FAILED` com erro sanitizado.
+
+## Sprint 7 - Lista de Espera
+
+- O webhook `POST /whatsapp/webhook/kirago` processa somente eventos `Message`.
+- O payload bruto da Kirago e normalizado pelo adapter `KiragoWebhookNormalizer`.
+- Mensagens de grupo, mensagens enviadas pelo proprio CRM/WhatsApp e eventos sem telefone real sao aceitos sem criar pendencia.
+- `WhatsAppInboundMessage` guarda rastreabilidade minima e idempotencia por `whatsAppConnectionId + providerMessageId`.
+- `WhatsAppPendingContact` representa um contato logico por `whatsAppConnectionId + phoneNormalized`.
+- Contatos desconhecidos criam ou atualizam entrada `PENDENTE` na Lista de Espera.
+- Telefones ja vinculados a clientes `ATIVO`, `INATIVO` ou `CANCELADO` nao criam contato pendente.
+- A aprovacao cria cliente em transacao, vincula o contato pendente e registra evento operacional no historico do cliente.
+- A Sprint 7 nao implementa chat completo, download de midia, resposta automatica, cobranca, recuperacao, PIX, Redis/BullMQ, Chatwoot, Typebot, grupos ou multiempresa.
+
+## Debito Operacional
+
+- Homologacao com webhook Kirago real permanece pendente para o ambiente Windows, quando `KIRAGO_ADMIN_TOKEN` e demais envs reais forem configurados.

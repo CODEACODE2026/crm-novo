@@ -454,6 +454,42 @@ a {
   padding: 18px;
 }
 
+.waitlist-kpis {
+  margin-bottom: 16px;
+}
+
+.waitlist-grid {
+  align-items: start;
+}
+
+.pill {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 8px;
+}
+
+.pill.pendente {
+  border-color: rgb(38 198 163 / 45%);
+  color: var(--accent-strong);
+}
+
+.pill.aprovado {
+  border-color: rgb(104 169 255 / 42%);
+  color: var(--info);
+}
+
+.pill.ignorado {
+  border-color: rgb(241 184 75 / 42%);
+  color: var(--warning);
+}
+
 .provider-health,
 .connection-status {
   display: inline-flex;

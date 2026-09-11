@@ -1,9 +1,12 @@
-import { Body, Controller, Get, Inject, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
+import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
+import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { WhatsAppService } from './whatsapp.service';
 
@@ -67,6 +70,40 @@ export class WhatsAppController {
   @Get('messages')
   listMessages() {
     return this.whatsAppService.listMessages();
+  }
+
+  @Get('pending-contacts')
+  listPendingContacts(@Query() query: ListWhatsAppPendingContactsDto) {
+    return this.whatsAppService.listPendingContacts(query);
+  }
+
+  @Get('pending-contacts/summary')
+  pendingContactsSummary() {
+    return this.whatsAppService.pendingContactsSummary();
+  }
+
+  @Get('pending-contacts/:id')
+  getPendingContact(@Param('id') id: string) {
+    return this.whatsAppService.getPendingContact(id);
+  }
+
+  @Post('pending-contacts/:id/approve')
+  approvePendingContact(
+    @Param('id') id: string,
+    @Body() dto: ApproveWhatsAppPendingContactDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.whatsAppService.approvePendingContact(id, dto, request.user.id);
+  }
+
+  @Post('pending-contacts/:id/ignore')
+  ignorePendingContact(@Param('id') id: string, @Body() dto: IgnoreWhatsAppPendingContactDto) {
+    return this.whatsAppService.ignorePendingContact(id, dto);
+  }
+
+  @Post('pending-contacts/:id/reopen')
+  reopenPendingContact(@Param('id') id: string) {
+    return this.whatsAppService.reopenPendingContact(id);
   }
 
   @Get('provider/health')

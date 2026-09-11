@@ -10,29 +10,51 @@ import { ConfigService } from '@nestjs/config';
 import {
   MessageDispatch,
   Prisma,
+  WhatsAppInboundMessageType,
   WhatsAppConnection,
   WhatsAppConnectionStatus,
 } from '@prisma/client';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { PlansService } from '../plans/plans.service';
+import {
+  formatBusinessDate,
+  getBusinessDateDay,
+  parseBusinessDate,
+} from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
+import {
+  KiragoWebhookNormalizer,
+  type NormalizedMessageType,
+  type NormalizedWhatsAppMessage,
+} from './kirago/kirago-webhook-normalizer';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from './provider/whatsapp-provider';
 import { TokenEncryptionService } from './security/token-encryption.service';
+import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
+import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
+import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
+const pageSizeLimit = 100;
 
 @Injectable()
 export class WhatsAppService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(WHATSAPP_PROVIDER) private readonly provider: WhatsAppProvider,
+    @Inject(PlansService)
+    private readonly plansService: PlansService,
+    @Inject(TokenEncryptionService)
     private readonly encryption: TokenEncryptionService,
+    @Inject(ConfigService)
     private readonly config: ConfigService,
+    @Inject(KiragoWebhookNormalizer)
+    private readonly normalizer: KiragoWebhookNormalizer,
   ) {}
 
   async getConnection() {
@@ -299,16 +321,397 @@ export class WhatsAppService {
     }
   }
 
-  receiveWebhook(payload: unknown) {
+  async listPendingContacts(query: ListWhatsAppPendingContactsDto) {
+    const page = query.page ?? 1;
+    const pageSize = Math.min(query.pageSize ?? 20, pageSizeLimit);
+    const where = this.buildPendingContactWhere(query);
+    const orderBy = this.buildPendingContactOrderBy(query);
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.whatsAppPendingContact.findMany({
+        where,
+        include: { whatsAppConnection: true, client: true },
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.whatsAppPendingContact.count({ where }),
+    ]);
+
+    return {
+      items: items.map((contact) => this.presentPendingContact(contact)),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    };
+  }
+
+  async pendingContactsSummary() {
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const [pending, approvedToday, ignored] = await this.prisma.$transaction([
+      this.prisma.whatsAppPendingContact.count({ where: { status: 'PENDENTE' } }),
+      this.prisma.whatsAppPendingContact.count({
+        where: { status: 'APROVADO', approvedAt: { gte: todayStart } },
+      }),
+      this.prisma.whatsAppPendingContact.count({ where: { status: 'IGNORADO' } }),
+    ]);
+
+    return { pending, approvedToday, ignored };
+  }
+
+  async getPendingContact(id: string) {
+    const contact = await this.prisma.whatsAppPendingContact.findUnique({
+      where: { id },
+      include: {
+        whatsAppConnection: true,
+        client: true,
+        inboundMessages: { orderBy: { receivedAt: 'desc' }, take: 20 },
+      },
+    });
+
+    if (!contact) {
+      throw new NotFoundException('Contato da lista de espera nao encontrado.');
+    }
+
+    return this.presentPendingContactDetail(contact);
+  }
+
+  async ignorePendingContact(id: string, dto: IgnoreWhatsAppPendingContactDto) {
+    const current = await this.prisma.whatsAppPendingContact.findUnique({ where: { id } });
+
+    if (!current) {
+      throw new NotFoundException('Contato da lista de espera nao encontrado.');
+    }
+
+    if (current.status !== 'PENDENTE') {
+      throw new BadRequestException('Somente contatos pendentes podem ser ignorados.');
+    }
+
+    const contact = await this.prisma.whatsAppPendingContact.update({
+      where: { id },
+      data: {
+        status: 'IGNORADO',
+        ignoredAt: new Date(),
+        ignoreReason: this.optionalTrim(dto.reason),
+      },
+      include: { whatsAppConnection: true, client: true },
+    });
+
+    return this.presentPendingContact(contact);
+  }
+
+  async reopenPendingContact(id: string) {
+    const current = await this.prisma.whatsAppPendingContact.findUnique({ where: { id } });
+
+    if (!current) {
+      throw new NotFoundException('Contato da lista de espera nao encontrado.');
+    }
+
+    if (current.status !== 'IGNORADO') {
+      throw new BadRequestException('Somente contatos ignorados podem ser reabertos.');
+    }
+
+    const contact = await this.prisma.whatsAppPendingContact.update({
+      where: { id },
+      data: { status: 'PENDENTE', ignoredAt: null, ignoreReason: null },
+      include: { whatsAppConnection: true, client: true },
+    });
+
+    return this.presentPendingContact(contact);
+  }
+
+  async approvePendingContact(
+    id: string,
+    dto: ApproveWhatsAppPendingContactDto,
+    actorUserId: string,
+  ) {
+    const pending = await this.prisma.whatsAppPendingContact.findUnique({ where: { id } });
+
+    if (!pending) {
+      throw new NotFoundException('Contato da lista de espera nao encontrado.');
+    }
+
+    if (pending.status === 'APROVADO') {
+      throw new ConflictException('Contato ja aprovado.');
+    }
+
+    const dueDate = parseBusinessDate(dto.dueDate);
+    await this.plansService.ensureActivePlan(dto.planId);
+
+    const existingClient = await this.prisma.client.findUnique({
+      where: { phoneNormalized: pending.phoneNormalized },
+    });
+
+    if (existingClient) {
+      throw new ConflictException('Ja existe um cliente cadastrado com este telefone.');
+    }
+
+    try {
+      const client = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.client.create({
+          data: {
+            name: dto.name.trim(),
+            phone: pending.phone,
+            phoneNormalized: pending.phoneNormalized,
+            email: this.optionalTrim(dto.email),
+            reference: dto.reference.trim(),
+            planId: dto.planId,
+            recurringValue: dto.recurringValue,
+            dueDate,
+            billingAnchorDay: getBusinessDateDay(dueDate),
+            billingNoticeDays: dto.billingNoticeDays,
+            notes: this.optionalTrim(dto.notes),
+          },
+          include: { plan: true },
+        });
+
+        await tx.whatsAppPendingContact.update({
+          where: { id },
+          data: {
+            status: 'APROVADO',
+            clientId: created.id,
+            approvedAt: new Date(),
+            ignoredAt: null,
+            ignoreReason: null,
+          },
+        });
+
+        await tx.whatsAppInboundMessage.updateMany({
+          where: { pendingContactId: id },
+          data: { clientId: created.id },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: created.id,
+            type: 'CLIENT_CREATED',
+            title: 'Cliente criado a partir de contato recebido pelo WhatsApp.',
+            metadata: { pendingContactId: id },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return created;
+      });
+
+      return this.presentApprovedClient(client);
+    } catch (error) {
+      this.handleClientCreationError(error);
+    }
+  }
+
+  async receiveWebhook(payload: unknown) {
     if (!payload || typeof payload !== 'object') {
       throw new BadRequestException('Payload invalido.');
     }
 
-    const event = this.extractWebhookEvent(payload as Record<string, unknown>);
+    const normalized = this.normalizer.normalize(payload);
+
+    if (!normalized) {
+      return { received: true, processed: false, reason: 'ignored_event' };
+    }
+
+    if (normalized.isGroup) {
+      return { received: true, processed: false, reason: 'ignored_group' };
+    }
+
+    if (normalized.direction === 'OUTGOING') {
+      return { received: true, processed: false, reason: 'ignored_outgoing' };
+    }
+
+    if (!normalized.phone) {
+      return { received: true, processed: false, reason: 'missing_phone' };
+    }
+
+    const incoming = { ...normalized, phone: normalized.phone };
+    const connection = await this.findConnectionForWebhook(normalized);
+
+    if (!connection) {
+      return { received: true, processed: false, reason: 'connection_not_found' };
+    }
+
+    const result = await this.processIncomingWebhook(connection.id, incoming);
+    return { received: true, ...result };
+  }
+
+  private async processIncomingWebhook(
+    connectionId: string,
+    normalized: NormalizedWhatsAppMessage & { phone: string },
+  ) {
+    const client = await this.prisma.client.findUnique({
+      where: { phoneNormalized: normalized.phone },
+    });
+
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const inbound = await tx.whatsAppInboundMessage.create({
+          data: {
+            whatsAppConnectionId: connectionId,
+            clientId: client?.id ?? null,
+            providerMessageId: normalized.messageId,
+            phoneNormalized: normalized.phone,
+            direction: normalized.direction,
+            messageType: this.toPrismaMessageType(normalized.messageType),
+            text: normalized.text,
+            messageTimestamp: normalized.messageTimestamp,
+            receivedAt: normalized.receivedAt,
+            contactName: normalized.contactName,
+            instanceName: normalized.instanceName,
+            providerUserId: normalized.providerUserId,
+            mediaMetadata: (normalized.mediaMetadata ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+          },
+        });
+
+        if (client) {
+          return { processed: true, action: 'client_exists', inboundMessageId: inbound.id };
+        }
+
+        const contact = await tx.whatsAppPendingContact.upsert({
+          where: {
+            whatsAppConnectionId_phoneNormalized: {
+              whatsAppConnectionId: connectionId,
+              phoneNormalized: normalized.phone,
+            },
+          },
+          create: {
+            whatsAppConnectionId: connectionId,
+            phone: normalized.phone,
+            phoneNormalized: normalized.phone,
+            contactName: normalized.contactName,
+            status: 'PENDENTE',
+            firstMessageText: normalized.text,
+            lastMessageText: normalized.text,
+            firstMessageType: this.toPrismaMessageType(normalized.messageType),
+            lastMessageType: this.toPrismaMessageType(normalized.messageType),
+            firstMessageId: normalized.messageId,
+            lastMessageId: normalized.messageId,
+            firstContactAt: normalized.messageTimestamp ?? normalized.receivedAt,
+            lastContactAt: normalized.messageTimestamp ?? normalized.receivedAt,
+            messageCount: 1,
+          },
+          update: this.pendingContactWebhookUpdate(normalized),
+        });
+
+        await tx.whatsAppInboundMessage.update({
+          where: { id: inbound.id },
+          data: { pendingContactId: contact.id },
+        });
+
+        return {
+          processed: true,
+          action: 'pending_contact_upserted',
+          pendingContactId: contact.id,
+          inboundMessageId: inbound.id,
+        };
+      });
+
+      return result;
+    } catch (error) {
+      if (this.isDuplicateInboundMessage(error)) {
+        return { processed: true, action: 'duplicate_message' };
+      }
+
+      throw error;
+    }
+  }
+
+  private findConnectionForWebhook(normalized: NormalizedWhatsAppMessage) {
+    const filters: Prisma.WhatsAppConnectionWhereInput[] = [];
+
+    if (normalized.providerUserId) {
+      filters.push({ providerUserId: normalized.providerUserId });
+    }
+
+    if (normalized.instanceName) {
+      filters.push({ name: normalized.instanceName });
+    }
+
+    if (!filters.length) {
+      return null;
+    }
+
+    return this.prisma.whatsAppConnection.findFirst({
+      where: { provider: 'KIRAGO', OR: filters },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private buildPendingContactWhere(
+    query: ListWhatsAppPendingContactsDto,
+  ): Prisma.WhatsAppPendingContactWhereInput {
+    const where: Prisma.WhatsAppPendingContactWhereInput = {};
+
+    if (query.status) {
+      where.status = query.status;
+    }
+
+    if (query.connectionId) {
+      where.whatsAppConnectionId = query.connectionId;
+    }
+
+    if (query.search) {
+      const search = query.search.trim();
+      const normalizedPhone = this.tryNormalizePhone(search);
+      where.OR = [
+        { contactName: { contains: search, mode: 'insensitive' } },
+        ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
+      ];
+    }
+
+    if (query.startDate || query.endDate) {
+      where.lastContactAt = {
+        ...(query.startDate ? { gte: parseBusinessDate(query.startDate) } : {}),
+        ...(query.endDate ? { lte: parseBusinessDate(query.endDate) } : {}),
+      };
+    }
+
+    return where;
+  }
+
+  private buildPendingContactOrderBy(query: ListWhatsAppPendingContactsDto) {
+    const sortBy = query.sortBy ?? 'lastContactAt';
+    const sortDirection = query.sortDirection ?? 'desc';
+
+    return { [sortBy]: sortDirection };
+  }
+
+  private pendingContactWebhookUpdate(
+    normalized: NormalizedWhatsAppMessage & { phone: string },
+  ): Prisma.WhatsAppPendingContactUpdateInput {
     return {
-      received: true,
-      event,
+      ...(normalized.contactName ? { contactName: normalized.contactName } : {}),
+      lastMessageText: normalized.text,
+      lastMessageType: this.toPrismaMessageType(normalized.messageType),
+      lastMessageId: normalized.messageId,
+      lastContactAt: normalized.messageTimestamp ?? normalized.receivedAt,
+      messageCount: { increment: 1 },
     };
+  }
+
+  private async ensurePendingContactExists(id: string) {
+    const exists = await this.prisma.whatsAppPendingContact.count({ where: { id } });
+
+    if (!exists) {
+      throw new NotFoundException('Contato da lista de espera nao encontrado.');
+    }
+  }
+
+  private optionalTrim(value: string | undefined) {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  private tryNormalizePhone(value: string) {
+    try {
+      return normalizeBrazilPhone(value);
+    } catch {
+      return null;
+    }
   }
 
   private async createPendingDispatch(input: {
@@ -470,6 +873,86 @@ export class WhatsAppService {
     };
   }
 
+  private presentPendingContact(
+    contact: Prisma.WhatsAppPendingContactGetPayload<{
+      include: { whatsAppConnection: true; client: true };
+    }>,
+  ) {
+    return {
+      id: contact.id,
+      whatsAppConnectionId: contact.whatsAppConnectionId,
+      phone: contact.phone,
+      phoneNormalized: contact.phoneNormalized,
+      contactName: contact.contactName,
+      status: contact.status,
+      firstMessageText: contact.firstMessageText,
+      lastMessageText: contact.lastMessageText,
+      firstMessageType: this.fromPrismaMessageType(contact.firstMessageType),
+      lastMessageType: this.fromPrismaMessageType(contact.lastMessageType),
+      firstMessageId: contact.firstMessageId,
+      lastMessageId: contact.lastMessageId,
+      firstContactAt: contact.firstContactAt,
+      lastContactAt: contact.lastContactAt,
+      messageCount: contact.messageCount,
+      clientId: contact.clientId,
+      approvedAt: contact.approvedAt,
+      ignoredAt: contact.ignoredAt,
+      ignoreReason: contact.ignoreReason,
+      createdAt: contact.createdAt,
+      updatedAt: contact.updatedAt,
+      connection: {
+        id: contact.whatsAppConnection.id,
+        name: contact.whatsAppConnection.name,
+        provider: contact.whatsAppConnection.provider,
+      },
+      client: contact.client
+        ? {
+            id: contact.client.id,
+            name: contact.client.name,
+            reference: contact.client.reference,
+          }
+        : null,
+    };
+  }
+
+  private presentPendingContactDetail(
+    contact: Prisma.WhatsAppPendingContactGetPayload<{
+      include: {
+        whatsAppConnection: true;
+        client: true;
+        inboundMessages: { orderBy: { receivedAt: 'desc' }; take: 20 };
+      };
+    }>,
+  ) {
+    return {
+      ...this.presentPendingContact(contact),
+      inboundMessages: contact.inboundMessages.map((message) => ({
+        id: message.id,
+        providerMessageId: message.providerMessageId,
+        phoneNormalized: message.phoneNormalized,
+        direction: message.direction,
+        messageType: this.fromPrismaMessageType(message.messageType),
+        text: message.text,
+        messageTimestamp: message.messageTimestamp,
+        receivedAt: message.receivedAt,
+        contactName: message.contactName,
+        mediaMetadata: message.mediaMetadata,
+      })),
+    };
+  }
+
+  private presentApprovedClient(client: Prisma.ClientGetPayload<{ include: { plan: true } }>) {
+    return {
+      ...client,
+      recurringValue: client.recurringValue.toString(),
+      dueDate: formatBusinessDate(client.dueDate),
+      plan: {
+        ...client.plan,
+        defaultValue: client.plan.defaultValue.toString(),
+      },
+    };
+  }
+
   private messagePreview(body: string) {
     return body.length > messagePreviewLimit
       ? `${body.slice(0, messagePreviewLimit).trim()}...`
@@ -484,8 +967,72 @@ export class WhatsAppService {
     return 'Falha ao enviar mensagem WhatsApp.';
   }
 
-  private extractWebhookEvent(payload: Record<string, unknown>) {
-    const event = payload.event ?? payload.Event ?? payload.type ?? payload.Type;
-    return typeof event === 'string' ? event : 'unknown';
+  private toPrismaMessageType(type: NormalizedMessageType): WhatsAppInboundMessageType {
+    const map: Record<NormalizedMessageType, WhatsAppInboundMessageType> = {
+      text: 'TEXT',
+      image: 'IMAGE',
+      video: 'VIDEO',
+      audio: 'AUDIO',
+      document: 'DOCUMENT',
+      sticker: 'STICKER',
+      location: 'LOCATION',
+      live_location: 'LIVE_LOCATION',
+      contact: 'CONTACT',
+      contacts: 'CONTACTS',
+      reaction: 'REACTION',
+      button_response: 'BUTTON_RESPONSE',
+      list_response: 'LIST_RESPONSE',
+      interactive_response: 'INTERACTIVE_RESPONSE',
+      unknown: 'UNKNOWN',
+    };
+
+    return map[type];
+  }
+
+  private fromPrismaMessageType(type: WhatsAppInboundMessageType): NormalizedMessageType {
+    const map: Record<WhatsAppInboundMessageType, NormalizedMessageType> = {
+      TEXT: 'text',
+      IMAGE: 'image',
+      VIDEO: 'video',
+      AUDIO: 'audio',
+      DOCUMENT: 'document',
+      STICKER: 'sticker',
+      LOCATION: 'location',
+      LIVE_LOCATION: 'live_location',
+      CONTACT: 'contact',
+      CONTACTS: 'contacts',
+      REACTION: 'reaction',
+      BUTTON_RESPONSE: 'button_response',
+      LIST_RESPONSE: 'list_response',
+      INTERACTIVE_RESPONSE: 'interactive_response',
+      UNKNOWN: 'unknown',
+    };
+
+    return map[type];
+  }
+
+  private isDuplicateInboundMessage(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+      return false;
+    }
+
+    const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
+    return target.includes('providerMessageId');
+  }
+
+  private handleClientCreationError(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
+
+      if (target.includes('reference')) {
+        throw new ConflictException('Ja existe um cliente com esta referencia.');
+      }
+
+      if (target.includes('phoneNormalized')) {
+        throw new ConflictException('Ja existe um cliente cadastrado com este telefone.');
+      }
+    }
+
+    throw error;
   }
 }

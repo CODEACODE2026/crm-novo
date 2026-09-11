@@ -34,7 +34,14 @@ export interface Client {
 
 export interface ClientEvent {
   id: string;
-  type: 'CLIENT_CREATED' | 'CLIENT_UPDATED' | 'STATUS_CHANGED' | 'CLIENT_RENEWED';
+  type:
+    | 'CLIENT_CREATED'
+    | 'CLIENT_UPDATED'
+    | 'STATUS_CHANGED'
+    | 'CLIENT_RENEWED'
+    | 'PAYMENT_REGISTERED'
+    | 'RECEIVABLE_CANCELED'
+    | 'FINANCIAL_TRANSACTION_CREATED';
   title: string;
   description: string | null;
   createdAt: string;
@@ -125,6 +132,79 @@ export interface FinancialSummary {
   entries: string;
   expenses: string;
   balance: string;
+}
+
+export interface DashboardSummary {
+  period: {
+    startDate: string;
+    endDate: string;
+    label: string;
+  };
+  today: string;
+  clients: {
+    active: number;
+    inactive: number;
+    canceled: number;
+    newInPeriod: number;
+    distribution: Array<{ status: ClientStatus; total: number }>;
+  };
+  dueDates: {
+    dueToday: number;
+    upcomingSevenDays: number;
+    overdueClients: number;
+  };
+  finance: FinancialSummaryFields;
+  renewals: {
+    count: number;
+    amount: string;
+  };
+  charts: {
+    grouping: 'day' | 'month';
+    cashflow: Array<{ period: string; entries: string; expenses: string }>;
+    received: Array<{ period: string; amount: string }>;
+    clients: Array<{ label: string; value: number }>;
+  };
+  lists: {
+    dueToday: DashboardClientDue[];
+    upcomingDue: DashboardClientDue[];
+    overdueReceivables: DashboardOverdueReceivable[];
+    recentActivity: DashboardActivity[];
+  };
+}
+
+export type FinancialSummaryFields = Pick<
+  FinancialSummary,
+  'received' | 'receivablePending' | 'receivableOverdue' | 'entries' | 'expenses' | 'balance'
+>;
+
+export interface DashboardClientDue {
+  id: string;
+  name: string;
+  reference: string;
+  planName: string;
+  recurringValue: string;
+  dueDate: string;
+  status: ClientStatus;
+}
+
+export interface DashboardOverdueReceivable {
+  id: string;
+  clientId: string;
+  clientName: string;
+  clientReference: string;
+  description: string;
+  dueDate: string;
+  amount: string;
+  daysOverdue: number;
+}
+
+export interface DashboardActivity {
+  id: string;
+  type: string;
+  title: string;
+  description: string | null;
+  createdAt: string;
+  client: Pick<Client, 'id' | 'name' | 'reference'>;
 }
 
 export interface FinancialTransactionPayload {
@@ -334,6 +414,16 @@ export function deleteFinancialCategory(id: string) {
 
 export function getFinancialSummary() {
   return apiFetch<FinancialSummary>('/finance/summary');
+}
+
+export function getDashboardSummary(filters: { startDate?: string; endDate?: string } = {}) {
+  const params = new URLSearchParams();
+
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
+
+  const query = params.toString();
+  return apiFetch<DashboardSummary>(`/dashboard/summary${query ? `?${query}` : ''}`);
 }
 
 export function listReceivables(

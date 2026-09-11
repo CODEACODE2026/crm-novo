@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
+  Activity,
   BarChart3,
   Bell,
   CalendarClock,
@@ -37,6 +38,7 @@ import {
   formatCurrency,
   formatDate,
   getClient,
+  getDashboardSummary,
   getFinancialSummary,
   listFinancialCategories,
   listClients,
@@ -52,6 +54,7 @@ import {
   updatePlan,
   type Client,
   type ClientStatus,
+  type DashboardSummary as DashboardSummaryPayload,
   type FinancialCategory,
   type FinancialSummary,
   type FinancialTransaction,
@@ -65,6 +68,7 @@ import {
 } from '../../lib/crm-api';
 
 type View = 'dashboard' | 'clients' | 'finance' | 'plans';
+type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -84,7 +88,7 @@ const futureNavItems = [
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
-  const [view, setView] = useState<View>('clients');
+  const [view, setView] = useState<View>('dashboard');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [clientsPayload, setClientsPayload] = useState<PaginatedClients | null>(null);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -92,6 +96,7 @@ export default function DashboardPage() {
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [clientFormOpen, setClientFormOpen] = useState(false);
   const [planFormOpen, setPlanFormOpen] = useState(false);
+  const [financeInitialTab, setFinanceInitialTab] = useState<FinanceTab>('summary');
   const [renewalClient, setRenewalClient] = useState<Client | null>(null);
   const [renewalNotice, setRenewalNotice] = useState('');
   const [search, setSearch] = useState('');
@@ -102,19 +107,6 @@ export default function DashboardPage() {
   const [dataLoading, setDataLoading] = useState(false);
 
   const clients = clientsPayload?.items ?? [];
-
-  const metrics = useMemo(() => {
-    const active = clients.filter((client) => client.status === 'ATIVO').length;
-    const inactive = clients.filter((client) => client.status === 'INATIVO').length;
-    const cancelled = clients.filter((client) => client.status === 'CANCELADO').length;
-
-    return [
-      { label: 'Clientes filtrados', value: String(clientsPayload?.pagination.total ?? 0) },
-      { label: 'Ativos nesta lista', value: String(active) },
-      { label: 'Inativos nesta lista', value: String(inactive) },
-      { label: 'Cancelados nesta lista', value: String(cancelled) },
-    ];
-  }, [clients, clientsPayload?.pagination.total]);
 
   const loadData = useCallback(async () => {
     setDataLoading(true);
@@ -260,7 +252,26 @@ export default function DashboardPage() {
         <section className="content">
           {error ? <div className="notice danger">{error}</div> : null}
           {view === 'dashboard' ? (
-            <DashboardSummary dataLoading={dataLoading} metrics={metrics} />
+            <OperationalDashboard
+              onNewClient={() => {
+                setEditingClient(null);
+                setClientFormOpen(true);
+                setView('clients');
+              }}
+              onOpenClient={async (id) => {
+                const client = await getClient(id);
+                setSelectedClient(client);
+                setView('clients');
+              }}
+              onOpenFinance={(tab) => {
+                setFinanceInitialTab(tab);
+                setView('finance');
+              }}
+              onRenew={async (id) => {
+                const client = await getClient(id);
+                setRenewalClient(client);
+              }}
+            />
           ) : null}
           {view === 'clients' ? (
             <ClientsView
@@ -304,7 +315,9 @@ export default function DashboardPage() {
               renewalNotice={renewalNotice}
             />
           ) : null}
-          {view === 'finance' ? <FinanceView clients={clients} /> : null}
+          {view === 'finance' ? (
+            <FinanceView clients={clients} initialTab={financeInitialTab} />
+          ) : null}
           {view === 'plans' ? (
             <PlansView
               editingPlan={editingPlan}
@@ -347,29 +360,411 @@ export default function DashboardPage() {
   );
 }
 
-function DashboardSummary({
-  dataLoading,
-  metrics,
+function OperationalDashboard({
+  onNewClient,
+  onOpenClient,
+  onOpenFinance,
+  onRenew,
 }: {
-  dataLoading: boolean;
-  metrics: Array<{ label: string; value: string }>;
+  onNewClient: () => void;
+  onOpenClient: (id: string) => Promise<void>;
+  onOpenFinance: (tab: FinanceTab) => void;
+  onRenew: (id: string) => Promise<void>;
 }) {
+  const [summary, setSummary] = useState<DashboardSummaryPayload | null>(null);
+  const [periodMode, setPeriodMode] = useState<'current' | 'previous' | 'last30' | 'custom'>(
+    'current',
+  );
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const filters = buildDashboardPeriod(periodMode, customStart, customEnd);
+      const nextSummary = await getDashboardSummary(filters);
+      setSummary(nextSummary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar o dashboard.');
+    } finally {
+      setLoading(false);
+    }
+  }, [customEnd, customStart, periodMode]);
+
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
+
+  const cashflowMax = maxChartValue(
+    summary?.charts.cashflow.flatMap((item) => [item.entries, item.expenses]) ?? [],
+  );
+  const receivedMax = maxChartValue(summary?.charts.received.map((item) => item.amount) ?? []);
+  const clientMax = Math.max(...(summary?.charts.clients.map((item) => item.value) ?? [1]), 1);
+
   return (
     <>
-      <div className="metric-grid">
-        {metrics.map((metric) => (
-          <article className="metric-card" key={metric.label}>
-            <span className="metric-label">{metric.label}</span>
-            <strong className="metric-value">{dataLoading ? '-' : metric.value}</strong>
+      <div className="dashboard-toolbar">
+        <div className="period-controls">
+          {[
+            ['current', 'Mes atual'],
+            ['previous', 'Mes anterior'],
+            ['last30', 'Ultimos 30 dias'],
+            ['custom', 'Personalizado'],
+          ].map(([value, label]) => (
+            <button
+              className={periodMode === value ? 'active' : ''}
+              key={value}
+              type="button"
+              onClick={() => setPeriodMode(value as typeof periodMode)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {periodMode === 'custom' ? (
+          <div className="custom-period">
+            <input
+              aria-label="Data inicial"
+              type="date"
+              value={customStart}
+              onChange={(event) => setCustomStart(event.target.value)}
+            />
+            <input
+              aria-label="Data final"
+              type="date"
+              value={customEnd}
+              onChange={(event) => setCustomEnd(event.target.value)}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      {error ? <div className="notice danger">{error}</div> : null}
+
+      <div className="quick-actions">
+        <button className="primary-button" type="button" onClick={onNewClient}>
+          <Plus aria-hidden="true" size={16} />
+          Novo cliente
+        </button>
+        <button className="secondary-button" type="button" onClick={() => onOpenFinance('entries')}>
+          <DollarSign aria-hidden="true" size={16} />
+          Nova entrada
+        </button>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => onOpenFinance('expenses')}
+        >
+          <CreditCard aria-hidden="true" size={16} />
+          Nova saida
+        </button>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => onOpenFinance('receivables')}
+        >
+          Ver contas a receber
+        </button>
+      </div>
+
+      <div className="metric-grid dashboard-kpis">
+        {[
+          ['Clientes ativos', summary?.clients.active],
+          ['Clientes inativos', summary?.clients.inactive],
+          ['Clientes cancelados', summary?.clients.canceled],
+          ['Novos clientes', summary?.clients.newInPeriod],
+          ['Vencem hoje', summary?.dueDates.dueToday],
+          ['Proximos 7 dias', summary?.dueDates.upcomingSevenDays],
+          ['Clientes vencidos', summary?.dueDates.overdueClients],
+          ['Renovacoes', summary?.renewals.count],
+        ].map(([label, value]) => (
+          <article className="metric-card compact" key={label}>
+            <span className="metric-label">{label}</span>
+            <strong className="metric-value">{loading ? '-' : String(value ?? 0)}</strong>
           </article>
         ))}
       </div>
-      <section className="panel">
-        <h2>Modulo homologavel da Sprint 2</h2>
-        <p>Clientes, planos, filtros, status com justificativa e timeline operacional.</p>
-      </section>
+
+      <div className="metric-grid finance-kpis">
+        {[
+          ['Recebido', summary?.finance.received],
+          ['A receber', summary?.finance.receivablePending],
+          ['Vencido', summary?.finance.receivableOverdue],
+          ['Entradas', summary?.finance.entries],
+          ['Saidas', summary?.finance.expenses],
+          ['Saldo', summary?.finance.balance],
+          ['Valor renovado', summary?.renewals.amount],
+        ].map(([label, value]) => (
+          <article className="metric-card compact" key={label}>
+            <span className="metric-label">{label}</span>
+            <strong className="metric-value">
+              {loading ? '-' : formatCurrency(String(value ?? '0'))}
+            </strong>
+          </article>
+        ))}
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="panel chart-panel">
+          <h2>Entradas x saidas</h2>
+          <div className="bar-chart">
+            {(summary?.charts.cashflow ?? []).map((item) => (
+              <div className="bar-group" key={item.period}>
+                <span>{formatPeriodLabel(item.period)}</span>
+                <div className="bar-track">
+                  <i
+                    className="bar-entry"
+                    style={{ width: `${chartPercent(item.entries, cashflowMax)}%` }}
+                  />
+                  <i
+                    className="bar-expense"
+                    style={{ width: `${chartPercent(item.expenses, cashflowMax)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+            {!summary?.charts.cashflow.length ? (
+              <div className="empty-state">Sem dados.</div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="panel chart-panel">
+          <h2>Recebimentos</h2>
+          <div className="single-bar-chart">
+            {(summary?.charts.received ?? []).map((item) => (
+              <div className="bar-group" key={item.period}>
+                <span>{formatPeriodLabel(item.period)}</span>
+                <div className="bar-track">
+                  <i
+                    className="bar-received"
+                    style={{ width: `${chartPercent(item.amount, receivedMax)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+            {!summary?.charts.received.length ? (
+              <div className="empty-state">Sem dados.</div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="panel chart-panel">
+          <h2>Clientes</h2>
+          <div className="client-distribution">
+            {(summary?.charts.clients ?? []).map((item) => (
+              <div className="distribution-row" key={item.label}>
+                <span>{item.label}</span>
+                <div className="bar-track">
+                  <i style={{ width: `${(item.value / clientMax) * 100}%` }} />
+                </div>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <div className="dashboard-grid operational-grid">
+        <section className="panel">
+          <PanelHeader title="Vencimentos de hoje" />
+          <CompactClientDueTable
+            items={summary?.lists.dueToday ?? []}
+            onOpen={onOpenClient}
+            onRenew={onRenew}
+          />
+        </section>
+
+        <section className="panel">
+          <PanelHeader title="Proximos vencimentos" />
+          <CompactClientDueTable
+            items={summary?.lists.upcomingDue ?? []}
+            onOpen={onOpenClient}
+            onRenew={onRenew}
+          />
+        </section>
+
+        <section className="panel">
+          <PanelHeader title="Contas vencidas" onViewAll={() => onOpenFinance('receivables')} />
+          <OverdueReceivablesTable
+            items={summary?.lists.overdueReceivables ?? []}
+            onOpenFinance={() => onOpenFinance('receivables')}
+          />
+        </section>
+
+        <section className="panel">
+          <h2>Atividade recente</h2>
+          <div className="activity-list">
+            {(summary?.lists.recentActivity ?? []).map((event) => (
+              <button
+                className="activity-item"
+                key={event.id}
+                type="button"
+                onClick={() => void onOpenClient(event.client.id)}
+              >
+                <Activity aria-hidden="true" size={16} />
+                <span>
+                  <strong>{event.title}</strong>
+                  <small>
+                    {event.client.name} | {new Date(event.createdAt).toLocaleString('pt-BR')}
+                  </small>
+                  {event.description ? <em>{event.description}</em> : null}
+                </span>
+              </button>
+            ))}
+            {!summary?.lists.recentActivity.length ? (
+              <div className="empty-state">Sem atividade recente.</div>
+            ) : null}
+          </div>
+        </section>
+      </div>
     </>
   );
+}
+
+function PanelHeader({ title, onViewAll }: { title: string; onViewAll?: () => void }) {
+  return (
+    <div className="panel-header">
+      <h2>{title}</h2>
+      {onViewAll ? (
+        <button className="secondary-button" type="button" onClick={onViewAll}>
+          Ver todos
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function CompactClientDueTable({
+  items,
+  onOpen,
+  onRenew,
+}: {
+  items: DashboardSummaryPayload['lists']['dueToday'];
+  onOpen: (id: string) => Promise<void>;
+  onRenew: (id: string) => Promise<void>;
+}) {
+  if (!items.length) {
+    return <div className="empty-state">Nenhum cliente nesta lista.</div>;
+  }
+
+  return (
+    <div className="compact-table">
+      {items.map((client) => (
+        <article key={client.id}>
+          <div>
+            <strong>{client.name}</strong>
+            <span>
+              {client.reference} | {client.planName}
+            </span>
+          </div>
+          <span>{formatCurrency(client.recurringValue)}</span>
+          <span>{formatDate(client.dueDate)}</span>
+          <StatusBadge status={client.status} />
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void onOpen(client.id)}
+            >
+              Ver
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void onRenew(client.id)}
+            >
+              Renovar
+            </button>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function OverdueReceivablesTable({
+  items,
+  onOpenFinance,
+}: {
+  items: DashboardSummaryPayload['lists']['overdueReceivables'];
+  onOpenFinance: () => void;
+}) {
+  if (!items.length) {
+    return <div className="empty-state">Nenhuma conta vencida.</div>;
+  }
+
+  return (
+    <div className="compact-table">
+      {items.map((receivable) => (
+        <article key={receivable.id}>
+          <div>
+            <strong>{receivable.clientName}</strong>
+            <span>
+              {receivable.clientReference} | {receivable.description}
+            </span>
+          </div>
+          <span>{formatCurrency(receivable.amount)}</span>
+          <span>{formatDate(receivable.dueDate)}</span>
+          <span>{receivable.daysOverdue} dias</span>
+          <button className="secondary-button" type="button" onClick={onOpenFinance}>
+            Dar baixa
+          </button>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function buildDashboardPeriod(
+  mode: 'current' | 'previous' | 'last30' | 'custom',
+  customStart: string,
+  customEnd: string,
+) {
+  const today = new Date();
+  const toDateInput = (date: Date) => date.toISOString().slice(0, 10);
+
+  if (mode === 'custom') {
+    return customStart && customEnd ? { startDate: customStart, endDate: customEnd } : {};
+  }
+
+  if (mode === 'current') {
+    return {};
+  }
+
+  if (mode === 'last30') {
+    const start = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 29),
+    );
+    return { startDate: toDateInput(start), endDate: toDateInput(today) };
+  }
+
+  const monthOffset = mode === 'previous' ? -1 : 0;
+  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + monthOffset, 1));
+  const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + monthOffset + 1, 0));
+
+  return { startDate: toDateInput(start), endDate: toDateInput(end) };
+}
+
+function maxChartValue(values: string[]) {
+  return Math.max(...values.map((value) => Number(value)), 1);
+}
+
+function chartPercent(value: string, maxValue: number) {
+  return Math.max(3, (Number(value) / maxValue) * 100);
+}
+
+function formatPeriodLabel(period: string) {
+  if (period.length === 7) {
+    const [year, month] = period.split('-');
+    return `${month}/${year}`;
+  }
+
+  return formatDate(period);
 }
 
 function ClientsView({
@@ -851,10 +1246,8 @@ function RenewalModal({
   );
 }
 
-function FinanceView({ clients }: { clients: Client[] }) {
-  const [tab, setTab] = useState<'summary' | 'receivables' | 'entries' | 'expenses' | 'categories'>(
-    'summary',
-  );
+function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: FinanceTab }) {
+  const [tab, setTab] = useState<FinanceTab>(initialTab);
   const [summary, setSummary] = useState<FinancialSummary | null>(null);
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [receivables, setReceivables] = useState<Receivable[]>([]);
@@ -907,6 +1300,10 @@ function FinanceView({ clients }: { clients: Client[] }) {
   useEffect(() => {
     void loadFinance();
   }, [loadFinance]);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   async function reloadWithNotice(message: string) {
     setNotice(message);

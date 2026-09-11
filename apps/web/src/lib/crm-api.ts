@@ -30,6 +30,7 @@ export interface Client {
   statusHistory?: ClientStatusHistory[];
   renewals?: Renewal[];
   receivables?: Receivable[];
+  recoveryCampaigns?: RecoveryCampaign[];
 }
 
 export interface ClientEvent {
@@ -41,7 +42,11 @@ export interface ClientEvent {
     | 'CLIENT_RENEWED'
     | 'PAYMENT_REGISTERED'
     | 'RECEIVABLE_CANCELED'
-    | 'FINANCIAL_TRANSACTION_CREATED';
+    | 'FINANCIAL_TRANSACTION_CREATED'
+    | 'WHATSAPP_MESSAGE_SENT'
+    | 'RECOVERY_CAMPAIGN_STARTED'
+    | 'RECOVERY_CAMPAIGN_CANCELED'
+    | 'RECOVERY_CAMPAIGN_COMPLETED';
   title: string;
   description: string | null;
   createdAt: string;
@@ -270,12 +275,62 @@ export interface BillingSummary {
 export interface MessageTemplate {
   id: string;
   name: string;
-  type: 'BILLING_DUE';
+  type:
+    'BILLING_DUE' | 'RECOVERY_DAY_3' | 'RECOVERY_DAY_10' | 'RECOVERY_DAY_15' | 'RECOVERY_DAY_30';
   content: string;
   active: boolean;
   variables: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type RecoveryCampaignStatus = 'ATIVA' | 'CONCLUIDA' | 'CANCELADA';
+export type RecoveryCampaignStepStatus = 'SCHEDULED' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
+
+export interface RecoveryCampaignStep {
+  id: string;
+  campaignId: string;
+  stepNumber: number;
+  delayDays: number;
+  templateId: string | null;
+  dispatchId: string | null;
+  scheduledFor: string;
+  status: RecoveryCampaignStepStatus;
+  sentAt: string | null;
+  canceledAt: string | null;
+  template: Pick<MessageTemplate, 'id' | 'name' | 'type' | 'active'> | null;
+  dispatch: {
+    id: string;
+    status: MessageDispatch['status'];
+    attempts: number;
+    scheduledFor: string | null;
+    nextAttemptAt: string | null;
+    sentAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  } | null;
+}
+
+export interface RecoveryCampaign {
+  id: string;
+  clientId: string;
+  status: RecoveryCampaignStatus;
+  startedAt: string;
+  completedAt: string | null;
+  canceledAt: string | null;
+  cancelReason: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  client?: Pick<Client, 'id' | 'name' | 'reference' | 'status'> & { planName?: string | null };
+  steps: RecoveryCampaignStep[];
+}
+
+export interface RecoverySummary {
+  active: number;
+  completed: number;
+  canceled: number;
+  scheduled: number;
+  failed: number;
 }
 
 export interface PaginatedBillingDispatches {
@@ -520,10 +575,19 @@ export function updateClient(id: string, payload: ClientPayload) {
   });
 }
 
-export function updateClientStatus(id: string, status: ClientStatus, reason?: string) {
+export function updateClientStatus(
+  id: string,
+  status: ClientStatus,
+  reason?: string,
+  startRecovery?: boolean,
+) {
   return apiFetch<Client>(`/clients/${id}/status`, {
     method: 'PATCH',
-    body: JSON.stringify({ status, ...(reason ? { reason } : {}) }),
+    body: JSON.stringify({
+      status,
+      ...(reason ? { reason } : {}),
+      ...(startRecovery ? { startRecovery } : {}),
+    }),
   });
 }
 
@@ -795,6 +859,34 @@ export function previewMessageTemplate(
       method: 'POST',
       body: JSON.stringify(payload),
     },
+  );
+}
+
+export function getRecoverySummary() {
+  return apiFetch<RecoverySummary>('/recovery/summary');
+}
+
+export function listRecoveryCampaigns(
+  filters: { status?: RecoveryCampaignStatus | ''; search?: string; clientId?: string } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set('status', filters.status);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.clientId) params.set('clientId', filters.clientId);
+
+  const query = params.toString();
+  return apiFetch<RecoveryCampaign[]>(`/recovery/campaigns${query ? `?${query}` : ''}`);
+}
+
+export function cancelRecoveryCampaign(id: string) {
+  return apiFetch<RecoveryCampaign>(`/recovery/campaigns/${id}/cancel`, { method: 'POST' });
+}
+
+export function reconcileRecovery() {
+  return apiFetch<{ kept: number; created: number; canceled: number; completed: number }>(
+    '/recovery/reconcile',
+    { method: 'POST' },
   );
 }
 

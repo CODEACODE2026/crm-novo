@@ -1,6 +1,7 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RecoveryService } from '../recovery/recovery.service';
 import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
@@ -22,7 +23,10 @@ type RenewalResult = Prisma.RenewalGetPayload<{
 
 @Injectable()
 export class RenewalsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(RecoveryService) private readonly recoveryService: RecoveryService,
+  ) {}
 
   async preview(clientId: string, dto: RenewalPreviewDto) {
     const { client, plan, newDueDate, anchorDay } = await this.buildPreview(clientId, dto);
@@ -144,6 +148,10 @@ export class RenewalsService {
               reason: reactivationDescription,
               changedByUserId: actorUserId,
             },
+          });
+
+          await this.recoveryService.handleClientStatusChange(tx, client, 'ATIVO', {
+            actorUserId,
           });
         }
 

@@ -8,6 +8,7 @@ import {
 import { ClientStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PlansService } from '../plans/plans.service';
+import { RecoveryService } from '../recovery/recovery.service';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CreateClientDto } from './dto/create-client.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
@@ -27,6 +28,12 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
     receivables: { orderBy: { createdAt: 'desc' } };
     statusHistory: { orderBy: { createdAt: 'desc' } };
     events: { orderBy: { createdAt: 'desc' } };
+    recoveryCampaigns: {
+      orderBy: { startedAt: 'desc' };
+      include: {
+        steps: { include: { template: true; dispatch: true }; orderBy: { stepNumber: 'asc' } };
+      };
+    };
   };
 }>;
 
@@ -35,6 +42,7 @@ export class ClientsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(PlansService) private readonly plansService: PlansService,
+    @Inject(RecoveryService) private readonly recoveryService: RecoveryService,
   ) {}
 
   async list(query: ListClientsDto) {
@@ -52,6 +60,15 @@ export class ClientsService {
           receivables: { orderBy: { createdAt: 'desc' } },
           statusHistory: { orderBy: { createdAt: 'desc' } },
           events: { orderBy: { createdAt: 'desc' } },
+          recoveryCampaigns: {
+            orderBy: { startedAt: 'desc' },
+            include: {
+              steps: {
+                include: { template: true, dispatch: true },
+                orderBy: { stepNumber: 'asc' },
+              },
+            },
+          },
         },
         orderBy,
         skip: (page - 1) * pageSize,
@@ -80,6 +97,12 @@ export class ClientsService {
         receivables: { orderBy: { createdAt: 'desc' } },
         statusHistory: { orderBy: { createdAt: 'desc' } },
         events: { orderBy: { createdAt: 'desc' } },
+        recoveryCampaigns: {
+          orderBy: { startedAt: 'desc' },
+          include: {
+            steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
+          },
+        },
       },
     });
 
@@ -198,7 +221,7 @@ export class ClientsService {
   }
 
   async updateStatus(id: string, dto: UpdateClientStatusDto, actorUserId: string) {
-    const client = await this.prisma.client.findUnique({ where: { id } });
+    const client = await this.prisma.client.findUnique({ where: { id }, include: { plan: true } });
 
     if (!client) {
       throw new NotFoundException('Cliente nao encontrado.');
@@ -238,6 +261,11 @@ export class ClientsService {
           description: reason ? `Motivo: ${reason}` : null,
           createdByUserId: actorUserId,
         },
+      });
+
+      await this.recoveryService.handleClientStatusChange(tx, client, dto.status, {
+        startRecovery: dto.startRecovery === true,
+        actorUserId,
       });
     });
 
@@ -335,6 +363,47 @@ export class ClientsService {
               amount: receivable.amount.toString(),
               dueDate: formatBusinessDate(receivable.dueDate),
               displayStatus: getReceivableDisplayStatus(receivable.status, receivable.dueDate),
+            })),
+            recoveryCampaigns: client.recoveryCampaigns.map((campaign) => ({
+              id: campaign.id,
+              clientId: campaign.clientId,
+              status: campaign.status,
+              startedAt: campaign.startedAt.toISOString(),
+              completedAt: campaign.completedAt?.toISOString() ?? null,
+              canceledAt: campaign.canceledAt?.toISOString() ?? null,
+              cancelReason: campaign.cancelReason,
+              steps: campaign.steps.map((step) => ({
+                id: step.id,
+                campaignId: step.campaignId,
+                stepNumber: step.stepNumber,
+                delayDays: step.delayDays,
+                templateId: step.templateId,
+                dispatchId: step.dispatchId,
+                scheduledFor: step.scheduledFor.toISOString(),
+                status: step.status,
+                sentAt: step.sentAt?.toISOString() ?? null,
+                canceledAt: step.canceledAt?.toISOString() ?? null,
+                template: step.template
+                  ? {
+                      id: step.template.id,
+                      name: step.template.name,
+                      type: step.template.type,
+                      active: step.template.active,
+                    }
+                  : null,
+                dispatch: step.dispatch
+                  ? {
+                      id: step.dispatch.id,
+                      status: step.dispatch.status,
+                      attempts: step.dispatch.attempts,
+                      scheduledFor: step.dispatch.scheduledFor?.toISOString() ?? null,
+                      nextAttemptAt: step.dispatch.nextAttemptAt?.toISOString() ?? null,
+                      sentAt: step.dispatch.sentAt?.toISOString() ?? null,
+                      errorCode: step.dispatch.errorCode,
+                      errorMessage: step.dispatch.errorMessage,
+                    }
+                  : null,
+              })),
             })),
           }
         : {}),

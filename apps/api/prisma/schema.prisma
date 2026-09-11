@@ -26,6 +26,9 @@ enum ClientEventType {
   RECEIVABLE_CANCELED
   FINANCIAL_TRANSACTION_CREATED
   WHATSAPP_MESSAGE_SENT
+  RECOVERY_CAMPAIGN_STARTED
+  RECOVERY_CAMPAIGN_CANCELED
+  RECOVERY_CAMPAIGN_COMPLETED
 }
 
 enum ReceivableStatus {
@@ -74,6 +77,24 @@ enum MessageDispatchStatus {
 
 enum MessageTemplateType {
   BILLING_DUE
+  RECOVERY_DAY_3
+  RECOVERY_DAY_10
+  RECOVERY_DAY_15
+  RECOVERY_DAY_30
+}
+
+enum RecoveryCampaignStatus {
+  ATIVA
+  CONCLUIDA
+  CANCELADA
+}
+
+enum RecoveryCampaignStepStatus {
+  SCHEDULED
+  SENT
+  FAILED
+  CANCELED
+  IGNORED
 }
 
 enum WhatsAppPendingContactStatus {
@@ -159,6 +180,7 @@ model Client {
   receivables             Receivable[]
   financialTransactions   FinancialTransaction[]
   messageDispatches       MessageDispatch[]
+  recoveryCampaigns       RecoveryCampaign[]
   whatsappPendingContacts WhatsAppPendingContact[]
   whatsappInboundMessages WhatsAppInboundMessage[]
 
@@ -200,6 +222,7 @@ model MessageDispatch {
   receivableId         String?               @db.Uuid
   templateId           String?               @db.Uuid
   whatsAppConnectionId String?               @db.Uuid
+  recoveryCampaignId   String?               @db.Uuid
   phone                String
   body                 String
   renderedContent      String?
@@ -220,11 +243,14 @@ model MessageDispatch {
   receivable           Receivable?           @relation(fields: [receivableId], references: [id], onDelete: SetNull)
   template             MessageTemplate?      @relation(fields: [templateId], references: [id], onDelete: SetNull)
   whatsAppConnection   WhatsAppConnection?   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: SetNull)
+  recoveryCampaign     RecoveryCampaign?     @relation(fields: [recoveryCampaignId], references: [id], onDelete: SetNull)
+  recoveryStep         RecoveryCampaignStep?
 
   @@index([clientId])
   @@index([receivableId])
   @@index([templateId])
   @@index([whatsAppConnectionId])
+  @@index([recoveryCampaignId])
   @@index([status])
   @@index([origin])
   @@index([scheduledFor])
@@ -234,19 +260,65 @@ model MessageDispatch {
 }
 
 model MessageTemplate {
-  id                String                @id @default(uuid()) @db.Uuid
+  id                String                 @id @default(uuid()) @db.Uuid
   name              String
   type              MessageTemplateType
   content           String
-  active            Boolean               @default(true)
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
+  active            Boolean                @default(true)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
   messageDispatches MessageDispatch[]
+  recoverySteps     RecoveryCampaignStep[]
 
   @@unique([type, name])
   @@index([type])
   @@index([active])
   @@map("message_templates")
+}
+
+model RecoveryCampaign {
+  id                String                 @id @default(uuid()) @db.Uuid
+  clientId          String                 @db.Uuid
+  status            RecoveryCampaignStatus @default(ATIVA)
+  startedAt         DateTime
+  completedAt       DateTime?
+  canceledAt        DateTime?
+  cancelReason      String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  client            Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  steps             RecoveryCampaignStep[]
+  messageDispatches MessageDispatch[]
+
+  @@index([clientId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("recovery_campaigns")
+}
+
+model RecoveryCampaignStep {
+  id           String                     @id @default(uuid()) @db.Uuid
+  campaignId   String                     @db.Uuid
+  stepNumber   Int
+  delayDays    Int
+  templateId   String?                    @db.Uuid
+  dispatchId   String?                    @unique @db.Uuid
+  scheduledFor DateTime
+  status       RecoveryCampaignStepStatus @default(SCHEDULED)
+  sentAt       DateTime?
+  canceledAt   DateTime?
+  createdAt    DateTime                   @default(now())
+  updatedAt    DateTime                   @updatedAt
+  campaign     RecoveryCampaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  template     MessageTemplate?           @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  dispatch     MessageDispatch?           @relation(fields: [dispatchId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, stepNumber])
+  @@index([campaignId])
+  @@index([templateId])
+  @@index([status])
+  @@index([scheduledFor])
+  @@map("recovery_campaign_steps")
 }
 
 model WhatsAppPendingContact {

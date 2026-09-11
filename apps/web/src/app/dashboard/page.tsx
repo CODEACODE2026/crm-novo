@@ -77,12 +77,16 @@ import {
   disconnectWhatsApp,
   configureWhatsAppWebhook,
   approveWhatsAppPendingContact,
+  cancelRecoveryCampaign,
   getBillingDispatch,
   getBillingSummary,
+  getRecoverySummary,
   listBillingDispatches,
   listMessageTemplates,
+  listRecoveryCampaigns,
   previewMessageTemplate,
   reconcileBilling,
+  reconcileRecovery,
   sendBillingNow,
   updateMessageTemplate,
   type BillingSummary,
@@ -101,6 +105,9 @@ import {
   type RenewalPreview,
   type MessageDispatch,
   type MessageTemplate,
+  type RecoveryCampaign,
+  type RecoveryCampaignStatus,
+  type RecoverySummary,
   type WhatsAppConnection,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
@@ -109,7 +116,15 @@ import {
   type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
 
-type View = 'dashboard' | 'clients' | 'finance' | 'plans' | 'whatsapp' | 'waitlist' | 'billing';
+type View =
+  | 'dashboard'
+  | 'clients'
+  | 'finance'
+  | 'plans'
+  | 'whatsapp'
+  | 'waitlist'
+  | 'billing'
+  | 'automations';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
 const navItems = [
@@ -118,6 +133,7 @@ const navItems = [
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
   { id: 'billing', label: 'Cobrancas', icon: Bell },
+  { id: 'automations', label: 'Automacoes', icon: Activity },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
@@ -146,6 +162,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<ClientStatus | ''>('');
   const [planId, setPlanId] = useState('');
   const [statusReason, setStatusReason] = useState('');
+  const [startRecovery, setStartRecovery] = useState(false);
   const [error, setError] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
 
@@ -217,8 +234,14 @@ export default function DashboardPage() {
   async function handleStatusChange(nextStatus: ClientStatus) {
     if (!selectedClient) return;
 
-    await updateClientStatus(selectedClient.id, nextStatus, statusReason.trim() || undefined);
+    await updateClientStatus(
+      selectedClient.id,
+      nextStatus,
+      statusReason.trim() || undefined,
+      nextStatus === 'INATIVO' && startRecovery,
+    );
     setStatusReason('');
+    setStartRecovery(false);
     await loadData();
   }
 
@@ -291,9 +314,11 @@ export default function DashboardPage() {
                     ? 'WhatsApp'
                     : view === 'billing'
                       ? 'Cobrancas'
-                      : view === 'waitlist'
-                        ? 'Lista de Espera'
-                        : 'Clientes'}
+                      : view === 'automations'
+                        ? 'Automacoes'
+                        : view === 'waitlist'
+                          ? 'Lista de Espera'
+                          : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -363,8 +388,10 @@ export default function DashboardPage() {
               setSearch={setSearch}
               setStatus={setStatus}
               setStatusReason={setStatusReason}
+              setStartRecovery={setStartRecovery}
               status={status}
               statusReason={statusReason}
+              startRecovery={startRecovery}
               renewalNotice={renewalNotice}
             />
           ) : null}
@@ -401,6 +428,7 @@ export default function DashboardPage() {
           ) : null}
           {view === 'whatsapp' ? <WhatsAppView /> : null}
           {view === 'billing' ? <BillingView /> : null}
+          {view === 'automations' ? <AutomationsView /> : null}
           {view === 'waitlist' ? (
             <WaitlistView
               plans={plans}
@@ -854,8 +882,10 @@ function ClientsView({
   setSearch,
   setStatus,
   setStatusReason,
+  setStartRecovery,
   status,
   statusReason,
+  startRecovery,
   renewalNotice,
 }: {
   clientFormOpen: boolean;
@@ -879,11 +909,15 @@ function ClientsView({
   setSearch: (value: string) => void;
   setStatus: (value: ClientStatus | '') => void;
   setStatusReason: (value: string) => void;
+  setStartRecovery: (value: boolean) => void;
   status: ClientStatus | '';
   statusReason: string;
+  startRecovery: boolean;
   renewalNotice: string;
 }) {
-  const [detailTab, setDetailTab] = useState<'timeline' | 'renewals' | 'receivables'>('timeline');
+  const [detailTab, setDetailTab] = useState<'timeline' | 'renewals' | 'receivables' | 'recovery'>(
+    'timeline',
+  );
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
 
   return (
@@ -1054,6 +1088,21 @@ function ClientsView({
                 value={statusReason}
                 onChange={(event) => setStatusReason(event.target.value)}
               />
+              <label className="checkbox-row">
+                <input
+                  checked={startRecovery}
+                  type="checkbox"
+                  onChange={(event) => setStartRecovery(event.target.checked)}
+                />
+                <span>Tentar recuperar este cliente automaticamente</span>
+              </label>
+              {startRecovery ? (
+                <div className="step-chips">
+                  {[3, 10, 15, 30].map((day) => (
+                    <span key={day}>{day} dias</span>
+                  ))}
+                </div>
+              ) : null}
               <div className="button-row">
                 <button
                   className="secondary-button"
@@ -1101,6 +1150,13 @@ function ClientsView({
               >
                 Financeiro
               </button>
+              <button
+                className={detailTab === 'recovery' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('recovery')}
+              >
+                Recuperacao
+              </button>
             </div>
 
             {detailTab === 'timeline' ? (
@@ -1146,6 +1202,29 @@ function ClientsView({
                 ))}
                 {!selectedClient.receivables?.length ? (
                   <div className="empty-state">Sem contas a receber.</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {detailTab === 'recovery' ? (
+              <div className="mini-list">
+                {(selectedClient.recoveryCampaigns ?? []).map((campaign) => (
+                  <article key={campaign.id}>
+                    <strong>Campanha {recoveryCampaignStatusLabel(campaign.status)}</strong>
+                    <span>Inicio: {formatDateTime(campaign.startedAt)}</span>
+                    <div className="step-list">
+                      {campaign.steps.map((step) => (
+                        <span key={step.id}>
+                          {step.delayDays}d · {recoveryStepStatusLabel(step.status)} ·{' '}
+                          {formatDateTime(step.scheduledFor)}
+                          {step.sentAt ? ` · enviada ${formatDateTime(step.sentAt)}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+                {!selectedClient.recoveryCampaigns?.length ? (
+                  <div className="empty-state">Sem campanha de recuperacao.</div>
                 ) : null}
               </div>
             ) : null}
@@ -1720,6 +1799,211 @@ function BillingView() {
         </div>
       ) : null}
     </>
+  );
+}
+
+function AutomationsView() {
+  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
+  const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
+  const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
+  const [status, setStatus] = useState<RecoveryCampaignStatus | ''>('ATIVA');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [working, setWorking] = useState('');
+  const [error, setError] = useState('');
+
+  const loadAutomations = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const [nextBilling, nextRecovery, nextCampaigns] = await Promise.all([
+        getBillingSummary(),
+        getRecoverySummary(),
+        listRecoveryCampaigns({
+          ...(status ? { status } : {}),
+          ...(search.trim() ? { search: search.trim() } : {}),
+        }),
+      ]);
+      setBillingSummary(nextBilling);
+      setRecoverySummary(nextRecovery);
+      setCampaigns(nextCampaigns);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar automacoes.');
+    } finally {
+      setLoading(false);
+    }
+  }, [search, status]);
+
+  useEffect(() => {
+    void loadAutomations();
+  }, [loadAutomations]);
+
+  async function runRecoveryReconcile() {
+    setWorking('reconcile');
+    setError('');
+
+    try {
+      await reconcileRecovery();
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel reconciliar recuperacao.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function runCancelCampaign(campaign: RecoveryCampaign) {
+    setWorking(campaign.id);
+    setError('');
+
+    try {
+      await cancelRecoveryCampaign(campaign.id);
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel cancelar campanha.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  return (
+    <div className="workspace-grid">
+      <section className="workspace-main">
+        {error ? <div className="notice danger">{error}</div> : null}
+        <div className="metric-grid billing-kpis">
+          <article className="metric-card compact">
+            <span className="metric-label">Cobranca automatica</span>
+            <strong className="metric-value">ATIVA</strong>
+            <p>{billingSummary?.scheduled ?? 0} agendadas</p>
+          </article>
+          <article className="metric-card compact">
+            <span className="metric-label">Recuperacao de clientes</span>
+            <strong className="metric-value">ATIVA</strong>
+            <p>{recoverySummary?.active ?? 0} campanhas ativas</p>
+          </article>
+          <article className="metric-card compact">
+            <span className="metric-label">Recuperacao concluida</span>
+            <strong className="metric-value">{recoverySummary?.completed ?? 0}</strong>
+            <p>{recoverySummary?.canceled ?? 0} canceladas</p>
+          </article>
+          <article className="metric-card compact">
+            <span className="metric-label">Pendencias</span>
+            <strong className="metric-value">{recoverySummary?.failed ?? 0}</strong>
+            <p>{recoverySummary?.scheduled ?? 0} mensagens futuras</p>
+          </article>
+        </div>
+
+        <div className="toolbar">
+          <div className="search-row">
+            <Search aria-hidden="true" size={18} />
+            <input
+              placeholder="Buscar cliente ou referencia"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as RecoveryCampaignStatus | '')}
+          >
+            <option value="">Todas</option>
+            <option value="ATIVA">Ativas</option>
+            <option value="CONCLUIDA">Concluidas</option>
+            <option value="CANCELADA">Canceladas</option>
+          </select>
+          <button className="secondary-button" type="button" onClick={() => void loadAutomations()}>
+            <RefreshCcw aria-hidden="true" size={16} />
+            Atualizar
+          </button>
+          <button
+            className="primary-button"
+            disabled={working === 'reconcile'}
+            type="button"
+            onClick={() => void runRecoveryReconcile()}
+          >
+            <CalendarClock aria-hidden="true" size={16} />
+            Reconciliar
+          </button>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Status</th>
+                <th>Etapa atual/proxima</th>
+                <th>Proxima data</th>
+                <th>Inicio</th>
+                <th>Acoes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map((campaign) => {
+                const nextStep =
+                  campaign.steps.find((step) => ['SCHEDULED', 'FAILED'].includes(step.status)) ??
+                  campaign.steps.at(-1);
+                return (
+                  <tr key={campaign.id}>
+                    <td>
+                      <strong>{campaign.client?.name ?? 'Cliente'}</strong>
+                      <span>{campaign.client?.reference ?? campaign.clientId}</span>
+                    </td>
+                    <td>
+                      <span className={`pill ${campaign.status.toLowerCase()}`}>
+                        {recoveryCampaignStatusLabel(campaign.status)}
+                      </span>
+                    </td>
+                    <td>{nextStep ? `${nextStep.delayDays} dias` : '-'}</td>
+                    <td>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</td>
+                    <td>{formatDateTime(campaign.startedAt)}</td>
+                    <td>
+                      <button
+                        className="secondary-button"
+                        disabled={campaign.status !== 'ATIVA' || working === campaign.id}
+                        type="button"
+                        onClick={() => void runCancelCampaign(campaign)}
+                      >
+                        <X aria-hidden="true" size={16} />
+                        Cancelar
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {!campaigns.length ? (
+            <div className="empty-state">
+              {loading ? 'Carregando...' : 'Nenhuma campanha encontrada.'}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <aside className="detail-panel">
+        <PanelHeader title="Configuracao" />
+        <dl className="detail-list">
+          <div>
+            <dt>Recuperacao</dt>
+            <dd>RECOVERY_SEND_HOUR=9</dd>
+          </div>
+          <div>
+            <dt>Etapas</dt>
+            <dd>3, 10, 15 e 30 dias</dd>
+          </div>
+          <div>
+            <dt>Retry</dt>
+            <dd>3 tentativas</dd>
+          </div>
+          <div>
+            <dt>Kirago real</dt>
+            <dd>PENDENTE</dd>
+          </div>
+        </dl>
+      </aside>
+    </div>
   );
 }
 
@@ -2524,6 +2808,28 @@ function billingStatusLabel(status: MessageDispatch['status']) {
     PENDING: 'Pendente',
     SCHEDULED: 'Agendada',
     PROCESSING: 'Processando',
+    SENT: 'Enviada',
+    FAILED: 'Falha',
+    CANCELED: 'Cancelada',
+    IGNORED: 'Ignorada',
+  };
+
+  return labels[status];
+}
+
+function recoveryCampaignStatusLabel(status: RecoveryCampaignStatus) {
+  const labels: Record<RecoveryCampaignStatus, string> = {
+    ATIVA: 'Ativa',
+    CONCLUIDA: 'Concluida',
+    CANCELADA: 'Cancelada',
+  };
+
+  return labels[status];
+}
+
+function recoveryStepStatusLabel(status: RecoveryCampaign['steps'][number]['status']) {
+  const labels: Record<RecoveryCampaign['steps'][number]['status'], string> = {
+    SCHEDULED: 'Agendada',
     SENT: 'Enviada',
     FAILED: 'Falha',
     CANCELED: 'Cancelada',

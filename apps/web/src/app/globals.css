@@ -885,6 +885,40 @@ tbody tr:hover,
   padding: 12px;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.checkbox-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.step-chips,
+.step-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.step-chips span,
+.step-list span {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 9px;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;

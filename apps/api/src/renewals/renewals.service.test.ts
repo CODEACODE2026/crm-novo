@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { RenewalsService } from './renewals.service';
@@ -132,7 +132,8 @@ function createFakePrisma() {
 describe('RenewalsService', () => {
   it('reactivates a canceled client with explicit history and idempotent replay', async () => {
     const fake = createFakePrisma();
-    const service = new RenewalsService(fake.prisma as never);
+    const recoveryService = { handleClientStatusChange: vi.fn().mockResolvedValue(undefined) };
+    const service = new RenewalsService(fake.prisma as never, recoveryService as never);
 
     const first = await service.create(
       fake.client.id,
@@ -146,6 +147,12 @@ describe('RenewalsService', () => {
 
     expect(first.idempotentReplay).toBe(false);
     expect(first.client.status).toBe('ATIVO');
+    expect(recoveryService.handleClientStatusChange).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: fake.client.id }),
+      'ATIVO',
+      expect.objectContaining({ actorUserId: userId }),
+    );
     expect(first.renewal.newDueDate).toBe('2026-02-28');
     expect(first.receivable.renewalId).toBe(first.renewal.id);
     expect(fake.renewals).toHaveLength(1);

@@ -23,6 +23,8 @@ enum ClientEventType {
   STATUS_CHANGED
   CLIENT_RENEWED
   PAYMENT_REGISTERED
+  PIX_PAYMENT_INTENT_CREATED
+  PIX_PAYMENT_STATUS_UPDATED
   RECEIVABLE_CANCELED
   FINANCIAL_TRANSACTION_CREATED
   WHATSAPP_MESSAGE_SENT
@@ -45,6 +47,23 @@ enum FinancialTransactionType {
 enum FinancialTransactionOrigin {
   RECEIVABLE_PAYMENT
   MANUAL
+}
+
+enum PaymentProviderCode {
+  MOCK
+  FASTFLOW
+  FASTPAY
+  DEPIX
+}
+
+enum PaymentIntentStatus {
+  CREATED
+  WAITING_PAYMENT
+  PAID
+  EXPIRED
+  CANCELED
+  FAILED
+  REFUNDED
 }
 
 enum WhatsAppProvider {
@@ -428,11 +447,86 @@ model Receivable {
   renewal            Renewal               @relation(fields: [renewalId], references: [id], onDelete: Restrict)
   paymentTransaction FinancialTransaction?
   messageDispatches  MessageDispatch[]
+  paymentIntents     PaymentIntent[]
 
   @@index([clientId])
   @@index([dueDate])
   @@index([status])
   @@map("receivables")
+}
+
+model PaymentIntent {
+  id                    String              @id @default(uuid()) @db.Uuid
+  receivableId          String              @db.Uuid
+  provider              PaymentProviderCode
+  providerTransactionId String?
+  externalStatus        String?
+  externalDepixId       String?
+  blockchainTxId        String?
+  status                PaymentIntentStatus @default(CREATED)
+  amount                Decimal             @db.Decimal(12, 2)
+  pixCopyPaste          String?
+  qrCodeData            String?
+  expiresAt             DateTime?
+  paidAt                DateTime?
+  lastSyncAt            DateTime?
+  failureCode           String?
+  failureMessage        String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  receivable            Receivable          @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  webhookEvents         PaymentWebhookEvent[]
+
+  @@unique([provider, providerTransactionId])
+  @@index([receivableId])
+  @@index([provider])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("payment_intents")
+}
+
+model PaymentProviderCredential {
+  id                   String              @id @default(uuid()) @db.Uuid
+  provider             PaymentProviderCode
+  name                 String
+  tokenEncrypted       String
+  tokenLastFour        String
+  webhookSecretEncrypted String?
+  webhookSecretLastFour  String?
+  webhookConfiguredAt    DateTime?
+  webhookUrl             String?
+  webhookRegisteredAt    DateTime?
+  defaultForPix          Boolean             @default(false)
+  active               Boolean             @default(true)
+  validatedAt          DateTime?
+  lastValidationStatus String?
+  companyId            String?             @db.Uuid
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@index([provider])
+  @@index([active])
+  @@index([defaultForPix])
+  @@index([companyId])
+  @@map("payment_provider_credentials")
+}
+
+model PaymentWebhookEvent {
+  id                    String              @id @default(uuid()) @db.Uuid
+  provider              PaymentProviderCode
+  providerTransactionId String
+  status                String
+  eventKey              String
+  paymentIntentId       String?             @db.Uuid
+  processedAt           DateTime            @default(now())
+  createdAt             DateTime            @default(now())
+  paymentIntent         PaymentIntent?      @relation(fields: [paymentIntentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerTransactionId, status, eventKey])
+  @@index([provider])
+  @@index([providerTransactionId])
+  @@index([paymentIntentId])
+  @@map("payment_webhook_events")
 }
 
 model FinancialCategory {

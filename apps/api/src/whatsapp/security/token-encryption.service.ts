@@ -46,16 +46,18 @@ export class TokenEncryptionService {
   }
 
   private getKey() {
-    const rawKey = this.config.get<string>('WHATSAPP_TOKEN_ENCRYPTION_KEY');
+    const rawKey =
+      this.config.get<string>('PAYMENT_TOKEN_ENCRYPTION_KEY') ??
+      this.config.get<string>('WHATSAPP_TOKEN_ENCRYPTION_KEY');
 
     if (!rawKey) {
-      throw new InternalServerErrorException('Chave de criptografia WhatsApp nao configurada.');
+      throw new InternalServerErrorException('Chave de criptografia de tokens nao configurada.');
     }
 
     const key = Buffer.from(rawKey, 'utf8');
 
     if (key.length !== 32) {
-      throw new InternalServerErrorException('Chave de criptografia WhatsApp deve ter 32 bytes.');
+      throw new InternalServerErrorException('Chave de criptografia de tokens deve ter 32 bytes.');
     }
 
     return key;

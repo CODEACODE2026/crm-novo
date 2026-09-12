@@ -13,6 +13,15 @@ async function bootstrap() {
   const corsOrigin = config.getOrThrow<string>('CORS_ORIGIN');
 
   app.use('/whatsapp/webhook/kirago', json({ limit: '32kb' }));
+  app.use(
+    '/payment-webhooks',
+    json({
+      limit: '64kb',
+      verify: (req, _res, buffer) => {
+        (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+      },
+    }),
+  );
   app.use(json({ limit: '1mb' }));
   app.use(helmet());
   app.use(cookieParser());

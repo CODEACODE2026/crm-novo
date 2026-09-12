@@ -4,8 +4,17 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
-import { FinancialTransactionOrigin, FinancialTransactionType, Prisma } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { createHmac, timingSafeEqual } from 'crypto';
+import {
+  FinancialTransactionOrigin,
+  FinancialTransactionType,
+  PaymentProviderCode,
+  PaymentIntentStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
@@ -18,14 +27,23 @@ import { ListReceivablesDto } from './dto/list-receivables.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
 import { UpdateManualTransactionDto } from './dto/update-manual-transaction.dto';
+import {
+  PAYMENT_PROVIDER,
+  type PaymentProvider,
+  type PaymentProviderStatus,
+} from './payments/payment-provider';
+import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 
 const pageSizeLimit = 100;
+const activePixStatuses = ['CREATED', 'WAITING_PAYMENT'] satisfies PaymentIntentStatus[];
+const pixExpirationMinutes = 30;
 
 type ReceivableWithRelations = Prisma.ReceivableGetPayload<{
   include: {
     client: true;
     renewal: true;
     paymentTransaction: true;
+    paymentIntents: { orderBy: { createdAt: 'desc' } };
   };
 }>;
 
@@ -37,9 +55,19 @@ type TransactionWithRelations = Prisma.FinancialTransactionGetPayload<{
   };
 }>;
 
+type PaymentWebhookStatus = PaymentProviderStatus & {
+  eventKey: string;
+};
+
 @Injectable()
 export class FinanceService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(PAYMENT_PROVIDER) private readonly paymentProvider: PaymentProvider,
+    @Inject(PaymentProviderCredentialsService)
+    private readonly paymentCredentials: PaymentProviderCredentialsService,
+    @Inject(ConfigService) private readonly config: ConfigService,
+  ) {}
 
   async listCategories() {
     const categories = await this.prisma.financialCategory.findMany({
@@ -131,6 +159,7 @@ export class FinanceService {
           client: true,
           renewal: true,
           paymentTransaction: true,
+          paymentIntents: { orderBy: { createdAt: 'desc' } },
         },
         orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
         skip: (page - 1) * pageSize,
@@ -152,6 +181,7 @@ export class FinanceService {
         client: true,
         renewal: true,
         paymentTransaction: true,
+        paymentIntents: { orderBy: { createdAt: 'desc' } },
       },
     });
 
@@ -162,6 +192,232 @@ export class FinanceService {
     return this.presentReceivable(receivable);
   }
 
+  async createReceivablePix(id: string, actorUserId: string) {
+    try {
+      const intent = await this.prisma.$transaction(async (tx) => {
+        const receivable = await tx.receivable.findUnique({
+          where: { id },
+          include: {
+            client: true,
+            renewal: true,
+            paymentTransaction: true,
+            paymentIntents: {
+              where: { status: { in: [...activePixStatuses] } },
+              orderBy: { createdAt: 'desc' },
+            },
+          },
+        });
+
+        if (!receivable) {
+          throw new NotFoundException('Conta a receber nao encontrada.');
+        }
+
+        if (receivable.status !== 'PENDENTE') {
+          throw new ConflictException('Apenas contas pendentes podem gerar PIX.');
+        }
+
+        const activeIntent = receivable.paymentIntents[0];
+
+        if (activeIntent) {
+          return activeIntent;
+        }
+
+        const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const providerPix = await this.paymentProvider.createPix({
+          receivableId: receivable.id,
+          amount: receivable.amount,
+          description: receivable.description,
+          expiresAt,
+          clientName: receivable.client.name,
+          payerPhone: receivable.client.phoneNormalized,
+          notificationUrl: this.getPaymentNotificationUrl(),
+        });
+
+        const created = await tx.paymentIntent.create({
+          data: {
+            receivableId: receivable.id,
+            provider: providerPix.provider,
+            providerTransactionId: providerPix.providerTransactionId,
+            externalStatus: providerPix.externalStatus,
+            externalDepixId: providerPix.externalDepixId,
+            blockchainTxId: providerPix.blockchainTxId,
+            status: providerPix.status,
+            amount: providerPix.amount,
+            pixCopyPaste: providerPix.pixCopyPaste,
+            qrCodeData: providerPix.qrCodeData,
+            expiresAt: providerPix.expiresAt,
+            lastSyncAt: new Date(),
+          },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: receivable.clientId,
+            type: 'PIX_PAYMENT_INTENT_CREATED',
+            title: 'PIX gerado.',
+            description: `${this.formatCurrency(receivable.amount)} referente a ${receivable.description}.`,
+            metadata: {
+              receivableId: receivable.id,
+              paymentIntentId: created.id,
+              provider: created.provider,
+              providerTransactionId: created.providerTransactionId,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return created;
+      });
+
+      return this.presentPaymentIntent(intent);
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        const activeIntent = await this.prisma.paymentIntent.findFirst({
+          where: { receivableId: id, status: { in: [...activePixStatuses] } },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (activeIntent) {
+          return this.presentPaymentIntent(activeIntent);
+        }
+
+        throw new ConflictException('Ja existe um PIX ativo para esta conta a receber.');
+      }
+
+      throw error;
+    }
+  }
+
+  async listPaymentIntents(receivableId: string) {
+    await this.ensureReceivableExists(receivableId);
+    const intents = await this.prisma.paymentIntent.findMany({
+      where: { receivableId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return intents.map((intent) => this.presentPaymentIntent(intent));
+  }
+
+  async syncPaymentIntent(id: string, actorUserId: string) {
+    const intent = await this.prisma.paymentIntent.findUnique({ where: { id } });
+
+    if (!intent) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada.');
+    }
+
+    if (!intent.providerTransactionId) {
+      throw new ConflictException('Intencao de pagamento sem transacao do provider.');
+    }
+
+    const providerStatus = await this.paymentProvider.getPixStatus(
+      intent.providerTransactionId,
+      intent.provider,
+    );
+
+    return this.applyProviderStatus(intent.id, providerStatus, actorUserId);
+  }
+
+  async confirmMockPaymentIntent(id: string, actorUserId: string) {
+    const intent = await this.prisma.paymentIntent.findUnique({ where: { id } });
+
+    if (!intent) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada.');
+    }
+
+    if (!intent.providerTransactionId) {
+      throw new ConflictException('Intencao de pagamento sem transacao do provider.');
+    }
+
+    if (!this.paymentProvider.markPixPaid) {
+      throw new ConflictException('Provider atual nao suporta confirmacao mock.');
+    }
+
+    await this.paymentProvider.markPixPaid(intent.providerTransactionId);
+    const providerStatus = await this.paymentProvider.getPixStatus(
+      intent.providerTransactionId,
+      intent.provider,
+    );
+
+    return this.applyProviderStatus(intent.id, providerStatus, actorUserId);
+  }
+
+  async cancelPaymentIntent(id: string, actorUserId: string) {
+    const intent = await this.prisma.paymentIntent.findUnique({ where: { id } });
+
+    if (!intent) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada.');
+    }
+
+    if (!intent.providerTransactionId) {
+      throw new ConflictException('Intencao de pagamento sem transacao do provider.');
+    }
+
+    if (intent.status === 'PAID') {
+      throw new ConflictException('PIX pago nao pode ser cancelado por esta rotina.');
+    }
+
+    if (!this.paymentProvider.cancelPix) {
+      throw new ConflictException('Provider atual nao suporta cancelamento de PIX.');
+    }
+
+    const providerStatus = await this.paymentProvider.cancelPix(
+      intent.providerTransactionId,
+      intent.provider,
+    );
+
+    return this.applyProviderStatus(intent.id, providerStatus, actorUserId);
+  }
+
+  async processPaymentWebhook(
+    provider: PaymentProviderCode,
+    signature: string | undefined,
+    rawBody: Buffer | undefined,
+    payload: unknown,
+  ) {
+    this.ensureWebhookProvider(provider);
+
+    if (!rawBody?.length) {
+      throw new BadRequestException('Raw body obrigatorio para validar webhook.');
+    }
+
+    const secret = await this.paymentCredentials.getWebhookSecret(provider);
+    this.verifyWebhookSignature(signature, rawBody, secret);
+
+    const normalized = this.normalizeWebhookPayload(provider, payload);
+    const intent = await this.prisma.paymentIntent.findFirst({
+      where: {
+        provider,
+        providerTransactionId: normalized.providerTransactionId,
+      },
+    });
+
+    if (!intent) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada para webhook.');
+    }
+
+    const eventKey = normalized.eventKey;
+
+    try {
+      await this.prisma.paymentWebhookEvent.create({
+        data: {
+          provider,
+          providerTransactionId: normalized.providerTransactionId,
+          status: normalized.externalStatus ?? normalized.status,
+          eventKey,
+          paymentIntentId: intent.id,
+        },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        return this.presentPaymentIntent(intent);
+      }
+
+      throw error;
+    }
+
+    return this.applyProviderStatus(intent.id, normalized, null);
+  }
+
   async payReceivable(id: string, dto: PayReceivableDto, actorUserId: string) {
     const paymentDate = parseBusinessDate(dto.paymentDate);
 
@@ -169,7 +425,12 @@ export class FinanceService {
       const transaction = await this.prisma.$transaction(async (tx) => {
         const receivable = await tx.receivable.findUnique({
           where: { id },
-          include: { client: true, renewal: true, paymentTransaction: true },
+          include: {
+            client: true,
+            renewal: true,
+            paymentTransaction: true,
+            paymentIntents: { orderBy: { createdAt: 'desc' } },
+          },
         });
 
         if (!receivable) {
@@ -254,7 +515,12 @@ export class FinanceService {
     const receivable = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.receivable.findUnique({
         where: { id },
-        include: { client: true, renewal: true, paymentTransaction: true },
+        include: {
+          client: true,
+          renewal: true,
+          paymentTransaction: true,
+          paymentIntents: { orderBy: { createdAt: 'desc' } },
+        },
       });
 
       if (!existing) {
@@ -272,7 +538,12 @@ export class FinanceService {
           canceledAt: new Date(),
           cancelReason: reason,
         },
-        include: { client: true, renewal: true, paymentTransaction: true },
+        include: {
+          client: true,
+          renewal: true,
+          paymentTransaction: true,
+          paymentIntents: { orderBy: { createdAt: 'desc' } },
+        },
       });
 
       await tx.clientEvent.create({
@@ -293,6 +564,176 @@ export class FinanceService {
     });
 
     return this.presentReceivable(receivable);
+  }
+
+  private async applyProviderStatus(
+    id: string,
+    providerStatus: PaymentProviderStatus,
+    actorUserId: string | null,
+  ) {
+    const synced = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.paymentIntent.findUnique({ where: { id } });
+
+      if (!current) {
+        throw new NotFoundException('Intencao de pagamento nao encontrada.');
+      }
+
+      if (
+        current.provider !== providerStatus.provider ||
+        current.providerTransactionId !== providerStatus.providerTransactionId
+      ) {
+        throw new ConflictException('Status do provider nao corresponde a intencao de pagamento.');
+      }
+
+      if (providerStatus.status !== 'PAID') {
+        const updated = await tx.paymentIntent.update({
+          where: { id },
+          data: {
+            status: providerStatus.status,
+            externalStatus: providerStatus.externalStatus,
+            externalDepixId: providerStatus.externalDepixId,
+            blockchainTxId: providerStatus.blockchainTxId,
+            lastSyncAt: new Date(),
+            failureCode: providerStatus.failureCode,
+            failureMessage: providerStatus.failureMessage,
+          },
+        });
+
+        if (providerStatus.status === 'REFUNDED') {
+          const receivable = await tx.receivable.findUnique({
+            where: { id: current.receivableId },
+          });
+
+          if (receivable) {
+            const existingEvent = await tx.clientEvent.findFirst({
+              where: {
+                clientId: receivable.clientId,
+                type: 'PIX_PAYMENT_STATUS_UPDATED',
+                metadata: { path: ['paymentIntentId'], equals: id },
+              },
+            });
+
+            if (!existingEvent) {
+              await tx.clientEvent.create({
+                data: {
+                  clientId: receivable.clientId,
+                  type: 'PIX_PAYMENT_STATUS_UPDATED',
+                  title: 'PIX estornado no provider.',
+                  description:
+                    'Status refunded recebido. Historico financeiro preservado para conciliacao futura.',
+                  metadata: {
+                    receivableId: receivable.id,
+                    paymentIntentId: id,
+                    provider: current.provider,
+                    providerTransactionId: current.providerTransactionId,
+                    externalStatus: providerStatus.externalStatus,
+                  },
+                  createdByUserId: actorUserId,
+                },
+              });
+            }
+          }
+        }
+
+        return updated;
+      }
+
+      const paidAt = providerStatus.paidAt ?? new Date();
+      const acquired = await tx.paymentIntent.updateMany({
+        where: { id, status: { not: 'PAID' } },
+        data: {
+          status: 'PAID',
+          externalStatus: providerStatus.externalStatus,
+          externalDepixId: providerStatus.externalDepixId,
+          blockchainTxId: providerStatus.blockchainTxId,
+          paidAt,
+          lastSyncAt: new Date(),
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+
+      if (acquired.count !== 1) {
+        return tx.paymentIntent.update({
+          where: { id },
+          data: {
+            externalStatus: providerStatus.externalStatus,
+            externalDepixId: providerStatus.externalDepixId,
+            blockchainTxId: providerStatus.blockchainTxId,
+            lastSyncAt: new Date(),
+            failureCode: providerStatus.failureCode,
+            failureMessage: providerStatus.failureMessage,
+          },
+        });
+      }
+
+      const receivable = await tx.receivable.findUnique({
+        where: { id: current.receivableId },
+        include: { paymentTransaction: true },
+      });
+
+      if (!receivable) {
+        throw new NotFoundException('Conta a receber nao encontrada.');
+      }
+
+      if (receivable.status === 'PENDENTE') {
+        await tx.receivable.update({
+          where: { id: receivable.id },
+          data: { status: 'PAGO', paidAt },
+        });
+      }
+
+      if (!receivable.paymentTransaction) {
+        const category = await this.ensureRenewalCategory(tx);
+        const createdTransaction = await tx.financialTransaction.create({
+          data: {
+            type: 'ENTRADA',
+            origin: 'RECEIVABLE_PAYMENT',
+            categoryId: category.id,
+            clientId: receivable.clientId,
+            receivableId: receivable.id,
+            description: `Recebimento PIX: ${receivable.description}`,
+            amount: receivable.amount,
+            transactionDate: paidAt,
+            notes: `PIX ${current.provider}`,
+            createdByUserId: actorUserId,
+          },
+        });
+
+        const existingEvent = await tx.clientEvent.findFirst({
+          where: {
+            clientId: receivable.clientId,
+            type: 'PAYMENT_REGISTERED',
+            metadata: { path: ['paymentIntentId'], equals: id },
+          },
+        });
+
+        if (!existingEvent) {
+          await tx.clientEvent.create({
+            data: {
+              clientId: receivable.clientId,
+              type: 'PAYMENT_REGISTERED',
+              title: 'Pagamento PIX confirmado.',
+              description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
+              metadata: {
+                receivableId: receivable.id,
+                paymentIntentId: id,
+                financialTransactionId: createdTransaction.id,
+                amount: receivable.amount.toString(),
+                paymentDate: formatBusinessDate(paidAt),
+                provider: current.provider,
+                providerTransactionId: current.providerTransactionId,
+              },
+              createdByUserId: actorUserId,
+            },
+          });
+        }
+      }
+
+      return tx.paymentIntent.findUniqueOrThrow({ where: { id } });
+    });
+
+    return this.presentPaymentIntent(synced);
   }
 
   async listTransactions(query: ListFinancialTransactionsDto) {
@@ -621,6 +1062,84 @@ export class FinanceService {
     }
   }
 
+  private async ensureReceivableExists(id: string) {
+    const exists = await this.prisma.receivable.count({ where: { id } });
+
+    if (!exists) {
+      throw new NotFoundException('Conta a receber nao encontrada.');
+    }
+  }
+
+  private ensureWebhookProvider(provider: PaymentProviderCode) {
+    if (provider !== 'FASTFLOW' && provider !== 'FASTPAY') {
+      throw new BadRequestException('Provider de webhook de pagamento nao suportado.');
+    }
+  }
+
+  private verifyWebhookSignature(signature: string | undefined, rawBody: Buffer, secret: string) {
+    if (!signature?.startsWith('sha256=')) {
+      throw new UnauthorizedException('Assinatura do webhook de pagamento invalida.');
+    }
+
+    const received = Buffer.from(signature.slice('sha256='.length), 'hex');
+    const expected = createHmac('sha256', secret).update(rawBody).digest();
+
+    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+      throw new UnauthorizedException('Assinatura do webhook de pagamento invalida.');
+    }
+  }
+
+  private normalizeWebhookPayload(
+    provider: PaymentProviderCode,
+    payload: unknown,
+  ): PaymentWebhookStatus {
+    const body = this.asRecord(payload) ?? {};
+    const data = this.asRecord(body.data) ?? body;
+    const transactionId = this.stringFrom(data.transaction_id ?? data.id);
+    const externalStatus = this.stringFrom(data.status)?.trim().toLowerCase() ?? null;
+
+    if (!transactionId || !externalStatus) {
+      throw new BadRequestException('Webhook de pagamento sem transacao ou status.');
+    }
+
+    return {
+      provider,
+      providerTransactionId: transactionId,
+      externalStatus,
+      externalDepixId: this.stringFrom(data.depix_transaction_id),
+      blockchainTxId: this.stringFrom(data.blockchain_tx_id),
+      status: this.mapExternalPaymentStatus(externalStatus),
+      paidAt: externalStatus === 'paid' ? new Date() : null,
+      failureCode: null,
+      failureMessage: null,
+      eventKey: this.stringFrom(body.event) ?? `transaction.${externalStatus}`,
+    };
+  }
+
+  private mapExternalPaymentStatus(status: string): PaymentIntentStatus {
+    if (status === 'paid') return 'PAID';
+    if (status === 'expired') return 'EXPIRED';
+    if (status === 'cancelled' || status === 'canceled') return 'CANCELED';
+    if (status === 'refunded') return 'REFUNDED';
+    if (status === 'pending' || status === 'approved' || status === 'under_review') {
+      return 'WAITING_PAYMENT';
+    }
+
+    return 'WAITING_PAYMENT';
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  private stringFrom(value: unknown): string | null {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+    return null;
+  }
+
   private ensureManualEditable(transaction: {
     origin: FinancialTransactionOrigin;
     receivableId: string | null;
@@ -666,6 +1185,7 @@ export class FinanceService {
       canceledAt: receivable.canceledAt?.toISOString() ?? null,
       cancelReason: receivable.cancelReason,
       paymentTransactionId: receivable.paymentTransaction?.id ?? null,
+      paymentIntents: receivable.paymentIntents.map((intent) => this.presentPaymentIntent(intent)),
       createdAt: receivable.createdAt,
       updatedAt: receivable.updatedAt,
       client: {
@@ -677,6 +1197,29 @@ export class FinanceService {
         id: receivable.renewal.id,
         planName: receivable.renewal.planName,
       },
+    };
+  }
+
+  private presentPaymentIntent(intent: Prisma.PaymentIntentGetPayload<object>) {
+    return {
+      id: intent.id,
+      receivableId: intent.receivableId,
+      provider: intent.provider,
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: intent.externalStatus,
+      externalDepixId: intent.externalDepixId,
+      blockchainTxId: intent.blockchainTxId,
+      status: intent.status,
+      amount: intent.amount.toFixed(2),
+      pixCopyPaste: intent.pixCopyPaste,
+      qrCodeData: intent.qrCodeData,
+      expiresAt: intent.expiresAt?.toISOString() ?? null,
+      paidAt: intent.paidAt?.toISOString() ?? null,
+      lastSyncAt: intent.lastSyncAt?.toISOString() ?? null,
+      failureCode: intent.failureCode,
+      failureMessage: intent.failureMessage,
+      createdAt: intent.createdAt.toISOString(),
+      updatedAt: intent.updatedAt.toISOString(),
     };
   }
 
@@ -727,16 +1270,30 @@ export class FinanceService {
     return `R$ ${Number(value).toFixed(2)}`;
   }
 
+  private getPaymentNotificationUrl() {
+    const explicit = this.config.get<string>('FASTDEPIX_NOTIFICATION_URL')?.trim();
+
+    if (explicit) {
+      return explicit;
+    }
+
+    return null;
+  }
+
   private optionalTrim(value: string | undefined) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
   }
 
   private handleCategoryError(error: unknown): never {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    if (this.isUniqueConstraint(error)) {
       throw new ConflictException('Ja existe uma categoria financeira com este nome e tipo.');
     }
 
     throw error;
+  }
+
+  private isUniqueConstraint(error: unknown) {
+    return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
   }
 }

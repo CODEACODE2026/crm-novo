@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bell,
   CalendarClock,
+  Copy,
   CreditCard,
   DollarSign,
   Eye,
@@ -34,11 +35,14 @@ import { StatusBadge } from '../../components/clients/status-badge';
 import { PlanForm } from '../../components/plans/plan-form';
 import {
   cancelReceivable,
+  cancelPaymentIntent,
+  confirmMockPaymentIntent,
   confirmRenewal,
   createClient,
   createFinancialCategory,
   createManualEntry,
   createManualExpense,
+  createReceivablePix,
   createPlan,
   deletePlan,
   deleteFinancialCategory,
@@ -57,7 +61,9 @@ import {
   listFinancialCategories,
   listClients,
   listFinancialTransactions,
+  listPaymentProviderCredentials,
   listPlans,
+  listPaymentIntents,
   listReceivables,
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
@@ -88,7 +94,14 @@ import {
   reconcileBilling,
   reconcileRecovery,
   sendBillingNow,
+  savePaymentProviderCredential,
+  savePaymentWebhookSecret,
+  setDefaultPaymentProvider,
+  testPaymentProviderCredential,
   updateMessageTemplate,
+  syncPaymentIntent,
+  deactivatePaymentProviderCredential,
+  registerPaymentWebhook,
   type BillingSummary,
   type Client,
   type ClientStatus,
@@ -99,6 +112,9 @@ import {
   type FinancialTransactionPayload,
   type FinancialTransactionType,
   type PaginatedClients,
+  type PaymentIntent,
+  type PaymentProviderCredentialStatus,
+  type PaymentProviderCode,
   type Receivable,
   type ReceivableDisplayStatus,
   type Plan,
@@ -124,7 +140,8 @@ type View =
   | 'whatsapp'
   | 'waitlist'
   | 'billing'
-  | 'automations';
+  | 'automations'
+  | 'settings';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
 const navItems = [
@@ -136,12 +153,12 @@ const navItems = [
   { id: 'automations', label: 'Automacoes', icon: Activity },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
+  { id: 'settings', label: 'Configuracoes', icon: Settings },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
 const futureNavItems = [
   { label: 'Renovacoes', icon: RefreshCcw },
   { label: 'Relatorios', icon: BarChart3 },
-  { label: 'Configuracoes', icon: Settings },
 ];
 
 export default function DashboardPage() {
@@ -318,7 +335,9 @@ export default function DashboardPage() {
                         ? 'Automacoes'
                         : view === 'waitlist'
                           ? 'Lista de Espera'
-                          : 'Clientes'}
+                          : view === 'settings'
+                            ? 'Configuracoes'
+                            : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -429,6 +448,7 @@ export default function DashboardPage() {
           {view === 'whatsapp' ? <WhatsAppView /> : null}
           {view === 'billing' ? <BillingView /> : null}
           {view === 'automations' ? <AutomationsView /> : null}
+          {view === 'settings' ? <SettingsView /> : null}
           {view === 'waitlist' ? (
             <WaitlistView
               plans={plans}
@@ -858,6 +878,283 @@ function formatPeriodLabel(period: string) {
   }
 
   return formatDate(period);
+}
+
+type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+
+function SettingsView() {
+  const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+
+  const loadCredentials = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      setCredentials(await listPaymentProviderCredentials());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar integracoes.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCredentials();
+  }, [loadCredentials]);
+
+  async function runAction(action: () => Promise<unknown>, success: string) {
+    setNotice('');
+    setError('');
+
+    try {
+      await action();
+      await loadCredentials();
+      setNotice(success);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar integracao.');
+    }
+  }
+
+  const byProvider = (provider: ConfigurablePaymentProvider) =>
+    credentials.find((credential) => credential.provider === provider) ?? {
+      provider,
+      configured: false,
+      status: 'NAO_CONFIGURADO' as const,
+    };
+
+  return (
+    <section className="workspace-main">
+      {error ? <div className="notice danger">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
+
+      <div className="tabs">
+        <button className="active" type="button">
+          Integracoes
+        </button>
+      </div>
+
+      <div className="settings-section">
+        <div className="panel-header">
+          <h2>Pagamentos</h2>
+          <button className="secondary-button" type="button" onClick={() => void loadCredentials()}>
+            <RefreshCcw aria-hidden="true" size={16} />
+            Atualizar
+          </button>
+        </div>
+        <div className="payment-provider-grid">
+          {(['FASTFLOW', 'FASTPAY'] satisfies ConfigurablePaymentProvider[]).map((provider) => (
+            <PaymentProviderCard
+              credential={byProvider(provider)}
+              key={provider}
+              loading={loading}
+              provider={provider}
+              onDeactivate={() =>
+                runAction(
+                  () => deactivatePaymentProviderCredential(provider),
+                  `${paymentProviderLabel(provider)} desativado.`,
+                )
+              }
+              onSave={(payload) =>
+                runAction(
+                  () => savePaymentProviderCredential(payload),
+                  `${paymentProviderLabel(provider)} configurado.`,
+                )
+              }
+              onSaveWebhookSecret={(secret) =>
+                runAction(
+                  () => savePaymentWebhookSecret(provider, secret),
+                  `Webhook secret do ${paymentProviderLabel(provider)} configurado.`,
+                )
+              }
+              onSetDefault={() =>
+                runAction(
+                  () => setDefaultPaymentProvider(provider),
+                  `${paymentProviderLabel(provider)} definido como padrao.`,
+                )
+              }
+              onTest={() =>
+                runAction(
+                  () => testPaymentProviderCredential(provider),
+                  `${paymentProviderLabel(provider)} validado.`,
+                )
+              }
+              onRegisterWebhook={() =>
+                runAction(
+                  () => registerPaymentWebhook(provider),
+                  `Webhook do ${paymentProviderLabel(provider)} registrado.`,
+                )
+              }
+            />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PaymentProviderCard({
+  credential,
+  loading,
+  provider,
+  onDeactivate,
+  onRegisterWebhook,
+  onSave,
+  onSaveWebhookSecret,
+  onSetDefault,
+  onTest,
+}: {
+  credential: PaymentProviderCredentialStatus;
+  loading: boolean;
+  provider: ConfigurablePaymentProvider;
+  onDeactivate: () => Promise<void>;
+  onRegisterWebhook: () => Promise<void>;
+  onSave: (payload: {
+    provider: ConfigurablePaymentProvider;
+    name: string;
+    token: string;
+  }) => Promise<void>;
+  onSaveWebhookSecret: (secret: string) => Promise<void>;
+  onSetDefault: () => Promise<void>;
+  onTest: () => Promise<void>;
+}) {
+  const [name, setName] = useState(credential.name ?? paymentProviderLabel(provider));
+  const [token, setToken] = useState('');
+  const [webhookSecret, setWebhookSecret] = useState('');
+
+  useEffect(() => {
+    setName(credential.name ?? paymentProviderLabel(provider));
+    setToken('');
+    setWebhookSecret('');
+  }, [credential.name, provider]);
+
+  return (
+    <article className="payment-provider-card">
+      <header>
+        <div>
+          <h3>{paymentProviderLabel(provider)}</h3>
+          <span className={`integration-status ${credential.status.toLowerCase()}`}>
+            {paymentProviderStatusLabel(credential.status)}
+          </span>
+        </div>
+        {credential.tokenMask ? <code>{credential.tokenMask}</code> : null}
+        {credential.defaultForPix ? <span className="pill">Padrao PIX</span> : null}
+      </header>
+
+      <label className="field">
+        <span>Nome da integracao</span>
+        <input value={name} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label className="field">
+        <span>Chave API</span>
+        <input
+          autoComplete="off"
+          placeholder={credential.configured ? 'Chave salva nao exibida' : 'fdpx_...'}
+          type="password"
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span>Webhook secret</span>
+        <input
+          autoComplete="off"
+          placeholder={
+            credential.webhookSecretConfigured
+              ? (credential.webhookSecretMask ?? 'Secret configurado')
+              : 'sha256 secret'
+          }
+          type="password"
+          value={webhookSecret}
+          onChange={(event) => setWebhookSecret(event.target.value)}
+        />
+      </label>
+
+      <dl className="detail-list integration-details">
+        <div>
+          <dt>Validado em</dt>
+          <dd>{credential.validatedAt ? formatDateTime(credential.validatedAt) : '-'}</dd>
+        </div>
+        <div>
+          <dt>Status tecnico</dt>
+          <dd>{credential.lastValidationStatus ?? '-'}</dd>
+        </div>
+        <div>
+          <dt>Webhook</dt>
+          <dd>{credential.webhookRegisteredAt ? 'Registrado' : 'Nao registrado'}</dd>
+        </div>
+        <div>
+          <dt>URL</dt>
+          <dd>{credential.webhookUrl ?? '-'}</dd>
+        </div>
+      </dl>
+
+      <div className="button-row">
+        <button
+          className="primary-button"
+          disabled={loading || token.trim().length < 12}
+          type="button"
+          onClick={() => void onSave({ provider, name, token })}
+        >
+          <ShieldCheck aria-hidden="true" size={16} />
+          {credential.configured ? 'Substituir chave' : 'Salvar'}
+        </button>
+        <button
+          className="secondary-button"
+          disabled={loading || !credential.configured || webhookSecret.trim().length < 16}
+          type="button"
+          onClick={() => void onSaveWebhookSecret(webhookSecret)}
+        >
+          Secret
+        </button>
+        <button
+          className="secondary-button"
+          disabled={loading || !credential.configured}
+          type="button"
+          onClick={() => void onTest()}
+        >
+          Testar conexao
+        </button>
+        <button
+          className="secondary-button"
+          disabled={loading || !credential.configured || Boolean(credential.defaultForPix)}
+          type="button"
+          onClick={() => void onSetDefault()}
+        >
+          Padrao
+        </button>
+        <button
+          className="secondary-button"
+          disabled={loading || !credential.configured}
+          type="button"
+          onClick={() => void onRegisterWebhook()}
+        >
+          Webhook
+        </button>
+        <button
+          className="danger-button"
+          disabled={loading || !credential.configured}
+          type="button"
+          onClick={() => void onDeactivate()}
+        >
+          Desativar
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function paymentProviderLabel(provider: ConfigurablePaymentProvider) {
+  return provider === 'FASTFLOW' ? 'FastFlow' : 'FastPay';
+}
+
+function paymentProviderStatusLabel(status: PaymentProviderCredentialStatus['status']) {
+  if (status === 'VALIDO') return 'VALIDO';
+  if (status === 'CONFIGURADO') return 'CONFIGURADO';
+  if (status === 'ERRO') return 'ERRO';
+  return 'NAO CONFIGURADO';
 }
 
 function ClientsView({
@@ -3020,6 +3317,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [paymentReceivable, setPaymentReceivable] = useState<Receivable | null>(null);
+  const [pixReceivable, setPixReceivable] = useState<Receivable | null>(null);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
 
   const loadFinance = useCallback(async () => {
@@ -3192,6 +3490,15 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                           className="secondary-button"
                           disabled={receivable.status !== 'PENDENTE'}
                           type="button"
+                          onClick={() => setPixReceivable(receivable)}
+                        >
+                          <QrCode aria-hidden="true" size={16} />
+                          Gerar PIX
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={receivable.status !== 'PENDENTE'}
+                          type="button"
                           onClick={() => setPaymentReceivable(receivable)}
                         >
                           Dar baixa
@@ -3288,6 +3595,16 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             await payReceivable(paymentReceivable.id, payload);
             setPaymentReceivable(null);
             await reloadWithNotice('Pagamento registrado.');
+          }}
+        />
+      ) : null}
+
+      {pixReceivable ? (
+        <PixReceivableModal
+          receivable={pixReceivable}
+          onClose={() => setPixReceivable(null)}
+          onChanged={async (message) => {
+            await reloadWithNotice(message);
           }}
         />
       ) : null}
@@ -3607,6 +3924,227 @@ function FinancialCategoriesView({
         </table>
       </div>
     </>
+  );
+}
+
+function PixReceivableModal({
+  receivable,
+  onClose,
+  onChanged,
+}: {
+  receivable: Receivable;
+  onClose: () => void;
+  onChanged: (message: string) => Promise<void>;
+}) {
+  const [intents, setIntents] = useState<PaymentIntent[]>([]);
+  const [activeIntent, setActiveIntent] = useState<PaymentIntent | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+
+  const loadIntents = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const nextIntents = await listPaymentIntents(receivable.id);
+      setIntents(nextIntents);
+      setActiveIntent(
+        nextIntents.find((intent) => ['CREATED', 'WAITING_PAYMENT'].includes(intent.status)) ??
+          nextIntents[0] ??
+          null,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar o PIX.');
+    } finally {
+      setLoading(false);
+    }
+  }, [receivable.id]);
+
+  useEffect(() => {
+    void loadIntents();
+  }, [loadIntents]);
+
+  async function runAction(action: () => Promise<PaymentIntent>, success: string) {
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const intent = await action();
+      setActiveIntent(intent);
+      await loadIntents();
+      setNotice(success);
+      await onChanged(success);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel atualizar o PIX.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyPix() {
+    if (!activeIntent?.pixCopyPaste) return;
+    await navigator.clipboard.writeText(activeIntent.pixCopyPaste);
+    setNotice('PIX copiado.');
+  }
+
+  const canCreateNew =
+    !activeIntent || !['CREATED', 'WAITING_PAYMENT'].includes(activeIntent.status);
+  const canCancel =
+    activeIntent && !['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
+  const canRenderQrImage =
+    activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="pix-title">
+        <header className="modal-header">
+          <h2 id="pix-title">PIX</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <dl className="detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{receivable.client?.name ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Descricao</dt>
+            <dd>{receivable.description}</dd>
+          </div>
+          <div>
+            <dt>Valor</dt>
+            <dd>{formatCurrency(receivable.amount)}</dd>
+          </div>
+          <div>
+            <dt>Vencimento</dt>
+            <dd>{formatDate(receivable.dueDate)}</dd>
+          </div>
+        </dl>
+
+        {error ? <div className="notice danger">{error}</div> : null}
+        {notice ? <div className="notice success">{notice}</div> : null}
+
+        {loading ? <div className="empty-state">Carregando PIX...</div> : null}
+
+        {activeIntent ? (
+          <div className="pix-panel">
+            <div className="pix-status-row">
+              <strong>{activeIntent.status}</strong>
+              <span>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</span>
+            </div>
+            <label className="field">
+              <span>PIX copia e cola</span>
+              <textarea readOnly rows={4} value={activeIntent.pixCopyPaste ?? ''} />
+            </label>
+            {activeIntent.qrCodeData ? (
+              <div className="pix-qr" aria-label="QR Code PIX">
+                {canRenderQrImage ? (
+                  <img alt="QR Code PIX" src={activeIntent.qrCodeData} />
+                ) : (
+                  <>
+                    <QrCode aria-hidden="true" size={92} />
+                    <span>{activeIntent.qrCodeData}</span>
+                  </>
+                )}
+              </div>
+            ) : null}
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={!activeIntent.pixCopyPaste}
+                type="button"
+                onClick={() => void copyPix()}
+              >
+                <Copy aria-hidden="true" size={16} />
+                Copiar
+              </button>
+              <button
+                className="secondary-button"
+                disabled={busy}
+                type="button"
+                onClick={() =>
+                  void runAction(
+                    () => syncPaymentIntent(activeIntent.id),
+                    'Status do PIX sincronizado.',
+                  )
+                }
+              >
+                <RefreshCcw aria-hidden="true" size={16} />
+                Sincronizar
+              </button>
+              {activeIntent.provider === 'MOCK' ? (
+                <button
+                  className="primary-button"
+                  disabled={busy || activeIntent.status === 'PAID'}
+                  type="button"
+                  onClick={() =>
+                    void runAction(
+                      () => confirmMockPaymentIntent(activeIntent.id),
+                      'Pagamento PIX mock confirmado.',
+                    )
+                  }
+                >
+                  <ShieldCheck aria-hidden="true" size={16} />
+                  Confirmar mock
+                </button>
+              ) : null}
+              {canCancel ? (
+                <button
+                  className="danger-button"
+                  disabled={busy}
+                  type="button"
+                  onClick={() =>
+                    void runAction(
+                      () => cancelPaymentIntent(activeIntent.id),
+                      'PIX cancelado no provider.',
+                    )
+                  }
+                >
+                  Cancelar
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {intents.length > 1 ? (
+          <div className="mini-list">
+            {intents.slice(1).map((intent) => (
+              <article key={intent.id}>
+                <strong>{intent.status}</strong>
+                <span>{intent.createdAt ? formatDateTime(intent.createdAt) : '-'}</span>
+                <p>{formatCurrency(intent.amount)}</p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="form-actions">
+          <span>{canCreateNew ? '' : 'Ja existe um PIX ativo para esta conta.'}</span>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Fechar
+            </button>
+            <button
+              className="primary-button"
+              disabled={busy || !canCreateNew}
+              type="button"
+              onClick={() =>
+                void runAction(() => createReceivablePix(receivable.id), 'PIX gerado.')
+              }
+            >
+              <QrCode aria-hidden="true" size={16} />
+              Gerar PIX
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 

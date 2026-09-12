@@ -64,6 +64,9 @@ export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
 export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
 export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
 export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL';
+export type PaymentIntentStatus =
+  'CREATED' | 'WAITING_PAYMENT' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED' | 'REFUNDED';
+export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPAY' | 'DEPIX';
 
 export interface Renewal {
   id: string;
@@ -91,9 +94,51 @@ export interface Receivable {
   canceledAt: string | null;
   cancelReason?: string | null;
   paymentTransactionId?: string | null;
+  paymentIntents?: PaymentIntent[];
   createdAt: string;
   updatedAt: string;
   client?: Pick<Client, 'id' | 'name' | 'reference'>;
+}
+
+export interface PaymentIntent {
+  id: string;
+  receivableId: string;
+  provider: PaymentProviderCode;
+  providerTransactionId: string | null;
+  externalStatus: string | null;
+  externalDepixId: string | null;
+  blockchainTxId: string | null;
+  status: PaymentIntentStatus;
+  amount: string;
+  pixCopyPaste: string | null;
+  qrCodeData: string | null;
+  expiresAt: string | null;
+  paidAt: string | null;
+  lastSyncAt: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentProviderCredentialStatus {
+  id?: string;
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+  name?: string;
+  configured: boolean;
+  active?: boolean;
+  tokenMask?: string;
+  webhookSecretConfigured?: boolean;
+  webhookSecretMask?: string | null;
+  webhookConfiguredAt?: string | null;
+  webhookUrl?: string | null;
+  webhookRegisteredAt?: string | null;
+  defaultForPix?: boolean;
+  validatedAt?: string | null;
+  lastValidationStatus?: string | null;
+  status: 'NAO_CONFIGURADO' | 'CONFIGURADO' | 'VALIDO' | 'ERRO';
+  providerLabel?: string | null;
+  partner?: { id?: string; name?: string; email?: string } | null;
 }
 
 export interface FinancialCategory {
@@ -678,6 +723,90 @@ export function payReceivable(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function createReceivablePix(id: string) {
+  return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, { method: 'POST' });
+}
+
+export function listPaymentIntents(receivableId: string) {
+  return apiFetch<PaymentIntent[]>(`/receivables/${receivableId}/payment-intents`);
+}
+
+export function syncPaymentIntent(id: string) {
+  return apiFetch<PaymentIntent>(`/payment-intents/${id}/sync`, { method: 'POST' });
+}
+
+export function confirmMockPaymentIntent(id: string) {
+  return apiFetch<PaymentIntent>(`/payment-intents/${id}/mock-confirm`, { method: 'POST' });
+}
+
+export function cancelPaymentIntent(id: string) {
+  return apiFetch<PaymentIntent>(`/payment-intents/${id}/cancel`, { method: 'POST' });
+}
+
+export function listPaymentProviderCredentials() {
+  return apiFetch<PaymentProviderCredentialStatus[]>('/payment-provider-credentials');
+}
+
+export function savePaymentProviderCredential(payload: {
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+  name: string;
+  token: string;
+}) {
+  return apiFetch<PaymentProviderCredentialStatus>('/payment-provider-credentials', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function testPaymentProviderCredential(
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+) {
+  return apiFetch<PaymentProviderCredentialStatus>(
+    `/payment-provider-credentials/${provider}/test`,
+    { method: 'POST' },
+  );
+}
+
+export function deactivatePaymentProviderCredential(
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+) {
+  return apiFetch<PaymentProviderCredentialStatus>(
+    `/payment-provider-credentials/${provider}/deactivate`,
+    { method: 'POST' },
+  );
+}
+
+export function setDefaultPaymentProvider(
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+) {
+  return apiFetch<PaymentProviderCredentialStatus>(
+    `/payment-provider-credentials/${provider}/default`,
+    { method: 'POST' },
+  );
+}
+
+export function savePaymentWebhookSecret(
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+  secret: string,
+) {
+  return apiFetch<PaymentProviderCredentialStatus>(
+    `/payment-provider-credentials/${provider}/webhook-secret`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ secret }),
+    },
+  );
+}
+
+export function registerPaymentWebhook(
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+) {
+  return apiFetch<PaymentProviderCredentialStatus>(
+    `/payment-provider-credentials/${provider}/webhook/register`,
+    { method: 'POST' },
+  );
 }
 
 export function cancelReceivable(id: string, payload: { reason: string }) {

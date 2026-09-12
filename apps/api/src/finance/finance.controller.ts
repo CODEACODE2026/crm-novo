@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { PaymentProviderCode } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
@@ -21,16 +22,25 @@ import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
+import {
+  SavePaymentProviderCredentialDto,
+  SavePaymentWebhookSecretDto,
+} from './dto/save-payment-provider-credential.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
 import { UpdateManualTransactionDto } from './dto/update-manual-transaction.dto';
 import { FinanceService } from './finance.service';
+import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
 @UseGuards(JwtAuthGuard)
 @Controller()
 export class FinanceController {
-  constructor(@Inject(FinanceService) private readonly financeService: FinanceService) {}
+  constructor(
+    @Inject(FinanceService) private readonly financeService: FinanceService,
+    @Inject(PaymentProviderCredentialsService)
+    private readonly paymentCredentials: PaymentProviderCredentialsService,
+  ) {}
 
   @Get('financial-categories')
   listCategories() {
@@ -76,6 +86,31 @@ export class FinanceController {
     return this.financeService.payReceivable(id, dto, request.user.id);
   }
 
+  @Post('receivables/:id/pix')
+  createReceivablePix(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.financeService.createReceivablePix(id, request.user.id);
+  }
+
+  @Get('receivables/:id/payment-intents')
+  listPaymentIntents(@Param('id') id: string) {
+    return this.financeService.listPaymentIntents(id);
+  }
+
+  @Post('payment-intents/:id/sync')
+  syncPaymentIntent(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.financeService.syncPaymentIntent(id, request.user.id);
+  }
+
+  @Post('payment-intents/:id/mock-confirm')
+  confirmMockPaymentIntent(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.financeService.confirmMockPaymentIntent(id, request.user.id);
+  }
+
+  @Post('payment-intents/:id/cancel')
+  cancelPaymentIntent(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.financeService.cancelPaymentIntent(id, request.user.id);
+  }
+
   @Post('receivables/:id/cancel')
   cancelReceivable(
     @Param('id') id: string,
@@ -118,5 +153,43 @@ export class FinanceController {
   @Get('finance/summary')
   summary(@Query() query: FinancialSummaryDto) {
     return this.financeService.summary(query);
+  }
+
+  @Get('payment-provider-credentials')
+  listPaymentProviderCredentials() {
+    return this.paymentCredentials.list();
+  }
+
+  @Post('payment-provider-credentials')
+  savePaymentProviderCredential(@Body() dto: SavePaymentProviderCredentialDto) {
+    return this.paymentCredentials.save(dto);
+  }
+
+  @Post('payment-provider-credentials/:provider/test')
+  testPaymentProviderCredential(@Param('provider') provider: PaymentProviderCode) {
+    return this.paymentCredentials.test(provider);
+  }
+
+  @Post('payment-provider-credentials/:provider/deactivate')
+  deactivatePaymentProviderCredential(@Param('provider') provider: PaymentProviderCode) {
+    return this.paymentCredentials.deactivate(provider);
+  }
+
+  @Post('payment-provider-credentials/:provider/default')
+  setDefaultPaymentProvider(@Param('provider') provider: PaymentProviderCode) {
+    return this.paymentCredentials.setDefaultProvider(provider);
+  }
+
+  @Post('payment-provider-credentials/:provider/webhook-secret')
+  savePaymentWebhookSecret(
+    @Param('provider') provider: PaymentProviderCode,
+    @Body() dto: SavePaymentWebhookSecretDto,
+  ) {
+    return this.paymentCredentials.saveWebhookSecret(provider, dto);
+  }
+
+  @Post('payment-provider-credentials/:provider/webhook/register')
+  registerPaymentWebhook(@Param('provider') provider: PaymentProviderCode) {
+    return this.paymentCredentials.registerWebhook(provider);
   }
 }

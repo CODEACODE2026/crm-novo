@@ -1069,6 +1069,111 @@ tbody tr:hover,
   color: var(--muted);
 }
 
+.pix-panel {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.pix-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.pix-status-row span,
+.pix-qr span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pix-qr {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(100%, 260px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 18px;
+}
+
+.pix-qr img {
+  width: 180px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.settings-section {
+  display: grid;
+  gap: 16px;
+}
+
+.payment-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.payment-provider-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 16px;
+}
+
+.payment-provider-card header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.payment-provider-card h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.payment-provider-card code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.integration-status {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.integration-status.valido {
+  border-color: rgb(38 198 163 / 45%);
+  color: var(--accent-strong);
+}
+
+.integration-status.erro {
+  border-color: rgb(255 107 107 / 45%);
+  color: var(--danger);
+}
+
+.integration-details {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1091,6 +1196,10 @@ tbody tr:hover,
   .dashboard-grid,
   .operational-grid,
   .whatsapp-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-provider-grid {
     grid-template-columns: 1fr;
   }
 

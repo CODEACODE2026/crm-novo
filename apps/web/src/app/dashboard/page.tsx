@@ -59,6 +59,7 @@ import {
   getWhatsAppPendingContactsSummary,
   getWhatsAppProviderHealth,
   getWhatsAppQrCode,
+  getWhatsAppWebhook,
   ignoreWhatsAppPendingContact,
   listFinancialCategories,
   listClients,
@@ -139,6 +140,13 @@ import {
   type WhatsAppPendingContactsSummary,
   type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
+import {
+  canStartWhatsAppAction,
+  extractWebhookUrl,
+  maskProviderUserId,
+  nextWhatsAppActionsMenuOpen,
+  normalizeWhatsAppDisplayPhone,
+} from '../../lib/whatsapp-actions';
 import {
   createWhatsAppQrPoller,
   startWhatsAppConnectionFlow,
@@ -2719,7 +2727,19 @@ function WhatsAppView() {
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [activeModal, setActiveModal] = useState<
+    'webhook' | 'diagnostic' | 'logout-confirm' | null
+  >(null);
+  const [webhookInfo, setWebhookInfo] = useState<unknown>(null);
   const pollerRef = useRef<WhatsAppQrPoller | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const workingRef = useRef('');
+
+  function setWorkingState(action: string) {
+    workingRef.current = action;
+    setWorking(action);
+  }
 
   const loadWhatsApp = useCallback(async () => {
     setLoading(true);
@@ -2742,7 +2762,9 @@ function WhatsAppView() {
   }, []);
 
   const refreshWhatsAppPanel = useCallback(async () => {
-    setLoading(true);
+    if (!canStartWhatsAppAction(workingRef.current)) return;
+
+    setWorkingState('refresh');
     setError('');
     setNotice('');
 
@@ -2756,13 +2778,11 @@ function WhatsAppView() {
       setMessages(nextMessages);
       setHealth(nextHealth);
 
-      if (nextConnection?.status === 'CONNECTED') {
-        setNotice(whatsappQrStatus.connected);
-      }
+      setNotice('Painel WhatsApp atualizado.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
     } finally {
-      setLoading(false);
+      setWorkingState('');
     }
   }, [connection]);
 
@@ -2773,6 +2793,43 @@ function WhatsAppView() {
   useEffect(() => {
     return () => stopQrPolling();
   }, []);
+
+  useEffect(() => {
+    if (!actionsOpen) return undefined;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!actionsRef.current?.contains(event.target as Node)) {
+        setActionsOpen(nextWhatsAppActionsMenuOpen(true, 'outside'));
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setActionsOpen(nextWhatsAppActionsMenuOpen(true, 'escape'));
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [actionsOpen]);
+
+  useEffect(() => {
+    if (!activeModal) return undefined;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setActiveModal(null);
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [activeModal]);
 
   function stopQrPolling() {
     pollerRef.current?.stop();
@@ -2830,20 +2887,93 @@ function WhatsAppView() {
     poller.start();
   }
 
-  async function runAction(action: string, operation: () => Promise<WhatsAppConnection>) {
-    setWorking(action);
+  function toggleActionsMenu() {
+    setActionsOpen((current) => nextWhatsAppActionsMenuOpen(current, 'toggle'));
+  }
+
+  function closeActionsMenuForSelection() {
+    setActionsOpen(nextWhatsAppActionsMenuOpen(true, 'select'));
+  }
+
+  async function runAction(
+    action: string,
+    operation: () => Promise<WhatsAppConnection>,
+    successMessage?: string,
+  ) {
+    if (!canStartWhatsAppAction(workingRef.current)) return false;
+
+    setWorkingState(action);
     setError('');
     setNotice('');
 
     try {
       const nextConnection = await operation();
       setConnection(nextConnection);
+      if (successMessage) setNotice(successMessage);
       await loadMessagesOnly();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nao foi possivel concluir a operacao.');
+      return false;
     } finally {
-      setWorking('');
+      setWorkingState('');
     }
+  }
+
+  async function handleDisconnect() {
+    if (!canStartWhatsAppAction(workingRef.current)) return;
+
+    const confirmed = window.confirm(
+      'Deseja desconectar temporariamente este WhatsApp? A configuracao sera preservada.',
+    );
+
+    if (!confirmed) return;
+
+    await runAction('disconnect', disconnectWhatsApp, 'WhatsApp desconectado.');
+  }
+
+  async function openWebhookModal() {
+    if (!canStartWhatsAppAction(workingRef.current)) return;
+
+    closeActionsMenuForSelection();
+    setActiveModal('webhook');
+    setWebhookInfo(null);
+    setWorkingState('webhook-info');
+    setError('');
+    setNotice('');
+
+    try {
+      setWebhookInfo(await getWhatsAppWebhook());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar webhook.');
+    } finally {
+      setWorkingState('');
+    }
+  }
+
+  async function configureWebhookFromModal() {
+    const success = await runAction('webhook', configureWhatsAppWebhook, 'Webhook configurado.');
+    if (success) setActiveModal(null);
+  }
+
+  async function handleManualStatusRefresh() {
+    closeActionsMenuForSelection();
+    await runAction('manual-status', refreshWhatsAppStatus, 'Status do WhatsApp atualizado.');
+  }
+
+  function openDiagnosticModal() {
+    closeActionsMenuForSelection();
+    setActiveModal('diagnostic');
+  }
+
+  function openLogoutConfirmation() {
+    closeActionsMenuForSelection();
+    setActiveModal('logout-confirm');
+  }
+
+  async function confirmLogout() {
+    const success = await runAction('logout', logoutWhatsApp, 'WhatsApp deslogado.');
+    if (success) setActiveModal(null);
   }
 
   async function loadMessagesOnly() {
@@ -2852,7 +2982,9 @@ function WhatsAppView() {
   }
 
   async function handleConnectFlow() {
-    setWorking('connectFlow');
+    if (!canStartWhatsAppAction(workingRef.current)) return;
+
+    setWorkingState('connectFlow');
     setError('');
     setNotice('');
     setQrStatus(whatsappQrStatus.preparing);
@@ -2881,7 +3013,7 @@ function WhatsAppView() {
       void closeQrModal(false);
       setError(err instanceof Error ? err.message : 'Nao foi possivel conectar WhatsApp.');
     } finally {
-      setWorking('');
+      setWorkingState('');
     }
   }
 
@@ -2893,22 +3025,35 @@ function WhatsAppView() {
       ? 'Reconectar WhatsApp'
       : 'Conectar WhatsApp';
   const isConnectingFlow = working === 'connectFlow';
+  const hasWorkingAction = Boolean(working);
+  const displayPhone = normalizeWhatsAppDisplayPhone(connection?.phone) ?? '-';
+  const webhookUrl = extractWebhookUrl(webhookInfo);
 
   return (
     <>
-      {error ? <div className="notice danger">{error}</div> : null}
-      {notice ? <div className="notice success">{notice}</div> : null}
+      {error ? (
+        <div className="notice danger" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="notice success" role="status">
+          {notice}
+        </div>
+      ) : null}
       <div className="whatsapp-grid">
         <section className="panel whatsapp-panel">
           <div className="panel-header">
             <h2>Conexao WhatsApp</h2>
             <button
               className="secondary-button"
+              aria-busy={working === 'refresh'}
+              disabled={hasWorkingAction}
               type="button"
               onClick={() => void refreshWhatsAppPanel()}
             >
               <RefreshCcw aria-hidden="true" size={16} />
-              Atualizar
+              {working === 'refresh' ? 'Atualizando...' : 'Atualizar'}
             </button>
           </div>
 
@@ -2933,7 +3078,8 @@ function WhatsAppView() {
               </label>
               <button
                 className="primary-button"
-                disabled={isConnectingFlow}
+                aria-busy={isConnectingFlow}
+                disabled={hasWorkingAction}
                 type="button"
                 onClick={() => void handleConnectFlow()}
               >
@@ -2970,7 +3116,7 @@ function WhatsAppView() {
                 </div>
                 <div>
                   <dt>Telefone</dt>
-                  <dd>{connection.phone ?? '-'}</dd>
+                  <dd>{displayPhone}</dd>
                 </div>
                 <div>
                   <dt>Ultima verificacao</dt>
@@ -2990,7 +3136,8 @@ function WhatsAppView() {
                 {connected ? null : (
                   <button
                     className="primary-button"
-                    disabled={isConnectingFlow}
+                    aria-busy={isConnectingFlow}
+                    disabled={hasWorkingAction}
                     type="button"
                     onClick={() => void handleConnectFlow()}
                   >
@@ -3000,64 +3147,85 @@ function WhatsAppView() {
                 )}
                 <button
                   className="secondary-button"
+                  aria-busy={working === 'manual-status'}
+                  disabled={hasWorkingAction}
                   type="button"
-                  onClick={() => void runAction('status', refreshWhatsAppStatus)}
+                  onClick={() =>
+                    void runAction('manual-status', refreshWhatsAppStatus, 'Status atualizado.')
+                  }
                 >
                   <RefreshCcw aria-hidden="true" size={16} />
-                  Atualizar
+                  {working === 'manual-status' ? 'Atualizando...' : 'Atualizar'}
                 </button>
                 {connected ? (
                   <button
                     className="secondary-button"
-                    disabled={working === 'disconnect'}
+                    aria-busy={working === 'disconnect'}
+                    disabled={hasWorkingAction}
                     type="button"
-                    onClick={() => void runAction('disconnect', disconnectWhatsApp)}
+                    onClick={() => void handleDisconnect()}
                   >
                     <Power aria-hidden="true" size={16} />
-                    Desconectar
+                    {working === 'disconnect' ? 'Desconectando...' : 'Desconectar'}
                   </button>
                 ) : null}
-                <details className="technical-actions">
-                  <summary>
+                <div className="technical-actions" ref={actionsRef}>
+                  <button
+                    aria-controls="whatsapp-actions-menu"
+                    aria-expanded={actionsOpen}
+                    aria-haspopup="menu"
+                    className="secondary-button technical-actions-trigger"
+                    type="button"
+                    onClick={toggleActionsMenu}
+                  >
                     <Settings aria-hidden="true" size={16} />
                     Mais ações
-                  </summary>
-                  <div className="technical-actions-menu">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => void runAction('webhook', configureWhatsAppWebhook)}
-                    >
-                      Configurar webhook
-                    </button>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => void runAction('status', refreshWhatsAppStatus)}
-                    >
-                      Atualizar status manualmente
-                    </button>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => void loadWhatsApp()}
-                    >
-                      Visualizar diagnóstico
-                    </button>
-                    <button
-                      className="danger-button"
-                      type="button"
-                      onClick={() => {
-                        const confirmed = window.confirm(
-                          'Isso encerrará a sessão atual do WhatsApp e será necessário conectar novamente.',
-                        );
-                        if (confirmed) void runAction('logout', logoutWhatsApp);
-                      }}
-                    >
-                      Deslogar WhatsApp
-                    </button>
-                  </div>
-                </details>
+                  </button>
+                  {actionsOpen ? (
+                    <div className="technical-actions-menu" id="whatsapp-actions-menu" role="menu">
+                      <button
+                        className="secondary-button"
+                        aria-busy={working === 'webhook-info'}
+                        disabled={hasWorkingAction}
+                        role="menuitem"
+                        type="button"
+                        onClick={() => void openWebhookModal()}
+                      >
+                        {working === 'webhook-info' ? 'Carregando...' : 'Configurar webhook'}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        aria-busy={working === 'manual-status'}
+                        disabled={hasWorkingAction}
+                        role="menuitem"
+                        type="button"
+                        onClick={() => void handleManualStatusRefresh()}
+                      >
+                        {working === 'manual-status'
+                          ? 'Atualizando...'
+                          : 'Atualizar status manualmente'}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={hasWorkingAction}
+                        role="menuitem"
+                        type="button"
+                        onClick={openDiagnosticModal}
+                      >
+                        Visualizar diagnóstico
+                      </button>
+                      <button
+                        className="danger-button"
+                        disabled={hasWorkingAction}
+                        role="menuitem"
+                        type="button"
+                        onClick={openLogoutConfirmation}
+                      >
+                        Deslogar WhatsApp
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </>
           )}
@@ -3111,6 +3279,172 @@ function WhatsAppView() {
             </div>
             <div className="qr-status" aria-live="polite">
               {qrStatus}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeModal === 'webhook' ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setActiveModal(null);
+          }}
+        >
+          <section className="modal" aria-labelledby="whatsapp-webhook-title">
+            <header className="modal-header">
+              <h2 id="whatsapp-webhook-title">Webhook WhatsApp</h2>
+              <button className="icon-button" type="button" onClick={() => setActiveModal(null)}>
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <dl className="detail-list">
+              <div>
+                <dt>URL atual</dt>
+                <dd>{working === 'webhook-info' ? 'Carregando...' : (webhookUrl ?? '-')}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{connection?.webhookConfigured ? 'Configurado' : 'Nao configurado'}</dd>
+              </div>
+            </dl>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setActiveModal(null)}
+              >
+                Fechar
+              </button>
+              <button
+                className="primary-button"
+                aria-busy={working === 'webhook'}
+                disabled={hasWorkingAction}
+                type="button"
+                onClick={() => void configureWebhookFromModal()}
+              >
+                {working === 'webhook' ? 'Configurando...' : 'Configurar webhook'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeModal === 'diagnostic' ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setActiveModal(null);
+          }}
+        >
+          <section className="modal" aria-labelledby="whatsapp-diagnostic-title">
+            <header className="modal-header">
+              <h2 id="whatsapp-diagnostic-title">Diagnóstico WhatsApp</h2>
+              <button className="icon-button" type="button" onClick={() => setActiveModal(null)}>
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <dl className="detail-list">
+              <div>
+                <dt>Kirago</dt>
+                <dd>{health?.online ? 'Online' : 'Offline'}</dd>
+              </div>
+              <div>
+                <dt>Versao</dt>
+                <dd>{health?.version ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>Conexao</dt>
+                <dd>{connection?.name ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>Provider</dt>
+                <dd>{connection?.provider ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>Status CRM</dt>
+                <dd>{connection?.status ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>connected</dt>
+                <dd>{connection?.connected ? 'true' : 'false'}</dd>
+              </div>
+              <div>
+                <dt>loggedIn</dt>
+                <dd>{connection?.loggedIn ? 'true' : 'false'}</dd>
+              </div>
+              <div>
+                <dt>Telefone</dt>
+                <dd>{displayPhone}</dd>
+              </div>
+              <div>
+                <dt>providerUserId</dt>
+                <dd>{maskProviderUserId(connection?.providerUserId)}</dd>
+              </div>
+              <div>
+                <dt>Ultima verificacao</dt>
+                <dd>
+                  {connection?.lastStatusAt
+                    ? new Date(connection.lastStatusAt).toLocaleString('pt-BR')
+                    : '-'}
+                </dd>
+              </div>
+              <div>
+                <dt>Webhook</dt>
+                <dd>{connection?.webhookConfigured ? 'Configurado' : 'Pendente'}</dd>
+              </div>
+            </dl>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setActiveModal(null)}
+              >
+                Fechar
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeModal === 'logout-confirm' ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setActiveModal(null);
+          }}
+        >
+          <section className="modal" aria-labelledby="whatsapp-logout-title">
+            <header className="modal-header">
+              <h2 id="whatsapp-logout-title">Deslogar WhatsApp</h2>
+              <button className="icon-button" type="button" onClick={() => setActiveModal(null)}>
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <p>
+              Deseja realmente deslogar este WhatsApp? Será necessário escanear um novo QR Code para
+              conectar novamente.
+            </p>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setActiveModal(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                aria-busy={working === 'logout'}
+                disabled={hasWorkingAction}
+                type="button"
+                onClick={() => void confirmLogout()}
+              >
+                {working === 'logout' ? 'Deslogando...' : 'Deslogar WhatsApp'}
+              </button>
             </div>
           </section>
         </div>

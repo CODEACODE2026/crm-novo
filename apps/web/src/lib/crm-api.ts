@@ -1019,6 +1019,10 @@ export function logoutWhatsApp() {
   return apiFetch<WhatsAppConnection>('/whatsapp/connection/logout', { method: 'POST' });
 }
 
+export function getWhatsAppWebhook() {
+  return apiFetch<unknown>('/whatsapp/connection/webhook');
+}
+
 export function configureWhatsAppWebhook() {
   return apiFetch<WhatsAppConnection>('/whatsapp/connection/webhook', { method: 'POST' });
 }

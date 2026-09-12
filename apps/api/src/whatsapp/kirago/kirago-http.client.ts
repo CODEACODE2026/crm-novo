@@ -44,7 +44,10 @@ export class KiragoHttpClient {
       const payload = (await response.json().catch(() => null)) as T | null;
 
       if (!response.ok) {
-        const code = response.status === 401 ? options.authFailureCode : 'WHATSAPP_PROVIDER_ERROR';
+        const code =
+          response.status === 401 || response.status === 403
+            ? options.authFailureCode
+            : 'WHATSAPP_PROVIDER_ERROR';
         throw new KiragoProviderError(code, this.safeMessage(code), response.status);
       }
 

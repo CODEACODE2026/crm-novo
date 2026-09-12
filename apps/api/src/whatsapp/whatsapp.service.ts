@@ -104,7 +104,21 @@ export class WhatsAppService {
       data: { status: 'CONNECTING' },
     });
 
-    await this.mapProviderError(() => this.provider.connect(instanceToken));
+    try {
+      await this.mapProviderError(() => this.provider.connect(instanceToken));
+    } catch (error) {
+      await this.prisma.whatsAppConnection.update({
+        where: { id: connection.id },
+        data: {
+          status: 'DISCONNECTED',
+          connected: false,
+          loggedIn: false,
+          lastStatusAt: new Date(),
+        },
+      });
+      throw error;
+    }
+
     return this.refreshStatus(connection.id);
   }
 

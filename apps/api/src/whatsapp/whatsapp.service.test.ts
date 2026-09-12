@@ -1,6 +1,12 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { KiragoProviderError } from './kirago/kirago-provider.error';
 import { WhatsAppService } from './whatsapp.service';
 
 const now = new Date('2026-09-11T00:00:00.000Z');
@@ -90,10 +96,12 @@ function pendingContact(overrides: Record<string, unknown> = {}) {
 function serviceFactory({
   currentConnection = connection(),
   providerOverrides = {},
+  encryptionOverrides = {},
   prismaOverrides = {},
 }: {
   currentConnection?: ReturnType<typeof connection> | null;
   providerOverrides?: Record<string, unknown>;
+  encryptionOverrides?: Record<string, unknown>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
   const prisma = {
@@ -182,6 +190,7 @@ function serviceFactory({
   const encryption = {
     encrypt: vi.fn().mockReturnValue('encrypted-token'),
     decrypt: vi.fn().mockReturnValue('instance-token'),
+    ...encryptionOverrides,
   };
   const plans = {
     ensureActivePlan: vi.fn().mockResolvedValue({ id: 'plan-id' }),
@@ -214,6 +223,10 @@ describe('WhatsAppService', () => {
     const { service, provider, encryption } = serviceFactory({ currentConnection: null });
 
     const result = await service.provisionConnection({ name: 'CRM Principal' });
+    const providerPayload = (provider.provisionConnection as MockWithCalls).mock.calls[0]?.[0] as {
+      instanceToken?: string;
+    };
+    const encryptedToken = (encryption.encrypt as MockWithCalls).mock.calls[0]?.[0] as string;
 
     expect(provider.provisionConnection).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -222,8 +235,69 @@ describe('WhatsAppService', () => {
       }),
     );
     expect(encryption.encrypt).toHaveBeenCalled();
+    expect(createHash('sha256').update(encryptedToken).digest('hex')).toBe(
+      createHash('sha256')
+        .update(providerPayload.instanceToken ?? '')
+        .digest('hex'),
+    );
     expect(JSON.stringify(result)).not.toContain('instance-token');
     expect(JSON.stringify(result)).not.toContain('encrypted-token');
+  });
+
+  it('connects using the decrypted instance token', async () => {
+    const { service, provider, encryption } = serviceFactory();
+
+    await service.connect();
+
+    expect(encryption.decrypt).toHaveBeenCalledWith('encrypted-token');
+    expect(provider.connect).toHaveBeenCalledWith('instance-token');
+  });
+
+  it('surfaces corrupted encrypted token without calling Kirago', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      encryptionOverrides: {
+        decrypt: vi.fn(() => {
+          throw new BadRequestException('Token da conexao WhatsApp corrompido ou invalido.');
+        }),
+      },
+      providerOverrides: { connect: vi.fn() },
+    });
+
+    await expect(service.connect()).rejects.toThrow(
+      'Token da conexao WhatsApp corrompido ou invalido.',
+    );
+
+    expect(provider.connect).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConnection.update).not.toHaveBeenCalled();
+  });
+
+  it('does not leave connection stuck as CONNECTING after instance auth failure', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      providerOverrides: {
+        connect: vi
+          .fn()
+          .mockRejectedValue(
+            new KiragoProviderError('KIRAGO_INSTANCE_AUTH_FAILED', 'Falha sanitizada.', 401),
+          ),
+      },
+    });
+
+    await expect(service.connect()).rejects.toThrow(ServiceUnavailableException);
+
+    expect(provider.connect).toHaveBeenCalledWith('instance-token');
+    expect(prisma.whatsAppConnection.update).toHaveBeenNthCalledWith(1, {
+      where: { id: connection().id },
+      data: { status: 'CONNECTING' },
+    });
+    const recoveryUpdate = (prisma.whatsAppConnection.update as MockWithCalls).mock
+      .calls[1]?.[0] as { data?: Record<string, unknown>; where?: { id?: string } } | undefined;
+
+    expect(recoveryUpdate?.where).toEqual({ id: connection().id });
+    expect(recoveryUpdate?.data).toMatchObject({
+      status: 'DISCONNECTED',
+      connected: false,
+      loggedIn: false,
+    });
   });
 
   it('maps provider status to CONNECTED', async () => {

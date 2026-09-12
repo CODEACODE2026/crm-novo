@@ -1,6 +1,6 @@
 'use client';
 
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   BarChart3,
@@ -139,6 +139,12 @@ import {
   type WhatsAppPendingContactsSummary,
   type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
+import {
+  createWhatsAppQrPoller,
+  startWhatsAppConnectionFlow,
+  type WhatsAppQrPoller,
+  whatsappQrStatus,
+} from '../../lib/whatsapp-connection-flow';
 
 type View =
   | 'dashboard'
@@ -2704,13 +2710,15 @@ function WhatsAppView() {
   const [connection, setConnection] = useState<WhatsAppConnection | null>(null);
   const [messages, setMessages] = useState<MessageDispatch[]>([]);
   const [health, setHealth] = useState<WhatsAppProviderHealth | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [connectionName, setConnectionName] = useState('CRM Principal');
   const [qrOpen, setQrOpen] = useState(false);
   const [qrCode, setQrCode] = useState('');
+  const [qrStatus, setQrStatus] = useState<string>(whatsappQrStatus.preparing);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const pollerRef = useRef<WhatsAppQrPoller | null>(null);
 
   const loadWhatsApp = useCallback(async () => {
     setLoading(true);
@@ -2737,30 +2745,52 @@ function WhatsAppView() {
   }, [loadWhatsApp]);
 
   useEffect(() => {
-    if (!qrOpen) return;
+    return () => stopQrPolling();
+  }, []);
 
-    const timer = window.setInterval(() => {
-      void (async () => {
-        try {
-          const nextConnection = await refreshWhatsAppStatus();
-          setConnection(nextConnection);
+  function stopQrPolling() {
+    pollerRef.current?.stop();
+    pollerRef.current = null;
+  }
 
-          if (nextConnection.status === 'CONNECTED') {
-            setQrOpen(false);
-            setQrCode('');
-          }
-        } catch {
-          window.clearInterval(timer);
-        }
-      })();
-    }, 4000);
+  function closeQrModal() {
+    stopQrPolling();
+    setQrOpen(false);
+    setQrCode('');
+  }
 
-    return () => window.clearInterval(timer);
-  }, [qrOpen]);
+  function startQrPolling() {
+    stopQrPolling();
+
+    const poller = createWhatsAppQrPoller({
+      refreshStatus: refreshWhatsAppStatus,
+      fetchQrCode: async () => {
+        const payload = await getWhatsAppQrCode();
+        return payload.qrCode;
+      },
+      onConnection: setConnection,
+      onQrCode: setQrCode,
+      onStatus: setQrStatus,
+      onConnected: (nextConnection) => {
+        setConnection(nextConnection);
+        setNotice(whatsappQrStatus.connected);
+        void loadMessagesOnly();
+        window.setTimeout(() => {
+          setQrOpen(false);
+          setQrCode('');
+        }, 900);
+      },
+      onError: setError,
+    });
+
+    pollerRef.current = poller;
+    poller.start();
+  }
 
   async function runAction(action: string, operation: () => Promise<WhatsAppConnection>) {
     setWorking(action);
     setError('');
+    setNotice('');
 
     try {
       const nextConnection = await operation();
@@ -2778,31 +2808,48 @@ function WhatsAppView() {
     setMessages(nextMessages);
   }
 
-  async function handleCreateConnection() {
-    await runAction('create', () => createWhatsAppConnection({ name: connectionName }));
-    setCreateOpen(false);
-  }
-
-  async function handleShowQr() {
-    setWorking('qr');
+  async function handleConnectFlow() {
+    setWorking('connectFlow');
     setError('');
+    setNotice('');
+    setQrStatus(whatsappQrStatus.preparing);
 
     try {
-      const payload = await getWhatsAppQrCode();
-      setQrCode(payload.qrCode);
+      const result = await startWhatsAppConnectionFlow({
+        currentConnection: connection,
+        connectionName,
+        createConnection: createWhatsAppConnection,
+        connect: connectWhatsApp,
+        getQrCode: getWhatsAppQrCode,
+        onConnection: setConnection,
+        onQrCode: setQrCode,
+        onStatus: setQrStatus,
+      });
+
+      if (!result.qrOpened) {
+        setNotice(whatsappQrStatus.connected);
+        await loadMessagesOnly();
+        return;
+      }
+
       setQrOpen(true);
+      startQrPolling();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'QR Code nao disponivel.');
+      closeQrModal();
+      setError(err instanceof Error ? err.message : 'Nao foi possivel conectar WhatsApp.');
     } finally {
       setWorking('');
     }
   }
 
   const connected = connection?.status === 'CONNECTED';
+  const connectActionLabel = connection ? 'Reconectar WhatsApp' : 'Conectar WhatsApp';
+  const isConnectingFlow = working === 'connectFlow';
 
   return (
     <>
       {error ? <div className="notice danger">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
       <div className="whatsapp-grid">
         <section className="panel whatsapp-panel">
           <div className="panel-header">
@@ -2823,9 +2870,23 @@ function WhatsAppView() {
             <div className="empty-card">
               <MessageCircle aria-hidden="true" size={28} />
               <strong>Nenhuma conexão WhatsApp configurada.</strong>
-              <span>Crie uma conexão para integrar o CRM ao WhatsApp.</span>
-              <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}>
-                Criar conexão
+              <span>Integre o CRM ao WhatsApp em um único passo.</span>
+              <label className="field compact-field">
+                <span>Nome da conexão</span>
+                <input
+                  placeholder="CRM Principal"
+                  value={connectionName}
+                  onChange={(event) => setConnectionName(event.target.value)}
+                />
+              </label>
+              <button
+                className="primary-button"
+                disabled={isConnectingFlow}
+                type="button"
+                onClick={() => void handleConnectFlow()}
+              >
+                <MessageCircle aria-hidden="true" size={16} />
+                {isConnectingFlow ? 'Preparando...' : 'Conectar WhatsApp'}
               </button>
             </div>
           ) : (
@@ -2868,57 +2929,77 @@ function WhatsAppView() {
               </dl>
 
               <div className="button-row wrap">
-                <button
-                  className="primary-button"
-                  disabled={working === 'connect'}
-                  type="button"
-                  onClick={() => void runAction('connect', connectWhatsApp)}
-                >
-                  <Power aria-hidden="true" size={16} />
-                  Conectar
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={working === 'qr'}
-                  type="button"
-                  onClick={() => void handleShowQr()}
-                >
-                  <QrCode aria-hidden="true" size={16} />
-                  Exibir QR Code
-                </button>
+                {connected ? null : (
+                  <button
+                    className="primary-button"
+                    disabled={isConnectingFlow}
+                    type="button"
+                    onClick={() => void handleConnectFlow()}
+                  >
+                    <Power aria-hidden="true" size={16} />
+                    {isConnectingFlow ? 'Preparando...' : connectActionLabel}
+                  </button>
+                )}
                 <button
                   className="secondary-button"
                   type="button"
                   onClick={() => void runAction('status', refreshWhatsAppStatus)}
                 >
-                  Atualizar status
+                  <RefreshCcw aria-hidden="true" size={16} />
+                  Atualizar
                 </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void runAction('webhook', configureWhatsAppWebhook)}
-                >
-                  Configurar webhook
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void runAction('disconnect', disconnectWhatsApp)}
-                >
-                  Desconectar
-                </button>
-                <button
-                  className="danger-button"
-                  type="button"
-                  onClick={() => {
-                    const confirmed = window.confirm(
-                      'Isso encerrará a sessão atual do WhatsApp e será necessário conectar novamente.',
-                    );
-                    if (confirmed) void runAction('logout', logoutWhatsApp);
-                  }}
-                >
-                  Deslogar WhatsApp
-                </button>
+                {connected ? (
+                  <button
+                    className="secondary-button"
+                    disabled={working === 'disconnect'}
+                    type="button"
+                    onClick={() => void runAction('disconnect', disconnectWhatsApp)}
+                  >
+                    <Power aria-hidden="true" size={16} />
+                    Desconectar
+                  </button>
+                ) : null}
+                <details className="technical-actions">
+                  <summary>
+                    <Settings aria-hidden="true" size={16} />
+                    Mais ações
+                  </summary>
+                  <div className="technical-actions-menu">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void runAction('webhook', configureWhatsAppWebhook)}
+                    >
+                      Configurar webhook
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void runAction('status', refreshWhatsAppStatus)}
+                    >
+                      Atualizar status manualmente
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void loadWhatsApp()}
+                    >
+                      Visualizar diagnóstico
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => {
+                        const confirmed = window.confirm(
+                          'Isso encerrará a sessão atual do WhatsApp e será necessário conectar novamente.',
+                        );
+                        if (confirmed) void runAction('logout', logoutWhatsApp);
+                      }}
+                    >
+                      Deslogar WhatsApp
+                    </button>
+                  </div>
+                </details>
               </div>
             </>
           )}
@@ -2948,67 +3029,31 @@ function WhatsAppView() {
         </section>
       </div>
 
-      {createOpen ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="modal" aria-labelledby="create-whatsapp-title">
-            <header className="modal-header">
-              <h2 id="create-whatsapp-title">Criar conexão</h2>
-              <button className="icon-button" type="button" onClick={() => setCreateOpen(false)}>
-                <X aria-hidden="true" size={17} />
-              </button>
-            </header>
-            <label className="field">
-              <span>Nome da conexão</span>
-              <input
-                placeholder="CRM Principal"
-                value={connectionName}
-                onChange={(event) => setConnectionName(event.target.value)}
-              />
-            </label>
-            <div className="form-actions">
-              <span className="error-message">{error}</span>
-              <div className="button-row">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setCreateOpen(false)}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={!connectionName.trim() || working === 'create'}
-                  type="button"
-                  onClick={() => void handleCreateConnection()}
-                >
-                  Criar conexão
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
-
       {qrOpen ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal qr-modal" aria-labelledby="qr-title">
             <header className="modal-header">
               <h2 id="qr-title">Conectar WhatsApp</h2>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => {
-                  setQrOpen(false);
-                  setQrCode('');
-                }}
-              >
+              <button className="icon-button" type="button" onClick={closeQrModal}>
                 <X aria-hidden="true" size={17} />
               </button>
             </header>
-            <p>Abra o WhatsApp no celular, acesse Aparelhos conectados e escaneie o QR Code.</p>
+            <p>
+              Abra o WhatsApp no celular &rarr; Aparelhos conectados &rarr; Conectar aparelho &rarr;
+              escaneie o QR Code.
+            </p>
             {/* QR Code vem como Data URI temporario da Kirago; next/image nao otimiza esse caso. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            {qrCode ? <img alt="QR Code do WhatsApp" className="qr-image" src={qrCode} /> : null}
+            <div className="qr-frame">
+              {qrCode ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img alt="QR Code do WhatsApp" className="qr-image" src={qrCode} />
+              ) : (
+                <div className="qr-placeholder">Preparando...</div>
+              )}
+            </div>
+            <div className="qr-status" aria-live="polite">
+              {qrStatus}
+            </div>
           </section>
         </div>
       ) : null}

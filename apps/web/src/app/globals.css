@@ -454,6 +454,10 @@ a {
   padding: 18px;
 }
 
+.compact-field {
+  width: min(100%, 360px);
+}
+
 .waitlist-kpis {
   margin-bottom: 16px;
 }
@@ -584,7 +588,21 @@ a {
 }
 
 .qr-modal {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
   text-align: center;
+}
+
+.qr-frame {
+  display: grid;
+  width: min(100%, 360px);
+  min-height: 320px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 16px;
 }
 
 .qr-image {
@@ -592,6 +610,60 @@ a {
   border: 12px solid #fff;
   border-radius: 8px;
   background: #fff;
+}
+
+.qr-placeholder {
+  display: grid;
+  width: min(100%, 320px);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.qr-status {
+  min-height: 24px;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.technical-actions {
+  position: relative;
+}
+
+.technical-actions summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+  padding: 0 14px;
+}
+
+.technical-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.technical-actions-menu {
+  position: absolute;
+  right: 0;
+  z-index: 5;
+  display: grid;
+  min-width: 230px;
+  gap: 8px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 10px;
 }
 
 .status-row {

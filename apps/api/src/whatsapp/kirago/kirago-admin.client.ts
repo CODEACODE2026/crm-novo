@@ -10,18 +10,20 @@ export type KiragoCreateUserPayload = {
   events?: string;
 };
 
+export type KiragoUserData = {
+  id?: string;
+  name?: string;
+  webhook?: string;
+  events?: string;
+  connected?: boolean;
+  loggedIn?: boolean;
+  jid?: string;
+  phone?: string;
+};
+
 export type KiragoUserResponse = {
   code?: number;
-  data?: {
-    id?: string;
-    name?: string;
-    webhook?: string;
-    events?: string;
-    connected?: boolean;
-    loggedIn?: boolean;
-    jid?: string;
-    phone?: string;
-  };
+  data?: KiragoUserData | KiragoUserData[];
   success?: boolean;
 };
 

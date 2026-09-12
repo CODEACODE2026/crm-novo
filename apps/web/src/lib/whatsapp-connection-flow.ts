@@ -73,8 +73,10 @@ export async function startWhatsAppConnectionFlow({
 
   onStatus(whatsappQrStatus.preparing);
 
-  if (!connection) {
-    connection = await createConnection({ name: connectionName.trim() || 'CRM Principal' });
+  if (!connection || connection.status === 'ERROR') {
+    const nextConnectionName =
+      connection?.status === 'ERROR' ? connection.name : connectionName.trim();
+    connection = await createConnection({ name: nextConnectionName || 'CRM Principal' });
     provisioned = true;
     onConnection(connection);
   }

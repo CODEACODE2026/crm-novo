@@ -56,4 +56,22 @@ describe('Kirago dependency injection', () => {
     });
     expect(result).toEqual({ providerUserId: 'kirago-user-id', webhookConfigured: true });
   });
+
+  it('confirms whether a remote Kirago user still exists before local reprovisioning', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const adminClient = app.get(KiragoAdminClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const getUser = vi
+      .spyOn(adminClient, 'getUser')
+      .mockResolvedValue({ success: true, data: { id: 'kirago-user-id' } });
+
+    const result = await provider.findRemoteConnection({
+      providerUserId: 'kirago-user-id',
+      instanceName: 'CRM Principal',
+    });
+
+    expect(getUser).toHaveBeenCalledWith('kirago-user-id');
+    expect(result).toEqual({ exists: true });
+  });
 });

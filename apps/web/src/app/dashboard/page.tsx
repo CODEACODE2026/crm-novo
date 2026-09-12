@@ -2843,7 +2843,12 @@ function WhatsAppView() {
   }
 
   const connected = connection?.status === 'CONNECTED';
-  const connectActionLabel = connection ? 'Reconectar WhatsApp' : 'Conectar WhatsApp';
+  const remoteInstanceMissing = connection?.status === 'ERROR';
+  const connectActionLabel = remoteInstanceMissing
+    ? 'Criar nova conexão'
+    : connection
+      ? 'Reconectar WhatsApp'
+      : 'Conectar WhatsApp';
   const isConnectingFlow = working === 'connectFlow';
 
   return (
@@ -2897,7 +2902,13 @@ function WhatsAppView() {
                 ) : (
                   <WifiOff aria-hidden="true" size={18} />
                 )}
-                <strong>{connected ? 'WhatsApp conectado' : 'WhatsApp aguardando conexão'}</strong>
+                <strong>
+                  {connected
+                    ? 'WhatsApp conectado'
+                    : remoteInstanceMissing
+                      ? 'Instância Kirago ausente'
+                      : 'WhatsApp aguardando conexão'}
+                </strong>
                 <span>{connection.status}</span>
               </div>
 

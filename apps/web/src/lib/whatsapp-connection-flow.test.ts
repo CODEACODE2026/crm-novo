@@ -74,6 +74,26 @@ describe('WhatsApp connection flow', () => {
     expect(result).toMatchObject({ provisioned: false, qrOpened: true });
   });
 
+  it('creates a clean new connection when the existing local connection lost its remote instance', async () => {
+    const created = connection('DISCONNECTED');
+    const connecting = connection('QR_REQUIRED');
+    const createConnection = vi.fn().mockResolvedValue(created);
+
+    const result = await startWhatsAppConnectionFlow({
+      currentConnection: { ...connection('ERROR'), name: 'CRM Antiga' },
+      connectionName: 'CRM Principal',
+      createConnection,
+      connect: vi.fn().mockResolvedValue(connecting),
+      getQrCode: vi.fn().mockResolvedValue({ qrCode: 'data:image/png;base64,qr' }),
+      onConnection: vi.fn(),
+      onQrCode: vi.fn(),
+      onStatus: vi.fn(),
+    });
+
+    expect(createConnection).toHaveBeenCalledWith({ name: 'CRM Antiga' });
+    expect(result).toMatchObject({ provisioned: true, qrOpened: true });
+  });
+
   it('does not request QR for an already connected connection', async () => {
     const createConnection = vi.fn();
     const connect = vi.fn();

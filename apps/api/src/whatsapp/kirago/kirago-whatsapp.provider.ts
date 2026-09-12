@@ -3,8 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { KiragoAdminClient } from './kirago-admin.client';
 import { KiragoInstanceClient } from './kirago-instance.client';
 import { KiragoHttpClient } from './kirago-http.client';
+import { KiragoProviderError } from './kirago-provider.error';
 import type {
   ProvisionConnectionInput,
+  RemoteConnectionLookupInput,
   SendTextInput,
   WhatsAppProvider,
 } from '../provider/whatsapp-provider';
@@ -33,9 +35,40 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     });
 
     return {
-      providerUserId: response.data?.id ?? null,
+      providerUserId: Array.isArray(response.data) ? null : (response.data?.id ?? null),
       webhookConfigured: Boolean(input.webhookUrl),
     };
+  }
+
+  async findRemoteConnection(input: RemoteConnectionLookupInput) {
+    if (input.providerUserId) {
+      try {
+        const response = await this.adminClient.getUser(input.providerUserId);
+        const user = Array.isArray(response.data) ? null : response.data;
+
+        if (user?.id === input.providerUserId) {
+          return { exists: true };
+        }
+      } catch (error) {
+        if (!(error instanceof KiragoProviderError) || error.code !== 'KIRAGO_RESOURCE_NOT_FOUND') {
+          throw error;
+        }
+      }
+    }
+
+    const response = await this.adminClient.listUsers();
+    const users = Array.isArray(response.data)
+      ? response.data
+      : response.data
+        ? [response.data]
+        : [];
+    const exists = users.some(
+      (user) =>
+        (input.providerUserId ? user.id === input.providerUserId : false) ||
+        user.name === input.instanceName,
+    );
+
+    return { exists };
   }
 
   async connect(instanceToken: string) {

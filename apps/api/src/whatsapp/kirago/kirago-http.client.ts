@@ -47,7 +47,9 @@ export class KiragoHttpClient {
         const code =
           response.status === 401 || response.status === 403
             ? options.authFailureCode
-            : 'WHATSAPP_PROVIDER_ERROR';
+            : response.status === 404
+              ? 'KIRAGO_RESOURCE_NOT_FOUND'
+              : 'WHATSAPP_PROVIDER_ERROR';
         throw new KiragoProviderError(code, this.safeMessage(code), response.status);
       }
 
@@ -70,6 +72,7 @@ export class KiragoHttpClient {
   private safeMessage(code: KiragoErrorCode) {
     if (code === 'KIRAGO_ADMIN_AUTH_FAILED') return 'Falha de autenticacao admin na Kirago.';
     if (code === 'KIRAGO_INSTANCE_AUTH_FAILED') return 'Falha de autenticacao da instancia Kirago.';
+    if (code === 'KIRAGO_RESOURCE_NOT_FOUND') return 'Recurso Kirago nao encontrado.';
     return 'Falha ao comunicar com a Kirago.';
   }
 }

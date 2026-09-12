@@ -180,6 +180,7 @@ function serviceFactory({
     provisionConnection: vi
       .fn()
       .mockResolvedValue({ providerUserId: 'kirago-user', webhookConfigured: true }),
+    findRemoteConnection: vi.fn().mockResolvedValue({ exists: true }),
     connect: vi.fn().mockResolvedValue(undefined),
     getStatus: vi.fn().mockResolvedValue({ connected: true, loggedIn: true, phone: null }),
     getQrCode: vi.fn().mockResolvedValue('data:image/png;base64,abc'),
@@ -298,6 +299,49 @@ describe('WhatsAppService', () => {
       connected: false,
       loggedIn: false,
     });
+  });
+
+  it('marks the local connection as ERROR when Kirago confirms the remote instance is missing', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      providerOverrides: {
+        connect: vi
+          .fn()
+          .mockRejectedValue(
+            new KiragoProviderError('KIRAGO_INSTANCE_AUTH_FAILED', 'Falha sanitizada.', 401),
+          ),
+        findRemoteConnection: vi.fn().mockResolvedValue({ exists: false }),
+      },
+    });
+
+    await expect(service.connect()).rejects.toThrow(ConflictException);
+
+    expect(provider.findRemoteConnection).toHaveBeenCalledWith({
+      providerUserId: 'kirago-user',
+      instanceName: 'CRM Principal',
+    });
+    const remoteMissingUpdate = (prisma.whatsAppConnection.update as MockWithCalls).mock
+      .calls[1]?.[0] as { data?: Record<string, unknown>; where?: { id?: string } } | undefined;
+
+    expect(remoteMissingUpdate?.where).toEqual({ id: connection().id });
+    expect(remoteMissingUpdate?.data).toMatchObject({
+      status: 'ERROR',
+      connected: false,
+      loggedIn: false,
+      connectedAt: null,
+    });
+  });
+
+  it('allows provisioning a clean new connection after the previous remote instance was removed', async () => {
+    const errorConnection = connection({ status: 'ERROR' });
+    const { service, provider, prisma, encryption } = serviceFactory({
+      currentConnection: errorConnection,
+    });
+
+    await service.provisionConnection({ name: 'CRM Principal' });
+
+    expect(provider.provisionConnection).toHaveBeenCalled();
+    expect(encryption.encrypt).toHaveBeenCalled();
+    expect(prisma.whatsAppConnection.create).toHaveBeenCalled();
   });
 
   it('maps provider status to CONNECTED', async () => {

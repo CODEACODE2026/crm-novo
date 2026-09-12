@@ -65,7 +65,7 @@ export class WhatsAppService {
   async provisionConnection(dto: CreateWhatsAppConnectionDto) {
     const existing = await this.findPrimaryConnection();
 
-    if (existing) {
+    if (existing && existing.status !== 'ERROR') {
       throw new ConflictException('Ja existe uma conexao WhatsApp configurada.');
     }
 
@@ -105,17 +105,19 @@ export class WhatsAppService {
     });
 
     try {
-      await this.mapProviderError(() => this.provider.connect(instanceToken));
+      await this.mapConnectionProviderError(connection, () => this.provider.connect(instanceToken));
     } catch (error) {
-      await this.prisma.whatsAppConnection.update({
-        where: { id: connection.id },
-        data: {
-          status: 'DISCONNECTED',
-          connected: false,
-          loggedIn: false,
-          lastStatusAt: new Date(),
-        },
-      });
+      if (!this.isRemoteInstanceMissingConflict(error)) {
+        await this.prisma.whatsAppConnection.update({
+          where: { id: connection.id },
+          data: {
+            status: 'DISCONNECTED',
+            connected: false,
+            loggedIn: false,
+            lastStatusAt: new Date(),
+          },
+        });
+      }
       throw error;
     }
 
@@ -132,7 +134,7 @@ export class WhatsAppService {
     }
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-    const providerStatus = await this.mapProviderError(() =>
+    const providerStatus = await this.mapConnectionProviderError(connection, () =>
       this.provider.getStatus(instanceToken),
     );
     const status = this.mapStatus(providerStatus.connected, providerStatus.loggedIn);
@@ -763,8 +765,15 @@ export class WhatsAppService {
     }
   }
 
-  private findPrimaryConnection() {
-    return this.prisma.whatsAppConnection.findFirst({ orderBy: { createdAt: 'asc' } });
+  private async findPrimaryConnection() {
+    const active = await this.prisma.whatsAppConnection.findFirst({
+      where: { status: { not: 'ERROR' } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (active) return active;
+
+    return this.prisma.whatsAppConnection.findFirst({ orderBy: { createdAt: 'desc' } });
   }
 
   private async requireConnection() {
@@ -814,22 +823,74 @@ export class WhatsAppService {
       return await operation();
     } catch (error) {
       if (error instanceof KiragoProviderError) {
-        if (error.code === 'KIRAGO_TIMEOUT' || error.code === 'KIRAGO_UNAVAILABLE') {
-          throw new ServiceUnavailableException(error.message);
-        }
-
-        if (
-          error.code === 'KIRAGO_ADMIN_AUTH_FAILED' ||
-          error.code === 'KIRAGO_INSTANCE_AUTH_FAILED'
-        ) {
-          throw new ServiceUnavailableException('Falha de autenticacao com provider WhatsApp.');
-        }
-
-        throw new BadRequestException(error.message);
+        this.throwMappedProviderError(error);
       }
 
       throw error;
     }
+  }
+
+  private async mapConnectionProviderError<T>(
+    connection: WhatsAppConnection,
+    operation: () => Promise<T>,
+  ) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof KiragoProviderError && error.code === 'KIRAGO_INSTANCE_AUTH_FAILED') {
+        const remote = await this.mapProviderError(() =>
+          this.provider.findRemoteConnection({
+            providerUserId: connection.providerUserId,
+            instanceName: connection.name,
+          }),
+        );
+
+        if (!remote.exists) {
+          await this.markConnectionRemoteMissing(connection.id);
+          throw new ConflictException(
+            'A instancia Kirago desta conexao nao existe mais. Crie uma nova conexao para gerar um novo token sem apagar o historico.',
+          );
+        }
+      }
+
+      if (error instanceof KiragoProviderError) {
+        this.throwMappedProviderError(error);
+      }
+
+      throw error;
+    }
+  }
+
+  private throwMappedProviderError(error: KiragoProviderError): never {
+    if (error.code === 'KIRAGO_TIMEOUT' || error.code === 'KIRAGO_UNAVAILABLE') {
+      throw new ServiceUnavailableException(error.message);
+    }
+
+    if (error.code === 'KIRAGO_ADMIN_AUTH_FAILED' || error.code === 'KIRAGO_INSTANCE_AUTH_FAILED') {
+      throw new ServiceUnavailableException('Falha de autenticacao com provider WhatsApp.');
+    }
+
+    throw new BadRequestException(error.message);
+  }
+
+  private async markConnectionRemoteMissing(connectionId: string) {
+    await this.prisma.whatsAppConnection.update({
+      where: { id: connectionId },
+      data: {
+        status: 'ERROR',
+        connected: false,
+        loggedIn: false,
+        connectedAt: null,
+        lastStatusAt: new Date(),
+      },
+    });
+  }
+
+  private isRemoteInstanceMissingConflict(error: unknown) {
+    return (
+      error instanceof ConflictException &&
+      error.message.includes('instancia Kirago desta conexao nao existe mais')
+    );
   }
 
   private presentConnection(connection: WhatsAppConnection) {

@@ -20,6 +20,21 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('uses Authorization when looking up an admin user by provider id', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, data: { id: 'kirago-user' } });
+    const client = new KiragoAdminClient(
+      { get: () => 'admin-token' } as never,
+      { request } as never,
+    );
+
+    await client.getUser('kirago-user');
+
+    expect(request).toHaveBeenCalledWith('/admin/users/kirago-user', {
+      headers: { Authorization: 'admin-token' },
+      authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
+    });
+  });
+
   it('uses token only for instance requests', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Connected: true } });
     const client = new KiragoInstanceClient({ request } as never);

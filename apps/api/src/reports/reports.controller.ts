@@ -9,11 +9,6 @@ import { ReportsService, type ReportType } from './reports.service';
 export class ReportsController {
   constructor(@Inject(ReportsService) private readonly reportsService: ReportsService) {}
 
-  @Get(':type')
-  list(@Param('type') type: ReportType, @Query() query: ListReportDto) {
-    return this.reportsService.list(type, query);
-  }
-
   @Get(':type.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async csv(
@@ -24,5 +19,10 @@ export class ReportsController {
     const file = await this.reportsService.csv(type, query);
     response.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
     response.send(file.content);
+  }
+
+  @Get(':type')
+  list(@Param('type') type: ReportType, @Query() query: ListReportDto) {
+    return this.reportsService.list(type, query);
   }
 }

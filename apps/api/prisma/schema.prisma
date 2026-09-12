@@ -215,6 +215,7 @@ model WhatsAppConnection {
   name                   String
   provider               WhatsAppProvider         @default(KIRAGO)
   providerUserId         String?
+  providerInstanceName   String?
   providerTokenEncrypted String
   phone                  String?
   status                 WhatsAppConnectionStatus @default(DISCONNECTED)
@@ -230,6 +231,7 @@ model WhatsAppConnection {
   inboundMessages        WhatsAppInboundMessage[]
 
   @@index([provider])
+  @@index([providerInstanceName])
   @@index([status])
   @@index([createdAt])
   @@map("whatsapp_connections")

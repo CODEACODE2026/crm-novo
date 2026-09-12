@@ -79,4 +79,29 @@ describe('Kirago clients', () => {
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   });
+
+  it('configures the instance webhook through the Kirago webhook endpoint', async () => {
+    const request = vi.fn().mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.example.com/whatsapp/webhook/kirago' },
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.configureWebhook(
+      'instance-token',
+      'https://crm.example.com/whatsapp/webhook/kirago',
+      ['Message'],
+    );
+
+    expect(request).toHaveBeenCalledWith('/webhook', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        webhook: 'https://crm.example.com/whatsapp/webhook/kirago',
+        events: ['Message'],
+        active: true,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
 });

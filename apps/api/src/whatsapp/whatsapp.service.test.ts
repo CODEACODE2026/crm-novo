@@ -19,6 +19,7 @@ function connection(overrides: Record<string, unknown> = {}) {
     name: 'CRM Principal',
     provider: 'KIRAGO',
     providerUserId: 'kirago-user',
+    providerInstanceName: 'CRM Principal',
     providerTokenEncrypted: 'encrypted-token',
     phone: null,
     status: 'DISCONNECTED',
@@ -184,6 +185,10 @@ function serviceFactory({
     connect: vi.fn().mockResolvedValue(undefined),
     getStatus: vi.fn().mockResolvedValue({ connected: true, loggedIn: true, phone: null }),
     getQrCode: vi.fn().mockResolvedValue('data:image/png;base64,abc'),
+    getWebhook: vi.fn().mockResolvedValue({
+      data: { WebhookURL: 'https://crm.example.com/whatsapp/webhook/kirago' },
+    }),
+    configureWebhook: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' }),
     health: vi.fn().mockResolvedValue({ online: true }),
     ...providerOverrides,
@@ -221,12 +226,21 @@ function serviceFactory({
 
 describe('WhatsAppService', () => {
   it('provisions a connection without exposing the generated token', async () => {
-    const { service, provider, encryption } = serviceFactory({ currentConnection: null });
+    const { service, provider, encryption, prisma } = serviceFactory({ currentConnection: null });
 
     const result = await service.provisionConnection({ name: 'CRM Principal' });
     const providerPayload = (provider.provisionConnection as MockWithCalls).mock.calls[0]?.[0] as {
       instanceToken?: string;
+      name?: string;
     };
+    const createPayload = (prisma.whatsAppConnection.create as MockWithCalls).mock.calls[0]?.[0] as
+      | {
+          data?: {
+            name?: string;
+            providerInstanceName?: string;
+          };
+        }
+      | undefined;
     const encryptedToken = (encryption.encrypt as MockWithCalls).mock.calls[0]?.[0] as string;
 
     expect(provider.provisionConnection).toHaveBeenCalledWith(
@@ -234,6 +248,11 @@ describe('WhatsAppService', () => {
         webhookUrl: 'https://crm.example.com/whatsapp/webhook/kirago',
         events: ['Message'],
       }),
+    );
+    expect(providerPayload.name).toMatch(/^crm-novo-crm-principal-[a-f0-9]{6}$/);
+    expect(createPayload?.data?.name).toBe('CRM Principal');
+    expect(createPayload?.data?.providerInstanceName).toMatch(
+      /^crm-novo-crm-principal-[a-f0-9]{6}$/,
     );
     expect(encryption.encrypt).toHaveBeenCalled();
     expect(createHash('sha256').update(encryptedToken).digest('hex')).toBe(
@@ -244,6 +263,39 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(result)).not.toContain('instance-token');
     expect(JSON.stringify(result)).not.toContain('encrypted-token');
   });
+
+  it('configures the Kirago webhook with the public CRM endpoint', async () => {
+    const { service, provider } = serviceFactory();
+
+    await service.configureWebhook();
+
+    expect(provider.configureWebhook).toHaveBeenCalledWith(
+      'instance-token',
+      'https://crm.example.com/whatsapp/webhook/kirago',
+      ['Message'],
+    );
+  });
+
+  it.each(['http://crm.example.com', 'https://localhost:3001', 'https://192.168.0.10'])(
+    'rejects non-public webhook URL %s',
+    async (publicUrl) => {
+      const decrypt = vi.fn().mockReturnValue('instance-token');
+      const { service, provider } = serviceFactory({
+        encryptionOverrides: { decrypt },
+        prismaOverrides: {
+          whatsAppConnection: {
+            findFirst: vi.fn().mockResolvedValue(connection()),
+          },
+        },
+      });
+
+      await expect(service.configureWebhook({ webhookUrl: publicUrl })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(provider.configureWebhook).not.toHaveBeenCalled();
+      expect(decrypt).not.toHaveBeenCalled();
+    },
+  );
 
   it('connects using the decrypted instance token', async () => {
     const { service, provider, encryption } = serviceFactory();
@@ -556,6 +608,42 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
   });
 
+  it('accepts irrelevant events and messages without a valid phone without side effects', async () => {
+    const ignoredEvent = serviceFactory();
+    ignoredEvent.normalizer.normalize.mockReturnValue(null);
+
+    await expect(ignoredEvent.service.receiveWebhook({ type: 'Status' })).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+    expect(ignoredEvent.prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+
+    const missingPhone = serviceFactory();
+    missingPhone.normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: null,
+      contactName: 'Lucas',
+      messageId: 'msg-without-phone',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: 'Oi',
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    await expect(missingPhone.service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      reason: 'missing_phone',
+    });
+    expect(missingPhone.prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+  });
+
   it('identifies webhook connection by provider user id and falls back to instance name', async () => {
     const byProviderUserId = serviceFactory();
     byProviderUserId.normalizer.normalize.mockReturnValue({
@@ -577,10 +665,7 @@ describe('WhatsAppService', () => {
     await byProviderUserId.service.receiveWebhook({ type: 'Message' });
 
     expect(byProviderUserId.prisma.whatsAppConnection.findFirst).toHaveBeenCalledWith({
-      where: {
-        provider: 'KIRAGO',
-        OR: [{ providerUserId: 'kirago-user' }, { name: 'CRM Principal' }],
-      },
+      where: { provider: 'KIRAGO', providerUserId: 'kirago-user' },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -604,7 +689,10 @@ describe('WhatsAppService', () => {
     await byInstanceName.service.receiveWebhook({ type: 'Message' });
 
     expect(byInstanceName.prisma.whatsAppConnection.findFirst).toHaveBeenCalledWith({
-      where: { provider: 'KIRAGO', OR: [{ name: 'CRM Principal' }] },
+      where: {
+        provider: 'KIRAGO',
+        OR: [{ providerInstanceName: 'CRM Principal' }, { name: 'CRM Principal' }],
+      },
       orderBy: { createdAt: 'asc' },
     });
   });

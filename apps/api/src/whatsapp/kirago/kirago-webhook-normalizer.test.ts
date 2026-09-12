@@ -171,4 +171,28 @@ describe('KiragoWebhookNormalizer', () => {
     expect(fromSenderAlt?.phone).toBe('5544888888888');
     expect(lidOnly?.phone).toBeNull();
   });
+
+  it('normalizes Kirago device-suffixed WhatsApp phone values from observed payloads', () => {
+    const result = normalizer.normalize(
+      payload({
+        jid: {
+          contact: { pn: '554498212815:67' },
+          chat: { pn: '554498212815:67', raw: '554498212815:67@s.whatsapp.net' },
+          sender: { pn: '554498212815:67', raw: '554498212815:67@s.whatsapp.net' },
+        },
+        event: {
+          Info: {
+            ...payload().event.Info,
+            SenderAlt: '554498212815:67@s.whatsapp.net',
+            Chat: '554498212815:67@s.whatsapp.net',
+            Sender: '554498212815:67@s.whatsapp.net',
+          },
+          Message: { conversation: 'Ola' },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result?.phone).toBe('554498212815');
+  });
 });

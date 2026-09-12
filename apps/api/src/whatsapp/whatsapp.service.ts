@@ -86,6 +86,7 @@ export class WhatsAppService {
         name: dto.name.trim(),
         provider: 'KIRAGO',
         providerUserId: provisioned.providerUserId,
+        providerInstanceName: providerName,
         providerTokenEncrypted: this.encryption.encrypt(instanceToken),
         status: 'DISCONNECTED',
         webhookConfigured: provisioned.webhookConfigured,
@@ -215,9 +216,9 @@ export class WhatsAppService {
 
   async configureWebhook(dto: ConfigureWhatsAppWebhookDto = {}) {
     const connection = await this.requireConnection();
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-    const webhookUrl = dto.webhookUrl?.trim() || this.webhookUrl();
+    const webhookUrl = this.webhookUrl(dto.webhookUrl);
     const events = dto.events?.length ? dto.events : providerEvents;
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
 
     await this.mapProviderError(() =>
       this.provider.configureWebhook(instanceToken, webhookUrl, events),
@@ -637,19 +638,21 @@ export class WhatsAppService {
   }
 
   private findConnectionForWebhook(normalized: NormalizedWhatsAppMessage) {
-    const filters: Prisma.WhatsAppConnectionWhereInput[] = [];
-
     if (normalized.providerUserId) {
-      filters.push({ providerUserId: normalized.providerUserId });
+      return this.prisma.whatsAppConnection.findFirst({
+        where: { provider: 'KIRAGO', providerUserId: normalized.providerUserId },
+        orderBy: { createdAt: 'asc' },
+      });
     }
 
-    if (normalized.instanceName) {
-      filters.push({ name: normalized.instanceName });
-    }
-
-    if (!filters.length) {
+    if (!normalized.instanceName) {
       return null;
     }
+
+    const filters: Prisma.WhatsAppConnectionWhereInput[] = [
+      { providerInstanceName: normalized.instanceName },
+      { name: normalized.instanceName },
+    ];
 
     return this.prisma.whatsAppConnection.findFirst({
       where: { provider: 'KIRAGO', OR: filters },
@@ -790,14 +793,55 @@ export class WhatsAppService {
     return randomBytes(32).toString('base64url');
   }
 
-  private webhookUrl() {
-    const publicUrl = this.config.get<string>('CRM_API_PUBLIC_URL');
+  private webhookUrl(customUrl?: string) {
+    const configuredUrl =
+      customUrl?.trim() || this.config.get<string>('CRM_API_PUBLIC_URL')?.trim();
 
-    if (!publicUrl) {
+    if (!configuredUrl) {
       throw new ServiceUnavailableException('CRM_API_PUBLIC_URL nao configurada.');
     }
 
-    return new URL('/whatsapp/webhook/kirago', publicUrl).toString();
+    let url: URL;
+
+    try {
+      url = customUrl?.trim()
+        ? new URL(configuredUrl)
+        : new URL('/whatsapp/webhook/kirago', configuredUrl);
+    } catch {
+      throw new BadRequestException('URL publica do webhook WhatsApp invalida.');
+    }
+
+    this.ensurePublicHttpsWebhookUrl(url);
+    return url.toString();
+  }
+
+  private ensurePublicHttpsWebhookUrl(url: URL) {
+    if (url.protocol !== 'https:') {
+      throw new BadRequestException('Webhook WhatsApp exige URL publica HTTPS.');
+    }
+
+    if (this.isLocalOrPrivateHost(url.hostname)) {
+      throw new BadRequestException('Webhook WhatsApp nao pode usar localhost ou IP privado.');
+    }
+  }
+
+  private isLocalOrPrivateHost(hostname: string) {
+    const host = hostname.toLowerCase();
+
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+      return true;
+    }
+
+    if (host === '::1' || host === '[::1]' || host === '0.0.0.0') {
+      return true;
+    }
+
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) {
+      return true;
+    }
+
+    const match = host.match(/^172\.(\d{1,2})\./);
+    return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
   }
 
   private providerConnectionName(name: string) {
@@ -841,7 +885,7 @@ export class WhatsAppService {
         const remote = await this.mapProviderError(() =>
           this.provider.findRemoteConnection({
             providerUserId: connection.providerUserId,
-            instanceName: connection.name,
+            instanceName: connection.providerInstanceName ?? connection.name,
           }),
         );
 

@@ -1,4 +1,5 @@
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { RecoveryCampaignStatus } from '@prisma/client';
 
 export class ListRecoveryCampaignsDto {
@@ -13,4 +14,16 @@ export class ListRecoveryCampaignsDto {
   @IsOptional()
   @IsUUID()
   clientId?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  pageSize?: number;
 }

@@ -25,7 +25,8 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
   include: {
     plan: true;
     renewals: { orderBy: { createdAt: 'desc' }; include: { receivable: true } };
-    receivables: { orderBy: { createdAt: 'desc' } };
+    receivables: { orderBy: { createdAt: 'desc' }; include: { paymentIntents: true } };
+    messageDispatches: { orderBy: { createdAt: 'desc' }; take: 20 };
     statusHistory: { orderBy: { createdAt: 'desc' } };
     events: { orderBy: { createdAt: 'desc' } };
     recoveryCampaigns: {
@@ -57,9 +58,13 @@ export class ClientsService {
         include: {
           plan: true,
           renewals: { orderBy: { createdAt: 'desc' }, include: { receivable: true } },
-          receivables: { orderBy: { createdAt: 'desc' } },
+          receivables: {
+            orderBy: { createdAt: 'desc' },
+            include: { paymentIntents: { orderBy: { createdAt: 'desc' } } },
+          },
           statusHistory: { orderBy: { createdAt: 'desc' } },
           events: { orderBy: { createdAt: 'desc' } },
+          messageDispatches: { orderBy: { createdAt: 'desc' }, take: 20 },
           recoveryCampaigns: {
             orderBy: { startedAt: 'desc' },
             include: {
@@ -94,9 +99,13 @@ export class ClientsService {
       include: {
         plan: true,
         renewals: { orderBy: { createdAt: 'desc' }, include: { receivable: true } },
-        receivables: { orderBy: { createdAt: 'desc' } },
+        receivables: {
+          orderBy: { createdAt: 'desc' },
+          include: { paymentIntents: { orderBy: { createdAt: 'desc' } } },
+        },
         statusHistory: { orderBy: { createdAt: 'desc' } },
         events: { orderBy: { createdAt: 'desc' } },
+        messageDispatches: { orderBy: { createdAt: 'desc' }, take: 20 },
         recoveryCampaigns: {
           orderBy: { startedAt: 'desc' },
           include: {
@@ -363,6 +372,27 @@ export class ClientsService {
               amount: receivable.amount.toString(),
               dueDate: formatBusinessDate(receivable.dueDate),
               displayStatus: getReceivableDisplayStatus(receivable.status, receivable.dueDate),
+              paymentIntents: receivable.paymentIntents.map((intent) => ({
+                ...intent,
+                amount: intent.amount.toString(),
+                expiresAt: intent.expiresAt?.toISOString() ?? null,
+                paidAt: intent.paidAt?.toISOString() ?? null,
+                lastSyncAt: intent.lastSyncAt?.toISOString() ?? null,
+              })),
+            })),
+            messageDispatches: client.messageDispatches.map((dispatch) => ({
+              id: dispatch.id,
+              phone: dispatch.phone,
+              body: dispatch.body,
+              renderedContent: dispatch.renderedContent,
+              origin: dispatch.origin,
+              status: dispatch.status,
+              scheduledFor: dispatch.scheduledFor?.toISOString() ?? null,
+              attempts: dispatch.attempts,
+              errorCode: dispatch.errorCode,
+              errorMessage: dispatch.errorMessage,
+              sentAt: dispatch.sentAt?.toISOString() ?? null,
+              createdAt: dispatch.createdAt.toISOString(),
             })),
             recoveryCampaigns: client.recoveryCampaigns.map((campaign) => ({
               id: campaign.id,

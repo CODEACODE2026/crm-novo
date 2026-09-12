@@ -10,6 +10,7 @@ import { FinanceModule } from './finance/finance.module';
 import { HealthModule } from './health/health.module';
 import { PlansModule } from './plans/plans.module';
 import { RecoveryModule } from './recovery/recovery.module';
+import { ReportsModule } from './reports/reports.module';
 import { RenewalsModule } from './renewals/renewals.module';
 import { UsersModule } from './users/users.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
@@ -29,6 +30,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     WhatsAppModule,
     BillingModule,
     RecoveryModule,
+    ReportsModule,
     HealthModule,
   ],
 })

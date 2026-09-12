@@ -130,6 +130,26 @@ function createDashboardPrisma() {
       client: activeDueToday,
     },
   ];
+  const paymentIntents = [{ status: 'WAITING_PAYMENT' }, { status: 'FAILED' }, { status: 'PAID' }];
+  const dispatches = [
+    {
+      origin: 'BILLING',
+      status: 'SCHEDULED',
+      scheduledFor: new Date('2026-09-10T12:00:00.000Z'),
+    },
+    {
+      origin: 'BILLING',
+      status: 'FAILED',
+      scheduledFor: new Date('2026-09-09T12:00:00.000Z'),
+    },
+    {
+      origin: 'RECOVERY',
+      status: 'FAILED',
+      scheduledFor: new Date('2026-09-09T12:00:00.000Z'),
+    },
+  ];
+  const recoveryCampaigns = [{ status: 'ATIVA' }, { status: 'CANCELADA' }];
+  const pendingContacts = [{ status: 'PENDENTE' }, { status: 'APROVADO' }];
   const inDateRange = (date: Date, range: { gte?: Date; lte?: Date; lt?: Date }) =>
     (!range.gte || date.getTime() >= range.gte.getTime()) &&
     (!range.lte || date.getTime() <= range.lte.getTime()) &&
@@ -245,6 +265,46 @@ function createDashboardPrisma() {
     clientEvent: {
       findMany: () => Promise.resolve(events),
     },
+    paymentIntent: {
+      count: ({ where }: { where: { status: string | { in: string[] } } }) =>
+        Promise.resolve(
+          paymentIntents.filter((intent) => {
+            if (typeof where.status === 'string') return intent.status === where.status;
+            return where.status.in.includes(intent.status);
+          }).length,
+        ),
+    },
+    messageDispatch: {
+      count: ({
+        where,
+      }: {
+        where: {
+          origin: string;
+          status: string;
+          scheduledFor?: { gte: Date; lte: Date };
+        };
+      }) =>
+        Promise.resolve(
+          dispatches
+            .filter((dispatch) => dispatch.origin === where.origin)
+            .filter((dispatch) => dispatch.status === where.status)
+            .filter((dispatch) =>
+              where.scheduledFor ? inDateRange(dispatch.scheduledFor, where.scheduledFor) : true,
+            ).length,
+        ),
+    },
+    recoveryCampaign: {
+      count: ({ where }: { where: { status: string } }) =>
+        Promise.resolve(
+          recoveryCampaigns.filter((campaign) => campaign.status === where.status).length,
+        ),
+    },
+    whatsAppPendingContact: {
+      count: ({ where }: { where: { status: string } }) =>
+        Promise.resolve(
+          pendingContacts.filter((contact) => contact.status === where.status).length,
+        ),
+    },
     $transaction: async <T>(operations: Array<Promise<T>>) => Promise.all(operations),
   };
 }
@@ -281,6 +341,16 @@ describe('DashboardService', () => {
       balance: '70.00',
     });
     expect(summary.renewals).toEqual({ count: 1, amount: '125.00' });
+    expect(summary.pending.counts).toMatchObject({
+      waitingPix: 1,
+      failedPix: 1,
+      billingScheduledToday: 1,
+      billingFailed: 1,
+      activeRecoveryCampaigns: 1,
+      failedRecoveryDispatches: 1,
+      pendingWaitlistContacts: 1,
+    });
+    expect(summary.pending.items.length).toBeGreaterThan(0);
     expect(summary.lists.dueToday).toHaveLength(1);
     expect(summary.lists.upcomingDue).toHaveLength(1);
     expect(summary.lists.overdueReceivables[0]).toMatchObject({ daysOverdue: 9 });

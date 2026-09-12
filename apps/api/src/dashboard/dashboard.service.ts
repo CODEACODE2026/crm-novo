@@ -21,6 +21,7 @@ export class DashboardService {
   async summary(query: DashboardSummaryDto) {
     const range = this.getPeriod(query);
     const today = this.today();
+    const todayEnd = new Date(`${formatBusinessDate(today)}T23:59:59.999Z`);
     const tomorrow = this.addDays(today, 1);
     const nextSevenDays = this.addDays(today, 7);
     const chartStart =
@@ -48,6 +49,13 @@ export class DashboardService {
       recentActivity,
       transactionSeries,
       receivedSeries,
+      waitingPixCount,
+      failedPixCount,
+      billingScheduledToday,
+      billingFailed,
+      activeRecoveryCampaigns,
+      failedRecoveryDispatches,
+      pendingWaitlistContacts,
     ] = await this.prisma.$transaction([
       this.prisma.client.count({ where: { status: 'ATIVO' } }),
       this.prisma.client.count({ where: { status: 'INATIVO' } }),
@@ -130,6 +138,21 @@ export class DashboardService {
         _sum: { amount: true },
         orderBy: { transactionDate: 'asc' },
       }),
+      this.prisma.paymentIntent.count({
+        where: { status: { in: ['CREATED', 'WAITING_PAYMENT'] } },
+      }),
+      this.prisma.paymentIntent.count({ where: { status: 'FAILED' } }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'SCHEDULED',
+          scheduledFor: { gte: today, lte: todayEnd },
+        },
+      }),
+      this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'FAILED' } }),
+      this.prisma.recoveryCampaign.count({ where: { status: 'ATIVA' } }),
+      this.prisma.messageDispatch.count({ where: { origin: 'RECOVERY', status: 'FAILED' } }),
+      this.prisma.whatsAppPendingContact.count({ where: { status: 'PENDENTE' } }),
     ]);
 
     const entriesTotal = this.decimalToNumber(entries._sum.amount);
@@ -170,6 +193,60 @@ export class DashboardService {
       renewals: {
         count: renewalsCount,
         amount: this.formatDecimal(renewedAmount._sum.amount),
+      },
+      pending: {
+        counts: {
+          overdueReceivables: overdueReceivableList.length,
+          waitingPix: waitingPixCount,
+          failedPix: failedPixCount,
+          billingScheduledToday,
+          billingFailed,
+          activeRecoveryCampaigns,
+          failedRecoveryDispatches,
+          pendingWaitlistContacts,
+        },
+        items: [
+          {
+            label: 'Contas vencidas',
+            count: overdueReceivableList.length,
+            action: 'finance',
+          },
+          {
+            label: 'PIX aguardando pagamento',
+            count: waitingPixCount,
+            action: 'finance',
+          },
+          {
+            label: 'PIX com falha',
+            count: failedPixCount,
+            action: 'finance',
+          },
+          {
+            label: 'Cobrancas agendadas hoje',
+            count: billingScheduledToday,
+            action: 'billing',
+          },
+          {
+            label: 'Cobrancas com erro',
+            count: billingFailed,
+            action: 'billing',
+          },
+          {
+            label: 'Campanhas de recuperacao ativas',
+            count: activeRecoveryCampaigns,
+            action: 'automations',
+          },
+          {
+            label: 'Campanhas com falha',
+            count: failedRecoveryDispatches,
+            action: 'automations',
+          },
+          {
+            label: 'Contatos na lista de espera',
+            count: pendingWaitlistContacts,
+            action: 'waitlist',
+          },
+        ].filter((item) => item.count > 0),
       },
       charts: {
         grouping: chartGrouping,

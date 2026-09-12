@@ -8,6 +8,7 @@ import {
   CalendarClock,
   Copy,
   CreditCard,
+  Download,
   DollarSign,
   Eye,
   LayoutDashboard,
@@ -51,6 +52,7 @@ import {
   formatDate,
   getClient,
   getDashboardSummary,
+  getReport,
   getFinancialSummary,
   getWhatsAppConnection,
   getWhatsAppPendingContact,
@@ -67,6 +69,7 @@ import {
   listReceivables,
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
+  downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
   previewRenewal,
@@ -109,15 +112,20 @@ import {
   type FinancialCategory,
   type FinancialSummary,
   type FinancialTransaction,
+  type FinancialTransactionOrigin,
   type FinancialTransactionPayload,
   type FinancialTransactionType,
   type PaginatedClients,
   type PaymentIntent,
+  type PaymentIntentStatus,
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
   type Receivable,
   type ReceivableDisplayStatus,
+  type OperationalReport,
   type Plan,
+  type ReportFilters,
+  type ReportType,
   type RenewalPreview,
   type MessageDispatch,
   type MessageTemplate,
@@ -141,6 +149,7 @@ type View =
   | 'waitlist'
   | 'billing'
   | 'automations'
+  | 'reports'
   | 'settings';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
 
@@ -151,15 +160,13 @@ const navItems = [
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
   { id: 'billing', label: 'Cobrancas', icon: Bell },
   { id: 'automations', label: 'Automacoes', icon: Activity },
+  { id: 'reports', label: 'Relatorios', icon: BarChart3 },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
   { id: 'settings', label: 'Configuracoes', icon: Settings },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
-const futureNavItems = [
-  { label: 'Renovacoes', icon: RefreshCcw },
-  { label: 'Relatorios', icon: BarChart3 },
-];
+const futureNavItems = [{ label: 'Renovacoes', icon: RefreshCcw }];
 
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
@@ -333,11 +340,13 @@ export default function DashboardPage() {
                       ? 'Cobrancas'
                       : view === 'automations'
                         ? 'Automacoes'
-                        : view === 'waitlist'
-                          ? 'Lista de Espera'
-                          : view === 'settings'
-                            ? 'Configuracoes'
-                            : 'Clientes'}
+                        : view === 'reports'
+                          ? 'Relatorios'
+                          : view === 'waitlist'
+                            ? 'Lista de Espera'
+                            : view === 'settings'
+                              ? 'Configuracoes'
+                              : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -360,6 +369,7 @@ export default function DashboardPage() {
                 setFinanceInitialTab(tab);
                 setView('finance');
               }}
+              onOpenOperationalView={(nextView) => setView(nextView)}
               onRenew={async (id) => {
                 const client = await getClient(id);
                 setRenewalClient(client);
@@ -448,6 +458,7 @@ export default function DashboardPage() {
           {view === 'whatsapp' ? <WhatsAppView /> : null}
           {view === 'billing' ? <BillingView /> : null}
           {view === 'automations' ? <AutomationsView /> : null}
+          {view === 'reports' ? <ReportsView plans={plans} /> : null}
           {view === 'settings' ? <SettingsView /> : null}
           {view === 'waitlist' ? (
             <WaitlistView
@@ -477,11 +488,13 @@ function OperationalDashboard({
   onNewClient,
   onOpenClient,
   onOpenFinance,
+  onOpenOperationalView,
   onRenew,
 }: {
   onNewClient: () => void;
   onOpenClient: (id: string) => Promise<void>;
   onOpenFinance: (tab: FinanceTab) => void;
+  onOpenOperationalView: (view: Extract<View, 'billing' | 'automations' | 'waitlist'>) => void;
   onRenew: (id: string) => Promise<void>;
 }) {
   const [summary, setSummary] = useState<DashboardSummaryPayload | null>(null);
@@ -684,6 +697,33 @@ function OperationalDashboard({
 
       <div className="dashboard-grid operational-grid">
         <section className="panel">
+          <PanelHeader title="Pendencias" />
+          <div className="pending-list">
+            {(summary?.pending.items ?? []).map((item) => (
+              <button
+                className="pending-item"
+                key={item.label}
+                type="button"
+                onClick={() => {
+                  if (item.action === 'finance') {
+                    onOpenFinance('receivables');
+                    return;
+                  }
+
+                  onOpenOperationalView(item.action);
+                }}
+              >
+                <span>{item.label}</span>
+                <strong>{item.count}</strong>
+              </button>
+            ))}
+            {!summary?.pending.items.length ? (
+              <div className="empty-state">Sem pendencias operacionais.</div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="panel">
           <PanelHeader title="Vencimentos de hoje" />
           <CompactClientDueTable
             items={summary?.lists.dueToday ?? []}
@@ -748,6 +788,40 @@ function PanelHeader({ title, onViewAll }: { title: string; onViewAll?: () => vo
           Ver todos
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function PaginationControls({
+  pagination,
+  onPageChange,
+}: {
+  pagination: PaginatedClients['pagination'] | null;
+  onPageChange: (page: number) => void;
+}) {
+  if (!pagination || pagination.totalPages <= 1) return null;
+
+  return (
+    <div className="pagination-row">
+      <button
+        className="secondary-button"
+        disabled={pagination.page <= 1}
+        type="button"
+        onClick={() => onPageChange(pagination.page - 1)}
+      >
+        Anterior
+      </button>
+      <span>
+        Pagina {pagination.page} de {pagination.totalPages} | {pagination.total} registros
+      </span>
+      <button
+        className="secondary-button"
+        disabled={pagination.page >= pagination.totalPages}
+        type="button"
+        onClick={() => onPageChange(pagination.page + 1)}
+      >
+        Proxima
+      </button>
     </div>
   );
 }
@@ -881,6 +955,277 @@ function formatPeriodLabel(period: string) {
 }
 
 type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+
+const reportDefinitions = [
+  { id: 'clients', label: 'Clientes' },
+  { id: 'renewals', label: 'Renovacoes' },
+  { id: 'receivables', label: 'Contas a receber' },
+  { id: 'finance', label: 'Financeiro' },
+  { id: 'billing', label: 'Cobrancas' },
+  { id: 'recovery', label: 'Recuperacao' },
+] satisfies Array<{ id: ReportType; label: string }>;
+
+function ReportsView({ plans }: { plans: Plan[] }) {
+  const [reportType, setReportType] = useState<ReportType>('clients');
+  const [filters, setFilters] = useState<ReportFilters>({});
+  const [report, setReport] = useState<OperationalReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadReport = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      setReport(await getReport(reportType, filters));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar relatorio.');
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, reportType]);
+
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  function updateFilter<Key extends keyof ReportFilters>(key: Key, value: ReportFilters[Key]) {
+    setFilters((current) => ({ ...current, [key]: value || undefined }));
+  }
+
+  async function exportCsv() {
+    setError('');
+
+    try {
+      const blob = await downloadReportCsv(reportType, filters);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `crm-novo-${reportType}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel exportar CSV.');
+    }
+  }
+
+  return (
+    <section className="workspace-main reports-view">
+      {error ? <div className="notice danger">{error}</div> : null}
+      <div className="tabs">
+        {reportDefinitions.map((definition) => (
+          <button
+            className={reportType === definition.id ? 'active' : ''}
+            key={definition.id}
+            type="button"
+            onClick={() => {
+              setReportType(definition.id);
+              setFilters({});
+            }}
+          >
+            {definition.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="toolbar report-filters">
+        <label className="field compact-field">
+          <span>Inicio</span>
+          <input
+            type="date"
+            value={filters.startDate ?? ''}
+            onChange={(event) => updateFilter('startDate', event.target.value)}
+          />
+        </label>
+        <label className="field compact-field">
+          <span>Fim</span>
+          <input
+            type="date"
+            value={filters.endDate ?? ''}
+            onChange={(event) => updateFilter('endDate', event.target.value)}
+          />
+        </label>
+        <div className="search-row">
+          <Search aria-hidden="true" size={18} />
+          <input
+            placeholder="Buscar cliente, referencia ou descricao"
+            value={filters.search ?? ''}
+            onChange={(event) => updateFilter('search', event.target.value)}
+          />
+        </div>
+        {reportType === 'clients' ? (
+          <>
+            <select
+              value={filters.clientStatus ?? ''}
+              onChange={(event) =>
+                updateFilter('clientStatus', event.target.value as ClientStatus | '')
+              }
+            >
+              <option value="">Todos os status</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+              <option value="CANCELADO">Cancelado</option>
+            </select>
+            <select
+              value={filters.planId ?? ''}
+              onChange={(event) => updateFilter('planId', event.target.value)}
+            >
+              <option value="">Todos os planos</option>
+              {plans.map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
+        {reportType === 'receivables' ? (
+          <select
+            value={filters.receivableDisplayStatus ?? ''}
+            onChange={(event) =>
+              updateFilter(
+                'receivableDisplayStatus',
+                event.target.value as ReceivableDisplayStatus | '',
+              )
+            }
+          >
+            <option value="">Todas as situacoes</option>
+            <option value="PENDENTE">Pendente</option>
+            <option value="VENCIDO">Vencido</option>
+            <option value="PAGO">Pago</option>
+            <option value="CANCELADO">Cancelado</option>
+          </select>
+        ) : null}
+        {reportType === 'finance' ? (
+          <>
+            <select
+              value={filters.transactionType ?? ''}
+              onChange={(event) =>
+                updateFilter('transactionType', event.target.value as FinancialTransactionType | '')
+              }
+            >
+              <option value="">Entradas e saidas</option>
+              <option value="ENTRADA">Entradas</option>
+              <option value="SAIDA">Saidas</option>
+            </select>
+            <select
+              value={filters.transactionOrigin ?? ''}
+              onChange={(event) =>
+                updateFilter(
+                  'transactionOrigin',
+                  event.target.value as FinancialTransactionOrigin | '',
+                )
+              }
+            >
+              <option value="">Todas as origens</option>
+              <option value="RECEIVABLE_PAYMENT">Contas a receber</option>
+              <option value="MANUAL">Manual</option>
+            </select>
+          </>
+        ) : null}
+        {reportType === 'billing' ? (
+          <select
+            value={filters.dispatchStatus ?? ''}
+            onChange={(event) =>
+              updateFilter('dispatchStatus', event.target.value as MessageDispatch['status'] | '')
+            }
+          >
+            <option value="">Todos os status</option>
+            <option value="SCHEDULED">Agendada</option>
+            <option value="SENT">Enviada</option>
+            <option value="FAILED">Falhada</option>
+            <option value="CANCELED">Cancelada</option>
+            <option value="IGNORED">Ignorada</option>
+          </select>
+        ) : null}
+        {reportType === 'recovery' ? (
+          <select
+            value={filters.recoveryStatus ?? ''}
+            onChange={(event) =>
+              updateFilter('recoveryStatus', event.target.value as RecoveryCampaignStatus | '')
+            }
+          >
+            <option value="">Todos os status</option>
+            <option value="ATIVA">Ativa</option>
+            <option value="CONCLUIDA">Concluida</option>
+            <option value="CANCELADA">Cancelada</option>
+          </select>
+        ) : null}
+        <button className="secondary-button" type="button" onClick={() => setFilters({})}>
+          Limpar filtros
+        </button>
+        <button className="secondary-button" type="button" onClick={() => void loadReport()}>
+          <RefreshCcw aria-hidden="true" size={16} />
+          Atualizar
+        </button>
+        <button className="primary-button" type="button" onClick={() => void exportCsv()}>
+          <Download aria-hidden="true" size={16} />
+          CSV
+        </button>
+      </div>
+
+      <div className="metric-grid report-kpis">
+        <article className="metric-card compact">
+          <span className="metric-label">Registros</span>
+          <strong className="metric-value">{loading ? '-' : (report?.total ?? 0)}</strong>
+          <p>{report?.limited ? 'Exibicao limitada para manter performance.' : 'Filtro atual'}</p>
+        </article>
+        {report?.summary
+          ? Object.entries(report.summary).map(([key, value]) => (
+              <article className="metric-card compact" key={key}>
+                <span className="metric-label">{reportSummaryLabel(key)}</span>
+                <strong className="metric-value">{reportSummaryValue(value)}</strong>
+              </article>
+            ))
+          : null}
+      </div>
+
+      <div className="table-wrap report-table">
+        <table>
+          <thead>
+            <tr>
+              {(report?.columns ?? []).map((column) => (
+                <th key={column}>{column}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(report?.rows ?? []).map((row, index) => (
+              <tr key={`${reportType}-${index}`}>
+                {(report?.columns ?? []).map((column) => (
+                  <td key={column}>{row[column] || '-'}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!report?.rows.length ? (
+          <div className="empty-state">{loading ? 'Carregando...' : 'Nenhum registro.'}</div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function reportSummaryLabel(key: string) {
+  const labels: Record<string, string> = {
+    amount: 'Valor total',
+    entries: 'Entradas',
+    expenses: 'Saidas',
+    balance: 'Saldo',
+    byStatus: 'Status',
+    byPlan: 'Planos',
+  };
+
+  return labels[key] ?? key;
+}
+
+function reportSummaryValue(value: unknown) {
+  if (Array.isArray(value)) return String(value.length);
+  if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value)) return formatCurrency(value);
+  if (typeof value === 'number') return String(value);
+  return '-';
+}
 
 function SettingsView() {
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
@@ -1212,9 +1557,9 @@ function ClientsView({
   startRecovery: boolean;
   renewalNotice: string;
 }) {
-  const [detailTab, setDetailTab] = useState<'timeline' | 'renewals' | 'receivables' | 'recovery'>(
-    'timeline',
-  );
+  const [detailTab, setDetailTab] = useState<
+    'timeline' | 'renewals' | 'receivables' | 'messages' | 'recovery'
+  >('timeline');
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
 
   return (
@@ -1448,6 +1793,13 @@ function ClientsView({
                 Financeiro
               </button>
               <button
+                className={detailTab === 'messages' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('messages')}
+              >
+                Cobrancas/PIX
+              </button>
+              <button
                 className={detailTab === 'recovery' ? 'active' : ''}
                 type="button"
                 onClick={() => setDetailTab('recovery')}
@@ -1495,10 +1847,40 @@ function ClientsView({
                     <p>
                       {formatCurrency(receivable.amount)} | {receivable.displayStatus}
                     </p>
+                    {receivable.paymentIntents?.length ? (
+                      <div className="step-list">
+                        {receivable.paymentIntents.map((intent) => (
+                          <span key={intent.id}>
+                            PIX {paymentProviderDisplay(intent.provider)} ·{' '}
+                            {paymentIntentStatusLabel(intent.status)}
+                            {intent.externalStatus ? ` · ${intent.externalStatus}` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </article>
                 ))}
                 {!selectedClient.receivables?.length ? (
                   <div className="empty-state">Sem contas a receber.</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {detailTab === 'messages' ? (
+              <div className="mini-list">
+                {(selectedClient.messageDispatches ?? []).map((dispatch) => (
+                  <article key={dispatch.id}>
+                    <strong>{messageOriginLabel(dispatch.origin)}</strong>
+                    <span>{formatDateTime(dispatch.createdAt)}</span>
+                    <p>
+                      {billingStatusLabel(dispatch.status)} | {dispatch.phone} | {dispatch.attempts}{' '}
+                      tentativa(s)
+                    </p>
+                    {dispatch.errorMessage ? <p>{dispatch.errorMessage}</p> : null}
+                  </article>
+                ))}
+                {!selectedClient.messageDispatches?.length ? (
+                  <div className="empty-state">Sem mensagens ou cobrancas recentes.</div>
                 ) : null}
               </div>
             ) : null}
@@ -2103,8 +2485,12 @@ function AutomationsView() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
+  const [campaignPagination, setCampaignPagination] = useState<
+    PaginatedClients['pagination'] | null
+  >(null);
   const [status, setStatus] = useState<RecoveryCampaignStatus | ''>('ATIVA');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
@@ -2120,17 +2506,20 @@ function AutomationsView() {
         listRecoveryCampaigns({
           ...(status ? { status } : {}),
           ...(search.trim() ? { search: search.trim() } : {}),
+          page,
+          pageSize: 20,
         }),
       ]);
       setBillingSummary(nextBilling);
       setRecoverySummary(nextRecovery);
-      setCampaigns(nextCampaigns);
+      setCampaigns(nextCampaigns.items);
+      setCampaignPagination(nextCampaigns.pagination);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nao foi possivel carregar automacoes.');
     } finally {
       setLoading(false);
     }
-  }, [search, status]);
+  }, [page, search, status]);
 
   useEffect(() => {
     void loadAutomations();
@@ -2197,12 +2586,18 @@ function AutomationsView() {
             <input
               placeholder="Buscar cliente ou referencia"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
             />
           </div>
           <select
             value={status}
-            onChange={(event) => setStatus(event.target.value as RecoveryCampaignStatus | '')}
+            onChange={(event) => {
+              setStatus(event.target.value as RecoveryCampaignStatus | '');
+              setPage(1);
+            }}
           >
             <option value="">Todas</option>
             <option value="ATIVA">Ativas</option>
@@ -2276,6 +2671,7 @@ function AutomationsView() {
               {loading ? 'Carregando...' : 'Nenhuma campanha encontrada.'}
             </div>
           ) : null}
+          <PaginationControls pagination={campaignPagination} onPageChange={setPage} />
         </div>
       </section>
 
@@ -3131,6 +3527,41 @@ function recoveryStepStatusLabel(status: RecoveryCampaign['steps'][number]['stat
     FAILED: 'Falha',
     CANCELED: 'Cancelada',
     IGNORED: 'Ignorada',
+  };
+
+  return labels[status];
+}
+
+function messageOriginLabel(origin: MessageDispatch['origin']) {
+  const labels: Record<MessageDispatch['origin'], string> = {
+    MANUAL: 'Mensagem manual',
+    BILLING: 'Cobranca',
+    RECOVERY: 'Recuperacao',
+  };
+
+  return labels[origin];
+}
+
+function paymentProviderDisplay(provider: PaymentProviderCode) {
+  const labels: Record<PaymentProviderCode, string> = {
+    MOCK: 'Mock',
+    FASTFLOW: 'FastFlow',
+    FASTPAY: 'FastPay',
+    DEPIX: 'Depix',
+  };
+
+  return labels[provider];
+}
+
+function paymentIntentStatusLabel(status: PaymentIntentStatus) {
+  const labels: Record<PaymentIntentStatus, string> = {
+    CREATED: 'Criado',
+    WAITING_PAYMENT: 'Aguardando',
+    PAID: 'Pago',
+    EXPIRED: 'Expirado',
+    CANCELED: 'Cancelado',
+    FAILED: 'Falha',
+    REFUNDED: 'Estornado',
   };
 
   return labels[status];

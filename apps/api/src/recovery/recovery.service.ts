@@ -26,6 +26,7 @@ import { ListRecoveryCampaignsDto } from './dto/list-recovery-campaigns.dto';
 
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
+const pageSizeLimit = 100;
 const recoverySteps = [
   { stepNumber: 1, delayDays: 3, templateType: 'RECOVERY_DAY_3' as const },
   { stepNumber: 2, delayDays: 10, templateType: 'RECOVERY_DAY_10' as const },
@@ -192,6 +193,8 @@ export class RecoveryService {
   }
 
   async listCampaigns(query: ListRecoveryCampaignsDto) {
+    const page = query.page ?? 1;
+    const pageSize = Math.min(query.pageSize ?? 20, pageSizeLimit);
     const where: Prisma.RecoveryCampaignWhereInput = {};
 
     if (query.status) {
@@ -212,17 +215,29 @@ export class RecoveryService {
       };
     }
 
-    const campaigns = await this.prisma.recoveryCampaign.findMany({
-      where,
-      include: {
-        client: { include: { plan: true } },
-        steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
-      },
-      orderBy: [{ status: 'asc' }, { startedAt: 'desc' }],
-      take: 100,
-    });
+    const [campaigns, total] = await this.prisma.$transaction([
+      this.prisma.recoveryCampaign.findMany({
+        where,
+        include: {
+          client: { include: { plan: true } },
+          steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
+        },
+        orderBy: [{ status: 'asc' }, { startedAt: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.recoveryCampaign.count({ where }),
+    ]);
 
-    return campaigns.map((campaign) => this.presentCampaign(campaign));
+    return {
+      items: campaigns.map((campaign) => this.presentCampaign(campaign)),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    };
   }
 
   async getCampaign(id: string) {

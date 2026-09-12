@@ -1174,6 +1174,73 @@ tbody tr:hover,
   margin: 0;
 }
 
+.pending-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pending-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+}
+
+.pending-item span {
+  overflow-wrap: anywhere;
+}
+
+.pending-item strong {
+  display: grid;
+  min-width: 34px;
+  min-height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgb(38 198 163 / 14%);
+  color: var(--accent-strong);
+}
+
+.reports-view {
+  display: grid;
+  gap: 16px;
+}
+
+.report-filters {
+  align-items: end;
+}
+
+.compact-field {
+  min-width: 140px;
+}
+
+.compact-field span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.report-table {
+  max-height: 620px;
+}
+
+.pagination-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;

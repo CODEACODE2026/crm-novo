@@ -151,6 +151,52 @@ Validar somente quando API real existir:
 - Baixa financeira.
 - Idempotencia.
 
+## Relatorios
+
+- Relatorio de clientes respeita filtros de periodo, status, plano e busca.
+- Relatorio de renovacoes mostra vencimento anterior e novo vencimento.
+- Relatorio de contas a receber diferencia pendente, vencido, pago e cancelado.
+- Relatorio financeiro mostra entradas, saidas, saldo, categoria, origem e cliente.
+- Relatorio de cobrancas mostra agendadas, enviadas, falhadas, canceladas/ignoradas e tentativas.
+- Relatorio de recuperacao mostra campanha, etapa atual, status e resultado.
+- Exportacao CSV respeita filtros aplicados.
+- CSV abre corretamente no Excel com caracteres acentuados.
+- Relatorios nao carregam volume sem limite.
+
+## Homologacao Ponta a Ponta Interna
+
+- Criar cliente no ambiente dev.
+- Renovar cliente e gerar conta a receber.
+- Gerar PIX mock.
+- Confirmar pagamento mock.
+- Validar FinancialTransaction criada uma unica vez.
+- Validar novo vencimento do cliente.
+- Reconciliar cobranca futura.
+- Inativar cliente com recuperacao.
+- Validar campanha e etapas.
+- Reativar cliente e cancelar recuperacao.
+- Validar lista de espera com payload Kirago mock/observado.
+- Confirmar segunda mensagem de cliente existente sem duplicar pending.
+
+## Homologacao Ambiente de Teste
+
+- Instalar dependencias.
+- Configurar banco.
+- Aplicar migrations.
+- Executar seeds.
+- Login administrativo.
+- Validar clientes.
+- Validar renovacao.
+- Validar financeiro.
+- Validar WhatsApp/Kirago real quando disponivel.
+- Validar lista de espera.
+- Validar cobranca.
+- Validar recuperacao.
+- Validar PIX FastFlow/FastPay real quando credencial estiver cadastrada.
+- Validar relatorios e CSV.
+- Validar seguranca.
+- Validar backup.
+
 ## UI
 
 - Tema escuro consistente.

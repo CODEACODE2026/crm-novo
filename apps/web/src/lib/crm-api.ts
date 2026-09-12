@@ -31,6 +31,7 @@ export interface Client {
   renewals?: Renewal[];
   receivables?: Receivable[];
   recoveryCampaigns?: RecoveryCampaign[];
+  messageDispatches?: ClientMessageDispatch[];
 }
 
 export interface ClientEvent {
@@ -57,6 +58,21 @@ export interface ClientStatusHistory {
   previousStatus: ClientStatus;
   newStatus: ClientStatus;
   reason: string | null;
+  createdAt: string;
+}
+
+export interface ClientMessageDispatch {
+  id: string;
+  phone: string;
+  body: string;
+  renderedContent: string | null;
+  origin: 'MANUAL' | 'BILLING' | 'RECOVERY';
+  status: 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
+  scheduledFor: string | null;
+  attempts: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  sentAt: string | null;
   createdAt: string;
 }
 
@@ -207,6 +223,23 @@ export interface DashboardSummary {
   renewals: {
     count: number;
     amount: string;
+  };
+  pending: {
+    counts: {
+      overdueReceivables: number;
+      waitingPix: number;
+      failedPix: number;
+      billingScheduledToday: number;
+      billingFailed: number;
+      activeRecoveryCampaigns: number;
+      failedRecoveryDispatches: number;
+      pendingWaitlistContacts: number;
+    };
+    items: Array<{
+      label: string;
+      count: number;
+      action: 'finance' | 'billing' | 'automations' | 'waitlist';
+    }>;
   };
   charts: {
     grouping: 'day' | 'month';
@@ -376,6 +409,37 @@ export interface RecoverySummary {
   canceled: number;
   scheduled: number;
   failed: number;
+}
+
+export interface PaginatedRecoveryCampaigns {
+  items: RecoveryCampaign[];
+  pagination: PaginatedClients['pagination'];
+}
+
+export type ReportType =
+  'clients' | 'renewals' | 'receivables' | 'finance' | 'billing' | 'recovery';
+
+export interface OperationalReport {
+  columns: string[];
+  rows: Array<Record<string, string>>;
+  total: number;
+  limited: boolean;
+  summary: Record<string, unknown>;
+}
+
+export interface ReportFilters {
+  startDate?: string;
+  endDate?: string;
+  dueDate?: string;
+  search?: string;
+  clientStatus?: ClientStatus | '';
+  planId?: string;
+  receivableDisplayStatus?: ReceivableDisplayStatus | '';
+  transactionType?: FinancialTransactionType | '';
+  transactionOrigin?: FinancialTransactionOrigin | '';
+  categoryId?: string;
+  dispatchStatus?: MessageDispatch['status'] | '';
+  recoveryStatus?: RecoveryCampaignStatus | '';
 }
 
 export interface PaginatedBillingDispatches {
@@ -696,6 +760,35 @@ export function getDashboardSummary(filters: { startDate?: string; endDate?: str
   return apiFetch<DashboardSummary>(`/dashboard/summary${query ? `?${query}` : ''}`);
 }
 
+function reportParams(filters: ReportFilters = {}) {
+  const params = new URLSearchParams();
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, String(value));
+  });
+
+  return params.toString();
+}
+
+export function getReport(type: ReportType, filters: ReportFilters = {}) {
+  const query = reportParams(filters);
+  return apiFetch<OperationalReport>(`/reports/${type}${query ? `?${query}` : ''}`);
+}
+
+export async function downloadReportCsv(type: ReportType, filters: ReportFilters = {}) {
+  const query = reportParams(filters);
+  const response = await fetch(buildApiUrl(`/reports/${type}.csv${query ? `?${query}` : ''}`), {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? 'Nao foi possivel exportar CSV.');
+  }
+
+  return response.blob();
+}
+
 export function listReceivables(
   filters: {
     status?: ReceivableDisplayStatus | '';
@@ -996,16 +1089,24 @@ export function getRecoverySummary() {
 }
 
 export function listRecoveryCampaigns(
-  filters: { status?: RecoveryCampaignStatus | ''; search?: string; clientId?: string } = {},
+  filters: {
+    status?: RecoveryCampaignStatus | '';
+    search?: string;
+    clientId?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
 ) {
   const params = new URLSearchParams();
 
   if (filters.status) params.set('status', filters.status);
   if (filters.search) params.set('search', filters.search);
   if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
 
   const query = params.toString();
-  return apiFetch<RecoveryCampaign[]>(`/recovery/campaigns${query ? `?${query}` : ''}`);
+  return apiFetch<PaginatedRecoveryCampaigns>(`/recovery/campaigns${query ? `?${query}` : ''}`);
 }
 
 export function cancelRecoveryCampaign(id: string) {

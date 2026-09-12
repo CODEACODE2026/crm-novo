@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
@@ -7,7 +12,7 @@ const version = 'v1';
 
 @Injectable()
 export class TokenEncryptionService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   encrypt(plainText: string) {
     const key = this.getKey();

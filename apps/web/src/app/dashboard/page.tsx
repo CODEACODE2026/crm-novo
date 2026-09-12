@@ -142,6 +142,7 @@ import {
 import {
   createWhatsAppQrPoller,
   startWhatsAppConnectionFlow,
+  syncWhatsAppConnectionStatus,
   type WhatsAppQrPoller,
   whatsappQrStatus,
 } from '../../lib/whatsapp-connection-flow';
@@ -2740,6 +2741,31 @@ function WhatsAppView() {
     }
   }, []);
 
+  const refreshWhatsAppPanel = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const [nextConnection, nextMessages, nextHealth] = await Promise.all([
+        connection ? refreshWhatsAppStatus() : getWhatsAppConnection(),
+        listWhatsAppMessages(),
+        getWhatsAppProviderHealth(),
+      ]);
+      setConnection(nextConnection);
+      setMessages(nextMessages);
+      setHealth(nextHealth);
+
+      if (nextConnection?.status === 'CONNECTED') {
+        setNotice(whatsappQrStatus.connected);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
+    } finally {
+      setLoading(false);
+    }
+  }, [connection]);
+
   useEffect(() => {
     void loadWhatsApp();
   }, [loadWhatsApp]);
@@ -2753,8 +2779,25 @@ function WhatsAppView() {
     pollerRef.current = null;
   }
 
-  function closeQrModal() {
+  async function closeQrModal(syncStatus = true) {
     stopQrPolling();
+
+    if (syncStatus) {
+      try {
+        await syncWhatsAppConnectionStatus({
+          refreshStatus: refreshWhatsAppStatus,
+          onConnection: setConnection,
+          onConnected: (nextConnection) => {
+            setConnection(nextConnection);
+            setNotice(whatsappQrStatus.connected);
+            void loadMessagesOnly();
+          },
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Nao foi possivel atualizar WhatsApp.');
+      }
+    }
+
     setQrOpen(false);
     setQrCode('');
   }
@@ -2835,7 +2878,7 @@ function WhatsAppView() {
       setQrOpen(true);
       startQrPolling();
     } catch (err) {
-      closeQrModal();
+      void closeQrModal(false);
       setError(err instanceof Error ? err.message : 'Nao foi possivel conectar WhatsApp.');
     } finally {
       setWorking('');
@@ -2859,7 +2902,11 @@ function WhatsAppView() {
         <section className="panel whatsapp-panel">
           <div className="panel-header">
             <h2>Conexao WhatsApp</h2>
-            <button className="secondary-button" type="button" onClick={() => void loadWhatsApp()}>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void refreshWhatsAppPanel()}
+            >
               <RefreshCcw aria-hidden="true" size={16} />
               Atualizar
             </button>
@@ -3045,7 +3092,7 @@ function WhatsAppView() {
           <section className="modal qr-modal" aria-labelledby="qr-title">
             <header className="modal-header">
               <h2 id="qr-title">Conectar WhatsApp</h2>
-              <button className="icon-button" type="button" onClick={closeQrModal}>
+              <button className="icon-button" type="button" onClick={() => void closeQrModal()}>
                 <X aria-hidden="true" size={17} />
               </button>
             </header>

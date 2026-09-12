@@ -4,6 +4,7 @@ import {
   createWhatsAppQrPoller,
   shouldRequestWhatsAppQr,
   startWhatsAppConnectionFlow,
+  syncWhatsAppConnectionStatus,
   whatsappQrStatus,
 } from './whatsapp-connection-flow';
 
@@ -246,5 +247,21 @@ describe('WhatsApp connection flow', () => {
 
     expect(onError).toHaveBeenCalledWith('Falha de API');
     expect(poller.isActive()).toBe(false);
+  });
+
+  it('syncs status before manual QR modal close and notifies when already connected', async () => {
+    const connected = connection('CONNECTED');
+    const onConnection = vi.fn();
+    const onConnected = vi.fn();
+
+    const result = await syncWhatsAppConnectionStatus({
+      refreshStatus: vi.fn().mockResolvedValue(connected),
+      onConnection,
+      onConnected,
+    });
+
+    expect(result).toBe(connected);
+    expect(onConnection).toHaveBeenCalledWith(connected);
+    expect(onConnected).toHaveBeenCalledWith(connected);
   });
 });

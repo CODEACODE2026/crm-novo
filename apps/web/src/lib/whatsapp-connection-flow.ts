@@ -41,6 +41,12 @@ export interface WhatsAppQrPoller {
   isActive: () => boolean;
 }
 
+export interface SyncWhatsAppConnectionStatusOptions {
+  refreshStatus: () => Promise<WhatsAppConnection>;
+  onConnection: (connection: WhatsAppConnection) => void;
+  onConnected?: (connection: WhatsAppConnection) => void;
+}
+
 export interface StartWhatsAppConnectionFlowOptions {
   currentConnection: WhatsAppConnection | null;
   connectionName: string;
@@ -212,6 +218,21 @@ export function createWhatsAppQrPoller(options: WhatsAppQrPollerOptions): WhatsA
       return active;
     },
   };
+}
+
+export async function syncWhatsAppConnectionStatus({
+  refreshStatus,
+  onConnection,
+  onConnected,
+}: SyncWhatsAppConnectionStatusOptions) {
+  const connection = await refreshStatus();
+  onConnection(connection);
+
+  if (connection.status === 'CONNECTED') {
+    onConnected?.(connection);
+  }
+
+  return connection;
 }
 
 export function shouldRequestWhatsAppQr(connection: WhatsAppConnection | null) {

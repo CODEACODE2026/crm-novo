@@ -354,6 +354,36 @@ describe('WhatsAppService', () => {
     expect(result.loggedIn).toBe(true);
   });
 
+  it('persists CONNECTED status and phone when refreshing a divergent local connection', async () => {
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'DISCONNECTED', connected: false, loggedIn: false }),
+      providerOverrides: {
+        getStatus: vi.fn().mockResolvedValue({
+          connected: true,
+          loggedIn: true,
+          phone: '5544999999999',
+        }),
+      },
+    });
+
+    await service.refreshStatus();
+
+    const updateCall = (prisma.whatsAppConnection.update as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+      where?: { id?: string };
+    };
+
+    expect(updateCall.where).toEqual({ id: connection().id });
+    expect(updateCall.data).toMatchObject({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+      phone: '5544999999999',
+    });
+    expect(updateCall.data?.connectedAt).toBeInstanceOf(Date);
+    expect(updateCall.data?.lastStatusAt).toBeInstanceOf(Date);
+  });
+
   it('blocks manual send when the connection is disconnected', async () => {
     const { service } = serviceFactory({
       currentConnection: connection({ status: 'DISCONNECTED' }),

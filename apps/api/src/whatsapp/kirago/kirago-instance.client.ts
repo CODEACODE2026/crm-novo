@@ -10,6 +10,18 @@ type KiragoEnvelope<T> = {
 export type KiragoStatusData = {
   Connected?: boolean;
   LoggedIn?: boolean;
+  connected?: boolean | string | number;
+  loggedIn?: boolean | string | number;
+  online?: boolean | string | number;
+  ready?: boolean | string | number;
+  status?: string;
+  state?: string;
+  Status?: string;
+  State?: string;
+  jid?: string;
+  JID?: string;
+  phone?: string;
+  Phone?: string;
 };
 
 export type KiragoQrData = {

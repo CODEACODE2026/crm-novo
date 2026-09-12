@@ -85,10 +85,26 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
 
   async getStatus(instanceToken: string) {
     const response = await this.instanceClient.status(instanceToken);
+    const data = response.data;
+    const statusValue = this.stringValue(
+      data?.status ?? data?.Status ?? data?.state ?? data?.State,
+    );
+    const connected =
+      this.booleanValue(data?.Connected) ??
+      this.booleanValue(data?.connected) ??
+      this.booleanValue(data?.online) ??
+      this.booleanValue(data?.ready) ??
+      this.connectedByStatus(statusValue);
+    const loggedIn =
+      this.booleanValue(data?.LoggedIn) ??
+      this.booleanValue(data?.loggedIn) ??
+      this.loggedInByStatus(statusValue) ??
+      connected;
+
     return {
-      connected: Boolean(response.data?.Connected),
-      loggedIn: Boolean(response.data?.LoggedIn),
-      phone: null,
+      connected,
+      loggedIn,
+      phone: this.phoneFromStatus(data),
     };
   }
 
@@ -136,5 +152,67 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       online: response.status === 'ok',
       version: response.version ?? null,
     };
+  }
+
+  private booleanValue(value: unknown) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim().toLowerCase();
+    if (
+      ['true', '1', 'yes', 'online', 'ready', 'connected', 'loggedin', 'logged_in'].includes(
+        normalized,
+      )
+    ) {
+      return true;
+    }
+    if (['false', '0', 'no', 'offline', 'disconnected', 'qr', 'qr_required'].includes(normalized)) {
+      return false;
+    }
+
+    return null;
+  }
+
+  private connectedByStatus(status: string | null) {
+    if (!status) return false;
+    return [
+      'connected',
+      'online',
+      'ready',
+      'open',
+      'authenticated',
+      'loggedin',
+      'logged_in',
+    ].includes(status);
+  }
+
+  private loggedInByStatus(status: string | null) {
+    if (!status) return null;
+    if (
+      ['connected', 'online', 'ready', 'open', 'authenticated', 'loggedin', 'logged_in'].includes(
+        status,
+      )
+    ) {
+      return true;
+    }
+    if (['qr', 'qrcode', 'qr_required', 'connecting', 'disconnected', 'offline'].includes(status)) {
+      return false;
+    }
+    return null;
+  }
+
+  private stringValue(value: unknown) {
+    return typeof value === 'string' ? value.trim().toLowerCase() : null;
+  }
+
+  private phoneFromStatus(
+    data: { phone?: string; Phone?: string; jid?: string; JID?: string } | undefined,
+  ) {
+    const phone = data?.phone ?? data?.Phone;
+    if (phone) return phone;
+
+    const jid = data?.jid ?? data?.JID;
+    return jid?.split('@')[0] || null;
   }
 }

@@ -74,4 +74,38 @@ describe('Kirago dependency injection', () => {
     expect(getUser).toHaveBeenCalledWith('kirago-user-id');
     expect(result).toEqual({ exists: true });
   });
+
+  it('normalizes lowercase Kirago v1.11 status payloads', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'status').mockResolvedValue({
+      success: true,
+      data: { connected: true, loggedIn: true, phone: '5544999999999' },
+    });
+
+    await expect(provider.getStatus('instance-token')).resolves.toEqual({
+      connected: true,
+      loggedIn: true,
+      phone: '5544999999999',
+    });
+  });
+
+  it('normalizes textual Kirago status values and extracts phone from JID', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'status').mockResolvedValue({
+      success: true,
+      data: { status: 'CONNECTED', jid: '5544888888888@s.whatsapp.net' },
+    });
+
+    await expect(provider.getStatus('instance-token')).resolves.toEqual({
+      connected: true,
+      loggedIn: true,
+      phone: '5544888888888',
+    });
+  });
 });

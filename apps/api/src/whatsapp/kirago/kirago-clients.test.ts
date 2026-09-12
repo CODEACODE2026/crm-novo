@@ -64,4 +64,19 @@ describe('Kirago clients', () => {
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   });
+
+  it('checks instance status through Kirago session status endpoint', async () => {
+    const request = vi.fn().mockResolvedValue({
+      success: true,
+      data: { connected: true, loggedIn: true },
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.status('instance-token');
+
+    expect(request).toHaveBeenCalledWith('/session/status', {
+      headers: { token: 'instance-token' },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
 });

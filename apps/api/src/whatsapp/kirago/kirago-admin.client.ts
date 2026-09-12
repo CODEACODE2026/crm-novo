@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { KiragoProviderError } from './kirago-provider.error';
 import { KiragoHttpClient } from './kirago-http.client';
@@ -28,7 +28,9 @@ export type KiragoUserResponse = {
 @Injectable()
 export class KiragoAdminClient {
   constructor(
+    @Inject(ConfigService)
     private readonly config: ConfigService,
+    @Inject(KiragoHttpClient)
     private readonly http: KiragoHttpClient,
   ) {}
 

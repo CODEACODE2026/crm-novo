@@ -1,5 +1,15 @@
 import { buildApiUrl } from './api';
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export type ClientStatus = 'ATIVO' | 'INATIVO' | 'CANCELADO';
 
 export interface Plan {
@@ -610,15 +620,33 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (response.status === 401) {
     window.location.assign('/login');
-    throw new Error('Nao autenticado.');
+    throw new ApiError('Nao autenticado.', response.status);
   }
 
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? 'Nao foi possivel concluir a operacao.');
+    const body = await parseJsonResponse<{ message?: string }>(response);
+    throw new ApiError(body?.message ?? 'Nao foi possivel concluir a operacao.', response.status);
   }
 
-  return (await response.json()) as T;
+  return (await parseJsonResponse<T>(response)) as T;
+}
+
+async function parseJsonResponse<T>(response: Response): Promise<T | undefined> {
+  if (response.status === 204) {
+    return undefined;
+  }
+
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return undefined;
+  }
 }
 
 export function formatCurrency(value: string | number) {

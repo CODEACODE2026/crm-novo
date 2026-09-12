@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { KiragoProviderError, type KiragoErrorCode } from './kirago-provider.error';
 
@@ -11,7 +11,7 @@ type KiragoRequestOptions = {
 
 @Injectable()
 export class KiragoHttpClient {
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   async request<T>(path: string, options: KiragoRequestOptions): Promise<T> {
     const baseUrl = this.config.get<string>('KIRAGO_BASE_URL');

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { KiragoHttpClient } from './kirago-http.client';
 
 type KiragoEnvelope<T> = {
@@ -33,7 +33,7 @@ export type KiragoSendTextData = {
 
 @Injectable()
 export class KiragoInstanceClient {
-  constructor(private readonly http: KiragoHttpClient) {}
+  constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
 
   connect(instanceToken: string, events: string[]) {
     return this.http.request<KiragoEnvelope<unknown>>('/session/connect', {

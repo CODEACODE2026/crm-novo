@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { KiragoAdminClient } from './kirago-admin.client';
 import { KiragoInstanceClient } from './kirago-instance.client';
@@ -14,9 +14,13 @@ const defaultEvents = ['Message'];
 @Injectable()
 export class KiragoWhatsAppProvider implements WhatsAppProvider {
   constructor(
+    @Inject(KiragoAdminClient)
     private readonly adminClient: KiragoAdminClient,
+    @Inject(KiragoInstanceClient)
     private readonly instanceClient: KiragoInstanceClient,
+    @Inject(KiragoHttpClient)
     private readonly http: KiragoHttpClient,
+    @Inject(ConfigService)
     private readonly config: ConfigService,
   ) {}
 

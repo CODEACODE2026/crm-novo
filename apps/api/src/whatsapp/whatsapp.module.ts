@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../common/prisma/prisma.module';
+import { FinanceModule } from '../finance/finance.module';
 import { PlansModule } from '../plans/plans.module';
 import { KiragoAdminClient } from './kirago/kirago-admin.client';
 import { KiragoHttpClient } from './kirago/kirago-http.client';
@@ -13,7 +14,7 @@ import { WhatsAppController, WhatsAppWebhookController } from './whatsapp.contro
 import { WhatsAppService } from './whatsapp.service';
 
 @Module({
-  imports: [AuthModule, PrismaModule, PlansModule],
+  imports: [AuthModule, PrismaModule, PlansModule, FinanceModule],
   controllers: [WhatsAppController, WhatsAppWebhookController],
   providers: [
     KiragoAdminClient,

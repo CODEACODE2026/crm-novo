@@ -307,6 +307,7 @@ export class BillingService {
         vencimento: dto.dueDate?.trim() || '15/09/2026',
         plano: dto.plan?.trim() || 'Mensal',
         referencia: dto.reference?.trim() || 'bruno1499',
+        pix: '000201...',
       }),
     };
   }
@@ -594,7 +595,9 @@ export class BillingService {
     const clientDueDate = formatBusinessDate(client.dueDate);
     return (
       client.receivables.find(
-        (receivable) => formatBusinessDate(receivable.dueDate) === clientDueDate,
+        (receivable) =>
+          receivable.purpose === 'RENEWAL' &&
+          formatBusinessDate(receivable.dueDate) === clientDueDate,
       ) ?? null
     );
   }
@@ -727,6 +730,7 @@ export class BillingService {
       vencimento: this.formatDisplayDate(receivable.dueDate),
       plano: client.plan.name,
       referencia: client.reference,
+      pix: '',
     });
   }
 

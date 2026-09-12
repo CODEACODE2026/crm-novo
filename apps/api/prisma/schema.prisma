@@ -12,6 +12,7 @@ enum UserRole {
 }
 
 enum ClientStatus {
+  PENDENTE_PAGAMENTO
   ATIVO
   INATIVO
   CANCELADO
@@ -37,6 +38,11 @@ enum ReceivableStatus {
   PENDENTE
   PAGO
   CANCELADO
+}
+
+enum ReceivablePurpose {
+  RENEWAL
+  INITIAL_ACTIVATION
 }
 
 enum FinancialTransactionType {
@@ -80,6 +86,7 @@ enum WhatsAppConnectionStatus {
 
 enum MessageDispatchOrigin {
   MANUAL
+  INITIAL_ACTIVATION
   BILLING
   RECOVERY
 }
@@ -95,6 +102,7 @@ enum MessageDispatchStatus {
 }
 
 enum MessageTemplateType {
+  INITIAL_ACTIVATION
   BILLING_DUE
   RECOVERY_DAY_3
   RECOVERY_DAY_10
@@ -435,7 +443,8 @@ model Renewal {
 model Receivable {
   id                 String                @id @default(uuid()) @db.Uuid
   clientId           String                @db.Uuid
-  renewalId          String                @unique @db.Uuid
+  renewalId          String?               @unique @db.Uuid
+  purpose            ReceivablePurpose     @default(RENEWAL)
   description        String
   amount             Decimal               @db.Decimal(12, 2)
   dueDate            DateTime              @db.Date
@@ -446,7 +455,7 @@ model Receivable {
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
   client             Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  renewal            Renewal               @relation(fields: [renewalId], references: [id], onDelete: Restrict)
+  renewal            Renewal?              @relation(fields: [renewalId], references: [id], onDelete: Restrict)
   paymentTransaction FinancialTransaction?
   messageDispatches  MessageDispatch[]
   paymentIntents     PaymentIntent[]
@@ -454,19 +463,20 @@ model Receivable {
   @@index([clientId])
   @@index([dueDate])
   @@index([status])
+  @@index([purpose])
   @@map("receivables")
 }
 
 model PaymentIntent {
-  id                    String              @id @default(uuid()) @db.Uuid
-  receivableId          String              @db.Uuid
+  id                    String                @id @default(uuid()) @db.Uuid
+  receivableId          String                @db.Uuid
   provider              PaymentProviderCode
   providerTransactionId String?
   externalStatus        String?
   externalDepixId       String?
   blockchainTxId        String?
-  status                PaymentIntentStatus @default(CREATED)
-  amount                Decimal             @db.Decimal(12, 2)
+  status                PaymentIntentStatus   @default(CREATED)
+  amount                Decimal               @db.Decimal(12, 2)
   pixCopyPaste          String?
   qrCodeData            String?
   expiresAt             DateTime?
@@ -474,9 +484,9 @@ model PaymentIntent {
   lastSyncAt            DateTime?
   failureCode           String?
   failureMessage        String?
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
-  receivable            Receivable          @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  receivable            Receivable            @relation(fields: [receivableId], references: [id], onDelete: Restrict)
   webhookEvents         PaymentWebhookEvent[]
 
   @@unique([provider, providerTransactionId])
@@ -488,23 +498,23 @@ model PaymentIntent {
 }
 
 model PaymentProviderCredential {
-  id                   String              @id @default(uuid()) @db.Uuid
-  provider             PaymentProviderCode
-  name                 String
-  tokenEncrypted       String
-  tokenLastFour        String
+  id                     String              @id @default(uuid()) @db.Uuid
+  provider               PaymentProviderCode
+  name                   String
+  tokenEncrypted         String
+  tokenLastFour          String
   webhookSecretEncrypted String?
   webhookSecretLastFour  String?
   webhookConfiguredAt    DateTime?
   webhookUrl             String?
   webhookRegisteredAt    DateTime?
   defaultForPix          Boolean             @default(false)
-  active               Boolean             @default(true)
-  validatedAt          DateTime?
-  lastValidationStatus String?
-  companyId            String?             @db.Uuid
-  createdAt            DateTime            @default(now())
-  updatedAt            DateTime            @updatedAt
+  active                 Boolean             @default(true)
+  validatedAt            DateTime?
+  lastValidationStatus   String?
+  companyId              String?             @db.Uuid
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
 
   @@index([provider])
   @@index([active])

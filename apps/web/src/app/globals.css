@@ -723,6 +723,24 @@ a {
   color: #fde68a;
 }
 
+.inline-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.inline-panel p,
+.inline-panel .notice {
+  margin: 0;
+}
+
+.inline-panel .notice {
+  display: grid;
+  gap: 4px;
+}
+
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -1024,6 +1042,11 @@ tbody tr:hover,
 .status-ativo {
   background: rgb(38 198 163 / 14%);
   color: var(--accent-strong);
+}
+
+.status-pendente_pagamento {
+  background: rgb(125 211 252 / 14%);
+  color: #7dd3fc;
 }
 
 .status-inativo {

@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsInt,
   IsNumber,
@@ -42,4 +43,12 @@ export class ApproveWhatsAppPendingContactDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  generateInitialReceivable?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sendPixWhatsAppNow?: boolean;
 }

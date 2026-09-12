@@ -16,7 +16,11 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
+import {
+  addCalendarMonthsPreservingAnchor,
+  formatBusinessDate,
+  parseBusinessDate,
+} from '../clients/utils/business-date';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
@@ -489,6 +493,8 @@ export class FinanceService {
           },
         });
 
+        await this.activateClientAfterInitialPayment(tx, receivable.id, actorUserId);
+
         return tx.financialTransaction.findUniqueOrThrow({
           where: { id: createdTransaction.id },
           include: { category: true, client: true, receivable: true },
@@ -729,6 +735,8 @@ export class FinanceService {
           });
         }
       }
+
+      await this.activateClientAfterInitialPayment(tx, receivable.id, actorUserId);
 
       return tx.paymentIntent.findUniqueOrThrow({ where: { id } });
     });
@@ -1062,6 +1070,72 @@ export class FinanceService {
     }
   }
 
+  private async activateClientAfterInitialPayment(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    actorUserId: string | null,
+  ) {
+    const receivable = await tx.receivable.findUnique({
+      where: { id: receivableId },
+      include: { client: { include: { plan: true } } },
+    });
+
+    if (!receivable || receivable.purpose !== 'INITIAL_ACTIVATION') {
+      return;
+    }
+
+    if (receivable.status !== 'PAGO' || receivable.client.status !== 'PENDENTE_PAGAMENTO') {
+      return;
+    }
+
+    const previousStatus = receivable.client.status;
+    const anchorDay = receivable.client.billingAnchorDay;
+    const nextDueDate = addCalendarMonthsPreservingAnchor(
+      receivable.dueDate,
+      receivable.client.plan.durationMonths,
+      anchorDay,
+    );
+
+    await tx.client.update({
+      where: { id: receivable.clientId },
+      data: {
+        status: 'ATIVO',
+        dueDate: nextDueDate,
+        billingAnchorDay: anchorDay,
+      },
+    });
+
+    await tx.clientStatusHistory.create({
+      data: {
+        clientId: receivable.clientId,
+        previousStatus,
+        newStatus: 'ATIVO',
+        reason: 'Ativacao automatica apos pagamento inicial.',
+        changedByUserId: actorUserId,
+      },
+    });
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: receivable.clientId,
+        type: 'STATUS_CHANGED',
+        title: 'Cliente ativado pelo primeiro pagamento.',
+        description: `Status alterado de ${previousStatus} para ATIVO. Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
+        metadata: {
+          receivableId,
+          previousStatus,
+          newStatus: 'ATIVO',
+          originalDueDate: formatBusinessDate(receivable.dueDate),
+          nextDueDate: formatBusinessDate(nextDueDate),
+          billingAnchorDay: anchorDay,
+          planId: receivable.client.planId,
+          durationMonths: receivable.client.plan.durationMonths,
+        },
+        createdByUserId: actorUserId,
+      },
+    });
+  }
+
   private async ensureReceivableExists(id: string) {
     const exists = await this.prisma.receivable.count({ where: { id } });
 
@@ -1176,6 +1250,7 @@ export class FinanceService {
       id: receivable.id,
       clientId: receivable.clientId,
       renewalId: receivable.renewalId,
+      purpose: receivable.purpose,
       description: receivable.description,
       amount: receivable.amount.toFixed(2),
       dueDate: formatBusinessDate(receivable.dueDate),
@@ -1193,10 +1268,12 @@ export class FinanceService {
         name: receivable.client.name,
         reference: receivable.client.reference,
       },
-      renewal: {
-        id: receivable.renewal.id,
-        planName: receivable.renewal.planName,
-      },
+      renewal: receivable.renewal
+        ? {
+            id: receivable.renewal.id,
+            planName: receivable.renewal.planName,
+          }
+        : null,
     };
   }
 

@@ -48,6 +48,7 @@ function receivable(overrides: Record<string, unknown> = {}) {
     id: 'receivable-id',
     clientId: 'client-id',
     renewalId: 'renewal-id',
+    purpose: 'RENEWAL',
     description: 'Renovacao Mensal',
     amount: 50,
     dueDate,
@@ -287,6 +288,7 @@ describe('BillingService', () => {
   });
 
   it.each([
+    ['PENDENTE_PAGAMENTO', 'PENDENTE'],
     ['INATIVO', 'PENDENTE'],
     ['CANCELADO', 'PENDENTE'],
     ['ATIVO', 'PAGO'],

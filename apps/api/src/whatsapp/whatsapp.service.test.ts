@@ -117,6 +117,33 @@ function serviceFactory({
     client: {
       findUnique: vi.fn().mockResolvedValue(client()),
     },
+    receivable: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'initial-receivable-id',
+        clientId: client().id,
+        purpose: 'INITIAL_ACTIVATION',
+        renewalId: null,
+        description: 'Cobranca inicial de ativacao - Mensal',
+        amount: 50,
+        dueDate: now,
+        status: 'PENDENTE',
+        client: {
+          ...client(),
+          plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
+        },
+      }),
+    },
+    messageTemplate: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'template-id',
+        type: 'INITIAL_ACTIVATION',
+        name: 'Ativacao inicial',
+        content: 'Oi {{primeiroNome}}, pague {{valor}} em {{vencimento}}. PIX: {{pix}}',
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    },
     messageDispatch: {
       create: vi.fn().mockResolvedValue(dispatch()),
       update: vi
@@ -150,6 +177,18 @@ function serviceFactory({
             recurringValue: 50,
             dueDate: now,
             plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
+          }),
+        },
+        receivable: {
+          create: vi.fn().mockResolvedValue({
+            id: 'initial-receivable-id',
+            clientId: client().id,
+            purpose: 'INITIAL_ACTIVATION',
+            renewalId: null,
+            description: 'Cobranca inicial de ativacao - Mensal',
+            amount: 50,
+            dueDate: now,
+            status: 'PENDENTE',
           }),
         },
         messageDispatch: {
@@ -201,6 +240,9 @@ function serviceFactory({
   const plans = {
     ensureActivePlan: vi.fn().mockResolvedValue({ id: 'plan-id' }),
   };
+  const finance = {
+    createReceivablePix: vi.fn(),
+  };
   const config = {
     get: (name: string) => (name === 'CRM_API_PUBLIC_URL' ? 'https://crm.example.com' : undefined),
   };
@@ -213,12 +255,14 @@ function serviceFactory({
       prisma as never,
       provider as never,
       plans as never,
+      finance as never,
       encryption as never,
       config as never,
       normalizer as never,
     ),
     prisma,
     provider,
+    finance,
     encryption,
     normalizer,
   };
@@ -914,12 +958,46 @@ describe('WhatsAppService', () => {
         recurringValue: 50,
         dueDate: '2026-10-10',
         billingNoticeDays: 0,
+        generateInitialReceivable: true,
+        sendPixWhatsAppNow: false,
       },
       'user-id',
     );
 
     expect(result.reference).toBe('CLI-1');
+    expect(result.initialActivation).toMatchObject({
+      initialReceivableId: 'initial-receivable-id',
+    });
     expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('approves a pending contact without initial receivable when requested', async () => {
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    const result = await service.approvePendingContact(
+      pendingContact().id,
+      {
+        name: 'Lucas',
+        reference: 'lucas001',
+        planId: '55555555-5555-4555-8555-555555555555',
+        recurringValue: 50,
+        dueDate: '2026-10-10',
+        billingNoticeDays: 0,
+        generateInitialReceivable: false,
+        sendPixWhatsAppNow: false,
+      },
+      'user-id',
+    );
+
+    expect(result.initialActivation).toMatchObject({
+      message: 'Cliente cadastrado aguardando primeiro pagamento.',
+    });
   });
 
   it('blocks approval when a client with the phone already exists', async () => {
@@ -935,10 +1013,97 @@ describe('WhatsAppService', () => {
           recurringValue: 50,
           dueDate: '2026-10-10',
           billingNoticeDays: 0,
+          generateInitialReceivable: false,
         },
         'user-id',
       ),
     ).rejects.toThrow(ConflictException);
+  });
+
+  it('preserves approved client and initial receivable when PIX generation fails', async () => {
+    const { service, finance } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+    finance.createReceivablePix.mockRejectedValue(new Error('provider offline'));
+
+    const result = await service.approvePendingContact(
+      pendingContact().id,
+      {
+        name: 'Lucas',
+        reference: 'lucas001',
+        planId: '55555555-5555-4555-8555-555555555555',
+        recurringValue: 50,
+        dueDate: '2026-10-10',
+        billingNoticeDays: 0,
+        generateInitialReceivable: true,
+        sendPixWhatsAppNow: true,
+      },
+      'user-id',
+    );
+
+    expect(result.initialActivation).toMatchObject({
+      initialReceivableId: 'initial-receivable-id',
+      warning: 'Cliente cadastrado e cobranca criada, mas nao foi possivel gerar/enviar o PIX.',
+    });
+  });
+
+  it('preserves approved client and initial receivable when WhatsApp send fails', async () => {
+    const { service, finance } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      providerOverrides: {
+        sendText: vi.fn().mockRejectedValue(new Error('kirago offline')),
+      },
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+    finance.createReceivablePix.mockResolvedValue({
+      id: 'intent-id',
+      receivableId: 'initial-receivable-id',
+      provider: 'MOCK',
+      providerTransactionId: 'provider-id',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: '50.00',
+      pixCopyPaste: 'PIX-COPIA-E-COLA',
+      qrCodeData: null,
+      expiresAt: null,
+      paidAt: null,
+      lastSyncAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+
+    const result = await service.approvePendingContact(
+      pendingContact().id,
+      {
+        name: 'Lucas',
+        reference: 'lucas001',
+        planId: '55555555-5555-4555-8555-555555555555',
+        recurringValue: 50,
+        dueDate: '2026-10-10',
+        billingNoticeDays: 0,
+        generateInitialReceivable: true,
+        sendPixWhatsAppNow: true,
+      },
+      'user-id',
+    );
+
+    expect(result.initialActivation).toMatchObject({
+      initialReceivableId: 'initial-receivable-id',
+      paymentIntentId: 'intent-id',
+      warning: 'Cliente cadastrado e cobranca criada, mas nao foi possivel gerar/enviar o PIX.',
+    });
   });
 
   it('does not approve a pending contact when client creation fails', async () => {
@@ -978,6 +1143,7 @@ describe('WhatsAppService', () => {
           recurringValue: 50,
           dueDate: '2026-10-10',
           billingNoticeDays: 0,
+          generateInitialReceivable: false,
         },
         'user-id',
       ),

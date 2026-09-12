@@ -14,6 +14,7 @@ describe('BillingTemplateRenderer', () => {
         vencimento: '15/09/2026',
         plano: 'Mensal',
         referencia: 'bruno1499',
+        pix: '',
       },
     );
 
@@ -28,6 +29,7 @@ describe('BillingTemplateRenderer', () => {
       vencimento: '15/09/2026',
       plano: 'Mensal',
       referencia: 'bruno1499',
+      pix: '',
     });
 
     expect(result).toBe('Oi Bruno .');

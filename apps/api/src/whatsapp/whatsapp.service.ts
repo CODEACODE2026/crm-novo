@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   MessageDispatch,
+  MessageDispatchOrigin,
   Prisma,
   WhatsAppInboundMessageType,
   WhatsAppConnection,
@@ -16,6 +17,7 @@ import {
 } from '@prisma/client';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { FinanceService } from '../finance/finance.service';
 import { PlansService } from '../plans/plans.service';
 import {
   formatBusinessDate,
@@ -42,6 +44,15 @@ const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
 const pageSizeLimit = 100;
 
+type InitialActivationResult = {
+  initialReceivableId?: string | null;
+  paymentIntentId?: string | null;
+  messageDispatchId?: string | null;
+  warning?: string | null;
+  message?: string | null;
+  reusedApproval?: boolean;
+};
+
 @Injectable()
 export class WhatsAppService {
   constructor(
@@ -49,6 +60,8 @@ export class WhatsAppService {
     @Inject(WHATSAPP_PROVIDER) private readonly provider: WhatsAppProvider,
     @Inject(PlansService)
     private readonly plansService: PlansService,
+    @Inject(FinanceService)
+    private readonly financeService: FinanceService,
     @Inject(TokenEncryptionService)
     private readonly encryption: TokenEncryptionService,
     @Inject(ConfigService)
@@ -454,11 +467,31 @@ export class WhatsAppService {
     }
 
     if (pending.status === 'APROVADO') {
-      throw new ConflictException('Contato ja aprovado.');
+      if (!pending.clientId) {
+        throw new ConflictException('Contato ja aprovado sem cliente vinculado.');
+      }
+
+      const approvedClient = await this.prisma.client.findUnique({
+        where: { id: pending.clientId },
+        include: { plan: true },
+      });
+
+      if (!approvedClient) {
+        throw new ConflictException(
+          'Contato ja aprovado, mas cliente vinculado nao foi encontrado.',
+        );
+      }
+
+      return this.presentApprovedClient(approvedClient, {
+        reusedApproval: true,
+        message: 'Contato ja aprovado anteriormente.',
+      });
     }
 
     const dueDate = parseBusinessDate(dto.dueDate);
     await this.plansService.ensureActivePlan(dto.planId);
+    const generateInitialReceivable = dto.generateInitialReceivable ?? true;
+    const sendPixWhatsAppNow = generateInitialReceivable && (dto.sendPixWhatsAppNow ?? true);
 
     const existingClient = await this.prisma.client.findUnique({
       where: { phoneNormalized: pending.phoneNormalized },
@@ -469,7 +502,7 @@ export class WhatsAppService {
     }
 
     try {
-      const client = await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         const created = await tx.client.create({
           data: {
             name: dto.name.trim(),
@@ -483,9 +516,23 @@ export class WhatsAppService {
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
             notes: this.optionalTrim(dto.notes),
+            status: 'PENDENTE_PAGAMENTO',
           },
           include: { plan: true },
         });
+
+        const initialReceivable = generateInitialReceivable
+          ? await tx.receivable.create({
+              data: {
+                clientId: created.id,
+                purpose: 'INITIAL_ACTIVATION',
+                description: `Cobranca inicial de ativacao - ${created.plan.name}`,
+                amount: dto.recurringValue,
+                dueDate,
+                status: 'PENDENTE',
+              },
+            })
+          : null;
 
         await tx.whatsAppPendingContact.update({
           where: { id },
@@ -507,18 +554,205 @@ export class WhatsAppService {
           data: {
             clientId: created.id,
             type: 'CLIENT_CREATED',
-            title: 'Cliente criado a partir de contato recebido pelo WhatsApp.',
-            metadata: { pendingContactId: id },
+            title: 'Cliente criado aguardando primeiro pagamento.',
+            description: generateInitialReceivable
+              ? 'Cliente criado a partir da Lista de Espera com cobranca inicial de ativacao.'
+              : 'Cliente criado a partir da Lista de Espera sem cobranca inicial.',
+            metadata: {
+              pendingContactId: id,
+              initialReceivableId: initialReceivable?.id ?? null,
+              status: 'PENDENTE_PAGAMENTO',
+            },
             createdByUserId: actorUserId,
           },
         });
 
-        return created;
+        return { client: created, initialReceivable };
       });
 
-      return this.presentApprovedClient(client);
+      const activation = await this.processInitialActivationAfterApproval({
+        clientId: result.client.id,
+        receivableId: result.initialReceivable?.id ?? null,
+        sendPixWhatsAppNow,
+        actorUserId,
+      });
+
+      return this.presentApprovedClient(result.client, activation);
     } catch (error) {
       this.handleClientCreationError(error);
+    }
+  }
+
+  private async processInitialActivationAfterApproval(input: {
+    clientId: string;
+    receivableId: string | null;
+    sendPixWhatsAppNow: boolean;
+    actorUserId: string;
+  }): Promise<InitialActivationResult> {
+    if (!input.receivableId) {
+      return { message: 'Cliente cadastrado aguardando primeiro pagamento.' };
+    }
+
+    const result: InitialActivationResult = {
+      initialReceivableId: input.receivableId,
+      message: 'Cliente cadastrado e cobranca inicial criada.',
+    };
+
+    if (!input.sendPixWhatsAppNow) {
+      return result;
+    }
+
+    let intent: Awaited<ReturnType<FinanceService['createReceivablePix']>>;
+
+    try {
+      intent = await this.financeService.createReceivablePix(input.receivableId, input.actorUserId);
+      result.paymentIntentId = intent.id;
+    } catch (error) {
+      return {
+        ...result,
+        warning: 'Cliente cadastrado e cobranca criada, mas nao foi possivel gerar/enviar o PIX.',
+        message: this.sanitizeError(error),
+      };
+    }
+
+    try {
+      const dispatch = await this.sendInitialActivationPixMessage(
+        input.clientId,
+        input.receivableId,
+        intent,
+        input.actorUserId,
+      );
+      result.messageDispatchId = dispatch.id;
+      if (dispatch.status !== 'SENT') {
+        return {
+          ...result,
+          warning: 'Cliente cadastrado e cobranca criada, mas nao foi possivel gerar/enviar o PIX.',
+          message: dispatch.errorMessage ?? 'Falha ao enviar PIX pelo WhatsApp.',
+        };
+      }
+
+      result.message = 'Cliente cadastrado, cobranca criada e PIX enviado pelo WhatsApp.';
+      return result;
+    } catch (error) {
+      return {
+        ...result,
+        warning: 'Cliente cadastrado e cobranca criada, mas nao foi possivel gerar/enviar o PIX.',
+        message: this.sanitizeError(error),
+      };
+    }
+  }
+
+  private async sendInitialActivationPixMessage(
+    clientId: string,
+    receivableId: string,
+    intent: Awaited<ReturnType<FinanceService['createReceivablePix']>>,
+    actorUserId: string,
+  ) {
+    const [connection, receivable, template] = await Promise.all([
+      this.requireConnection(),
+      this.prisma.receivable.findUnique({
+        where: { id: receivableId },
+        include: { client: { include: { plan: true } } },
+      }),
+      this.prisma.messageTemplate.findFirst({
+        where: { type: 'INITIAL_ACTIVATION', active: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    if (!receivable || receivable.clientId !== clientId) {
+      throw new NotFoundException('Cobranca inicial nao encontrada.');
+    }
+
+    if (!template) {
+      throw new NotFoundException('Template de ativacao inicial nao configurado.');
+    }
+
+    if (!intent.pixCopyPaste) {
+      throw new ConflictException('PIX sem copia e cola disponivel.');
+    }
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp nao esta operacional.');
+    }
+
+    const phone = normalizeBrazilPhone(receivable.client.phoneNormalized);
+    const body = this.renderInitialActivationTemplate(template.content, {
+      nome: receivable.client.name,
+      primeiroNome: this.firstName(receivable.client.name),
+      valor: this.formatCurrency(receivable.amount),
+      vencimento: this.formatDisplayDate(receivable.dueDate),
+      plano: receivable.client.plan.name,
+      referencia: receivable.client.reference,
+      pix: intent.pixCopyPaste,
+    });
+    const requestId = `initial-activation:${clientId}:${receivableId}`;
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+
+    const { dispatch, created } = await this.createPendingDispatch({
+      clientId,
+      connectionId: connection.id,
+      receivableId,
+      templateId: template.id,
+      phone,
+      body,
+      requestId,
+      origin: 'INITIAL_ACTIVATION',
+      idempotencyKey: requestId,
+    });
+
+    if (!created || dispatch.status === 'SENT') {
+      return this.presentDispatch(dispatch);
+    }
+
+    try {
+      const sentResult = await this.mapProviderError(() =>
+        this.provider.sendText(instanceToken, { phone, body, requestId }),
+      );
+
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const sent = await tx.messageDispatch.update({
+          where: { id: dispatch.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: sentResult.providerMessageId,
+            sentAt: new Date(),
+            errorMessage: null,
+          },
+          include: { client: true, whatsAppConnection: true },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId,
+            type: 'WHATSAPP_MESSAGE_SENT',
+            title: 'PIX inicial enviado pelo WhatsApp.',
+            description: this.messagePreview(body),
+            metadata: {
+              messageDispatchId: sent.id,
+              receivableId,
+              paymentIntentId: intent.id,
+              requestId,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return sent;
+      });
+
+      return this.presentDispatch(updated);
+    } catch (error) {
+      const updated = await this.prisma.messageDispatch.update({
+        where: { id: dispatch.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: this.sanitizeError(error),
+        },
+        include: { client: true, whatsAppConnection: true },
+      });
+
+      return this.presentDispatch(updated);
     }
   }
 
@@ -736,9 +970,13 @@ export class WhatsAppService {
   private async createPendingDispatch(input: {
     clientId: string;
     connectionId: string;
+    receivableId?: string;
+    templateId?: string;
     phone: string;
     body: string;
     requestId: string;
+    origin?: MessageDispatchOrigin;
+    idempotencyKey?: string;
   }) {
     try {
       const dispatch = await this.prisma.messageDispatch.create({
@@ -748,8 +986,11 @@ export class WhatsAppService {
           phone: input.phone,
           body: input.body,
           requestId: input.requestId,
-          origin: 'MANUAL',
+          origin: input.origin ?? 'MANUAL',
           status: 'PENDING',
+          ...(input.receivableId ? { receivableId: input.receivableId } : {}),
+          ...(input.templateId ? { templateId: input.templateId } : {}),
+          ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
         },
         include: { client: true, whatsAppConnection: true },
       });
@@ -1060,11 +1301,15 @@ export class WhatsAppService {
     };
   }
 
-  private presentApprovedClient(client: Prisma.ClientGetPayload<{ include: { plan: true } }>) {
+  private presentApprovedClient(
+    client: Prisma.ClientGetPayload<{ include: { plan: true } }>,
+    activation?: InitialActivationResult,
+  ) {
     return {
       ...client,
       recurringValue: client.recurringValue.toString(),
       dueDate: formatBusinessDate(client.dueDate),
+      initialActivation: activation ?? null,
       plan: {
         ...client.plan,
         defaultValue: client.plan.defaultValue.toString(),
@@ -1076,6 +1321,37 @@ export class WhatsAppService {
     return body.length > messagePreviewLimit
       ? `${body.slice(0, messagePreviewLimit).trim()}...`
       : body;
+  }
+
+  private renderInitialActivationTemplate(
+    content: string,
+    context: Record<
+      'nome' | 'primeiroNome' | 'valor' | 'vencimento' | 'plano' | 'referencia' | 'pix',
+      string
+    >,
+  ) {
+    return content.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_match, variable: string) => {
+      if (variable in context) {
+        return context[variable as keyof typeof context];
+      }
+
+      return '';
+    });
+  }
+
+  private firstName(name: string) {
+    return name.trim().split(/\s+/)[0] || name.trim();
+  }
+
+  private formatDisplayDate(date: Date) {
+    const parts = formatBusinessDate(date).split('-');
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+
+  private formatCurrency(value: Prisma.Decimal | number | string) {
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
+      Number(value),
+    );
   }
 
   private sanitizeError(error: unknown) {

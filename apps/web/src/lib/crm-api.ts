@@ -10,7 +10,7 @@ export class ApiError extends Error {
   }
 }
 
-export type ClientStatus = 'ATIVO' | 'INATIVO' | 'CANCELADO';
+export type ClientStatus = 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO';
 
 export interface Plan {
   id: string;
@@ -42,6 +42,16 @@ export interface Client {
   receivables?: Receivable[];
   recoveryCampaigns?: RecoveryCampaign[];
   messageDispatches?: ClientMessageDispatch[];
+  initialActivation?: InitialActivationResult | null;
+}
+
+export interface InitialActivationResult {
+  initialReceivableId?: string | null;
+  paymentIntentId?: string | null;
+  messageDispatchId?: string | null;
+  warning?: string | null;
+  message?: string | null;
+  reusedApproval?: boolean;
 }
 
 export interface ClientEvent {
@@ -55,6 +65,8 @@ export interface ClientEvent {
     | 'RECEIVABLE_CANCELED'
     | 'FINANCIAL_TRANSACTION_CREATED'
     | 'WHATSAPP_MESSAGE_SENT'
+    | 'PIX_PAYMENT_INTENT_CREATED'
+    | 'PIX_PAYMENT_STATUS_UPDATED'
     | 'RECOVERY_CAMPAIGN_STARTED'
     | 'RECOVERY_CAMPAIGN_CANCELED'
     | 'RECOVERY_CAMPAIGN_COMPLETED';
@@ -76,7 +88,7 @@ export interface ClientMessageDispatch {
   phone: string;
   body: string;
   renderedContent: string | null;
-  origin: 'MANUAL' | 'BILLING' | 'RECOVERY';
+  origin: 'MANUAL' | 'INITIAL_ACTIVATION' | 'BILLING' | 'RECOVERY';
   status: 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
   scheduledFor: string | null;
   attempts: number;
@@ -87,6 +99,7 @@ export interface ClientMessageDispatch {
 }
 
 export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
+export type ReceivablePurpose = 'RENEWAL' | 'INITIAL_ACTIVATION';
 export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
 export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
 export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL';
@@ -110,7 +123,8 @@ export interface Renewal {
 export interface Receivable {
   id: string;
   clientId: string;
-  renewalId: string;
+  renewalId: string | null;
+  purpose: ReceivablePurpose;
   description: string;
   amount: string;
   dueDate: string;
@@ -328,7 +342,7 @@ export interface MessageDispatch {
   phone: string;
   body: string;
   renderedContent?: string | null;
-  origin: 'MANUAL' | 'BILLING' | 'RECOVERY';
+  origin: 'MANUAL' | 'INITIAL_ACTIVATION' | 'BILLING' | 'RECOVERY';
   status: 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
   requestId: string;
   idempotencyKey?: string | null;
@@ -571,6 +585,8 @@ export interface ApproveWhatsAppPendingContactPayload {
   dueDate: string;
   billingNoticeDays: number;
   notes?: string | undefined;
+  generateInitialReceivable?: boolean | undefined;
+  sendPixWhatsAppNow?: boolean | undefined;
 }
 
 export interface PlanPayload {

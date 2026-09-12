@@ -322,9 +322,15 @@ export class RenewalsService {
     return lines.join('\\n');
   }
 
-  private buildReactivationDescription(previousStatus: 'INATIVO' | 'CANCELADO') {
+  private buildReactivationDescription(
+    previousStatus: 'PENDENTE_PAGAMENTO' | 'INATIVO' | 'CANCELADO',
+  ) {
     if (previousStatus === 'CANCELADO') {
       return 'Cliente cancelado foi reativado através de renovação.';
+    }
+
+    if (previousStatus === 'PENDENTE_PAGAMENTO') {
+      return 'Cliente pendente de pagamento foi ativado através de renovação.';
     }
 
     return 'Cliente inativo foi reativado através de renovação.';

@@ -1077,6 +1077,7 @@ function ReportsView({ plans }: { plans: Plan[] }) {
               }
             >
               <option value="">Todos os status</option>
+              <option value="PENDENTE_PAGAMENTO">Pendente pagamento</option>
               <option value="ATIVO">Ativo</option>
               <option value="INATIVO">Inativo</option>
               <option value="CANCELADO">Cancelado</option>
@@ -1595,6 +1596,7 @@ function ClientsView({
             onChange={(event) => setStatus(event.target.value as ClientStatus | '')}
           >
             <option value="">Todos os status</option>
+            <option value="PENDENTE_PAGAMENTO">Pendente pagamento</option>
             <option value="ATIVO">Ativo</option>
             <option value="INATIVO">Inativo</option>
             <option value="CANCELADO">Cancelado</option>
@@ -3770,6 +3772,8 @@ function ApprovePendingContactModal({
   const [dueDate, setDueDate] = useState('');
   const [billingNoticeDays, setBillingNoticeDays] = useState('0');
   const [notes, setNotes] = useState('');
+  const [generateInitialReceivable, setGenerateInitialReceivable] = useState(true);
+  const [sendPixWhatsAppNow, setSendPixWhatsAppNow] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -3794,6 +3798,8 @@ function ApprovePendingContactModal({
         dueDate,
         billingNoticeDays: Number(billingNoticeDays),
         notes: notes || undefined,
+        generateInitialReceivable,
+        sendPixWhatsAppNow: generateInitialReceivable && sendPixWhatsAppNow,
       });
       await onApproved(client);
     } catch (err) {
@@ -3885,6 +3891,45 @@ function ApprovePendingContactModal({
             <span>Observacoes</span>
             <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
           </label>
+          <section className="inline-panel">
+            <div>
+              <strong>Cobranca inicial</strong>
+              <p>
+                O cliente sera criado como pendente de pagamento. A ativacao acontece somente depois
+                do primeiro pagamento.
+              </p>
+            </div>
+            <label className="checkbox-row">
+              <input
+                checked={generateInitialReceivable}
+                type="checkbox"
+                onChange={(event) => setGenerateInitialReceivable(event.target.checked)}
+              />
+              Gerar cobranca inicial
+            </label>
+            {generateInitialReceivable ? (
+              <label className="checkbox-row">
+                <input
+                  checked={sendPixWhatsAppNow}
+                  type="checkbox"
+                  onChange={(event) => setSendPixWhatsAppNow(event.target.checked)}
+                />
+                Enviar PIX pelo WhatsApp agora
+              </label>
+            ) : null}
+            <div className="notice">
+              <strong>Resumo</strong>
+              <span>
+                {name || 'Cliente'} ficara como Pendente pagamento
+                {generateInitialReceivable
+                  ? `, com cobranca inicial de ${formatCurrency(Number(recurringValue || 0))} para ${dueDate || 'data selecionada'}`
+                  : ', sem cobranca inicial gerada agora'}
+                {generateInitialReceivable && sendPixWhatsAppNow
+                  ? ' e envio imediato do PIX.'
+                  : '.'}
+              </span>
+            </div>
+          </section>
           <div className="form-actions">
             <span className="error-message">{error}</span>
             <div className="button-row">
@@ -3972,6 +4017,7 @@ function recoveryStepStatusLabel(status: RecoveryCampaign['steps'][number]['stat
 function messageOriginLabel(origin: MessageDispatch['origin']) {
   const labels: Record<MessageDispatch['origin'], string> = {
     MANUAL: 'Mensagem manual',
+    INITIAL_ACTIVATION: 'Ativacao inicial',
     BILLING: 'Cobranca',
     RECOVERY: 'Recuperacao',
   };

@@ -6,6 +6,12 @@ const prisma = new PrismaClient();
 async function main() {
   const templates = [
     {
+      type: 'INITIAL_ACTIVATION' as const,
+      name: 'Ativacao inicial',
+      content:
+        'Olá, {{primeiroNome}}!\n\nSeu cadastro foi realizado.\n\nPara ativar seu serviço, realize o pagamento de {{valor}} com vencimento em {{vencimento}}.\n\nSegue o PIX:\n\n{{pix}}',
+    },
+    {
       type: 'BILLING_DUE' as const,
       name: 'Cobranca padrao',
       content:

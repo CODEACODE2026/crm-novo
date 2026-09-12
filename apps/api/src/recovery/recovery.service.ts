@@ -70,7 +70,7 @@ export class RecoveryService {
   async handleClientStatusChange(
     tx: Transaction,
     client: RecoveryClient,
-    nextStatus: 'ATIVO' | 'INATIVO' | 'CANCELADO',
+    nextStatus: 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO',
     options: { startRecovery?: boolean; actorUserId?: string; changedAt?: Date } = {},
   ) {
     const changedAt = options.changedAt ?? new Date();
@@ -979,6 +979,7 @@ export class RecoveryService {
       vencimento: this.formatDisplayDate(client.dueDate),
       plano: client.plan.name,
       referencia: client.reference,
+      pix: '',
     });
   }
 

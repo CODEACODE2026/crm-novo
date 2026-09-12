@@ -37,7 +37,16 @@ function createFinancePrisma() {
     billingAnchorDay: 10,
     billingNoticeDays: 5,
     notes: null,
-    status: 'ATIVO' as const,
+    status: 'ATIVO' as 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const plan = {
+    id: client.planId,
+    name: 'Mensal',
+    durationMonths: 1,
+    defaultValue: new Prisma.Decimal('50.00'),
+    active: true,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -56,7 +65,8 @@ function createFinancePrisma() {
   const receivable = {
     id: '77777777-7777-4777-8777-777777777777',
     clientId: client.id,
-    renewalId: renewal.id,
+    renewalId: renewal.id as string | null,
+    purpose: 'RENEWAL' as 'RENEWAL' | 'INITIAL_ACTIVATION',
     description: 'Renovacao - Plano Mensal',
     amount: new Prisma.Decimal('50.00'),
     dueDate: parseBusinessDate('2026-10-10'),
@@ -151,7 +161,7 @@ function createFinancePrisma() {
 
         return Promise.resolve({
           ...receivable,
-          client,
+          client: { ...client, plan },
           renewal,
           paymentTransaction:
             transactions.find((transaction) => transaction.receivableId === receivable.id) ?? null,
@@ -164,7 +174,7 @@ function createFinancePrisma() {
         Object.assign(receivable, data);
         return Promise.resolve({
           ...receivable,
-          client,
+          client: { ...client, plan },
           renewal,
           paymentTransaction: null,
           paymentIntents,
@@ -236,6 +246,18 @@ function createFinancePrisma() {
         return Promise.resolve({ count: 1 });
       },
     },
+    client: {
+      update: ({ data }: { data: Partial<typeof client> }) => {
+        Object.assign(client, data);
+        return Promise.resolve(client);
+      },
+    },
+    clientStatusHistory: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        events.push({ type: 'CLIENT_STATUS_HISTORY', ...data });
+        return Promise.resolve(data);
+      },
+    },
     clientEvent: {
       findFirst: ({
         where,
@@ -287,6 +309,8 @@ function createFinancePrisma() {
   return {
     entryCategory,
     expenseCategory,
+    client,
+    plan,
     receivable,
     paymentIntents,
     transactions,
@@ -299,9 +323,11 @@ function createFinancePrisma() {
           tx.financialTransaction.findUniqueOrThrow({ where }).catch(() => null),
       },
       client: {
+        update: tx.client.update,
         count: ({ where }: { where: { id: string } }) =>
           Promise.resolve(where.id === client.id ? 1 : 0),
       },
+      clientStatusHistory: tx.clientStatusHistory,
       receivable: tx.receivable,
       paymentIntent: tx.paymentIntent,
       paymentWebhookEvent: tx.paymentWebhookEvent,
@@ -363,6 +389,34 @@ describe('FinanceService', () => {
       ),
     ).rejects.toThrow('Apenas contas pendentes podem receber baixa.');
     expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('activates a pending client from manual payment using the original due date cycle', async () => {
+    const fake = createFinancePrisma();
+    fake.client.status = 'PENDENTE_PAGAMENTO';
+    fake.client.dueDate = parseBusinessDate('2026-09-10');
+    fake.client.billingAnchorDay = 10;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-10');
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-15', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.client.status).toBe('ATIVO');
+    expect(fake.client.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(1);
   });
 
   it('cancels only pending receivables with a reason and no financial transaction', async () => {
@@ -551,6 +605,40 @@ describe('FinanceService', () => {
           event.metadata.paymentIntentId === intent.id,
       ),
     ).toHaveLength(1);
+  });
+
+  it('activates once from paid PIX replay and keeps the cycle based on the initial due date', async () => {
+    const fake = createFinancePrisma();
+    fake.client.status = 'PENDENTE_PAGAMENTO';
+    fake.client.dueDate = parseBusinessDate('2026-01-31');
+    fake.client.billingAnchorDay = 31;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.dueDate = parseBusinessDate('2026-01-31');
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      status: 'PAID',
+      paidAt: parseBusinessDate('2026-02-05'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.client.status).toBe('ATIVO');
+    expect(fake.client.dueDate).toEqual(parseBusinessDate('2026-02-28'));
+    expect(fake.client.billingAnchorDay).toBe(31);
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(1);
   });
 
   it('keeps concurrent paid sync to one financial write-off', async () => {

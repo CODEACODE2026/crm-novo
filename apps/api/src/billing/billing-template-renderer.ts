@@ -7,6 +7,7 @@ export type BillingTemplateContext = {
   vencimento: string;
   plano: string;
   referencia: string;
+  pix: string;
 };
 
 const allowedVariables = [
@@ -16,6 +17,7 @@ const allowedVariables = [
   'vencimento',
   'plano',
   'referencia',
+  'pix',
 ] as const;
 
 @Injectable()

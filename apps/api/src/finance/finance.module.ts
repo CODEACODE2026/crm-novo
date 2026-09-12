@@ -28,5 +28,6 @@ import { PAYMENT_PROVIDER } from './payments/payment-provider';
     TokenEncryptionService,
     { provide: PAYMENT_PROVIDER, useExisting: PaymentProviderRegistryService },
   ],
+  exports: [FinanceService],
 })
 export class FinanceModule {}

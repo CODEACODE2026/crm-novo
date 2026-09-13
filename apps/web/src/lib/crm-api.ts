@@ -481,6 +481,20 @@ export interface BillingSummary {
   sent: number;
   failed: number;
   ignoredOrCanceled: number;
+  scheduledToday?: number;
+  sentToday?: number;
+  failedToday?: number;
+  next?: MessageDispatch[];
+  settings?: BillingAutomationSettings;
+}
+
+export interface BillingAutomationSettings {
+  id: string;
+  enabled: boolean;
+  sendTime: string;
+  timezone: 'America/Sao_Paulo';
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MessageTemplate {
@@ -1318,6 +1332,21 @@ export function listWhatsAppMessages() {
 
 export function getBillingSummary() {
   return apiFetch<BillingSummary>('/billing/summary');
+}
+
+export function getBillingAutomationSettings() {
+  return apiFetch<BillingAutomationSettings>('/billing/automation-settings');
+}
+
+export function updateBillingAutomationSettings(payload: {
+  enabled?: boolean;
+  sendTime?: string;
+  timezone?: 'America/Sao_Paulo';
+}) {
+  return apiFetch<BillingAutomationSettings>('/billing/automation-settings', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listBillingDispatches(

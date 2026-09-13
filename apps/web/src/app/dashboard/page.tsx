@@ -94,6 +94,7 @@ import {
   applyReferralReward,
   cancelRecoveryCampaign,
   cancelReferral,
+  getBillingAutomationSettings,
   getBillingDispatch,
   getBillingSummary,
   getRecoverySummary,
@@ -111,10 +112,12 @@ import {
   setDefaultPaymentProvider,
   testPaymentProviderCredential,
   updateMessageTemplate,
+  updateBillingAutomationSettings,
   syncPaymentIntent,
   deactivatePaymentProviderCredential,
   registerPaymentWebhook,
   type BillingSummary,
+  type BillingAutomationSettings,
   type Client,
   type ClientPayload,
   type ClientReference,
@@ -3022,6 +3025,8 @@ function BillingView() {
 
 function AutomationsView() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
+  const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
+  const [sendTime, setSendTime] = useState('09:00');
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
   const [campaignPagination, setCampaignPagination] = useState<
@@ -3039,8 +3044,9 @@ function AutomationsView() {
     setError('');
 
     try {
-      const [nextBilling, nextRecovery, nextCampaigns] = await Promise.all([
+      const [nextBilling, nextBillingSettings, nextRecovery, nextCampaigns] = await Promise.all([
         getBillingSummary(),
+        getBillingAutomationSettings(),
         getRecoverySummary(),
         listRecoveryCampaigns({
           ...(status ? { status } : {}),
@@ -3050,6 +3056,8 @@ function AutomationsView() {
         }),
       ]);
       setBillingSummary(nextBilling);
+      setBillingSettings(nextBillingSettings);
+      setSendTime(nextBillingSettings.sendTime);
       setRecoverySummary(nextRecovery);
       setCampaigns(nextCampaigns.items);
       setCampaignPagination(nextCampaigns.pagination);
@@ -3078,6 +3086,27 @@ function AutomationsView() {
     }
   }
 
+  async function saveBillingSettings(
+    payload: Partial<Pick<BillingAutomationSettings, 'enabled' | 'sendTime'>>,
+  ) {
+    setWorking('billing-settings');
+    setError('');
+
+    try {
+      const next = await updateBillingAutomationSettings({
+        ...payload,
+        timezone: 'America/Sao_Paulo',
+      });
+      setBillingSettings(next);
+      setSendTime(next.sendTime);
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar cobranca automatica.');
+    } finally {
+      setWorking('');
+    }
+  }
+
   async function runCancelCampaign(campaign: RecoveryCampaign) {
     setWorking(campaign.id);
     setError('');
@@ -3099,8 +3128,10 @@ function AutomationsView() {
         <div className="metric-grid billing-kpis">
           <article className="metric-card compact">
             <span className="metric-label">Cobranca automatica</span>
-            <strong className="metric-value">ATIVA</strong>
-            <p>{billingSummary?.scheduled ?? 0} agendadas</p>
+            <strong className="metric-value">
+              {billingSettings?.enabled ? 'ATIVA' : 'DESATIVADA'}
+            </strong>
+            <p>{billingSummary?.scheduledToday ?? 0} agendadas hoje</p>
           </article>
           <article className="metric-card compact">
             <span className="metric-label">Recuperacao de clientes</span>
@@ -3117,6 +3148,108 @@ function AutomationsView() {
             <strong className="metric-value">{recoverySummary?.failed ?? 0}</strong>
             <p>{recoverySummary?.scheduled ?? 0} mensagens futuras</p>
           </article>
+        </div>
+
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <span className="metric-label">COBRANCA AUTOMATICA</span>
+              <h2>{billingSettings?.enabled ? 'Ativa' : 'Desativada'}</h2>
+            </div>
+            <label className="toggle-field compact-toggle">
+              <input
+                checked={Boolean(billingSettings?.enabled)}
+                disabled={!billingSettings || working === 'billing-settings'}
+                type="checkbox"
+                onChange={(event) => void saveBillingSettings({ enabled: event.target.checked })}
+              />
+              <span>Ativar cobranca automatica</span>
+            </label>
+          </div>
+          <div className="form-grid automation-settings-grid">
+            <label className="field">
+              <span>Horario de envio</span>
+              <input
+                required
+                type="time"
+                value={sendTime}
+                onChange={(event) => setSendTime(event.target.value)}
+                onBlur={() => {
+                  if (sendTime && sendTime !== billingSettings?.sendTime) {
+                    void saveBillingSettings({ sendTime });
+                  }
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Timezone</span>
+              <input disabled value="America/Sao_Paulo" readOnly />
+            </label>
+          </div>
+          <p className="helper-text">
+            As cobrancas serao processadas diariamente a partir das{' '}
+            {billingSettings?.sendTime ?? '09:00'}.
+          </p>
+          <p className="helper-text">
+            A data de envio de cada cliente e definida pelo vencimento da referencia e pelos dias de
+            antecedencia configurados nela.
+          </p>
+        </section>
+
+        <div className="metric-grid billing-kpis">
+          <article className="metric-card compact">
+            <span className="metric-label">Agendadas hoje</span>
+            <strong className="metric-value">{billingSummary?.scheduledToday ?? 0}</strong>
+            <p>{billingSummary?.scheduled ?? 0} futuras totais</p>
+          </article>
+          <article className="metric-card compact">
+            <span className="metric-label">Enviadas hoje</span>
+            <strong className="metric-value">{billingSummary?.sentToday ?? 0}</strong>
+            <p>{billingSummary?.sent ?? 0} historico</p>
+          </article>
+          <article className="metric-card compact">
+            <span className="metric-label">Falhas hoje</span>
+            <strong className="metric-value">{billingSummary?.failedToday ?? 0}</strong>
+            <p>{billingSummary?.failed ?? 0} pendentes de retry</p>
+          </article>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Referencia</th>
+                <th>Vencimento</th>
+                <th>Aviso</th>
+                <th>Agendado para</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(billingSummary?.next ?? []).map((dispatch) => (
+                <tr key={dispatch.id}>
+                  <td>{dispatch.client?.name ?? '-'}</td>
+                  <td>{dispatch.clientReference?.reference ?? '-'}</td>
+                  <td>
+                    {dispatch.receivable?.dueDate ? formatDate(dispatch.receivable.dueDate) : '-'}
+                  </td>
+                  <td>{dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias</td>
+                  <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
+                  <td>
+                    <span className={`pill ${dispatch.status.toLowerCase()}`}>
+                      {billingStatusLabel(dispatch.status)}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!(billingSummary?.next ?? []).length ? (
+            <div className="empty-state">
+              {loading ? 'Carregando...' : 'Nenhum envio futuro encontrado.'}
+            </div>
+          ) : null}
         </div>
 
         <div className="toolbar">
@@ -4684,13 +4817,14 @@ function ClientReferenceForm({
           />
         </label>
         <label className="field">
-          <span>Dias de aviso</span>
+          <span>Antecedencia da cobranca</span>
           <input
             min="0"
             type="number"
             value={billingNoticeDays}
             onChange={(event) => setBillingNoticeDays(event.target.value)}
           />
+          <small>Define quantos dias antes do vencimento a cobranca automatica sera enviada.</small>
         </label>
         <label className="field">
           <span>Observacoes</span>

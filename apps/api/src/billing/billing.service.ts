@@ -10,6 +10,7 @@ import {
   Prisma,
   type Client,
   type ClientReference,
+  type BillingAutomationSettings,
   type MessageDispatch,
   type MessageTemplate,
   type Plan,
@@ -23,12 +24,15 @@ import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/w
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
+import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
 import { UpdateMessageTemplateDto } from './dto/update-message-template.dto';
 import { BillingTemplateRenderer } from './billing-template-renderer';
 
 const pageSizeLimit = 100;
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
+const defaultBillingSendTime = '09:00';
+const defaultBillingTimezone = 'America/Sao_Paulo';
 
 type BillingDispatch = MessageDispatch & {
   client: Client | null;
@@ -50,7 +54,7 @@ export class BillingService {
   ) {}
 
   async reconcile(now = new Date()) {
-    void now;
+    const settings = await this.getAutomationSettings();
     const template = await this.ensureDefaultTemplate();
     const connection = await this.findOperationalConnection(null);
     const clients = await this.prisma.client.findMany({
@@ -127,6 +131,7 @@ export class BillingService {
       const scheduledFor = this.calculateScheduledFor(
         reference.dueDate,
         reference.billingNoticeDays,
+        settings,
       );
       const renderedContent = this.renderForClientReference(
         template.content,
@@ -137,6 +142,17 @@ export class BillingService {
       const idempotencyKey = expectedKey ?? '';
 
       try {
+        const rescheduled = await this.rescheduleExistingFutureDispatch(
+          idempotencyKey,
+          scheduledFor,
+          now,
+        );
+
+        if (rescheduled) {
+          kept += 1;
+          continue;
+        }
+
         const dispatch = await this.prisma.messageDispatch.create({
           data: {
             clientId: client.id,
@@ -174,13 +190,25 @@ export class BillingService {
     return { created, kept, canceled, skipped };
   }
 
-  async processDue(now = new Date(), limit = 20) {
+  async processDue(now = new Date(), limit = 20, options: { automatic?: boolean } = {}) {
+    const settings = await this.getAutomationSettings();
+
+    if (options.automatic && !settings.enabled) {
+      return { processed: 0, results: [], skipped: 'BILLING_AUTOMATION_DISABLED' };
+    }
+
+    const automaticWindow = options.automatic
+      ? this.businessDayWindow(now, settings.timezone)
+      : null;
     const candidates = await this.prisma.messageDispatch.findMany({
       where: {
         origin: 'BILLING',
         status: { in: ['SCHEDULED', 'FAILED'] },
         attempts: { lt: maxAttempts },
-        scheduledFor: { lte: now },
+        scheduledFor: {
+          lte: now,
+          ...(automaticWindow ? { gte: automaticWindow.start } : {}),
+        },
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
       orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
@@ -203,6 +231,7 @@ export class BillingService {
   }
 
   async sendNow(id: string) {
+    const now = new Date();
     const dispatch = await this.prisma.messageDispatch.findUnique({ where: { id } });
 
     if (!dispatch || dispatch.origin !== 'BILLING') {
@@ -215,23 +244,113 @@ export class BillingService {
 
     await this.prisma.messageDispatch.update({
       where: { id },
-      data: { scheduledFor: new Date(), nextAttemptAt: new Date() },
+      data: { scheduledFor: now, nextAttemptAt: now },
     });
 
-    return this.processDue(new Date(), 1);
+    const acquired = await this.acquireDispatch(id, now);
+
+    if (!acquired) {
+      return { processed: 0, results: [] };
+    }
+
+    return { processed: 1, results: [await this.processAcquired(id, now)] };
   }
 
   async summary() {
-    const [scheduled, sent, failed, ignoredOrCanceled] = await this.prisma.$transaction([
+    const settings = await this.getAutomationSettings();
+    const today = this.businessDayWindow(new Date(), settings.timezone);
+    const [
+      scheduled,
+      sent,
+      failed,
+      ignoredOrCanceled,
+      scheduledToday,
+      sentToday,
+      failedToday,
+      next,
+    ] = await this.prisma.$transaction([
       this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'SCHEDULED' } }),
       this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'SENT' } }),
       this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'FAILED' } }),
       this.prisma.messageDispatch.count({
         where: { origin: 'BILLING', status: { in: ['IGNORED', 'CANCELED'] } },
       }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'SCHEDULED',
+          scheduledFor: { gte: today.start, lte: today.end },
+        },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'SENT',
+          sentAt: { gte: today.start, lte: today.end },
+        },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'FAILED',
+          updatedAt: { gte: today.start, lte: today.end },
+        },
+      }),
+      this.prisma.messageDispatch.findMany({
+        where: {
+          origin: 'BILLING',
+          status: { in: ['SCHEDULED', 'FAILED'] },
+          scheduledFor: { gte: today.start },
+        },
+        include: {
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
+          template: true,
+          whatsAppConnection: true,
+        },
+        orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
+        take: 10,
+      }),
     ]);
 
-    return { scheduled, sent, failed, ignoredOrCanceled };
+    return {
+      scheduled,
+      sent,
+      failed,
+      ignoredOrCanceled,
+      scheduledToday,
+      sentToday,
+      failedToday,
+      next: next.map((dispatch) => this.presentDispatch(dispatch)),
+      settings: this.presentSettings(settings),
+    };
+  }
+
+  async getSettings() {
+    return this.presentSettings(await this.getAutomationSettings());
+  }
+
+  async updateSettings(dto: UpdateBillingAutomationSettingsDto) {
+    const current = await this.getAutomationSettings();
+    const next = await this.prisma.billingAutomationSettings.update({
+      where: { scope: 'global' },
+      data: {
+        ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
+        ...(dto.sendTime !== undefined ? { sendTime: dto.sendTime } : {}),
+        ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
+      },
+    });
+
+    if (
+      (dto.enabled === true && !current.enabled) ||
+      (dto.sendTime !== undefined && dto.sendTime !== current.sendTime) ||
+      (dto.timezone !== undefined && dto.timezone !== current.timezone)
+    ) {
+      await this.reconcile();
+    }
+
+    return this.presentSettings(next);
   }
 
   async listDispatches(query: ListBillingDispatchesDto) {
@@ -337,7 +456,11 @@ export class BillingService {
     };
   }
 
-  calculateScheduledFor(dueDate: Date, billingNoticeDays: number) {
+  calculateScheduledFor(
+    dueDate: Date,
+    billingNoticeDays: number,
+    settings?: Pick<BillingAutomationSettings, 'sendTime' | 'timezone'>,
+  ) {
     if (!Number.isInteger(billingNoticeDays) || billingNoticeDays < 0) {
       throw new BadRequestException('Dias de aviso de cobranca invalidos.');
     }
@@ -347,11 +470,15 @@ export class BillingService {
     const month = Number(monthPart);
     const day = Number(dayPart);
     const scheduledDate = new Date(Date.UTC(year, month - 1, day - billingNoticeDays));
-    const sendHour = this.getSendHour();
     const yyyyMmDd = formatBusinessDate(scheduledDate);
-    const hour = String(sendHour).padStart(2, '0');
+    const sendTime = settings?.sendTime ?? this.getSendTime();
+    const timezone = settings?.timezone ?? defaultBillingTimezone;
 
-    return new Date(`${yyyyMmDd}T${hour}:00:00-03:00`);
+    if (timezone !== defaultBillingTimezone) {
+      throw new BadRequestException('Timezone de cobranca invalido.');
+    }
+
+    return new Date(`${yyyyMmDd}T${sendTime}:00-03:00`);
   }
 
   private async acquireDispatch(id: string, now: Date) {
@@ -497,14 +624,7 @@ export class BillingService {
     }
 
     const dispatchReference =
-      dispatch.clientReference ??
-      dispatch.receivable?.clientReference ??
-      (dispatch.client
-        ? {
-            ...dispatch.client,
-            clientId: dispatch.client.id,
-          }
-        : null);
+      dispatch.clientReference ?? dispatch.receivable?.clientReference ?? null;
 
     if (!dispatchReference || dispatchReference.status !== 'ATIVO') {
       return { code: 'CLIENT_REFERENCE_NOT_ACTIVE', message: 'Referencia nao esta ativa.' };
@@ -612,32 +732,7 @@ export class BillingService {
         references: Array<ClientReference & { plan: Plan; receivables: Receivable[] }>;
       }>,
   ) {
-    if (client.references?.length) {
-      return client.references;
-    }
-
-    if (client.plan && client.receivables) {
-      return [
-        {
-          id: client.id,
-          clientId: client.id,
-          reference: client.reference,
-          planId: client.planId,
-          recurringValue: client.recurringValue,
-          dueDate: client.dueDate,
-          billingAnchorDay: client.billingAnchorDay,
-          billingNoticeDays: client.billingNoticeDays,
-          status: client.status,
-          notes: client.notes,
-          createdAt: client.createdAt,
-          updatedAt: client.updatedAt,
-          plan: client.plan,
-          receivables: client.receivables,
-        },
-      ];
-    }
-
-    return [];
+    return client.references ?? [];
   }
 
   private async markRetry(
@@ -725,6 +820,29 @@ export class BillingService {
     return result.count;
   }
 
+  private async rescheduleExistingFutureDispatch(
+    idempotencyKey: string,
+    scheduledFor: Date,
+    now: Date,
+  ) {
+    const result = await this.prisma.messageDispatch.updateMany({
+      where: {
+        origin: 'BILLING',
+        idempotencyKey,
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        scheduledFor: { gt: now },
+      },
+      data: {
+        scheduledFor,
+        nextAttemptAt: scheduledFor,
+        errorCode: null,
+        errorMessage: null,
+      },
+    });
+
+    return result.count > 0;
+  }
+
   private async cancelNoLongerEligibleDispatches() {
     const result = await this.prisma.messageDispatch.updateMany({
       where: {
@@ -732,7 +850,8 @@ export class BillingService {
         status: { in: ['SCHEDULED', 'FAILED'] },
         OR: [
           { client: { is: null } },
-          { client: { is: { status: { not: 'ATIVO' } } } },
+          { clientReference: { is: null } },
+          { clientReference: { is: { status: { not: 'ATIVO' } } } },
           { receivable: { is: null } },
           { receivable: { is: { status: { not: 'PENDENTE' } } } },
           { template: { is: null } },
@@ -858,9 +977,53 @@ export class BillingService {
     };
   }
 
-  private getSendHour() {
-    const configured = Number(this.config.get<string>('BILLING_SEND_HOUR') ?? '9');
-    return Number.isInteger(configured) && configured >= 0 && configured <= 23 ? configured : 9;
+  private getSendTime() {
+    const hour = Number(this.config.get<string>('BILLING_SEND_HOUR') ?? '9');
+    const legacyTime =
+      Number.isInteger(hour) && hour >= 0 && hour <= 23
+        ? `${String(hour).padStart(2, '0')}:00`
+        : defaultBillingSendTime;
+    const configured = this.config.get<string>('BILLING_SEND_TIME') ?? legacyTime;
+
+    return /^([01]\d|2[0-3]):[0-5]\d$/.test(configured) ? configured : defaultBillingSendTime;
+  }
+
+  private async getAutomationSettings() {
+    return this.prisma.billingAutomationSettings.upsert({
+      where: { scope: 'global' },
+      update: {},
+      create: {
+        scope: 'global',
+        enabled: false,
+        sendTime: defaultBillingSendTime,
+        timezone: defaultBillingTimezone,
+      },
+    });
+  }
+
+  private presentSettings(settings: BillingAutomationSettings) {
+    return {
+      id: settings.id,
+      enabled: settings.enabled,
+      sendTime: settings.sendTime,
+      timezone: settings.timezone,
+      createdAt: settings.createdAt,
+      updatedAt: settings.updatedAt,
+    };
+  }
+
+  private businessDayWindow(now: Date, timezone: string) {
+    if (timezone !== defaultBillingTimezone) {
+      throw new BadRequestException('Timezone de cobranca invalido.');
+    }
+
+    const local = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const yyyyMmDd = local.toISOString().slice(0, 10);
+
+    return {
+      start: new Date(`${yyyyMmDd}T00:00:00-03:00`),
+      end: new Date(`${yyyyMmDd}T23:59:59.999-03:00`),
+    };
   }
 
   private endOfBusinessDate(value: string) {

@@ -1010,6 +1010,43 @@ a {
   min-height: 44px;
 }
 
+.field small,
+.helper-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 16px;
+}
+
+.settings-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-card-header h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+}
+
+.compact-toggle {
+  justify-content: flex-end;
+}
+
+.automation-settings-grid {
+  max-width: 520px;
+}
+
 .form-actions {
   display: flex;
   align-items: center;

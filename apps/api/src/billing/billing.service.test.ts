@@ -127,6 +127,20 @@ function connection(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function automationSettings(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'billing-settings-id',
+    scope: 'global',
+    enabled: true,
+    sendTime: '09:00',
+    timezone: 'America/Sao_Paulo',
+    companyId: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 function dispatch(overrides: Record<string, unknown> = {}) {
   const dispatchClient = (overrides.client as ReturnType<typeof client> | undefined) ?? client();
   const dispatchReceivable =
@@ -178,6 +192,7 @@ function serviceFactory({
   createDispatch = vi.fn().mockResolvedValue(dispatch()),
   templateRecord = template(),
   connectionRecord = connection(),
+  settingsRecord = automationSettings(),
   existingClientEvent = null,
 }: {
   clients?: Array<ReturnType<typeof client>>;
@@ -187,6 +202,7 @@ function serviceFactory({
   createDispatch?: ReturnType<typeof vi.fn>;
   templateRecord?: ReturnType<typeof template>;
   connectionRecord?: ReturnType<typeof connection> | null;
+  settingsRecord?: ReturnType<typeof automationSettings>;
   existingClientEvent?: Record<string, unknown> | null;
 } = {}) {
   const clientEventCreate = vi.fn().mockResolvedValue({});
@@ -221,6 +237,10 @@ function serviceFactory({
     },
     whatsAppConnection: {
       findFirst: vi.fn().mockResolvedValue(connectionRecord),
+    },
+    billingAutomationSettings: {
+      upsert: vi.fn().mockResolvedValue(settingsRecord),
+      update: vi.fn().mockResolvedValue(settingsRecord),
     },
     messageDispatch: {
       create: createDispatch,
@@ -285,6 +305,19 @@ describe('BillingService', () => {
     expect(
       service.calculateScheduledFor(new Date('2026-09-20T00:00:00.000Z'), 3).toISOString(),
     ).toBe('2026-09-17T12:00:00.000Z');
+  });
+
+  it('uses persisted send time instead of changing business time through env', () => {
+    const { service } = serviceFactory();
+
+    expect(
+      service
+        .calculateScheduledFor(new Date('2026-09-20T00:00:00.000Z'), 0, {
+          sendTime: '10:30',
+          timezone: 'America/Sao_Paulo',
+        })
+        .toISOString(),
+    ).toBe('2026-09-20T13:30:00.000Z');
   });
 
   it('creates one billing dispatch for an active client with a pending receivable', async () => {
@@ -518,6 +551,45 @@ describe('BillingService', () => {
     expect(clientEventCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ title: 'Cobranca automatica enviada pelo WhatsApp.' }),
+      }),
+    );
+  });
+
+  it('does not process automatic billing when automation is disabled', async () => {
+    const providerSendText = vi.fn();
+    const { service, prisma } = serviceFactory({
+      settingsRecord: automationSettings({ enabled: false }),
+      providerSendText,
+    });
+
+    const result = await service.processDue(new Date('2026-09-15T12:00:00.000Z'), 20, {
+      automatic: true,
+    });
+
+    expect(result).toEqual({
+      processed: 0,
+      results: [],
+      skipped: 'BILLING_AUTOMATION_DISABLED',
+    });
+    expect(prisma.messageDispatch.findMany).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
+  });
+
+  it('automatic processing only picks dispatches from the current Sao Paulo business day', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.processDue(new Date('2026-09-15T12:10:00.000Z'), 20, {
+      automatic: true,
+    });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          scheduledFor: expect.objectContaining({
+            gte: new Date('2026-09-15T03:00:00.000Z'),
+            lte: new Date('2026-09-15T12:10:00.000Z'),
+          }),
+        }),
       }),
     );
   });

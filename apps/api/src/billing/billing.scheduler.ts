@@ -18,6 +18,7 @@ export class BillingScheduler implements OnModuleInit, OnModuleDestroy {
     }
 
     const intervalMs = Number(this.config.get<string>('BILLING_SCHEDULER_INTERVAL_MS') ?? '60000');
+    void this.tick();
     this.interval = setInterval(() => void this.tick(), Math.max(intervalMs, 30_000));
   }
 
@@ -36,7 +37,7 @@ export class BillingScheduler implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.billingService.reconcile();
-      await this.billingService.processDue();
+      await this.billingService.processDue(new Date(), 20, { automatic: true });
     } finally {
       this.running = false;
     }

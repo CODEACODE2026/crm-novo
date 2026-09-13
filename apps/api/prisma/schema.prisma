@@ -361,6 +361,20 @@ model MessageTemplate {
   @@map("message_templates")
 }
 
+model BillingAutomationSettings {
+  id        String   @id @default(uuid()) @db.Uuid
+  scope     String   @unique @default("global")
+  enabled   Boolean  @default(false)
+  sendTime  String   @default("09:00") @db.VarChar(5)
+  timezone  String   @default("America/Sao_Paulo")
+  companyId String?  @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@map("billing_automation_settings")
+}
+
 model RecoveryCampaign {
   id                String                 @id @default(uuid()) @db.Uuid
   clientId          String                 @db.Uuid

@@ -156,13 +156,14 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
               />
             </label>
             <label className="field">
-              <span>Dias antes da cobranca</span>
+              <span>Antecedencia da cobranca</span>
               <input
                 min="0"
                 type="number"
                 value={billingNoticeDays}
                 onChange={(event) => setBillingNoticeDays(event.target.value)}
               />
+              <small>0 no dia do vencimento, 1 um dia antes, 2 dois dias antes.</small>
             </label>
           </div>
         </section>

@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
+import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
 import { UpdateMessageTemplateDto } from './dto/update-message-template.dto';
 
 @UseGuards(JwtAuthGuard)
@@ -23,6 +24,16 @@ export class BillingController {
   @Get('summary')
   summary() {
     return this.billingService.summary();
+  }
+
+  @Get('automation-settings')
+  getAutomationSettings() {
+    return this.billingService.getSettings();
+  }
+
+  @Patch('automation-settings')
+  updateAutomationSettings(@Body() dto: UpdateBillingAutomationSettingsDto) {
+    return this.billingService.updateSettings(dto);
   }
 
   @Get('dispatches')

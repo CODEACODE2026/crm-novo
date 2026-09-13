@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { ReferralsService } from './referrals.service';
 
@@ -390,6 +390,45 @@ describe('ReferralsService', () => {
         actorUserId,
       ),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('cancels the bonified pending cycle and ensures the next payable cycle on FREE_MONTH', async () => {
+    const fake = createReferralPrisma();
+    const cycle = {
+      cancelPendingCurrentCycleReceivable: vi.fn().mockResolvedValue({ id: 'old-receivable' }),
+      ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const service = new ReferralsService(fake.prisma as never, cycle as never);
+
+    const created = await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+    });
+    await service.qualifyAfterInitialActivation(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'receivable-1',
+      actorUserId,
+    );
+
+    await service.applyReward(
+      created!.id,
+      { clientReferenceId: fake.clientReferences[0]!.id },
+      actorUserId,
+    );
+
+    expect(cycle.cancelPendingCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.clientReferences[0]!.id,
+      parseBusinessDate('2026-10-10'),
+      'Ciclo bonificado por indicacao FREE_MONTH.',
+      expect.any(Object),
+    );
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.clientReferences[0]!.id,
+      expect.any(Object),
+    );
+    expect(fake.renewals).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
   });
 
   it('preserves billing anchor on day 31 and does not reactivate inactive referrer', async () => {

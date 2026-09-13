@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { ReceivableCycleModule } from '../receivable-cycle/receivable-cycle.module';
 import { ReferralsModule } from '../referrals/referrals.module';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
 import { FinanceController } from './finance.controller';
@@ -16,7 +17,7 @@ import { PaymentProviderRegistryService } from './payments/payment-provider-regi
 import { PAYMENT_PROVIDER } from './payments/payment-provider';
 
 @Module({
-  imports: [AuthModule, ReferralsModule],
+  imports: [AuthModule, ReceivableCycleModule, ReferralsModule],
   controllers: [FinanceController, PaymentWebhookController],
   providers: [
     FinanceService,

@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, ReferralRewardType } from '@prisma/client';
 import {
@@ -12,6 +13,7 @@ import {
   parseBusinessDate,
 } from '../clients/utils/business-date';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { ApplyReferralRewardDto } from './dto/apply-referral-reward.dto';
 import { CancelReferralDto } from './dto/cancel-referral.dto';
 import { ListReferralsDto } from './dto/list-referrals.dto';
@@ -39,7 +41,12 @@ const pageSizeLimit = 100;
 
 @Injectable()
 export class ReferralsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(ReceivableCycleService)
+    private readonly receivableCycleService?: ReceivableCycleService,
+  ) {}
 
   async list(query: ListReferralsDto) {
     const where = this.buildWhere(query);
@@ -313,6 +320,13 @@ export class ReferralsService {
           rewardReference.billingAnchorDay,
         );
 
+        await this.receivableCycleService?.cancelPendingCurrentCycleReceivable(
+          rewardReference.id,
+          rewardReference.dueDate,
+          'Ciclo bonificado por indicacao FREE_MONTH.',
+          tx,
+        );
+
         await tx.clientReference.update({
           where: { id: rewardReference.id },
           data: {
@@ -320,6 +334,8 @@ export class ReferralsService {
             billingAnchorDay: rewardReference.billingAnchorDay,
           },
         });
+
+        await this.receivableCycleService?.ensureCurrentCycleReceivable(rewardReference.id, tx);
 
         data.appliedPreviousDueDate = appliedPreviousDueDate;
         data.appliedNewDueDate = appliedNewDueDate;

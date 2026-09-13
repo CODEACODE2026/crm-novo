@@ -17,6 +17,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import {
   addCalendarMonthsPreservingAnchor,
@@ -78,6 +79,9 @@ export class FinanceService {
     @Optional()
     @Inject(ReferralsService)
     private readonly referralsService?: ReferralsService,
+    @Optional()
+    @Inject(ReceivableCycleService)
+    private readonly receivableCycleService?: ReceivableCycleService,
   ) {}
 
   async listCategories() {
@@ -1189,6 +1193,11 @@ export class FinanceService {
           billingAnchorDay: anchorDay,
         },
       });
+
+      await this.receivableCycleService?.ensureCurrentCycleReceivable(
+        receivable.clientReferenceId,
+        tx,
+      );
     } else {
       await tx.client.update({
         where: { id: receivable.clientId },

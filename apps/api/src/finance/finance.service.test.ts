@@ -366,6 +366,7 @@ function createFinancePrisma() {
     credentials: { getWebhookSecret: vi.fn().mockResolvedValue('webhook-secret') },
     config: { get: () => undefined },
     webhookEvents,
+    tx,
   };
 }
 
@@ -446,6 +447,40 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(1);
+  });
+
+  it('ensures the next renewal receivable after initial activation payment', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-10');
+    fake.clientReference.billingAnchorDay = 10;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-10');
+    const cycle = {
+      ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-15', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.clientReference.id,
+      fake.tx,
+    );
   });
 
   it('cancels only pending receivables with a reason and no financial transaction', async () => {

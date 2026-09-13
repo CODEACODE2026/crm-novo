@@ -1,13 +1,14 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PlansModule } from '../plans/plans.module';
+import { ReceivableCycleModule } from '../receivable-cycle/receivable-cycle.module';
 import { RecoveryModule } from '../recovery/recovery.module';
 import { ReferralsModule } from '../referrals/referrals.module';
 import { ClientsController } from './clients.controller';
 import { ClientsService } from './clients.service';
 
 @Module({
-  imports: [AuthModule, PlansModule, RecoveryModule, ReferralsModule],
+  imports: [AuthModule, PlansModule, ReceivableCycleModule, RecoveryModule, ReferralsModule],
   controllers: [ClientsController],
   providers: [ClientsService],
 })

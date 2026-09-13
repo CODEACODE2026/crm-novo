@@ -485,7 +485,56 @@ export interface BillingSummary {
   sentToday?: number;
   failedToday?: number;
   next?: MessageDispatch[];
+  cycleIssues?: ReceivableCycleIssue[];
   settings?: BillingAutomationSettings;
+}
+
+export type ReceivableCycleCode =
+  | 'OK'
+  | 'MISSING_RECEIVABLE'
+  | 'RECEIVABLE_DIVERGENT'
+  | 'RECEIVABLE_PAID'
+  | 'RECEIVABLE_CANCELED'
+  | 'REFERENCE_NOT_BILLABLE';
+
+export interface ReceivableCycleIssue {
+  clientId: string;
+  clientName: string;
+  clientReferenceId: string;
+  reference: string;
+  planName: string;
+  amount: string;
+  dueDate: string;
+  code: ReceivableCycleCode;
+  reason: string;
+  receivable: {
+    id: string;
+    dueDate: string;
+    status: 'PENDENTE' | 'PAGO' | 'CANCELADO';
+    amount: string;
+    purpose: 'RENEWAL' | 'INITIAL_ACTIVATION';
+  } | null;
+}
+
+export interface ReceivableCycleReport {
+  counts: Record<ReceivableCycleCode, number>;
+  items: ReceivableCycleIssue[];
+}
+
+export interface ReceivableCyclePreview {
+  allowed: boolean;
+  status: {
+    code: ReceivableCycleCode;
+    reason: string;
+  };
+  preview: {
+    clientReferenceId: string;
+    reference: string;
+    amount: string;
+    dueDate: string;
+    purpose: 'RENEWAL';
+    description: string;
+  } | null;
 }
 
 export interface BillingAutomationSettings {
@@ -1347,6 +1396,25 @@ export function updateBillingAutomationSettings(payload: {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+}
+
+export function reconcileBillingReceivables() {
+  return apiFetch<ReceivableCycleReport>('/billing/reconcile-receivables', {
+    method: 'POST',
+  });
+}
+
+export function previewCurrentCycleReceivable(clientReferenceId: string) {
+  return apiFetch<ReceivableCyclePreview>(
+    `/billing/client-references/${clientReferenceId}/current-cycle-receivable/preview`,
+  );
+}
+
+export function generateCurrentCycleReceivable(clientReferenceId: string) {
+  return apiFetch<{ action: 'created' | 'kept'; receivable: unknown }>(
+    `/billing/client-references/${clientReferenceId}/current-cycle-receivable`,
+    { method: 'POST' },
+  );
 }
 
 export function listBillingDispatches(

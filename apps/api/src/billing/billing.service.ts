@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -18,6 +19,7 @@ import {
   type WhatsAppConnection,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
@@ -51,6 +53,9 @@ export class BillingService {
     @Inject(TokenEncryptionService) private readonly encryption: TokenEncryptionService,
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(BillingTemplateRenderer) private readonly renderer: BillingTemplateRenderer,
+    @Optional()
+    @Inject(ReceivableCycleService)
+    private readonly receivableCycleService?: ReceivableCycleService,
   ) {}
 
   async reconcile(now = new Date()) {
@@ -314,6 +319,10 @@ export class BillingService {
       }),
     ]);
 
+    const cycleIssues = this.receivableCycleService
+      ? await this.receivableCycleService.listOperationalIssues(10)
+      : [];
+
     return {
       scheduled,
       sent,
@@ -323,6 +332,7 @@ export class BillingService {
       sentToday,
       failedToday,
       next: next.map((dispatch) => this.presentDispatch(dispatch)),
+      cycleIssues,
       settings: this.presentSettings(settings),
     };
   }
@@ -351,6 +361,20 @@ export class BillingService {
     }
 
     return this.presentSettings(next);
+  }
+
+  async reconcileReceivables() {
+    return this.currentCycle().reconcileCurrentCycles();
+  }
+
+  async previewCurrentCycleReceivable(clientReferenceId: string) {
+    return this.currentCycle().previewCurrentCycleReceivable(clientReferenceId);
+  }
+
+  async generateCurrentCycleReceivable(clientReferenceId: string) {
+    const result = await this.currentCycle().ensureCurrentCycleReceivable(clientReferenceId);
+    await this.reconcile();
+    return result;
   }
 
   async listDispatches(query: ListBillingDispatchesDto) {
@@ -1010,6 +1034,14 @@ export class BillingService {
       createdAt: settings.createdAt,
       updatedAt: settings.updatedAt,
     };
+  }
+
+  private currentCycle() {
+    if (!this.receivableCycleService) {
+      throw new ConflictException('Servico de ciclo financeiro indisponivel.');
+    }
+
+    return this.receivableCycleService;
   }
 
   private businessDayWindow(now: Date, timezone: string) {

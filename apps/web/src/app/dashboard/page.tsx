@@ -97,6 +97,7 @@ import {
   getBillingAutomationSettings,
   getBillingDispatch,
   getBillingSummary,
+  generateCurrentCycleReceivable,
   getRecoverySummary,
   getReferralSummary,
   listBillingDispatches,
@@ -104,7 +105,9 @@ import {
   listRecoveryCampaigns,
   listReferrals,
   previewMessageTemplate,
+  previewCurrentCycleReceivable,
   reconcileBilling,
+  reconcileBillingReceivables,
   reconcileRecovery,
   sendBillingNow,
   savePaymentProviderCredential,
@@ -3107,6 +3110,54 @@ function AutomationsView() {
     }
   }
 
+  async function runBillingReceivablesReconcile() {
+    setWorking('billing-receivables');
+    setError('');
+
+    try {
+      await reconcileBillingReceivables();
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel reconciliar ciclos.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function runGenerateCycleReceivable(clientReferenceId: string) {
+    setWorking(`cycle-${clientReferenceId}`);
+    setError('');
+
+    try {
+      const preview = await previewCurrentCycleReceivable(clientReferenceId);
+
+      if (!preview.allowed || !preview.preview) {
+        throw new Error(preview.status.reason);
+      }
+
+      const confirmed = window.confirm(
+        [
+          'Gerar conta a receber do ciclo?',
+          `Referencia: ${preview.preview.reference}`,
+          `Valor: ${formatCurrency(preview.preview.amount)}`,
+          `Vencimento: ${formatDate(preview.preview.dueDate)}`,
+          `Purpose: ${preview.preview.purpose}`,
+        ].join('\n'),
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      await generateCurrentCycleReceivable(clientReferenceId);
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel gerar conta a receber.');
+    } finally {
+      setWorking('');
+    }
+  }
+
   async function runCancelCampaign(campaign: RecoveryCampaign) {
     setWorking(campaign.id);
     setError('');
@@ -3251,6 +3302,70 @@ function AutomationsView() {
             </div>
           ) : null}
         </div>
+
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <span className="metric-label">CICLO FINANCEIRO</span>
+              <h2>Pendencias operacionais</h2>
+            </div>
+            <button
+              className="secondary-button"
+              disabled={working === 'billing-receivables'}
+              type="button"
+              onClick={() => void runBillingReceivablesReconcile()}
+            >
+              <RefreshCcw aria-hidden="true" size={16} />
+              Verificar ciclos
+            </button>
+          </div>
+          <div className="table-wrap compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Referencia</th>
+                  <th>Plano</th>
+                  <th>Valor</th>
+                  <th>Vencimento</th>
+                  <th>Motivo</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(billingSummary?.cycleIssues ?? []).map((issue) => (
+                  <tr key={issue.clientReferenceId}>
+                    <td>{issue.clientName}</td>
+                    <td>{issue.reference}</td>
+                    <td>{issue.planName}</td>
+                    <td>{formatCurrency(issue.amount)}</td>
+                    <td>{formatDate(issue.dueDate)}</td>
+                    <td>{issue.reason}</td>
+                    <td>
+                      <button
+                        className="secondary-button"
+                        disabled={
+                          issue.code !== 'MISSING_RECEIVABLE' ||
+                          working === `cycle-${issue.clientReferenceId}`
+                        }
+                        type="button"
+                        onClick={() => void runGenerateCycleReceivable(issue.clientReferenceId)}
+                      >
+                        <Plus aria-hidden="true" size={16} />
+                        Gerar conta
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!(billingSummary?.cycleIssues ?? []).length ? (
+              <div className="empty-state">
+                {loading ? 'Carregando...' : 'Nenhuma pendencia de ciclo financeiro.'}
+              </div>
+            ) : null}
+          </div>
+        </section>
 
         <div className="toolbar">
           <div className="search-row">

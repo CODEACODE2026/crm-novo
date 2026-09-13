@@ -189,16 +189,16 @@ model User {
 }
 
 model Plan {
-  id             String    @id @default(uuid()) @db.Uuid
-  name           String    @unique
-  durationMonths Int
-  defaultValue   Decimal   @db.Decimal(12, 2)
-  active         Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  clients        Client[]
+  id               String            @id @default(uuid()) @db.Uuid
+  name             String            @unique
+  durationMonths   Int
+  defaultValue     Decimal           @db.Decimal(12, 2)
+  active           Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  clients          Client[]
   clientReferences ClientReference[]
-  renewals       Renewal[]
+  renewals         Renewal[]
 
   @@map("plans")
 }
@@ -241,27 +241,27 @@ model Client {
 }
 
 model ClientReference {
-  id                   String                  @id @default(uuid()) @db.Uuid
-  clientId             String                  @db.Uuid
-  reference            String                  @unique
-  planId               String                  @db.Uuid
-  recurringValue       Decimal                 @db.Decimal(12, 2)
-  dueDate              DateTime                @db.Date
-  billingAnchorDay     Int
-  billingNoticeDays    Int
-  status               ClientStatus            @default(ATIVO)
-  notes                String?
-  createdAt            DateTime                @default(now())
-  updatedAt            DateTime                @updatedAt
-  client               Client                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  plan                 Plan                    @relation(fields: [planId], references: [id], onDelete: Restrict)
-  renewals             Renewal[]
-  receivables          Receivable[]
-  recoveryCampaigns    RecoveryCampaign[]
-  messageDispatches    MessageDispatch[]
+  id                    String                 @id @default(uuid()) @db.Uuid
+  clientId              String                 @db.Uuid
+  reference             String                 @unique
+  planId                String                 @db.Uuid
+  recurringValue        Decimal                @db.Decimal(12, 2)
+  dueDate               DateTime               @db.Date
+  billingAnchorDay      Int
+  billingNoticeDays     Int
+  status                ClientStatus           @default(ATIVO)
+  notes                 String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  client                Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  plan                  Plan                   @relation(fields: [planId], references: [id], onDelete: Restrict)
+  renewals              Renewal[]
+  receivables           Receivable[]
+  recoveryCampaigns     RecoveryCampaign[]
+  messageDispatches     MessageDispatch[]
   financialTransactions FinancialTransaction[]
-  statusHistory        ClientStatusHistory[]
-  rewardedReferrals    Referral[]              @relation("ReferralRewardClientReference")
+  statusHistory         ClientStatusHistory[]
+  rewardedReferrals     Referral[]             @relation("ReferralRewardClientReference")
 
   @@index([clientId])
   @@index([planId])
@@ -490,23 +490,23 @@ model WhatsAppInboundMessage {
 }
 
 model Renewal {
-  id              String      @id @default(uuid()) @db.Uuid
-  clientId        String      @db.Uuid
-  clientReferenceId String    @db.Uuid
-  planId          String      @db.Uuid
-  previousDueDate DateTime    @db.Date
-  newDueDate      DateTime    @db.Date
-  amount          Decimal     @db.Decimal(12, 2)
-  planName        String
-  durationMonths  Int
-  idempotencyKey  String?
-  createdByUserId String?     @db.Uuid
-  createdAt       DateTime    @default(now())
-  client          Client      @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  clientReference ClientReference @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
-  plan            Plan        @relation(fields: [planId], references: [id], onDelete: Restrict)
-  createdBy       User?       @relation("RenewalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  receivable      Receivable?
+  id                String          @id @default(uuid()) @db.Uuid
+  clientId          String          @db.Uuid
+  clientReferenceId String          @db.Uuid
+  planId            String          @db.Uuid
+  previousDueDate   DateTime        @db.Date
+  newDueDate        DateTime        @db.Date
+  amount            Decimal         @db.Decimal(12, 2)
+  planName          String
+  durationMonths    Int
+  idempotencyKey    String?
+  createdByUserId   String?         @db.Uuid
+  createdAt         DateTime        @default(now())
+  client            Client          @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientReference   ClientReference @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  plan              Plan            @relation(fields: [planId], references: [id], onDelete: Restrict)
+  createdBy         User?           @relation("RenewalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  receivable        Receivable?
 
   @@unique([clientId, idempotencyKey])
   @@unique([clientReferenceId, idempotencyKey])
@@ -539,6 +539,7 @@ model Receivable {
   messageDispatches  MessageDispatch[]
   paymentIntents     PaymentIntent[]
 
+  @@unique([clientReferenceId, purpose, dueDate])
   @@index([clientId])
   @@index([clientReferenceId])
   @@index([dueDate])
@@ -637,25 +638,25 @@ model FinancialCategory {
 }
 
 model FinancialTransaction {
-  id              String                     @id @default(uuid()) @db.Uuid
-  type            FinancialTransactionType
-  origin          FinancialTransactionOrigin @default(MANUAL)
-  categoryId      String                     @db.Uuid
-  clientId        String?                    @db.Uuid
-  clientReferenceId String?                  @db.Uuid
-  receivableId    String?                    @unique @db.Uuid
-  description     String
-  amount          Decimal                    @db.Decimal(12, 2)
-  transactionDate DateTime                   @db.Date
-  notes           String?
-  createdByUserId String?                    @db.Uuid
-  createdAt       DateTime                   @default(now())
-  updatedAt       DateTime                   @updatedAt
-  category        FinancialCategory          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  client          Client?                    @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  clientReference ClientReference?           @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
-  receivable      Receivable?                @relation(fields: [receivableId], references: [id], onDelete: Restrict)
-  createdBy       User?                      @relation("FinancialTransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  id                String                     @id @default(uuid()) @db.Uuid
+  type              FinancialTransactionType
+  origin            FinancialTransactionOrigin @default(MANUAL)
+  categoryId        String                     @db.Uuid
+  clientId          String?                    @db.Uuid
+  clientReferenceId String?                    @db.Uuid
+  receivableId      String?                    @unique @db.Uuid
+  description       String
+  amount            Decimal                    @db.Decimal(12, 2)
+  transactionDate   DateTime                   @db.Date
+  notes             String?
+  createdByUserId   String?                    @db.Uuid
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  category          FinancialCategory          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  client            Client?                    @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientReference   ClientReference?           @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  receivable        Receivable?                @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  createdBy         User?                      @relation("FinancialTransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@index([type])
   @@index([origin])
@@ -668,27 +669,27 @@ model FinancialTransaction {
 }
 
 model Referral {
-  id                     String             @id @default(uuid()) @db.Uuid
-  referredClientId       String             @unique @db.Uuid
-  referrerClientId       String             @db.Uuid
-  status                 ReferralStatus     @default(PENDING)
-  rewardType             ReferralRewardType @default(FREE_MONTH)
-  rewardValue            Decimal?           @db.Decimal(12, 2)
-  rewardDescription      String?
-  qualifiedAt            DateTime?
-  appliedAt              DateTime?
-  canceledAt             DateTime?
-  cancellationReason     String?
-  appliedPreviousDueDate DateTime?          @db.Date
-  appliedNewDueDate      DateTime?          @db.Date
-  rewardClientReferenceId String?           @db.Uuid
-  createdByUserId        String?            @db.Uuid
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
-  referredClient         Client             @relation("ReferralReferredClient", fields: [referredClientId], references: [id], onDelete: Restrict)
-  referrerClient         Client             @relation("ReferralReferrerClient", fields: [referrerClientId], references: [id], onDelete: Restrict)
-  rewardClientReference  ClientReference?   @relation("ReferralRewardClientReference", fields: [rewardClientReferenceId], references: [id], onDelete: SetNull)
-  createdBy              User?              @relation("ReferralCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  id                      String             @id @default(uuid()) @db.Uuid
+  referredClientId        String             @unique @db.Uuid
+  referrerClientId        String             @db.Uuid
+  status                  ReferralStatus     @default(PENDING)
+  rewardType              ReferralRewardType @default(FREE_MONTH)
+  rewardValue             Decimal?           @db.Decimal(12, 2)
+  rewardDescription       String?
+  qualifiedAt             DateTime?
+  appliedAt               DateTime?
+  canceledAt              DateTime?
+  cancellationReason      String?
+  appliedPreviousDueDate  DateTime?          @db.Date
+  appliedNewDueDate       DateTime?          @db.Date
+  rewardClientReferenceId String?            @db.Uuid
+  createdByUserId         String?            @db.Uuid
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  referredClient          Client             @relation("ReferralReferredClient", fields: [referredClientId], references: [id], onDelete: Restrict)
+  referrerClient          Client             @relation("ReferralReferrerClient", fields: [referrerClientId], references: [id], onDelete: Restrict)
+  rewardClientReference   ClientReference?   @relation("ReferralRewardClientReference", fields: [rewardClientReferenceId], references: [id], onDelete: SetNull)
+  createdBy               User?              @relation("ReferralCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@index([referrerClientId])
   @@index([status])
@@ -701,17 +702,17 @@ model Referral {
 }
 
 model ClientStatusHistory {
-  id              String       @id @default(uuid()) @db.Uuid
-  clientId        String       @db.Uuid
-  clientReferenceId String?    @db.Uuid
-  previousStatus  ClientStatus
-  newStatus       ClientStatus
-  reason          String?
-  changedByUserId String?      @db.Uuid
-  createdAt       DateTime     @default(now())
-  client          Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  clientReference ClientReference? @relation(fields: [clientReferenceId], references: [id], onDelete: SetNull)
-  changedBy       User?        @relation("ClientStatusChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull)
+  id                String           @id @default(uuid()) @db.Uuid
+  clientId          String           @db.Uuid
+  clientReferenceId String?          @db.Uuid
+  previousStatus    ClientStatus
+  newStatus         ClientStatus
+  reason            String?
+  changedByUserId   String?          @db.Uuid
+  createdAt         DateTime         @default(now())
+  client            Client           @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientReference   ClientReference? @relation(fields: [clientReferenceId], references: [id], onDelete: SetNull)
+  changedBy         User?            @relation("ClientStatusChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull)
 
   @@index([clientId])
   @@index([clientReferenceId])

@@ -4,10 +4,12 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ClientStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PlansService } from '../plans/plans.service';
+import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { RecoveryService } from '../recovery/recovery.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
@@ -67,6 +69,9 @@ export class ClientsService {
     @Inject(PlansService) private readonly plansService: PlansService,
     @Inject(RecoveryService) private readonly recoveryService: RecoveryService,
     @Inject(ReferralsService) private readonly referralsService: ReferralsService,
+    @Optional()
+    @Inject(ReceivableCycleService)
+    private readonly receivableCycleService?: ReceivableCycleService,
   ) {}
 
   async list(query: ListClientsDto) {
@@ -210,7 +215,7 @@ export class ClientsService {
           include: { plan: true },
         });
 
-        await tx.clientReference.create({
+        const clientReference = await tx.clientReference.create({
           data: {
             clientId: created.id,
             reference: dto.reference.trim(),
@@ -222,6 +227,8 @@ export class ClientsService {
             status: 'ATIVO',
           },
         });
+
+        await this.currentCycle().ensureCurrentCycleReceivable(clientReference.id, tx);
 
         await tx.clientEvent.create({
           data: {
@@ -338,6 +345,8 @@ export class ClientsService {
           include: { plan: true },
         });
 
+        await this.currentCycle().ensureCurrentCycleReceivable(created.id, tx);
+
         await tx.clientEvent.create({
           data: {
             clientId,
@@ -380,9 +389,34 @@ export class ClientsService {
     if (dto.billingNoticeDays !== undefined) data.billingNoticeDays = dto.billingNoticeDays;
     if (dto.notes !== undefined) data.notes = this.optionalTrim(dto.notes);
 
+    const cycleChanged =
+      dto.dueDate !== undefined || dto.recurringValue !== undefined || dto.planId !== undefined;
+
     try {
       const reference = await this.prisma.$transaction(async (tx) => {
-        await tx.clientReference.update({ where: { id }, data });
+        const updated = await tx.clientReference.update({
+          where: { id },
+          data,
+          include: { plan: true },
+        });
+
+        if (current.status === 'ATIVO' && cycleChanged) {
+          const moved = await this.currentCycle().updatePendingCurrentCycleReceivable(
+            id,
+            current.dueDate,
+            {
+              dueDate: updated.dueDate,
+              amount: updated.recurringValue,
+              planName: updated.plan.name,
+            },
+            tx,
+          );
+
+          if (!moved) {
+            await this.currentCycle().ensureCurrentCycleReceivable(id, tx);
+          }
+        }
+
         await tx.clientEvent.create({
           data: {
             clientId: current.clientId,
@@ -400,6 +434,14 @@ export class ClientsService {
     } catch (error) {
       this.handlePrismaError(error);
     }
+  }
+
+  private currentCycle() {
+    if (!this.receivableCycleService) {
+      throw new ConflictException('Servico de ciclo financeiro indisponivel.');
+    }
+
+    return this.receivableCycleService;
   }
 
   async updateReferenceStatus(

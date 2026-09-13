@@ -56,6 +56,21 @@ export class BillingController {
     return this.billingService.reconcile();
   }
 
+  @Post('reconcile-receivables')
+  reconcileReceivables() {
+    return this.billingService.reconcileReceivables();
+  }
+
+  @Get('client-references/:id/current-cycle-receivable/preview')
+  previewCurrentCycleReceivable(@Param('id') id: string) {
+    return this.billingService.previewCurrentCycleReceivable(id);
+  }
+
+  @Post('client-references/:id/current-cycle-receivable')
+  generateCurrentCycleReceivable(@Param('id') id: string) {
+    return this.billingService.generateCurrentCycleReceivable(id);
+  }
+
   @Post('process-due')
   processDue() {
     return this.billingService.processDue();

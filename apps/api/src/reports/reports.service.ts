@@ -6,9 +6,17 @@ import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { ListReportDto } from './dto/list-report.dto';
 
 export type ReportType =
-  'clients' | 'renewals' | 'receivables' | 'finance' | 'billing' | 'recovery';
+  'clients' | 'renewals' | 'receivables' | 'finance' | 'billing' | 'recovery' | 'referrals';
 
-const reportTypes = ['clients', 'renewals', 'receivables', 'finance', 'billing', 'recovery'];
+const reportTypes = [
+  'clients',
+  'renewals',
+  'receivables',
+  'finance',
+  'billing',
+  'recovery',
+  'referrals',
+];
 const jsonLimit = 200;
 const csvLimit = 1000;
 
@@ -24,7 +32,8 @@ export class ReportsService {
     if (type === 'receivables') return this.receivables(query, jsonLimit);
     if (type === 'finance') return this.finance(query, jsonLimit);
     if (type === 'billing') return this.billing(query, jsonLimit);
-    return this.recovery(query, jsonLimit);
+    if (type === 'recovery') return this.recovery(query, jsonLimit);
+    return this.referrals(query, jsonLimit);
   }
 
   async csv(type: ReportType, query: ListReportDto) {
@@ -44,7 +53,8 @@ export class ReportsService {
     if (type === 'receivables') return this.receivables(query, csvLimit);
     if (type === 'finance') return this.finance(query, csvLimit);
     if (type === 'billing') return this.billing(query, csvLimit);
-    return this.recovery(query, csvLimit);
+    if (type === 'recovery') return this.recovery(query, csvLimit);
+    return this.referrals(query, csvLimit);
   }
 
   private async clients(query: ListReportDto, take: number) {
@@ -399,6 +409,71 @@ export class ReportsService {
           Resultado: campaign.cancelReason ?? (campaign.completedAt ? 'Concluida' : ''),
         };
       }),
+      total,
+      limited: total > take,
+      summary: {
+        byStatus: byStatus.map((item) => ({
+          status: item.status,
+          total: this.groupCount(item._count, 'status'),
+        })),
+      },
+    };
+  }
+
+  private async referrals(query: ListReportDto, take: number) {
+    const where: Prisma.ReferralWhereInput = {};
+    const createdRange = this.dateRange(query);
+
+    if (createdRange) where.createdAt = createdRange;
+    if (query.referralStatus) where.status = query.referralStatus;
+    if (query.referrerClientId) where.referrerClientId = query.referrerClientId;
+    if (query.search) {
+      const search = query.search.trim();
+      where.OR = [
+        { referrerClient: { name: { contains: search, mode: 'insensitive' } } },
+        { referrerClient: { reference: { contains: search, mode: 'insensitive' } } },
+        { referredClient: { name: { contains: search, mode: 'insensitive' } } },
+        { referredClient: { reference: { contains: search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [items, total, byStatus] = await this.prisma.$transaction([
+      this.prisma.referral.findMany({
+        where,
+        include: { referrerClient: true, referredClient: true },
+        orderBy: [{ createdAt: 'desc' }],
+        take,
+      }),
+      this.prisma.referral.count({ where }),
+      this.prisma.referral.groupBy({
+        by: ['status'],
+        where,
+        _count: { status: true },
+        orderBy: { status: 'asc' },
+      }),
+    ]);
+
+    return {
+      columns: [
+        'Indicador',
+        'Indicado',
+        'Status',
+        'Beneficio',
+        'Valor/Descricao',
+        'Data indicacao',
+        'Qualificacao',
+        'Aplicacao',
+      ],
+      rows: items.map((referral) => ({
+        Indicador: referral.referrerClient.name,
+        Indicado: referral.referredClient.name,
+        Status: referral.status,
+        Beneficio: referral.rewardType,
+        'Valor/Descricao': referral.rewardValue?.toFixed(2) ?? referral.rewardDescription ?? '',
+        'Data indicacao': this.formatDateTime(referral.createdAt),
+        Qualificacao: referral.qualifiedAt ? this.formatDateTime(referral.qualifiedAt) : '',
+        Aplicacao: referral.appliedAt ? this.formatDateTime(referral.appliedAt) : '',
+      })),
       total,
       limited: total > take,
       summary: {

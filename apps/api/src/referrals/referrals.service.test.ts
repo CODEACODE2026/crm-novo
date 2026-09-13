@@ -1,0 +1,393 @@
+import { BadRequestException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { describe, expect, it } from 'vitest';
+import { parseBusinessDate } from '../clients/utils/business-date';
+import { ReferralsService } from './referrals.service';
+
+const actorUserId = '22222222-2222-4222-8222-222222222222';
+
+type TestClient = {
+  id: string;
+  name: string;
+  phone: string;
+  phoneNormalized: string;
+  email: string | null;
+  reference: string;
+  planId: string;
+  recurringValue: Prisma.Decimal;
+  dueDate: Date;
+  billingAnchorDay: number;
+  billingNoticeDays: number;
+  notes: string | null;
+  status: 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO';
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type TestReferral = Record<string, unknown>;
+type MockTx = Record<string, unknown> & {
+  $transaction: <T>(input: Promise<T>[] | ((client: MockTx) => Promise<T>)) => Promise<T | T[]>;
+};
+
+function createReferralPrisma() {
+  const clients: TestClient[] = [
+    {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Bruno',
+      phone: '(11) 99999-9999',
+      phoneNormalized: '5511999999999',
+      email: null,
+      reference: 'BRU-001',
+      planId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      recurringValue: new Prisma.Decimal('100.00'),
+      dueDate: parseBusinessDate('2026-10-10'),
+      billingAnchorDay: 10,
+      billingNoticeDays: 3,
+      notes: null,
+      status: 'ATIVO',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'Joao',
+      phone: '(11) 98888-8888',
+      phoneNormalized: '5511988888888',
+      email: null,
+      reference: 'JOA-001',
+      planId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      recurringValue: new Prisma.Decimal('100.00'),
+      dueDate: parseBusinessDate('2026-10-10'),
+      billingAnchorDay: 10,
+      billingNoticeDays: 3,
+      notes: null,
+      status: 'PENDENTE_PAGAMENTO',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: '44444444-4444-4444-8444-444444444444',
+      name: 'Ana',
+      phone: '(11) 97777-7777',
+      phoneNormalized: '5511977777777',
+      email: null,
+      reference: 'ANA-001',
+      planId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      recurringValue: new Prisma.Decimal('100.00'),
+      dueDate: parseBusinessDate('2026-01-31'),
+      billingAnchorDay: 31,
+      billingNoticeDays: 3,
+      notes: null,
+      status: 'ATIVO',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  ];
+  const referrals: TestReferral[] = [];
+  const events: Array<Record<string, unknown>> = [];
+  const renewals: Array<Record<string, unknown>> = [];
+  const receivables: Array<Record<string, unknown>> = [];
+  const transactions: Array<Record<string, unknown>> = [];
+
+  const includeClients = (referral: Record<string, unknown>) => ({
+    ...referral,
+    referredClient: clients.find((client) => client.id === referral.referredClientId),
+    referrerClient: clients.find((client) => client.id === referral.referrerClientId),
+  });
+
+  const tx: MockTx = {
+    client: {
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(clients.find((client) => client.id === where.id) ?? null),
+      update: ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const client = clients.find((item) => item.id === where.id);
+        if (!client) throw new Error('missing client');
+        Object.assign(client, data);
+        return Promise.resolve(client);
+      },
+    },
+    referral: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        if (referrals.some((referral) => referral.referredClientId === data.referredClientId)) {
+          throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+            code: 'P2002',
+            clientVersion: 'test',
+            meta: { target: ['referredClientId'] },
+          });
+        }
+
+        const referral = {
+          id: `ref-${referrals.length + 1}`,
+          status: 'PENDING',
+          rewardType: 'FREE_MONTH',
+          rewardValue: null,
+          rewardDescription: null,
+          qualifiedAt: null,
+          appliedAt: null,
+          canceledAt: null,
+          cancellationReason: null,
+          appliedPreviousDueDate: null,
+          appliedNewDueDate: null,
+          createdAt: new Date('2026-09-12T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-12T00:00:00.000Z'),
+          ...data,
+        };
+        referrals.push(referral);
+        return Promise.resolve(referral);
+      },
+      findUnique: ({
+        where,
+        include,
+      }: {
+        where: { id?: string; referredClientId?: string };
+        include?: unknown;
+      }) => {
+        const referral =
+          referrals.find(
+            (item) =>
+              (where.id === undefined || item.id === where.id) &&
+              (where.referredClientId === undefined ||
+                item.referredClientId === where.referredClientId),
+          ) ?? null;
+        return Promise.resolve(referral && include ? includeClients(referral) : referral);
+      },
+      updateMany: ({ where, data }: { where: { id: string; status?: string }; data: object }) => {
+        const referral = referrals.find(
+          (item) =>
+            item.id === where.id && (where.status === undefined || item.status === where.status),
+        );
+        if (!referral) return Promise.resolve({ count: 0 });
+        Object.assign(referral, data);
+        return Promise.resolve({ count: 1 });
+      },
+      update: ({
+        where,
+        data,
+        include,
+      }: {
+        where: { id: string };
+        data: Record<string, unknown>;
+        include?: unknown;
+      }) => {
+        const referral = referrals.find((item) => item.id === where.id);
+        if (!referral) throw new Error('missing referral');
+        Object.assign(referral, data);
+        return Promise.resolve(include ? includeClients(referral) : referral);
+      },
+      count: ({ where }: { where?: { status?: string; appliedAt?: null } } = {}) =>
+        Promise.resolve(
+          referrals.filter(
+            (referral) =>
+              (!where?.status || referral.status === where.status) &&
+              (where?.appliedAt !== null || referral.appliedAt === null),
+          ).length,
+        ),
+      findMany: () => Promise.resolve(referrals.map(includeClients)),
+    },
+    clientEvent: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        events.push(data);
+        return Promise.resolve(data);
+      },
+      createMany: ({ data }: { data: Array<Record<string, unknown>> }) => {
+        events.push(...data);
+        return Promise.resolve({ count: data.length });
+      },
+    },
+    $transaction: async <T>(input: Promise<T>[] | ((client: MockTx) => Promise<T>)) =>
+      Array.isArray(input) ? Promise.all(input) : input(tx),
+  };
+
+  const prisma = tx as unknown;
+
+  return { clients, events, prisma, receivables, referrals, renewals, transactions };
+}
+
+describe('ReferralsService', () => {
+  it('keeps clients without referral unchanged', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    await expect(
+      service.createPending(fake.prisma as never, {
+        referredClientId: fake.clients[1]!.id,
+        actorUserId,
+      }),
+    ).resolves.toBeNull();
+    expect(fake.referrals).toHaveLength(0);
+  });
+
+  it('creates one pending referral for manual or waitlist client creation', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    const referral = await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+      actorUserId,
+    });
+
+    expect(referral).toMatchObject({
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+      status: 'PENDING',
+      rewardType: 'FREE_MONTH',
+    });
+    expect(fake.events.map((event) => event.type)).toEqual([
+      'REFERRAL_CREATED',
+      'REFERRAL_CREATED',
+    ]);
+  });
+
+  it('rejects self referral and duplicate referred client', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    await expect(
+      service.createPending(fake.prisma as never, {
+        referredClientId: fake.clients[0]!.id,
+        referrerClientId: fake.clients[0]!.id,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+    });
+    await expect(
+      service.createPending(fake.prisma as never, {
+        referredClientId: fake.clients[1]!.id,
+        referrerClientId: fake.clients[2]!.id,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('qualifies once after initial activation payment replay', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+    });
+    await service.qualifyAfterInitialActivation(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'receivable-1',
+      actorUserId,
+    );
+    await service.qualifyAfterInitialActivation(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'receivable-1',
+      actorUserId,
+    );
+
+    expect(fake.referrals[0]).toMatchObject({ status: 'QUALIFIED' });
+    expect(fake.events.filter((event) => event.type === 'REFERRAL_QUALIFIED')).toHaveLength(2);
+  });
+
+  it('applies FREE_MONTH once without creating financial side effects', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    const created = await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+    });
+    await service.qualifyAfterInitialActivation(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'receivable-1',
+      actorUserId,
+    );
+
+    const applied = await service.applyReward(created!.id, {}, actorUserId);
+
+    expect(applied).toMatchObject({
+      status: 'REWARDED',
+      appliedPreviousDueDate: '2026-10-10',
+      appliedNewDueDate: '2026-11-10',
+    });
+    expect(fake.clients[0]!.dueDate).toEqual(parseBusinessDate('2026-11-10'));
+    expect(fake.renewals).toHaveLength(0);
+    expect(fake.receivables).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+    await expect(service.applyReward(created!.id, {}, actorUserId)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('preserves billing anchor on day 31 and does not reactivate inactive referrer', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+    fake.clients[2]!.status = 'CANCELADO';
+
+    const created = await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[2]!.id,
+    });
+    await service.qualifyAfterInitialActivation(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'receivable-1',
+      actorUserId,
+    );
+
+    const applied = await service.applyReward(created!.id, {}, actorUserId);
+
+    expect(applied.appliedPreviousDueDate).toBe('2026-01-31');
+    expect(applied.appliedNewDueDate).toBe('2026-02-28');
+    expect(fake.clients[2]!.status).toBe('CANCELADO');
+  });
+
+  it('cancels pending referral when referred client cancels before payment', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+    });
+    await service.cancelPendingForClientBeforePayment(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'Desistiu antes de pagar.',
+      actorUserId,
+    );
+
+    expect(fake.referrals[0]).toMatchObject({
+      status: 'CANCELED',
+      cancellationReason: 'Desistiu antes de pagar.',
+    });
+    expect(fake.events.some((event) => event.type === 'REFERRAL_CANCELED')).toBe(true);
+  });
+
+  it('models CREDIT and CUSTOM without automatic financial movement', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+
+    const credit = await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+      rewardType: 'CREDIT',
+      rewardValue: 25,
+    });
+    await service.qualifyAfterInitialActivation(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      'receivable-1',
+      actorUserId,
+    );
+    await service.applyReward(credit!.id, {}, actorUserId);
+
+    expect(fake.transactions).toHaveLength(0);
+    await expect(
+      service.createPending(fake.prisma as never, {
+        referredClientId: fake.clients[2]!.id,
+        referrerClientId: fake.clients[0]!.id,
+        rewardType: 'CUSTOM',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});

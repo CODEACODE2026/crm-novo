@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../common/prisma/prisma.module';
 import { FinanceModule } from '../finance/finance.module';
 import { PlansModule } from '../plans/plans.module';
+import { ReferralsModule } from '../referrals/referrals.module';
 import { KiragoAdminClient } from './kirago/kirago-admin.client';
 import { KiragoHttpClient } from './kirago/kirago-http.client';
 import { KiragoInstanceClient } from './kirago/kirago-instance.client';
@@ -14,7 +15,7 @@ import { WhatsAppController, WhatsAppWebhookController } from './whatsapp.contro
 import { WhatsAppService } from './whatsapp.service';
 
 @Module({
-  imports: [AuthModule, PrismaModule, PlansModule, FinanceModule],
+  imports: [AuthModule, PrismaModule, PlansModule, FinanceModule, ReferralsModule],
   controllers: [WhatsAppController, WhatsAppWebhookController],
   providers: [
     KiragoAdminClient,

@@ -150,6 +150,7 @@ function createDashboardPrisma() {
   ];
   const recoveryCampaigns = [{ status: 'ATIVA' }, { status: 'CANCELADA' }];
   const pendingContacts = [{ status: 'PENDENTE' }, { status: 'APROVADO' }];
+  const referrals = [{ status: 'QUALIFIED', appliedAt: null }];
   const inDateRange = (date: Date, range: { gte?: Date; lte?: Date; lt?: Date }) =>
     (!range.gte || date.getTime() >= range.gte.getTime()) &&
     (!range.lte || date.getTime() <= range.lte.getTime()) &&
@@ -305,6 +306,16 @@ function createDashboardPrisma() {
           pendingContacts.filter((contact) => contact.status === where.status).length,
         ),
     },
+    referral: {
+      count: ({ where }: { where: { status: string; appliedAt?: null } }) =>
+        Promise.resolve(
+          referrals.filter(
+            (referral) =>
+              referral.status === where.status &&
+              (where.appliedAt !== null || referral.appliedAt === null),
+          ).length,
+        ),
+    },
     $transaction: async <T>(operations: Array<Promise<T>>) => Promise.all(operations),
   };
 }
@@ -349,6 +360,7 @@ describe('DashboardService', () => {
       activeRecoveryCampaigns: 1,
       failedRecoveryDispatches: 1,
       pendingWaitlistContacts: 1,
+      qualifiedReferralsAwaitingReward: 1,
     });
     expect(summary.pending.items.length).toBeGreaterThan(0);
     expect(summary.lists.dueToday).toHaveLength(1);

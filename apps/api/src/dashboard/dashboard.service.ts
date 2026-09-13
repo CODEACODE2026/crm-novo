@@ -56,6 +56,7 @@ export class DashboardService {
       activeRecoveryCampaigns,
       failedRecoveryDispatches,
       pendingWaitlistContacts,
+      qualifiedReferralsAwaitingReward,
     ] = await this.prisma.$transaction([
       this.prisma.client.count({ where: { status: 'ATIVO' } }),
       this.prisma.client.count({ where: { status: 'INATIVO' } }),
@@ -153,6 +154,7 @@ export class DashboardService {
       this.prisma.recoveryCampaign.count({ where: { status: 'ATIVA' } }),
       this.prisma.messageDispatch.count({ where: { origin: 'RECOVERY', status: 'FAILED' } }),
       this.prisma.whatsAppPendingContact.count({ where: { status: 'PENDENTE' } }),
+      this.prisma.referral.count({ where: { status: 'QUALIFIED', appliedAt: null } }),
     ]);
 
     const entriesTotal = this.decimalToNumber(entries._sum.amount);
@@ -204,6 +206,7 @@ export class DashboardService {
           activeRecoveryCampaigns,
           failedRecoveryDispatches,
           pendingWaitlistContacts,
+          qualifiedReferralsAwaitingReward,
         },
         items: [
           {
@@ -245,6 +248,11 @@ export class DashboardService {
             label: 'Contatos na lista de espera',
             count: pendingWaitlistContacts,
             action: 'waitlist',
+          },
+          {
+            label: 'Indicacoes qualificadas aguardando beneficio',
+            count: qualifiedReferralsAwaitingReward,
+            action: 'clients',
           },
         ].filter((item) => item.count > 0),
       },

@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -16,6 +17,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ReferralsService } from '../referrals/referrals.service';
 import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
@@ -71,6 +73,9 @@ export class FinanceService {
     @Inject(PaymentProviderCredentialsService)
     private readonly paymentCredentials: PaymentProviderCredentialsService,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional()
+    @Inject(ReferralsService)
+    private readonly referralsService?: ReferralsService,
   ) {}
 
   async listCategories() {
@@ -1134,6 +1139,13 @@ export class FinanceService {
         createdByUserId: actorUserId,
       },
     });
+
+    await this.referralsService?.qualifyAfterInitialActivation(
+      tx,
+      receivable.clientId,
+      receivableId,
+      actorUserId,
+    );
   }
 
   private async ensureReceivableExists(id: string) {

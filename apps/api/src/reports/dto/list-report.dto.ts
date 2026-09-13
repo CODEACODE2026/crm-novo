@@ -6,6 +6,7 @@ import {
   MessageDispatchStatus,
   ReceivableStatus,
   RecoveryCampaignStatus,
+  ReferralStatus,
 } from '@prisma/client';
 
 export class ListReportDto {
@@ -60,4 +61,12 @@ export class ListReportDto {
   @IsOptional()
   @IsEnum(RecoveryCampaignStatus)
   recoveryStatus?: RecoveryCampaignStatus;
+
+  @IsOptional()
+  @IsEnum(ReferralStatus)
+  referralStatus?: ReferralStatus;
+
+  @IsOptional()
+  @IsUUID()
+  referrerClientId?: string;
 }

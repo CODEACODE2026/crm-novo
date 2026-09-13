@@ -43,6 +43,8 @@ export interface Client {
   recoveryCampaigns?: RecoveryCampaign[];
   messageDispatches?: ClientMessageDispatch[];
   initialActivation?: InitialActivationResult | null;
+  referralReceived?: ClientReferralReceived | null;
+  referralsMade?: ClientReferralsMade;
 }
 
 export interface InitialActivationResult {
@@ -69,7 +71,11 @@ export interface ClientEvent {
     | 'PIX_PAYMENT_STATUS_UPDATED'
     | 'RECOVERY_CAMPAIGN_STARTED'
     | 'RECOVERY_CAMPAIGN_CANCELED'
-    | 'RECOVERY_CAMPAIGN_COMPLETED';
+    | 'RECOVERY_CAMPAIGN_COMPLETED'
+    | 'REFERRAL_CREATED'
+    | 'REFERRAL_QUALIFIED'
+    | 'REFERRAL_REWARD_APPLIED'
+    | 'REFERRAL_CANCELED';
   title: string;
   description: string | null;
   createdAt: string;
@@ -106,6 +112,8 @@ export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL';
 export type PaymentIntentStatus =
   'CREATED' | 'WAITING_PAYMENT' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED' | 'REFUNDED';
 export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPAY' | 'DEPIX';
+export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
+export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
 
 export interface Renewal {
   id: string;
@@ -159,6 +167,81 @@ export interface PaymentIntent {
   failureMessage: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ReferralClientSummary {
+  id: string;
+  name: string;
+  reference: string;
+  phone?: string;
+  phoneNormalized?: string;
+  status: ClientStatus;
+  dueDate?: string;
+  billingAnchorDay?: number;
+}
+
+export interface Referral {
+  id: string;
+  referredClientId: string;
+  referrerClientId: string;
+  status: ReferralStatus;
+  rewardType: ReferralRewardType;
+  rewardValue: string | null;
+  rewardDescription: string | null;
+  qualifiedAt: string | null;
+  appliedAt: string | null;
+  canceledAt: string | null;
+  cancellationReason: string | null;
+  appliedPreviousDueDate: string | null;
+  appliedNewDueDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+  referredClient: ReferralClientSummary;
+  referrerClient: ReferralClientSummary;
+  rewardLabel: string;
+  rewardPreview: {
+    referrerStatus: ClientStatus;
+    currentDueDate: string;
+    newDueDate: string | null;
+  } | null;
+}
+
+export interface ClientReferralReceived {
+  id: string;
+  referrerClientId: string;
+  status: ReferralStatus;
+  rewardType: ReferralRewardType;
+  rewardValue: string | null;
+  rewardDescription: string | null;
+  qualifiedAt: string | null;
+  appliedAt: string | null;
+  canceledAt: string | null;
+  referrerClient: Pick<ReferralClientSummary, 'id' | 'name' | 'reference' | 'status'>;
+}
+
+export interface ClientReferralsMade {
+  total: number;
+  qualified: number;
+  rewarded: number;
+  items: Array<{
+    id: string;
+    referredClientId: string;
+    status: ReferralStatus;
+    rewardType: ReferralRewardType;
+    rewardValue: string | null;
+    rewardDescription: string | null;
+    qualifiedAt: string | null;
+    appliedAt: string | null;
+    referredClient: Pick<ReferralClientSummary, 'id' | 'name' | 'reference' | 'status'>;
+  }>;
+}
+
+export interface ReferralSummary {
+  pending: number;
+  qualified: number;
+  rewarded: number;
+  canceled: number;
+  awaitingReward: number;
 }
 
 export interface PaymentProviderCredentialStatus {
@@ -262,7 +345,7 @@ export interface DashboardSummary {
     items: Array<{
       label: string;
       count: number;
-      action: 'finance' | 'billing' | 'automations' | 'waitlist';
+      action: 'finance' | 'billing' | 'automations' | 'waitlist' | 'clients';
     }>;
   };
   charts: {
@@ -441,7 +524,7 @@ export interface PaginatedRecoveryCampaigns {
 }
 
 export type ReportType =
-  'clients' | 'renewals' | 'receivables' | 'finance' | 'billing' | 'recovery';
+  'clients' | 'renewals' | 'receivables' | 'finance' | 'billing' | 'recovery' | 'referrals';
 
 export interface OperationalReport {
   columns: string[];
@@ -464,6 +547,8 @@ export interface ReportFilters {
   categoryId?: string;
   dispatchStatus?: MessageDispatch['status'] | '';
   recoveryStatus?: RecoveryCampaignStatus | '';
+  referralStatus?: ReferralStatus | '';
+  referrerClientId?: string;
 }
 
 export interface PaginatedBillingDispatches {
@@ -564,6 +649,11 @@ export interface PaginatedClients {
   };
 }
 
+export interface PaginatedReferrals {
+  items: Referral[];
+  pagination: PaginatedClients['pagination'];
+}
+
 export interface ClientPayload {
   name: string;
   phone: string;
@@ -574,6 +664,10 @@ export interface ClientPayload {
   dueDate: string;
   billingNoticeDays: number;
   notes?: string | undefined;
+  referrerClientId?: string | undefined;
+  referralRewardType?: ReferralRewardType | undefined;
+  referralRewardValue?: number | undefined;
+  referralRewardDescription?: string | undefined;
 }
 
 export interface ApproveWhatsAppPendingContactPayload {
@@ -587,6 +681,10 @@ export interface ApproveWhatsAppPendingContactPayload {
   notes?: string | undefined;
   generateInitialReceivable?: boolean | undefined;
   sendPixWhatsAppNow?: boolean | undefined;
+  referrerClientId?: string | undefined;
+  referralRewardType?: ReferralRewardType | undefined;
+  referralRewardValue?: number | undefined;
+  referralRewardDescription?: string | undefined;
 }
 
 export interface PlanPayload {
@@ -817,6 +915,46 @@ function reportParams(filters: ReportFilters = {}) {
 export function getReport(type: ReportType, filters: ReportFilters = {}) {
   const query = reportParams(filters);
   return apiFetch<OperationalReport>(`/reports/${type}${query ? `?${query}` : ''}`);
+}
+
+export function listReferrals(
+  filters: {
+    search?: string;
+    status?: ReferralStatus | '';
+    referrerClientId?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, String(value));
+  });
+
+  const query = params.toString();
+  return apiFetch<PaginatedReferrals>(`/referrals${query ? `?${query}` : ''}`);
+}
+
+export function getReferralSummary() {
+  return apiFetch<ReferralSummary>('/referrals/summary');
+}
+
+export function applyReferralReward(
+  id: string,
+  payload: { rewardValue?: number; rewardDescription?: string } = {},
+) {
+  return apiFetch<Referral>(`/referrals/${id}/apply-reward`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function cancelReferral(id: string, reason: string) {
+  return apiFetch<Referral>(`/referrals/${id}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
 }
 
 export async function downloadReportCsv(type: ReportType, filters: ReportFilters = {}) {

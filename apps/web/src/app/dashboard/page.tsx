@@ -11,6 +11,7 @@ import {
   Download,
   DollarSign,
   Eye,
+  Gift,
   LayoutDashboard,
   ListChecks,
   MessageCircle,
@@ -87,13 +88,17 @@ import {
   disconnectWhatsApp,
   configureWhatsAppWebhook,
   approveWhatsAppPendingContact,
+  applyReferralReward,
   cancelRecoveryCampaign,
+  cancelReferral,
   getBillingDispatch,
   getBillingSummary,
   getRecoverySummary,
+  getReferralSummary,
   listBillingDispatches,
   listMessageTemplates,
   listRecoveryCampaigns,
+  listReferrals,
   previewMessageTemplate,
   reconcileBilling,
   reconcileRecovery,
@@ -133,6 +138,9 @@ import {
   type RecoveryCampaign,
   type RecoveryCampaignStatus,
   type RecoverySummary,
+  type Referral,
+  type ReferralStatus,
+  type ReferralSummary,
   type WhatsAppConnection,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
@@ -162,6 +170,7 @@ type View =
   | 'plans'
   | 'whatsapp'
   | 'waitlist'
+  | 'referrals'
   | 'billing'
   | 'automations'
   | 'reports'
@@ -171,6 +180,7 @@ type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categori
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'clients', label: 'Clientes', icon: Users },
+  { id: 'referrals', label: 'Indicacoes', icon: Gift },
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
   { id: 'billing', label: 'Cobrancas', icon: Bell },
@@ -351,17 +361,19 @@ export default function DashboardPage() {
                   ? 'Financeiro'
                   : view === 'whatsapp'
                     ? 'WhatsApp'
-                    : view === 'billing'
-                      ? 'Cobrancas'
-                      : view === 'automations'
-                        ? 'Automacoes'
-                        : view === 'reports'
-                          ? 'Relatorios'
-                          : view === 'waitlist'
-                            ? 'Lista de Espera'
-                            : view === 'settings'
-                              ? 'Configuracoes'
-                              : 'Clientes'}
+                    : view === 'referrals'
+                      ? 'Indicacoes'
+                      : view === 'billing'
+                        ? 'Cobrancas'
+                        : view === 'automations'
+                          ? 'Automacoes'
+                          : view === 'reports'
+                            ? 'Relatorios'
+                            : view === 'waitlist'
+                              ? 'Lista de Espera'
+                              : view === 'settings'
+                                ? 'Configuracoes'
+                                : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
         </header>
@@ -442,6 +454,7 @@ export default function DashboardPage() {
           {view === 'finance' ? (
             <FinanceView clients={clients} initialTab={financeInitialTab} />
           ) : null}
+          {view === 'referrals' ? <ReferralsView clients={clients} /> : null}
           {view === 'plans' ? (
             <PlansView
               editingPlan={editingPlan}
@@ -473,10 +486,11 @@ export default function DashboardPage() {
           {view === 'whatsapp' ? <WhatsAppView /> : null}
           {view === 'billing' ? <BillingView /> : null}
           {view === 'automations' ? <AutomationsView /> : null}
-          {view === 'reports' ? <ReportsView plans={plans} /> : null}
+          {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
           {view === 'settings' ? <SettingsView /> : null}
           {view === 'waitlist' ? (
             <WaitlistView
+              clients={clients}
               plans={plans}
               onClientCreated={async (client) => {
                 await loadData();
@@ -509,7 +523,9 @@ function OperationalDashboard({
   onNewClient: () => void;
   onOpenClient: (id: string) => Promise<void>;
   onOpenFinance: (tab: FinanceTab) => void;
-  onOpenOperationalView: (view: Extract<View, 'billing' | 'automations' | 'waitlist'>) => void;
+  onOpenOperationalView: (
+    view: Extract<View, 'clients' | 'billing' | 'automations' | 'waitlist'>,
+  ) => void;
   onRenew: (id: string) => Promise<void>;
 }) {
   const [summary, setSummary] = useState<DashboardSummaryPayload | null>(null);
@@ -971,6 +987,241 @@ function formatPeriodLabel(period: string) {
 
 type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
 
+function ReferralsView({ clients }: { clients: Client[] }) {
+  const [items, setItems] = useState<Referral[]>([]);
+  const [summary, setSummary] = useState<ReferralSummary | null>(null);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState<ReferralStatus | ''>('');
+  const [referrerClientId, setReferrerClientId] = useState('');
+  const [confirming, setConfirming] = useState<Referral | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const loadReferrals = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const [list, nextSummary] = await Promise.all([
+        listReferrals({ search, status, referrerClientId }),
+        getReferralSummary(),
+      ]);
+      setItems(list.items);
+      setSummary(nextSummary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar indicacoes.');
+    } finally {
+      setLoading(false);
+    }
+  }, [referrerClientId, search, status]);
+
+  useEffect(() => {
+    void loadReferrals();
+  }, [loadReferrals]);
+
+  async function applyReward(referral: Referral) {
+    setError('');
+
+    try {
+      await applyReferralReward(referral.id);
+      setConfirming(null);
+      await loadReferrals();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel aplicar o beneficio.');
+    }
+  }
+
+  async function cancelCurrentReferral(referral: Referral) {
+    const reason = window.prompt('Motivo do cancelamento');
+
+    if (!reason) return;
+
+    setError('');
+
+    try {
+      await cancelReferral(referral.id, reason);
+      await loadReferrals();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel cancelar a indicacao.');
+    }
+  }
+
+  return (
+    <section className="workspace-main">
+      {error ? <div className="notice danger">{error}</div> : null}
+      <div className="metric-grid">
+        {[
+          ['Pendentes', summary?.pending ?? 0],
+          ['Qualificadas', summary?.qualified ?? 0],
+          ['Beneficios aplicados', summary?.rewarded ?? 0],
+          ['Aguardando beneficio', summary?.awaitingReward ?? 0],
+        ].map(([label, value]) => (
+          <article className="metric-card" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </article>
+        ))}
+      </div>
+      <div className="toolbar">
+        <div className="search-row">
+          <Search aria-hidden="true" size={18} />
+          <input
+            placeholder="Buscar indicador ou indicado"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+        <select
+          value={status}
+          onChange={(event) => setStatus(event.target.value as ReferralStatus | '')}
+        >
+          <option value="">Todos os status</option>
+          <option value="PENDING">Pendente</option>
+          <option value="QUALIFIED">Qualificada</option>
+          <option value="REWARDED">Recompensada</option>
+          <option value="CANCELED">Cancelada</option>
+        </select>
+        <select
+          value={referrerClientId}
+          onChange={(event) => setReferrerClientId(event.target.value)}
+        >
+          <option value="">Todos os indicadores</option>
+          {clients.map((client) => (
+            <option key={client.id} value={client.id}>
+              {client.name} · {client.reference}
+            </option>
+          ))}
+        </select>
+        <button className="secondary-button" type="button" onClick={() => void loadReferrals()}>
+          Aplicar
+        </button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Indicado</th>
+              <th>Indicador</th>
+              <th>Data</th>
+              <th>Status</th>
+              <th>Beneficio</th>
+              <th>Qualificacao</th>
+              <th>Aplicacao</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((referral) => (
+              <tr key={referral.id}>
+                <td>
+                  <strong>{referral.referredClient.name}</strong>
+                  <span>{referral.referredClient.reference}</span>
+                </td>
+                <td>
+                  <strong>{referral.referrerClient.name}</strong>
+                  <span>{referral.referrerClient.status}</span>
+                </td>
+                <td>{formatDateTime(referral.createdAt)}</td>
+                <td>{referralStatusLabel(referral.status)}</td>
+                <td>{referral.rewardLabel}</td>
+                <td>{referral.qualifiedAt ? formatDateTime(referral.qualifiedAt) : '-'}</td>
+                <td>{referral.appliedAt ? formatDateTime(referral.appliedAt) : '-'}</td>
+                <td>
+                  <div className="row-actions">
+                    {referral.status === 'QUALIFIED' ? (
+                      <button
+                        className="secondary-button compact"
+                        type="button"
+                        onClick={() => setConfirming(referral)}
+                      >
+                        Aplicar beneficio
+                      </button>
+                    ) : null}
+                    {referral.status !== 'REWARDED' && referral.status !== 'CANCELED' ? (
+                      <button
+                        className="ghost-button compact"
+                        type="button"
+                        onClick={() => void cancelCurrentReferral(referral)}
+                      >
+                        Cancelar
+                      </button>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!items.length ? (
+              <tr>
+                <td colSpan={8}>{loading ? 'Carregando...' : 'Nenhuma indicacao encontrada.'}</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+      {confirming ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal">
+            <header className="modal-header">
+              <h2>Aplicar beneficio</h2>
+              <button className="icon-button" type="button" onClick={() => setConfirming(null)}>
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <div className="mini-list">
+              <article>
+                <strong>Indicador</strong>
+                <span>{confirming.referrerClient.name}</span>
+                <p>Status atual: {confirming.referrerClient.status}</p>
+              </article>
+              <article>
+                <strong>Beneficio</strong>
+                <span>{confirming.rewardLabel}</span>
+              </article>
+              <article>
+                <strong>Vencimento atual</strong>
+                <span>{confirming.rewardPreview?.currentDueDate ?? '-'}</span>
+              </article>
+              <article>
+                <strong>Novo vencimento</strong>
+                <span>{confirming.rewardPreview?.newDueDate ?? '-'}</span>
+              </article>
+            </div>
+            <div className="form-actions">
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setConfirming(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void applyReward(confirming)}
+                >
+                  Aplicar beneficio
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function referralStatusLabel(status: ReferralStatus) {
+  const labels = {
+    PENDING: 'Pendente',
+    QUALIFIED: 'Qualificada',
+    REWARDED: 'Recompensada',
+    CANCELED: 'Cancelada',
+  } satisfies Record<ReferralStatus, string>;
+
+  return labels[status];
+}
+
 const reportDefinitions = [
   { id: 'clients', label: 'Clientes' },
   { id: 'renewals', label: 'Renovacoes' },
@@ -978,9 +1229,10 @@ const reportDefinitions = [
   { id: 'finance', label: 'Financeiro' },
   { id: 'billing', label: 'Cobrancas' },
   { id: 'recovery', label: 'Recuperacao' },
+  { id: 'referrals', label: 'Indicacoes' },
 ] satisfies Array<{ id: ReportType; label: string }>;
 
-function ReportsView({ plans }: { plans: Plan[] }) {
+function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
   const [reportType, setReportType] = useState<ReportType>('clients');
   const [filters, setFilters] = useState<ReportFilters>({});
   const [report, setReport] = useState<OperationalReport | null>(null);
@@ -1166,6 +1418,33 @@ function ReportsView({ plans }: { plans: Plan[] }) {
             <option value="CONCLUIDA">Concluida</option>
             <option value="CANCELADA">Cancelada</option>
           </select>
+        ) : null}
+        {reportType === 'referrals' ? (
+          <>
+            <select
+              value={filters.referralStatus ?? ''}
+              onChange={(event) =>
+                updateFilter('referralStatus', event.target.value as ReferralStatus | '')
+              }
+            >
+              <option value="">Todos os status</option>
+              <option value="PENDING">Pendente</option>
+              <option value="QUALIFIED">Qualificada</option>
+              <option value="REWARDED">Recompensada</option>
+              <option value="CANCELED">Cancelada</option>
+            </select>
+            <select
+              value={filters.referrerClientId ?? ''}
+              onChange={(event) => updateFilter('referrerClientId', event.target.value)}
+            >
+              <option value="">Todos os indicadores</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name} · {client.reference}
+                </option>
+              ))}
+            </select>
+          </>
         ) : null}
         <button className="secondary-button" type="button" onClick={() => setFilters({})}>
           Limpar filtros
@@ -1574,7 +1853,7 @@ function ClientsView({
   renewalNotice: string;
 }) {
   const [detailTab, setDetailTab] = useState<
-    'timeline' | 'renewals' | 'receivables' | 'messages' | 'recovery'
+    'timeline' | 'renewals' | 'receivables' | 'messages' | 'recovery' | 'referrals'
   >('timeline');
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
 
@@ -1621,6 +1900,7 @@ function ClientsView({
         {clientFormOpen ? (
           <ClientForm
             client={editingClient ?? undefined}
+            clients={clients}
             plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
             submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
             onSubmit={editingClient ? onUpdate : onCreate}
@@ -1823,6 +2103,13 @@ function ClientsView({
               >
                 Recuperacao
               </button>
+              <button
+                className={detailTab === 'referrals' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('referrals')}
+              >
+                Indicacoes
+              </button>
             </div>
 
             {detailTab === 'timeline' ? (
@@ -1921,6 +2208,44 @@ function ClientsView({
                 ))}
                 {!selectedClient.recoveryCampaigns?.length ? (
                   <div className="empty-state">Sem campanha de recuperacao.</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {detailTab === 'referrals' ? (
+              <div className="mini-list">
+                {selectedClient.referralReceived ? (
+                  <article>
+                    <strong>
+                      Indicado por {selectedClient.referralReceived.referrerClient.name}
+                    </strong>
+                    <span>{referralStatusLabel(selectedClient.referralReceived.status)}</span>
+                    <p>
+                      {selectedClient.referralReceived.rewardType}
+                      {selectedClient.referralReceived.rewardDescription
+                        ? ` · ${selectedClient.referralReceived.rewardDescription}`
+                        : ''}
+                    </p>
+                  </article>
+                ) : null}
+                {selectedClient.referralsMade ? (
+                  <article>
+                    <strong>{selectedClient.referralsMade.total} indicacao(oes) feitas</strong>
+                    <span>
+                      {selectedClient.referralsMade.qualified} qualificadas ·{' '}
+                      {selectedClient.referralsMade.rewarded} recompensadas
+                    </span>
+                  </article>
+                ) : null}
+                {(selectedClient.referralsMade?.items ?? []).map((referral) => (
+                  <article key={referral.id}>
+                    <strong>{referral.referredClient.name}</strong>
+                    <span>{referralStatusLabel(referral.status)}</span>
+                    <p>{referral.rewardType}</p>
+                  </article>
+                ))}
+                {!selectedClient.referralReceived && !selectedClient.referralsMade?.items.length ? (
+                  <div className="empty-state">Sem indicacoes vinculadas.</div>
                 ) : null}
               </div>
             ) : null}
@@ -3456,9 +3781,11 @@ function WhatsAppView() {
 }
 
 function WaitlistView({
+  clients,
   plans,
   onClientCreated,
 }: {
+  clients: Client[];
   plans: Plan[];
   onClientCreated: (client: Client) => Promise<void>;
 }) {
@@ -3738,6 +4065,7 @@ function WaitlistView({
 
       {approveOpen && selected ? (
         <ApprovePendingContactModal
+          clients={clients}
           contact={selected}
           plans={plans}
           onClose={() => setApproveOpen(false)}
@@ -3752,11 +4080,13 @@ function WaitlistView({
 }
 
 function ApprovePendingContactModal({
+  clients,
   contact,
   plans,
   onClose,
   onApproved,
 }: {
+  clients: Client[];
   contact: WhatsAppPendingContact;
   plans: Plan[];
   onClose: () => void;
@@ -3774,6 +4104,7 @@ function ApprovePendingContactModal({
   const [notes, setNotes] = useState('');
   const [generateInitialReceivable, setGenerateInitialReceivable] = useState(true);
   const [sendPixWhatsAppNow, setSendPixWhatsAppNow] = useState(true);
+  const [referrerClientId, setReferrerClientId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -3800,6 +4131,8 @@ function ApprovePendingContactModal({
         notes: notes || undefined,
         generateInitialReceivable,
         sendPixWhatsAppNow: generateInitialReceivable && sendPixWhatsAppNow,
+        referrerClientId: referrerClientId || undefined,
+        referralRewardType: referrerClientId ? 'FREE_MONTH' : undefined,
       });
       await onApproved(client);
     } catch (err) {
@@ -3890,6 +4223,20 @@ function ApprovePendingContactModal({
           <label className="field">
             <span>Observacoes</span>
             <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Indicado por</span>
+            <select
+              value={referrerClientId}
+              onChange={(event) => setReferrerClientId(event.target.value)}
+            >
+              <option value="">Sem indicacao</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name} · {client.reference} · {client.phone}
+                </option>
+              ))}
+            </select>
           </label>
           <section className="inline-panel">
             <div>

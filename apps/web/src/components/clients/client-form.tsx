@@ -5,12 +5,19 @@ import type { Client, ClientPayload, Plan } from '../../lib/crm-api';
 
 interface ClientFormProps {
   client?: Client | undefined;
+  clients?: Client[];
   plans: Plan[];
   submitLabel: string;
   onSubmit: (payload: ClientPayload) => Promise<void>;
 }
 
-export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormProps) {
+export function ClientForm({
+  client,
+  clients = [],
+  plans,
+  submitLabel,
+  onSubmit,
+}: ClientFormProps) {
   const initialPlan = useMemo(
     () => plans.find((plan) => plan.id === client?.planId) ?? plans[0],
     [client?.planId, plans],
@@ -29,8 +36,10 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
     String(client?.billingNoticeDays ?? 0),
   );
   const [notes, setNotes] = useState(client?.notes ?? '');
+  const [referrerClientId, setReferrerClientId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const referralCandidates = clients.filter((candidate) => candidate.id !== client?.id);
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -59,6 +68,10 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
 
       if (email) payload.email = email;
       if (notes) payload.notes = notes;
+      if (!client && referrerClientId) {
+        payload.referrerClientId = referrerClientId;
+        payload.referralRewardType = 'FREE_MONTH';
+      }
 
       await onSubmit(payload);
     } catch (err) {
@@ -153,6 +166,22 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
           <span>Observacoes</span>
           <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
         </label>
+        {!client ? (
+          <label className="field">
+            <span>Indicado por</span>
+            <select
+              value={referrerClientId}
+              onChange={(event) => setReferrerClientId(event.target.value)}
+            >
+              <option value="">Sem indicacao</option>
+              {referralCandidates.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name} · {candidate.reference} · {candidate.phone}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </section>
 
       <div className="form-actions">

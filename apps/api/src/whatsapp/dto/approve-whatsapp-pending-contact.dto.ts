@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -10,6 +11,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { ReferralRewardType } from '@prisma/client';
 
 export class ApproveWhatsAppPendingContactDto {
   @IsString()
@@ -51,4 +53,22 @@ export class ApproveWhatsAppPendingContactDto {
   @IsOptional()
   @IsBoolean()
   sendPixWhatsAppNow?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  referrerClientId?: string;
+
+  @IsOptional()
+  @IsEnum(ReferralRewardType)
+  referralRewardType?: ReferralRewardType;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  referralRewardValue?: number;
+
+  @IsOptional()
+  @IsString()
+  referralRewardDescription?: string;
 }

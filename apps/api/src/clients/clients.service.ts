@@ -9,6 +9,7 @@ import { ClientStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PlansService } from '../plans/plans.service';
 import { RecoveryService } from '../recovery/recovery.service';
+import { ReferralsService } from '../referrals/referrals.service';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CreateClientDto } from './dto/create-client.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
@@ -35,6 +36,11 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
         steps: { include: { template: true; dispatch: true }; orderBy: { stepNumber: 'asc' } };
       };
     };
+    referralReceived: { include: { referrerClient: true } };
+    referralsMade: {
+      orderBy: { createdAt: 'desc' };
+      include: { referredClient: true };
+    };
   };
 }>;
 
@@ -44,6 +50,7 @@ export class ClientsService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(PlansService) private readonly plansService: PlansService,
     @Inject(RecoveryService) private readonly recoveryService: RecoveryService,
+    @Inject(ReferralsService) private readonly referralsService: ReferralsService,
   ) {}
 
   async list(query: ListClientsDto) {
@@ -73,6 +80,11 @@ export class ClientsService {
                 orderBy: { stepNumber: 'asc' },
               },
             },
+          },
+          referralReceived: { include: { referrerClient: true } },
+          referralsMade: {
+            orderBy: { createdAt: 'desc' },
+            include: { referredClient: true },
           },
         },
         orderBy,
@@ -111,6 +123,11 @@ export class ClientsService {
           include: {
             steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
           },
+        },
+        referralReceived: { include: { referrerClient: true } },
+        referralsMade: {
+          orderBy: { createdAt: 'desc' },
+          include: { referredClient: true },
         },
       },
     });
@@ -154,6 +171,15 @@ export class ClientsService {
             title: 'Cliente cadastrado.',
             createdByUserId: actorUserId,
           },
+        });
+
+        await this.referralsService.createPending(tx, {
+          referredClientId: created.id,
+          referrerClientId: dto.referrerClientId,
+          rewardType: dto.referralRewardType,
+          rewardValue: dto.referralRewardValue,
+          rewardDescription: dto.referralRewardDescription,
+          actorUserId,
         });
 
         return created;
@@ -276,6 +302,15 @@ export class ClientsService {
         startRecovery: dto.startRecovery === true,
         actorUserId,
       });
+
+      if (client.status === 'PENDENTE_PAGAMENTO' && dto.status === 'CANCELADO') {
+        await this.referralsService.cancelPendingForClientBeforePayment(
+          tx,
+          id,
+          reason,
+          actorUserId,
+        );
+      }
     });
 
     return this.get(id);
@@ -435,6 +470,48 @@ export class ClientsService {
                   : null,
               })),
             })),
+            referralReceived: client.referralReceived
+              ? {
+                  id: client.referralReceived.id,
+                  referrerClientId: client.referralReceived.referrerClientId,
+                  status: client.referralReceived.status,
+                  rewardType: client.referralReceived.rewardType,
+                  rewardValue: client.referralReceived.rewardValue?.toString() ?? null,
+                  rewardDescription: client.referralReceived.rewardDescription,
+                  qualifiedAt: client.referralReceived.qualifiedAt?.toISOString() ?? null,
+                  appliedAt: client.referralReceived.appliedAt?.toISOString() ?? null,
+                  canceledAt: client.referralReceived.canceledAt?.toISOString() ?? null,
+                  referrerClient: {
+                    id: client.referralReceived.referrerClient.id,
+                    name: client.referralReceived.referrerClient.name,
+                    reference: client.referralReceived.referrerClient.reference,
+                    status: client.referralReceived.referrerClient.status,
+                  },
+                }
+              : null,
+            referralsMade: {
+              total: client.referralsMade.length,
+              qualified: client.referralsMade.filter((referral) => referral.status === 'QUALIFIED')
+                .length,
+              rewarded: client.referralsMade.filter((referral) => referral.status === 'REWARDED')
+                .length,
+              items: client.referralsMade.map((referral) => ({
+                id: referral.id,
+                referredClientId: referral.referredClientId,
+                status: referral.status,
+                rewardType: referral.rewardType,
+                rewardValue: referral.rewardValue?.toString() ?? null,
+                rewardDescription: referral.rewardDescription,
+                qualifiedAt: referral.qualifiedAt?.toISOString() ?? null,
+                appliedAt: referral.appliedAt?.toISOString() ?? null,
+                referredClient: {
+                  id: referral.referredClient.id,
+                  name: referral.referredClient.name,
+                  reference: referral.referredClient.reference,
+                  status: referral.referredClient.status,
+                },
+              })),
+            },
           }
         : {}),
     };

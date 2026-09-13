@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -19,6 +20,7 @@ import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FinanceService } from '../finance/finance.service';
 import { PlansService } from '../plans/plans.service';
+import { ReferralsService } from '../referrals/referrals.service';
 import {
   formatBusinessDate,
   getBusinessDateDay,
@@ -68,6 +70,9 @@ export class WhatsAppService {
     private readonly config: ConfigService,
     @Inject(KiragoWebhookNormalizer)
     private readonly normalizer: KiragoWebhookNormalizer,
+    @Optional()
+    @Inject(ReferralsService)
+    private readonly referralsService?: ReferralsService,
   ) {}
 
   async getConnection() {
@@ -565,6 +570,15 @@ export class WhatsAppService {
             },
             createdByUserId: actorUserId,
           },
+        });
+
+        await this.referralsService?.createPending(tx, {
+          referredClientId: created.id,
+          referrerClientId: dto.referrerClientId,
+          rewardType: dto.referralRewardType,
+          rewardValue: dto.referralRewardValue,
+          rewardDescription: dto.referralRewardDescription,
+          actorUserId,
         });
 
         return { client: created, initialReceivable };

@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   type Client,
+  type ClientReference,
   type MessageDispatch,
   type MessageTemplate,
   type Plan,
@@ -36,8 +37,10 @@ const recoverySteps = [
 
 type Transaction = Prisma.TransactionClient;
 type RecoveryClient = Client & { plan: Plan };
+type RecoveryReference = ClientReference & { client: Client; plan: Plan };
 type RecoveryCampaignWithRelations = RecoveryCampaign & {
   client: RecoveryClient;
+  clientReference: ClientReference & { client: Client; plan: Plan };
   steps: Array<
     RecoveryCampaignStep & {
       template: MessageTemplate | null;
@@ -47,6 +50,7 @@ type RecoveryCampaignWithRelations = RecoveryCampaign & {
 };
 type RecoveryDispatch = MessageDispatch & {
   client: RecoveryClient | null;
+  clientReference: RecoveryReference | null;
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
   recoveryCampaign:
@@ -106,11 +110,57 @@ export class RecoveryService {
     }
   }
 
+  async handleClientReferenceStatusChange(
+    tx: Transaction,
+    reference: RecoveryReference,
+    nextStatus: 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO',
+    options: { startRecovery?: boolean; actorUserId?: string; changedAt?: Date } = {},
+  ) {
+    const changedAt = options.changedAt ?? new Date();
+    const recoveryClient = this.referenceAsRecoveryClient(reference);
+
+    if (nextStatus === 'INATIVO') {
+      if (options.startRecovery) {
+        await this.startCampaign(tx, recoveryClient, changedAt, options.actorUserId, reference.id);
+      } else {
+        await this.cancelActiveReferenceCampaigns(
+          tx,
+          reference.id,
+          'RECOVERY_NOT_REQUESTED',
+          'Recuperacao automatica nao solicitada na inativacao da referencia.',
+          options.actorUserId,
+        );
+      }
+      return;
+    }
+
+    if (nextStatus === 'ATIVO') {
+      await this.cancelActiveCampaignsAfterReactivation(
+        tx,
+        reference.clientId,
+        options.actorUserId,
+        reference.id,
+      );
+      return;
+    }
+
+    if (nextStatus === 'CANCELADO') {
+      await this.cancelActiveReferenceCampaigns(
+        tx,
+        reference.id,
+        'CLIENT_REFERENCE_CANCELED',
+        'Referencia cancelada durante campanha de recuperacao.',
+        options.actorUserId,
+      );
+    }
+  }
+
   async reconcile() {
     const campaigns = await this.prisma.recoveryCampaign.findMany({
       where: { status: 'ATIVA' },
       include: {
         client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
         steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
       },
     });
@@ -121,21 +171,26 @@ export class RecoveryService {
     const completed = 0;
 
     for (const campaign of campaigns) {
-      if (campaign.client.status === 'ATIVO') {
+      if (campaign.clientReference.status === 'ATIVO') {
         await this.prisma.$transaction((tx) =>
-          this.cancelActiveCampaignsAfterReactivation(tx, campaign.clientId, undefined),
+          this.cancelActiveCampaignsAfterReactivation(
+            tx,
+            campaign.clientId,
+            undefined,
+            campaign.clientReferenceId,
+          ),
         );
         canceled += 1;
         continue;
       }
 
-      if (campaign.client.status === 'CANCELADO') {
+      if (campaign.clientReference.status === 'CANCELADO') {
         await this.prisma.$transaction((tx) =>
-          this.cancelActiveCampaigns(
+          this.cancelActiveReferenceCampaigns(
             tx,
-            campaign.clientId,
-            'CLIENT_CANCELED',
-            'Cliente cancelado durante campanha de recuperacao.',
+            campaign.clientReferenceId,
+            'CLIENT_REFERENCE_CANCELED',
+            'Referencia cancelada durante campanha de recuperacao.',
             undefined,
           ),
         );
@@ -207,12 +262,10 @@ export class RecoveryService {
 
     if (query.search) {
       const search = query.search.trim();
-      where.client = {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { reference: { contains: search, mode: 'insensitive' } },
-        ],
-      };
+      where.OR = [
+        { client: { name: { contains: search, mode: 'insensitive' } } },
+        { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
+      ];
     }
 
     const [campaigns, total] = await this.prisma.$transaction([
@@ -220,6 +273,7 @@ export class RecoveryService {
         where,
         include: {
           client: { include: { plan: true } },
+          clientReference: { include: { client: true, plan: true } },
           steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
         },
         orderBy: [{ status: 'asc' }, { startedAt: 'desc' }],
@@ -245,6 +299,7 @@ export class RecoveryService {
       where: { id },
       include: {
         client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
         steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
       },
     });
@@ -282,13 +337,18 @@ export class RecoveryService {
     client: RecoveryClient,
     startedAt: Date,
     actorUserId?: string,
+    clientReferenceId?: string,
   ) {
     if (client.status === 'CANCELADO') {
       return null;
     }
 
     const existing = await tx.recoveryCampaign.findFirst({
-      where: { clientId: client.id, status: 'ATIVA' },
+      where: {
+        clientId: client.id,
+        ...(clientReferenceId ? { clientReferenceId } : {}),
+        status: 'ATIVA',
+      },
     });
 
     if (existing) {
@@ -300,6 +360,7 @@ export class RecoveryService {
     const campaign = await tx.recoveryCampaign.create({
       data: {
         clientId: client.id,
+        clientReferenceId: clientReferenceId ?? (await this.findPrimaryReferenceId(tx, client.id)),
         status: 'ATIVA',
         startedAt,
       },
@@ -328,6 +389,7 @@ export class RecoveryService {
       const dispatch = await tx.messageDispatch.create({
         data: {
           clientId: client.id,
+          clientReferenceId: clientReferenceId ?? campaign.clientReferenceId,
           recoveryCampaignId: campaign.id,
           templateId: template.id,
           whatsAppConnectionId: connection?.id ?? null,
@@ -391,7 +453,10 @@ export class RecoveryService {
 
       const scheduledFor =
         step?.scheduledFor ?? this.calculateScheduledFor(campaign.startedAt, expected.delayDays);
-      const renderedContent = this.renderForClient(template.content, campaign.client);
+      const renderedContent = this.renderForClient(
+        template.content,
+        this.referenceAsRecoveryClient(campaign.clientReference),
+      );
       const idempotencyKey = this.buildIdempotencyKey(
         campaign.clientId,
         campaign.id,
@@ -415,6 +480,7 @@ export class RecoveryService {
           const dispatch = await tx.messageDispatch.create({
             data: {
               clientId: campaign.clientId,
+              clientReferenceId: campaign.clientReferenceId,
               recoveryCampaignId: campaign.id,
               templateId: template.id,
               whatsAppConnectionId: connection?.id ?? null,
@@ -472,6 +538,7 @@ export class RecoveryService {
       where: { id },
       include: {
         client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
         template: true,
         whatsAppConnection: true,
         recoveryCampaign: { include: { steps: true } },
@@ -529,6 +596,7 @@ export class RecoveryService {
           },
           include: {
             client: { include: { plan: true } },
+            clientReference: { include: { client: true, plan: true } },
             template: true,
             whatsAppConnection: true,
             recoveryCampaign: { include: { steps: true } },
@@ -574,28 +642,43 @@ export class RecoveryService {
       return { code: 'CLIENT_MISSING', message: 'Cliente da recuperacao nao encontrado.' };
     }
 
-    if (dispatch.client.status === 'ATIVO') {
-      await this.prisma.$transaction((tx) =>
-        this.cancelActiveCampaignsAfterReactivation(tx, dispatch.client!.id, undefined),
-      );
-      return { code: 'CLIENT_REACTIVATED', message: 'Cliente reativado antes do envio.' };
-    }
+    const referenceStatus = dispatch.clientReference?.status ?? dispatch.client.status;
 
-    if (dispatch.client.status === 'CANCELADO') {
+    if (referenceStatus === 'ATIVO') {
       await this.prisma.$transaction((tx) =>
-        this.cancelActiveCampaigns(
+        this.cancelActiveCampaignsAfterReactivation(
           tx,
           dispatch.client!.id,
-          'CLIENT_CANCELED',
-          'Cliente cancelado durante campanha de recuperacao.',
           undefined,
+          dispatch.clientReferenceId ?? undefined,
         ),
       );
-      return { code: 'CLIENT_CANCELED', message: 'Cliente cancelado antes do envio.' };
+      return { code: 'CLIENT_REACTIVATED', message: 'Referencia reativada antes do envio.' };
     }
 
-    if (dispatch.client.status !== 'INATIVO') {
-      return { code: 'CLIENT_NOT_INACTIVE', message: 'Cliente nao esta inativo.' };
+    if (referenceStatus === 'CANCELADO') {
+      await this.prisma.$transaction((tx) =>
+        dispatch.clientReferenceId
+          ? this.cancelActiveReferenceCampaigns(
+              tx,
+              dispatch.clientReferenceId,
+              'CLIENT_REFERENCE_CANCELED',
+              'Referencia cancelada durante campanha de recuperacao.',
+              undefined,
+            )
+          : this.cancelActiveCampaigns(
+              tx,
+              dispatch.client!.id,
+              'CLIENT_CANCELED',
+              'Cliente cancelado durante campanha de recuperacao.',
+              undefined,
+            ),
+      );
+      return { code: 'CLIENT_CANCELED', message: 'Referencia cancelada antes do envio.' };
+    }
+
+    if (referenceStatus !== 'INATIVO') {
+      return { code: 'CLIENT_NOT_INACTIVE', message: 'Referencia nao esta inativa.' };
     }
 
     if (!dispatch.recoveryCampaign || dispatch.recoveryCampaign.status !== 'ATIVA') {
@@ -652,6 +735,7 @@ export class RecoveryService {
         data: { status, errorCode, errorMessage, nextAttemptAt: null },
         include: {
           client: { include: { plan: true } },
+          clientReference: { include: { client: true, plan: true } },
           template: true,
           whatsAppConnection: true,
           recoveryCampaign: { include: { steps: true } },
@@ -691,6 +775,7 @@ export class RecoveryService {
       },
       include: {
         client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
         template: true,
         whatsAppConnection: true,
         recoveryCampaign: { include: { steps: true } },
@@ -712,9 +797,10 @@ export class RecoveryService {
     tx: Transaction,
     clientId: string,
     actorUserId?: string,
+    clientReferenceId?: string,
   ) {
     const campaigns = await tx.recoveryCampaign.findMany({
-      where: { clientId, status: 'ATIVA' },
+      where: { clientId, ...(clientReferenceId ? { clientReferenceId } : {}), status: 'ATIVA' },
     });
 
     for (const campaign of campaigns) {
@@ -758,6 +844,53 @@ export class RecoveryService {
     for (const campaign of campaigns) {
       await this.cancelCampaignById(tx, campaign.id, reason, errorCode, actorUserId);
     }
+  }
+
+  private async cancelActiveReferenceCampaigns(
+    tx: Transaction,
+    clientReferenceId: string,
+    errorCode: string,
+    reason: string,
+    actorUserId?: string,
+  ) {
+    const campaigns = await tx.recoveryCampaign.findMany({
+      where: { clientReferenceId, status: 'ATIVA' },
+    });
+
+    for (const campaign of campaigns) {
+      await this.cancelCampaignById(tx, campaign.id, reason, errorCode, actorUserId);
+    }
+  }
+
+  private async findPrimaryReferenceId(tx: Transaction, clientId: string) {
+    if (!tx.clientReference) {
+      return clientId;
+    }
+
+    const reference = await tx.clientReference.findFirst({
+      where: { clientId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    return reference.id;
+  }
+
+  private referenceAsRecoveryClient(reference: RecoveryReference): RecoveryClient {
+    return {
+      ...reference.client,
+      reference: reference.reference,
+      planId: reference.planId,
+      recurringValue: reference.recurringValue,
+      dueDate: reference.dueDate,
+      billingAnchorDay: reference.billingAnchorDay,
+      billingNoticeDays: reference.billingNoticeDays,
+      status: reference.status,
+      plan: reference.plan,
+    };
   }
 
   private async cancelCampaignById(
@@ -1041,9 +1174,9 @@ export class RecoveryService {
       client: {
         id: campaign.client.id,
         name: campaign.client.name,
-        reference: campaign.client.reference,
-        status: campaign.client.status,
-        planName: campaign.client.plan.name,
+        reference: campaign.clientReference.reference,
+        status: campaign.clientReference.status,
+        planName: campaign.clientReference.plan.name,
       },
       steps: campaign.steps.map((step) => ({
         id: step.id,

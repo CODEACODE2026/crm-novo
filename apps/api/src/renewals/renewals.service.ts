@@ -1,12 +1,12 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../common/prisma/prisma.service';
-import { RecoveryService } from '../recovery/recovery.service';
 import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
   getBusinessDateDay,
 } from '../clients/utils/business-date';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { RecoveryService } from '../recovery/recovery.service';
 import { CreateRenewalDto } from './dto/create-renewal.dto';
 import { RenewalPreviewDto } from './dto/renewal-preview.dto';
 import {
@@ -17,6 +17,7 @@ import {
 type RenewalResult = Prisma.RenewalGetPayload<{
   include: {
     client: { include: { plan: true } };
+    clientReference: { include: { client: true; plan: true } };
     receivable: true;
   };
 }>;
@@ -29,25 +30,36 @@ export class RenewalsService {
   ) {}
 
   async preview(clientId: string, dto: RenewalPreviewDto) {
-    const { client, plan, newDueDate, anchorDay } = await this.buildPreview(clientId, dto);
+    const reference = await this.findPrimaryReference(clientId);
+    return this.previewReference(reference.id, dto);
+  }
+
+  async previewReference(clientReferenceId: string, dto: RenewalPreviewDto) {
+    const { reference, plan, newDueDate, anchorDay } = await this.buildPreview(
+      clientReferenceId,
+      dto,
+    );
+    const client = reference.client;
 
     return {
       clientId: client.id,
+      clientReferenceId: reference.id,
+      reference: reference.reference,
       clientName: client.name,
-      clientStatus: client.status,
+      clientStatus: reference.status,
       currentPlan: {
-        id: client.plan.id,
-        name: client.plan.name,
-        durationMonths: client.plan.durationMonths,
+        id: reference.plan.id,
+        name: reference.plan.name,
+        durationMonths: reference.plan.durationMonths,
       },
       selectedPlan: {
         id: plan.id,
         name: plan.name,
         durationMonths: plan.durationMonths,
       },
-      planChanged: client.planId !== plan.id,
+      planChanged: reference.planId !== plan.id,
       amount: dto.amount.toFixed(2),
-      previousDueDate: formatBusinessDate(client.dueDate),
+      previousDueDate: formatBusinessDate(reference.dueDate),
       newDueDate: formatBusinessDate(newDueDate),
       billingAnchorDay: anchorDay,
       receivableDescription: buildRenewalReceivableDescription(plan.name),
@@ -55,15 +67,21 @@ export class RenewalsService {
   }
 
   async create(clientId: string, dto: CreateRenewalDto, actorUserId: string) {
+    const reference = await this.findPrimaryReference(clientId);
+    return this.createForReference(reference.id, dto, actorUserId);
+  }
+
+  async createForReference(clientReferenceId: string, dto: CreateRenewalDto, actorUserId: string) {
     const existing = await this.prisma.renewal.findUnique({
       where: {
-        clientId_idempotencyKey: {
-          clientId,
+        clientReferenceId_idempotencyKey: {
+          clientReferenceId,
           idempotencyKey: dto.idempotencyKey,
         },
       },
       include: {
         client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
         receivable: true,
       },
     });
@@ -74,31 +92,30 @@ export class RenewalsService {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
-        const client = await tx.client.findUnique({
-          where: { id: clientId },
-          include: { plan: true },
+        const reference = await tx.clientReference.findUnique({
+          where: { id: clientReferenceId },
+          include: { client: true, plan: true },
         });
 
-        if (!client) {
-          throw new NotFoundException('Cliente nao encontrado.');
+        if (!reference) {
+          throw new NotFoundException('Referencia do cliente nao encontrada.');
         }
 
-        const plan = await tx.plan.findFirst({
-          where: { id: dto.planId, active: true },
-        });
+        const plan = await tx.plan.findFirst({ where: { id: dto.planId, active: true } });
 
         if (!plan) {
           throw new NotFoundException('Plano ativo nao encontrado.');
         }
 
-        const anchorDay = client.billingAnchorDay ?? getBusinessDateDay(client.dueDate);
+        const client = reference.client;
+        const anchorDay = reference.billingAnchorDay ?? getBusinessDateDay(reference.dueDate);
         const newDueDate = addCalendarMonthsPreservingAnchor(
-          client.dueDate,
+          reference.dueDate,
           plan.durationMonths,
           anchorDay,
         );
-        const previousStatus = client.status;
-        const planChanged = client.planId !== plan.id;
+        const previousStatus = reference.status;
+        const planChanged = reference.planId !== plan.id;
         const receivableDescription = buildRenewalReceivableDescription(plan.name);
         const reactivationDescription =
           previousStatus === 'ATIVO' ? null : this.buildReactivationDescription(previousStatus);
@@ -106,8 +123,9 @@ export class RenewalsService {
         const renewal = await tx.renewal.create({
           data: {
             clientId: client.id,
+            clientReferenceId: reference.id,
             planId: plan.id,
-            previousDueDate: client.dueDate,
+            previousDueDate: reference.dueDate,
             newDueDate,
             amount: dto.amount,
             planName: plan.name,
@@ -120,6 +138,7 @@ export class RenewalsService {
         await tx.receivable.create({
           data: {
             clientId: client.id,
+            clientReferenceId: reference.id,
             renewalId: renewal.id,
             description: receivableDescription,
             amount: dto.amount,
@@ -128,8 +147,8 @@ export class RenewalsService {
           },
         });
 
-        await tx.client.update({
-          where: { id: client.id },
+        await tx.clientReference.update({
+          where: { id: reference.id },
           data: {
             dueDate: newDueDate,
             billingAnchorDay: anchorDay,
@@ -143,6 +162,7 @@ export class RenewalsService {
           await tx.clientStatusHistory.create({
             data: {
               clientId: client.id,
+              clientReferenceId: reference.id,
               previousStatus,
               newStatus: 'ATIVO',
               reason: reactivationDescription,
@@ -150,29 +170,34 @@ export class RenewalsService {
             },
           });
 
-          await this.recoveryService.handleClientStatusChange(tx, client, 'ATIVO', {
-            actorUserId,
-          });
+          await this.recoveryService.handleClientReferenceStatusChange(
+            tx,
+            { ...reference, status: 'ATIVO' },
+            'ATIVO',
+            { actorUserId },
+          );
         }
 
         await tx.clientEvent.create({
           data: {
             clientId: client.id,
             type: 'CLIENT_RENEWED',
-            title: 'Cliente renovado.',
+            title: `Referencia ${reference.reference} renovada.`,
             description: this.buildTimelineDescription({
               amount: dto.amount,
               newDueDate,
               planChanged,
-              previousDueDate: client.dueDate,
-              previousPlanName: client.plan.name,
+              previousDueDate: reference.dueDate,
+              previousPlanName: reference.plan.name,
               reactivationDescription,
               selectedPlanName: plan.name,
             }),
             metadata: {
               renewalId: renewal.id,
+              clientReferenceId: reference.id,
+              reference: reference.reference,
               planId: plan.id,
-              previousDueDate: formatBusinessDate(client.dueDate),
+              previousDueDate: formatBusinessDate(reference.dueDate),
               newDueDate: formatBusinessDate(newDueDate),
               amount: dto.amount,
             },
@@ -184,6 +209,7 @@ export class RenewalsService {
           where: { id: renewal.id },
           include: {
             client: { include: { plan: true } },
+            clientReference: { include: { client: true, plan: true } },
             receivable: true,
           },
         });
@@ -194,13 +220,14 @@ export class RenewalsService {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         const existingAfterConflict = await this.prisma.renewal.findUnique({
           where: {
-            clientId_idempotencyKey: {
-              clientId,
+            clientReferenceId_idempotencyKey: {
+              clientReferenceId,
               idempotencyKey: dto.idempotencyKey,
             },
           },
           include: {
             client: { include: { plan: true } },
+            clientReference: { include: { client: true, plan: true } },
             receivable: true,
           },
         });
@@ -216,33 +243,45 @@ export class RenewalsService {
     }
   }
 
-  private async buildPreview(clientId: string, dto: RenewalPreviewDto) {
-    const [client, plan] = await Promise.all([
-      this.prisma.client.findUnique({
-        where: { id: clientId },
-        include: { plan: true },
+  private async buildPreview(clientReferenceId: string, dto: RenewalPreviewDto) {
+    const [reference, plan] = await Promise.all([
+      this.prisma.clientReference.findUnique({
+        where: { id: clientReferenceId },
+        include: { client: true, plan: true },
       }),
-      this.prisma.plan.findFirst({
-        where: { id: dto.planId, active: true },
-      }),
+      this.prisma.plan.findFirst({ where: { id: dto.planId, active: true } }),
     ]);
 
-    if (!client) {
-      throw new NotFoundException('Cliente nao encontrado.');
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
     }
 
     if (!plan) {
       throw new NotFoundException('Plano ativo nao encontrado.');
     }
 
-    const anchorDay = client.billingAnchorDay ?? getBusinessDateDay(client.dueDate);
+    const anchorDay = reference.billingAnchorDay ?? getBusinessDateDay(reference.dueDate);
     const newDueDate = addCalendarMonthsPreservingAnchor(
-      client.dueDate,
+      reference.dueDate,
       plan.durationMonths,
       anchorDay,
     );
 
-    return { client, plan, newDueDate, anchorDay };
+    return { reference, plan, newDueDate, anchorDay };
+  }
+
+  private async findPrimaryReference(clientId: string) {
+    const reference = await this.prisma.clientReference.findFirst({
+      where: { clientId },
+      include: { client: true, plan: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    return reference;
   }
 
   private presentRenewalResult(result: RenewalResult, idempotentReplay: boolean) {
@@ -254,16 +293,22 @@ export class RenewalsService {
       idempotentReplay,
       client: {
         ...result.client,
-        dueDate: formatBusinessDate(result.client.dueDate),
-        recurringValue: result.client.recurringValue.toString(),
+        dueDate: formatBusinessDate(result.clientReference.dueDate),
+        recurringValue: result.clientReference.recurringValue.toString(),
         plan: {
-          ...result.client.plan,
-          defaultValue: result.client.plan.defaultValue.toString(),
+          ...result.clientReference.plan,
+          defaultValue: result.clientReference.plan.defaultValue.toString(),
         },
+      },
+      clientReference: {
+        id: result.clientReference.id,
+        reference: result.clientReference.reference,
+        status: result.clientReference.status,
       },
       renewal: {
         id: result.id,
         clientId: result.clientId,
+        clientReferenceId: result.clientReferenceId,
         planId: result.planId,
         planName: result.planName,
         durationMonths: result.durationMonths,
@@ -319,20 +364,20 @@ export class RenewalsService {
       );
     }
 
-    return lines.join('\\n');
+    return lines.join('\n');
   }
 
   private buildReactivationDescription(
     previousStatus: 'PENDENTE_PAGAMENTO' | 'INATIVO' | 'CANCELADO',
   ) {
     if (previousStatus === 'CANCELADO') {
-      return 'Cliente cancelado foi reativado através de renovação.';
+      return 'Referencia cancelada foi reativada atraves de renovacao.';
     }
 
     if (previousStatus === 'PENDENTE_PAGAMENTO') {
-      return 'Cliente pendente de pagamento foi ativado através de renovação.';
+      return 'Referencia pendente de pagamento foi ativada atraves de renovacao.';
     }
 
-    return 'Cliente inativo foi reativado através de renovação.';
+    return 'Referencia inativa foi reativada atraves de renovacao.';
   }
 }

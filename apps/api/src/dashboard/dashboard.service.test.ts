@@ -64,10 +64,27 @@ function createDashboardPrisma() {
     status: 'CANCELADO' as const,
   };
   const clients = [activeDueToday, activeTomorrow, activeOverdue, inactive, canceled];
+  const clientReferences = clients.map((client) => ({
+    id: `ref-${client.id}`,
+    clientId: client.id,
+    reference: client.reference,
+    planId: client.planId,
+    recurringValue: client.recurringValue,
+    dueDate: client.dueDate,
+    billingAnchorDay: client.billingAnchorDay,
+    billingNoticeDays: client.billingNoticeDays,
+    notes: client.notes,
+    status: client.status,
+    createdAt: client.createdAt,
+    updatedAt: client.updatedAt,
+    client,
+    plan,
+  }));
   const receivables = [
     {
       id: '77777777-7777-4777-8777-777777777777',
       clientId: activeOverdue.id,
+      clientReferenceId: `ref-${activeOverdue.id}`,
       renewalId: '88888888-8888-4888-8888-888888888888',
       description: 'Recebivel vencido',
       amount: decimal('40.00'),
@@ -79,10 +96,12 @@ function createDashboardPrisma() {
       createdAt: new Date(),
       updatedAt: new Date(),
       client: activeOverdue,
+      clientReference: clientReferences[2],
     },
     {
       id: '99999999-9999-4999-8999-999999999999',
       clientId: activeTomorrow.id,
+      clientReferenceId: `ref-${activeTomorrow.id}`,
       renewalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       description: 'Recebivel futuro',
       amount: decimal('60.00'),
@@ -94,6 +113,7 @@ function createDashboardPrisma() {
       createdAt: new Date(),
       updatedAt: new Date(),
       client: activeTomorrow,
+      clientReference: clientReferences[1],
     },
   ];
   const transactions = [
@@ -191,6 +211,42 @@ function createDashboardPrisma() {
                 ? client.dueDate.getTime() === where.dueDate.getTime()
                 : where.dueDate
                   ? inDateRange(client.dueDate, where.dueDate)
+                  : true,
+            ),
+        ),
+    },
+    clientReference: {
+      count: ({
+        where,
+      }: {
+        where: {
+          status?: string;
+          dueDate?: Date | { gte?: Date; lte?: Date; lt?: Date };
+        };
+      }) =>
+        Promise.resolve(
+          clientReferences.filter((reference) => {
+            if (where.status && reference.status !== where.status) return false;
+            if (where.dueDate instanceof Date) {
+              return reference.dueDate.getTime() === where.dueDate.getTime();
+            }
+            if (where.dueDate) return inDateRange(reference.dueDate, where.dueDate);
+            return true;
+          }).length,
+        ),
+      findMany: ({
+        where,
+      }: {
+        where: { dueDate?: Date | { gte?: Date; lte?: Date; lt?: Date } };
+      }) =>
+        Promise.resolve(
+          clientReferences
+            .filter((reference) => reference.status === 'ATIVO')
+            .filter((reference) =>
+              where.dueDate instanceof Date
+                ? reference.dueDate.getTime() === where.dueDate.getTime()
+                : where.dueDate
+                  ? inDateRange(reference.dueDate, where.dueDate)
                   : true,
             ),
         ),

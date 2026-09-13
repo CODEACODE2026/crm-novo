@@ -32,6 +32,10 @@ export class ListFinancialTransactionsDto {
   clientId?: string;
 
   @IsOptional()
+  @IsUUID()
+  clientReferenceId?: string;
+
+  @IsOptional()
   @IsString()
   startDate?: string;
 

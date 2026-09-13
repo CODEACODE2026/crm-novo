@@ -1,7 +1,11 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, Min, ValidateIf } from 'class-validator';
+import { IsNumber, IsOptional, IsString, IsUUID, Min, ValidateIf } from 'class-validator';
 
 export class ApplyReferralRewardDto {
+  @IsOptional()
+  @IsUUID()
+  clientReferenceId?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })

@@ -50,6 +50,21 @@ function createFinancePrisma() {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+  const clientReference = {
+    id: '99999999-9999-4999-8999-999999999999',
+    clientId: client.id,
+    reference: client.reference,
+    planId: client.planId,
+    recurringValue: client.recurringValue,
+    dueDate: client.dueDate,
+    billingAnchorDay: client.billingAnchorDay,
+    billingNoticeDays: client.billingNoticeDays,
+    notes: client.notes,
+    status: client.status,
+    createdAt: client.createdAt,
+    updatedAt: client.updatedAt,
+    plan,
+  };
   const renewal = {
     id: '66666666-6666-4666-8666-666666666666',
     clientId: client.id,
@@ -65,6 +80,7 @@ function createFinancePrisma() {
   const receivable = {
     id: '77777777-7777-4777-8777-777777777777',
     clientId: client.id,
+    clientReferenceId: clientReference.id,
     renewalId: renewal.id as string | null,
     purpose: 'RENEWAL' as 'RENEWAL' | 'INITIAL_ACTIVATION',
     description: 'Renovacao - Plano Mensal',
@@ -149,8 +165,18 @@ function createFinancePrisma() {
           ...transaction,
           category: categories.find((category) => category.id === transaction.categoryId),
           client,
-          receivable,
+          clientReference,
+          receivable: { ...receivable, clientReference },
         });
+      },
+    },
+    clientReference: {
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(where.id === clientReference.id ? clientReference : null),
+      update: ({ data }: { data: Partial<typeof clientReference> }) => {
+        Object.assign(clientReference, data);
+        Object.assign(client, data);
+        return Promise.resolve(clientReference);
       },
     },
     receivable: {
@@ -162,6 +188,7 @@ function createFinancePrisma() {
         return Promise.resolve({
           ...receivable,
           client: { ...client, plan },
+          clientReference: { ...clientReference, plan },
           renewal,
           paymentTransaction:
             transactions.find((transaction) => transaction.receivableId === receivable.id) ?? null,
@@ -175,6 +202,7 @@ function createFinancePrisma() {
         return Promise.resolve({
           ...receivable,
           client: { ...client, plan },
+          clientReference: { ...clientReference, plan },
           renewal,
           paymentTransaction: null,
           paymentIntents,
@@ -310,6 +338,7 @@ function createFinancePrisma() {
     entryCategory,
     expenseCategory,
     client,
+    clientReference,
     plan,
     receivable,
     paymentIntents,
@@ -393,9 +422,9 @@ describe('FinanceService', () => {
 
   it('activates a pending client from manual payment using the original due date cycle', async () => {
     const fake = createFinancePrisma();
-    fake.client.status = 'PENDENTE_PAGAMENTO';
-    fake.client.dueDate = parseBusinessDate('2026-09-10');
-    fake.client.billingAnchorDay = 10;
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-10');
+    fake.clientReference.billingAnchorDay = 10;
     fake.receivable.purpose = 'INITIAL_ACTIVATION';
     fake.receivable.renewalId = null;
     fake.receivable.dueDate = parseBusinessDate('2026-09-10');
@@ -412,8 +441,8 @@ describe('FinanceService', () => {
       actorUserId,
     );
 
-    expect(fake.client.status).toBe('ATIVO');
-    expect(fake.client.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-10'));
     expect(fake.transactions).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(1);
@@ -609,9 +638,9 @@ describe('FinanceService', () => {
 
   it('activates once from paid PIX replay and keeps the cycle based on the initial due date', async () => {
     const fake = createFinancePrisma();
-    fake.client.status = 'PENDENTE_PAGAMENTO';
-    fake.client.dueDate = parseBusinessDate('2026-01-31');
-    fake.client.billingAnchorDay = 31;
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-01-31');
+    fake.clientReference.billingAnchorDay = 31;
     fake.receivable.purpose = 'INITIAL_ACTIVATION';
     fake.receivable.renewalId = null;
     fake.receivable.dueDate = parseBusinessDate('2026-01-31');
@@ -634,9 +663,9 @@ describe('FinanceService', () => {
     await service.syncPaymentIntent(intent.id, actorUserId);
     await service.syncPaymentIntent(intent.id, actorUserId);
 
-    expect(fake.client.status).toBe('ATIVO');
-    expect(fake.client.dueDate).toEqual(parseBusinessDate('2026-02-28'));
-    expect(fake.client.billingAnchorDay).toBe(31);
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-02-28'));
+    expect(fake.clientReference.billingAnchorDay).toBe(31);
     expect(fake.transactions).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(1);
   });

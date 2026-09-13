@@ -11,9 +11,12 @@ import { PlansService } from '../plans/plans.service';
 import { RecoveryService } from '../recovery/recovery.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
+import { CreateClientReferenceDto } from './dto/create-client-reference.dto';
 import { CreateClientDto } from './dto/create-client.dto';
 import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
+import { UpdateClientReferenceStatusDto } from './dto/update-client-reference-status.dto';
+import { UpdateClientReferenceDto } from './dto/update-client-reference.dto';
 import { UpdateClientStatusDto } from './dto/update-client-status.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { formatBusinessDate, getBusinessDateDay, parseBusinessDate } from './utils/business-date';
@@ -22,6 +25,15 @@ import { normalizeBrazilPhone } from './utils/phone-normalizer';
 const pageSizeLimit = 100;
 const allowedSortFields = ['name', 'dueDate', 'createdAt'] as const;
 const allowedSortDirections = ['asc', 'desc'] as const;
+const legacyOperationalClientFields = [
+  'reference',
+  'planId',
+  'recurringValue',
+  'dueDate',
+  'billingAnchorDay',
+  'billingNoticeDays',
+  'status',
+] as const;
 
 type ClientWithRelations = Prisma.ClientGetPayload<{
   include: {
@@ -42,8 +54,11 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
       orderBy: { createdAt: 'desc' };
       include: { referredClient: true };
     };
+    references: { orderBy: { createdAt: 'asc' }; include: { plan: true } };
   };
 }>;
+
+type ClientReferenceWithPlan = Prisma.ClientReferenceGetPayload<{ include: { plan: true } }>;
 
 @Injectable()
 export class ClientsService {
@@ -87,6 +102,7 @@ export class ClientsService {
             orderBy: { createdAt: 'desc' },
             include: { referredClient: true },
           },
+          references: { orderBy: { createdAt: 'asc' }, include: { plan: true } },
         },
         orderBy,
         skip: (page - 1) * pageSize,
@@ -119,14 +135,19 @@ export class ClientsService {
       select: {
         id: true,
         name: true,
-        reference: true,
         phoneNormalized: true,
+        references: { select: { reference: true }, orderBy: { createdAt: 'asc' } },
       },
       orderBy: { name: 'asc' },
       take: Math.min(query.limit ?? 20, 20),
     });
 
-    return items;
+    return items.map((client) => ({
+      id: client.id,
+      name: client.name,
+      reference: this.referenceSummary(client.references),
+      phoneNormalized: client.phoneNormalized,
+    }));
   }
 
   async get(id: string) {
@@ -153,6 +174,7 @@ export class ClientsService {
           orderBy: { createdAt: 'desc' },
           include: { referredClient: true },
         },
+        references: { orderBy: { createdAt: 'asc' }, include: { plan: true } },
       },
     });
 
@@ -188,6 +210,19 @@ export class ClientsService {
           include: { plan: true },
         });
 
+        await tx.clientReference.create({
+          data: {
+            clientId: created.id,
+            reference: dto.reference.trim(),
+            planId: dto.planId,
+            recurringValue: dto.recurringValue,
+            dueDate,
+            billingAnchorDay: getBusinessDateDay(dueDate),
+            billingNoticeDays: dto.billingNoticeDays,
+            status: 'ATIVO',
+          },
+        });
+
         await tx.clientEvent.create({
           data: {
             clientId: created.id,
@@ -216,6 +251,7 @@ export class ClientsService {
   }
 
   async update(id: string, dto: UpdateClientDto, actorUserId: string) {
+    this.rejectLegacyOperationalClientFields(dto);
     await this.ensureExists(id);
 
     const data: Prisma.ClientUpdateInput = {};
@@ -231,29 +267,6 @@ export class ClientsService {
 
     if (dto.email !== undefined) {
       data.email = this.optionalTrim(dto.email);
-    }
-
-    if (dto.reference !== undefined) {
-      data.reference = dto.reference.trim();
-    }
-
-    if (dto.planId !== undefined) {
-      await this.plansService.ensureActivePlan(dto.planId);
-      data.plan = { connect: { id: dto.planId } };
-    }
-
-    if (dto.recurringValue !== undefined) {
-      data.recurringValue = dto.recurringValue;
-    }
-
-    if (dto.dueDate !== undefined) {
-      const dueDate = parseBusinessDate(dto.dueDate);
-      data.dueDate = dueDate;
-      data.billingAnchorDay = getBusinessDateDay(dueDate);
-    }
-
-    if (dto.billingNoticeDays !== undefined) {
-      data.billingNoticeDays = dto.billingNoticeDays;
     }
 
     if (dto.notes !== undefined) {
@@ -279,69 +292,218 @@ export class ClientsService {
     }
   }
 
-  async updateStatus(id: string, dto: UpdateClientStatusDto, actorUserId: string) {
-    const client = await this.prisma.client.findUnique({ where: { id }, include: { plan: true } });
+  async listReferences(clientId: string) {
+    await this.ensureExists(clientId);
+    const references = await this.prisma.clientReference.findMany({
+      where: { clientId },
+      include: { plan: true },
+      orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { createdAt: 'asc' }],
+    });
 
-    if (!client) {
-      throw new NotFoundException('Cliente nao encontrado.');
+    return references.map((reference) => this.presentClientReference(reference));
+  }
+
+  async getReference(id: string) {
+    const reference = await this.prisma.clientReference.findUnique({
+      where: { id },
+      include: { plan: true },
+    });
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    return this.presentClientReference(reference);
+  }
+
+  async createReference(clientId: string, dto: CreateClientReferenceDto, actorUserId: string) {
+    await this.ensureExists(clientId);
+    await this.plansService.ensureActivePlan(dto.planId);
+    const dueDate = parseBusinessDate(dto.dueDate);
+
+    try {
+      const reference = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.clientReference.create({
+          data: {
+            clientId,
+            reference: dto.reference.trim(),
+            planId: dto.planId,
+            recurringValue: dto.recurringValue,
+            dueDate,
+            billingAnchorDay: getBusinessDateDay(dueDate),
+            billingNoticeDays: dto.billingNoticeDays,
+            notes: this.optionalTrim(dto.notes),
+            status: 'ATIVO',
+          },
+          include: { plan: true },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId,
+            type: 'CLIENT_UPDATED',
+            title: `Referencia ${created.reference} adicionada.`,
+            metadata: { clientReferenceId: created.id, reference: created.reference },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return created;
+      });
+
+      return this.presentClientReference(reference);
+    } catch (error) {
+      this.handlePrismaError(error);
+    }
+  }
+
+  async updateReference(id: string, dto: UpdateClientReferenceDto, actorUserId: string) {
+    const current = await this.prisma.clientReference.findUnique({ where: { id } });
+
+    if (!current) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    const data: Prisma.ClientReferenceUpdateInput = {};
+
+    if (dto.reference !== undefined) data.reference = dto.reference.trim();
+    if (dto.planId !== undefined) {
+      await this.plansService.ensureActivePlan(dto.planId);
+      data.plan = { connect: { id: dto.planId } };
+    }
+    if (dto.recurringValue !== undefined) data.recurringValue = dto.recurringValue;
+    if (dto.dueDate !== undefined) {
+      const dueDate = parseBusinessDate(dto.dueDate);
+      data.dueDate = dueDate;
+      data.billingAnchorDay = getBusinessDateDay(dueDate);
+    }
+    if (dto.billingNoticeDays !== undefined) data.billingNoticeDays = dto.billingNoticeDays;
+    if (dto.notes !== undefined) data.notes = this.optionalTrim(dto.notes);
+
+    try {
+      const reference = await this.prisma.$transaction(async (tx) => {
+        await tx.clientReference.update({ where: { id }, data });
+        await tx.clientEvent.create({
+          data: {
+            clientId: current.clientId,
+            type: 'CLIENT_UPDATED',
+            title: `Referencia ${current.reference} atualizada.`,
+            metadata: { clientReferenceId: id },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return tx.clientReference.findUniqueOrThrow({ where: { id }, include: { plan: true } });
+      });
+
+      return this.presentClientReference(reference);
+    } catch (error) {
+      this.handlePrismaError(error);
+    }
+  }
+
+  async updateReferenceStatus(
+    id: string,
+    dto: UpdateClientReferenceStatusDto,
+    actorUserId: string,
+  ) {
+    const reference = await this.prisma.clientReference.findUnique({
+      where: { id },
+      include: { plan: true, client: true },
+    });
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
     }
 
     const reason = this.optionalTrim(dto.reason);
-
     if (this.requiresReason(dto.status) && !reason) {
-      throw new BadRequestException('Justificativa obrigatoria para inativar ou cancelar cliente.');
+      throw new BadRequestException(
+        'Justificativa obrigatoria para inativar ou cancelar referencia.',
+      );
     }
 
-    if (client.status === dto.status) {
-      return this.get(id);
+    if (reference.status === dto.status) {
+      return this.presentClientReference(reference);
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.client.update({
-        where: { id },
-        data: { status: dto.status },
-      });
-
+      await tx.clientReference.update({ where: { id }, data: { status: dto.status } });
       await tx.clientStatusHistory.create({
         data: {
-          clientId: id,
-          previousStatus: client.status,
+          clientId: reference.clientId,
+          clientReferenceId: id,
+          previousStatus: reference.status,
           newStatus: dto.status,
           reason,
           changedByUserId: actorUserId,
         },
       });
-
       await tx.clientEvent.create({
         data: {
-          clientId: id,
+          clientId: reference.clientId,
           type: 'STATUS_CHANGED',
-          title: `Status alterado de ${client.status} para ${dto.status}.`,
+          title: `Status da referencia ${reference.reference} alterado de ${reference.status} para ${dto.status}.`,
           description: reason ? `Motivo: ${reason}` : null,
+          metadata: {
+            clientReferenceId: id,
+            previousStatus: reference.status,
+            newStatus: dto.status,
+          },
           createdByUserId: actorUserId,
         },
       });
 
-      await this.recoveryService.handleClientStatusChange(tx, client, dto.status, {
+      await this.recoveryService.handleClientReferenceStatusChange(tx, reference, dto.status, {
         startRecovery: dto.startRecovery === true,
         actorUserId,
       });
 
-      if (client.status === 'PENDENTE_PAGAMENTO' && dto.status === 'CANCELADO') {
+      if (reference.status === 'PENDENTE_PAGAMENTO' && dto.status === 'CANCELADO') {
         await this.referralsService.cancelPendingForClientBeforePayment(
           tx,
-          id,
+          reference.clientId,
           reason,
           actorUserId,
         );
       }
     });
 
+    return this.getReference(id);
+  }
+
+  async updateStatus(id: string, dto: UpdateClientStatusDto, actorUserId: string) {
+    const client = await this.prisma.client.findUnique({
+      where: { id },
+      include: { references: { include: { plan: true }, orderBy: { createdAt: 'asc' } } },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Cliente nao encontrado.');
+    }
+
+    if (client.references.length !== 1) {
+      throw new ConflictException(
+        client.references.length > 1
+          ? 'Cliente possui multiplas referencias. Altere o status pela referencia operacional especifica.'
+          : 'Cliente nao possui referencia operacional para alteracao de status.',
+      );
+    }
+
+    const [reference] = client.references;
+    if (!reference) {
+      throw new ConflictException(
+        'Cliente nao possui referencia operacional para alteracao de status.',
+      );
+    }
+
+    await this.updateReferenceStatus(reference.id, dto, actorUserId);
     return this.get(id);
   }
 
   private buildWhere(query: ListClientsDto): Prisma.ClientWhereInput {
     const where: Prisma.ClientWhereInput = {};
+    const referenceFilters: Prisma.ClientReferenceWhereInput = {};
 
     if (query.search) {
       const search = query.search.trim();
@@ -349,7 +511,7 @@ export class ClientsService {
 
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
-        { reference: { contains: search, mode: 'insensitive' } },
+        { references: { some: { reference: { contains: search, mode: 'insensitive' } } } },
         ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
       ];
     }
@@ -359,7 +521,7 @@ export class ClientsService {
     }
 
     if (query.reference) {
-      where.reference = { contains: query.reference.trim(), mode: 'insensitive' };
+      referenceFilters.reference = { contains: query.reference.trim(), mode: 'insensitive' };
     }
 
     if (query.phone) {
@@ -367,15 +529,19 @@ export class ClientsService {
     }
 
     if (query.status) {
-      where.status = query.status;
+      referenceFilters.status = query.status;
     }
 
     if (query.planId) {
-      where.planId = query.planId;
+      referenceFilters.planId = query.planId;
     }
 
     if (query.dueDate) {
-      where.dueDate = parseBusinessDate(query.dueDate);
+      referenceFilters.dueDate = parseBusinessDate(query.dueDate);
+    }
+
+    if (Object.keys(referenceFilters).length > 0) {
+      where.references = { some: referenceFilters };
     }
 
     return where;
@@ -388,7 +554,7 @@ export class ClientsService {
     return {
       OR: [
         { name: { contains: search, mode: 'insensitive' } },
-        { reference: { contains: search, mode: 'insensitive' } },
+        { references: { some: { reference: { contains: search, mode: 'insensitive' } } } },
         { phone: { contains: search, mode: 'insensitive' } },
         ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
       ],
@@ -423,6 +589,9 @@ export class ClientsService {
       },
       ...('renewals' in client
         ? {
+            references: client.references.map((reference) =>
+              this.presentClientReference(reference),
+            ),
             renewals: client.renewals.map((renewal) => ({
               ...renewal,
               previousDueDate: formatBusinessDate(renewal.previousDueDate),
@@ -555,6 +724,27 @@ export class ClientsService {
     };
   }
 
+  private presentClientReference(reference: ClientReferenceWithPlan) {
+    return {
+      id: reference.id,
+      clientId: reference.clientId,
+      reference: reference.reference,
+      planId: reference.planId,
+      recurringValue: reference.recurringValue.toString(),
+      dueDate: formatBusinessDate(reference.dueDate),
+      billingAnchorDay: reference.billingAnchorDay,
+      billingNoticeDays: reference.billingNoticeDays,
+      status: reference.status,
+      notes: reference.notes,
+      createdAt: reference.createdAt.toISOString(),
+      updatedAt: reference.updatedAt.toISOString(),
+      plan: {
+        ...reference.plan,
+        defaultValue: reference.plan.defaultValue.toString(),
+      },
+    };
+  }
+
   private async ensureExists(id: string) {
     const exists = await this.prisma.client.count({ where: { id } });
 
@@ -565,6 +755,16 @@ export class ClientsService {
 
   private requiresReason(status: ClientStatus) {
     return status === 'INATIVO' || status === 'CANCELADO';
+  }
+
+  private rejectLegacyOperationalClientFields(dto: UpdateClientDto) {
+    const receivedLegacyFields = legacyOperationalClientFields.filter((field) => field in dto);
+
+    if (receivedLegacyFields.length > 0) {
+      throw new BadRequestException(
+        `Atualize campos operacionais pela referencia do cliente: ${receivedLegacyFields.join(', ')}.`,
+      );
+    }
   }
 
   private optionalTrim(value: string | undefined) {
@@ -578,6 +778,11 @@ export class ClientsService {
     } catch {
       return null;
     }
+  }
+
+  private referenceSummary(references: Array<{ reference: string }>) {
+    if (references.length === 0) return '';
+    return references.map((reference) => reference.reference).join(', ');
   }
 
   private handlePrismaError(error: unknown): never {

@@ -36,6 +36,7 @@ export interface Client {
   createdAt: string;
   updatedAt: string;
   plan: Plan;
+  references?: ClientReference[];
   events?: ClientEvent[];
   statusHistory?: ClientStatusHistory[];
   renewals?: Renewal[];
@@ -45,6 +46,22 @@ export interface Client {
   initialActivation?: InitialActivationResult | null;
   referralReceived?: ClientReferralReceived | null;
   referralsMade?: ClientReferralsMade;
+}
+
+export interface ClientReference {
+  id: string;
+  clientId: string;
+  reference: string;
+  planId: string;
+  recurringValue: string;
+  dueDate: string;
+  billingAnchorDay: number;
+  billingNoticeDays: number;
+  status: ClientStatus;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+  plan: Plan;
 }
 
 export interface InitialActivationResult {
@@ -118,6 +135,7 @@ export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
 export interface Renewal {
   id: string;
   clientId: string;
+  clientReferenceId?: string;
   planId: string;
   planName: string;
   durationMonths: number;
@@ -131,6 +149,7 @@ export interface Renewal {
 export interface Receivable {
   id: string;
   clientId: string;
+  clientReferenceId?: string;
   renewalId: string | null;
   purpose: ReceivablePurpose;
   description: string;
@@ -146,6 +165,7 @@ export interface Receivable {
   createdAt: string;
   updatedAt: string;
   client?: Pick<Client, 'id' | 'name' | 'reference'>;
+  clientReference?: Pick<ClientReference, 'id' | 'reference' | 'status'> & { planName?: string };
 }
 
 export interface PaymentIntent {
@@ -201,8 +221,11 @@ export interface Referral {
   rewardLabel: string;
   rewardPreview: {
     referrerStatus: ClientStatus;
-    currentDueDate: string;
+    selectedClientReferenceId?: string | null;
+    selectedReference?: string | null;
+    currentDueDate: string | null;
     newDueDate: string | null;
+    requiresClientReferenceSelection?: boolean;
   } | null;
 }
 
@@ -277,6 +300,7 @@ export interface FinancialTransaction {
   origin: FinancialTransactionOrigin;
   categoryId: string;
   clientId: string | null;
+  clientReferenceId?: string | null;
   receivableId: string | null;
   description: string;
   amount: string;
@@ -369,6 +393,7 @@ export type FinancialSummaryFields = Pick<
 
 export interface DashboardClientDue {
   id: string;
+  clientReferenceId: string;
   name: string;
   reference: string;
   planName: string;
@@ -440,6 +465,7 @@ export interface MessageDispatch {
   updatedAt: string;
   client:
     (Pick<Client, 'id' | 'name' | 'reference' | 'status'> & { planName?: string | null }) | null;
+  clientReference?: Pick<ClientReference, 'id' | 'reference' | 'status'> | null;
   receivable?: Pick<Receivable, 'id' | 'amount' | 'dueDate' | 'status'> | null;
   template?: {
     id: string;
@@ -524,7 +550,14 @@ export interface PaginatedRecoveryCampaigns {
 }
 
 export type ReportType =
-  'clients' | 'renewals' | 'receivables' | 'finance' | 'billing' | 'recovery' | 'referrals';
+  | 'clients'
+  | 'references'
+  | 'renewals'
+  | 'receivables'
+  | 'finance'
+  | 'billing'
+  | 'recovery'
+  | 'referrals';
 
 export interface OperationalReport {
   columns: string[];
@@ -677,6 +710,13 @@ export interface ClientPayload {
   referralRewardDescription?: string | undefined;
 }
 
+export interface ClientUpdatePayload {
+  name?: string | undefined;
+  phone?: string | undefined;
+  email?: string | undefined;
+  notes?: string | undefined;
+}
+
 export interface ApproveWhatsAppPendingContactPayload {
   name: string;
   email?: string | undefined;
@@ -709,6 +749,8 @@ export interface ClientListFilters {
 
 export interface RenewalPreview {
   clientId: string;
+  clientReferenceId?: string;
+  reference?: string;
   clientName: string;
   clientStatus: ClientStatus;
   currentPlan: Pick<Plan, 'id' | 'name' | 'durationMonths'>;
@@ -724,6 +766,7 @@ export interface RenewalPreview {
 export interface RenewalResult {
   idempotentReplay: boolean;
   client: Client;
+  clientReference?: Pick<ClientReference, 'id' | 'reference' | 'status'>;
   renewal: Renewal;
   receivable: Receivable;
   newDueDate: string;
@@ -836,7 +879,7 @@ export function createClient(payload: ClientPayload) {
   });
 }
 
-export function updateClient(id: string, payload: ClientPayload) {
+export function updateClient(id: string, payload: ClientUpdatePayload) {
   return apiFetch<Client>(`/clients/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -859,8 +902,58 @@ export function updateClientStatus(
   });
 }
 
+export function listClientReferences(clientId: string) {
+  return apiFetch<ClientReference[]>(`/clients/${clientId}/references`);
+}
+
+export function createClientReference(
+  clientId: string,
+  payload: Omit<ClientPayload, 'name' | 'phone' | 'email'>,
+) {
+  return apiFetch<ClientReference>(`/clients/${clientId}/references`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateClientReference(
+  referenceId: string,
+  payload: Partial<Omit<ClientPayload, 'name' | 'phone' | 'email'>>,
+) {
+  return apiFetch<ClientReference>(`/clients/references/${referenceId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateClientReferenceStatus(
+  referenceId: string,
+  status: ClientStatus,
+  reason?: string,
+  startRecovery?: boolean,
+) {
+  return apiFetch<ClientReference>(`/clients/references/${referenceId}/status`, {
+    method: 'POST',
+    body: JSON.stringify({
+      status,
+      ...(reason ? { reason } : {}),
+      ...(startRecovery ? { startRecovery } : {}),
+    }),
+  });
+}
+
 export function previewRenewal(clientId: string, payload: { planId: string; amount: number }) {
   return apiFetch<RenewalPreview>(`/clients/${clientId}/renewals/preview`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewReferenceRenewal(
+  clientReferenceId: string,
+  payload: { planId: string; amount: number },
+) {
+  return apiFetch<RenewalPreview>(`/client-references/${clientReferenceId}/renewals/preview`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -871,6 +964,16 @@ export function confirmRenewal(
   payload: { planId: string; amount: number; idempotencyKey: string },
 ) {
   return apiFetch<RenewalResult>(`/clients/${clientId}/renewals`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmReferenceRenewal(
+  clientReferenceId: string,
+  payload: { planId: string; amount: number; idempotencyKey: string },
+) {
+  return apiFetch<RenewalResult>(`/client-references/${clientReferenceId}/renewals`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -959,7 +1062,7 @@ export function getReferralSummary() {
 
 export function applyReferralReward(
   id: string,
-  payload: { rewardValue?: number; rewardDescription?: string } = {},
+  payload: { clientReferenceId?: string; rewardValue?: number; rewardDescription?: string } = {},
 ) {
   return apiFetch<Referral>(`/referrals/${id}/apply-reward`, {
     method: 'POST',

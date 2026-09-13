@@ -33,6 +33,22 @@ function createFakePrisma() {
     updatedAt: new Date(),
     plan,
   };
+  const clientReference = {
+    id: '44444444-4444-4444-8444-444444444444',
+    clientId: client.id,
+    reference: client.reference,
+    planId: plan.id,
+    recurringValue: client.recurringValue,
+    dueDate: client.dueDate,
+    billingAnchorDay: client.billingAnchorDay,
+    billingNoticeDays: client.billingNoticeDays,
+    notes: client.notes,
+    status: client.status,
+    createdAt: client.createdAt,
+    updatedAt: client.updatedAt,
+    client,
+    plan,
+  };
   const renewals: Array<Record<string, unknown>> = [];
   const receivables: Array<Record<string, unknown>> = [];
   const statusHistory: Array<Record<string, unknown>> = [];
@@ -44,6 +60,15 @@ function createFakePrisma() {
       update: ({ data }: { data: Partial<typeof client> }) => {
         Object.assign(client, data);
         return Promise.resolve(client);
+      },
+    },
+    clientReference: {
+      findUnique: () => Promise.resolve(clientReference),
+      findFirst: () => Promise.resolve(clientReference),
+      update: ({ data }: { data: Partial<typeof clientReference> }) => {
+        Object.assign(clientReference, data);
+        Object.assign(client, data);
+        return Promise.resolve(clientReference);
       },
     },
     plan: {
@@ -69,6 +94,7 @@ function createFakePrisma() {
         return Promise.resolve({
           ...renewal,
           client,
+          clientReference: { ...clientReference, client, plan },
           receivable: receivables.find((item) => item.renewalId === where.id),
         });
       },
@@ -104,11 +130,15 @@ function createFakePrisma() {
         findUnique: ({
           where,
         }: {
-          where: { clientId_idempotencyKey: { idempotencyKey: string } };
+          where: {
+            clientId_idempotencyKey?: { idempotencyKey: string };
+            clientReferenceId_idempotencyKey?: { idempotencyKey: string };
+          };
         }) => {
-          const renewal = renewals.find(
-            (item) => item.idempotencyKey === where.clientId_idempotencyKey.idempotencyKey,
-          );
+          const idempotencyKey =
+            where.clientReferenceId_idempotencyKey?.idempotencyKey ??
+            where.clientId_idempotencyKey?.idempotencyKey;
+          const renewal = renewals.find((item) => item.idempotencyKey === idempotencyKey);
 
           if (!renewal) {
             return Promise.resolve(null);
@@ -117,9 +147,13 @@ function createFakePrisma() {
           return Promise.resolve({
             ...renewal,
             client,
+            clientReference: { ...clientReference, client, plan },
             receivable: receivables.find((item) => item.renewalId === renewal.id),
           });
         },
+      },
+      clientReference: {
+        findFirst: () => Promise.resolve(clientReference),
       },
       $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => callback(tx),
     },
@@ -132,7 +166,10 @@ function createFakePrisma() {
 describe('RenewalsService', () => {
   it('reactivates a canceled client with explicit history and idempotent replay', async () => {
     const fake = createFakePrisma();
-    const recoveryService = { handleClientStatusChange: vi.fn().mockResolvedValue(undefined) };
+    const recoveryService = {
+      handleClientReferenceStatusChange: vi.fn().mockResolvedValue(undefined),
+      handleClientStatusChange: vi.fn().mockResolvedValue(undefined),
+    };
     const service = new RenewalsService(fake.prisma as never, recoveryService as never);
 
     const first = await service.create(
@@ -147,9 +184,9 @@ describe('RenewalsService', () => {
 
     expect(first.idempotentReplay).toBe(false);
     expect(first.client.status).toBe('ATIVO');
-    expect(recoveryService.handleClientStatusChange).toHaveBeenCalledWith(
+    expect(recoveryService.handleClientReferenceStatusChange).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ id: fake.client.id }),
+      expect.objectContaining({ clientId: fake.client.id }),
       'ATIVO',
       expect.objectContaining({ actorUserId: userId }),
     );
@@ -159,15 +196,16 @@ describe('RenewalsService', () => {
     expect(fake.receivables).toHaveLength(1);
     expect(fake.statusHistory).toContainEqual(
       expect.objectContaining({
+        clientReferenceId: '44444444-4444-4444-8444-444444444444',
         previousStatus: 'CANCELADO',
         newStatus: 'ATIVO',
-        reason: 'Cliente cancelado foi reativado através de renovação.',
+        reason: 'Referencia cancelada foi reativada atraves de renovacao.',
       }),
     );
     const renewalEvent = fake.events.find((event) => event.type === 'CLIENT_RENEWED');
 
     expect(renewalEvent?.description).toEqual(
-      expect.stringContaining('Cliente cancelado foi reativado através de renovação.'),
+      expect.stringContaining('Referencia cancelada foi reativada atraves de renovacao.'),
     );
 
     const replay = await service.create(

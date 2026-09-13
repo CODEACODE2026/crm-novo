@@ -19,7 +19,11 @@ import { ListReferralsDto } from './dto/list-referrals.dto';
 type ReferralTx = Prisma.TransactionClient | PrismaService;
 
 type ReferralWithClients = Prisma.ReferralGetPayload<{
-  include: { referredClient: true; referrerClient: true };
+  include: {
+    referredClient: { include: { references: true } };
+    referrerClient: { include: { references: true } };
+    rewardClientReference: true;
+  };
 }>;
 
 export type CreateReferralInput = {
@@ -43,7 +47,11 @@ export class ReferralsService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.referral.findMany({
         where,
-        include: { referredClient: true, referrerClient: true },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
         orderBy: [{ createdAt: 'desc' }],
         take: pageSizeLimit,
       }),
@@ -73,7 +81,11 @@ export class ReferralsService {
   async get(id: string) {
     const referral = await this.prisma.referral.findUnique({
       where: { id },
-      include: { referredClient: true, referrerClient: true },
+      include: {
+        referredClient: { include: { references: true } },
+        referrerClient: { include: { references: true } },
+        rewardClientReference: true,
+      },
     });
 
     if (!referral) {
@@ -160,7 +172,11 @@ export class ReferralsService {
   ) {
     const referral = await tx.referral.findUnique({
       where: { referredClientId },
-      include: { referredClient: true, referrerClient: true },
+      include: {
+        referredClient: { include: { references: true } },
+        referrerClient: { include: { references: true } },
+        rewardClientReference: true,
+      },
     });
 
     if (!referral || referral.status !== 'PENDING') {
@@ -207,7 +223,11 @@ export class ReferralsService {
   ) {
     const referral = await tx.referral.findUnique({
       where: { referredClientId },
-      include: { referredClient: true, referrerClient: true },
+      include: {
+        referredClient: { include: { references: true } },
+        referrerClient: { include: { references: true } },
+        rewardClientReference: true,
+      },
     });
 
     if (!referral || referral.status !== 'PENDING') {
@@ -243,7 +263,11 @@ export class ReferralsService {
     const referral = await this.prisma.$transaction(async (tx) => {
       const current = await tx.referral.findUnique({
         where: { id },
-        include: { referredClient: true, referrerClient: true },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
       });
 
       if (!current) {
@@ -266,29 +290,50 @@ export class ReferralsService {
       };
 
       if (current.rewardType === 'FREE_MONTH') {
-        appliedPreviousDueDate = current.referrerClient.dueDate;
+        if (!dto.clientReferenceId) {
+          throw new BadRequestException('Referencia beneficiada obrigatoria para FREE_MONTH.');
+        }
+
+        const rewardReference = await tx.clientReference.findFirst({
+          where: {
+            id: dto.clientReferenceId,
+            clientId: current.referrerClientId,
+            status: { in: ['ATIVO', 'PENDENTE_PAGAMENTO', 'INATIVO'] },
+          },
+        });
+
+        if (!rewardReference) {
+          throw new NotFoundException('Referencia beneficiada nao encontrada para o indicador.');
+        }
+
+        appliedPreviousDueDate = rewardReference.dueDate;
         appliedNewDueDate = addCalendarMonthsPreservingAnchor(
-          current.referrerClient.dueDate,
+          rewardReference.dueDate,
           1,
-          current.referrerClient.billingAnchorDay,
+          rewardReference.billingAnchorDay,
         );
 
-        await tx.client.update({
-          where: { id: current.referrerClientId },
+        await tx.clientReference.update({
+          where: { id: rewardReference.id },
           data: {
             dueDate: appliedNewDueDate,
-            billingAnchorDay: current.referrerClient.billingAnchorDay,
+            billingAnchorDay: rewardReference.billingAnchorDay,
           },
         });
 
         data.appliedPreviousDueDate = appliedPreviousDueDate;
         data.appliedNewDueDate = appliedNewDueDate;
+        data.rewardClientReference = { connect: { id: rewardReference.id } };
       }
 
       const updated = await tx.referral.update({
         where: { id },
         data,
-        include: { referredClient: true, referrerClient: true },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
       });
 
       await tx.clientEvent.create({
@@ -323,7 +368,11 @@ export class ReferralsService {
     const referral = await this.prisma.$transaction(async (tx) => {
       const current = await tx.referral.findUnique({
         where: { id },
-        include: { referredClient: true, referrerClient: true },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
       });
 
       if (!current) {
@@ -345,7 +394,11 @@ export class ReferralsService {
           canceledAt: new Date(),
           cancellationReason: dto.reason.trim(),
         },
-        include: { referredClient: true, referrerClient: true },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
       });
 
       await tx.clientEvent.create({
@@ -378,10 +431,18 @@ export class ReferralsService {
       const search = query.search.trim();
       where.OR = [
         { referredClient: { name: { contains: search, mode: 'insensitive' } } },
-        { referredClient: { reference: { contains: search, mode: 'insensitive' } } },
+        {
+          referredClient: {
+            references: { some: { reference: { contains: search, mode: 'insensitive' } } },
+          },
+        },
         { referredClient: { phoneNormalized: { contains: search } } },
         { referrerClient: { name: { contains: search, mode: 'insensitive' } } },
-        { referrerClient: { reference: { contains: search, mode: 'insensitive' } } },
+        {
+          referrerClient: {
+            references: { some: { reference: { contains: search, mode: 'insensitive' } } },
+          },
+        },
         { referrerClient: { phoneNormalized: { contains: search } } },
       ];
     }
@@ -391,11 +452,13 @@ export class ReferralsService {
 
   private presentReferral(referral: ReferralWithClients) {
     const previewNewDueDate =
-      referral.status === 'QUALIFIED' && referral.rewardType === 'FREE_MONTH'
+      referral.status === 'QUALIFIED' &&
+      referral.rewardType === 'FREE_MONTH' &&
+      referral.rewardClientReference
         ? addCalendarMonthsPreservingAnchor(
-            referral.referrerClient.dueDate,
+            referral.rewardClientReference.dueDate,
             1,
-            referral.referrerClient.billingAnchorDay,
+            referral.rewardClientReference.billingAnchorDay,
           )
         : null;
 
@@ -419,25 +482,39 @@ export class ReferralsService {
       rewardPreview:
         referral.status === 'QUALIFIED'
           ? {
-              referrerStatus: referral.referrerClient.status,
-              currentDueDate: formatBusinessDate(referral.referrerClient.dueDate),
+              referrerStatus:
+                referral.rewardClientReference?.status ??
+                this.uniqueReference(referral.referrerClient)?.status ??
+                referral.referrerClient.status,
+              selectedClientReferenceId: referral.rewardClientReferenceId,
+              selectedReference: referral.rewardClientReference?.reference ?? null,
+              currentDueDate: referral.rewardClientReference
+                ? formatBusinessDate(referral.rewardClientReference.dueDate)
+                : null,
               newDueDate: previewNewDueDate ? formatBusinessDate(previewNewDueDate) : null,
+              requiresClientReferenceSelection: referral.rewardType === 'FREE_MONTH',
             }
           : null,
     };
   }
 
   private presentClientSummary(client: ReferralWithClients['referredClient']) {
+    const uniqueReference = this.uniqueReference(client);
+
     return {
       id: client.id,
       name: client.name,
-      reference: client.reference,
+      reference: uniqueReference?.reference ?? `${client.references.length} referencias`,
       phone: client.phone,
       phoneNormalized: client.phoneNormalized,
-      status: client.status,
-      dueDate: formatBusinessDate(client.dueDate),
-      billingAnchorDay: client.billingAnchorDay,
+      status: uniqueReference?.status ?? client.status,
+      dueDate: uniqueReference ? formatBusinessDate(uniqueReference.dueDate) : undefined,
+      billingAnchorDay: uniqueReference?.billingAnchorDay,
     };
+  }
+
+  private uniqueReference(client: ReferralWithClients['referredClient']) {
+    return client.references.length === 1 ? client.references[0] : null;
   }
 
   private validateRewardInput(

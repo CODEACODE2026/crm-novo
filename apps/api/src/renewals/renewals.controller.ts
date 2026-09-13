@@ -27,3 +27,23 @@ export class RenewalsController {
     return this.renewalsService.create(clientId, dto, request.user.id);
   }
 }
+
+@UseGuards(JwtAuthGuard)
+@Controller('client-references/:clientReferenceId/renewals')
+export class ClientReferenceRenewalsController {
+  constructor(@Inject(RenewalsService) private readonly renewalsService: RenewalsService) {}
+
+  @Post('preview')
+  preview(@Param('clientReferenceId') clientReferenceId: string, @Body() dto: RenewalPreviewDto) {
+    return this.renewalsService.previewReference(clientReferenceId, dto);
+  }
+
+  @Post()
+  create(
+    @Param('clientReferenceId') clientReferenceId: string,
+    @Body() dto: CreateRenewalDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.renewalsService.createForReference(clientReferenceId, dto, request.user.id);
+  }
+}

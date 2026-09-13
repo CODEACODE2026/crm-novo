@@ -498,14 +498,6 @@ export class WhatsAppService {
     const generateInitialReceivable = dto.generateInitialReceivable ?? true;
     const sendPixWhatsAppNow = generateInitialReceivable && (dto.sendPixWhatsAppNow ?? true);
 
-    const existingClient = await this.prisma.client.findUnique({
-      where: { phoneNormalized: pending.phoneNormalized },
-    });
-
-    if (existingClient) {
-      throw new ConflictException('Ja existe um cliente cadastrado com este telefone.');
-    }
-
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         const created = await tx.client.create({
@@ -526,10 +518,25 @@ export class WhatsAppService {
           include: { plan: true },
         });
 
+        const clientReference = await tx.clientReference.create({
+          data: {
+            clientId: created.id,
+            reference: dto.reference.trim(),
+            planId: dto.planId,
+            recurringValue: dto.recurringValue,
+            dueDate,
+            billingAnchorDay: getBusinessDateDay(dueDate),
+            billingNoticeDays: dto.billingNoticeDays,
+            notes: this.optionalTrim(dto.notes),
+            status: 'PENDENTE_PAGAMENTO',
+          },
+        });
+
         const initialReceivable = generateInitialReceivable
           ? await tx.receivable.create({
               data: {
                 clientId: created.id,
+                clientReferenceId: clientReference.id,
                 purpose: 'INITIAL_ACTIVATION',
                 description: `Cobranca inicial de ativacao - ${created.plan.name}`,
                 amount: dto.recurringValue,
@@ -566,6 +573,7 @@ export class WhatsAppService {
             metadata: {
               pendingContactId: id,
               initialReceivableId: initialReceivable?.id ?? null,
+              clientReferenceId: clientReference.id,
               status: 'PENDENTE_PAGAMENTO',
             },
             createdByUserId: actorUserId,
@@ -666,7 +674,7 @@ export class WhatsAppService {
       this.requireConnection(),
       this.prisma.receivable.findUnique({
         where: { id: receivableId },
-        include: { client: { include: { plan: true } } },
+        include: { client: true, clientReference: { include: { plan: true } } },
       }),
       this.prisma.messageTemplate.findFirst({
         where: { type: 'INITIAL_ACTIVATION', active: true },
@@ -696,8 +704,8 @@ export class WhatsAppService {
       primeiroNome: this.firstName(receivable.client.name),
       valor: this.formatCurrency(receivable.amount),
       vencimento: this.formatDisplayDate(receivable.dueDate),
-      plano: receivable.client.plan.name,
-      referencia: receivable.client.reference,
+      plano: receivable.clientReference.plan.name,
+      referencia: receivable.clientReference.reference,
       pix: intent.pixCopyPaste,
     });
     const requestId = `initial-activation:${clientId}:${receivableId}`;
@@ -705,6 +713,7 @@ export class WhatsAppService {
 
     const { dispatch, created } = await this.createPendingDispatch({
       clientId,
+      clientReferenceId: receivable.clientReferenceId,
       connectionId: connection.id,
       receivableId,
       templateId: template.id,
@@ -808,9 +817,8 @@ export class WhatsAppService {
     connectionId: string,
     normalized: NormalizedWhatsAppMessage & { phone: string },
   ) {
-    const client = await this.prisma.client.findUnique({
-      where: { phoneNormalized: normalized.phone },
-    });
+    const clients = await this.findClientsByPhone(normalized.phone);
+    const client = clients.length === 1 ? clients[0] : null;
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
@@ -834,6 +842,15 @@ export class WhatsAppService {
 
         if (client) {
           return { processed: true, action: 'client_exists', inboundMessageId: inbound.id };
+        }
+
+        if (clients.length > 1) {
+          return {
+            processed: true,
+            action: 'ambiguous_client_phone',
+            inboundMessageId: inbound.id,
+            clientMatches: clients.length,
+          };
         }
 
         const contact = await tx.whatsAppPendingContact.upsert({
@@ -981,8 +998,17 @@ export class WhatsAppService {
     }
   }
 
+  private async findClientsByPhone(phoneNormalized: string) {
+    return this.prisma.client.findMany({
+      where: { phoneNormalized },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+  }
+
   private async createPendingDispatch(input: {
     clientId: string;
+    clientReferenceId?: string;
     connectionId: string;
     receivableId?: string;
     templateId?: string;
@@ -996,6 +1022,7 @@ export class WhatsAppService {
       const dispatch = await this.prisma.messageDispatch.create({
         data: {
           clientId: input.clientId,
+          ...(input.clientReferenceId ? { clientReferenceId: input.clientReferenceId } : {}),
           whatsAppConnectionId: input.connectionId,
           phone: input.phone,
           body: input.body,

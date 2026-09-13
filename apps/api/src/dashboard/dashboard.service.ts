@@ -58,17 +58,17 @@ export class DashboardService {
       pendingWaitlistContacts,
       qualifiedReferralsAwaitingReward,
     ] = await this.prisma.$transaction([
-      this.prisma.client.count({ where: { status: 'ATIVO' } }),
-      this.prisma.client.count({ where: { status: 'INATIVO' } }),
-      this.prisma.client.count({ where: { status: 'CANCELADO' } }),
+      this.prisma.clientReference.count({ where: { status: 'ATIVO' } }),
+      this.prisma.clientReference.count({ where: { status: 'INATIVO' } }),
+      this.prisma.clientReference.count({ where: { status: 'CANCELADO' } }),
       this.prisma.client.count({
         where: { createdAt: { gte: range.startDateTime, lte: range.endDateTime } },
       }),
-      this.prisma.client.count({ where: { status: 'ATIVO', dueDate: today } }),
-      this.prisma.client.count({
+      this.prisma.clientReference.count({ where: { status: 'ATIVO', dueDate: today } }),
+      this.prisma.clientReference.count({
         where: { status: 'ATIVO', dueDate: { gte: tomorrow, lte: nextSevenDays } },
       }),
-      this.prisma.client.count({ where: { status: 'ATIVO', dueDate: { lt: today } } }),
+      this.prisma.clientReference.count({ where: { status: 'ATIVO', dueDate: { lt: today } } }),
       this.prisma.financialTransaction.aggregate({
         where: {
           type: 'ENTRADA',
@@ -100,21 +100,21 @@ export class DashboardService {
         where: { createdAt: { gte: range.startDateTime, lte: range.endDateTime } },
         _sum: { amount: true },
       }),
-      this.prisma.client.findMany({
+      this.prisma.clientReference.findMany({
         where: { status: 'ATIVO', dueDate: today },
-        include: { plan: true },
-        orderBy: [{ name: 'asc' }],
+        include: { client: true, plan: true },
+        orderBy: [{ reference: 'asc' }],
         take: 10,
       }),
-      this.prisma.client.findMany({
+      this.prisma.clientReference.findMany({
         where: { status: 'ATIVO', dueDate: { gte: tomorrow, lte: nextSevenDays } },
-        include: { plan: true },
-        orderBy: [{ dueDate: 'asc' }, { name: 'asc' }],
+        include: { client: true, plan: true },
+        orderBy: [{ dueDate: 'asc' }, { reference: 'asc' }],
         take: 10,
       }),
       this.prisma.receivable.findMany({
         where: { status: 'PENDENTE', dueDate: { lt: today } },
-        include: { client: true },
+        include: { client: true, clientReference: true },
         orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
         take: 10,
       }),
@@ -398,27 +398,30 @@ export class DashboardService {
     return grouping === 'month' ? formatted.slice(0, 7) : formatted;
   }
 
-  private presentClientDue(client: Prisma.ClientGetPayload<{ include: { plan: true } }>) {
+  private presentClientDue(
+    clientReference: Prisma.ClientReferenceGetPayload<{ include: { client: true; plan: true } }>,
+  ) {
     return {
-      id: client.id,
-      name: client.name,
-      reference: client.reference,
-      planName: client.plan.name,
-      recurringValue: client.recurringValue.toFixed(2),
-      dueDate: formatBusinessDate(client.dueDate),
-      status: client.status,
+      id: clientReference.client.id,
+      clientReferenceId: clientReference.id,
+      name: clientReference.client.name,
+      reference: clientReference.reference,
+      planName: clientReference.plan.name,
+      recurringValue: clientReference.recurringValue.toFixed(2),
+      dueDate: formatBusinessDate(clientReference.dueDate),
+      status: clientReference.status,
     };
   }
 
   private presentOverdueReceivable(
-    receivable: Prisma.ReceivableGetPayload<{ include: { client: true } }>,
+    receivable: Prisma.ReceivableGetPayload<{ include: { client: true; clientReference: true } }>,
     today: Date,
   ) {
     return {
       id: receivable.id,
       clientId: receivable.clientId,
       clientName: receivable.client.name,
-      clientReference: receivable.client.reference,
+      clientReference: receivable.clientReference.reference,
       description: receivable.description,
       dueDate: formatBusinessDate(receivable.dueDate),
       amount: receivable.amount.toFixed(2),

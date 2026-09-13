@@ -40,8 +40,9 @@ import {
   cancelReceivable,
   cancelPaymentIntent,
   confirmMockPaymentIntent,
-  confirmRenewal,
+  confirmReferenceRenewal,
   createClient,
+  createClientReference,
   createFinancialCategory,
   createManualEntry,
   createManualExpense,
@@ -75,14 +76,15 @@ import {
   downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
-  previewRenewal,
+  previewReferenceRenewal,
   refreshWhatsAppStatus,
   reopenWhatsAppPendingContact,
   sendWhatsAppMessage,
   updateClient,
+  updateClientReference,
+  updateClientReferenceStatus,
   updateFinancialCategory,
   updateFinancialTransaction,
-  updateClientStatus,
   updatePlan,
   connectWhatsApp,
   createWhatsAppConnection,
@@ -114,7 +116,10 @@ import {
   registerPaymentWebhook,
   type BillingSummary,
   type Client,
+  type ClientPayload,
+  type ClientReference,
   type ClientStatus,
+  type ClientUpdatePayload,
   type DashboardSummary as DashboardSummaryPayload,
   type FinancialCategory,
   type FinancialSummary,
@@ -194,6 +199,11 @@ const navItems = [
 
 const futureNavItems = [{ label: 'Renovacoes', icon: RefreshCcw }];
 
+type RenewalTarget = {
+  client: Client;
+  reference: ClientReference;
+};
+
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
@@ -206,7 +216,7 @@ export default function DashboardPage() {
   const [clientFormOpen, setClientFormOpen] = useState(false);
   const [planFormOpen, setPlanFormOpen] = useState(false);
   const [financeInitialTab, setFinanceInitialTab] = useState<FinanceTab>('summary');
-  const [renewalClient, setRenewalClient] = useState<Client | null>(null);
+  const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
   const [renewalNotice, setRenewalNotice] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ClientStatus | ''>('');
@@ -281,31 +291,48 @@ export default function DashboardPage() {
     setEditingPlan(null);
   }
 
-  async function handleStatusChange(nextStatus: ClientStatus) {
+  async function handleReferenceStatusChange(reference: ClientReference, nextStatus: ClientStatus) {
     if (!selectedClient) return;
 
-    await updateClientStatus(
-      selectedClient.id,
+    await updateClientReferenceStatus(
+      reference.id,
       nextStatus,
       statusReason.trim() || undefined,
       nextStatus === 'INATIVO' && startRecovery,
     );
     setStatusReason('');
     setStartRecovery(false);
+    const detailed = await getClient(selectedClient.id);
+    setSelectedClient(detailed);
     await loadData();
   }
 
+  function openRenewal(client: Client, reference?: ClientReference) {
+    const selectedReference =
+      reference ?? (client.references?.length === 1 ? client.references[0] : null);
+
+    if (!selectedReference) {
+      setSelectedClient(client);
+      setView('clients');
+      setRenewalNotice('Selecione uma referencia especifica para renovar.');
+      return;
+    }
+
+    setRenewalNotice('');
+    setRenewalTarget({ client, reference: selectedReference });
+  }
+
   async function handleRenewalConfirm(
-    client: Client,
+    target: RenewalTarget,
     payload: { planId: string; amount: number; idempotencyKey: string },
   ) {
-    const result = await confirmRenewal(client.id, payload);
+    const result = await confirmReferenceRenewal(target.reference.id, payload);
     await loadData();
-    const detailed = await getClient(client.id);
+    const detailed = await getClient(target.client.id);
     setSelectedClient(detailed);
-    setRenewalClient(null);
+    setRenewalTarget(null);
     setRenewalNotice(
-      `Cliente renovado com sucesso. Novo vencimento: ${formatDate(result.newDueDate)}. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
+      `Referencia ${target.reference.reference} renovada com sucesso. Novo vencimento: ${formatDate(result.newDueDate)}. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
     );
   }
 
@@ -398,9 +425,10 @@ export default function DashboardPage() {
                 setView('finance');
               }}
               onOpenOperationalView={(nextView) => setView(nextView)}
-              onRenew={async (id) => {
+              onRenew={async (id, clientReferenceId) => {
                 const client = await getClient(id);
-                setRenewalClient(client);
+                const reference = client.references?.find((item) => item.id === clientReferenceId);
+                openRenewal(client, reference);
               }}
             />
           ) : null}
@@ -424,9 +452,23 @@ export default function DashboardPage() {
                 setEditingClient(null);
                 setClientFormOpen((open) => !open);
               }}
-              onRenew={setRenewalClient}
+              onRenew={openRenewal}
+              onCreateReference={async (client, payload) => {
+                await createClientReference(client.id, payload);
+                const detailed = await getClient(client.id);
+                setSelectedClient(detailed);
+                await loadData();
+              }}
+              onUpdateReference={async (reference, payload) => {
+                await updateClientReference(reference.id, payload);
+                const detailed = await getClient(reference.clientId);
+                setSelectedClient(detailed);
+                await loadData();
+              }}
               onSelect={setSelectedClient}
-              onStatusChange={(nextStatus) => void handleStatusChange(nextStatus)}
+              onReferenceStatusChange={(reference, nextStatus) =>
+                void handleReferenceStatusChange(reference, nextStatus)
+              }
               onWhatsAppSent={async (clientId) => {
                 const detailed = await getClient(clientId);
                 setSelectedClient(detailed);
@@ -500,12 +542,14 @@ export default function DashboardPage() {
             />
           ) : null}
         </section>
-        {renewalClient ? (
+        {renewalTarget ? (
           <RenewalModal
-            client={renewalClient}
-            plans={plans.filter((plan) => plan.active || plan.id === renewalClient.planId)}
-            onClose={() => setRenewalClient(null)}
-            onConfirm={async (payload) => handleRenewalConfirm(renewalClient, payload)}
+            target={renewalTarget}
+            plans={plans.filter(
+              (plan) => plan.active || plan.id === renewalTarget.reference.planId,
+            )}
+            onClose={() => setRenewalTarget(null)}
+            onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
           />
         ) : null}
       </main>
@@ -526,7 +570,7 @@ function OperationalDashboard({
   onOpenOperationalView: (
     view: Extract<View, 'clients' | 'billing' | 'automations' | 'waitlist'>,
   ) => void;
-  onRenew: (id: string) => Promise<void>;
+  onRenew: (id: string, clientReferenceId?: string) => Promise<void>;
 }) {
   const [summary, setSummary] = useState<DashboardSummaryPayload | null>(null);
   const [periodMode, setPeriodMode] = useState<'current' | 'previous' | 'last30' | 'custom'>(
@@ -864,7 +908,7 @@ function CompactClientDueTable({
 }: {
   items: DashboardSummaryPayload['lists']['dueToday'];
   onOpen: (id: string) => Promise<void>;
-  onRenew: (id: string) => Promise<void>;
+  onRenew: (id: string, clientReferenceId: string) => Promise<void>;
 }) {
   if (!items.length) {
     return <div className="empty-state">Nenhum cliente nesta lista.</div>;
@@ -894,7 +938,7 @@ function CompactClientDueTable({
             <button
               className="secondary-button"
               type="button"
-              onClick={() => void onRenew(client.id)}
+              onClick={() => void onRenew(client.id, client.clientReferenceId)}
             >
               Renovar
             </button>
@@ -994,6 +1038,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   const [status, setStatus] = useState<ReferralStatus | ''>('');
   const [referrerClientId, setReferrerClientId] = useState('');
   const [confirming, setConfirming] = useState<Referral | null>(null);
+  const [rewardClientReferenceId, setRewardClientReferenceId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -1023,8 +1068,13 @@ function ReferralsView({ clients }: { clients: Client[] }) {
     setError('');
 
     try {
-      await applyReferralReward(referral.id);
+      await applyReferralReward(referral.id, {
+        ...(referral.rewardType === 'FREE_MONTH'
+          ? { clientReferenceId: rewardClientReferenceId }
+          : {}),
+      });
       setConfirming(null);
+      setRewardClientReferenceId('');
       await loadReferrals();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nao foi possivel aplicar o beneficio.');
@@ -1132,7 +1182,10 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                       <button
                         className="secondary-button compact"
                         type="button"
-                        onClick={() => setConfirming(referral)}
+                        onClick={() => {
+                          setRewardClientReferenceId('');
+                          setConfirming(referral);
+                        }}
                       >
                         Aplicar beneficio
                       </button>
@@ -1177,6 +1230,26 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                 <strong>Beneficio</strong>
                 <span>{confirming.rewardLabel}</span>
               </article>
+              {confirming.rewardType === 'FREE_MONTH' ? (
+                <label className="field">
+                  <span>Referencia beneficiada</span>
+                  <select
+                    required
+                    value={rewardClientReferenceId}
+                    onChange={(event) => setRewardClientReferenceId(event.target.value)}
+                  >
+                    <option value="">Selecione uma referencia</option>
+                    {clients
+                      .find((client) => client.id === confirming.referrerClientId)
+                      ?.references?.filter((reference) => reference.status !== 'CANCELADO')
+                      .map((reference) => (
+                        <option key={reference.id} value={reference.id}>
+                          {reference.reference} · {formatDate(reference.dueDate)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : null}
               <article>
                 <strong>Vencimento atual</strong>
                 <span>{confirming.rewardPreview?.currentDueDate ?? '-'}</span>
@@ -1197,6 +1270,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                 </button>
                 <button
                   className="primary-button"
+                  disabled={confirming.rewardType === 'FREE_MONTH' && !rewardClientReferenceId}
                   type="button"
                   onClick={() => void applyReward(confirming)}
                 >
@@ -1224,6 +1298,7 @@ function referralStatusLabel(status: ReferralStatus) {
 
 const reportDefinitions = [
   { id: 'clients', label: 'Clientes' },
+  { id: 'references', label: 'Referencias/Servicos' },
   { id: 'renewals', label: 'Renovacoes' },
   { id: 'receivables', label: 'Contas a receber' },
   { id: 'finance', label: 'Financeiro' },
@@ -1807,8 +1882,10 @@ function ClientsView({
   onEdit,
   onNew,
   onRenew,
+  onCreateReference,
+  onUpdateReference,
+  onReferenceStatusChange,
   onSelect,
-  onStatusChange,
   onWhatsAppSent,
   onUpdate,
   planId,
@@ -1830,14 +1907,22 @@ function ClientsView({
   dataLoading: boolean;
   editingClient: Client | null;
   onApplyFilters: () => void;
-  onCreate: Parameters<typeof ClientForm>[0]['onSubmit'];
+  onCreate: (payload: ClientPayload) => Promise<void>;
   onEdit: (client: Client) => void;
   onNew: () => void;
-  onRenew: (client: Client) => void;
+  onRenew: (client: Client, reference?: ClientReference) => void;
+  onCreateReference: (
+    client: Client,
+    payload: Omit<ClientPayload, 'name' | 'phone' | 'email'>,
+  ) => Promise<void>;
+  onUpdateReference: (
+    reference: ClientReference,
+    payload: Partial<Omit<ClientPayload, 'name' | 'phone' | 'email'>>,
+  ) => Promise<void>;
+  onReferenceStatusChange: (reference: ClientReference, status: ClientStatus) => void;
   onSelect: (client: Client) => void;
-  onStatusChange: (status: ClientStatus) => void;
   onWhatsAppSent: (clientId: string) => Promise<void>;
-  onUpdate: Parameters<typeof ClientForm>[0]['onSubmit'];
+  onUpdate: (payload: ClientUpdatePayload) => Promise<void>;
   planId: string;
   plans: Plan[];
   search: string;
@@ -1853,9 +1938,13 @@ function ClientsView({
   renewalNotice: string;
 }) {
   const [detailTab, setDetailTab] = useState<
-    'timeline' | 'renewals' | 'receivables' | 'messages' | 'recovery' | 'referrals'
+    'timeline' | 'references' | 'renewals' | 'receivables' | 'messages' | 'recovery' | 'referrals'
   >('timeline');
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
+  const [referenceFormOpen, setReferenceFormOpen] = useState(false);
+  const [editingReference, setEditingReference] = useState<ClientReference | null>(null);
+  const uniqueSelectedReference =
+    selectedClient?.references?.length === 1 ? selectedClient.references[0] : null;
 
   return (
     <div className="workspace-grid">
@@ -1902,7 +1991,13 @@ function ClientsView({
             client={editingClient ?? undefined}
             plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
             submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
-            onSubmit={editingClient ? onUpdate : onCreate}
+            onSubmit={async (payload) => {
+              if (editingClient) {
+                await onUpdate(payload);
+              } else {
+                await onCreate(payload as ClientPayload);
+              }
+            }}
           />
         ) : null}
 
@@ -1911,47 +2006,66 @@ function ClientsView({
             <thead>
               <tr>
                 <th>Cliente</th>
-                <th>Referencia</th>
-                <th>Plano</th>
-                <th>Vencimento</th>
-                <th>Status</th>
-                <th>Valor</th>
+                <th>Referencias</th>
+                <th>Resumo operacional</th>
                 <th>Acoes</th>
               </tr>
             </thead>
             <tbody>
-              {clients.map((client) => (
-                <tr
-                  className={selectedClient?.id === client.id ? 'selected-row' : ''}
-                  key={client.id}
-                  onClick={() => onSelect(client)}
-                >
-                  <td>
-                    <strong>{client.name}</strong>
-                    <span>{client.phoneNormalized}</span>
-                  </td>
-                  <td>{client.reference}</td>
-                  <td>{client.plan.name}</td>
-                  <td>{formatDate(client.dueDate)}</td>
-                  <td>
-                    <StatusBadge status={client.status} />
-                  </td>
-                  <td>{formatCurrency(client.recurringValue)}</td>
-                  <td>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onRenew(client);
-                      }}
-                    >
-                      <CalendarClock aria-hidden="true" size={16} />
-                      Renovar
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {clients.map((client) => {
+                const references = client.references ?? [];
+                const singleReference = references.length === 1 ? references[0] : null;
+                const referenceSummary = singleReference
+                  ? `${singleReference.reference} | ${singleReference.plan.name}`
+                  : `${references.length} referencias`;
+                const operationalSummary = singleReference
+                  ? `${formatCurrency(singleReference.recurringValue)} | ${formatDate(singleReference.dueDate)}`
+                  : references.map((reference) => reference.reference).join(', ') || '-';
+
+                return (
+                  <tr
+                    className={selectedClient?.id === client.id ? 'selected-row' : ''}
+                    key={client.id}
+                    onClick={() => onSelect(client)}
+                  >
+                    <td>
+                      <strong>{client.name}</strong>
+                      <span>{client.phoneNormalized}</span>
+                    </td>
+                    <td>{referenceSummary}</td>
+                    <td>
+                      <span>{operationalSummary}</span>
+                      {singleReference ? <StatusBadge status={singleReference.status} /> : null}
+                    </td>
+                    <td>
+                      {singleReference ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRenew(client, singleReference);
+                          }}
+                        >
+                          <CalendarClock aria-hidden="true" size={16} />
+                          Renovar
+                        </button>
+                      ) : (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onSelect(client);
+                          }}
+                        >
+                          Ver referencias
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {!clients.length ? (
@@ -1968,7 +2082,7 @@ function ClientsView({
             <div className="detail-header">
               <div>
                 <h2>{selectedClient.name}</h2>
-                <span>{selectedClient.reference}</span>
+                <span>{selectedClient.references?.length ?? 0} referencias operacionais</span>
               </div>
               <button
                 className="icon-button"
@@ -2007,64 +2121,26 @@ function ClientsView({
                 <dd>{selectedClient.email ?? '-'}</dd>
               </div>
               <div>
-                <dt>Plano</dt>
-                <dd>{selectedClient.plan.name}</dd>
+                <dt>Referencias</dt>
+                <dd>{selectedClient.references?.length ?? 0}</dd>
               </div>
-              <div>
-                <dt>Recorrencia</dt>
-                <dd>{formatCurrency(selectedClient.recurringValue)}</dd>
-              </div>
-              <div>
-                <dt>Cobranca</dt>
-                <dd>{selectedClient.billingNoticeDays} dias antes</dd>
-              </div>
-            </dl>
-
-            <div className="status-actions">
-              <textarea
-                placeholder="Justificativa para inativar ou cancelar"
-                value={statusReason}
-                onChange={(event) => setStatusReason(event.target.value)}
-              />
-              <label className="checkbox-row">
-                <input
-                  checked={startRecovery}
-                  type="checkbox"
-                  onChange={(event) => setStartRecovery(event.target.checked)}
-                />
-                <span>Tentar recuperar este cliente automaticamente</span>
-              </label>
-              {startRecovery ? (
-                <div className="step-chips">
-                  {[3, 10, 15, 30].map((day) => (
-                    <span key={day}>{day} dias</span>
-                  ))}
-                </div>
+              {uniqueSelectedReference ? (
+                <>
+                  <div>
+                    <dt>Plano</dt>
+                    <dd>{uniqueSelectedReference.plan.name}</dd>
+                  </div>
+                  <div>
+                    <dt>Recorrencia</dt>
+                    <dd>{formatCurrency(uniqueSelectedReference.recurringValue)}</dd>
+                  </div>
+                  <div>
+                    <dt>Cobranca</dt>
+                    <dd>{uniqueSelectedReference.billingNoticeDays} dias antes</dd>
+                  </div>
+                </>
               ) : null}
-              <div className="button-row">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => onStatusChange('ATIVO')}
-                >
-                  Ativar
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => onStatusChange('INATIVO')}
-                >
-                  Inativar
-                </button>
-                <button
-                  className="danger-button"
-                  type="button"
-                  onClick={() => onStatusChange('CANCELADO')}
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
+            </dl>
 
             <div className="tabs">
               <button
@@ -2073,6 +2149,13 @@ function ClientsView({
                 onClick={() => setDetailTab('timeline')}
               >
                 Timeline
+              </button>
+              <button
+                className={detailTab === 'references' ? 'active' : ''}
+                type="button"
+                onClick={() => setDetailTab('references')}
+              >
+                Referencias
               </button>
               <button
                 className={detailTab === 'renewals' ? 'active' : ''}
@@ -2121,6 +2204,121 @@ function ClientsView({
                   </li>
                 ))}
               </ol>
+            ) : null}
+
+            {detailTab === 'references' ? (
+              <div className="mini-list">
+                <div className="button-row">
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => {
+                      setEditingReference(null);
+                      setReferenceFormOpen((open) => !open);
+                    }}
+                  >
+                    <Plus aria-hidden="true" size={16} />
+                    Adicionar referencia
+                  </button>
+                </div>
+                {referenceFormOpen ? (
+                  <ClientReferenceForm
+                    plans={plans}
+                    reference={editingReference}
+                    onCancel={() => {
+                      setReferenceFormOpen(false);
+                      setEditingReference(null);
+                    }}
+                    onSubmit={async (payload) => {
+                      if (editingReference) {
+                        await onUpdateReference(editingReference, payload);
+                      } else {
+                        await onCreateReference(selectedClient, payload);
+                      }
+                      setReferenceFormOpen(false);
+                      setEditingReference(null);
+                    }}
+                  />
+                ) : null}
+                <div className="status-actions">
+                  <textarea
+                    placeholder="Justificativa para inativar ou cancelar referencia"
+                    value={statusReason}
+                    onChange={(event) => setStatusReason(event.target.value)}
+                  />
+                  <label className="checkbox-row">
+                    <input
+                      checked={startRecovery}
+                      type="checkbox"
+                      onChange={(event) => setStartRecovery(event.target.checked)}
+                    />
+                    <span>Tentar recuperar esta referencia automaticamente</span>
+                  </label>
+                  {startRecovery ? (
+                    <div className="step-chips">
+                      {[3, 10, 15, 30].map((day) => (
+                        <span key={day}>{day} dias</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                {(selectedClient.references ?? []).map((reference) => (
+                  <article key={reference.id}>
+                    <strong>{reference.reference}</strong>
+                    <span>{reference.plan.name}</span>
+                    <p>
+                      {formatCurrency(reference.recurringValue)} | {formatDate(reference.dueDate)} |{' '}
+                      {reference.billingNoticeDays} dias antes
+                    </p>
+                    <StatusBadge status={reference.status} />
+                    <div className="button-row">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => onRenew(selectedClient, reference)}
+                      >
+                        <CalendarClock aria-hidden="true" size={16} />
+                        Renovar
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => {
+                          setEditingReference(reference);
+                          setReferenceFormOpen(true);
+                        }}
+                      >
+                        <Pencil aria-hidden="true" size={16} />
+                        Editar
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => onReferenceStatusChange(reference, 'ATIVO')}
+                      >
+                        Ativar
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => onReferenceStatusChange(reference, 'INATIVO')}
+                      >
+                        Inativar
+                      </button>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        onClick={() => onReferenceStatusChange(reference, 'CANCELADO')}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!selectedClient.references?.length ? (
+                  <div className="empty-state">Sem referencias cadastradas.</div>
+                ) : null}
+              </div>
             ) : null}
 
             {detailTab === 'renewals' ? (
@@ -4385,19 +4583,149 @@ function formatDateTime(value: string) {
   return new Date(value).toLocaleString('pt-BR');
 }
 
+function ClientReferenceForm({
+  plans,
+  reference,
+  onCancel,
+  onSubmit,
+}: {
+  plans: Plan[];
+  reference: ClientReference | null;
+  onCancel: () => void;
+  onSubmit: (payload: Omit<ClientPayload, 'name' | 'phone' | 'email'>) => Promise<void>;
+}) {
+  const initialPlan = reference?.plan ?? plans[0];
+  const [referenceValue, setReferenceValue] = useState(reference?.reference ?? '');
+  const [planId, setPlanId] = useState(reference?.planId ?? initialPlan?.id ?? '');
+  const [recurringValue, setRecurringValue] = useState(
+    reference?.recurringValue ?? initialPlan?.defaultValue ?? '0.00',
+  );
+  const [dueDate, setDueDate] = useState(reference?.dueDate ?? '');
+  const [billingNoticeDays, setBillingNoticeDays] = useState(
+    String(reference?.billingNoticeDays ?? 5),
+  );
+  const [notes, setNotes] = useState(reference?.notes ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  function handlePlanChange(nextPlanId: string) {
+    setPlanId(nextPlanId);
+    const selectedPlan = plans.find((plan) => plan.id === nextPlanId);
+    if (selectedPlan && !reference) setRecurringValue(selectedPlan.defaultValue);
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+    setSaving(true);
+
+    try {
+      await onSubmit({
+        reference: referenceValue,
+        planId,
+        recurringValue: Number(recurringValue),
+        dueDate,
+        billingNoticeDays: Number(billingNoticeDays),
+        notes: notes || undefined,
+        referrerClientId: undefined,
+        referralRewardType: undefined,
+        referralRewardValue: undefined,
+        referralRewardDescription: undefined,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar a referencia.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
+      <div className="form-grid">
+        <label className="field">
+          <span>Referencia</span>
+          <input
+            required
+            value={referenceValue}
+            onChange={(event) => setReferenceValue(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Plano</span>
+          <select
+            required
+            value={planId}
+            onChange={(event) => handlePlanChange(event.target.value)}
+          >
+            {plans.map((plan) => (
+              <option key={plan.id} value={plan.id}>
+                {plan.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Valor</span>
+          <input
+            min="0"
+            step="0.01"
+            type="number"
+            value={recurringValue}
+            onChange={(event) => setRecurringValue(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Vencimento</span>
+          <input
+            required
+            type="date"
+            value={dueDate}
+            onChange={(event) => setDueDate(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Dias de aviso</span>
+          <input
+            min="0"
+            type="number"
+            value={billingNoticeDays}
+            onChange={(event) => setBillingNoticeDays(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Observacoes</span>
+          <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+        </label>
+      </div>
+      <div className="form-actions">
+        <span className="error-message">{error}</span>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            Cancelar
+          </button>
+          <button className="primary-button" disabled={saving} type="submit">
+            {saving ? 'Salvando...' : reference ? 'Atualizar referencia' : 'Criar referencia'}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
 function RenewalModal({
-  client,
+  target,
   plans,
   onClose,
   onConfirm,
 }: {
-  client: Client;
+  target: RenewalTarget;
   plans: Plan[];
   onClose: () => void;
   onConfirm: (payload: { planId: string; amount: number; idempotencyKey: string }) => Promise<void>;
 }) {
-  const [planId, setPlanId] = useState(client.planId);
-  const [amount, setAmount] = useState(client.recurringValue);
+  const { client, reference } = target;
+  const [planId, setPlanId] = useState(reference.planId);
+  const [amount, setAmount] = useState(reference.recurringValue);
   const [preview, setPreview] = useState<RenewalPreview | null>(null);
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -4418,7 +4746,10 @@ function RenewalModal({
       setError('');
 
       try {
-        const nextPreview = await previewRenewal(client.id, { planId, amount: parsedAmount });
+        const nextPreview = await previewReferenceRenewal(reference.id, {
+          planId,
+          amount: parsedAmount,
+        });
         if (active) setPreview(nextPreview);
       } catch (err) {
         if (active) {
@@ -4435,7 +4766,7 @@ function RenewalModal({
     return () => {
       active = false;
     };
-  }, [amount, client.id, planId]);
+  }, [amount, planId, reference.id]);
 
   async function handleConfirm() {
     setError('');
@@ -4454,7 +4785,7 @@ function RenewalModal({
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="renewal-title">
         <header className="modal-header">
-          <h2 id="renewal-title">Renovar cliente</h2>
+          <h2 id="renewal-title">Renovar referencia</h2>
           <button className="icon-button" type="button" onClick={onClose}>
             <X aria-hidden="true" size={17} />
           </button>
@@ -4466,27 +4797,31 @@ function RenewalModal({
             <dd>{client.name}</dd>
           </div>
           <div>
+            <dt>Referencia</dt>
+            <dd>{reference.reference}</dd>
+          </div>
+          <div>
             <dt>Status</dt>
-            <dd>{client.status}</dd>
+            <dd>{reference.status}</dd>
           </div>
           <div>
             <dt>Plano atual</dt>
-            <dd>{client.plan.name}</dd>
+            <dd>{reference.plan.name}</dd>
           </div>
           <div>
             <dt>Vencimento atual</dt>
-            <dd>{formatDate(client.dueDate)}</dd>
+            <dd>{formatDate(reference.dueDate)}</dd>
           </div>
           <div>
             <dt>Valor atual</dt>
-            <dd>{formatCurrency(client.recurringValue)}</dd>
+            <dd>{formatCurrency(reference.recurringValue)}</dd>
           </div>
         </dl>
 
-        {client.status === 'CANCELADO' ? (
+        {reference.status === 'CANCELADO' ? (
           <div className="notice warning">
-            Este cliente está CANCELADO. Ao confirmar a renovação, ele será reativado e voltará para
-            o status ATIVO.
+            Esta referencia esta CANCELADA. Ao confirmar a renovacao, ela sera reativada e voltara
+            para o status ATIVO.
           </div>
         ) : null}
 

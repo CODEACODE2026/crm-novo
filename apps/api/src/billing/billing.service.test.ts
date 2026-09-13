@@ -21,6 +21,16 @@ function plan() {
 }
 
 function client(overrides: Record<string, unknown> = {}) {
+  const basePlan = plan();
+  const baseReceivables = (overrides.receivables as
+    ReturnType<typeof receivable>[] | undefined) ?? [receivable()];
+  const reference = clientReference({
+    plan: basePlan,
+    receivables: baseReceivables,
+    status: overrides.status ?? 'ATIVO',
+    dueDate: overrides.dueDate ?? dueDate,
+    billingNoticeDays: overrides.billingNoticeDays ?? 0,
+  });
   return {
     id: 'client-id',
     name: 'Bruno Teste',
@@ -28,13 +38,34 @@ function client(overrides: Record<string, unknown> = {}) {
     phoneNormalized: '5544999999999',
     email: null,
     reference: 'bruno1499',
-    planId: plan().id,
+    planId: basePlan.id,
     recurringValue: 50,
     dueDate,
     billingAnchorDay: 15,
     billingNoticeDays: 0,
     notes: null,
     status: 'ATIVO',
+    createdAt: now,
+    updatedAt: now,
+    plan: basePlan,
+    receivables: baseReceivables,
+    references: [reference],
+    ...overrides,
+  };
+}
+
+function clientReference(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'client-reference-id',
+    clientId: 'client-id',
+    reference: 'bruno1499',
+    planId: plan().id,
+    recurringValue: 50,
+    dueDate,
+    billingAnchorDay: 15,
+    billingNoticeDays: 0,
+    status: 'ATIVO',
+    notes: null,
     createdAt: now,
     updatedAt: now,
     plan: plan(),
@@ -47,6 +78,7 @@ function receivable(overrides: Record<string, unknown> = {}) {
   return {
     id: 'receivable-id',
     clientId: 'client-id',
+    clientReferenceId: 'client-reference-id',
     renewalId: 'renewal-id',
     purpose: 'RENEWAL',
     description: 'Renovacao Mensal',
@@ -96,6 +128,17 @@ function connection(overrides: Record<string, unknown> = {}) {
 }
 
 function dispatch(overrides: Record<string, unknown> = {}) {
+  const dispatchClient = (overrides.client as ReturnType<typeof client> | undefined) ?? client();
+  const dispatchReceivable =
+    (overrides.receivable as ReturnType<typeof receivable> | undefined) ?? receivable();
+  const dispatchReference =
+    (overrides.clientReference as ReturnType<typeof clientReference> | undefined) ??
+    clientReference({
+      status: dispatchClient.status,
+      dueDate: dispatchClient.dueDate,
+      billingNoticeDays: dispatchClient.billingNoticeDays,
+      receivables: [dispatchReceivable],
+    });
   return {
     id: 'dispatch-id',
     clientId: client().id,
@@ -118,8 +161,9 @@ function dispatch(overrides: Record<string, unknown> = {}) {
     sentAt: null,
     createdAt: now,
     updatedAt: now,
-    client: client(),
-    receivable: receivable(),
+    client: dispatchClient,
+    clientReference: dispatchReference,
+    receivable: dispatchReceivable,
     template: template(),
     whatsAppConnection: connection(),
     ...overrides,
@@ -591,5 +635,35 @@ describe('BillingService', () => {
     ]);
 
     expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('searches dispatches by ClientReference.reference without Client.reference fallback', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listDispatches({ search: 'REF-001' });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            { clientReference: { reference: { contains: 'REF-001', mode: 'insensitive' } } },
+            {
+              receivable: {
+                clientReference: { reference: { contains: 'REF-001', mode: 'insensitive' } },
+              },
+            },
+          ]),
+        }),
+      }),
+    );
+    expect(prisma.messageDispatch.findMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            { client: { reference: { contains: 'REF-001', mode: 'insensitive' } } },
+          ]),
+        }),
+      }),
+    );
   });
 });

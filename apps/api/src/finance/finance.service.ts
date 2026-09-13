@@ -47,6 +47,7 @@ const pixExpirationMinutes = 30;
 type ReceivableWithRelations = Prisma.ReceivableGetPayload<{
   include: {
     client: true;
+    clientReference: { include: { plan: true } };
     renewal: true;
     paymentTransaction: true;
     paymentIntents: { orderBy: { createdAt: 'desc' } };
@@ -57,7 +58,8 @@ type TransactionWithRelations = Prisma.FinancialTransactionGetPayload<{
   include: {
     category: true;
     client: true;
-    receivable: true;
+    clientReference: true;
+    receivable: { include: { clientReference: true } };
   };
 }>;
 
@@ -166,6 +168,7 @@ export class FinanceService {
         where,
         include: {
           client: true,
+          clientReference: { include: { plan: true } },
           renewal: true,
           paymentTransaction: true,
           paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -188,6 +191,7 @@ export class FinanceService {
       where: { id },
       include: {
         client: true,
+        clientReference: { include: { plan: true } },
         renewal: true,
         paymentTransaction: true,
         paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -208,6 +212,7 @@ export class FinanceService {
           where: { id },
           include: {
             client: true,
+            clientReference: { include: { plan: true } },
             renewal: true,
             paymentTransaction: true,
             paymentIntents: {
@@ -436,6 +441,7 @@ export class FinanceService {
           where: { id },
           include: {
             client: true,
+            clientReference: { include: { plan: true } },
             renewal: true,
             paymentTransaction: true,
             paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -465,6 +471,7 @@ export class FinanceService {
             origin: 'RECEIVABLE_PAYMENT',
             categoryId: category.id,
             clientId: receivable.clientId,
+            clientReferenceId: receivable.clientReferenceId,
             receivableId: receivable.id,
             description,
             amount: receivable.amount,
@@ -502,7 +509,12 @@ export class FinanceService {
 
         return tx.financialTransaction.findUniqueOrThrow({
           where: { id: createdTransaction.id },
-          include: { category: true, client: true, receivable: true },
+          include: {
+            category: true,
+            client: true,
+            clientReference: true,
+            receivable: { include: { clientReference: true } },
+          },
         });
       });
 
@@ -528,6 +540,7 @@ export class FinanceService {
         where: { id },
         include: {
           client: true,
+          clientReference: { include: { plan: true } },
           renewal: true,
           paymentTransaction: true,
           paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -551,6 +564,7 @@ export class FinanceService {
         },
         include: {
           client: true,
+          clientReference: { include: { plan: true } },
           renewal: true,
           paymentTransaction: true,
           paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -702,6 +716,7 @@ export class FinanceService {
             origin: 'RECEIVABLE_PAYMENT',
             categoryId: category.id,
             clientId: receivable.clientId,
+            clientReferenceId: receivable.clientReferenceId,
             receivableId: receivable.id,
             description: `Recebimento PIX: ${receivable.description}`,
             amount: receivable.amount,
@@ -757,7 +772,12 @@ export class FinanceService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.financialTransaction.findMany({
         where,
-        include: { category: true, client: true, receivable: true },
+        include: {
+          category: true,
+          client: true,
+          clientReference: true,
+          receivable: { include: { clientReference: true } },
+        },
         orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -774,7 +794,12 @@ export class FinanceService {
   async getTransaction(id: string) {
     const transaction = await this.prisma.financialTransaction.findUnique({
       where: { id },
-      include: { category: true, client: true, receivable: true },
+      include: {
+        category: true,
+        client: true,
+        clientReference: true,
+        receivable: { include: { clientReference: true } },
+      },
     });
 
     if (!transaction) {
@@ -809,6 +834,9 @@ export class FinanceService {
     if (dto.clientId !== undefined) {
       await this.ensureClientExists(dto.clientId);
     }
+    if (dto.clientReferenceId !== undefined) {
+      await this.ensureClientReference(dto.clientReferenceId, dto.clientId);
+    }
 
     const transaction = await this.prisma.financialTransaction.update({
       where: { id },
@@ -821,8 +849,16 @@ export class FinanceService {
         ...(dto.notes !== undefined ? { notes: this.optionalTrim(dto.notes) } : {}),
         ...(category ? { categoryId: category.id } : {}),
         ...(dto.clientId !== undefined ? { clientId: dto.clientId } : {}),
+        ...(dto.clientReferenceId !== undefined
+          ? { clientReferenceId: dto.clientReferenceId }
+          : {}),
       },
-      include: { category: true, client: true, receivable: true },
+      include: {
+        category: true,
+        client: true,
+        clientReference: true,
+        receivable: { include: { clientReference: true } },
+      },
     });
 
     return this.presentTransaction(transaction);
@@ -831,7 +867,12 @@ export class FinanceService {
   async removeManualTransaction(id: string) {
     const existing = await this.prisma.financialTransaction.findUnique({
       where: { id },
-      include: { category: true, client: true, receivable: true },
+      include: {
+        category: true,
+        client: true,
+        clientReference: true,
+        receivable: { include: { clientReference: true } },
+      },
     });
 
     if (!existing) {
@@ -914,6 +955,9 @@ export class FinanceService {
     if (dto.clientId) {
       await this.ensureClientExists(dto.clientId);
     }
+    if (dto.clientReferenceId) {
+      await this.ensureClientReference(dto.clientReferenceId, dto.clientId);
+    }
 
     const transactionId = await this.prisma.$transaction(async (tx) => {
       const created = await tx.financialTransaction.create({
@@ -922,13 +966,19 @@ export class FinanceService {
           origin: 'MANUAL',
           categoryId: category.id,
           clientId: dto.clientId ?? null,
+          clientReferenceId: dto.clientReferenceId ?? null,
           description: dto.description.trim(),
           amount: dto.amount,
           transactionDate,
           notes: this.optionalTrim(dto.notes),
           createdByUserId: actorUserId,
         },
-        include: { category: true, client: true, receivable: true },
+        include: {
+          category: true,
+          client: true,
+          clientReference: true,
+          receivable: { include: { clientReference: true } },
+        },
       });
 
       if (dto.clientId && type === 'ENTRADA') {
@@ -953,7 +1003,12 @@ export class FinanceService {
 
     const transaction = await this.prisma.financialTransaction.findUniqueOrThrow({
       where: { id: transactionId },
-      include: { category: true, client: true, receivable: true },
+      include: {
+        category: true,
+        client: true,
+        clientReference: true,
+        receivable: { include: { clientReference: true } },
+      },
     });
 
     return this.presentTransaction(transaction);
@@ -964,6 +1019,10 @@ export class FinanceService {
 
     if (query.clientId) {
       where.clientId = query.clientId;
+    }
+
+    if (query.clientReferenceId) {
+      where.clientReferenceId = query.clientReferenceId;
     }
 
     if (query.status === 'VENCIDO') {
@@ -994,7 +1053,7 @@ export class FinanceService {
         where.OR = [
           { description: { contains: search, mode: 'insensitive' } },
           { client: { name: { contains: search, mode: 'insensitive' } } },
-          { client: { reference: { contains: search, mode: 'insensitive' } } },
+          { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
         ];
       }
     }
@@ -1011,6 +1070,7 @@ export class FinanceService {
     if (query.origin) where.origin = query.origin;
     if (query.categoryId) where.categoryId = query.categoryId;
     if (query.clientId) where.clientId = query.clientId;
+    if (query.clientReferenceId) where.clientReferenceId = query.clientReferenceId;
 
     if (query.startDate || query.endDate) {
       where.transactionDate = {
@@ -1027,7 +1087,7 @@ export class FinanceService {
           { description: { contains: search, mode: 'insensitive' } },
           { notes: { contains: search, mode: 'insensitive' } },
           { client: { name: { contains: search, mode: 'insensitive' } } },
-          { client: { reference: { contains: search, mode: 'insensitive' } } },
+          { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
         ];
       }
     }
@@ -1075,6 +1135,20 @@ export class FinanceService {
     }
   }
 
+  private async ensureClientReference(id: string, clientId?: string) {
+    const reference = await this.prisma.clientReference.findUnique({ where: { id } });
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    if (clientId && reference.clientId !== clientId) {
+      throw new BadRequestException('Referencia nao pertence ao cliente informado.');
+    }
+
+    return reference;
+  }
+
   private async activateClientAfterInitialPayment(
     tx: Prisma.TransactionClient,
     receivableId: string,
@@ -1082,37 +1156,56 @@ export class FinanceService {
   ) {
     const receivable = await tx.receivable.findUnique({
       where: { id: receivableId },
-      include: { client: { include: { plan: true } } },
+      include: {
+        client: { include: { plan: true } },
+        clientReference: { include: { plan: true } },
+      },
     });
 
     if (!receivable || receivable.purpose !== 'INITIAL_ACTIVATION') {
       return;
     }
 
-    if (receivable.status !== 'PAGO' || receivable.client.status !== 'PENDENTE_PAGAMENTO') {
+    const reference = receivable.clientReference ?? receivable.client;
+
+    if (receivable.status !== 'PAGO' || reference.status !== 'PENDENTE_PAGAMENTO') {
       return;
     }
 
-    const previousStatus = receivable.client.status;
-    const anchorDay = receivable.client.billingAnchorDay;
+    const previousStatus = reference.status;
+    const anchorDay = reference.billingAnchorDay;
     const nextDueDate = addCalendarMonthsPreservingAnchor(
       receivable.dueDate,
-      receivable.client.plan.durationMonths,
+      'plan' in reference ? reference.plan.durationMonths : receivable.client.plan.durationMonths,
       anchorDay,
     );
 
-    await tx.client.update({
-      where: { id: receivable.clientId },
-      data: {
-        status: 'ATIVO',
-        dueDate: nextDueDate,
-        billingAnchorDay: anchorDay,
-      },
-    });
+    if (tx.clientReference) {
+      await tx.clientReference.update({
+        where: { id: receivable.clientReferenceId },
+        data: {
+          status: 'ATIVO',
+          dueDate: nextDueDate,
+          billingAnchorDay: anchorDay,
+        },
+      });
+    } else {
+      await tx.client.update({
+        where: { id: receivable.clientId },
+        data: {
+          status: 'ATIVO',
+          dueDate: nextDueDate,
+          billingAnchorDay: anchorDay,
+        },
+      });
+    }
 
     await tx.clientStatusHistory.create({
       data: {
         clientId: receivable.clientId,
+        ...(receivable.clientReferenceId
+          ? { clientReferenceId: receivable.clientReferenceId }
+          : {}),
         previousStatus,
         newStatus: 'ATIVO',
         reason: 'Ativacao automatica apos pagamento inicial.',
@@ -1124,17 +1217,21 @@ export class FinanceService {
       data: {
         clientId: receivable.clientId,
         type: 'STATUS_CHANGED',
-        title: 'Cliente ativado pelo primeiro pagamento.',
+        title: 'Referencia ativada pelo primeiro pagamento.',
         description: `Status alterado de ${previousStatus} para ATIVO. Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
         metadata: {
           receivableId,
+          clientReferenceId: receivable.clientReferenceId,
           previousStatus,
           newStatus: 'ATIVO',
           originalDueDate: formatBusinessDate(receivable.dueDate),
           nextDueDate: formatBusinessDate(nextDueDate),
           billingAnchorDay: anchorDay,
-          planId: receivable.client.planId,
-          durationMonths: receivable.client.plan.durationMonths,
+          planId: reference.planId,
+          durationMonths:
+            'plan' in reference
+              ? reference.plan.durationMonths
+              : receivable.client.plan.durationMonths,
         },
         createdByUserId: actorUserId,
       },
@@ -1261,6 +1358,7 @@ export class FinanceService {
     return {
       id: receivable.id,
       clientId: receivable.clientId,
+      clientReferenceId: receivable.clientReferenceId,
       renewalId: receivable.renewalId,
       purpose: receivable.purpose,
       description: receivable.description,
@@ -1278,8 +1376,16 @@ export class FinanceService {
       client: {
         id: receivable.client.id,
         name: receivable.client.name,
-        reference: receivable.client.reference,
+        reference: receivable.clientReference?.reference ?? receivable.client.reference,
       },
+      clientReference: receivable.clientReference
+        ? {
+            id: receivable.clientReference.id,
+            reference: receivable.clientReference.reference,
+            planName: receivable.clientReference.plan.name,
+            status: receivable.clientReference.status,
+          }
+        : null,
       renewal: receivable.renewal
         ? {
             id: receivable.renewal.id,
@@ -1319,6 +1425,8 @@ export class FinanceService {
       origin: transaction.origin,
       categoryId: transaction.categoryId,
       clientId: transaction.clientId,
+      clientReferenceId:
+        transaction.clientReferenceId ?? transaction.receivable?.clientReferenceId ?? null,
       receivableId: transaction.receivableId,
       description: transaction.description,
       amount: transaction.amount.toFixed(2),
@@ -1332,9 +1440,20 @@ export class FinanceService {
         ? {
             id: transaction.client.id,
             name: transaction.client.name,
-            reference: transaction.client.reference,
+            reference:
+              transaction.clientReference?.reference ??
+              transaction.receivable?.clientReference?.reference ??
+              transaction.client.reference,
           }
         : null,
+      clientReference:
+        (transaction.clientReference ?? transaction.receivable?.clientReference)
+          ? {
+              id: (transaction.clientReference ?? transaction.receivable?.clientReference)!.id,
+              reference: (transaction.clientReference ?? transaction.receivable?.clientReference)!
+                .reference,
+            }
+          : null,
     };
   }
 

@@ -44,6 +44,24 @@ function client() {
   };
 }
 
+function clientReference() {
+  return {
+    id: '55555555-5555-4555-8555-555555555555',
+    clientId: client().id,
+    reference: 'CLI-1',
+    planId: 'plan-id',
+    recurringValue: 50,
+    dueDate: now,
+    billingAnchorDay: 11,
+    billingNoticeDays: 5,
+    status: 'PENDENTE_PAGAMENTO',
+    notes: null,
+    createdAt: now,
+    updatedAt: now,
+    plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
+  };
+}
+
 function dispatch(overrides: Record<string, unknown> = {}) {
   return {
     id: '33333333-3333-4333-8333-333333333333',
@@ -116,11 +134,13 @@ function serviceFactory({
     },
     client: {
       findUnique: vi.fn().mockResolvedValue(client()),
+      findMany: vi.fn().mockResolvedValue([client()]),
     },
     receivable: {
       findUnique: vi.fn().mockResolvedValue({
         id: 'initial-receivable-id',
         clientId: client().id,
+        clientReferenceId: clientReference().id,
         purpose: 'INITIAL_ACTIVATION',
         renewalId: null,
         description: 'Cobranca inicial de ativacao - Mensal',
@@ -131,6 +151,7 @@ function serviceFactory({
           ...client(),
           plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
         },
+        clientReference: clientReference(),
       }),
     },
     messageTemplate: {
@@ -178,6 +199,9 @@ function serviceFactory({
             dueDate: now,
             plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
           }),
+        },
+        clientReference: {
+          create: vi.fn().mockResolvedValue(clientReference()),
         },
         receivable: {
           create: vi.fn().mockResolvedValue({
@@ -558,6 +582,7 @@ describe('WhatsAppService', () => {
       prismaOverrides: {
         client: {
           findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
         },
       },
     });
@@ -597,6 +622,7 @@ describe('WhatsAppService', () => {
       prismaOverrides: {
         client: {
           findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
         },
       },
     });
@@ -649,6 +675,43 @@ describe('WhatsAppService', () => {
     const result = await service.receiveWebhook({ type: 'Message' });
 
     expect(result).toMatchObject({ action: 'client_exists' });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not choose a client automatically when an incoming phone is ambiguous', async () => {
+    const otherClient = {
+      ...client(),
+      id: '99999999-9999-4999-8999-999999999999',
+      name: 'Outro Cliente',
+      reference: 'CLI-2',
+    };
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(client()),
+          findMany: vi.fn().mockResolvedValue([client(), otherClient]),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: '5544999999999',
+      contactName: 'Cliente Teste',
+      messageId: 'msg-ambiguous',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: 'Oi',
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'ambiguous_client_phone', clientMatches: 2 });
     expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
   });
 
@@ -794,6 +857,7 @@ describe('WhatsAppService', () => {
       prismaOverrides: {
         client: {
           findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
         },
         whatsAppInboundMessage: {
           create: vi.fn().mockRejectedValue(duplicateError),
@@ -1000,7 +1064,7 @@ describe('WhatsAppService', () => {
     });
   });
 
-  it('blocks approval when a client with the phone already exists', async () => {
+  it('allows approval when another client already uses the same phone', async () => {
     const { service } = serviceFactory();
 
     await expect(
@@ -1017,7 +1081,7 @@ describe('WhatsAppService', () => {
         },
         'user-id',
       ),
-    ).rejects.toThrow(ConflictException);
+    ).resolves.toMatchObject({ phoneNormalized: '5544999999999' });
   });
 
   it('preserves approved client and initial receivable when PIX generation fails', async () => {

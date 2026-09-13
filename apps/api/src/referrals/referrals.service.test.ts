@@ -84,15 +84,44 @@ function createReferralPrisma() {
     },
   ];
   const referrals: TestReferral[] = [];
+  const clientReferences = clients.map((client) => ({
+    id: `ref-${client.id}`,
+    clientId: client.id,
+    reference: client.reference,
+    planId: client.planId,
+    recurringValue: client.recurringValue,
+    dueDate: client.dueDate,
+    billingAnchorDay: client.billingAnchorDay,
+    billingNoticeDays: client.billingNoticeDays,
+    notes: client.notes,
+    status: client.status,
+    createdAt: client.createdAt,
+    updatedAt: client.updatedAt,
+  }));
   const events: Array<Record<string, unknown>> = [];
   const renewals: Array<Record<string, unknown>> = [];
   const receivables: Array<Record<string, unknown>> = [];
   const transactions: Array<Record<string, unknown>> = [];
 
+  const withReferences = (client: TestClient | undefined) =>
+    client
+      ? {
+          ...client,
+          references: clientReferences.filter((reference) => reference.clientId === client.id),
+        }
+      : null;
+
   const includeClients = (referral: Record<string, unknown>) => ({
     ...referral,
-    referredClient: clients.find((client) => client.id === referral.referredClientId),
-    referrerClient: clients.find((client) => client.id === referral.referrerClientId),
+    referredClient: withReferences(
+      clients.find((client) => client.id === referral.referredClientId),
+    ),
+    referrerClient: withReferences(
+      clients.find((client) => client.id === referral.referrerClientId),
+    ),
+    rewardClientReference:
+      clientReferences.find((reference) => reference.id === referral.rewardClientReferenceId) ??
+      null,
   });
 
   const tx: MockTx = {
@@ -104,6 +133,27 @@ function createReferralPrisma() {
         if (!client) throw new Error('missing client');
         Object.assign(client, data);
         return Promise.resolve(client);
+      },
+    },
+    clientReference: {
+      findFirst: ({
+        where,
+      }: {
+        where: { id?: string; clientId?: string; status?: { in: string[] } };
+      }) =>
+        Promise.resolve(
+          clientReferences.find(
+            (reference) =>
+              (where.id === undefined || reference.id === where.id) &&
+              (where.clientId === undefined || reference.clientId === where.clientId) &&
+              (where.status?.in === undefined || where.status.in.includes(reference.status)),
+          ) ?? null,
+        ),
+      update: ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const reference = clientReferences.find((item) => item.id === where.id);
+        if (!reference) throw new Error('missing reference');
+        Object.assign(reference, data);
+        return Promise.resolve(reference);
       },
     },
     referral: {
@@ -171,7 +221,13 @@ function createReferralPrisma() {
       }) => {
         const referral = referrals.find((item) => item.id === where.id);
         if (!referral) throw new Error('missing referral');
-        Object.assign(referral, data);
+        const rewardClientReference = data.rewardClientReference as
+          { connect?: { id: string } } | undefined;
+        Object.assign(referral, data, {
+          ...(rewardClientReference?.connect
+            ? { rewardClientReferenceId: rewardClientReference.connect.id }
+            : {}),
+        });
         return Promise.resolve(include ? includeClients(referral) : referral);
       },
       count: ({ where }: { where?: { status?: string; appliedAt?: null } } = {}) =>
@@ -200,7 +256,16 @@ function createReferralPrisma() {
 
   const prisma = tx as unknown;
 
-  return { clients, events, prisma, receivables, referrals, renewals, transactions };
+  return {
+    clientReferences,
+    clients,
+    events,
+    prisma,
+    receivables,
+    referrals,
+    renewals,
+    transactions,
+  };
 }
 
 describe('ReferralsService', () => {
@@ -302,20 +367,29 @@ describe('ReferralsService', () => {
       actorUserId,
     );
 
-    const applied = await service.applyReward(created!.id, {}, actorUserId);
+    const applied = await service.applyReward(
+      created!.id,
+      { clientReferenceId: fake.clientReferences[0]!.id },
+      actorUserId,
+    );
 
     expect(applied).toMatchObject({
       status: 'REWARDED',
       appliedPreviousDueDate: '2026-10-10',
       appliedNewDueDate: '2026-11-10',
     });
-    expect(fake.clients[0]!.dueDate).toEqual(parseBusinessDate('2026-11-10'));
+    expect(fake.clientReferences[0]!.dueDate).toEqual(parseBusinessDate('2026-11-10'));
+    expect(fake.clients[0]!.dueDate).toEqual(parseBusinessDate('2026-10-10'));
     expect(fake.renewals).toHaveLength(0);
     expect(fake.receivables).toHaveLength(0);
     expect(fake.transactions).toHaveLength(0);
-    await expect(service.applyReward(created!.id, {}, actorUserId)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(
+      service.applyReward(
+        created!.id,
+        { clientReferenceId: fake.clientReferences[0]!.id },
+        actorUserId,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('preserves billing anchor on day 31 and does not reactivate inactive referrer', async () => {
@@ -334,7 +408,11 @@ describe('ReferralsService', () => {
       actorUserId,
     );
 
-    const applied = await service.applyReward(created!.id, {}, actorUserId);
+    const applied = await service.applyReward(
+      created!.id,
+      { clientReferenceId: fake.clientReferences[2]!.id },
+      actorUserId,
+    );
 
     expect(applied.appliedPreviousDueDate).toBe('2026-01-31');
     expect(applied.appliedNewDueDate).toBe('2026-02-28');

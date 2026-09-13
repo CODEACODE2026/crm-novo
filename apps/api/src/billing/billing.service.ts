@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   Prisma,
   type Client,
+  type ClientReference,
   type MessageDispatch,
   type MessageTemplate,
   type Plan,
@@ -29,14 +30,11 @@ const pageSizeLimit = 100;
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
 
-type BillingClient = Client & {
-  plan: Plan;
-  receivables: Receivable[];
-};
-
 type BillingDispatch = MessageDispatch & {
-  client: (Client & { plan?: Plan | null }) | null;
-  receivable: Receivable | null;
+  client: Client | null;
+  clientReference: (ClientReference & { plan?: Plan | null }) | null;
+  receivable:
+    (Receivable & { clientReference?: (ClientReference & { plan?: Plan | null }) | null }) | null;
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
 };
@@ -56,11 +54,19 @@ export class BillingService {
     const template = await this.ensureDefaultTemplate();
     const connection = await this.findOperationalConnection(null);
     const clients = await this.prisma.client.findMany({
-      where: { status: 'ATIVO', billingNoticeDays: { gte: 0 }, recurringValue: { gt: 0 } },
+      where: {
+        references: {
+          some: { status: 'ATIVO', billingNoticeDays: { gte: 0 }, recurringValue: { gt: 0 } },
+        },
+      },
       include: {
-        plan: true,
-        receivables: {
-          orderBy: { createdAt: 'desc' },
+        references: {
+          where: { status: 'ATIVO', billingNoticeDays: { gte: 0 }, recurringValue: { gt: 0 } },
+          include: {
+            plan: true,
+            receivables: { orderBy: { createdAt: 'desc' } },
+          },
+          orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
         },
       },
     });
@@ -73,27 +79,35 @@ export class BillingService {
     canceled += await this.cancelNoLongerEligibleDispatches();
 
     if (!template.active || !connection) {
-      return { created, kept, canceled, skipped: clients.length };
+      const referencesCount = clients.reduce(
+        (total, client) => total + this.billingReferencesForClient(client).length,
+        0,
+      );
+      return { created, kept, canceled, skipped: referencesCount };
     }
 
-    for (const client of clients) {
-      if (!this.isClientEligibleForScheduling(client)) {
+    const clientReferences = clients.flatMap((client) =>
+      this.billingReferencesForClient(client).map((reference) => ({ client, reference })),
+    );
+
+    for (const { client, reference } of clientReferences) {
+      if (!this.isClientReferenceEligibleForScheduling(client, reference)) {
         skipped += 1;
         continue;
       }
 
-      const receivable = this.findReceivableForClientDueDate(client);
+      const receivable = this.findReceivableForReferenceDueDate(reference);
       const expectedKey = receivable
         ? this.buildIdempotencyKey(
             client.id,
             receivable.id,
-            client.dueDate,
-            client.billingNoticeDays,
+            reference.dueDate,
+            reference.billingNoticeDays,
             template.id,
           )
         : null;
 
-      canceled += await this.cancelObsoleteFutureDispatches(client.id, expectedKey);
+      canceled += await this.cancelObsoleteFutureDispatches(client.id, reference.id, expectedKey);
 
       if (!receivable) {
         skipped += 1;
@@ -105,19 +119,28 @@ export class BillingService {
         continue;
       }
 
-      if (this.isCreateIneligible(client, receivable, template, connection)) {
+      if (this.isCreateIneligible(client, reference, receivable, template, connection)) {
         skipped += 1;
         continue;
       }
 
-      const scheduledFor = this.calculateScheduledFor(client.dueDate, client.billingNoticeDays);
-      const renderedContent = this.renderForClient(template.content, client, receivable);
+      const scheduledFor = this.calculateScheduledFor(
+        reference.dueDate,
+        reference.billingNoticeDays,
+      );
+      const renderedContent = this.renderForClientReference(
+        template.content,
+        client,
+        reference,
+        receivable,
+      );
       const idempotencyKey = expectedKey ?? '';
 
       try {
         const dispatch = await this.prisma.messageDispatch.create({
           data: {
             clientId: client.id,
+            clientReferenceId: reference.id,
             receivableId: receivable.id,
             templateId: template.id,
             whatsAppConnectionId: connection.id,
@@ -220,8 +243,9 @@ export class BillingService {
       this.prisma.messageDispatch.findMany({
         where,
         include: {
-          client: { include: { plan: true } },
-          receivable: true,
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
           template: true,
           whatsAppConnection: true,
         },
@@ -247,8 +271,9 @@ export class BillingService {
     const dispatch = await this.prisma.messageDispatch.findUnique({
       where: { id },
       include: {
-        client: { include: { plan: true } },
-        receivable: true,
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
         template: true,
         whatsAppConnection: true,
       },
@@ -353,8 +378,9 @@ export class BillingService {
     const dispatch = await this.prisma.messageDispatch.findUnique({
       where: { id },
       include: {
-        client: { include: { plan: true } },
-        receivable: true,
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
         template: true,
         whatsAppConnection: true,
       },
@@ -372,8 +398,9 @@ export class BillingService {
         where: { id },
         data: { status, errorCode: ineligible.code, errorMessage: ineligible.message },
         include: {
-          client: { include: { plan: true } },
-          receivable: true,
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
           template: true,
           whatsAppConnection: true,
         },
@@ -416,8 +443,9 @@ export class BillingService {
             nextAttemptAt: null,
           },
           include: {
-            client: { include: { plan: true } },
-            receivable: true,
+            client: true,
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
             template: true,
             whatsAppConnection: true,
           },
@@ -468,8 +496,18 @@ export class BillingService {
       };
     }
 
-    if (!dispatch.client || dispatch.client.status !== 'ATIVO') {
-      return { code: 'CLIENT_NOT_ACTIVE', message: 'Cliente nao esta ativo.' };
+    const dispatchReference =
+      dispatch.clientReference ??
+      dispatch.receivable?.clientReference ??
+      (dispatch.client
+        ? {
+            ...dispatch.client,
+            clientId: dispatch.client.id,
+          }
+        : null);
+
+    if (!dispatchReference || dispatchReference.status !== 'ATIVO') {
+      return { code: 'CLIENT_REFERENCE_NOT_ACTIVE', message: 'Referencia nao esta ativa.' };
     }
 
     try {
@@ -512,6 +550,7 @@ export class BillingService {
     }
 
     if (
+      !dispatch.client ||
       intent.clientId !== dispatch.client.id ||
       intent.receivableId !== dispatch.receivable.id ||
       intent.templateId !== dispatch.template.id
@@ -524,12 +563,12 @@ export class BillingService {
 
     if (
       formatBusinessDate(dispatch.receivable.dueDate) !== intent.dueDate ||
-      formatBusinessDate(dispatch.client.dueDate) !== intent.dueDate
+      formatBusinessDate(dispatchReference.dueDate) !== intent.dueDate
     ) {
       return { code: 'DUE_DATE_CHANGED', message: 'Vencimento da cobranca mudou antes do envio.' };
     }
 
-    if (dispatch.client.billingNoticeDays !== intent.billingNoticeDays) {
+    if (dispatchReference.billingNoticeDays !== intent.billingNoticeDays) {
       return {
         code: 'BILLING_NOTICE_CHANGED',
         message: 'Dias de aviso da cobranca mudaram antes do envio.',
@@ -540,7 +579,8 @@ export class BillingService {
   }
 
   private isCreateIneligible(
-    client: BillingClient,
+    client: Client,
+    reference: ClientReference,
     receivable: Receivable,
     template: MessageTemplate,
     connection: WhatsAppConnection | null,
@@ -552,16 +592,52 @@ export class BillingService {
     }
 
     return (
-      client.status !== 'ATIVO' ||
+      reference.status !== 'ATIVO' ||
       receivable.status !== 'PENDENTE' ||
-      formatBusinessDate(receivable.dueDate) !== formatBusinessDate(client.dueDate) ||
-      client.billingNoticeDays < 0 ||
+      formatBusinessDate(receivable.dueDate) !== formatBusinessDate(reference.dueDate) ||
+      reference.billingNoticeDays < 0 ||
       !template.active ||
       !connection ||
       connection.status !== 'CONNECTED' ||
       !connection.connected ||
       !connection.loggedIn
     );
+  }
+
+  private billingReferencesForClient(
+    client: Client &
+      Partial<{
+        plan: Plan;
+        receivables: Receivable[];
+        references: Array<ClientReference & { plan: Plan; receivables: Receivable[] }>;
+      }>,
+  ) {
+    if (client.references?.length) {
+      return client.references;
+    }
+
+    if (client.plan && client.receivables) {
+      return [
+        {
+          id: client.id,
+          clientId: client.id,
+          reference: client.reference,
+          planId: client.planId,
+          recurringValue: client.recurringValue,
+          dueDate: client.dueDate,
+          billingAnchorDay: client.billingAnchorDay,
+          billingNoticeDays: client.billingNoticeDays,
+          status: client.status,
+          notes: client.notes,
+          createdAt: client.createdAt,
+          updatedAt: client.updatedAt,
+          plan: client.plan,
+          receivables: client.receivables,
+        },
+      ];
+    }
+
+    return [];
   }
 
   private async markRetry(
@@ -581,8 +657,9 @@ export class BillingService {
         nextAttemptAt: exhausted ? null : new Date(now.getTime() + retryDelayMinutes * 60 * 1000),
       },
       include: {
-        client: { include: { plan: true } },
-        receivable: true,
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
         template: true,
         whatsAppConnection: true,
       },
@@ -591,10 +668,12 @@ export class BillingService {
     return this.presentDispatch(updated);
   }
 
-  private findReceivableForClientDueDate(client: BillingClient) {
-    const clientDueDate = formatBusinessDate(client.dueDate);
+  private findReceivableForReferenceDueDate(
+    reference: ClientReference & { receivables: Receivable[] },
+  ) {
+    const clientDueDate = formatBusinessDate(reference.dueDate);
     return (
-      client.receivables.find(
+      reference.receivables.find(
         (receivable) =>
           receivable.purpose === 'RENEWAL' &&
           formatBusinessDate(receivable.dueDate) === clientDueDate,
@@ -602,15 +681,15 @@ export class BillingService {
     );
   }
 
-  private isClientEligibleForScheduling(client: BillingClient) {
-    if (client.status !== 'ATIVO') {
+  private isClientReferenceEligibleForScheduling(client: Client, reference: ClientReference) {
+    if (reference.status !== 'ATIVO') {
       return false;
     }
 
     if (
       !client.phoneNormalized ||
-      client.billingNoticeDays < 0 ||
-      Number(client.recurringValue) <= 0
+      reference.billingNoticeDays < 0 ||
+      Number(reference.recurringValue) <= 0
     ) {
       return false;
     }
@@ -623,10 +702,15 @@ export class BillingService {
     }
   }
 
-  private async cancelObsoleteFutureDispatches(clientId: string, expectedKey: string | null) {
+  private async cancelObsoleteFutureDispatches(
+    clientId: string,
+    clientReferenceId: string,
+    expectedKey: string | null,
+  ) {
     const result = await this.prisma.messageDispatch.updateMany({
       where: {
         clientId,
+        clientReferenceId,
         origin: 'BILLING',
         status: { in: ['SCHEDULED', 'FAILED'] },
         ...(expectedKey ? { idempotencyKey: { not: expectedKey } } : {}),
@@ -676,7 +760,10 @@ export class BillingService {
       const search = query.search.trim();
       where.OR = [
         { client: { name: { contains: search, mode: 'insensitive' } } },
-        { client: { reference: { contains: search, mode: 'insensitive' } } },
+        { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
+        {
+          receivable: { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
+        },
         { phone: { contains: search } },
       ];
     }
@@ -722,14 +809,19 @@ export class BillingService {
     });
   }
 
-  private renderForClient(template: string, client: BillingClient, receivable: Receivable) {
+  private renderForClientReference(
+    template: string,
+    client: Client,
+    reference: ClientReference & { plan: Plan },
+    receivable: Receivable,
+  ) {
     return this.renderer.render(template, {
       nome: client.name,
       primeiroNome: this.firstName(client.name),
       valor: this.formatCurrency(receivable.amount),
       vencimento: this.formatDisplayDate(receivable.dueDate),
-      plano: client.plan.name,
-      referencia: client.reference,
+      plano: reference.plan.name,
+      referencia: reference.reference,
       pix: '',
     });
   }
@@ -802,6 +894,7 @@ export class BillingService {
     return {
       id: dispatch.id,
       clientId: dispatch.clientId,
+      clientReferenceId: dispatch.clientReferenceId,
       receivableId: dispatch.receivableId,
       templateId: dispatch.templateId,
       whatsAppConnectionId: dispatch.whatsAppConnectionId,
@@ -825,11 +918,29 @@ export class BillingService {
         ? {
             id: dispatch.client.id,
             name: dispatch.client.name,
-            reference: dispatch.client.reference,
-            status: dispatch.client.status,
-            planName: dispatch.client.plan?.name ?? null,
+            reference:
+              dispatch.clientReference?.reference ??
+              dispatch.receivable?.clientReference?.reference ??
+              dispatch.client.reference,
+            status:
+              dispatch.clientReference?.status ??
+              dispatch.receivable?.clientReference?.status ??
+              dispatch.client.status,
+            planName:
+              dispatch.clientReference?.plan?.name ??
+              dispatch.receivable?.clientReference?.plan?.name ??
+              null,
           }
         : null,
+      clientReference:
+        (dispatch.clientReference ?? dispatch.receivable?.clientReference)
+          ? {
+              id: (dispatch.clientReference ?? dispatch.receivable?.clientReference)!.id,
+              reference: (dispatch.clientReference ?? dispatch.receivable?.clientReference)!
+                .reference,
+              status: (dispatch.clientReference ?? dispatch.receivable?.clientReference)!.status,
+            }
+          : null,
       receivable: dispatch.receivable
         ? {
             id: dispatch.receivable.id,

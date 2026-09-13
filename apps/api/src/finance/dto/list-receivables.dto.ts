@@ -19,6 +19,10 @@ export class ListReceivablesDto {
   clientId?: string;
 
   @IsOptional()
+  @IsUUID()
+  clientReferenceId?: string;
+
+  @IsOptional()
   @IsIn(['PENDENTE', 'PAGO', 'CANCELADO', 'VENCIDO'])
   status?: 'PENDENTE' | 'PAGO' | 'CANCELADO' | 'VENCIDO';
 

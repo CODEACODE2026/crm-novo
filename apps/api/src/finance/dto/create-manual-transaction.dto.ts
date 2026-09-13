@@ -22,6 +22,10 @@ export class CreateManualTransactionDto {
   clientId?: string;
 
   @IsOptional()
+  @IsUUID()
+  clientReferenceId?: string;
+
+  @IsOptional()
   @IsString()
   notes?: string;
 }

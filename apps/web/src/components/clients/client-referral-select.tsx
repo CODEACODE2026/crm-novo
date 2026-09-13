@@ -69,28 +69,65 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
 
   return (
     <div className="client-referral-select">
-      <div className="autocomplete-control">
-        <Search aria-hidden="true" size={16} />
-        <input
-          aria-label="Indicado por"
-          autoComplete="off"
-          placeholder={selected ? selected.name : 'Pesquisar cliente'}
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-        />
-        {value ? (
-          <button
-            aria-label="Limpar indicador"
-            className="inline-icon-button"
-            type="button"
-            onClick={() => selectOption(null)}
-          >
-            <X aria-hidden="true" size={15} />
-          </button>
+      <div className="autocomplete-search-box">
+        <div className="autocomplete-control">
+          <Search aria-hidden="true" size={16} />
+          <input
+            aria-label="Indicado por"
+            autoComplete="off"
+            placeholder={selected ? selected.name : 'Pesquisar cliente'}
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+          />
+          {value ? (
+            <button
+              aria-label="Limpar indicador"
+              className="inline-icon-button"
+              type="button"
+              onClick={() => selectOption(null)}
+            >
+              <X aria-hidden="true" size={15} />
+            </button>
+          ) : null}
+        </div>
+
+        {open && (search.trim() || value) ? (
+          <div className="autocomplete-menu">
+            <button
+              className="autocomplete-option"
+              type="button"
+              onClick={() => selectOption(null)}
+            >
+              <strong>Sem indicacao</strong>
+              <span>Nao vincular indicador</span>
+            </button>
+
+            {loading ? <div className="autocomplete-status">Carregando...</div> : null}
+
+            {!loading && search.trim() && !visibleOptions.length ? (
+              <div className="autocomplete-status">Nenhum cliente encontrado</div>
+            ) : null}
+
+            {!loading
+              ? visibleOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    className="autocomplete-option"
+                    type="button"
+                    onClick={() => selectOption(option)}
+                  >
+                    <strong>{option.name}</strong>
+                    <span>
+                      {option.reference} · {formatNormalizedBrazilPhone(option.phoneNormalized)}
+                    </span>
+                  </button>
+                ))
+              : null}
+          </div>
         ) : null}
       </div>
 
@@ -106,37 +143,6 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
           <span>Sem indicacao</span>
         )}
       </div>
-
-      {open && (search.trim() || value) ? (
-        <div className="autocomplete-menu">
-          <button className="autocomplete-option" type="button" onClick={() => selectOption(null)}>
-            <strong>Sem indicacao</strong>
-            <span>Nao vincular indicador</span>
-          </button>
-
-          {loading ? <div className="autocomplete-status">Carregando...</div> : null}
-
-          {!loading && search.trim() && !visibleOptions.length ? (
-            <div className="autocomplete-status">Nenhum cliente encontrado</div>
-          ) : null}
-
-          {!loading
-            ? visibleOptions.map((option) => (
-                <button
-                  key={option.id}
-                  className="autocomplete-option"
-                  type="button"
-                  onClick={() => selectOption(option)}
-                >
-                  <strong>{option.name}</strong>
-                  <span>
-                    {option.reference} · {formatNormalizedBrazilPhone(option.phoneNormalized)}
-                  </span>
-                </button>
-              ))
-            : null}
-        </div>
-      ) : null}
     </div>
   );
 }

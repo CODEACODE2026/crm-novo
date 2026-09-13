@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { ClientsService } from './clients.service';
 import { CreateClientDto } from './dto/create-client.dto';
+import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientStatusDto } from './dto/update-client-status.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -29,6 +30,11 @@ export class ClientsController {
   @Get()
   list(@Query() query: ListClientsDto) {
     return this.clientsService.list(query);
+  }
+
+  @Get('options')
+  options(@Query() query: ListClientOptionsDto) {
+    return this.clientsService.options(query);
   }
 
   @Get(':id')

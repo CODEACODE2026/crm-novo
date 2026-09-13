@@ -12,6 +12,7 @@ import { RecoveryService } from '../recovery/recovery.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CreateClientDto } from './dto/create-client.dto';
+import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientStatusDto } from './dto/update-client-status.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -103,6 +104,29 @@ export class ClientsService {
         totalPages: Math.ceil(total / pageSize),
       },
     };
+  }
+
+  async options(query: ListClientOptionsDto) {
+    const search = query.search?.trim() ?? '';
+
+    if (!search) {
+      return [];
+    }
+
+    const normalizedPhone = this.tryNormalizePhone(search);
+    const items = await this.prisma.client.findMany({
+      where: this.buildOptionWhere(search, normalizedPhone),
+      select: {
+        id: true,
+        name: true,
+        reference: true,
+        phoneNormalized: true,
+      },
+      orderBy: { name: 'asc' },
+      take: Math.min(query.limit ?? 20, 20),
+    });
+
+    return items;
   }
 
   async get(id: string) {
@@ -355,6 +379,20 @@ export class ClientsService {
     }
 
     return where;
+  }
+
+  private buildOptionWhere(
+    search: string,
+    normalizedPhone: string | null,
+  ): Prisma.ClientWhereInput {
+    return {
+      OR: [
+        { name: { contains: search, mode: 'insensitive' } },
+        { reference: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
+      ],
+    };
   }
 
   private buildOrderBy(query: ListClientsDto): Prisma.ClientOrderByWithRelationInput {

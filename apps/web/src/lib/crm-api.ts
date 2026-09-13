@@ -649,6 +649,13 @@ export interface PaginatedClients {
   };
 }
 
+export interface ClientOption {
+  id: string;
+  name: string;
+  reference: string;
+  phoneNormalized: string;
+}
+
 export interface PaginatedReferrals {
   items: Referral[];
   pagination: PaginatedClients['pagination'];
@@ -806,6 +813,16 @@ export function listClients(filters: ClientListFilters = {}) {
 
   const query = params.toString();
   return apiFetch<PaginatedClients>(`/clients${query ? `?${query}` : ''}`);
+}
+
+export function listClientOptions(search: string) {
+  const params = new URLSearchParams();
+  const trimmedSearch = search.trim();
+
+  if (trimmedSearch) params.set('search', trimmedSearch);
+
+  const query = params.toString();
+  return apiFetch<ClientOption[]>(`/clients/options${query ? `?${query}` : ''}`);
 }
 
 export function getClient(id: string) {

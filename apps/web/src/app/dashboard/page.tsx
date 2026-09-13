@@ -33,6 +33,7 @@ import {
 import type { AuthenticatedUser } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
+import { ClientReferralSelect } from '../../components/clients/client-referral-select';
 import { StatusBadge } from '../../components/clients/status-badge';
 import { PlanForm } from '../../components/plans/plan-form';
 import {
@@ -490,7 +491,6 @@ export default function DashboardPage() {
           {view === 'settings' ? <SettingsView /> : null}
           {view === 'waitlist' ? (
             <WaitlistView
-              clients={clients}
               plans={plans}
               onClientCreated={async (client) => {
                 await loadData();
@@ -1900,7 +1900,6 @@ function ClientsView({
         {clientFormOpen ? (
           <ClientForm
             client={editingClient ?? undefined}
-            clients={clients}
             plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
             submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
             onSubmit={editingClient ? onUpdate : onCreate}
@@ -3781,11 +3780,9 @@ function WhatsAppView() {
 }
 
 function WaitlistView({
-  clients,
   plans,
   onClientCreated,
 }: {
-  clients: Client[];
   plans: Plan[];
   onClientCreated: (client: Client) => Promise<void>;
 }) {
@@ -4065,7 +4062,6 @@ function WaitlistView({
 
       {approveOpen && selected ? (
         <ApprovePendingContactModal
-          clients={clients}
           contact={selected}
           plans={plans}
           onClose={() => setApproveOpen(false)}
@@ -4080,13 +4076,11 @@ function WaitlistView({
 }
 
 function ApprovePendingContactModal({
-  clients,
   contact,
   plans,
   onClose,
   onApproved,
 }: {
-  clients: Client[];
   contact: WhatsAppPendingContact;
   plans: Plan[];
   onClose: () => void;
@@ -4226,17 +4220,7 @@ function ApprovePendingContactModal({
           </label>
           <label className="field">
             <span>Indicado por</span>
-            <select
-              value={referrerClientId}
-              onChange={(event) => setReferrerClientId(event.target.value)}
-            >
-              <option value="">Sem indicacao</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.name} · {client.reference} · {client.phone}
-                </option>
-              ))}
-            </select>
+            <ClientReferralSelect value={referrerClientId} onChange={setReferrerClientId} />
           </label>
           <section className="inline-panel">
             <div>

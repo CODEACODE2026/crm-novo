@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiFetch, formatCurrency, formatDate } from './crm-api';
+import { ApiError, apiFetch, formatCurrency, formatDate, listClientOptions } from './crm-api';
 
 describe('CRM UI formatters', () => {
   afterEach(() => {
@@ -32,5 +32,17 @@ describe('CRM UI formatters', () => {
       message: 'Nao foi possivel concluir a operacao.',
       status: 500,
     } satisfies Partial<ApiError>);
+  });
+
+  it('fetches lightweight client options with trimmed search', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('[]', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listClientOptions('  bruno  ');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/clients/options?search=bruno'),
+      expect.any(Object),
+    );
   });
 });

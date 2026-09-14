@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString, Matches } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 export class UpdateBillingAutomationSettingsDto {
   @IsOptional()
@@ -14,4 +14,10 @@ export class UpdateBillingAutomationSettingsDto {
   @IsString()
   @Matches(/^America\/Sao_Paulo$/)
   timezone?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(3)
+  @Max(300)
+  sendIntervalSeconds?: number;
 }

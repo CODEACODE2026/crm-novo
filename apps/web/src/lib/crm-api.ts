@@ -541,6 +541,7 @@ export interface BillingAutomationSettings {
   id: string;
   enabled: boolean;
   sendTime: string;
+  sendIntervalSeconds: number;
   timezone: 'America/Sao_Paulo';
   createdAt: string;
   updatedAt: string;
@@ -1390,6 +1391,7 @@ export function getBillingAutomationSettings() {
 export function updateBillingAutomationSettings(payload: {
   enabled?: boolean;
   sendTime?: string;
+  sendIntervalSeconds?: number;
   timezone?: 'America/Sao_Paulo';
 }) {
   return apiFetch<BillingAutomationSettings>('/billing/automation-settings', {

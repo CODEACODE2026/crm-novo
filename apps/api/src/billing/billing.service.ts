@@ -35,6 +35,9 @@ const maxAttempts = 3;
 const retryDelayMinutes = 15;
 const defaultBillingSendTime = '09:00';
 const defaultBillingTimezone = 'America/Sao_Paulo';
+const defaultBillingSendIntervalSeconds = 8;
+const minBillingSendIntervalSeconds = 3;
+const maxBillingSendIntervalSeconds = 300;
 
 type BillingDispatch = MessageDispatch & {
   client: Client | null;
@@ -43,6 +46,15 @@ type BillingDispatch = MessageDispatch & {
     (Receivable & { clientReference?: (ClientReference & { plan?: Plan | null }) | null }) | null;
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
+};
+
+type BillingReconcileItem = {
+  client: Client;
+  reference: ClientReference & { plan: Plan; receivables: Receivable[] };
+  receivable: Receivable;
+  idempotencyKey: string;
+  baseScheduledFor: Date;
+  scheduledFor: Date;
 };
 
 @Injectable()
@@ -95,56 +107,75 @@ export class BillingService {
       return { created, kept, canceled, skipped: referencesCount };
     }
 
-    const clientReferences = clients.flatMap((client) =>
-      this.billingReferencesForClient(client).map((reference) => ({ client, reference })),
-    );
+    const candidates: BillingReconcileItem[] = [];
 
-    for (const { client, reference } of clientReferences) {
-      if (!this.isClientReferenceEligibleForScheduling(client, reference)) {
-        skipped += 1;
-        continue;
+    for (const client of clients) {
+      for (const reference of this.billingReferencesForClient(client)) {
+        if (!this.isClientReferenceEligibleForScheduling(client, reference)) {
+          skipped += 1;
+          continue;
+        }
+
+        const receivable = this.findReceivableForReferenceDueDate(reference);
+        const expectedKey = receivable
+          ? this.buildIdempotencyKey(
+              client.id,
+              receivable.id,
+              reference.dueDate,
+              reference.billingNoticeDays,
+              template.id,
+            )
+          : null;
+
+        canceled += await this.cancelObsoleteFutureDispatches(client.id, reference.id, expectedKey);
+
+        if (!receivable) {
+          skipped += 1;
+          continue;
+        }
+
+        if (receivable.status !== 'PENDENTE') {
+          skipped += 1;
+          continue;
+        }
+
+        if (this.isCreateIneligible(client, reference, receivable, template, connection)) {
+          skipped += 1;
+          continue;
+        }
+
+        const baseScheduledFor = this.calculateScheduledFor(
+          reference.dueDate,
+          reference.billingNoticeDays,
+          settings,
+        );
+
+        candidates.push({
+          client,
+          reference,
+          receivable,
+          idempotencyKey: expectedKey ?? '',
+          baseScheduledFor,
+          scheduledFor: baseScheduledFor,
+        });
       }
+    }
 
-      const receivable = this.findReceivableForReferenceDueDate(reference);
-      const expectedKey = receivable
-        ? this.buildIdempotencyKey(
-            client.id,
-            receivable.id,
-            reference.dueDate,
-            reference.billingNoticeDays,
-            template.id,
-          )
-        : null;
+    const scheduledCandidates = this.scheduleBillingBatch(candidates, settings.sendIntervalSeconds);
 
-      canceled += await this.cancelObsoleteFutureDispatches(client.id, reference.id, expectedKey);
-
-      if (!receivable) {
-        skipped += 1;
-        continue;
-      }
-
-      if (receivable.status !== 'PENDENTE') {
-        skipped += 1;
-        continue;
-      }
-
-      if (this.isCreateIneligible(client, reference, receivable, template, connection)) {
-        skipped += 1;
-        continue;
-      }
-
-      const scheduledFor = this.calculateScheduledFor(
-        reference.dueDate,
-        reference.billingNoticeDays,
-        settings,
-      );
+    for (const {
+      client,
+      reference,
+      receivable,
+      idempotencyKey,
+      scheduledFor,
+    } of scheduledCandidates) {
       const renderedContent = this.renderForClientReference(
         template.content,
         client,
         reference,
         receivable,
       );
-      const idempotencyKey = expectedKey ?? '';
 
       try {
         const rescheduled = await this.rescheduleExistingFutureDispatch(
@@ -205,6 +236,7 @@ export class BillingService {
     const automaticWindow = options.automatic
       ? this.businessDayWindow(now, settings.timezone)
       : null;
+    const effectiveLimit = Math.min(Math.max(limit, 1), 1);
     const candidates = await this.prisma.messageDispatch.findMany({
       where: {
         origin: 'BILLING',
@@ -216,8 +248,8 @@ export class BillingService {
         },
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
-      orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
-      take: limit,
+      orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      take: effectiveLimit,
     });
 
     const results = [];
@@ -348,6 +380,9 @@ export class BillingService {
       data: {
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
         ...(dto.sendTime !== undefined ? { sendTime: dto.sendTime } : {}),
+        ...(dto.sendIntervalSeconds !== undefined
+          ? { sendIntervalSeconds: dto.sendIntervalSeconds }
+          : {}),
         ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
       },
     });
@@ -355,6 +390,8 @@ export class BillingService {
     if (
       (dto.enabled === true && !current.enabled) ||
       (dto.sendTime !== undefined && dto.sendTime !== current.sendTime) ||
+      (dto.sendIntervalSeconds !== undefined &&
+        dto.sendIntervalSeconds !== current.sendIntervalSeconds) ||
       (dto.timezone !== undefined && dto.timezone !== current.timezone)
     ) {
       await this.reconcile();
@@ -503,6 +540,26 @@ export class BillingService {
     }
 
     return new Date(`${yyyyMmDd}T${sendTime}:00-03:00`);
+  }
+
+  scheduleBillingBatch(items: BillingReconcileItem[], intervalSeconds: number) {
+    const safeIntervalSeconds = this.normalizeSendIntervalSeconds(intervalSeconds);
+    const offsetsByBaseTime = new Map<string, number>();
+
+    return [...items]
+      .sort((left, right) => this.compareBillingReconcileItems(left, right))
+      .map((item) => {
+        const baseKey = item.baseScheduledFor.toISOString();
+        const offset = offsetsByBaseTime.get(baseKey) ?? 0;
+        offsetsByBaseTime.set(baseKey, offset + 1);
+
+        return {
+          ...item,
+          scheduledFor: new Date(
+            item.baseScheduledFor.getTime() + offset * safeIntervalSeconds * 1000,
+          ),
+        };
+      });
   }
 
   private async acquireDispatch(id: string, now: Date) {
@@ -831,7 +888,7 @@ export class BillingService {
         clientId,
         clientReferenceId,
         origin: 'BILLING',
-        status: { in: ['SCHEDULED', 'FAILED'] },
+        status: 'SCHEDULED',
         ...(expectedKey ? { idempotencyKey: { not: expectedKey } } : {}),
       },
       data: {
@@ -853,7 +910,7 @@ export class BillingService {
       where: {
         origin: 'BILLING',
         idempotencyKey,
-        status: { in: ['SCHEDULED', 'FAILED'] },
+        status: 'SCHEDULED',
         scheduledFor: { gt: now },
       },
       data: {
@@ -871,7 +928,7 @@ export class BillingService {
     const result = await this.prisma.messageDispatch.updateMany({
       where: {
         origin: 'BILLING',
-        status: { in: ['SCHEDULED', 'FAILED'] },
+        status: 'SCHEDULED',
         OR: [
           { client: { is: null } },
           { clientReference: { is: null } },
@@ -1021,6 +1078,7 @@ export class BillingService {
         enabled: false,
         sendTime: defaultBillingSendTime,
         timezone: defaultBillingTimezone,
+        sendIntervalSeconds: defaultBillingSendIntervalSeconds,
       },
     });
   }
@@ -1030,10 +1088,34 @@ export class BillingService {
       id: settings.id,
       enabled: settings.enabled,
       sendTime: settings.sendTime,
+      sendIntervalSeconds: settings.sendIntervalSeconds,
       timezone: settings.timezone,
       createdAt: settings.createdAt,
       updatedAt: settings.updatedAt,
     };
+  }
+
+  private compareBillingReconcileItems(left: BillingReconcileItem, right: BillingReconcileItem) {
+    return (
+      left.baseScheduledFor.getTime() - right.baseScheduledFor.getTime() ||
+      left.reference.dueDate.getTime() - right.reference.dueDate.getTime() ||
+      left.reference.createdAt.getTime() - right.reference.createdAt.getTime() ||
+      left.reference.id.localeCompare(right.reference.id) ||
+      left.receivable.createdAt.getTime() - right.receivable.createdAt.getTime() ||
+      left.receivable.id.localeCompare(right.receivable.id)
+    );
+  }
+
+  private normalizeSendIntervalSeconds(value: number) {
+    if (
+      !Number.isInteger(value) ||
+      value < minBillingSendIntervalSeconds ||
+      value > maxBillingSendIntervalSeconds
+    ) {
+      throw new BadRequestException('Intervalo entre mensagens de cobranca invalido.');
+    }
+
+    return value;
   }
 
   private currentCycle() {

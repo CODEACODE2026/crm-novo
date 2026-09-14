@@ -133,6 +133,7 @@ function automationSettings(overrides: Record<string, unknown> = {}) {
     scope: 'global',
     enabled: true,
     sendTime: '09:00',
+    sendIntervalSeconds: 8,
     timezone: 'America/Sao_Paulo',
     companyId: null,
     createdAt: now,
@@ -182,6 +183,35 @@ function dispatch(overrides: Record<string, unknown> = {}) {
     whatsAppConnection: connection(),
     ...overrides,
   };
+}
+
+function billingClient(index: number, overrides: Record<string, unknown> = {}) {
+  const clientId = `client-${String(index).padStart(2, '0')}`;
+  const referenceId = `reference-${String(index).padStart(2, '0')}`;
+  const receivableId = `receivable-${String(index).padStart(2, '0')}`;
+  const referenceCreatedAt = new Date(now.getTime() + index * 1000);
+  const nextReceivable = receivable({
+    id: receivableId,
+    clientId,
+    clientReferenceId: referenceId,
+    createdAt: referenceCreatedAt,
+  });
+  const reference = clientReference({
+    id: referenceId,
+    clientId,
+    reference: `ref-${String(index).padStart(2, '0')}`,
+    createdAt: referenceCreatedAt,
+    receivables: [nextReceivable],
+  });
+
+  return client({
+    id: clientId,
+    name: `Cliente ${index}`,
+    reference: `cliente-${index}`,
+    receivables: [nextReceivable],
+    references: [reference],
+    ...overrides,
+  });
 }
 
 function serviceFactory({
@@ -292,6 +322,28 @@ function serviceFactory({
   };
 }
 
+type DispatchCreateArgs = {
+  data: {
+    scheduledFor: Date;
+    clientReferenceId?: string | null;
+    receivableId?: string | null;
+  };
+};
+
+type UpdateManyArgs = {
+  where?: {
+    status?: unknown;
+  };
+};
+
+function createdDispatchData(createDispatch: ReturnType<typeof vi.fn>) {
+  return createDispatch.mock.calls.map((call) => (call[0] as DispatchCreateArgs).data);
+}
+
+function updateManyArgs(updateMany: ReturnType<typeof vi.fn>) {
+  return updateMany.mock.calls.map((call) => call[0] as UpdateManyArgs);
+}
+
 describe('BillingService', () => {
   it.each([
     [0, '2026-09-15T12:00:00.000Z'],
@@ -338,9 +390,141 @@ describe('BillingService', () => {
           origin: 'BILLING',
           status: 'SCHEDULED',
           idempotencyKey: 'billing:client-id:receivable-id:2026-09-15:0:template-id',
+          scheduledFor: new Date('2026-09-15T12:00:00.000Z'),
+          nextAttemptAt: new Date('2026-09-15T12:00:00.000Z'),
           renderedContent: expect.stringContaining('15/09/2026'),
         }),
       }),
+    );
+  });
+
+  it('spreads three billing dispatches by the configured interval', async () => {
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [billingClient(1), billingClient(2), billingClient(3)],
+      createDispatch,
+    });
+
+    const result = await service.reconcile(now);
+
+    expect(result.created).toBe(3);
+    expect(
+      createdDispatchData(createDispatch).map((data) => data.scheduledFor.toISOString()),
+    ).toEqual(['2026-09-15T12:00:00.000Z', '2026-09-15T12:00:08.000Z', '2026-09-15T12:00:16.000Z']);
+  });
+
+  it('spreads twenty billing dispatches without changing client reference or receivable links', async () => {
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const clients = Array.from({ length: 20 }, (_, index) => billingClient(index + 1));
+    const { service } = serviceFactory({ clients, createDispatch });
+
+    await service.reconcile(now);
+
+    expect(createDispatch).toHaveBeenCalledTimes(20);
+    const dispatches = createdDispatchData(createDispatch);
+    expect(dispatches.map((data) => data.scheduledFor.toISOString())).toEqual(
+      Array.from({ length: 20 }, (_, index) =>
+        new Date(new Date('2026-09-15T12:00:00.000Z').getTime() + index * 8000).toISOString(),
+      ),
+    );
+    expect(dispatches.at(0)).toMatchObject({
+      clientReferenceId: 'reference-01',
+      receivableId: 'receivable-01',
+    });
+    expect(dispatches.at(19)).toMatchObject({
+      clientReferenceId: 'reference-20',
+      receivableId: 'receivable-20',
+    });
+  });
+
+  it('keeps two references from the same client independent in the scheduled queue', async () => {
+    const firstReceivable = receivable({
+      id: 'receivable-a',
+      clientReferenceId: 'reference-a',
+    });
+    const secondReceivable = receivable({
+      id: 'receivable-b',
+      clientReferenceId: 'reference-b',
+      createdAt: new Date(now.getTime() + 1000),
+    });
+    const firstReference = clientReference({
+      id: 'reference-a',
+      reference: 'A',
+      receivables: [firstReceivable],
+    });
+    const secondReference = clientReference({
+      id: 'reference-b',
+      reference: 'B',
+      createdAt: new Date(now.getTime() + 1000),
+      receivables: [secondReceivable],
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [
+        client({
+          receivables: [firstReceivable, secondReceivable],
+          references: [secondReference, firstReference],
+        }),
+      ],
+      createDispatch,
+    });
+
+    await service.reconcile(now);
+
+    const dispatches = createdDispatchData(createDispatch);
+    expect(dispatches.map((data) => data.clientReferenceId)).toEqual([
+      'reference-a',
+      'reference-b',
+    ]);
+    expect(dispatches.map((data) => data.receivableId)).toEqual(['receivable-a', 'receivable-b']);
+    expect(dispatches.map((data) => data.scheduledFor.toISOString())).toEqual([
+      '2026-09-15T12:00:00.000Z',
+      '2026-09-15T12:00:08.000Z',
+    ]);
+  });
+
+  it('uses a changed send interval when reconciling future scheduled dispatches', async () => {
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [billingClient(1), billingClient(2), billingClient(3)],
+      createDispatch,
+      settingsRecord: automationSettings({ sendIntervalSeconds: 15 }),
+    });
+
+    await service.reconcile(now);
+
+    expect(
+      createdDispatchData(createDispatch).map((data) => data.scheduledFor.toISOString()),
+    ).toEqual(['2026-09-15T12:00:00.000Z', '2026-09-15T12:00:15.000Z', '2026-09-15T12:00:30.000Z']);
+  });
+
+  it('does not target sent or failed historical dispatches when reconciling schedule changes', async () => {
+    const { service, updateMany } = serviceFactory({
+      clients: [billingClient(1)],
+      settingsRecord: automationSettings({ sendIntervalSeconds: 15 }),
+    });
+
+    await service.reconcile(now);
+
+    const updateManyCalls = updateManyArgs(updateMany);
+    expect(updateManyCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ where: expect.objectContaining({ status: 'SCHEDULED' }) }),
+      ]),
+    );
+    expect(updateManyCalls).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          where: expect.objectContaining({ status: expect.arrayContaining(['SENT', 'FAILED']) }),
+        }),
+      ]),
+    );
+    expect(updateManyCalls).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          where: expect.objectContaining({ status: { in: expect.arrayContaining(['FAILED']) } }),
+        }),
+      ]),
     );
   });
 
@@ -608,6 +792,40 @@ describe('BillingService', () => {
     );
   });
 
+  it('processes only one due automatic dispatch per tick after restart backlog', async () => {
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const { service, prisma } = serviceFactory({ providerSendText });
+
+    await service.processDue(new Date('2026-09-15T12:30:00.000Z'), 20, {
+      automatic: true,
+    });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 1 }),
+    );
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('processes only one failed retry per tick when retries become due together', async () => {
+    const providerSendText = vi.fn().mockRejectedValue(new Error('temporary provider failure'));
+    const { service, prisma } = serviceFactory({
+      providerSendText,
+      dispatchForProcessing: dispatch({ status: 'PROCESSING', attempts: 2 }),
+    });
+
+    await service.processDue(new Date('2026-09-15T12:15:00.000Z'), 20, {
+      automatic: true,
+    });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: { in: ['SCHEDULED', 'FAILED'] } }),
+        take: 1,
+      }),
+    );
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
   it('does not duplicate the timeline event on replay after a sent state is recovered', async () => {
     const { service, clientEventCreate, clientEventFindFirst } = serviceFactory({
       existingClientEvent: { id: 'event-id' },
@@ -720,6 +938,34 @@ describe('BillingService', () => {
       service.processDue(new Date('2026-09-15T12:00:00.000Z')),
     ]);
 
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendNow sends immediately without depending on the automatic queue throttle', async () => {
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const { service, prisma, updateDispatch } = serviceFactory({
+      providerSendText,
+      dispatchForProcessing: dispatch({ status: 'PROCESSING', attempts: 1 }),
+    });
+    prisma.messageDispatch.findUnique
+      .mockResolvedValueOnce(dispatch({ status: 'SCHEDULED', attempts: 0 }))
+      .mockResolvedValue(dispatch({ status: 'PROCESSING', attempts: 1 }));
+
+    const result = await service.sendNow('dispatch-id');
+
+    expect(result.processed).toBe(1);
+    expect(prisma.messageDispatch.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'dispatch-id' },
+        data: expect.objectContaining({
+          scheduledFor: expect.any(Date),
+          nextAttemptAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+    );
     expect(providerSendText).toHaveBeenCalledTimes(1);
   });
 

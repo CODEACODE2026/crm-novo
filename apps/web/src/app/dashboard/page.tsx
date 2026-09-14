@@ -3058,6 +3058,7 @@ function AutomationsView() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
   const [sendTime, setSendTime] = useState('09:00');
+  const [sendIntervalSeconds, setSendIntervalSeconds] = useState('8');
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
   const [campaignPagination, setCampaignPagination] = useState<
@@ -3089,6 +3090,7 @@ function AutomationsView() {
       setBillingSummary(nextBilling);
       setBillingSettings(nextBillingSettings);
       setSendTime(nextBillingSettings.sendTime);
+      setSendIntervalSeconds(String(nextBillingSettings.sendIntervalSeconds));
       setRecoverySummary(nextRecovery);
       setCampaigns(nextCampaigns.items);
       setCampaignPagination(nextCampaigns.pagination);
@@ -3118,7 +3120,9 @@ function AutomationsView() {
   }
 
   async function saveBillingSettings(
-    payload: Partial<Pick<BillingAutomationSettings, 'enabled' | 'sendTime'>>,
+    payload: Partial<
+      Pick<BillingAutomationSettings, 'enabled' | 'sendTime' | 'sendIntervalSeconds'>
+    >,
   ) {
     setWorking('billing-settings');
     setError('');
@@ -3130,6 +3134,7 @@ function AutomationsView() {
       });
       setBillingSettings(next);
       setSendTime(next.sendTime);
+      setSendIntervalSeconds(String(next.sendIntervalSeconds));
       await loadAutomations();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nao foi possivel salvar cobranca automatica.');
@@ -3261,17 +3266,41 @@ function AutomationsView() {
               />
             </label>
             <label className="field">
+              <span>Intervalo entre mensagens</span>
+              <input
+                min={3}
+                max={300}
+                required
+                step={1}
+                type="number"
+                value={sendIntervalSeconds}
+                onChange={(event) => setSendIntervalSeconds(event.target.value)}
+                onBlur={() => {
+                  const parsed = Number(sendIntervalSeconds);
+
+                  if (
+                    Number.isInteger(parsed) &&
+                    parsed >= 3 &&
+                    parsed <= 300 &&
+                    parsed !== billingSettings?.sendIntervalSeconds
+                  ) {
+                    void saveBillingSettings({ sendIntervalSeconds: parsed });
+                  }
+                }}
+              />
+            </label>
+            <label className="field">
               <span>Timezone</span>
               <input disabled value="America/Sao_Paulo" readOnly />
             </label>
           </div>
           <p className="helper-text">
-            As cobrancas serao processadas diariamente a partir das{' '}
-            {billingSettings?.sendTime ?? '09:00'}.
+            As cobrancas comecam as {billingSettings?.sendTime ?? '09:00'} e sao enviadas com
+            intervalo minimo de {billingSettings?.sendIntervalSeconds ?? 8} segundos entre
+            mensagens.
           </p>
           <p className="helper-text">
-            A data de envio de cada cliente e definida pelo vencimento da referencia e pelos dias de
-            antecedencia configurados nela.
+            Define o intervalo minimo entre o envio de uma cobranca e a proxima.
           </p>
         </section>
 

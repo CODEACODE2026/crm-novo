@@ -234,15 +234,6 @@ export class FinanceService {
           throw new ConflictException('Apenas contas pendentes podem gerar PIX.');
         }
 
-        const billingResponse = await tx.billingResponse.findFirst({
-          where: { receivableId: receivable.id },
-          orderBy: { createdAt: 'desc' },
-        });
-
-        if (billingResponse && billingResponse.decision !== 'ACCEPTED') {
-          throw new ConflictException('Cliente ainda nao aceitou renovar esta cobranca.');
-        }
-
         const activeIntent = receivable.paymentIntents[0];
 
         if (activeIntent) {

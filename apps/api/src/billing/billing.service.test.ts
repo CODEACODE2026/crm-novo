@@ -156,7 +156,6 @@ function dispatch(overrides: Record<string, unknown> = {}) {
   return {
     id: 'dispatch-id',
     clientId: client().id,
-    clientReferenceId: clientReference().id,
     receivableId: receivable().id,
     templateId: template().id,
     whatsAppConnectionId: connection().id,
@@ -208,7 +207,8 @@ function serviceFactory({
 } = {}) {
   const clientEventCreate = vi.fn().mockResolvedValue({});
   const clientEventFindFirst = vi.fn().mockResolvedValue(existingClientEvent);
-  const billingResponseUpsert = vi.fn().mockResolvedValue({});
+  const billingResponseCreate = vi.fn();
+  const billingResponseUpsert = vi.fn();
   const updateDispatch = vi.fn().mockImplementation(({ data }) =>
     Promise.resolve(
       dispatch({
@@ -261,7 +261,7 @@ function serviceFactory({
       return callback({
         messageDispatch: { update: updateDispatch },
         clientEvent: { create: clientEventCreate, findFirst: clientEventFindFirst },
-        billingResponse: { upsert: billingResponseUpsert },
+        billingResponse: { create: billingResponseCreate, upsert: billingResponseUpsert },
       });
     }),
   };
@@ -287,6 +287,7 @@ function serviceFactory({
     clientEventFindFirst,
     updateDispatch,
     updateMany,
+    billingResponseCreate,
     billingResponseUpsert,
   };
 }
@@ -542,9 +543,15 @@ describe('BillingService', () => {
     expect(createDispatch).not.toHaveBeenCalled();
   });
 
-  it('sends a due dispatch once and writes timeline only after provider success', async () => {
-    const { service, provider, clientEventCreate, updateDispatch, billingResponseUpsert } =
-      serviceFactory();
+  it('sends a due dispatch once and finishes without requiring a billing response', async () => {
+    const {
+      service,
+      provider,
+      clientEventCreate,
+      updateDispatch,
+      billingResponseCreate,
+      billingResponseUpsert,
+    } = serviceFactory();
 
     const result = await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
 
@@ -558,17 +565,8 @@ describe('BillingService', () => {
         data: expect.objectContaining({ title: 'Cobranca automatica enviada pelo WhatsApp.' }),
       }),
     );
-    expect(billingResponseUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { messageDispatchId: 'dispatch-id' },
-        create: expect.objectContaining({
-          messageDispatchId: 'dispatch-id',
-          receivableId: 'receivable-id',
-          clientReferenceId: 'client-reference-id',
-          clientId: 'client-id',
-        }),
-      }),
-    );
+    expect(billingResponseCreate).not.toHaveBeenCalled();
+    expect(billingResponseUpsert).not.toHaveBeenCalled();
   });
 
   it('does not process automatic billing when automation is disabled', async () => {

@@ -43,7 +43,6 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - A configuracao direta usa a API de instancia Kirago: `POST /webhook`, header `token`, body `{ webhook, events, active: true }`.
 - `CRM_API_PUBLIC_URL` deve apontar para uma URL publica HTTPS; localhost, HTTP e IP privado sao recusados para registro externo.
 - A integracao Kirago v1.11 em uso neste projeto nao possui contrato local documentado de assinatura, secret ou HMAC para webhook recebido. Sem esse contrato, o CRM nao inventa validacao inexistente; a protecao fica em limite de payload, normalizacao defensiva, aceite apenas de eventos esperados, erros sanitizados e idempotencia de banco.
-- A integracao Kirago v1.11 em uso neste projeto normaliza respostas de botao/lista quando chegarem no webhook, mas nao ha contrato local comprovado para envio de botoes interativos. Por isso, respostas de cobranca usam fallback textual controlado: `1 - Sim, quero renovar` e `2 - Nao quero renovar`.
 
 ## Envio manual
 

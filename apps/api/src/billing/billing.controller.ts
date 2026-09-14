@@ -7,19 +7,14 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
-import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
 import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
 import { UpdateMessageTemplateDto } from './dto/update-message-template.dto';
-
-type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
 @UseGuards(JwtAuthGuard)
 @Controller('billing')
@@ -54,14 +49,6 @@ export class BillingController {
   @Post('dispatches/:id/send-now')
   sendNow(@Param('id') id: string) {
     return this.billingService.sendNow(id);
-  }
-
-  @Post('responses/:id/deactivate-reference')
-  deactivateBillingResponseReference(
-    @Param('id') id: string,
-    @Req() request: AuthenticatedRequest,
-  ) {
-    return this.billingService.deactivateBillingResponseReference(id, request.user.id);
   }
 
   @Post('reconcile')

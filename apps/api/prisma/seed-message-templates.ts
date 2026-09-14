@@ -15,7 +15,7 @@ async function main() {
       type: 'BILLING_DUE' as const,
       name: 'Cobranca padrao',
       content:
-        'Bom dia, *{{primeiroNome}}*! Seu serviço vence em {{vencimento}} no valor de {{valor}}. Queria saber se tem interesse em renovar?\n\n1 - Sim, quero renovar\n2 - Nao quero renovar',
+        'Bom dia, *{{primeiroNome}}*! Seu serviço vence em {{vencimento}} no valor de {{valor}}. Queria saber se tem interesse em renovar?',
     },
     {
       type: 'RECOVERY_DAY_3' as const,

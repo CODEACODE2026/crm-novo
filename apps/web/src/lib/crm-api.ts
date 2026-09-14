@@ -474,17 +474,6 @@ export interface MessageDispatch {
     active: boolean;
   } | null;
   connection: Pick<WhatsAppConnection, 'id' | 'name' | 'provider'> | null;
-  billingResponse?: BillingResponse | null;
-}
-
-export type BillingResponseDecision = 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'UNRESOLVED';
-
-export interface BillingResponse {
-  id: string;
-  decision: BillingResponseDecision;
-  respondedAt: string | null;
-  providerMessageId: string | null;
-  responseText: string | null;
 }
 
 export interface BillingSummary {
@@ -1463,13 +1452,6 @@ export function reconcileBilling() {
 export function sendBillingNow(id: string) {
   return apiFetch<{ processed: number; results: MessageDispatch[] }>(
     `/billing/dispatches/${id}/send-now`,
-    { method: 'POST' },
-  );
-}
-
-export function deactivateBillingResponseReference(id: string) {
-  return apiFetch<{ id: string; clientId: string; reference: string; status: ClientStatus }>(
-    `/billing/responses/${id}/deactivate-reference`,
     { method: 'POST' },
   );
 }

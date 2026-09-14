@@ -14,8 +14,23 @@ describe('Kirago clients', () => {
 
     expect(request).toHaveBeenCalledWith('/admin/users', {
       method: 'POST',
-      headers: { Authorization: 'admin-token' },
+      headers: { Authorization: 'Bearer admin-token' },
       body: { name: 'CRM', token: 'instance-token', events: 'Message' },
+      authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
+    });
+  });
+
+  it('keeps an already prefixed admin bearer token', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, data: { id: 'kirago-user' } });
+    const client = new KiragoAdminClient(
+      { get: () => 'Bearer admin-token' } as never,
+      { request } as never,
+    );
+
+    await client.listUsers();
+
+    expect(request).toHaveBeenCalledWith('/admin/users', {
+      headers: { Authorization: 'Bearer admin-token' },
       authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
     });
   });
@@ -30,7 +45,7 @@ describe('Kirago clients', () => {
     await client.getUser('kirago-user');
 
     expect(request).toHaveBeenCalledWith('/admin/users/kirago-user', {
-      headers: { Authorization: 'admin-token' },
+      headers: { Authorization: 'Bearer admin-token' },
       authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
     });
   });

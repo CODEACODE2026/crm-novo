@@ -69,6 +69,6 @@ export class KiragoAdminClient {
       );
     }
 
-    return token;
+    return token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`;
   }
 }

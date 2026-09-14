@@ -509,7 +509,9 @@ export class FinanceService {
           },
         });
 
-        await this.activateClientAfterInitialPayment(tx, receivable.id, actorUserId);
+        await this.processPaidReceivableCycle(tx, receivable.id, actorUserId, {
+          receivableWasPending: true,
+        });
 
         return tx.financialTransaction.findUniqueOrThrow({
           where: { id: createdTransaction.id },
@@ -705,7 +707,9 @@ export class FinanceService {
         throw new NotFoundException('Conta a receber nao encontrada.');
       }
 
-      if (receivable.status === 'PENDENTE') {
+      const receivableWasPending = receivable.status === 'PENDENTE';
+
+      if (receivableWasPending) {
         await tx.receivable.update({
           where: { id: receivable.id },
           data: { status: 'PAGO', paidAt },
@@ -760,7 +764,9 @@ export class FinanceService {
         }
       }
 
-      await this.activateClientAfterInitialPayment(tx, receivable.id, actorUserId);
+      await this.processPaidReceivableCycle(tx, receivable.id, actorUserId, {
+        receivableWasPending,
+      });
 
       return tx.paymentIntent.findUniqueOrThrow({ where: { id } });
     });
@@ -1153,6 +1159,16 @@ export class FinanceService {
     return reference;
   }
 
+  private async processPaidReceivableCycle(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    actorUserId: string | null,
+    options: { receivableWasPending: boolean },
+  ) {
+    await this.activateClientAfterInitialPayment(tx, receivableId, actorUserId);
+    await this.advanceClientReferenceAfterRenewalPayment(tx, receivableId, actorUserId, options);
+  }
+
   private async activateClientAfterInitialPayment(
     tx: Prisma.TransactionClient,
     receivableId: string,
@@ -1252,6 +1268,79 @@ export class FinanceService {
       receivableId,
       actorUserId,
     );
+  }
+
+  private async advanceClientReferenceAfterRenewalPayment(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    actorUserId: string | null,
+    options: { receivableWasPending: boolean },
+  ) {
+    if (!options.receivableWasPending) {
+      return;
+    }
+
+    const receivable = await tx.receivable.findUnique({
+      where: { id: receivableId },
+      include: {
+        clientReference: { include: { plan: true } },
+      },
+    });
+
+    if (
+      !receivable ||
+      receivable.purpose !== 'RENEWAL' ||
+      receivable.status !== 'PAGO' ||
+      !receivable.clientReference ||
+      receivable.clientReferenceId !== receivable.clientReference.id
+    ) {
+      return;
+    }
+
+    const reference = receivable.clientReference;
+
+    if (
+      reference.status !== 'ATIVO' ||
+      formatBusinessDate(reference.dueDate) !== formatBusinessDate(receivable.dueDate)
+    ) {
+      return;
+    }
+
+    const anchorDay = reference.billingAnchorDay;
+    const nextDueDate = addCalendarMonthsPreservingAnchor(
+      reference.dueDate,
+      reference.plan.durationMonths,
+      anchorDay,
+    );
+
+    await tx.clientReference.update({
+      where: { id: reference.id },
+      data: {
+        dueDate: nextDueDate,
+        billingAnchorDay: anchorDay,
+      },
+    });
+
+    await this.receivableCycleService?.ensureCurrentCycleReceivable(reference.id, tx);
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: receivable.clientId,
+        type: 'CLIENT_RENEWED',
+        title: 'Ciclo renovado apos pagamento.',
+        description: `Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
+        metadata: {
+          receivableId,
+          clientReferenceId: reference.id,
+          previousDueDate: formatBusinessDate(receivable.dueDate),
+          nextDueDate: formatBusinessDate(nextDueDate),
+          billingAnchorDay: anchorDay,
+          planId: reference.planId,
+          durationMonths: reference.plan.durationMonths,
+        },
+        createdByUserId: actorUserId,
+      },
+    });
   }
 
   private async ensureReceivableExists(id: string) {

@@ -86,7 +86,7 @@ function createFinancePrisma() {
     description: 'Renovacao - Plano Mensal',
     amount: new Prisma.Decimal('50.00'),
     dueDate: parseBusinessDate('2026-10-10'),
-    status: 'PENDENTE' as const,
+    status: 'PENDENTE' as 'PENDENTE' | 'PAGO' | 'CANCELADO',
     paidAt: null as Date | null,
     canceledAt: null as Date | null,
     cancelReason: null as string | null,
@@ -374,6 +374,25 @@ function createWebhookSignature(payload: string, secret = 'webhook-secret') {
   return `sha256=${createHmac('sha256', secret).update(Buffer.from(payload)).digest('hex')}`;
 }
 
+function createCycleRecorder(fake: ReturnType<typeof createFinancePrisma>) {
+  const nextReceivables: Array<Record<string, unknown>> = [];
+  const cycle = {
+    ensureCurrentCycleReceivable: vi.fn().mockImplementation((clientReferenceId: string) => {
+      const receivable = {
+        clientReferenceId,
+        purpose: 'RENEWAL',
+        dueDate: fake.clientReference.dueDate,
+        amount: fake.clientReference.recurringValue,
+        status: 'PENDENTE',
+      };
+      nextReceivables.push(receivable);
+      return Promise.resolve({ action: 'created', receivable });
+    }),
+  };
+
+  return { cycle, nextReceivables };
+}
+
 describe('FinanceService', () => {
   it('pays a pending receivable once and registers the client timeline', async () => {
     const fake = createFinancePrisma();
@@ -481,6 +500,239 @@ describe('FinanceService', () => {
       fake.clientReference.id,
       fake.tx,
     );
+  });
+
+  it('advances the current reference cycle after manual renewal payment', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.clientReference.recurringValue = new Prisma.Decimal('30.00');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-14', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-09-14'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-14'));
+    expect(fake.clientReference.billingAnchorDay).toBe(14);
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.clientReference.id,
+      fake.tx,
+    );
+    expect(nextReceivables).toEqual([
+      {
+        clientReferenceId: fake.clientReference.id,
+        purpose: 'RENEWAL',
+        dueDate: parseBusinessDate('2026-10-14'),
+        amount: new Prisma.Decimal('30.00'),
+        status: 'PENDENTE',
+      },
+    ]);
+    expect(
+      fake.events.filter(
+        (event) =>
+          event.type === 'CLIENT_RENEWED' &&
+          typeof event.metadata === 'object' &&
+          event.metadata !== null &&
+          'receivableId' in event.metadata &&
+          event.metadata.receivableId === fake.receivable.id,
+      ),
+    ).toHaveLength(1);
+
+    await expect(
+      service.payReceivable(
+        fake.receivable.id,
+        { paymentDate: '2026-09-14', categoryId: fake.entryCategory.id },
+        actorUserId,
+      ),
+    ).rejects.toThrow('Apenas contas pendentes podem receber baixa.');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-14'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    expect(nextReceivables).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'CLIENT_RENEWED')).toHaveLength(1);
+  });
+
+  it.each([
+    ['Mensal', 1, '2026-10-14'],
+    ['Bimestral', 2, '2026-11-14'],
+    ['Trimestral', 3, '2026-12-14'],
+    ['Semestral', 6, '2027-03-14'],
+    ['Anual', 12, '2027-09-14'],
+  ])(
+    'advances renewal payment using the real %s plan duration',
+    async (_planName, durationMonths, expectedDueDate) => {
+      const fake = createFinancePrisma();
+      fake.plan.durationMonths = durationMonths;
+      fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+      fake.clientReference.billingAnchorDay = 14;
+      fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+      const { cycle, nextReceivables } = createCycleRecorder(fake);
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+        undefined,
+        cycle as never,
+      );
+
+      await service.payReceivable(
+        fake.receivable.id,
+        { paymentDate: '2026-09-14', categoryId: fake.entryCategory.id },
+        actorUserId,
+      );
+
+      expect(fake.clientReference.dueDate).toEqual(parseBusinessDate(expectedDueDate));
+      expect(nextReceivables).toHaveLength(1);
+      expect(nextReceivables[0]).toMatchObject({
+        clientReferenceId: fake.clientReference.id,
+        purpose: 'RENEWAL',
+        dueDate: parseBusinessDate(expectedDueDate),
+        status: 'PENDENTE',
+      });
+    },
+  );
+
+  it('preserves billingAnchorDay 31 when renewal advances into February', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-01-31');
+    fake.clientReference.billingAnchorDay = 31;
+    fake.receivable.dueDate = parseBusinessDate('2026-01-31');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-01-31', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-02-28'));
+    expect(fake.clientReference.billingAnchorDay).toBe(31);
+    expect(nextReceivables).toHaveLength(1);
+    expect(nextReceivables[0]).toMatchObject({
+      dueDate: parseBusinessDate('2026-02-28'),
+      status: 'PENDENTE',
+    });
+  });
+
+  it('advances the current reference cycle after PIX renewal confirmation', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      status: 'PAID',
+      paidAt: parseBusinessDate('2026-09-14'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-14'));
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    expect(nextReceivables).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'CLIENT_RENEWED')).toHaveLength(1);
+  });
+
+  it('does not advance another reference when receivable relation is inconsistent', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.clientReferenceId = '88888888-8888-4888-8888-888888888888';
+    const originalDueDate = fake.clientReference.dueDate;
+    const { cycle } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-10-10', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.clientReference.dueDate).toEqual(originalDueDate);
+    expect(cycle.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.events.filter((event) => event.type === 'CLIENT_RENEWED')).toHaveLength(0);
+  });
+
+  it.each([
+    ['INITIAL_ACTIVATION' as const, 'PENDENTE' as const],
+    ['RENEWAL' as const, 'CANCELADO' as const],
+    ['RENEWAL' as const, 'PAGO' as const],
+  ])('does not advance cycle for %s receivable with %s status', async (purpose, status) => {
+    const fake = createFinancePrisma();
+    fake.receivable.purpose = purpose;
+    fake.receivable.status = status;
+    const originalDueDate = fake.clientReference.dueDate;
+    const { cycle } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    const payment = service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-10-10', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    if (status === 'PENDENTE') {
+      await payment;
+    } else {
+      await expect(payment).rejects.toThrow('Apenas contas pendentes podem receber baixa.');
+    }
+
+    expect(fake.clientReference.dueDate).toEqual(originalDueDate);
+    expect(cycle.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.events.filter((event) => event.type === 'CLIENT_RENEWED')).toHaveLength(0);
   });
 
   it('cancels only pending receivables with a reason and no financial transaction', async () => {

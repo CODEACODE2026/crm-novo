@@ -181,6 +181,7 @@ import {
   type WhatsAppQrPoller,
   whatsappQrStatus,
 } from '../../lib/whatsapp-connection-flow';
+import { removalCountLabel, reportSummaryLabel } from '../../lib/display-labels';
 
 type View =
   | 'dashboard'
@@ -199,18 +200,18 @@ type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categori
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'clients', label: 'Clientes', icon: Users },
-  { id: 'referrals', label: 'Indicacoes', icon: Gift },
+  { id: 'referrals', label: 'Indicações', icon: Gift },
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
-  { id: 'billing', label: 'Cobrancas', icon: Bell },
-  { id: 'automations', label: 'Automacoes', icon: Activity },
-  { id: 'reports', label: 'Relatorios', icon: BarChart3 },
+  { id: 'billing', label: 'Cobranças', icon: Bell },
+  { id: 'automations', label: 'Automações', icon: Activity },
+  { id: 'reports', label: 'Relatórios', icon: BarChart3 },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
-  { id: 'settings', label: 'Configuracoes', icon: Settings },
+  { id: 'settings', label: 'Configurações', icon: Settings },
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
-const futureNavItems = [{ label: 'Renovacoes', icon: RefreshCcw }];
+const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
 
 type RenewalTarget = {
   client: Client;
@@ -275,7 +276,7 @@ export default function DashboardPage() {
         );
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar clientes e planos.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar clientes e planos.');
     } finally {
       setDataLoading(false);
     }
@@ -325,18 +326,18 @@ export default function DashboardPage() {
     const requiresReason = nextStatus === 'INATIVO' || nextStatus === 'CANCELADO';
     const reason =
       requiresReason && !statusReason.trim()
-        ? window.prompt(`Informe o motivo para ${actionLabel} a referencia ${reference.reference}:`)
+        ? window.prompt(`Informe o motivo para ${actionLabel} a referência ${reference.reference}:`)
         : statusReason;
 
     if (requiresReason && !reason?.trim()) {
-      setError('Motivo obrigatorio para inativar ou cancelar referencia.');
+      setError('Motivo obrigatório para inativar ou cancelar referência.');
       return;
     }
 
     const confirmed = window.confirm(
       [
-        `${actionLabel[0]?.toUpperCase()}${actionLabel.slice(1)} referencia?`,
-        `Referencia: ${reference.reference}`,
+        `${actionLabel[0]?.toUpperCase()}${actionLabel.slice(1)} referência?`,
+        `Referência: ${reference.reference}`,
         `Cliente: ${selectedClient.name}`,
         `Status atual: ${reference.status}`,
         `Novo status: ${nextStatus}`,
@@ -392,7 +393,7 @@ export default function DashboardPage() {
     if (!selectedReference) {
       setSelectedClient(client);
       setView('clients');
-      setRenewalNotice('Selecione uma referencia especifica para renovar.');
+      setRenewalNotice('Selecione uma referência específica para renovar.');
       return;
     }
 
@@ -410,7 +411,7 @@ export default function DashboardPage() {
     setSelectedClient(detailed);
     setRenewalTarget(null);
     setRenewalNotice(
-      `Referencia ${target.reference.reference} renovada com sucesso. Novo vencimento: ${formatDate(result.newDueDate)}. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
+      `Referência ${target.reference.reference} renovada com sucesso. Novo vencimento: ${formatDate(result.newDueDate)}. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
     );
   }
 
@@ -424,7 +425,7 @@ export default function DashboardPage() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar" aria-label="Navegacao principal">
+      <aside className="sidebar" aria-label="Navegação principal">
         <div className="brand">
           <span className="brand-mark">C</span>
           <span>CRM Novo</span>
@@ -468,17 +469,17 @@ export default function DashboardPage() {
                   : view === 'whatsapp'
                     ? 'WhatsApp'
                     : view === 'referrals'
-                      ? 'Indicacoes'
+                      ? 'Indicações'
                       : view === 'billing'
-                        ? 'Cobrancas'
+                        ? 'Cobranças'
                         : view === 'automations'
-                          ? 'Automacoes'
+                          ? 'Automações'
                           : view === 'reports'
-                            ? 'Relatorios'
+                            ? 'Relatórios'
                             : view === 'waitlist'
                               ? 'Lista de Espera'
                               : view === 'settings'
-                                ? 'Configuracoes'
+                                ? 'Configurações'
                                 : 'Clientes'}
           </h1>
           <span className="topbar-user">{user?.name}</span>
@@ -655,7 +656,7 @@ function DeletionConfirmationModal({
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const isClient = target.kind === 'client';
-  const title = isClient ? 'Remover cliente' : 'Remover referencia';
+  const title = isClient ? 'Remover cliente' : 'Remover referência';
   const targetLabel = isClient ? target.client.name : target.reference.reference;
   const counts = Object.entries(target.preview.counts).filter(([, value]) => value > 0);
 
@@ -671,7 +672,7 @@ function DeletionConfirmationModal({
     try {
       await onConfirm(target);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel remover.');
+      setError(err instanceof Error ? err.message : 'Não foi possível remover.');
     } finally {
       setWorking(false);
     }
@@ -682,7 +683,7 @@ function DeletionConfirmationModal({
       <section className="modal" aria-labelledby="deletion-title">
         <header className="modal-header">
           <div>
-            <span className="metric-label">ACAO DESTRUTIVA</span>
+            <span className="metric-label">AÇÃO DESTRUTIVA</span>
             <h2 id="deletion-title">{title}</h2>
           </div>
           <button className="icon-button" type="button" onClick={onClose}>
@@ -691,8 +692,8 @@ function DeletionConfirmationModal({
         </header>
         {error ? <div className="notice danger">{error}</div> : null}
         <div className="notice danger">
-          Esta acao removera permanentemente {isClient ? 'o cliente' : 'a referencia'} e os dados
-          vinculados listados abaixo. Esta acao nao pode ser desfeita.
+          Esta ação removerá permanentemente {isClient ? 'o cliente' : 'a referência'} e os dados
+          vinculados listados abaixo. Esta ação não pode ser desfeita.
         </div>
         <dl className="detail-list">
           <div>
@@ -700,7 +701,7 @@ function DeletionConfirmationModal({
             <dd>{targetLabel}</dd>
           </div>
           <div>
-            <dt>Confirmacao</dt>
+            <dt>Confirmação</dt>
             <dd>Digite REMOVER</dd>
           </div>
         </dl>
@@ -715,7 +716,7 @@ function DeletionConfirmationModal({
             <tbody>
               {counts.map(([key, value]) => (
                 <tr key={key}>
-                  <td>{key}</td>
+                  <td>{removalCountLabel(key)}</td>
                   <td>{value}</td>
                 </tr>
               ))}
@@ -723,7 +724,7 @@ function DeletionConfirmationModal({
           </table>
         </div>
         <label className="field">
-          <span>Confirmacao</span>
+          <span>Confirmação</span>
           <input
             autoFocus
             value={confirmation}
@@ -781,7 +782,7 @@ function OperationalDashboard({
       const nextSummary = await getDashboardSummary(filters);
       setSummary(nextSummary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar o dashboard.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar o dashboard.');
     } finally {
       setLoading(false);
     }
@@ -852,7 +853,7 @@ function OperationalDashboard({
           onClick={() => onOpenFinance('expenses')}
         >
           <CreditCard aria-hidden="true" size={16} />
-          Nova saida
+          Nova saída
         </button>
         <button
           className="secondary-button"
@@ -870,9 +871,9 @@ function OperationalDashboard({
           ['Clientes cancelados', summary?.clients.canceled],
           ['Novos clientes', summary?.clients.newInPeriod],
           ['Vencem hoje', summary?.dueDates.dueToday],
-          ['Proximos 7 dias', summary?.dueDates.upcomingSevenDays],
+          ['Próximos 7 dias', summary?.dueDates.upcomingSevenDays],
           ['Clientes vencidos', summary?.dueDates.overdueClients],
-          ['Renovacoes', summary?.renewals.count],
+          ['Renovações', summary?.renewals.count],
         ].map(([label, value]) => (
           <article className="metric-card compact" key={label}>
             <span className="metric-label">{label}</span>
@@ -887,7 +888,7 @@ function OperationalDashboard({
           ['A receber', summary?.finance.receivablePending],
           ['Vencido', summary?.finance.receivableOverdue],
           ['Entradas', summary?.finance.entries],
-          ['Saidas', summary?.finance.expenses],
+          ['Saídas', summary?.finance.expenses],
           ['Saldo', summary?.finance.balance],
           ['Valor renovado', summary?.renewals.amount],
         ].map(([label, value]) => (
@@ -902,7 +903,7 @@ function OperationalDashboard({
 
       <div className="dashboard-grid">
         <section className="panel chart-panel">
-          <h2>Entradas x saidas</h2>
+          <h2>Entradas x saídas</h2>
           <div className="bar-chart">
             {(summary?.charts.cashflow ?? []).map((item) => (
               <div className="bar-group" key={item.period}>
@@ -984,7 +985,7 @@ function OperationalDashboard({
               </button>
             ))}
             {!summary?.pending.items.length ? (
-              <div className="empty-state">Sem pendencias operacionais.</div>
+              <div className="empty-state">Sem pendências operacionais.</div>
             ) : null}
           </div>
         </section>
@@ -999,7 +1000,7 @@ function OperationalDashboard({
         </section>
 
         <section className="panel">
-          <PanelHeader title="Proximos vencimentos" />
+          <PanelHeader title="Próximos vencimentos" />
           <CompactClientDueTable
             items={summary?.lists.upcomingDue ?? []}
             onOpen={onOpenClient}
@@ -1078,7 +1079,7 @@ function PaginationControls({
         Anterior
       </button>
       <span>
-        Pagina {pagination.page} de {pagination.totalPages} | {pagination.total} registros
+        Página {pagination.page} de {pagination.totalPages} | {pagination.total} registros
       </span>
       <button
         className="secondary-button"
@@ -1086,7 +1087,7 @@ function PaginationControls({
         type="button"
         onClick={() => onPageChange(pagination.page + 1)}
       >
-        Proxima
+        Próxima
       </button>
     </div>
   );
@@ -1245,7 +1246,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
       setItems(list.items);
       setSummary(nextSummary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar indicacoes.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar indicações.');
     } finally {
       setLoading(false);
     }
@@ -1268,7 +1269,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
       setRewardClientReferenceId('');
       await loadReferrals();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel aplicar o beneficio.');
+      setError(err instanceof Error ? err.message : 'Não foi possível aplicar o benefício.');
     }
   }
 
@@ -1283,7 +1284,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
       await cancelReferral(referral.id, reason);
       await loadReferrals();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel cancelar a indicacao.');
+      setError(err instanceof Error ? err.message : 'Não foi possível cancelar a indicação.');
     }
   }
 
@@ -1294,8 +1295,8 @@ function ReferralsView({ clients }: { clients: Client[] }) {
         {[
           ['Pendentes', summary?.pending ?? 0],
           ['Qualificadas', summary?.qualified ?? 0],
-          ['Beneficios aplicados', summary?.rewarded ?? 0],
-          ['Aguardando beneficio', summary?.awaitingReward ?? 0],
+          ['Benefícios aplicados', summary?.rewarded ?? 0],
+          ['Aguardando benefício', summary?.awaitingReward ?? 0],
         ].map(([label, value]) => (
           <article className="metric-card" key={label}>
             <span>{label}</span>
@@ -1346,9 +1347,9 @@ function ReferralsView({ clients }: { clients: Client[] }) {
               <th>Data</th>
               <th>Status</th>
               <th>Beneficio</th>
-              <th>Qualificacao</th>
-              <th>Aplicacao</th>
-              <th>Acoes</th>
+              <th>Qualificação</th>
+              <th>Aplicação</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -1378,7 +1379,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                           setConfirming(referral);
                         }}
                       >
-                        Aplicar beneficio
+                        Aplicar benefício
                       </button>
                     ) : null}
                     {referral.status !== 'REWARDED' && referral.status !== 'CANCELED' ? (
@@ -1396,7 +1397,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
             ))}
             {!items.length ? (
               <tr>
-                <td colSpan={8}>{loading ? 'Carregando...' : 'Nenhuma indicacao encontrada.'}</td>
+                <td colSpan={8}>{loading ? 'Carregando...' : 'Nenhuma indicação encontrada.'}</td>
               </tr>
             ) : null}
           </tbody>
@@ -1406,7 +1407,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
         <div className="modal-backdrop" role="presentation">
           <section className="modal">
             <header className="modal-header">
-              <h2>Aplicar beneficio</h2>
+              <h2>Aplicar benefício</h2>
               <button className="icon-button" type="button" onClick={() => setConfirming(null)}>
                 <X aria-hidden="true" size={17} />
               </button>
@@ -1423,13 +1424,13 @@ function ReferralsView({ clients }: { clients: Client[] }) {
               </article>
               {confirming.rewardType === 'FREE_MONTH' ? (
                 <label className="field">
-                  <span>Referencia beneficiada</span>
+                  <span>Referência beneficiada</span>
                   <select
                     required
                     value={rewardClientReferenceId}
                     onChange={(event) => setRewardClientReferenceId(event.target.value)}
                   >
-                    <option value="">Selecione uma referencia</option>
+                    <option value="">Selecione uma referência</option>
                     {clients
                       .find((client) => client.id === confirming.referrerClientId)
                       ?.references?.filter((reference) => reference.status !== 'CANCELADO')
@@ -1465,7 +1466,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                   type="button"
                   onClick={() => void applyReward(confirming)}
                 >
-                  Aplicar beneficio
+                  Aplicar benefício
                 </button>
               </div>
             </div>
@@ -1489,13 +1490,13 @@ function referralStatusLabel(status: ReferralStatus) {
 
 const reportDefinitions = [
   { id: 'clients', label: 'Clientes' },
-  { id: 'references', label: 'Referencias/Servicos' },
-  { id: 'renewals', label: 'Renovacoes' },
+  { id: 'references', label: 'Referências/Serviços' },
+  { id: 'renewals', label: 'Renovações' },
   { id: 'receivables', label: 'Contas a receber' },
   { id: 'finance', label: 'Financeiro' },
-  { id: 'billing', label: 'Cobrancas' },
-  { id: 'recovery', label: 'Recuperacao' },
-  { id: 'referrals', label: 'Indicacoes' },
+  { id: 'billing', label: 'Cobranças' },
+  { id: 'recovery', label: 'Recuperação' },
+  { id: 'referrals', label: 'Indicações' },
 ] satisfies Array<{ id: ReportType; label: string }>;
 
 function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
@@ -1512,7 +1513,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
     try {
       setReport(await getReport(reportType, filters));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar relatorio.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar relatório.');
     } finally {
       setLoading(false);
     }
@@ -1538,7 +1539,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel exportar CSV.');
+      setError(err instanceof Error ? err.message : 'Não foi possível exportar CSV.');
     }
   }
 
@@ -1581,7 +1582,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
         <div className="search-row">
           <Search aria-hidden="true" size={18} />
           <input
-            placeholder="Buscar cliente, referencia ou descricao"
+            placeholder="Buscar cliente, referência ou descrição"
             value={filters.search ?? ''}
             onChange={(event) => updateFilter('search', event.target.value)}
           />
@@ -1623,7 +1624,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
               )
             }
           >
-            <option value="">Todas as situacoes</option>
+            <option value="">Todas as situações</option>
             <option value="PENDENTE">Pendente</option>
             <option value="VENCIDO">Vencido</option>
             <option value="PAGO">Pago</option>
@@ -1638,9 +1639,9 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
                 updateFilter('transactionType', event.target.value as FinancialTransactionType | '')
               }
             >
-              <option value="">Entradas e saidas</option>
+              <option value="">Entradas e saídas</option>
               <option value="ENTRADA">Entradas</option>
-              <option value="SAIDA">Saidas</option>
+              <option value="SAIDA">Saídas</option>
             </select>
             <select
               value={filters.transactionOrigin ?? ''}
@@ -1729,7 +1730,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
         <article className="metric-card compact">
           <span className="metric-label">Registros</span>
           <strong className="metric-value">{loading ? '-' : (report?.total ?? 0)}</strong>
-          <p>{report?.limited ? 'Exibicao limitada para manter performance.' : 'Filtro atual'}</p>
+          <p>{report?.limited ? 'Exibição limitada para manter performance.' : 'Filtro atual'}</p>
         </article>
         {report?.summary
           ? Object.entries(report.summary).map(([key, value]) => (
@@ -1768,19 +1769,6 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
   );
 }
 
-function reportSummaryLabel(key: string) {
-  const labels: Record<string, string> = {
-    amount: 'Valor total',
-    entries: 'Entradas',
-    expenses: 'Saidas',
-    balance: 'Saldo',
-    byStatus: 'Status',
-    byPlan: 'Planos',
-  };
-
-  return labels[key] ?? key;
-}
-
 function reportSummaryValue(value: unknown) {
   if (Array.isArray(value)) return String(value.length);
   if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value)) return formatCurrency(value);
@@ -1801,7 +1789,7 @@ function SettingsView() {
     try {
       setCredentials(await listPaymentProviderCredentials());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar integracoes.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar integrações.');
     } finally {
       setLoading(false);
     }
@@ -1820,7 +1808,7 @@ function SettingsView() {
       await loadCredentials();
       setNotice(success);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar integracao.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar integração.');
     }
   }
 
@@ -1838,7 +1826,7 @@ function SettingsView() {
 
       <div className="tabs">
         <button className="active" type="button">
-          Integracoes
+          Integrações
         </button>
       </div>
 
@@ -1950,14 +1938,14 @@ function PaymentProviderCard({
       </header>
 
       <label className="field">
-        <span>Nome da integracao</span>
+        <span>Nome da integração</span>
         <input value={name} onChange={(event) => setName(event.target.value)} />
       </label>
       <label className="field">
         <span>Chave API</span>
         <input
           autoComplete="off"
-          placeholder={credential.configured ? 'Chave salva nao exibida' : 'fdpx_...'}
+          placeholder={credential.configured ? 'Chave salva não exibida' : 'fdpx_...'}
           type="password"
           value={token}
           onChange={(event) => setToken(event.target.value)}
@@ -1989,7 +1977,7 @@ function PaymentProviderCard({
         </div>
         <div>
           <dt>Webhook</dt>
-          <dd>{credential.webhookRegisteredAt ? 'Registrado' : 'Nao registrado'}</dd>
+          <dd>{credential.webhookRegisteredAt ? 'Registrado' : 'Não registrado'}</dd>
         </div>
         <div>
           <dt>URL</dt>
@@ -2021,7 +2009,7 @@ function PaymentProviderCard({
           type="button"
           onClick={() => void onTest()}
         >
-          Testar conexao
+          Testár conexao
         </button>
         <button
           className="secondary-button"
@@ -2145,7 +2133,7 @@ function ClientsView({
           <div className="search-row">
             <Search aria-hidden="true" size={18} />
             <input
-              placeholder="Buscar por nome, referencia ou telefone"
+              placeholder="Buscar por nome, referência ou telefone"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -2197,9 +2185,9 @@ function ClientsView({
             <thead>
               <tr>
                 <th>Cliente</th>
-                <th>Referencias</th>
+                <th>Referências</th>
                 <th>Resumo operacional</th>
-                <th>Acoes</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -2208,7 +2196,7 @@ function ClientsView({
                 const singleReference = references.length === 1 ? references[0] : null;
                 const referenceSummary = singleReference
                   ? `${singleReference.reference} | ${singleReference.plan.name}`
-                  : `${references.length} referencias`;
+                  : `${references.length} referências`;
                 const operationalSummary = singleReference
                   ? `${formatCurrency(singleReference.recurringValue)} | ${formatDate(singleReference.dueDate)}`
                   : references.map((reference) => reference.reference).join(', ') || '-';
@@ -2250,7 +2238,7 @@ function ClientsView({
                             onSelect(client);
                           }}
                         >
-                          Ver referencias
+                          Ver referências
                         </button>
                       )}
                     </td>
@@ -2273,7 +2261,7 @@ function ClientsView({
             <div className="detail-header">
               <div>
                 <h2>{selectedClient.name}</h2>
-                <span>{selectedClient.references?.length ?? 0} referencias operacionais</span>
+                <span>{selectedClient.references?.length ?? 0} referências operacionais</span>
               </div>
               <button
                 className="icon-button"
@@ -2320,7 +2308,7 @@ function ClientsView({
                 <dd>{selectedClient.email ?? '-'}</dd>
               </div>
               <div>
-                <dt>Referencias</dt>
+                <dt>Referências</dt>
                 <dd>{selectedClient.references?.length ?? 0}</dd>
               </div>
               {uniqueSelectedReference ? (
@@ -2334,7 +2322,7 @@ function ClientsView({
                     <dd>{formatCurrency(uniqueSelectedReference.recurringValue)}</dd>
                   </div>
                   <div>
-                    <dt>Cobranca</dt>
+                    <dt>Cobrança</dt>
                     <dd>{uniqueSelectedReference.billingNoticeDays} dias antes</dd>
                   </div>
                 </>
@@ -2354,14 +2342,14 @@ function ClientsView({
                 type="button"
                 onClick={() => setDetailTab('references')}
               >
-                Referencias
+                Referências
               </button>
               <button
                 className={detailTab === 'renewals' ? 'active' : ''}
                 type="button"
                 onClick={() => setDetailTab('renewals')}
               >
-                Renovacoes
+                Renovações
               </button>
               <button
                 className={detailTab === 'receivables' ? 'active' : ''}
@@ -2375,21 +2363,21 @@ function ClientsView({
                 type="button"
                 onClick={() => setDetailTab('messages')}
               >
-                Cobrancas/PIX
+                Cobranças/PIX
               </button>
               <button
                 className={detailTab === 'recovery' ? 'active' : ''}
                 type="button"
                 onClick={() => setDetailTab('recovery')}
               >
-                Recuperacao
+                Recuperação
               </button>
               <button
                 className={detailTab === 'referrals' ? 'active' : ''}
                 type="button"
                 onClick={() => setDetailTab('referrals')}
               >
-                Indicacoes
+                Indicações
               </button>
             </div>
 
@@ -2417,7 +2405,7 @@ function ClientsView({
                     }}
                   >
                     <Plus aria-hidden="true" size={16} />
-                    Adicionar referencia
+                    Adicionar referência
                   </button>
                 </div>
                 {referenceFormOpen ? (
@@ -2441,11 +2429,11 @@ function ClientsView({
                 ) : null}
                 <div className="status-actions">
                   <div className="notice">
-                    INATIVO = servico temporariamente parado e elegivel para recuperacao. CANCELADO
-                    = encerramento definitivo da referencia, sem continuidade de recuperacao.
+                    INATIVO = serviço temporariamente parado e elegivel para recuperação. CANCELADO
+                    = encerramento definitivo da referência, sem continuidade de recuperação.
                   </div>
                   <textarea
-                    placeholder="Justificativa para inativar ou cancelar referencia"
+                    placeholder="Justificativa para inativar ou cancelar referência"
                     value={statusReason}
                     onChange={(event) => setStatusReason(event.target.value)}
                   />
@@ -2504,27 +2492,27 @@ function ClientsView({
                         type="button"
                         onClick={() => onReferenceStatusChange(reference, 'INATIVO')}
                       >
-                        Inativar referencia
+                        Inativar referência
                       </button>
                       <button
                         className="danger-button"
                         type="button"
                         onClick={() => onReferenceStatusChange(reference, 'CANCELADO')}
                       >
-                        Cancelar referencia
+                        Cancelar referência
                       </button>
                       <button
                         className="danger-button"
                         type="button"
                         onClick={() => onRemoveReference(reference)}
                       >
-                        Remover referencia
+                        Remover referência
                       </button>
                     </div>
                   </article>
                 ))}
                 {!selectedClient.references?.length ? (
-                  <div className="empty-state">Sem referencias cadastradas.</div>
+                  <div className="empty-state">Sem referências cadastradas.</div>
                 ) : null}
               </div>
             ) : null}
@@ -2542,7 +2530,7 @@ function ClientsView({
                   </article>
                 ))}
                 {!selectedClient.renewals?.length ? (
-                  <div className="empty-state">Sem renovacoes.</div>
+                  <div className="empty-state">Sem renovações.</div>
                 ) : null}
               </div>
             ) : null}
@@ -2589,7 +2577,7 @@ function ClientsView({
                   </article>
                 ))}
                 {!selectedClient.messageDispatches?.length ? (
-                  <div className="empty-state">Sem mensagens ou cobrancas recentes.</div>
+                  <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
                 ) : null}
               </div>
             ) : null}
@@ -2612,7 +2600,7 @@ function ClientsView({
                   </article>
                 ))}
                 {!selectedClient.recoveryCampaigns?.length ? (
-                  <div className="empty-state">Sem campanha de recuperacao.</div>
+                  <div className="empty-state">Sem campanha de recuperação.</div>
                 ) : null}
               </div>
             ) : null}
@@ -2635,7 +2623,7 @@ function ClientsView({
                 ) : null}
                 {selectedClient.referralsMade ? (
                   <article>
-                    <strong>{selectedClient.referralsMade.total} indicacao(oes) feitas</strong>
+                    <strong>{selectedClient.referralsMade.total} indicação(oes) feitas</strong>
                     <span>
                       {selectedClient.referralsMade.qualified} qualificadas ·{' '}
                       {selectedClient.referralsMade.rewarded} recompensadas
@@ -2650,7 +2638,7 @@ function ClientsView({
                   </article>
                 ))}
                 {!selectedClient.referralReceived && !selectedClient.referralsMade?.items.length ? (
-                  <div className="empty-state">Sem indicacoes vinculadas.</div>
+                  <div className="empty-state">Sem indicações vinculadas.</div>
                 ) : null}
               </div>
             ) : null}
@@ -2702,7 +2690,7 @@ function SendWhatsAppModal({
         if (active) setConnection(nextConnection);
       } catch (err) {
         if (active) {
-          setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
+          setError(err instanceof Error ? err.message : 'Não foi possível carregar WhatsApp.');
         }
       } finally {
         if (active) setLoading(false);
@@ -2729,9 +2717,9 @@ function SendWhatsAppModal({
         return;
       }
 
-      setError(dispatch.errorMessage ?? 'Nao foi possivel enviar a mensagem.');
+      setError(dispatch.errorMessage ?? 'Não foi possível enviar a mensagem.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel enviar a mensagem.');
+      setError(err instanceof Error ? err.message : 'Não foi possível enviar a mensagem.');
     } finally {
       setSending(false);
     }
@@ -2776,7 +2764,7 @@ function SendWhatsAppModal({
         </label>
 
         {connection && connection.status !== 'CONNECTED' ? (
-          <div className="notice warning">A conexao WhatsApp nao esta operacional.</div>
+          <div className="notice warning">A conexao WhatsApp não está operacional.</div>
         ) : null}
         {notice ? <div className="notice success">{notice}</div> : null}
 
@@ -2844,7 +2832,7 @@ function BillingView() {
         );
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar cobrancas.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar cobranças.');
     } finally {
       setLoading(false);
     }
@@ -2860,7 +2848,7 @@ function BillingView() {
     try {
       setSelected(await getBillingDispatch(dispatch.id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel abrir a cobranca.');
+      setError(err instanceof Error ? err.message : 'Não foi possível abrir a cobrança.');
     }
   }
 
@@ -2872,7 +2860,7 @@ function BillingView() {
       await reconcileBilling();
       await loadBilling();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel reconciliar cobrancas.');
+      setError(err instanceof Error ? err.message : 'Não foi possível reconciliar cobranças.');
     } finally {
       setWorking('');
     }
@@ -2886,7 +2874,7 @@ function BillingView() {
       await sendBillingNow(dispatch.id);
       await loadBilling();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel processar a cobranca.');
+      setError(err instanceof Error ? err.message : 'Não foi possível processar a cobrança.');
     } finally {
       setWorking('');
     }
@@ -2908,7 +2896,7 @@ function BillingView() {
       setEditingTemplate(null);
       await loadBilling();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar o template.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar o template.');
     } finally {
       setWorking('');
     }
@@ -2922,7 +2910,7 @@ function BillingView() {
       await updateMessageTemplate(template.id, { active: !template.active });
       await loadBilling();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel alterar o template.');
+      setError(err instanceof Error ? err.message : 'Não foi possível alterar o template.');
     } finally {
       setWorking('');
     }
@@ -2937,7 +2925,7 @@ function BillingView() {
       const result = await previewMessageTemplate(editingTemplate.id, { content: templateContent });
       setPreview(result.renderedContent);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel gerar preview.');
+      setError(err instanceof Error ? err.message : 'Não foi possível gerar preview.');
     } finally {
       setWorking('');
     }
@@ -2966,7 +2954,7 @@ function BillingView() {
             <div className="search-row">
               <Search aria-hidden="true" size={18} />
               <input
-                placeholder="Buscar por cliente, referencia ou telefone"
+                placeholder="Buscar por cliente, referência ou telefone"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -3009,7 +2997,7 @@ function BillingView() {
               <thead>
                 <tr>
                   <th>Cliente</th>
-                  <th>Referencia</th>
+                  <th>Referência</th>
                   <th>Valor</th>
                   <th>Vencimento</th>
                   <th>Agendado para</th>
@@ -3017,7 +3005,7 @@ function BillingView() {
                   <th>Status</th>
                   <th>Tentativas</th>
                   <th>Erro</th>
-                  <th>Acoes</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -3027,7 +3015,7 @@ function BillingView() {
                     key={dispatch.id}
                     onClick={() => void selectDispatch(dispatch)}
                   >
-                    <td>{dispatch.client?.name ?? 'Cliente nao vinculado'}</td>
+                    <td>{dispatch.client?.name ?? 'Cliente não vinculado'}</td>
                     <td>
                       {dispatch.clientReference?.reference ?? dispatch.client?.reference ?? '-'}
                     </td>
@@ -3071,7 +3059,7 @@ function BillingView() {
             </table>
             {!dispatches.length ? (
               <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhuma cobranca encontrada.'}
+                {loading ? 'Carregando...' : 'Nenhuma cobrança encontrada.'}
               </div>
             ) : null}
           </div>
@@ -3118,7 +3106,7 @@ function BillingView() {
             <>
               <div className="detail-header">
                 <div>
-                  <h2>{selected.client?.name ?? 'Cobranca'}</h2>
+                  <h2>{selected.client?.name ?? 'Cobrança'}</h2>
                   <span>{selected.idempotencyKey ?? selected.requestId}</span>
                 </div>
                 <span className={`pill ${selected.status.toLowerCase()}`}>
@@ -3127,7 +3115,7 @@ function BillingView() {
               </div>
               <dl className="detail-list">
                 <div>
-                  <dt>Referencia</dt>
+                  <dt>Referência</dt>
                   <dd>
                     {selected.clientReference?.reference ?? selected.client?.reference ?? '-'}
                   </dd>
@@ -3153,7 +3141,7 @@ function BillingView() {
                   <dd>{selected.scheduledFor ? formatDateTime(selected.scheduledFor) : '-'}</dd>
                 </div>
                 <div>
-                  <dt>Proxima tentativa</dt>
+                  <dt>Próxima tentativa</dt>
                   <dd>{selected.nextAttemptAt ? formatDateTime(selected.nextAttemptAt) : '-'}</dd>
                 </div>
                 <div>
@@ -3181,7 +3169,7 @@ function BillingView() {
               ) : null}
             </>
           ) : (
-            <div className="empty-state">Selecione uma cobranca para visualizar detalhes.</div>
+            <div className="empty-state">Selecione uma cobrança para visualizar detalhes.</div>
           )}
         </aside>
       </div>
@@ -3307,7 +3295,7 @@ function AutomationsView() {
       setCampaigns(nextCampaigns.items);
       setCampaignPagination(nextCampaigns.pagination);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar automacoes.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar automações.');
     } finally {
       setLoading(false);
     }
@@ -3325,7 +3313,7 @@ function AutomationsView() {
       await reconcileRecovery();
       await loadAutomations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel reconciliar recuperacao.');
+      setError(err instanceof Error ? err.message : 'Não foi possível reconciliar recuperação.');
     } finally {
       setWorking('');
     }
@@ -3349,7 +3337,7 @@ function AutomationsView() {
       setSendIntervalSeconds(String(next.sendIntervalSeconds));
       await loadAutomations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar cobranca automatica.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar cobrança automática.');
     } finally {
       setWorking('');
     }
@@ -3370,7 +3358,7 @@ function AutomationsView() {
       setRecoveryOffsets(next.steps.map((step) => String(step.offsetDays)));
       await loadAutomations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar recuperacao.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar recuperação.');
     } finally {
       setWorking('');
     }
@@ -3385,7 +3373,7 @@ function AutomationsView() {
       parsed.some((offset, index) => index > 0 && offset <= parsed[index - 1]!)
     ) {
       throw new Error(
-        'Etapas de recuperacao devem ter dias maiores que zero, sem duplicidade e em ordem crescente.',
+        'Etapas de recuperação devem ter dias maiores que zero, sem duplicidade e em ordem crescente.',
       );
     }
 
@@ -3405,7 +3393,7 @@ function AutomationsView() {
       await reconcileBillingReceivables();
       await loadAutomations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel reconciliar ciclos.');
+      setError(err instanceof Error ? err.message : 'Não foi possível reconciliar ciclos.');
     } finally {
       setWorking('');
     }
@@ -3425,7 +3413,7 @@ function AutomationsView() {
       const confirmed = window.confirm(
         [
           'Gerar conta a receber do ciclo?',
-          `Referencia: ${preview.preview.reference}`,
+          `Referência: ${preview.preview.reference}`,
           `Valor: ${formatCurrency(preview.preview.amount)}`,
           `Vencimento: ${formatDate(preview.preview.dueDate)}`,
           `Purpose: ${preview.preview.purpose}`,
@@ -3439,7 +3427,7 @@ function AutomationsView() {
       await generateCurrentCycleReceivable(clientReferenceId);
       await loadAutomations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel gerar conta a receber.');
+      setError(err instanceof Error ? err.message : 'Não foi possível gerar conta a receber.');
     } finally {
       setWorking('');
     }
@@ -3453,7 +3441,7 @@ function AutomationsView() {
       await cancelRecoveryCampaign(campaign.id);
       await loadAutomations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel cancelar campanha.');
+      setError(err instanceof Error ? err.message : 'Não foi possível cancelar campanha.');
     } finally {
       setWorking('');
     }
@@ -3465,19 +3453,19 @@ function AutomationsView() {
         {error ? <div className="notice danger">{error}</div> : null}
         <div className="metric-grid billing-kpis">
           <article className="metric-card compact">
-            <span className="metric-label">Cobranca automatica</span>
+            <span className="metric-label">Cobrança automática</span>
             <strong className="metric-value">
               {billingSettings?.enabled ? 'ATIVA' : 'DESATIVADA'}
             </strong>
             <p>{billingSummary?.scheduledToday ?? 0} agendadas hoje</p>
           </article>
           <article className="metric-card compact">
-            <span className="metric-label">Recuperacao de clientes</span>
+            <span className="metric-label">Recuperação de clientes</span>
             <strong className="metric-value">ATIVA</strong>
             <p>{recoverySummary?.active ?? 0} campanhas ativas</p>
           </article>
           <article className="metric-card compact">
-            <span className="metric-label">Recuperacao concluida</span>
+            <span className="metric-label">Recuperação concluida</span>
             <strong className="metric-value">{recoverySummary?.completed ?? 0}</strong>
             <p>{recoverySummary?.canceled ?? 0} canceladas</p>
           </article>
@@ -3501,12 +3489,12 @@ function AutomationsView() {
                 type="checkbox"
                 onChange={(event) => void saveBillingSettings({ enabled: event.target.checked })}
               />
-              <span>Ativar cobranca automatica</span>
+              <span>Ativar cobrança automática</span>
             </label>
           </div>
           <div className="form-grid automation-settings-grid">
             <label className="field">
-              <span>Horario de envio</span>
+              <span>Horário de envio</span>
               <input
                 required
                 type="time"
@@ -3549,19 +3537,19 @@ function AutomationsView() {
             </label>
           </div>
           <p className="helper-text">
-            As cobrancas comecam as {billingSettings?.sendTime ?? '09:00'} e sao enviadas com
-            intervalo minimo de {billingSettings?.sendIntervalSeconds ?? 8} segundos entre
+            As cobranças começam as {billingSettings?.sendTime ?? '09:00'} e sao enviadas com
+            intervalo mínimo de {billingSettings?.sendIntervalSeconds ?? 8} segundos entre
             mensagens.
           </p>
           <p className="helper-text">
-            Define o intervalo minimo entre o envio de uma cobranca e a proxima.
+            Define o intervalo mínimo entre o envio de uma cobrança e a próxima.
           </p>
         </section>
 
         <section className="settings-card">
           <div className="settings-card-header">
             <div>
-              <span className="metric-label">RECUPERACAO</span>
+              <span className="metric-label">RECUPERAÇÃO</span>
               <h2>{recoverySettings?.enabled ? 'Ativa' : 'Desativada'}</h2>
             </div>
             <label className="toggle-field compact-toggle">
@@ -3571,12 +3559,12 @@ function AutomationsView() {
                 type="checkbox"
                 onChange={(event) => void saveRecoverySettings({ enabled: event.target.checked })}
               />
-              <span>Ativar recuperacao automatica</span>
+              <span>Ativar recuperação automática</span>
             </label>
           </div>
           <div className="form-grid automation-settings-grid">
             <label className="field">
-              <span>Horario de recuperacao</span>
+              <span>Horário de recuperação</span>
               <input
                 required
                 type="time"
@@ -3623,7 +3611,7 @@ function AutomationsView() {
               <thead>
                 <tr>
                   <th>Etapa</th>
-                  <th>Dias apos vencimento</th>
+                  <th>Dias após vencimento</th>
                   <th>Template</th>
                   <th>Ativa</th>
                 </tr>
@@ -3651,7 +3639,7 @@ function AutomationsView() {
                             setError(
                               err instanceof Error
                                 ? err.message
-                                : 'Etapas de recuperacao invalidas.',
+                                : 'Etapas de recuperação invalidas.',
                             );
                           }
                         }}
@@ -3692,7 +3680,7 @@ function AutomationsView() {
           <article className="metric-card compact">
             <span className="metric-label">Enviadas hoje</span>
             <strong className="metric-value">{billingSummary?.sentToday ?? 0}</strong>
-            <p>{billingSummary?.sent ?? 0} historico</p>
+            <p>{billingSummary?.sent ?? 0} histórico</p>
           </article>
           <article className="metric-card compact">
             <span className="metric-label">Falhas hoje</span>
@@ -3706,7 +3694,7 @@ function AutomationsView() {
             <thead>
               <tr>
                 <th>Cliente</th>
-                <th>Referencia</th>
+                <th>Referência</th>
                 <th>Vencimento</th>
                 <th>Aviso</th>
                 <th>Agendado para</th>
@@ -3760,12 +3748,12 @@ function AutomationsView() {
               <thead>
                 <tr>
                   <th>Cliente</th>
-                  <th>Referencia</th>
+                  <th>Referência</th>
                   <th>Plano</th>
                   <th>Valor</th>
                   <th>Vencimento</th>
                   <th>Motivo</th>
-                  <th>Acoes</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -3797,7 +3785,7 @@ function AutomationsView() {
             </table>
             {!(billingSummary?.cycleIssues ?? []).length ? (
               <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhuma pendencia de ciclo financeiro.'}
+                {loading ? 'Carregando...' : 'Nenhuma pendência de ciclo financeiro.'}
               </div>
             ) : null}
           </div>
@@ -3807,7 +3795,7 @@ function AutomationsView() {
           <div className="search-row">
             <Search aria-hidden="true" size={18} />
             <input
-              placeholder="Buscar cliente ou referencia"
+              placeholder="Buscar cliente ou referência"
               value={search}
               onChange={(event) => {
                 setSearch(event.target.value);
@@ -3847,15 +3835,15 @@ function AutomationsView() {
             <thead>
               <tr>
                 <th>Cliente</th>
-                <th>Referencia</th>
+                <th>Referência</th>
                 <th>Receivable</th>
                 <th>Vencimento</th>
                 <th>Atraso</th>
                 <th>Status</th>
-                <th>Etapa atual/proxima</th>
-                <th>Proxima data</th>
-                <th>Inicio</th>
-                <th>Acoes</th>
+                <th>Etapa atual/próxima</th>
+                <th>Próxima data</th>
+                <th>Início</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -3909,10 +3897,10 @@ function AutomationsView() {
       </section>
 
       <aside className="detail-panel">
-        <PanelHeader title="Configuracao" />
+        <PanelHeader title="Configuração" />
         <dl className="detail-list">
           <div>
-            <dt>Recuperacao</dt>
+            <dt>Recuperação</dt>
             <dd>{recoverySettings?.enabled ? 'Ativa' : 'Desativada'}</dd>
           </div>
           <div>
@@ -3925,7 +3913,7 @@ function AutomationsView() {
             </dd>
           </div>
           <div>
-            <dt>Horario</dt>
+            <dt>Horário</dt>
             <dd>{recoverySettings?.sendTime ?? '09:00'}</dd>
           </div>
           <div>
@@ -3982,7 +3970,7 @@ function WhatsAppView() {
       setMessages(nextMessages);
       setHealth(nextHealth);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar WhatsApp.');
     } finally {
       setLoading(false);
     }
@@ -4007,7 +3995,7 @@ function WhatsAppView() {
 
       setNotice('Painel WhatsApp atualizado.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar WhatsApp.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar WhatsApp.');
     } finally {
       setWorkingState('');
     }
@@ -4078,7 +4066,7 @@ function WhatsAppView() {
           },
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Nao foi possivel atualizar WhatsApp.');
+        setError(err instanceof Error ? err.message : 'Não foi possível atualizar WhatsApp.');
       }
     }
 
@@ -4140,7 +4128,7 @@ function WhatsAppView() {
       await loadMessagesOnly();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel concluir a operacao.');
+      setError(err instanceof Error ? err.message : 'Não foi possível concluir a operação.');
       return false;
     } finally {
       setWorkingState('');
@@ -4151,7 +4139,7 @@ function WhatsAppView() {
     if (!canStartWhatsAppAction(workingRef.current)) return;
 
     const confirmed = window.confirm(
-      'Deseja desconectar temporariamente este WhatsApp? A configuracao sera preservada.',
+      'Deseja desconectar temporariamente este WhatsApp? A configuração será preservada.',
     );
 
     if (!confirmed) return;
@@ -4172,7 +4160,7 @@ function WhatsAppView() {
     try {
       setWebhookInfo(await getWhatsAppWebhook());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar webhook.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar webhook.');
     } finally {
       setWorkingState('');
     }
@@ -4238,7 +4226,7 @@ function WhatsAppView() {
       startQrPolling();
     } catch (err) {
       void closeQrModal(false);
-      setError(err instanceof Error ? err.message : 'Nao foi possivel conectar WhatsApp.');
+      setError(err instanceof Error ? err.message : 'Não foi possível conectar WhatsApp.');
     } finally {
       setWorkingState('');
     }
@@ -4346,7 +4334,7 @@ function WhatsAppView() {
                   <dd>{displayPhone}</dd>
                 </div>
                 <div>
-                  <dt>Ultima verificacao</dt>
+                  <dt>Ultima verificação</dt>
                   <dd>
                     {connection.lastStatusAt
                       ? new Date(connection.lastStatusAt).toLocaleString('pt-BR')
@@ -4466,7 +4454,7 @@ function WhatsAppView() {
             {messages.map((message) => (
               <article key={message.id}>
                 <div>
-                  <strong>{message.client?.name ?? 'Cliente nao vinculado'}</strong>
+                  <strong>{message.client?.name ?? 'Cliente não vinculado'}</strong>
                   <span>{message.phone}</span>
                 </div>
                 <p>{message.body}</p>
@@ -4495,7 +4483,7 @@ function WhatsAppView() {
               Abra o WhatsApp no celular &rarr; Aparelhos conectados &rarr; Conectar aparelho &rarr;
               escaneie o QR Code.
             </p>
-            {/* QR Code vem como Data URI temporario da Kirago; next/image nao otimiza esse caso. */}
+            {/* QR Code vem como Data URI temporario da Kirago; next/image não otimiza esse caso. */}
             <div className="qr-frame">
               {qrCode ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -4533,7 +4521,7 @@ function WhatsAppView() {
               </div>
               <div>
                 <dt>Status</dt>
-                <dd>{connection?.webhookConfigured ? 'Configurado' : 'Nao configurado'}</dd>
+                <dd>{connection?.webhookConfigured ? 'Configurado' : 'Não configurado'}</dd>
               </div>
             </dl>
             <div className="button-row">
@@ -4611,7 +4599,7 @@ function WhatsAppView() {
                 <dd>{maskProviderUserId(connection?.providerUserId)}</dd>
               </div>
               <div>
-                <dt>Ultima verificacao</dt>
+                <dt>Ultima verificação</dt>
                 <dd>
                   {connection?.lastStatusAt
                     ? new Date(connection.lastStatusAt).toLocaleString('pt-BR')
@@ -4724,7 +4712,7 @@ function WaitlistView({
         );
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar a lista.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar a lista.');
     } finally {
       setLoading(false);
     }
@@ -4741,7 +4729,7 @@ function WaitlistView({
       const detail = await getWhatsAppPendingContact(contact.id);
       setSelected(detail);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel abrir o contato.');
+      setError(err instanceof Error ? err.message : 'Não foi possível abrir o contato.');
     }
   }
 
@@ -4757,7 +4745,7 @@ function WaitlistView({
       setSelected(updated);
       await loadWaitlist();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel ignorar o contato.');
+      setError(err instanceof Error ? err.message : 'Não foi possível ignorar o contato.');
     }
   }
 
@@ -4769,7 +4757,7 @@ function WaitlistView({
       setSelected(updated);
       await loadWaitlist();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel reabrir o contato.');
+      setError(err instanceof Error ? err.message : 'Não foi possível reabrir o contato.');
     }
   }
 
@@ -4828,7 +4816,7 @@ function WaitlistView({
                   <th>Ultimo contato</th>
                   <th>Mensagens</th>
                   <th>Status</th>
-                  <th>Acoes</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -4951,7 +4939,7 @@ function WaitlistView({
                   </article>
                 ))}
                 {!selected.inboundMessages?.length ? (
-                  <div className="empty-state">Abra um contato para ver o historico minimo.</div>
+                  <div className="empty-state">Abra um contato para ver o histórico mínimo.</div>
                 ) : null}
               </div>
             </>
@@ -5031,7 +5019,7 @@ function ApprovePendingContactModal({
       });
       await onApproved(client);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel aprovar o contato.');
+      setError(err instanceof Error ? err.message : 'Não foi possível aprovar o contato.');
     } finally {
       setLoading(false);
     }
@@ -5065,7 +5053,7 @@ function ApprovePendingContactModal({
               />
             </label>
             <label className="field">
-              <span>Referencia</span>
+              <span>Referência</span>
               <input
                 required
                 value={reference}
@@ -5106,7 +5094,7 @@ function ApprovePendingContactModal({
               />
             </label>
             <label className="field">
-              <span>Avisar cobranca</span>
+              <span>Avisar cobrança</span>
               <input
                 min="0"
                 type="number"
@@ -5116,7 +5104,7 @@ function ApprovePendingContactModal({
             </label>
           </div>
           <label className="field">
-            <span>Observacoes</span>
+            <span>Observações</span>
             <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
           </label>
           <label className="field">
@@ -5125,9 +5113,9 @@ function ApprovePendingContactModal({
           </label>
           <section className="inline-panel">
             <div>
-              <strong>Cobranca inicial</strong>
+              <strong>Cobrança inicial</strong>
               <p>
-                O cliente sera criado como pendente de pagamento. A ativacao acontece somente depois
+                O cliente será criado como pendente de pagamento. A ativação acontece somente depois
                 do primeiro pagamento.
               </p>
             </div>
@@ -5137,7 +5125,7 @@ function ApprovePendingContactModal({
                 type="checkbox"
                 onChange={(event) => setGenerateInitialReceivable(event.target.checked)}
               />
-              Gerar cobranca inicial
+              Gerar cobrança inicial
             </label>
             {generateInitialReceivable ? (
               <label className="checkbox-row">
@@ -5154,8 +5142,8 @@ function ApprovePendingContactModal({
               <span>
                 {name || 'Cliente'} ficara como Pendente pagamento
                 {generateInitialReceivable
-                  ? `, com cobranca inicial de ${formatCurrency(Number(recurringValue || 0))} para ${dueDate || 'data selecionada'}`
-                  : ', sem cobranca inicial gerada agora'}
+                  ? `, com cobrança inicial de ${formatCurrency(Number(recurringValue || 0))} para ${dueDate || 'data selecionada'}`
+                  : ', sem cobrança inicial gerada agora'}
                 {generateInitialReceivable && sendPixWhatsAppNow
                   ? ' e envio imediato do PIX.'
                   : '.'}
@@ -5192,12 +5180,12 @@ function messageTypePreview(type: WhatsAppInboundMessageType) {
     audio: '[Audio]',
     document: '[Documento]',
     sticker: '[Figurinha]',
-    location: '[Localizacao]',
-    live_location: '[Localizacao ao vivo]',
+    location: '[Localização]',
+    live_location: '[Localização ao vivo]',
     contact: '[Contato]',
     contacts: '[Contatos]',
-    reaction: '[Reacao]',
-    button_response: '[Resposta de botao]',
+    reaction: '[Reação]',
+    button_response: '[Resposta de botão]',
     list_response: '[Resposta de lista]',
     interactive_response: '[Resposta interativa]',
     unknown: '[Mensagem]',
@@ -5249,9 +5237,9 @@ function recoveryStepStatusLabel(status: RecoveryCampaign['steps'][number]['stat
 function messageOriginLabel(origin: MessageDispatch['origin']) {
   const labels: Record<MessageDispatch['origin'], string> = {
     MANUAL: 'Mensagem manual',
-    INITIAL_ACTIVATION: 'Ativacao inicial',
-    BILLING: 'Cobranca',
-    RECOVERY: 'Recuperacao',
+    INITIAL_ACTIVATION: 'Ativação inicial',
+    BILLING: 'Cobrança',
+    RECOVERY: 'Recuperação',
   };
 
   return labels[origin];
@@ -5336,7 +5324,7 @@ function ClientReferenceForm({
         referralRewardDescription: undefined,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar a referencia.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar a referência.');
     } finally {
       setSaving(false);
     }
@@ -5346,7 +5334,7 @@ function ClientReferenceForm({
     <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
       <div className="form-grid">
         <label className="field">
-          <span>Referencia</span>
+          <span>Referência</span>
           <input
             required
             value={referenceValue}
@@ -5387,17 +5375,17 @@ function ClientReferenceForm({
           />
         </label>
         <label className="field">
-          <span>Antecedencia da cobranca</span>
+          <span>Antecedência da cobrança</span>
           <input
             min="0"
             type="number"
             value={billingNoticeDays}
             onChange={(event) => setBillingNoticeDays(event.target.value)}
           />
-          <small>Define quantos dias antes do vencimento a cobranca automatica sera enviada.</small>
+          <small>Define quantos dias antes do vencimento a cobrança automática será enviada.</small>
         </label>
         <label className="field">
-          <span>Observacoes</span>
+          <span>Observações</span>
           <input value={notes} onChange={(event) => setNotes(event.target.value)} />
         </label>
       </div>
@@ -5408,7 +5396,7 @@ function ClientReferenceForm({
             Cancelar
           </button>
           <button className="primary-button" disabled={saving} type="submit">
-            {saving ? 'Salvando...' : reference ? 'Atualizar referencia' : 'Criar referencia'}
+            {saving ? 'Salvando...' : reference ? 'Atualizar referência' : 'Criar referência'}
           </button>
         </div>
       </div>
@@ -5458,7 +5446,7 @@ function RenewalModal({
       } catch (err) {
         if (active) {
           setPreview(null);
-          setError(err instanceof Error ? err.message : 'Nao foi possivel calcular a renovacao.');
+          setError(err instanceof Error ? err.message : 'Não foi possível calcular a renovação.');
         }
       } finally {
         if (active) setLoadingPreview(false);
@@ -5479,7 +5467,7 @@ function RenewalModal({
     try {
       await onConfirm({ planId, amount: Number(amount), idempotencyKey });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel confirmar a renovacao.');
+      setError(err instanceof Error ? err.message : 'Não foi possível confirmar a renovação.');
     } finally {
       setSaving(false);
     }
@@ -5489,7 +5477,7 @@ function RenewalModal({
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="renewal-title">
         <header className="modal-header">
-          <h2 id="renewal-title">Renovar referencia</h2>
+          <h2 id="renewal-title">Renovar referência</h2>
           <button className="icon-button" type="button" onClick={onClose}>
             <X aria-hidden="true" size={17} />
           </button>
@@ -5501,7 +5489,7 @@ function RenewalModal({
             <dd>{client.name}</dd>
           </div>
           <div>
-            <dt>Referencia</dt>
+            <dt>Referência</dt>
             <dd>{reference.reference}</dd>
           </div>
           <div>
@@ -5524,7 +5512,7 @@ function RenewalModal({
 
         {reference.status === 'CANCELADO' ? (
           <div className="notice warning">
-            Esta referencia esta CANCELADA. Ao confirmar a renovacao, ela sera reativada e voltara
+            Esta referência está CANCELADA. Ao confirmar a renovação, ela será reativada e voltará
             para o status ATIVO.
           </div>
         ) : null}
@@ -5579,7 +5567,7 @@ function RenewalModal({
               type="button"
               onClick={() => void handleConfirm()}
             >
-              {saving ? 'Confirmando...' : 'Confirmar renovacao'}
+              {saving ? 'Confirmando...' : 'Confirmar renovação'}
             </button>
           </div>
         </div>
@@ -5634,7 +5622,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       setEntries(nextEntries.items);
       setExpenses(nextExpenses.items);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar financeiro.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar financeiro.');
     } finally {
       setLoading(false);
     }
@@ -5688,7 +5676,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
           type="button"
           onClick={() => setTab('expenses')}
         >
-          Saidas
+          Saídas
         </button>
         <button
           className={tab === 'categories' ? 'active' : ''}
@@ -5707,7 +5695,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               ['A receber', summary.receivablePending],
               ['Vencido', summary.receivableOverdue],
               ['Entradas', summary.entries],
-              ['Saidas', summary.expenses],
+              ['Saídas', summary.expenses],
               ['Saldo', summary.balance],
             ] satisfies Array<[string, string]>
           ).map(([label, value]) => (
@@ -5725,7 +5713,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             <div className="search-row">
               <Search aria-hidden="true" size={18} />
               <input
-                placeholder="Buscar cliente, referencia ou descricao"
+                placeholder="Buscar cliente, referência ou descrição"
                 value={financeSearch}
                 onChange={(event) => setFinanceSearch(event.target.value)}
               />
@@ -5736,7 +5724,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                 setReceivableStatus(event.target.value as ReceivableDisplayStatus | '')
               }
             >
-              <option value="">Todas as situacoes</option>
+              <option value="">Todas as situações</option>
               <option value="PENDENTE">Pendente</option>
               <option value="VENCIDO">Vencido</option>
               <option value="PAGO">Pago</option>
@@ -5751,12 +5739,12 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               <thead>
                 <tr>
                   <th>Cliente</th>
-                  <th>Referencia</th>
-                  <th>Descricao</th>
+                  <th>Referência</th>
+                  <th>Descrição</th>
                   <th>Vencimento</th>
                   <th>Valor</th>
-                  <th>Situacao</th>
-                  <th>Acoes</th>
+                  <th>Situação</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -5989,7 +5977,7 @@ function TransactionSection({
     <>
       <div className="entity-form">
         <label className="field">
-          <span>Descricao</span>
+          <span>Descrição</span>
           <input
             value={form.description}
             onChange={(event) => setForm({ ...form, description: event.target.value })}
@@ -6041,7 +6029,7 @@ function TransactionSection({
           </select>
         </label>
         <label className="field">
-          <span>Observacao</span>
+          <span>Observação</span>
           <input
             value={form.notes}
             onChange={(event) => setForm({ ...form, notes: event.target.value })}
@@ -6057,7 +6045,7 @@ function TransactionSection({
             ) : null}
             <button className="primary-button" type="button" onClick={() => void submitForm()}>
               <DollarSign aria-hidden="true" size={16} />
-              {editing ? 'Atualizar' : kind === 'ENTRADA' ? 'Nova entrada' : 'Nova saida'}
+              {editing ? 'Atualizar' : kind === 'ENTRADA' ? 'Nova entrada' : 'Nova saída'}
             </button>
           </div>
         </div>
@@ -6068,12 +6056,12 @@ function TransactionSection({
           <thead>
             <tr>
               <th>Data</th>
-              <th>Descricao</th>
+              <th>Descrição</th>
               <th>Categoria</th>
               <th>Cliente</th>
               <th>Valor</th>
               <th>Origem</th>
-              <th>Acoes</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -6113,7 +6101,7 @@ function TransactionSection({
             ))}
           </tbody>
         </table>
-        {!items.length ? <div className="empty-state">Nenhuma movimentacao encontrada.</div> : null}
+        {!items.length ? <div className="empty-state">Nenhuma movimentação encontrada.</div> : null}
       </div>
     </>
   );
@@ -6175,7 +6163,7 @@ function FinancialCategoriesView({
               <th>Nome</th>
               <th>Tipo</th>
               <th>Status</th>
-              <th>Acoes</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -6240,7 +6228,7 @@ function PixReceivableModal({
           null,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar o PIX.');
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar o PIX.');
     } finally {
       setLoading(false);
     }
@@ -6262,7 +6250,7 @@ function PixReceivableModal({
       setNotice(success);
       await onChanged(success);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel atualizar o PIX.');
+      setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
     } finally {
       setBusy(false);
     }
@@ -6297,7 +6285,7 @@ function PixReceivableModal({
             <dd>{receivable.client?.name ?? '-'}</dd>
           </div>
           <div>
-            <dt>Descricao</dt>
+            <dt>Descrição</dt>
             <dd>{receivable.description}</dd>
           </div>
           <div>
@@ -6409,7 +6397,7 @@ function PixReceivableModal({
         ) : null}
 
         <div className="form-actions">
-          <span>{canCreateNew ? '' : 'Ja existe um PIX ativo para esta conta.'}</span>
+          <span>{canCreateNew ? '' : 'Já existe um PIX ativo para esta conta.'}</span>
           <div className="button-row">
             <button className="secondary-button" type="button" onClick={onClose}>
               Fechar
@@ -6471,7 +6459,7 @@ function PayReceivableModal({
             <dd>{receivable.client?.name ?? '-'}</dd>
           </div>
           <div>
-            <dt>Descricao</dt>
+            <dt>Descrição</dt>
             <dd>{receivable.description}</dd>
           </div>
           <div>
@@ -6503,7 +6491,7 @@ function PayReceivableModal({
             </select>
           </label>
           <label className="field">
-            <span>Observacao</span>
+            <span>Observação</span>
             <input value={notes} onChange={(event) => setNotes(event.target.value)} />
           </label>
         </div>
@@ -6614,10 +6602,10 @@ function PlansView({
           <thead>
             <tr>
               <th>Plano</th>
-              <th>Duracao</th>
-              <th>Valor padrao</th>
+              <th>Duração</th>
+              <th>Valor padrão</th>
               <th>Status</th>
-              <th>Acoes</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>

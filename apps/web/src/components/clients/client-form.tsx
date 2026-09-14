@@ -79,7 +79,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
 
       await onSubmit(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar o cliente.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar o cliente.');
     } finally {
       setLoading(false);
     }
@@ -104,7 +104,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
           </label>
           {!editing ? (
             <label className="field">
-              <span>Referencia</span>
+              <span>Referência</span>
               <input
                 required
                 value={reference}
@@ -156,7 +156,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
               />
             </label>
             <label className="field">
-              <span>Antecedencia da cobranca</span>
+              <span>Antecedência da cobrança</span>
               <input
                 min="0"
                 type="number"
@@ -172,7 +172,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
       <section className="form-section">
         <h2>Outros</h2>
         <label className="field">
-          <span>Observacoes</span>
+          <span>Observações</span>
           <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
         </label>
         {!editing ? (

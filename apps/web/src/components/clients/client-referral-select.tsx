@@ -102,8 +102,8 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
               type="button"
               onClick={() => selectOption(null)}
             >
-              <strong>Sem indicacao</strong>
-              <span>Nao vincular indicador</span>
+              <strong>Sem indicação</strong>
+              <span>Não vincular indicador</span>
             </button>
 
             {loading ? <div className="autocomplete-status">Carregando...</div> : null}
@@ -140,7 +140,7 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
             </span>
           </>
         ) : (
-          <span>Sem indicacao</span>
+          <span>Sem indicação</span>
         )}
       </div>
     </div>

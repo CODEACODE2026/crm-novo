@@ -893,12 +893,12 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (response.status === 401) {
     window.location.assign('/login');
-    throw new ApiError('Nao autenticado.', response.status);
+    throw new ApiError('Não autenticado.', response.status);
   }
 
   if (!response.ok) {
     const body = await parseJsonResponse<{ message?: string }>(response);
-    throw new ApiError(body?.message ?? 'Nao foi possivel concluir a operacao.', response.status);
+    throw new ApiError(body?.message ?? 'Não foi possível concluir a operação.', response.status);
   }
 
   return (await parseJsonResponse<T>(response)) as T;
@@ -1212,7 +1212,7 @@ export async function downloadReportCsv(type: ReportType, filters: ReportFilters
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? 'Nao foi possivel exportar CSV.');
+    throw new Error(body?.message ?? 'Não foi possível exportar CSV.');
   }
 
   return response.blob();

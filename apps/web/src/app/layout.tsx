@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'CRM Novo',
-  description: 'Gestao administrativa de clientes e recorrencias da Code a Code.',
+  description: 'Gestão administrativa de clientes e recorrências da Code a Code.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

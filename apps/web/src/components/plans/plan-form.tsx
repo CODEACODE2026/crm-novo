@@ -30,7 +30,7 @@ export function PlanForm({ plan, submitLabel, onSubmit }: PlanFormProps) {
         active,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar o plano.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar o plano.');
     } finally {
       setLoading(false);
     }
@@ -53,7 +53,7 @@ export function PlanForm({ plan, submitLabel, onSubmit }: PlanFormProps) {
         />
       </label>
       <label className="field">
-        <span>Valor padrao</span>
+        <span>Valor padrão</span>
         <input
           min="0"
           required

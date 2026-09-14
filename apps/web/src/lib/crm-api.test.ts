@@ -29,7 +29,7 @@ describe('CRM UI formatters', () => {
 
     await expect(apiFetch('/whatsapp/connection', { method: 'POST' })).rejects.toMatchObject({
       name: 'ApiError',
-      message: 'Nao foi possivel concluir a operacao.',
+      message: 'Não foi possível concluir a operação.',
       status: 500,
     } satisfies Partial<ApiError>);
   });

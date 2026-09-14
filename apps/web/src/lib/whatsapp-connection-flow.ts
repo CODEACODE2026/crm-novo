@@ -195,7 +195,7 @@ export function createWhatsAppQrPoller(options: WhatsAppQrPollerOptions): WhatsA
     } catch (error) {
       stop();
       options.onError(
-        error instanceof Error ? error.message : 'Nao foi possivel conectar WhatsApp.',
+        error instanceof Error ? error.message : 'Não foi possível conectar WhatsApp.',
       );
     } finally {
       inFlight = false;

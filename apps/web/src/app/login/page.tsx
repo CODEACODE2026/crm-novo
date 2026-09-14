@@ -30,7 +30,7 @@ export default function LoginPage() {
 
       window.location.assign('/dashboard');
     } catch {
-      setError('Nao foi possivel conectar a API.');
+      setError('Não foi possível conectar a API.');
     } finally {
       setLoading(false);
     }

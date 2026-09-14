@@ -193,6 +193,8 @@ model User {
   updatedAt             DateTime               @updatedAt
   createdClientEvents   ClientEvent[]          @relation("ClientEventCreatedBy")
   changedClientStatuses ClientStatusHistory[]  @relation("ClientStatusChangedBy")
+  inactivatedReferences ClientReference[]      @relation("ClientReferenceInactivatedBy")
+  canceledReferences    ClientReference[]      @relation("ClientReferenceCanceledBy")
   createdRenewals       Renewal[]              @relation("RenewalCreatedBy")
   createdTransactions   FinancialTransaction[] @relation("FinancialTransactionCreatedBy")
   createdReferrals      Referral[]             @relation("ReferralCreatedBy")
@@ -264,10 +266,18 @@ model ClientReference {
   billingNoticeDays     Int
   status                ClientStatus           @default(ATIVO)
   notes                 String?
+  inactivatedAt         DateTime?
+  inactivationReason    String?
+  inactivatedByUserId   String?                @db.Uuid
+  canceledAt            DateTime?
+  cancellationReason    String?
+  canceledByUserId      String?                @db.Uuid
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
   client                Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
   plan                  Plan                   @relation(fields: [planId], references: [id], onDelete: Restrict)
+  inactivatedBy         User?                  @relation("ClientReferenceInactivatedBy", fields: [inactivatedByUserId], references: [id], onDelete: SetNull)
+  canceledBy            User?                  @relation("ClientReferenceCanceledBy", fields: [canceledByUserId], references: [id], onDelete: SetNull)
   renewals              Renewal[]
   receivables           Receivable[]
   recoveryCampaigns     RecoveryCampaign[]
@@ -281,6 +291,8 @@ model ClientReference {
   @@index([planId])
   @@index([status])
   @@index([dueDate])
+  @@index([inactivatedAt])
+  @@index([canceledAt])
   @@index([createdAt])
   @@map("client_references")
 }
@@ -391,10 +403,34 @@ model BillingAutomationSettings {
   @@map("billing_automation_settings")
 }
 
+model RecoveryAutomationSettings {
+  id                  String   @id @default(uuid()) @db.Uuid
+  scope               String   @unique @default("global")
+  enabled             Boolean  @default(false)
+  sendTime            String   @default("09:00") @db.VarChar(5)
+  timezone            String   @default("America/Sao_Paulo")
+  sendIntervalSeconds Int      @default(8)
+  day3Enabled         Boolean  @default(true)
+  day3OffsetDays      Int      @default(3)
+  day10Enabled        Boolean  @default(true)
+  day10OffsetDays     Int      @default(7)
+  day15Enabled        Boolean  @default(true)
+  day15OffsetDays     Int      @default(15)
+  day30Enabled        Boolean  @default(true)
+  day30OffsetDays     Int      @default(30)
+  companyId           String?  @db.Uuid
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([companyId])
+  @@map("recovery_automation_settings")
+}
+
 model RecoveryCampaign {
   id                String                 @id @default(uuid()) @db.Uuid
   clientId          String                 @db.Uuid
   clientReferenceId String                 @db.Uuid
+  receivableId      String?                @db.Uuid
   status            RecoveryCampaignStatus @default(ATIVA)
   startedAt         DateTime
   completedAt       DateTime?
@@ -404,11 +440,13 @@ model RecoveryCampaign {
   updatedAt         DateTime               @updatedAt
   client            Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
   clientReference   ClientReference        @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  receivable        Receivable?            @relation(fields: [receivableId], references: [id], onDelete: Restrict)
   steps             RecoveryCampaignStep[]
   messageDispatches MessageDispatch[]
 
   @@index([clientId])
   @@index([clientReferenceId])
+  @@index([receivableId])
   @@index([status])
   @@index([startedAt])
   @@map("recovery_campaigns")
@@ -582,6 +620,7 @@ model Receivable {
   clientReference    ClientReference       @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
   renewal            Renewal?              @relation(fields: [renewalId], references: [id], onDelete: Restrict)
   paymentTransaction FinancialTransaction?
+  recoveryCampaigns  RecoveryCampaign[]
   messageDispatches  MessageDispatch[]
   paymentIntents     PaymentIntent[]
   billingResponses   BillingResponse[]

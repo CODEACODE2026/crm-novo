@@ -59,6 +59,12 @@ export interface ClientReference {
   billingNoticeDays: number;
   status: ClientStatus;
   notes: string | null;
+  inactivatedAt: string | null;
+  inactivationReason: string | null;
+  inactivatedByUserId: string | null;
+  canceledAt: string | null;
+  cancellationReason: string | null;
+  canceledByUserId: string | null;
   createdAt: string;
   updatedAt: string;
   plan: Plan;
@@ -547,6 +553,32 @@ export interface BillingAutomationSettings {
   updatedAt: string;
 }
 
+export interface RecoveryAutomationStepSettings {
+  stepNumber: number;
+  enabled: boolean;
+  offsetDays: number;
+  templateType: MessageTemplate['type'];
+}
+
+export interface RecoveryAutomationSettings {
+  id: string;
+  enabled: boolean;
+  sendTime: string;
+  timezone: 'America/Sao_Paulo';
+  sendIntervalSeconds: number;
+  steps: RecoveryAutomationStepSettings[];
+  day3Enabled: boolean;
+  day3OffsetDays: number;
+  day10Enabled: boolean;
+  day10OffsetDays: number;
+  day15Enabled: boolean;
+  day15OffsetDays: number;
+  day30Enabled: boolean;
+  day30OffsetDays: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MessageTemplate {
   id: string;
   name: string;
@@ -589,6 +621,8 @@ export interface RecoveryCampaignStep {
 export interface RecoveryCampaign {
   id: string;
   clientId: string;
+  clientReferenceId: string;
+  receivableId: string;
   status: RecoveryCampaignStatus;
   startedAt: string;
   completedAt: string | null;
@@ -597,6 +631,12 @@ export interface RecoveryCampaign {
   createdAt?: string;
   updatedAt?: string;
   client?: Pick<Client, 'id' | 'name' | 'reference' | 'status'> & { planName?: string | null };
+  clientReference?: Pick<ClientReference, 'id' | 'reference' | 'status'>;
+  receivable:
+    | (Pick<Receivable, 'id' | 'description' | 'amount' | 'dueDate' | 'status'> & {
+        daysOverdue: number;
+      })
+    | null;
   steps: RecoveryCampaignStep[];
 }
 
@@ -744,6 +784,11 @@ export interface PaginatedClients {
     total: number;
     totalPages: number;
   };
+}
+
+export interface RemovalPreview<TTarget> {
+  target: TTarget;
+  counts: Record<string, number>;
 }
 
 export interface ClientOption {
@@ -950,18 +995,12 @@ export function updateClient(id: string, payload: ClientUpdatePayload) {
   });
 }
 
-export function updateClientStatus(
-  id: string,
-  status: ClientStatus,
-  reason?: string,
-  startRecovery?: boolean,
-) {
+export function updateClientStatus(id: string, status: ClientStatus, reason?: string) {
   return apiFetch<Client>(`/clients/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({
       status,
       ...(reason ? { reason } : {}),
-      ...(startRecovery ? { startRecovery } : {}),
     }),
   });
 }
@@ -994,16 +1033,40 @@ export function updateClientReferenceStatus(
   referenceId: string,
   status: ClientStatus,
   reason?: string,
-  startRecovery?: boolean,
 ) {
   return apiFetch<ClientReference>(`/clients/references/${referenceId}/status`, {
     method: 'POST',
     body: JSON.stringify({
       status,
       ...(reason ? { reason } : {}),
-      ...(startRecovery ? { startRecovery } : {}),
     }),
   });
+}
+
+export function deleteClientReference(referenceId: string, confirmation: 'REMOVER') {
+  return apiFetch<{ id: string; removed: true; counts: Record<string, number> }>(
+    `/clients/references/${referenceId}`,
+    { method: 'DELETE', body: JSON.stringify({ confirmation }) },
+  );
+}
+
+export function deleteClient(id: string, confirmation: 'REMOVER') {
+  return apiFetch<{ id: string; removed: true; counts: Record<string, number> }>(`/clients/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
+export function previewDeleteClientReference(referenceId: string) {
+  return apiFetch<RemovalPreview<ClientReference>>(
+    `/clients/references/${referenceId}/deletion-preview`,
+  );
+}
+
+export function previewDeleteClient(id: string) {
+  return apiFetch<RemovalPreview<Pick<Client, 'id' | 'name' | 'reference'>>>(
+    `/clients/${id}/deletion-preview`,
+  );
 }
 
 export function previewRenewal(clientId: string, payload: { planId: string; amount: number }) {
@@ -1491,6 +1554,35 @@ export function previewMessageTemplate(
 
 export function getRecoverySummary() {
   return apiFetch<RecoverySummary>('/recovery/summary');
+}
+
+export function getRecoveryAutomationSettings() {
+  return apiFetch<RecoveryAutomationSettings>('/recovery/automation-settings');
+}
+
+export function updateRecoveryAutomationSettings(
+  payload: Partial<
+    Pick<
+      RecoveryAutomationSettings,
+      | 'enabled'
+      | 'sendTime'
+      | 'timezone'
+      | 'sendIntervalSeconds'
+      | 'day3Enabled'
+      | 'day3OffsetDays'
+      | 'day10Enabled'
+      | 'day10OffsetDays'
+      | 'day15Enabled'
+      | 'day15OffsetDays'
+      | 'day30Enabled'
+      | 'day30OffsetDays'
+    >
+  >,
+) {
+  return apiFetch<RecoveryAutomationSettings>('/recovery/automation-settings', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listRecoveryCampaigns(

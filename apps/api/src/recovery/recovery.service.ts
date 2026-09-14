@@ -13,27 +13,55 @@ import {
   type MessageTemplate,
   type Plan,
   Prisma,
+  type Receivable,
+  type RecoveryAutomationSettings,
   type RecoveryCampaign,
   type RecoveryCampaignStep,
   type WhatsAppConnection,
 } from '@prisma/client';
 import { BillingTemplateRenderer } from '../billing/billing-template-renderer';
-import { formatBusinessDate } from '../clients/utils/business-date';
+import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
 import { ListRecoveryCampaignsDto } from './dto/list-recovery-campaigns.dto';
+import { UpdateRecoveryAutomationSettingsDto } from './dto/update-recovery-automation-settings.dto';
 
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
 const pageSizeLimit = 100;
-const recoverySteps = [
-  { stepNumber: 1, delayDays: 3, templateType: 'RECOVERY_DAY_3' as const },
-  { stepNumber: 2, delayDays: 10, templateType: 'RECOVERY_DAY_10' as const },
-  { stepNumber: 3, delayDays: 15, templateType: 'RECOVERY_DAY_15' as const },
-  { stepNumber: 4, delayDays: 30, templateType: 'RECOVERY_DAY_30' as const },
-];
+const defaultRecoverySendTime = '09:00';
+const defaultRecoveryTimezone = 'America/Sao_Paulo';
+const defaultRecoverySendIntervalSeconds = 8;
+const minRecoverySendIntervalSeconds = 3;
+const maxRecoverySendIntervalSeconds = 300;
+const recoveryStepTemplates = [
+  {
+    stepNumber: 1,
+    enabledKey: 'day3Enabled',
+    offsetKey: 'day3OffsetDays',
+    templateType: 'RECOVERY_DAY_3' as const,
+  },
+  {
+    stepNumber: 2,
+    enabledKey: 'day10Enabled',
+    offsetKey: 'day10OffsetDays',
+    templateType: 'RECOVERY_DAY_10' as const,
+  },
+  {
+    stepNumber: 3,
+    enabledKey: 'day15Enabled',
+    offsetKey: 'day15OffsetDays',
+    templateType: 'RECOVERY_DAY_15' as const,
+  },
+  {
+    stepNumber: 4,
+    enabledKey: 'day30Enabled',
+    offsetKey: 'day30OffsetDays',
+    templateType: 'RECOVERY_DAY_30' as const,
+  },
+] as const;
 
 type Transaction = Prisma.TransactionClient;
 type RecoveryClient = Client & { plan: Plan };
@@ -41,6 +69,7 @@ type RecoveryReference = ClientReference & { client: Client; plan: Plan };
 type RecoveryCampaignWithRelations = RecoveryCampaign & {
   client: RecoveryClient;
   clientReference: ClientReference & { client: Client; plan: Plan };
+  receivable: Receivable | null;
   steps: Array<
     RecoveryCampaignStep & {
       template: MessageTemplate | null;
@@ -48,9 +77,15 @@ type RecoveryCampaignWithRelations = RecoveryCampaign & {
     }
   >;
 };
+type RecoveryStepConfig = {
+  stepNumber: number;
+  delayDays: number;
+  templateType: (typeof recoveryStepTemplates)[number]['templateType'];
+};
 type RecoveryDispatch = MessageDispatch & {
   client: RecoveryClient | null;
   clientReference: RecoveryReference | null;
+  receivable: Receivable | null;
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
   recoveryCampaign:
@@ -72,30 +107,16 @@ export class RecoveryService {
   ) {}
 
   async handleClientStatusChange(
-    tx: Transaction,
+    tx: Transaction | PrismaService,
     client: RecoveryClient,
     nextStatus: 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO',
-    options: { startRecovery?: boolean; actorUserId?: string; changedAt?: Date } = {},
+    options: { actorUserId?: string } = {},
   ) {
-    const changedAt = options.changedAt ?? new Date();
-
     if (nextStatus === 'INATIVO') {
-      if (options.startRecovery) {
-        await this.startCampaign(tx, client, changedAt, options.actorUserId);
-      } else {
-        await this.cancelActiveCampaigns(
-          tx,
-          client.id,
-          'RECOVERY_NOT_REQUESTED',
-          'Recuperacao automatica nao solicitada na inativacao.',
-          options.actorUserId,
-        );
-      }
       return;
     }
 
     if (nextStatus === 'ATIVO') {
-      await this.cancelActiveCampaignsAfterReactivation(tx, client.id, options.actorUserId);
       return;
     }
 
@@ -114,33 +135,13 @@ export class RecoveryService {
     tx: Transaction,
     reference: RecoveryReference,
     nextStatus: 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO',
-    options: { startRecovery?: boolean; actorUserId?: string; changedAt?: Date } = {},
+    options: { actorUserId?: string } = {},
   ) {
-    const changedAt = options.changedAt ?? new Date();
-    const recoveryClient = this.referenceAsRecoveryClient(reference);
-
     if (nextStatus === 'INATIVO') {
-      if (options.startRecovery) {
-        await this.startCampaign(tx, recoveryClient, changedAt, options.actorUserId, reference.id);
-      } else {
-        await this.cancelActiveReferenceCampaigns(
-          tx,
-          reference.id,
-          'RECOVERY_NOT_REQUESTED',
-          'Recuperacao automatica nao solicitada na inativacao da referencia.',
-          options.actorUserId,
-        );
-      }
       return;
     }
 
     if (nextStatus === 'ATIVO') {
-      await this.cancelActiveCampaignsAfterReactivation(
-        tx,
-        reference.clientId,
-        options.actorUserId,
-        reference.id,
-      );
       return;
     }
 
@@ -156,11 +157,25 @@ export class RecoveryService {
   }
 
   async reconcile() {
+    const today = this.today();
+    const overdueReceivables = await this.prisma.receivable.findMany({
+      where: {
+        status: 'PENDENTE',
+        dueDate: { lt: today },
+        clientReference: { status: { in: ['ATIVO', 'INATIVO'] } },
+      },
+      include: {
+        client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
+      },
+      orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    });
     const campaigns = await this.prisma.recoveryCampaign.findMany({
       where: { status: 'ATIVA' },
       include: {
         client: { include: { plan: true } },
         clientReference: { include: { client: true, plan: true } },
+        receivable: true,
         steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
       },
     });
@@ -168,16 +183,59 @@ export class RecoveryService {
     let kept = 0;
     let created = 0;
     let canceled = 0;
-    const completed = 0;
+    let completed = 0;
+    const activeReceivableIds = new Set(
+      campaigns.map((campaign) => campaign.receivableId).filter(Boolean),
+    );
+
+    for (const receivable of overdueReceivables) {
+      if (activeReceivableIds.has(receivable.id)) {
+        continue;
+      }
+
+      const campaign = await this.startCampaignForReceivable(this.prisma, receivable);
+
+      if (campaign) {
+        created += 1;
+        activeReceivableIds.add(receivable.id);
+      }
+    }
 
     for (const campaign of campaigns) {
-      if (campaign.clientReference.status === 'ATIVO') {
+      if (!campaign.receivable) {
         await this.prisma.$transaction((tx) =>
-          this.cancelActiveCampaignsAfterReactivation(
+          this.cancelCampaignById(
             tx,
-            campaign.clientId,
+            campaign.id,
+            'Campanha legada sem conta a receber vinculada.',
+            'LEGACY_RECOVERY_WITHOUT_RECEIVABLE',
             undefined,
-            campaign.clientReferenceId,
+          ),
+        );
+        canceled += 1;
+        continue;
+      }
+
+      if (campaign.receivable.status === 'PAGO') {
+        await this.prisma.$transaction((tx) =>
+          this.closeActiveReceivableCampaigns(
+            tx,
+            campaign.receivableId!,
+            'RECEIVABLE_PAID',
+            'Conta a receber paga durante campanha de recuperacao.',
+          ),
+        );
+        completed += 1;
+        continue;
+      }
+
+      if (campaign.receivable.status !== 'PENDENTE') {
+        await this.prisma.$transaction((tx) =>
+          this.closeActiveReceivableCampaigns(
+            tx,
+            campaign.receivableId!,
+            'RECEIVABLE_NOT_PENDING',
+            'Conta a receber deixou de estar pendente.',
           ),
         );
         canceled += 1;
@@ -207,7 +265,14 @@ export class RecoveryService {
     return { kept, created, canceled, completed };
   }
 
-  async processDue(now = new Date(), limit = 20) {
+  async processDue(now = new Date(), limit = 20, options: { automatic?: boolean } = {}) {
+    const settings = await this.getAutomationSettings();
+
+    if (options.automatic && !settings.enabled) {
+      return { processed: 0, results: [], skipped: 'RECOVERY_AUTOMATION_DISABLED' };
+    }
+
+    const effectiveLimit = options.automatic ? 1 : Math.max(Math.min(limit, 100), 1);
     const candidates = await this.prisma.messageDispatch.findMany({
       where: {
         origin: 'RECOVERY',
@@ -217,7 +282,7 @@ export class RecoveryService {
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
       orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
-      take: limit,
+      take: effectiveLimit,
     });
 
     const results = [];
@@ -247,6 +312,41 @@ export class RecoveryService {
     return { active, completed, canceled, scheduled, failed };
   }
 
+  async getSettings() {
+    return this.presentSettings(await this.getAutomationSettings());
+  }
+
+  async updateSettings(dto: UpdateRecoveryAutomationSettingsDto) {
+    const current = await this.getAutomationSettings();
+    const nextValues = {
+      enabled: dto.enabled ?? current.enabled,
+      sendTime: dto.sendTime ?? current.sendTime,
+      timezone: dto.timezone ?? current.timezone,
+      sendIntervalSeconds: dto.sendIntervalSeconds ?? current.sendIntervalSeconds,
+      day3Enabled: dto.day3Enabled ?? current.day3Enabled,
+      day3OffsetDays: dto.day3OffsetDays ?? current.day3OffsetDays,
+      day10Enabled: dto.day10Enabled ?? current.day10Enabled,
+      day10OffsetDays: dto.day10OffsetDays ?? current.day10OffsetDays,
+      day15Enabled: dto.day15Enabled ?? current.day15Enabled,
+      day15OffsetDays: dto.day15OffsetDays ?? current.day15OffsetDays,
+      day30Enabled: dto.day30Enabled ?? current.day30Enabled,
+      day30OffsetDays: dto.day30OffsetDays ?? current.day30OffsetDays,
+    };
+
+    this.validateSettings(nextValues);
+
+    const next = await this.prisma.recoveryAutomationSettings.update({
+      where: { scope: 'global' },
+      data: nextValues,
+    });
+
+    if (next.enabled) {
+      await this.reconcile();
+    }
+
+    return this.presentSettings(next);
+  }
+
   async listCampaigns(query: ListRecoveryCampaignsDto) {
     const page = query.page ?? 1;
     const pageSize = Math.min(query.pageSize ?? 20, pageSizeLimit);
@@ -274,6 +374,7 @@ export class RecoveryService {
         include: {
           client: { include: { plan: true } },
           clientReference: { include: { client: true, plan: true } },
+          receivable: true,
           steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
         },
         orderBy: [{ status: 'asc' }, { startedAt: 'desc' }],
@@ -300,6 +401,7 @@ export class RecoveryService {
       include: {
         client: { include: { plan: true } },
         clientReference: { include: { client: true, plan: true } },
+        receivable: true,
         steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
       },
     });
@@ -338,6 +440,8 @@ export class RecoveryService {
     startedAt: Date,
     actorUserId?: string,
     clientReferenceId?: string,
+    receivableId?: string,
+    settings?: RecoveryAutomationSettings,
   ) {
     if (client.status === 'CANCELADO') {
       return null;
@@ -345,8 +449,7 @@ export class RecoveryService {
 
     const existing = await tx.recoveryCampaign.findFirst({
       where: {
-        clientId: client.id,
-        ...(clientReferenceId ? { clientReferenceId } : {}),
+        ...(receivableId ? { receivableId } : { clientId: client.id }),
         status: 'ATIVA',
       },
     });
@@ -355,27 +458,45 @@ export class RecoveryService {
       return existing;
     }
 
+    const effectiveSettings = settings ?? (await this.getAutomationSettings(tx));
+    const stepsConfig = this.buildRecoverySteps(effectiveSettings);
+
+    if (!stepsConfig.length) {
+      return null;
+    }
+
     const templates = await this.ensureRecoveryTemplates(tx);
     const connection = await this.findOperationalConnection(tx, null);
     const campaign = await tx.recoveryCampaign.create({
       data: {
         clientId: client.id,
         clientReferenceId: clientReferenceId ?? (await this.findPrimaryReferenceId(tx, client.id)),
+        receivableId: receivableId ?? (await this.findPrimaryReceivableId(tx, client.id)),
         status: 'ATIVA',
         startedAt,
       },
     });
 
-    for (const step of recoverySteps) {
+    for (const step of stepsConfig) {
       const template = templates.get(step.templateType);
 
       if (!template) {
         throw new BadRequestException(`Template ${step.templateType} indisponivel.`);
       }
 
-      const scheduledFor = this.calculateScheduledFor(startedAt, step.delayDays);
+      const scheduledFor = await this.calculateThrottledScheduledFor(
+        tx,
+        startedAt,
+        step.delayDays,
+        effectiveSettings,
+      );
       const renderedContent = this.renderForClient(template.content, client);
-      const idempotencyKey = this.buildIdempotencyKey(client.id, campaign.id, step.stepNumber);
+      const idempotencyKey = this.buildIdempotencyKey(
+        client.id,
+        campaign.receivableId!,
+        campaign.id,
+        step.stepNumber,
+      );
       const createdStep = await tx.recoveryCampaignStep.create({
         data: {
           campaignId: campaign.id,
@@ -390,6 +511,7 @@ export class RecoveryService {
         data: {
           clientId: client.id,
           clientReferenceId: clientReferenceId ?? campaign.clientReferenceId,
+          receivableId: campaign.receivableId!,
           recoveryCampaignId: campaign.id,
           templateId: template.id,
           whatsAppConnectionId: connection?.id ?? null,
@@ -416,7 +538,9 @@ export class RecoveryService {
         clientId: client.id,
         type: 'RECOVERY_CAMPAIGN_STARTED',
         title: 'Campanha automatica de recuperacao iniciada.',
-        description: 'Etapas agendadas: 3, 10, 15 e 30 dias.',
+        description: `Etapas agendadas: ${stepsConfig
+          .map((step) => `${step.delayDays} dias`)
+          .join(', ')}.`,
         metadata: { recoveryCampaignId: campaign.id },
         ...(actorUserId ? { createdByUserId: actorUserId } : {}),
       },
@@ -425,14 +549,42 @@ export class RecoveryService {
     return campaign;
   }
 
+  private async startCampaignForReceivable(
+    tx: Transaction | PrismaService,
+    receivable: Receivable & {
+      client: RecoveryClient;
+      clientReference: RecoveryReference;
+    },
+  ) {
+    if (receivable.clientReference.status === 'CANCELADO' || receivable.status !== 'PENDENTE') {
+      return null;
+    }
+
+    return this.startCampaign(
+      tx,
+      {
+        ...this.referenceAsRecoveryClient(receivable.clientReference),
+        recurringValue: receivable.amount,
+        dueDate: receivable.dueDate,
+      },
+      receivable.dueDate,
+      undefined,
+      receivable.clientReferenceId,
+      receivable.id,
+    );
+  }
+
   private async reconcileCampaign(campaign: RecoveryCampaignWithRelations) {
     let kept = 0;
     let created = 0;
     let canceled = 0;
+    const settings = await this.getAutomationSettings(this.prisma);
+    const stepsConfig = this.buildRecoverySteps(settings);
+    const expectedStepNumbers = new Set(stepsConfig.map((step) => step.stepNumber));
     const templates = await this.ensureRecoveryTemplates(this.prisma);
     const connection = await this.findOperationalConnection(this.prisma, null);
 
-    for (const expected of recoverySteps) {
+    for (const expected of stepsConfig) {
       const step = campaign.steps.find((item) => item.stepNumber === expected.stepNumber);
       const template = templates.get(expected.templateType);
 
@@ -447,18 +599,75 @@ export class RecoveryService {
       }
 
       if (step?.dispatch) {
+        if (
+          ['SCHEDULED', 'FAILED'].includes(step.status) &&
+          ['SCHEDULED', 'FAILED'].includes(step.dispatch.status)
+        ) {
+          const nextScheduledFor = await this.calculateThrottledScheduledFor(
+            this.prisma,
+            campaign.startedAt,
+            expected.delayDays,
+            settings,
+            step.dispatch.id,
+          );
+
+          if (
+            step.delayDays !== expected.delayDays ||
+            step.scheduledFor.getTime() !== nextScheduledFor.getTime() ||
+            step.templateId !== template.id ||
+            step.dispatch.templateId !== template.id
+          ) {
+            const renderedContent = this.renderForClient(
+              template.content,
+              this.referenceAsRecoveryClient(campaign.clientReference),
+            );
+
+            await this.prisma.$transaction(async (tx) => {
+              await tx.recoveryCampaignStep.update({
+                where: { id: step.id },
+                data: {
+                  delayDays: expected.delayDays,
+                  scheduledFor: nextScheduledFor,
+                  templateId: template.id,
+                  status: 'SCHEDULED',
+                },
+              });
+              await tx.messageDispatch.update({
+                where: { id: step.dispatch!.id },
+                data: {
+                  templateId: template.id,
+                  body: renderedContent,
+                  renderedContent,
+                  scheduledFor: nextScheduledFor,
+                  nextAttemptAt: nextScheduledFor,
+                  status: 'SCHEDULED',
+                  errorCode: null,
+                  errorMessage: null,
+                  whatsAppConnectionId: connection?.id ?? step.dispatch!.whatsAppConnectionId,
+                },
+              });
+            });
+          }
+        }
         kept += 1;
         continue;
       }
 
       const scheduledFor =
-        step?.scheduledFor ?? this.calculateScheduledFor(campaign.startedAt, expected.delayDays);
+        step?.scheduledFor ??
+        (await this.calculateThrottledScheduledFor(
+          this.prisma,
+          campaign.startedAt,
+          expected.delayDays,
+          settings,
+        ));
       const renderedContent = this.renderForClient(
         template.content,
         this.referenceAsRecoveryClient(campaign.clientReference),
       );
       const idempotencyKey = this.buildIdempotencyKey(
         campaign.clientId,
+        campaign.receivableId!,
         campaign.id,
         expected.stepNumber,
       );
@@ -510,6 +719,17 @@ export class RecoveryService {
       }
     }
 
+    for (const staleStep of campaign.steps.filter(
+      (step) => !expectedStepNumbers.has(step.stepNumber),
+    )) {
+      canceled += await this.cancelStepAndDispatch(
+        this.prisma,
+        staleStep,
+        'RECOVERY_STEP_DISABLED',
+        'Etapa de recuperacao desativada na configuracao.',
+      );
+    }
+
     return { kept, created, canceled };
   }
 
@@ -539,6 +759,7 @@ export class RecoveryService {
       include: {
         client: { include: { plan: true } },
         clientReference: { include: { client: true, plan: true } },
+        receivable: true,
         template: true,
         whatsAppConnection: true,
         recoveryCampaign: { include: { steps: true } },
@@ -597,6 +818,7 @@ export class RecoveryService {
           include: {
             client: { include: { plan: true } },
             clientReference: { include: { client: true, plan: true } },
+            receivable: true,
             template: true,
             whatsAppConnection: true,
             recoveryCampaign: { include: { steps: true } },
@@ -644,18 +866,6 @@ export class RecoveryService {
 
     const referenceStatus = dispatch.clientReference?.status ?? dispatch.client.status;
 
-    if (referenceStatus === 'ATIVO') {
-      await this.prisma.$transaction((tx) =>
-        this.cancelActiveCampaignsAfterReactivation(
-          tx,
-          dispatch.client!.id,
-          undefined,
-          dispatch.clientReferenceId ?? undefined,
-        ),
-      );
-      return { code: 'CLIENT_REACTIVATED', message: 'Referencia reativada antes do envio.' };
-    }
-
     if (referenceStatus === 'CANCELADO') {
       await this.prisma.$transaction((tx) =>
         dispatch.clientReferenceId
@@ -677,8 +887,52 @@ export class RecoveryService {
       return { code: 'CLIENT_CANCELED', message: 'Referencia cancelada antes do envio.' };
     }
 
-    if (referenceStatus !== 'INATIVO') {
-      return { code: 'CLIENT_NOT_INACTIVE', message: 'Referencia nao esta inativa.' };
+    if (referenceStatus !== 'ATIVO' && referenceStatus !== 'INATIVO') {
+      return {
+        code: 'CLIENT_REFERENCE_NOT_RECOVERABLE',
+        message: 'Referencia nao esta elegivel para recuperacao financeira.',
+      };
+    }
+
+    if (!dispatch.receivable) {
+      return {
+        code: 'RECEIVABLE_MISSING',
+        message: 'Conta a receber da recuperacao nao encontrada.',
+      };
+    }
+
+    if (dispatch.receivable.status === 'PAGO') {
+      await this.prisma.$transaction((tx) =>
+        this.closeActiveReceivableCampaigns(
+          tx,
+          dispatch.receivable!.id,
+          'RECEIVABLE_PAID',
+          'Conta a receber paga durante campanha de recuperacao.',
+        ),
+      );
+      return { code: 'RECEIVABLE_PAID', message: 'Conta a receber paga antes do envio.' };
+    }
+
+    if (dispatch.receivable.status !== 'PENDENTE') {
+      await this.prisma.$transaction((tx) =>
+        this.closeActiveReceivableCampaigns(
+          tx,
+          dispatch.receivable!.id,
+          'RECEIVABLE_NOT_PENDING',
+          'Conta a receber deixou de estar pendente.',
+        ),
+      );
+      return {
+        code: 'RECEIVABLE_NOT_PENDING',
+        message: 'Conta a receber deixou de estar pendente.',
+      };
+    }
+
+    if (dispatch.receivableId !== dispatch.recoveryCampaign?.receivableId) {
+      return {
+        code: 'RECOVERY_RECEIVABLE_MISMATCH',
+        message: 'Campanha de recuperacao nao corresponde a conta a receber.',
+      };
     }
 
     if (!dispatch.recoveryCampaign || dispatch.recoveryCampaign.status !== 'ATIVA') {
@@ -702,6 +956,7 @@ export class RecoveryService {
     if (
       !intent ||
       intent.clientId !== dispatch.client.id ||
+      intent.receivableId !== dispatch.receivable.id ||
       intent.campaignId !== dispatch.recoveryCampaign.id ||
       intent.stepNumber !== dispatch.recoveryStep.stepNumber
     ) {
@@ -725,10 +980,14 @@ export class RecoveryService {
     errorCode: string,
     errorMessage: string,
   ) {
-    const status =
-      errorCode === 'CLIENT_CANCELED' || errorCode === 'RECOVERY_NOT_ACTIVE'
-        ? 'CANCELED'
-        : 'IGNORED';
+    const status = [
+      'CLIENT_CANCELED',
+      'RECOVERY_NOT_ACTIVE',
+      'RECEIVABLE_PAID',
+      'RECEIVABLE_NOT_PENDING',
+    ].includes(errorCode)
+      ? 'CANCELED'
+      : 'IGNORED';
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.messageDispatch.update({
         where: { id: dispatch.id },
@@ -736,6 +995,7 @@ export class RecoveryService {
         include: {
           client: { include: { plan: true } },
           clientReference: { include: { client: true, plan: true } },
+          receivable: true,
           template: true,
           whatsAppConnection: true,
           recoveryCampaign: { include: { steps: true } },
@@ -776,6 +1036,7 @@ export class RecoveryService {
       include: {
         client: { include: { plan: true } },
         clientReference: { include: { client: true, plan: true } },
+        receivable: true,
         template: true,
         whatsAppConnection: true,
         recoveryCampaign: { include: { steps: true } },
@@ -862,7 +1123,52 @@ export class RecoveryService {
     }
   }
 
-  private async findPrimaryReferenceId(tx: Transaction, clientId: string) {
+  async cancelActiveForReceivable(
+    tx: Transaction,
+    receivableId: string,
+    errorCode = 'RECEIVABLE_PAID',
+    reason = 'Conta a receber deixou de estar pendente.',
+  ) {
+    await this.closeActiveReceivableCampaigns(tx, receivableId, errorCode, reason);
+  }
+
+  private async closeActiveReceivableCampaigns(
+    tx: Transaction,
+    receivableId: string,
+    errorCode: string,
+    reason: string,
+  ) {
+    const campaigns = await tx.recoveryCampaign.findMany({
+      where: { receivableId, status: 'ATIVA' },
+    });
+
+    for (const campaign of campaigns) {
+      const status = errorCode === 'RECEIVABLE_PAID' ? 'CONCLUIDA' : 'CANCELADA';
+      await tx.recoveryCampaign.update({
+        where: { id: campaign.id },
+        data:
+          status === 'CONCLUIDA'
+            ? { status, completedAt: new Date(), cancelReason: reason }
+            : { status, canceledAt: new Date(), cancelReason: reason },
+      });
+      await this.cancelFutureDispatches(tx, campaign.id, errorCode, reason);
+      await tx.clientEvent.create({
+        data: {
+          clientId: campaign.clientId,
+          type:
+            status === 'CONCLUIDA' ? 'RECOVERY_CAMPAIGN_COMPLETED' : 'RECOVERY_CAMPAIGN_CANCELED',
+          title:
+            status === 'CONCLUIDA'
+              ? 'Campanha de recuperacao encerrada por pagamento.'
+              : 'Campanha de recuperacao cancelada.',
+          description: reason,
+          metadata: { recoveryCampaignId: campaign.id, receivableId },
+        },
+      });
+    }
+  }
+
+  private async findPrimaryReferenceId(tx: Transaction | PrismaService, clientId: string) {
     if (!tx.clientReference) {
       return clientId;
     }
@@ -877,6 +1183,19 @@ export class RecoveryService {
     }
 
     return reference.id;
+  }
+
+  private async findPrimaryReceivableId(tx: Transaction | PrismaService, clientId: string) {
+    const receivable = await tx.receivable.findFirst({
+      where: { clientId, status: 'PENDENTE' },
+      orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    if (!receivable) {
+      throw new NotFoundException('Conta a receber pendente nao encontrada.');
+    }
+
+    return receivable.id;
   }
 
   private referenceAsRecoveryClient(reference: RecoveryReference): RecoveryClient {
@@ -1040,25 +1359,25 @@ export class RecoveryService {
         type: 'RECOVERY_DAY_3' as const,
         name: 'Recuperacao 3 dias',
         content:
-          'Olá, *{{primeiroNome}}*! Passando para saber se tem interesse em renovar seu serviço de suporte. Se quiser continuar, posso te ajudar com a renovação.',
+          'Olá, *{{primeiroNome}}*! Identifiquei que existe uma cobrança pendente do vencimento {{vencimento}}. Posso te ajudar a regularizar?',
       },
       {
         type: 'RECOVERY_DAY_10' as const,
         name: 'Recuperacao 10 dias',
         content:
-          'Olá, *{{primeiroNome}}*! Seu serviço continua inativo no momento. Caso queira reativar, me chama que posso te ajudar com a renovação.',
+          'Olá, *{{primeiroNome}}*! A cobrança de {{valor}} vencida em {{vencimento}} ainda consta como pendente. Quer que eu te envie as opções de pagamento?',
       },
       {
         type: 'RECOVERY_DAY_15' as const,
         name: 'Recuperacao 15 dias',
         content:
-          'Oi, *{{primeiroNome}}*! Só passando novamente para saber se deseja voltar a utilizar o serviço. Se tiver interesse, posso organizar a renovação para você.',
+          'Oi, *{{primeiroNome}}*! Estou acompanhando a pendência financeira da referência {{referencia}}. Posso te apoiar para resolver hoje?',
       },
       {
         type: 'RECOVERY_DAY_30' as const,
         name: 'Recuperacao 30 dias',
         content:
-          'Olá, *{{primeiroNome}}*! Este é nosso último lembrete automático sobre a reativação do serviço. Se quiser voltar futuramente, é só entrar em contato.',
+          'Olá, *{{primeiroNome}}*! A pendência da referência {{referencia}} segue aberta. Este é o último lembrete automático deste ciclo financeiro.',
       },
     ];
     const templates = new Map<string, MessageTemplate>();
@@ -1087,21 +1406,17 @@ export class RecoveryService {
     });
   }
 
-  calculateScheduledFor(base: Date, delayDays: number) {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Sao_Paulo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(base);
-    const year = Number(parts.find((part) => part.type === 'year')?.value);
-    const month = Number(parts.find((part) => part.type === 'month')?.value);
-    const day = Number(parts.find((part) => part.type === 'day')?.value);
+  calculateScheduledFor(
+    base: Date,
+    delayDays: number,
+    settings?: Pick<RecoveryAutomationSettings, 'sendTime' | 'timezone'>,
+  ) {
+    const [year = 0, month = 1, day = 1] = formatBusinessDate(base).split('-').map(Number);
     const scheduledDate = new Date(Date.UTC(year, month - 1, day + delayDays));
     const yyyyMmDd = formatBusinessDate(scheduledDate);
-    const hour = String(this.getSendHour()).padStart(2, '0');
+    const sendTime = settings?.sendTime ?? this.getSendTime();
 
-    return new Date(`${yyyyMmDd}T${hour}:00:00-03:00`);
+    return new Date(`${yyyyMmDd}T${sendTime}:00-03:00`);
   }
 
   private renderForClient(template: string, client: RecoveryClient) {
@@ -1116,33 +1431,190 @@ export class RecoveryService {
     });
   }
 
-  private buildIdempotencyKey(clientId: string, campaignId: string, stepNumber: number) {
-    return `recovery:${clientId}:${campaignId}:${stepNumber}`;
+  private buildIdempotencyKey(
+    clientId: string,
+    receivableId: string,
+    campaignId: string,
+    stepNumber: number,
+  ) {
+    return `recovery:${clientId}:${receivableId}:${campaignId}:${stepNumber}`;
   }
 
   private parseIdempotencyKey(key: string) {
     const parts = key.split(':');
 
-    if (parts.length !== 4 || parts[0] !== 'recovery') {
+    if (parts.length !== 5 || parts[0] !== 'recovery') {
       return null;
     }
 
-    const stepNumber = Number(parts[3]);
+    const stepNumber = Number(parts[4]);
 
     if (!Number.isInteger(stepNumber) || stepNumber < 1) {
       return null;
     }
 
-    return { clientId: parts[1], campaignId: parts[2], stepNumber };
+    return { clientId: parts[1], receivableId: parts[2], campaignId: parts[3], stepNumber };
   }
 
-  private getSendHour() {
-    const configured = Number(this.config.get<string>('RECOVERY_SEND_HOUR') ?? '9');
-    return Number.isInteger(configured) && configured >= 0 && configured <= 23 ? configured : 9;
+  private getSendTime() {
+    const hour = Number(this.config.get<string>('RECOVERY_SEND_HOUR') ?? '9');
+    const legacyTime =
+      Number.isInteger(hour) && hour >= 0 && hour <= 23
+        ? `${String(hour).padStart(2, '0')}:00`
+        : defaultRecoverySendTime;
+    const configured = this.config.get<string>('RECOVERY_SEND_TIME') ?? legacyTime;
+
+    return /^([01]\d|2[0-3]):[0-5]\d$/.test(configured) ? configured : defaultRecoverySendTime;
+  }
+
+  private today() {
+    return parseBusinessDate(formatBusinessDate(new Date()));
   }
 
   private isRecoveryTemplate(type: string) {
-    return recoverySteps.some((step) => step.templateType === type);
+    return recoveryStepTemplates.some((step) => step.templateType === type);
+  }
+
+  private async getAutomationSettings(tx: Transaction | PrismaService = this.prisma) {
+    return tx.recoveryAutomationSettings.upsert({
+      where: { scope: 'global' },
+      update: {},
+      create: {
+        scope: 'global',
+        enabled: false,
+        sendTime: this.getSendTime(),
+        timezone: defaultRecoveryTimezone,
+        sendIntervalSeconds: defaultRecoverySendIntervalSeconds,
+        day3Enabled: true,
+        day3OffsetDays: 3,
+        day10Enabled: true,
+        day10OffsetDays: 7,
+        day15Enabled: true,
+        day15OffsetDays: 15,
+        day30Enabled: true,
+        day30OffsetDays: 30,
+      },
+    });
+  }
+
+  private buildRecoverySteps(settings: RecoveryAutomationSettings): RecoveryStepConfig[] {
+    return recoveryStepTemplates
+      .filter((step) => Boolean(settings[step.enabledKey]))
+      .map((step) => ({
+        stepNumber: step.stepNumber,
+        delayDays: Number(settings[step.offsetKey]),
+        templateType: step.templateType,
+      }));
+  }
+
+  private async calculateThrottledScheduledFor(
+    tx: Transaction | PrismaService,
+    base: Date,
+    delayDays: number,
+    settings: RecoveryAutomationSettings,
+    excludingDispatchId?: string,
+  ) {
+    const scheduledFor = this.calculateScheduledFor(base, delayDays, settings);
+    const nextDay = new Date(scheduledFor.getTime() + 24 * 60 * 60 * 1000);
+    const existingForDay = await tx.messageDispatch.count({
+      where: {
+        origin: 'RECOVERY',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        ...(excludingDispatchId ? { id: { not: excludingDispatchId } } : {}),
+        scheduledFor: {
+          gte: scheduledFor,
+          lt: nextDay,
+        },
+      },
+    });
+
+    return new Date(
+      scheduledFor.getTime() +
+        existingForDay * this.normalizeSendIntervalSeconds(settings.sendIntervalSeconds) * 1000,
+    );
+  }
+
+  private validateSettings(
+    settings: Pick<
+      RecoveryAutomationSettings,
+      | 'sendTime'
+      | 'timezone'
+      | 'sendIntervalSeconds'
+      | 'day3Enabled'
+      | 'day3OffsetDays'
+      | 'day10Enabled'
+      | 'day10OffsetDays'
+      | 'day15Enabled'
+      | 'day15OffsetDays'
+      | 'day30Enabled'
+      | 'day30OffsetDays'
+    >,
+  ) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(settings.sendTime)) {
+      throw new BadRequestException('Horario de recuperacao invalido.');
+    }
+
+    if (settings.timezone !== defaultRecoveryTimezone) {
+      throw new BadRequestException('Timezone de recuperacao invalido.');
+    }
+
+    this.normalizeSendIntervalSeconds(settings.sendIntervalSeconds);
+
+    const offsets = recoveryStepTemplates.map((step) => Number(settings[step.offsetKey]));
+
+    if (offsets.some((offset) => !Number.isInteger(offset) || offset <= 0)) {
+      throw new BadRequestException('Dias das etapas de recuperacao devem ser maiores que zero.');
+    }
+
+    if (new Set(offsets).size !== offsets.length) {
+      throw new BadRequestException('Dias das etapas de recuperacao nao podem se repetir.');
+    }
+
+    for (let index = 1; index < offsets.length; index += 1) {
+      if (offsets[index]! <= offsets[index - 1]!) {
+        throw new BadRequestException(
+          'Dias das etapas de recuperacao devem estar em ordem crescente.',
+        );
+      }
+    }
+  }
+
+  private normalizeSendIntervalSeconds(value: number) {
+    if (
+      !Number.isInteger(value) ||
+      value < minRecoverySendIntervalSeconds ||
+      value > maxRecoverySendIntervalSeconds
+    ) {
+      throw new BadRequestException('Intervalo entre mensagens de recuperacao invalido.');
+    }
+
+    return value;
+  }
+
+  private presentSettings(settings: RecoveryAutomationSettings) {
+    return {
+      id: settings.id,
+      enabled: settings.enabled,
+      sendTime: settings.sendTime,
+      timezone: settings.timezone,
+      sendIntervalSeconds: settings.sendIntervalSeconds,
+      steps: recoveryStepTemplates.map((step) => ({
+        stepNumber: step.stepNumber,
+        enabled: Boolean(settings[step.enabledKey]),
+        offsetDays: Number(settings[step.offsetKey]),
+        templateType: step.templateType,
+      })),
+      day3Enabled: settings.day3Enabled,
+      day3OffsetDays: settings.day3OffsetDays,
+      day10Enabled: settings.day10Enabled,
+      day10OffsetDays: settings.day10OffsetDays,
+      day15Enabled: settings.day15Enabled,
+      day15OffsetDays: settings.day15OffsetDays,
+      day30Enabled: settings.day30Enabled,
+      day30OffsetDays: settings.day30OffsetDays,
+      createdAt: settings.createdAt,
+      updatedAt: settings.updatedAt,
+    };
   }
 
   private firstName(name: string) {
@@ -1160,10 +1632,19 @@ export class RecoveryService {
     );
   }
 
+  private daysOverdue(dueDate: Date) {
+    const due = parseBusinessDate(formatBusinessDate(dueDate)).getTime();
+    const today = this.today().getTime();
+
+    return Math.max(0, Math.floor((today - due) / (24 * 60 * 60 * 1000)));
+  }
+
   private presentCampaign(campaign: RecoveryCampaignWithRelations) {
     return {
       id: campaign.id,
       clientId: campaign.clientId,
+      clientReferenceId: campaign.clientReferenceId,
+      receivableId: campaign.receivableId,
       status: campaign.status,
       startedAt: campaign.startedAt.toISOString(),
       completedAt: campaign.completedAt?.toISOString() ?? null,
@@ -1178,6 +1659,21 @@ export class RecoveryService {
         status: campaign.clientReference.status,
         planName: campaign.clientReference.plan.name,
       },
+      clientReference: {
+        id: campaign.clientReference.id,
+        reference: campaign.clientReference.reference,
+        status: campaign.clientReference.status,
+      },
+      receivable: campaign.receivable
+        ? {
+            id: campaign.receivable.id,
+            description: campaign.receivable.description,
+            amount: campaign.receivable.amount.toString(),
+            dueDate: campaign.receivable.dueDate.toISOString(),
+            status: campaign.receivable.status,
+            daysOverdue: this.daysOverdue(campaign.receivable.dueDate),
+          }
+        : null,
       steps: campaign.steps.map((step) => ({
         id: step.id,
         campaignId: step.campaignId,

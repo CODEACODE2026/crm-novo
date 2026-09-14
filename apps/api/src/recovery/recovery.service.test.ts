@@ -4,14 +4,23 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/require-await */
-/* eslint-disable @typescript-eslint/restrict-template-expressions */
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { describe, expect, it, vi } from 'vitest';
+/* eslint-disable @typescript-eslint/no-base-to-string */
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion */
 import { Prisma } from '@prisma/client';
+import { describe, expect, it, vi } from 'vitest';
 import { BillingTemplateRenderer } from '../billing/billing-template-renderer';
 import { RecoveryService } from './recovery.service';
 
-const userId = '22222222-2222-4222-8222-222222222222';
+const plan = {
+  id: 'plan-1',
+  name: 'Mensal',
+  durationMonths: 1,
+  defaultValue: new Prisma.Decimal(50),
+  active: true,
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+};
+
 const baseClient = {
   id: 'client-1',
   name: 'Bruno Silva',
@@ -19,7 +28,7 @@ const baseClient = {
   phoneNormalized: '5511999999999',
   email: null,
   reference: 'bruno1499',
-  planId: 'plan-1',
+  planId: plan.id,
   recurringValue: new Prisma.Decimal(50),
   dueDate: new Date('2026-09-20T00:00:00.000Z'),
   billingAnchorDay: 20,
@@ -28,38 +37,92 @@ const baseClient = {
   status: 'ATIVO' as const,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
   updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-  plan: {
-    id: 'plan-1',
-    name: 'Mensal',
-    durationMonths: 1,
-    defaultValue: new Prisma.Decimal(50),
-    active: true,
-    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-  },
+  plan,
 };
 
-function createService(
-  provider = { sendText: vi.fn().mockResolvedValue({ providerMessageId: 'msg-1' }) },
-) {
-  const fake = createFakePrisma();
-  const service = new RecoveryService(
-    fake.prisma as never,
-    provider as never,
-    { decrypt: vi.fn(() => 'instance-token') } as never,
-    { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
-    new BillingTemplateRenderer(),
-  );
-
-  return { ...fake, provider, service };
+function reference(overrides: Record<string, unknown> = {}) {
+  return {
+    id: String(overrides.id ?? 'reference-1'),
+    clientId: String(overrides.clientId ?? baseClient.id),
+    reference: String(overrides.reference ?? 'bruno1499-a'),
+    planId: plan.id,
+    recurringValue: new Prisma.Decimal(50),
+    dueDate: new Date('2026-09-10T00:00:00.000Z'),
+    billingAnchorDay: 10,
+    billingNoticeDays: 3,
+    status: (overrides.status ?? 'ATIVO') as 'ATIVO' | 'INATIVO' | 'CANCELADO',
+    notes: null,
+    inactivatedAt: null,
+    inactivationReason: null,
+    inactivatedByUserId: null,
+    canceledAt: null,
+    cancellationReason: null,
+    canceledByUserId: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    client: baseClient,
+    plan,
+    ...overrides,
+  };
 }
 
-function createFakePrisma() {
+function receivable(overrides: Record<string, unknown> = {}) {
+  const nextReference = (overrides.clientReference as ReturnType<typeof reference>) ?? reference();
+
+  return {
+    id: String(overrides.id ?? 'receivable-1'),
+    clientId: nextReference.clientId,
+    clientReferenceId: nextReference.id,
+    renewalId: null,
+    purpose: 'RENEWAL' as const,
+    description: 'Mensalidade',
+    amount: new Prisma.Decimal(50),
+    dueDate: new Date('2026-09-10T00:00:00.000Z'),
+    status: (overrides.status ?? 'PENDENTE') as 'PENDENTE' | 'PAGO' | 'CANCELADO',
+    paidAt: null,
+    canceledAt: null,
+    cancelReason: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    client: baseClient,
+    clientReference: nextReference,
+    ...overrides,
+  };
+}
+
+function createService(
+  input: {
+    receivables?: Array<ReturnType<typeof receivable>>;
+    provider?: { sendText: ReturnType<typeof vi.fn> };
+    settings?: Partial<Record<string, unknown>>;
+  } = {},
+) {
   const templates: Array<Record<string, unknown>> = [];
   const campaigns: Array<Record<string, unknown>> = [];
   const steps: Array<Record<string, unknown>> = [];
   const dispatches: Array<Record<string, unknown>> = [];
   const events: Array<Record<string, unknown>> = [];
+  const receivables = input.receivables ?? [receivable()];
+  const recoverySettings = {
+    id: 'recovery-settings-1',
+    scope: 'global',
+    enabled: false,
+    sendTime: '09:00',
+    timezone: 'America/Sao_Paulo',
+    sendIntervalSeconds: 8,
+    day3Enabled: true,
+    day3OffsetDays: 3,
+    day10Enabled: true,
+    day10OffsetDays: 7,
+    day15Enabled: true,
+    day15OffsetDays: 15,
+    day30Enabled: true,
+    day30OffsetDays: 30,
+    companyId: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    ...input.settings,
+  };
   const connection = {
     id: 'connection-1',
     providerTokenEncrypted: 'encrypted',
@@ -70,24 +133,34 @@ function createFakePrisma() {
   };
   let id = 1;
   const nextId = (prefix: string) => `${prefix}-${id++}`;
-  const includeCampaign = (campaign: Record<string, unknown>) => ({
-    ...campaign,
-    client: { ...baseClient, status: 'INATIVO' },
-    steps: steps
-      .filter((step) => step.campaignId === campaign.id)
-      .map((step) => ({
-        ...step,
-        template: templates.find((template) => template.id === step.templateId) ?? null,
-        dispatch: dispatches.find((dispatch) => dispatch.id === step.dispatchId) ?? null,
-      })),
-  });
+  const includeCampaign = (campaign: Record<string, unknown>) => {
+    const campaignReceivable = receivables.find((item) => item.id === campaign.receivableId)!;
+
+    return {
+      ...campaign,
+      client: campaignReceivable.client,
+      clientReference: campaignReceivable.clientReference,
+      receivable: campaignReceivable,
+      steps: steps
+        .filter((step) => step.campaignId === campaign.id)
+        .map((step) => ({
+          ...step,
+          template: templates.find((template) => template.id === step.templateId) ?? null,
+          dispatch: dispatches.find((dispatch) => dispatch.id === step.dispatchId) ?? null,
+        })),
+    };
+  };
   const includeDispatch = (dispatch: Record<string, unknown>) => {
     const campaign = campaigns.find((item) => item.id === dispatch.recoveryCampaignId) ?? null;
+    const campaignReceivable =
+      receivables.find((item) => item.id === dispatch.receivableId) ?? null;
     const step = steps.find((item) => item.dispatchId === dispatch.id) ?? null;
 
     return {
       ...dispatch,
-      client: { ...baseClient, status: 'INATIVO' },
+      client: campaignReceivable?.client ?? baseClient,
+      clientReference: campaignReceivable?.clientReference ?? null,
+      receivable: campaignReceivable,
       template: templates.find((template) => template.id === dispatch.templateId) ?? null,
       whatsAppConnection: connection,
       recoveryCampaign: campaign ? { ...campaign, steps } : null,
@@ -115,22 +188,63 @@ function createFakePrisma() {
         return template;
       }),
     },
+    receivable: {
+      findMany: vi.fn(async ({ where }) =>
+        receivables.filter((item) => {
+          if (where?.status && item.status !== where.status) return false;
+          if (where?.clientId && item.clientId !== where.clientId) return false;
+          if (where?.dueDate?.lt && !(item.dueDate < where.dueDate.lt)) return false;
+          const statuses = where?.clientReference?.status?.in as string[] | undefined;
+          if (statuses && !statuses.includes(item.clientReference.status)) return false;
+          return true;
+        }),
+      ),
+      findFirst: vi.fn(
+        async ({ where }) =>
+          receivables.find(
+            (item) =>
+              (!where.clientId || item.clientId === where.clientId) &&
+              (!where.status || item.status === where.status),
+          ) ?? null,
+      ),
+    },
+    recoveryAutomationSettings: {
+      upsert: vi.fn(async ({ create, update }) => {
+        if (!recoverySettings.id) {
+          Object.assign(recoverySettings, create);
+        }
+        Object.assign(recoverySettings, update);
+        return recoverySettings;
+      }),
+      update: vi.fn(async ({ data }) => {
+        Object.assign(recoverySettings, data, { updatedAt: new Date() });
+        return recoverySettings;
+      }),
+    },
     whatsAppConnection: {
       findFirst: vi.fn(async () => connection),
     },
     recoveryCampaign: {
       findFirst: vi.fn(
         async ({ where }) =>
-          campaigns.find(
-            (campaign) => campaign.clientId === where.clientId && campaign.status === where.status,
-          ) ?? null,
+          campaigns.find((campaign) => {
+            if (where.receivableId && campaign.receivableId !== where.receivableId) return false;
+            if (where.clientId && campaign.clientId !== where.clientId) return false;
+            return campaign.status === where.status;
+          }) ?? null,
       ),
       findMany: vi.fn(async ({ where }) =>
-        campaigns.filter(
-          (campaign) =>
-            (!where.clientId || campaign.clientId === where.clientId) &&
-            (!where.status || campaign.status === where.status),
-        ),
+        campaigns
+          .filter((campaign) => {
+            if (where.receivableId && campaign.receivableId !== where.receivableId) return false;
+            if (where.clientId && campaign.clientId !== where.clientId) return false;
+            if (where.clientReferenceId && campaign.clientReferenceId !== where.clientReferenceId) {
+              return false;
+            }
+            if (where.status && campaign.status !== where.status) return false;
+            return true;
+          })
+          .map(includeCampaign),
       ),
       create: vi.fn(async ({ data }) => {
         const campaign = {
@@ -151,9 +265,10 @@ function createFakePrisma() {
         Object.assign(campaign, data, { updatedAt: new Date() });
         return campaign;
       }),
-      findUnique: vi.fn(
-        async ({ where }) => campaigns.find((item) => item.id === where.id) ?? null,
-      ),
+      findUnique: vi.fn(async ({ where }) => {
+        const campaign = campaigns.find((item) => item.id === where.id);
+        return campaign ? includeCampaign(campaign) : null;
+      }),
       count: vi.fn(
         async ({ where }) =>
           campaigns.filter((campaign) => !where.status || campaign.status === where.status).length,
@@ -222,12 +337,22 @@ function createFakePrisma() {
       }),
       findMany: vi.fn(async ({ where, take }) =>
         dispatches
-          .filter(
-            (dispatch) =>
-              dispatch.origin === where.origin &&
-              where.status.in.includes(dispatch.status) &&
-              Number(dispatch.attempts) < where.attempts.lt,
-          )
+          .filter((dispatch) => {
+            if (dispatch.origin !== where.origin) return false;
+            if (!where.status.in.includes(dispatch.status)) return false;
+            if (Number(dispatch.attempts) >= where.attempts.lt) return false;
+            const scheduledFor = dispatch.scheduledFor as Date;
+            const nextAttemptAt = dispatch.nextAttemptAt as Date | null;
+
+            if (where.scheduledFor?.lte && scheduledFor > where.scheduledFor.lte) {
+              return false;
+            }
+            if (where.OR && nextAttemptAt && nextAttemptAt > where.OR[1].nextAttemptAt.lte) {
+              return false;
+            }
+            return true;
+          })
+          .sort((a, b) => Number(a.scheduledFor) - Number(b.scheduledFor))
           .slice(0, take),
       ),
       findUnique: vi.fn(async ({ where }) => {
@@ -247,8 +372,8 @@ function createFakePrisma() {
           ) {
             const { attempts, ...rest } = data;
             Object.assign(dispatch, rest);
-            if (data.attempts?.increment) {
-              dispatch.attempts = Number(dispatch.attempts) + data.attempts.increment;
+            if (attempts?.increment) {
+              dispatch.attempts = Number(dispatch.attempts) + attempts.increment;
             }
             count += 1;
           }
@@ -263,9 +388,21 @@ function createFakePrisma() {
       }),
       count: vi.fn(
         async ({ where }) =>
-          dispatches.filter(
-            (dispatch) => dispatch.origin === where.origin && dispatch.status === where.status,
-          ).length,
+          dispatches.filter((dispatch) => {
+            if (dispatch.origin !== where.origin) return false;
+            const statuses = where.status?.in ?? [where.status];
+            if (where.status && !statuses.includes(dispatch.status)) return false;
+            if (where.id?.not && dispatch.id === where.id.not) return false;
+            const scheduledFor = dispatch.scheduledFor as Date;
+
+            if (where.scheduledFor?.gte && scheduledFor < where.scheduledFor.gte) {
+              return false;
+            }
+            if (where.scheduledFor?.lt && scheduledFor >= where.scheduledFor.lt) {
+              return false;
+            }
+            return true;
+          }).length,
       ),
     },
     clientEvent: {
@@ -283,157 +420,242 @@ function createFakePrisma() {
           ) ?? null,
       ),
     },
-    $transaction: vi.fn(async (callback) => callback(tx)),
+    $transaction: vi.fn(async (input) => (Array.isArray(input) ? Promise.all(input) : input(tx))),
   };
+
+  const provider = input.provider ?? {
+    sendText: vi.fn().mockResolvedValue({ providerMessageId: 'msg-1' }),
+  };
+  const service = new RecoveryService(
+    tx as never,
+    provider as never,
+    { decrypt: vi.fn(() => 'instance-token') } as never,
+    { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
+    new BillingTemplateRenderer(),
+  );
 
   return {
     campaigns,
     dispatches,
     events,
-    includeCampaign,
-    prisma: tx,
+    provider,
+    receivables,
+    service,
+    settings: recoverySettings,
     steps,
-    templates,
     tx,
   };
 }
 
 describe('RecoveryService', () => {
-  it('does not start a campaign when recovery is not requested', async () => {
-    const { campaigns, dispatches, service, tx } = createService();
+  it('starts recovery from overdue receivable dueDate with default D+3/D+7/D+15/D+30 steps', async () => {
+    vi.setSystemTime(new Date('2026-09-14T12:00:00.000Z'));
+    const { campaigns, dispatches, service, steps } = createService();
 
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      actorUserId: userId,
-      startRecovery: false,
-    });
-
-    expect(campaigns).toHaveLength(0);
-    expect(dispatches).toHaveLength(0);
-  });
-
-  it('starts one campaign with four recovery steps and Sao Paulo schedule', async () => {
-    const { campaigns, dispatches, events, service, steps, tx } = createService();
-
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      actorUserId: userId,
-      changedAt: new Date('2026-09-11T18:00:00.000Z'),
-      startRecovery: true,
-    });
+    await service.reconcile();
 
     expect(campaigns).toHaveLength(1);
-    expect(steps.map((step) => step.delayDays)).toEqual([3, 10, 15, 30]);
-    expect(dispatches).toHaveLength(4);
+    expect(campaigns[0]).toMatchObject({
+      clientId: baseClient.id,
+      clientReferenceId: 'reference-1',
+      receivableId: 'receivable-1',
+      startedAt: new Date('2026-09-10T00:00:00.000Z'),
+      status: 'ATIVA',
+    });
+    expect(steps.map((step) => step.delayDays)).toEqual([3, 7, 15, 30]);
     expect(steps.map((step) => (step.scheduledFor as Date).toISOString())).toEqual([
-      '2026-09-14T12:00:00.000Z',
-      '2026-09-21T12:00:00.000Z',
-      '2026-09-26T12:00:00.000Z',
-      '2026-10-11T12:00:00.000Z',
+      '2026-09-13T12:00:00.000Z',
+      '2026-09-17T12:00:00.000Z',
+      '2026-09-25T12:00:00.000Z',
+      '2026-10-10T12:00:00.000Z',
     ]);
-    expect(dispatches.map((dispatch) => dispatch.idempotencyKey)).toEqual([
-      `recovery:${baseClient.id}:${campaigns[0]!.id}:1`,
-      `recovery:${baseClient.id}:${campaigns[0]!.id}:2`,
-      `recovery:${baseClient.id}:${campaigns[0]!.id}:3`,
-      `recovery:${baseClient.id}:${campaigns[0]!.id}:4`,
+    expect(dispatches.map((dispatch) => dispatch.receivableId)).toEqual([
+      'receivable-1',
+      'receivable-1',
+      'receivable-1',
+      'receivable-1',
     ]);
-    expect(events.at(-1)?.title).toBe('Campanha automatica de recuperacao iniciada.');
+    vi.useRealTimers();
   });
 
-  it('cancels an active campaign and only future dispatches on reactivation', async () => {
-    const { campaigns, dispatches, service, steps, tx } = createService();
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      startRecovery: true,
+  it('does not start recovery when a reference is inactivated without overdue debt', async () => {
+    vi.setSystemTime(new Date('2026-09-14T12:00:00.000Z'));
+    const { campaigns, service, tx } = createService({
+      receivables: [receivable({ dueDate: new Date('2026-09-20T00:00:00.000Z') })],
     });
+
+    await service.handleClientReferenceStatusChange(
+      tx as never,
+      reference({ status: 'ATIVO' }) as never,
+      'INATIVO',
+    );
+    await service.reconcile();
+
+    expect(campaigns).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  it('keeps active and inactive overdue references eligible, but blocks canceled references', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const activeRef = reference({ id: 'ref-active', reference: 'active', status: 'ATIVO' });
+    const inactiveRef = reference({ id: 'ref-inactive', reference: 'inactive', status: 'INATIVO' });
+    const canceledRef = reference({
+      id: 'ref-canceled',
+      reference: 'canceled',
+      status: 'CANCELADO',
+    });
+    const { campaigns, service } = createService({
+      receivables: [
+        receivable({ id: 'rec-active', clientReference: activeRef }),
+        receivable({ id: 'rec-inactive', clientReference: inactiveRef }),
+        receivable({ id: 'rec-canceled', clientReference: canceledRef }),
+      ],
+    });
+
+    await service.reconcile();
+
+    expect(campaigns.map((campaign) => campaign.receivableId)).toEqual([
+      'rec-active',
+      'rec-inactive',
+    ]);
+    vi.useRealTimers();
+  });
+
+  it('keeps two references independent and reconciles idempotently per receivable', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const overdueA = reference({ id: 'ref-a', reference: 'A' });
+    const currentB = reference({
+      id: 'ref-b',
+      reference: 'B',
+      dueDate: new Date('2026-09-25T00:00:00.000Z'),
+    });
+    const { campaigns, dispatches, service } = createService({
+      receivables: [
+        receivable({ id: 'rec-a', clientReference: overdueA }),
+        receivable({
+          id: 'rec-b',
+          clientReference: currentB,
+          dueDate: new Date('2026-09-25T00:00:00.000Z'),
+        }),
+      ],
+    });
+
+    await service.reconcile();
+    await service.reconcile();
+
+    expect(campaigns).toHaveLength(1);
+    expect(campaigns[0]!.receivableId).toBe('rec-a');
+    expect(dispatches).toHaveLength(4);
+    vi.useRealTimers();
+  });
+
+  it('creates independent campaigns when two receivables are overdue', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const refA = reference({ id: 'ref-a', reference: 'A' });
+    const refB = reference({ id: 'ref-b', reference: 'B' });
+    const { campaigns, service } = createService({
+      receivables: [
+        receivable({ id: 'rec-a', clientReference: refA }),
+        receivable({ id: 'rec-b', clientReference: refB }),
+      ],
+    });
+
+    await service.reconcile();
+
+    expect(campaigns.map((campaign) => campaign.receivableId)).toEqual(['rec-a', 'rec-b']);
+    vi.useRealTimers();
+  });
+
+  it('cancels only future recovery when a receivable is paid and creates a new campaign for next cycle', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const september = receivable({ id: 'rec-september' });
+    const { campaigns, dispatches, receivables, service, steps, tx } = createService({
+      receivables: [september],
+    });
+    await service.reconcile();
     Object.assign(dispatches[0]!, { status: 'SENT', sentAt: new Date() });
     Object.assign(steps[0]!, { status: 'SENT', sentAt: new Date() });
+    september.status = 'PAGO';
 
-    await service.handleClientStatusChange(
+    await service.cancelActiveForReceivable(
       tx as never,
-      { ...baseClient, status: 'INATIVO' },
-      'ATIVO',
-      {
-        actorUserId: userId,
-      },
+      september.id,
+      'RECEIVABLE_PAID',
+      'Conta a receber paga durante campanha de recuperacao.',
     );
+    receivables.push(
+      receivable({ id: 'rec-october', dueDate: new Date('2026-10-10T00:00:00.000Z') }),
+    );
+    vi.setSystemTime(new Date('2026-10-14T12:00:00.000Z'));
+    await service.reconcile();
 
-    expect(campaigns[0]!.status).toBe('CANCELADA');
-    expect(campaigns[0]!.cancelReason).toBe(
-      'Campanha de recuperação encerrada após reativação do cliente.',
-    );
+    expect(campaigns.map((campaign) => campaign.status)).toEqual(['CONCLUIDA', 'ATIVA']);
     expect(dispatches[0]!.status).toBe('SENT');
-    expect(dispatches.slice(1).map((dispatch) => dispatch.status)).toEqual([
+    expect(dispatches.slice(1, 4).map((dispatch) => dispatch.status)).toEqual([
       'CANCELED',
       'CANCELED',
       'CANCELED',
     ]);
+    expect(campaigns[1]!.receivableId).toBe('rec-october');
+    vi.useRealTimers();
   });
 
-  it('cancels an active campaign when the client is canceled', async () => {
-    const { campaigns, dispatches, service, tx } = createService();
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      startRecovery: true,
+  it('cancels future recovery when the reference is canceled', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const nextReference = reference({ status: 'ATIVO' });
+    const { campaigns, dispatches, service } = createService({
+      receivables: [receivable({ clientReference: nextReference })],
     });
+    await service.reconcile();
+    nextReference.status = 'CANCELADO';
 
-    await service.handleClientStatusChange(
-      tx as never,
-      { ...baseClient, status: 'INATIVO' },
-      'CANCELADO',
-      {
-        actorUserId: userId,
-      },
-    );
+    await service.reconcile();
 
     expect(campaigns[0]!.status).toBe('CANCELADA');
     expect(dispatches.every((dispatch) => dispatch.status === 'CANCELED')).toBe(true);
+    vi.useRealTimers();
   });
 
-  it('creates a new campaign after a future inactivation', async () => {
-    const { campaigns, service, tx } = createService();
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      startRecovery: true,
+  it('automatic processing and failed retries send at most one message per tick', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { dispatches, provider, service, settings } = createService({
+      settings: { enabled: true },
     });
-    await service.handleClientStatusChange(
-      tx as never,
-      { ...baseClient, status: 'INATIVO' },
-      'ATIVO',
-    );
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      startRecovery: true,
-    });
+    await service.reconcile();
 
-    expect(campaigns).toHaveLength(2);
-    expect(campaigns.map((campaign) => campaign.status)).toEqual(['CANCELADA', 'ATIVA']);
-  });
-
-  it('acquires a due recovery dispatch only once under concurrent processing', async () => {
-    const { provider, service, tx } = createService();
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      changedAt: new Date('2026-09-01T12:00:00.000Z'),
-      startRecovery: true,
-    });
-
-    await Promise.all([
-      service.processDue(new Date('2026-09-20T12:00:00.000Z'), 1),
-      service.processDue(new Date('2026-09-20T12:00:00.000Z'), 1),
-    ]);
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
 
     expect(provider.sendText).toHaveBeenCalledTimes(1);
+    dispatches[1]!.status = 'FAILED';
+    dispatches[1]!.nextAttemptAt = new Date('2026-09-20T12:00:00.000Z');
+    dispatches[2]!.status = 'FAILED';
+    dispatches[2]!.nextAttemptAt = new Date('2026-09-20T12:00:00.000Z');
+    settings.enabled = true;
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
+
+    expect(provider.sendText).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
-  it('marks exhausted provider failures without duplicating dispatches', async () => {
-    const provider = { sendText: vi.fn().mockRejectedValue(new Error('token=abc secret=123')) };
-    const { dispatches, service, tx } = createService(provider);
-    await service.handleClientStatusChange(tx as never, baseClient, 'INATIVO', {
-      changedAt: new Date('2026-09-01T12:00:00.000Z'),
-      startRecovery: true,
+  it('recalculates only future steps when offsets and send time change', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { dispatches, service, steps } = createService({ settings: { enabled: true } });
+    await service.reconcile();
+    Object.assign(dispatches[0]!, { status: 'SENT', sentAt: new Date() });
+    Object.assign(steps[0]!, { status: 'SENT', sentAt: new Date() });
+
+    await service.updateSettings({
+      sendTime: '10:30',
+      day3OffsetDays: 3,
+      day10OffsetDays: 8,
+      day15OffsetDays: 16,
+      day30OffsetDays: 31,
     });
-    dispatches[0]!.attempts = 2;
 
-    await service.processDue(new Date('2026-09-20T12:00:00.000Z'));
-
-    expect(dispatches).toHaveLength(4);
-    expect(dispatches[0]!.status).toBe('FAILED');
-    expect(dispatches[0]!.attempts).toBe(3);
-    expect(dispatches[0]!.nextAttemptAt).toBeNull();
-    expect(dispatches[0]!.errorMessage).toContain('token=[redacted]');
+    expect(steps[0]!.status).toBe('SENT');
+    expect(steps.slice(1).map((step) => step.delayDays)).toEqual([8, 16, 31]);
+    expect((steps[1]!.scheduledFor as Date).toISOString()).toBe('2026-09-18T13:30:00.000Z');
+    vi.useRealTimers();
   });
 });

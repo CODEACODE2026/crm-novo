@@ -15,6 +15,7 @@ import { ReferralsService } from '../referrals/referrals.service';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CreateClientReferenceDto } from './dto/create-client-reference.dto';
 import { CreateClientDto } from './dto/create-client.dto';
+import { DeleteClientConfirmationDto } from './dto/delete-client-confirmation.dto';
 import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientReferenceStatusDto } from './dto/update-client-reference-status.dto';
@@ -465,12 +466,36 @@ export class ClientsService {
       );
     }
 
+    if (reference.status === 'CANCELADO' && dto.status === 'ATIVO') {
+      throw new ConflictException('Referencia cancelada nao pode ser reativada nesta etapa.');
+    }
+
     if (reference.status === dto.status) {
       return this.presentClientReference(reference);
     }
 
+    const changedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
-      await tx.clientReference.update({ where: { id }, data: { status: dto.status } });
+      await tx.clientReference.update({
+        where: { id },
+        data: {
+          status: dto.status,
+          ...(dto.status === 'INATIVO'
+            ? {
+                inactivatedAt: changedAt,
+                inactivationReason: reason,
+                inactivatedByUserId: actorUserId,
+              }
+            : {}),
+          ...(dto.status === 'CANCELADO'
+            ? {
+                canceledAt: changedAt,
+                cancellationReason: reason,
+                canceledByUserId: actorUserId,
+              }
+            : {}),
+        },
+      });
       await tx.clientStatusHistory.create({
         data: {
           clientId: reference.clientId,
@@ -497,9 +522,16 @@ export class ClientsService {
       });
 
       await this.recoveryService.handleClientReferenceStatusChange(tx, reference, dto.status, {
-        startRecovery: dto.startRecovery === true,
         actorUserId,
       });
+
+      if (dto.status === 'INATIVO' || dto.status === 'CANCELADO') {
+        await this.cancelFutureReferenceBillingDispatches(tx, id, dto.status);
+      }
+
+      if (reference.status === 'INATIVO' && dto.status === 'ATIVO') {
+        await this.currentCycle().ensureCurrentCycleReceivable(id, tx);
+      }
 
       if (reference.status === 'PENDENTE_PAGAMENTO' && dto.status === 'CANCELADO') {
         await this.referralsService.cancelPendingForClientBeforePayment(
@@ -512,6 +544,55 @@ export class ClientsService {
     });
 
     return this.getReference(id);
+  }
+
+  async previewRemoveReference(id: string) {
+    const reference = await this.prisma.clientReference.findUnique({
+      where: { id },
+      include: { plan: true },
+    });
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    return {
+      target: this.presentClientReference(reference),
+      counts: await this.countReferenceRemovalTargets(id),
+    };
+  }
+
+  async removeReference(id: string, dto: DeleteClientConfirmationDto) {
+    this.ensureDeleteConfirmed(dto);
+    await this.previewRemoveReference(id);
+    const counts = await this.deleteReferenceTree(id);
+
+    return { id, removed: true, counts };
+  }
+
+  async previewRemove(id: string) {
+    const client = await this.prisma.client.findUnique({ where: { id }, include: { plan: true } });
+
+    if (!client) {
+      throw new NotFoundException('Cliente nao encontrado.');
+    }
+
+    return {
+      target: {
+        id: client.id,
+        name: client.name,
+        reference: client.reference,
+      },
+      counts: await this.countClientRemovalTargets(id),
+    };
+  }
+
+  async remove(id: string, dto: DeleteClientConfirmationDto) {
+    this.ensureDeleteConfirmed(dto);
+    await this.previewRemove(id);
+    const counts = await this.deleteClientTree(id);
+
+    return { id, removed: true, counts };
   }
 
   async updateStatus(id: string, dto: UpdateClientStatusDto, actorUserId: string) {
@@ -778,6 +859,12 @@ export class ClientsService {
       billingNoticeDays: reference.billingNoticeDays,
       status: reference.status,
       notes: reference.notes,
+      inactivatedAt: reference.inactivatedAt?.toISOString() ?? null,
+      inactivationReason: reference.inactivationReason,
+      inactivatedByUserId: reference.inactivatedByUserId,
+      canceledAt: reference.canceledAt?.toISOString() ?? null,
+      cancellationReason: reference.cancellationReason,
+      canceledByUserId: reference.canceledByUserId,
       createdAt: reference.createdAt.toISOString(),
       updatedAt: reference.updatedAt.toISOString(),
       plan: {
@@ -795,8 +882,351 @@ export class ClientsService {
     }
   }
 
+  private async countReferenceRemovalTargets(clientReferenceId: string) {
+    const receivableIds = await this.findReceivableIdsByReference(clientReferenceId);
+    const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+    const [
+      renewals,
+      receivables,
+      paymentIntents,
+      paymentWebhookEvents,
+      campaigns,
+      campaignSteps,
+      dispatches,
+      billingResponses,
+      financialTransactions,
+      statusHistory,
+      referralsUpdated,
+    ] = await this.prisma.$transaction([
+      this.prisma.renewal.count({ where: { clientReferenceId } }),
+      this.prisma.receivable.count({ where: { clientReferenceId } }),
+      this.prisma.paymentIntent.count({ where: { receivableId: { in: receivableIds } } }),
+      this.prisma.paymentWebhookEvent.count({
+        where: { paymentIntentId: { in: paymentIntentIds } },
+      }),
+      this.prisma.recoveryCampaign.count({ where: { clientReferenceId } }),
+      this.prisma.recoveryCampaignStep.count({
+        where: { campaign: { clientReferenceId } },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }] },
+      }),
+      this.prisma.billingResponse.count({ where: { clientReferenceId } }),
+      this.prisma.financialTransaction.count({
+        where: { OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }] },
+      }),
+      this.prisma.clientStatusHistory.count({ where: { clientReferenceId } }),
+      this.prisma.referral.count({ where: { rewardClientReferenceId: clientReferenceId } }),
+    ]);
+
+    return {
+      total:
+        1 +
+        renewals +
+        receivables +
+        paymentIntents +
+        paymentWebhookEvents +
+        campaigns +
+        campaignSteps +
+        dispatches +
+        billingResponses +
+        financialTransactions +
+        statusHistory +
+        referralsUpdated,
+      clientReferences: 1,
+      renewals,
+      receivables,
+      paymentIntents,
+      paymentWebhookEvents,
+      recoveryCampaigns: campaigns,
+      recoveryCampaignSteps: campaignSteps,
+      messageDispatches: dispatches,
+      billingResponses,
+      financialTransactions,
+      statusHistory,
+      referralsUpdated,
+    };
+  }
+
+  private async countClientRemovalTargets(clientId: string) {
+    const clientReferenceIds = await this.findReferenceIdsByClient(clientId);
+    const receivableIds = await this.findReceivableIdsByClient(clientId);
+    const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+    const campaignIds = await this.findRecoveryCampaignIdsByClient(clientId);
+    const [
+      references,
+      renewals,
+      receivables,
+      paymentIntents,
+      paymentWebhookEvents,
+      campaigns,
+      campaignSteps,
+      dispatches,
+      billingResponses,
+      financialTransactions,
+      statusHistory,
+      events,
+      referralsReceived,
+      referralsMade,
+      referralsUpdated,
+      whatsappPendingContacts,
+      whatsappInboundMessages,
+    ] = await this.prisma.$transaction([
+      this.prisma.clientReference.count({ where: { clientId } }),
+      this.prisma.renewal.count({ where: { clientId } }),
+      this.prisma.receivable.count({ where: { clientId } }),
+      this.prisma.paymentIntent.count({ where: { receivableId: { in: receivableIds } } }),
+      this.prisma.paymentWebhookEvent.count({
+        where: { paymentIntentId: { in: paymentIntentIds } },
+      }),
+      this.prisma.recoveryCampaign.count({ where: { clientId } }),
+      this.prisma.recoveryCampaignStep.count({
+        where: { campaign: { clientId } },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          OR: [
+            { clientId },
+            { clientReferenceId: { in: clientReferenceIds } },
+            { receivableId: { in: receivableIds } },
+            { recoveryCampaignId: { in: campaignIds } },
+          ],
+        },
+      }),
+      this.prisma.billingResponse.count({ where: { clientId } }),
+      this.prisma.financialTransaction.count({
+        where: {
+          OR: [
+            { clientId },
+            { clientReferenceId: { in: clientReferenceIds } },
+            { receivableId: { in: receivableIds } },
+          ],
+        },
+      }),
+      this.prisma.clientStatusHistory.count({ where: { clientId } }),
+      this.prisma.clientEvent.count({ where: { clientId } }),
+      this.prisma.referral.count({ where: { referredClientId: clientId } }),
+      this.prisma.referral.count({ where: { referrerClientId: clientId } }),
+      this.prisma.referral.count({
+        where: {
+          rewardClientReferenceId: { in: clientReferenceIds },
+          NOT: { OR: [{ referredClientId: clientId }, { referrerClientId: clientId }] },
+        },
+      }),
+      this.prisma.whatsAppPendingContact.count({ where: { clientId } }),
+      this.prisma.whatsAppInboundMessage.count({ where: { clientId } }),
+    ]);
+
+    return {
+      total:
+        1 +
+        references +
+        renewals +
+        receivables +
+        paymentIntents +
+        paymentWebhookEvents +
+        campaigns +
+        campaignSteps +
+        dispatches +
+        billingResponses +
+        financialTransactions +
+        statusHistory +
+        events +
+        referralsReceived +
+        referralsMade +
+        referralsUpdated +
+        whatsappPendingContacts +
+        whatsappInboundMessages,
+      clients: 1,
+      clientReferences: references,
+      renewals,
+      receivables,
+      paymentIntents,
+      paymentWebhookEvents,
+      recoveryCampaigns: campaigns,
+      recoveryCampaignSteps: campaignSteps,
+      messageDispatches: dispatches,
+      billingResponses,
+      financialTransactions,
+      statusHistory,
+      clientEvents: events,
+      referralsReceived,
+      referralsMade,
+      referralsUpdated,
+      whatsappPendingContacts,
+      whatsappInboundMessages,
+    };
+  }
+
+  private async deleteReferenceTree(clientReferenceId: string) {
+    const counts = await this.countReferenceRemovalTargets(clientReferenceId);
+    const receivableIds = await this.findReceivableIdsByReference(clientReferenceId);
+    const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.paymentWebhookEvent.deleteMany({
+        where: { paymentIntentId: { in: paymentIntentIds } },
+      });
+      await tx.billingResponse.deleteMany({ where: { clientReferenceId } });
+      await tx.recoveryCampaign.deleteMany({ where: { clientReferenceId } });
+      await tx.messageDispatch.deleteMany({
+        where: {
+          OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }],
+        },
+      });
+      await tx.financialTransaction.deleteMany({
+        where: {
+          OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }],
+        },
+      });
+      await tx.paymentIntent.deleteMany({ where: { receivableId: { in: receivableIds } } });
+      await tx.receivable.deleteMany({ where: { clientReferenceId } });
+      await tx.renewal.deleteMany({ where: { clientReferenceId } });
+      await tx.clientStatusHistory.deleteMany({ where: { clientReferenceId } });
+      await tx.referral.updateMany({
+        where: { rewardClientReferenceId: clientReferenceId },
+        data: { rewardClientReferenceId: null },
+      });
+      await tx.clientReference.delete({ where: { id: clientReferenceId } });
+    });
+
+    return counts;
+  }
+
+  private async deleteClientTree(clientId: string) {
+    const counts = await this.countClientRemovalTargets(clientId);
+    const clientReferenceIds = await this.findReferenceIdsByClient(clientId);
+    const receivableIds = await this.findReceivableIdsByClient(clientId);
+    const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+    const campaignIds = await this.findRecoveryCampaignIdsByClient(clientId);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.paymentWebhookEvent.deleteMany({
+        where: { paymentIntentId: { in: paymentIntentIds } },
+      });
+      await tx.billingResponse.deleteMany({ where: { clientId } });
+      await tx.referral.deleteMany({
+        where: { OR: [{ referredClientId: clientId }, { referrerClientId: clientId }] },
+      });
+      await tx.referral.updateMany({
+        where: { rewardClientReferenceId: { in: clientReferenceIds } },
+        data: { rewardClientReferenceId: null },
+      });
+      await tx.whatsAppInboundMessage.deleteMany({ where: { clientId } });
+      await tx.whatsAppPendingContact.deleteMany({ where: { clientId } });
+      await tx.recoveryCampaign.deleteMany({ where: { clientId } });
+      await tx.messageDispatch.deleteMany({
+        where: {
+          OR: [
+            { clientId },
+            { clientReferenceId: { in: clientReferenceIds } },
+            { receivableId: { in: receivableIds } },
+            { recoveryCampaignId: { in: campaignIds } },
+          ],
+        },
+      });
+      await tx.financialTransaction.deleteMany({
+        where: {
+          OR: [
+            { clientId },
+            { clientReferenceId: { in: clientReferenceIds } },
+            { receivableId: { in: receivableIds } },
+          ],
+        },
+      });
+      await tx.paymentIntent.deleteMany({ where: { receivableId: { in: receivableIds } } });
+      await tx.receivable.deleteMany({ where: { clientId } });
+      await tx.renewal.deleteMany({ where: { clientId } });
+      await tx.clientStatusHistory.deleteMany({ where: { clientId } });
+      await tx.clientEvent.deleteMany({ where: { clientId } });
+      await tx.clientReference.deleteMany({ where: { clientId } });
+      await tx.client.delete({ where: { id: clientId } });
+    });
+
+    return counts;
+  }
+
+  private async findReferenceIdsByClient(clientId: string) {
+    const references = await this.prisma.clientReference.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+
+    return references.map((reference) => reference.id);
+  }
+
+  private async findReceivableIdsByClient(clientId: string) {
+    const receivables = await this.prisma.receivable.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+
+    return receivables.map((receivable) => receivable.id);
+  }
+
+  private async findReceivableIdsByReference(clientReferenceId: string) {
+    const receivables = await this.prisma.receivable.findMany({
+      where: { clientReferenceId },
+      select: { id: true },
+    });
+
+    return receivables.map((receivable) => receivable.id);
+  }
+
+  private async findPaymentIntentIdsByReceivables(receivableIds: string[]) {
+    if (!receivableIds.length) {
+      return [];
+    }
+
+    const intents = await this.prisma.paymentIntent.findMany({
+      where: { receivableId: { in: receivableIds } },
+      select: { id: true },
+    });
+
+    return intents.map((intent) => intent.id);
+  }
+
+  private async findRecoveryCampaignIdsByClient(clientId: string) {
+    const campaigns = await this.prisma.recoveryCampaign.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+
+    return campaigns.map((campaign) => campaign.id);
+  }
+
+  private async cancelFutureReferenceBillingDispatches(
+    tx: Prisma.TransactionClient,
+    clientReferenceId: string,
+    status: ClientStatus,
+  ) {
+    await tx.messageDispatch.updateMany({
+      where: {
+        clientReferenceId,
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode:
+          status === 'CANCELADO' ? 'CLIENT_REFERENCE_CANCELED' : 'CLIENT_REFERENCE_INACTIVE',
+        errorMessage:
+          status === 'CANCELADO'
+            ? 'Referencia cancelada antes do envio da cobranca.'
+            : 'Referencia inativada antes do envio da cobranca.',
+        nextAttemptAt: null,
+      },
+    });
+  }
+
   private requiresReason(status: ClientStatus) {
     return status === 'INATIVO' || status === 'CANCELADO';
+  }
+
+  private ensureDeleteConfirmed(dto: DeleteClientConfirmationDto) {
+    if (dto.confirmation !== 'REMOVER') {
+      throw new BadRequestException('Confirmacao invalida para remocao destrutiva.');
+    }
   }
 
   private rejectLegacyOperationalClientFields(dto: UpdateClientDto) {

@@ -462,6 +462,7 @@ export class ReportsService {
         include: {
           client: true,
           clientReference: true,
+          receivable: true,
           steps: { orderBy: { stepNumber: 'asc' } },
         },
         orderBy: [{ status: 'asc' }, { startedAt: 'desc' }],
@@ -477,7 +478,16 @@ export class ReportsService {
     ]);
 
     return {
-      columns: ['Cliente', 'Referencia', 'Inicio', 'Etapa atual', 'Status', 'Resultado'],
+      columns: [
+        'Cliente',
+        'Referencia',
+        'Receivable',
+        'Vencimento',
+        'Inicio',
+        'Etapa atual',
+        'Status',
+        'Resultado',
+      ],
       rows: items.map((campaign) => {
         const currentStep =
           campaign.steps.find((step) => ['SCHEDULED', 'FAILED'].includes(step.status)) ??
@@ -486,6 +496,8 @@ export class ReportsService {
         return {
           Cliente: campaign.client.name,
           Referencia: campaign.clientReference.reference,
+          Receivable: campaign.receivable?.id ?? '',
+          Vencimento: campaign.receivable ? formatBusinessDate(campaign.receivable.dueDate) : '',
           Inicio: formatBusinessDate(campaign.startedAt),
           'Etapa atual': currentStep
             ? `${currentStep.stepNumber} (${currentStep.delayDays} dias)`

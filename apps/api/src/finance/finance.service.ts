@@ -18,6 +18,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
+import { RecoveryService } from '../recovery/recovery.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import {
   addCalendarMonthsPreservingAnchor,
@@ -82,6 +83,9 @@ export class FinanceService {
     @Optional()
     @Inject(ReceivableCycleService)
     private readonly receivableCycleService?: ReceivableCycleService,
+    @Optional()
+    @Inject(RecoveryService)
+    private readonly recoveryService?: RecoveryService,
   ) {}
 
   async listCategories() {
@@ -590,6 +594,13 @@ export class FinanceService {
           createdByUserId: actorUserId,
         },
       });
+
+      await this.recoveryService?.cancelActiveForReceivable(
+        tx,
+        existing.id,
+        'RECEIVABLE_CANCELED',
+        'Conta a receber cancelada durante campanha de recuperacao.',
+      );
 
       return updated;
     });
@@ -1165,6 +1176,15 @@ export class FinanceService {
     actorUserId: string | null,
     options: { receivableWasPending: boolean },
   ) {
+    if (options.receivableWasPending) {
+      await this.recoveryService?.cancelActiveForReceivable(
+        tx,
+        receivableId,
+        'RECEIVABLE_PAID',
+        'Conta a receber paga durante campanha de recuperacao.',
+      );
+    }
+
     await this.activateClientAfterInitialPayment(tx, receivableId, actorUserId);
     await this.advanceClientReferenceAfterRenewalPayment(tx, receivableId, actorUserId, options);
   }

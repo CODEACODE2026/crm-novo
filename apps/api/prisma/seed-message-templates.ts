@@ -21,25 +21,25 @@ async function main() {
       type: 'RECOVERY_DAY_3' as const,
       name: 'Recuperacao 3 dias',
       content:
-        'Olá, *{{primeiroNome}}*! Passando para saber se tem interesse em renovar seu serviço de suporte. Se quiser continuar, posso te ajudar com a renovação.',
+        'Olá, *{{primeiroNome}}*! Identifiquei que existe uma cobrança pendente do vencimento {{vencimento}}. Posso te ajudar a regularizar?',
     },
     {
       type: 'RECOVERY_DAY_10' as const,
       name: 'Recuperacao 10 dias',
       content:
-        'Olá, *{{primeiroNome}}*! Seu serviço continua inativo no momento. Caso queira reativar, me chama que posso te ajudar com a renovação.',
+        'Olá, *{{primeiroNome}}*! A cobrança de {{valor}} vencida em {{vencimento}} ainda consta como pendente. Quer que eu te envie as opções de pagamento?',
     },
     {
       type: 'RECOVERY_DAY_15' as const,
       name: 'Recuperacao 15 dias',
       content:
-        'Oi, *{{primeiroNome}}*! Só passando novamente para saber se deseja voltar a utilizar o serviço. Se tiver interesse, posso organizar a renovação para você.',
+        'Oi, *{{primeiroNome}}*! Estou acompanhando a pendência financeira da referência {{referencia}}. Posso te apoiar para resolver hoje?',
     },
     {
       type: 'RECOVERY_DAY_30' as const,
       name: 'Recuperacao 30 dias',
       content:
-        'Olá, *{{primeiroNome}}*! Este é nosso último lembrete automático sobre a reativação do serviço. Se quiser voltar futuramente, é só entrar em contato.',
+        'Olá, *{{primeiroNome}}*! A pendência da referência {{referencia}} segue aberta. Este é o último lembrete automático deste ciclo financeiro.',
     },
   ];
 

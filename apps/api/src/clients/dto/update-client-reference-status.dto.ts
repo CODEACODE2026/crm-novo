@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { ClientStatus } from '@prisma/client';
 
 export class UpdateClientReferenceStatusDto {
@@ -8,8 +8,4 @@ export class UpdateClientReferenceStatusDto {
   @IsOptional()
   @IsString()
   reason?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  startRecovery?: boolean;
 }

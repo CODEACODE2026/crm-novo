@@ -1,7 +1,18 @@
-import { Controller, Get, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ListRecoveryCampaignsDto } from './dto/list-recovery-campaigns.dto';
 import { RecoveryService } from './recovery.service';
+import { UpdateRecoveryAutomationSettingsDto } from './dto/update-recovery-automation-settings.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('recovery')
@@ -11,6 +22,16 @@ export class RecoveryController {
   @Get('summary')
   summary() {
     return this.recoveryService.summary();
+  }
+
+  @Get('automation-settings')
+  getAutomationSettings() {
+    return this.recoveryService.getSettings();
+  }
+
+  @Patch('automation-settings')
+  updateAutomationSettings(@Body() dto: UpdateRecoveryAutomationSettingsDto) {
+    return this.recoveryService.updateSettings(dto);
   }
 
   @Get('campaigns')

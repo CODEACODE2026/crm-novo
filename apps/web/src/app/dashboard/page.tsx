@@ -48,6 +48,8 @@ import {
   createManualExpense,
   createReceivablePix,
   createPlan,
+  deleteClient,
+  deleteClientReference,
   deletePlan,
   deleteFinancialCategory,
   deleteFinancialTransaction,
@@ -76,6 +78,8 @@ import {
   downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
+  previewDeleteClient,
+  previewDeleteClientReference,
   previewReferenceRenewal,
   refreshWhatsAppStatus,
   reopenWhatsAppPendingContact,
@@ -99,6 +103,7 @@ import {
   getBillingSummary,
   generateCurrentCycleReceivable,
   getRecoverySummary,
+  getRecoveryAutomationSettings,
   getReferralSummary,
   listBillingDispatches,
   listMessageTemplates,
@@ -116,6 +121,7 @@ import {
   testPaymentProviderCredential,
   updateMessageTemplate,
   updateBillingAutomationSettings,
+  updateRecoveryAutomationSettings,
   syncPaymentIntent,
   deactivatePaymentProviderCredential,
   registerPaymentWebhook,
@@ -148,6 +154,7 @@ import {
   type MessageDispatch,
   type MessageTemplate,
   type RecoveryCampaign,
+  type RecoveryAutomationSettings,
   type RecoveryCampaignStatus,
   type RecoverySummary,
   type Referral,
@@ -210,6 +217,19 @@ type RenewalTarget = {
   reference: ClientReference;
 };
 
+type DeletionDialogTarget =
+  | {
+      kind: 'client';
+      client: Client;
+      preview: Awaited<ReturnType<typeof previewDeleteClient>>;
+    }
+  | {
+      kind: 'reference';
+      client: Client;
+      reference: ClientReference;
+      preview: Awaited<ReturnType<typeof previewDeleteClientReference>>;
+    };
+
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
@@ -223,12 +243,12 @@ export default function DashboardPage() {
   const [planFormOpen, setPlanFormOpen] = useState(false);
   const [financeInitialTab, setFinanceInitialTab] = useState<FinanceTab>('summary');
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
+  const [deletionTarget, setDeletionTarget] = useState<DeletionDialogTarget | null>(null);
   const [renewalNotice, setRenewalNotice] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ClientStatus | ''>('');
   const [planId, setPlanId] = useState('');
   const [statusReason, setStatusReason] = useState('');
-  const [startRecovery, setStartRecovery] = useState(false);
   const [error, setError] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
 
@@ -300,16 +320,68 @@ export default function DashboardPage() {
   async function handleReferenceStatusChange(reference: ClientReference, nextStatus: ClientStatus) {
     if (!selectedClient) return;
 
-    await updateClientReferenceStatus(
-      reference.id,
-      nextStatus,
-      statusReason.trim() || undefined,
-      nextStatus === 'INATIVO' && startRecovery,
+    const actionLabel =
+      nextStatus === 'INATIVO' ? 'inativar' : nextStatus === 'CANCELADO' ? 'cancelar' : 'ativar';
+    const requiresReason = nextStatus === 'INATIVO' || nextStatus === 'CANCELADO';
+    const reason =
+      requiresReason && !statusReason.trim()
+        ? window.prompt(`Informe o motivo para ${actionLabel} a referencia ${reference.reference}:`)
+        : statusReason;
+
+    if (requiresReason && !reason?.trim()) {
+      setError('Motivo obrigatorio para inativar ou cancelar referencia.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      [
+        `${actionLabel[0]?.toUpperCase()}${actionLabel.slice(1)} referencia?`,
+        `Referencia: ${reference.reference}`,
+        `Cliente: ${selectedClient.name}`,
+        `Status atual: ${reference.status}`,
+        `Novo status: ${nextStatus}`,
+        reason?.trim() ? `Motivo: ${reason.trim()}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await updateClientReferenceStatus(reference.id, nextStatus, reason?.trim() || undefined);
     setStatusReason('');
-    setStartRecovery(false);
     const detailed = await getClient(selectedClient.id);
     setSelectedClient(detailed);
+    await loadData();
+  }
+
+  async function handleRemoveReference(reference: ClientReference) {
+    if (!selectedClient) return;
+
+    const preview = await previewDeleteClientReference(reference.id);
+    setDeletionTarget({ kind: 'reference', client: selectedClient, reference, preview });
+  }
+
+  async function handleRemoveClient(client: Client) {
+    const preview = await previewDeleteClient(client.id);
+    setDeletionTarget({ kind: 'client', client, preview });
+  }
+
+  async function confirmDeletion(target: DeletionDialogTarget) {
+    if (target.kind === 'reference') {
+      await deleteClientReference(target.reference.id, 'REMOVER');
+      const detailed = await getClient(target.client.id);
+      setSelectedClient(detailed);
+      setDeletionTarget(null);
+      await loadData();
+      return;
+    }
+
+    await deleteClient(target.client.id, 'REMOVER');
+    setSelectedClient(null);
+    setDeletionTarget(null);
     await loadData();
   }
 
@@ -472,6 +544,8 @@ export default function DashboardPage() {
                 await loadData();
               }}
               onSelect={setSelectedClient}
+              onRemoveClient={(client) => void handleRemoveClient(client)}
+              onRemoveReference={(reference) => void handleRemoveReference(reference)}
               onReferenceStatusChange={(reference, nextStatus) =>
                 void handleReferenceStatusChange(reference, nextStatus)
               }
@@ -493,10 +567,8 @@ export default function DashboardPage() {
               setSearch={setSearch}
               setStatus={setStatus}
               setStatusReason={setStatusReason}
-              setStartRecovery={setStartRecovery}
               status={status}
               statusReason={statusReason}
-              startRecovery={startRecovery}
               renewalNotice={renewalNotice}
             />
           ) : null}
@@ -558,7 +630,120 @@ export default function DashboardPage() {
             onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
           />
         ) : null}
+        {deletionTarget ? (
+          <DeletionConfirmationModal
+            target={deletionTarget}
+            onClose={() => setDeletionTarget(null)}
+            onConfirm={confirmDeletion}
+          />
+        ) : null}
       </main>
+    </div>
+  );
+}
+
+function DeletionConfirmationModal({
+  target,
+  onClose,
+  onConfirm,
+}: {
+  target: DeletionDialogTarget;
+  onClose: () => void;
+  onConfirm: (target: DeletionDialogTarget) => Promise<void>;
+}) {
+  const [confirmation, setConfirmation] = useState('');
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState('');
+  const isClient = target.kind === 'client';
+  const title = isClient ? 'Remover cliente' : 'Remover referencia';
+  const targetLabel = isClient ? target.client.name : target.reference.reference;
+  const counts = Object.entries(target.preview.counts).filter(([, value]) => value > 0);
+
+  async function submit() {
+    if (confirmation !== 'REMOVER') {
+      setError('Digite REMOVER para confirmar.');
+      return;
+    }
+
+    setWorking(true);
+    setError('');
+
+    try {
+      await onConfirm(target);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel remover.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="deletion-title">
+        <header className="modal-header">
+          <div>
+            <span className="metric-label">ACAO DESTRUTIVA</span>
+            <h2 id="deletion-title">{title}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={18} />
+          </button>
+        </header>
+        {error ? <div className="notice danger">{error}</div> : null}
+        <div className="notice danger">
+          Esta acao removera permanentemente {isClient ? 'o cliente' : 'a referencia'} e os dados
+          vinculados listados abaixo. Esta acao nao pode ser desfeita.
+        </div>
+        <dl className="detail-list">
+          <div>
+            <dt>Alvo</dt>
+            <dd>{targetLabel}</dd>
+          </div>
+          <div>
+            <dt>Confirmacao</dt>
+            <dd>Digite REMOVER</dd>
+          </div>
+        </dl>
+        <div className="table-wrap compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Dado</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {counts.map(([key, value]) => (
+                <tr key={key}>
+                  <td>{key}</td>
+                  <td>{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <label className="field">
+          <span>Confirmacao</span>
+          <input
+            autoFocus
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+        </label>
+        <div className="button-row">
+          <button className="secondary-button" disabled={working} type="button" onClick={onClose}>
+            Cancelar
+          </button>
+          <button
+            className="danger-button"
+            disabled={working || confirmation !== 'REMOVER'}
+            type="button"
+            onClick={() => void submit()}
+          >
+            Remover definitivamente
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1891,6 +2076,8 @@ function ClientsView({
   onCreateReference,
   onUpdateReference,
   onReferenceStatusChange,
+  onRemoveClient,
+  onRemoveReference,
   onSelect,
   onWhatsAppSent,
   onUpdate,
@@ -1902,10 +2089,8 @@ function ClientsView({
   setSearch,
   setStatus,
   setStatusReason,
-  setStartRecovery,
   status,
   statusReason,
-  startRecovery,
   renewalNotice,
 }: {
   clientFormOpen: boolean;
@@ -1926,6 +2111,8 @@ function ClientsView({
     payload: Partial<Omit<ClientPayload, 'name' | 'phone' | 'email'>>,
   ) => Promise<void>;
   onReferenceStatusChange: (reference: ClientReference, status: ClientStatus) => void;
+  onRemoveClient: (client: Client) => void;
+  onRemoveReference: (reference: ClientReference) => void;
   onSelect: (client: Client) => void;
   onWhatsAppSent: (clientId: string) => Promise<void>;
   onUpdate: (payload: ClientUpdatePayload) => Promise<void>;
@@ -1937,10 +2124,8 @@ function ClientsView({
   setSearch: (value: string) => void;
   setStatus: (value: ClientStatus | '') => void;
   setStatusReason: (value: string) => void;
-  setStartRecovery: (value: boolean) => void;
   status: ClientStatus | '';
   statusReason: string;
-  startRecovery: boolean;
   renewalNotice: string;
 }) {
   const [detailTab, setDetailTab] = useState<
@@ -2098,6 +2283,14 @@ function ClientsView({
               >
                 <Pencil aria-hidden="true" size={17} />
               </button>
+              <button
+                className="icon-button danger-icon"
+                title="Remover cliente"
+                type="button"
+                onClick={() => onRemoveClient(selectedClient)}
+              >
+                <X aria-hidden="true" size={17} />
+              </button>
             </div>
             <div className="button-row detail-actions">
               <button
@@ -2247,26 +2440,15 @@ function ClientsView({
                   />
                 ) : null}
                 <div className="status-actions">
+                  <div className="notice">
+                    INATIVO = servico temporariamente parado e elegivel para recuperacao. CANCELADO
+                    = encerramento definitivo da referencia, sem continuidade de recuperacao.
+                  </div>
                   <textarea
                     placeholder="Justificativa para inativar ou cancelar referencia"
                     value={statusReason}
                     onChange={(event) => setStatusReason(event.target.value)}
                   />
-                  <label className="checkbox-row">
-                    <input
-                      checked={startRecovery}
-                      type="checkbox"
-                      onChange={(event) => setStartRecovery(event.target.checked)}
-                    />
-                    <span>Tentar recuperar esta referencia automaticamente</span>
-                  </label>
-                  {startRecovery ? (
-                    <div className="step-chips">
-                      {[3, 10, 15, 30].map((day) => (
-                        <span key={day}>{day} dias</span>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
                 {(selectedClient.references ?? []).map((reference) => (
                   <article key={reference.id}>
@@ -2276,6 +2458,18 @@ function ClientsView({
                       {formatCurrency(reference.recurringValue)} | {formatDate(reference.dueDate)} |{' '}
                       {reference.billingNoticeDays} dias antes
                     </p>
+                    {reference.inactivatedAt ? (
+                      <p>
+                        Inativada em {formatDateTime(reference.inactivatedAt)}
+                        {reference.inactivationReason ? ` | ${reference.inactivationReason}` : ''}
+                      </p>
+                    ) : null}
+                    {reference.canceledAt ? (
+                      <p>
+                        Cancelada em {formatDateTime(reference.canceledAt)}
+                        {reference.cancellationReason ? ` | ${reference.cancellationReason}` : ''}
+                      </p>
+                    ) : null}
                     <StatusBadge status={reference.status} />
                     <div className="button-row">
                       <button
@@ -2299,6 +2493,7 @@ function ClientsView({
                       </button>
                       <button
                         className="secondary-button"
+                        disabled={reference.status === 'CANCELADO'}
                         type="button"
                         onClick={() => onReferenceStatusChange(reference, 'ATIVO')}
                       >
@@ -2309,14 +2504,21 @@ function ClientsView({
                         type="button"
                         onClick={() => onReferenceStatusChange(reference, 'INATIVO')}
                       >
-                        Inativar
+                        Inativar referencia
                       </button>
                       <button
                         className="danger-button"
                         type="button"
                         onClick={() => onReferenceStatusChange(reference, 'CANCELADO')}
                       >
-                        Cancelar
+                        Cancelar referencia
+                      </button>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        onClick={() => onRemoveReference(reference)}
+                      >
+                        Remover referencia
                       </button>
                     </div>
                   </article>
@@ -3059,6 +3261,10 @@ function AutomationsView() {
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
   const [sendTime, setSendTime] = useState('09:00');
   const [sendIntervalSeconds, setSendIntervalSeconds] = useState('8');
+  const [recoverySettings, setRecoverySettings] = useState<RecoveryAutomationSettings | null>(null);
+  const [recoverySendTime, setRecoverySendTime] = useState('09:00');
+  const [recoverySendIntervalSeconds, setRecoverySendIntervalSeconds] = useState('8');
+  const [recoveryOffsets, setRecoveryOffsets] = useState(['3', '7', '15', '30']);
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
   const [campaignPagination, setCampaignPagination] = useState<
@@ -3076,21 +3282,27 @@ function AutomationsView() {
     setError('');
 
     try {
-      const [nextBilling, nextBillingSettings, nextRecovery, nextCampaigns] = await Promise.all([
-        getBillingSummary(),
-        getBillingAutomationSettings(),
-        getRecoverySummary(),
-        listRecoveryCampaigns({
-          ...(status ? { status } : {}),
-          ...(search.trim() ? { search: search.trim() } : {}),
-          page,
-          pageSize: 20,
-        }),
-      ]);
+      const [nextBilling, nextBillingSettings, nextRecoverySettings, nextRecovery, nextCampaigns] =
+        await Promise.all([
+          getBillingSummary(),
+          getBillingAutomationSettings(),
+          getRecoveryAutomationSettings(),
+          getRecoverySummary(),
+          listRecoveryCampaigns({
+            ...(status ? { status } : {}),
+            ...(search.trim() ? { search: search.trim() } : {}),
+            page,
+            pageSize: 20,
+          }),
+        ]);
       setBillingSummary(nextBilling);
       setBillingSettings(nextBillingSettings);
       setSendTime(nextBillingSettings.sendTime);
       setSendIntervalSeconds(String(nextBillingSettings.sendIntervalSeconds));
+      setRecoverySettings(nextRecoverySettings);
+      setRecoverySendTime(nextRecoverySettings.sendTime);
+      setRecoverySendIntervalSeconds(String(nextRecoverySettings.sendIntervalSeconds));
+      setRecoveryOffsets(nextRecoverySettings.steps.map((step) => String(step.offsetDays)));
       setRecoverySummary(nextRecovery);
       setCampaigns(nextCampaigns.items);
       setCampaignPagination(nextCampaigns.pagination);
@@ -3141,6 +3353,48 @@ function AutomationsView() {
     } finally {
       setWorking('');
     }
+  }
+
+  async function saveRecoverySettings(payload: Partial<RecoveryAutomationSettings>) {
+    setWorking('recovery-settings');
+    setError('');
+
+    try {
+      const next = await updateRecoveryAutomationSettings({
+        ...payload,
+        timezone: 'America/Sao_Paulo',
+      });
+      setRecoverySettings(next);
+      setRecoverySendTime(next.sendTime);
+      setRecoverySendIntervalSeconds(String(next.sendIntervalSeconds));
+      setRecoveryOffsets(next.steps.map((step) => String(step.offsetDays)));
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel salvar recuperacao.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  function recoveryPayloadFromOffsets(offsets: string[]) {
+    const parsed = offsets.map((offset) => Number(offset));
+
+    if (
+      parsed.some((offset) => !Number.isInteger(offset) || offset <= 0) ||
+      new Set(parsed).size !== parsed.length ||
+      parsed.some((offset, index) => index > 0 && offset <= parsed[index - 1]!)
+    ) {
+      throw new Error(
+        'Etapas de recuperacao devem ter dias maiores que zero, sem duplicidade e em ordem crescente.',
+      );
+    }
+
+    return {
+      day3OffsetDays: parsed[0]!,
+      day10OffsetDays: parsed[1]!,
+      day15OffsetDays: parsed[2]!,
+      day30OffsetDays: parsed[3]!,
+    };
   }
 
   async function runBillingReceivablesReconcile() {
@@ -3302,6 +3556,131 @@ function AutomationsView() {
           <p className="helper-text">
             Define o intervalo minimo entre o envio de uma cobranca e a proxima.
           </p>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <span className="metric-label">RECUPERACAO</span>
+              <h2>{recoverySettings?.enabled ? 'Ativa' : 'Desativada'}</h2>
+            </div>
+            <label className="toggle-field compact-toggle">
+              <input
+                checked={Boolean(recoverySettings?.enabled)}
+                disabled={!recoverySettings || working === 'recovery-settings'}
+                type="checkbox"
+                onChange={(event) => void saveRecoverySettings({ enabled: event.target.checked })}
+              />
+              <span>Ativar recuperacao automatica</span>
+            </label>
+          </div>
+          <div className="form-grid automation-settings-grid">
+            <label className="field">
+              <span>Horario de recuperacao</span>
+              <input
+                required
+                type="time"
+                value={recoverySendTime}
+                onChange={(event) => setRecoverySendTime(event.target.value)}
+                onBlur={() => {
+                  if (recoverySendTime && recoverySendTime !== recoverySettings?.sendTime) {
+                    void saveRecoverySettings({ sendTime: recoverySendTime });
+                  }
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Intervalo entre mensagens</span>
+              <input
+                min={3}
+                max={300}
+                required
+                step={1}
+                type="number"
+                value={recoverySendIntervalSeconds}
+                onChange={(event) => setRecoverySendIntervalSeconds(event.target.value)}
+                onBlur={() => {
+                  const parsed = Number(recoverySendIntervalSeconds);
+
+                  if (
+                    Number.isInteger(parsed) &&
+                    parsed >= 3 &&
+                    parsed <= 300 &&
+                    parsed !== recoverySettings?.sendIntervalSeconds
+                  ) {
+                    void saveRecoverySettings({ sendIntervalSeconds: parsed });
+                  }
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Timezone</span>
+              <input disabled value="America/Sao_Paulo" readOnly />
+            </label>
+          </div>
+          <div className="table-wrap compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Etapa</th>
+                  <th>Dias apos vencimento</th>
+                  <th>Template</th>
+                  <th>Ativa</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(recoverySettings?.steps ?? []).map((step, index) => (
+                  <tr key={step.stepNumber}>
+                    <td>Etapa {step.stepNumber}</td>
+                    <td>
+                      <input
+                        min={1}
+                        required
+                        step={1}
+                        type="number"
+                        value={recoveryOffsets[index] ?? String(step.offsetDays)}
+                        onChange={(event) => {
+                          const next = [...recoveryOffsets];
+                          next[index] = event.target.value;
+                          setRecoveryOffsets(next);
+                        }}
+                        onBlur={() => {
+                          try {
+                            void saveRecoverySettings(recoveryPayloadFromOffsets(recoveryOffsets));
+                          } catch (err) {
+                            setError(
+                              err instanceof Error
+                                ? err.message
+                                : 'Etapas de recuperacao invalidas.',
+                            );
+                          }
+                        }}
+                      />
+                    </td>
+                    <td>{step.templateType}</td>
+                    <td>
+                      <input
+                        checked={step.enabled}
+                        type="checkbox"
+                        onChange={(event) => {
+                          const keys = [
+                            'day3Enabled',
+                            'day10Enabled',
+                            'day15Enabled',
+                            'day30Enabled',
+                          ] as const;
+                          const key = keys[index];
+                          if (key) {
+                            void saveRecoverySettings({ [key]: event.target.checked });
+                          }
+                        }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <div className="metric-grid billing-kpis">
@@ -3468,6 +3847,10 @@ function AutomationsView() {
             <thead>
               <tr>
                 <th>Cliente</th>
+                <th>Referencia</th>
+                <th>Receivable</th>
+                <th>Vencimento</th>
+                <th>Atraso</th>
                 <th>Status</th>
                 <th>Etapa atual/proxima</th>
                 <th>Proxima data</th>
@@ -3486,6 +3869,12 @@ function AutomationsView() {
                       <strong>{campaign.client?.name ?? 'Cliente'}</strong>
                       <span>{campaign.client?.reference ?? campaign.clientId}</span>
                     </td>
+                    <td>
+                      {campaign.clientReference?.reference ?? campaign.client?.reference ?? '-'}
+                    </td>
+                    <td>{campaign.receivable?.id ?? campaign.receivableId}</td>
+                    <td>{campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}</td>
+                    <td>{campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}</td>
                     <td>
                       <span className={`pill ${campaign.status.toLowerCase()}`}>
                         {recoveryCampaignStatusLabel(campaign.status)}
@@ -3524,11 +3913,20 @@ function AutomationsView() {
         <dl className="detail-list">
           <div>
             <dt>Recuperacao</dt>
-            <dd>RECOVERY_SEND_HOUR=9</dd>
+            <dd>{recoverySettings?.enabled ? 'Ativa' : 'Desativada'}</dd>
           </div>
           <div>
             <dt>Etapas</dt>
-            <dd>3, 10, 15 e 30 dias</dd>
+            <dd>
+              {(recoverySettings?.steps ?? [])
+                .filter((step) => step.enabled)
+                .map((step) => `${step.offsetDays} dias`)
+                .join(', ') || '-'}
+            </dd>
+          </div>
+          <div>
+            <dt>Horario</dt>
+            <dd>{recoverySettings?.sendTime ?? '09:00'}</dd>
           </div>
           <div>
             <dt>Retry</dt>

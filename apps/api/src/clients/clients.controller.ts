@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   Param,
@@ -16,6 +17,7 @@ import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { ClientsService } from './clients.service';
 import { CreateClientReferenceDto } from './dto/create-client-reference.dto';
 import { CreateClientDto } from './dto/create-client.dto';
+import { DeleteClientConfirmationDto } from './dto/delete-client-confirmation.dto';
 import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientReferenceStatusDto } from './dto/update-client-reference-status.dto';
@@ -45,6 +47,11 @@ export class ClientsController {
     return this.clientsService.getReference(referenceId);
   }
 
+  @Get('references/:referenceId/deletion-preview')
+  previewRemoveReference(@Param('referenceId') referenceId: string) {
+    return this.clientsService.previewRemoveReference(referenceId);
+  }
+
   @Patch('references/:referenceId')
   updateReference(
     @Param('referenceId') referenceId: string,
@@ -52,6 +59,14 @@ export class ClientsController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.clientsService.updateReference(referenceId, dto, request.user.id);
+  }
+
+  @Delete('references/:referenceId')
+  removeReference(
+    @Param('referenceId') referenceId: string,
+    @Body() dto: DeleteClientConfirmationDto,
+  ) {
+    return this.clientsService.removeReference(referenceId, dto);
   }
 
   @Post('references/:referenceId/status')
@@ -66,6 +81,11 @@ export class ClientsController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.clientsService.get(id);
+  }
+
+  @Get(':id/deletion-preview')
+  previewRemove(@Param('id') id: string) {
+    return this.clientsService.previewRemove(id);
   }
 
   @Get(':id/references')
@@ -103,5 +123,10 @@ export class ClientsController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.clientsService.updateStatus(id, dto, request.user.id);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string, @Body() dto: DeleteClientConfirmationDto) {
+    return this.clientsService.remove(id, dto);
   }
 }

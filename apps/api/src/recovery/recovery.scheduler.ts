@@ -36,7 +36,7 @@ export class RecoveryScheduler implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.recoveryService.reconcile();
-      await this.recoveryService.processDue();
+      await this.recoveryService.processDue(new Date(), 20, { automatic: true });
     } finally {
       this.running = false;
     }

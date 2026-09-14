@@ -27,6 +27,7 @@ export type NormalizedWhatsAppMessage = {
   direction: 'INCOMING' | 'OUTGOING';
   messageType: NormalizedMessageType;
   text: string | null;
+  quotedProviderMessageId: string | null;
   messageTimestamp: Date | null;
   receivedAt: Date;
   isGroup: boolean;
@@ -80,6 +81,7 @@ export class KiragoWebhookNormalizer {
       direction,
       messageType,
       text: this.extractText(message),
+      quotedProviderMessageId: this.extractQuotedProviderMessageId(message),
       messageTimestamp: this.parseTimestamp(info?.Timestamp),
       receivedAt,
       isGroup,
@@ -181,6 +183,17 @@ export class KiragoWebhookNormalizer {
     }
 
     return null;
+  }
+
+  private extractQuotedProviderMessageId(message: RecordValue | null) {
+    const contextInfo =
+      asRecord(asRecord(message?.extendedTextMessage)?.contextInfo) ??
+      asRecord(asRecord(message?.buttonsResponseMessage)?.contextInfo) ??
+      asRecord(asRecord(message?.templateButtonReplyMessage)?.contextInfo) ??
+      asRecord(asRecord(message?.listResponseMessage)?.contextInfo) ??
+      asRecord(asRecord(message?.interactiveResponseMessage)?.contextInfo);
+
+    return stringOrNull(contextInfo?.stanzaId ?? contextInfo?.quotedMessageId ?? contextInfo?.id);
   }
 
   private extractMessageType(

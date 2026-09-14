@@ -156,6 +156,7 @@ function dispatch(overrides: Record<string, unknown> = {}) {
   return {
     id: 'dispatch-id',
     clientId: client().id,
+    clientReferenceId: clientReference().id,
     receivableId: receivable().id,
     templateId: template().id,
     whatsAppConnectionId: connection().id,
@@ -207,6 +208,7 @@ function serviceFactory({
 } = {}) {
   const clientEventCreate = vi.fn().mockResolvedValue({});
   const clientEventFindFirst = vi.fn().mockResolvedValue(existingClientEvent);
+  const billingResponseUpsert = vi.fn().mockResolvedValue({});
   const updateDispatch = vi.fn().mockImplementation(({ data }) =>
     Promise.resolve(
       dispatch({
@@ -259,6 +261,7 @@ function serviceFactory({
       return callback({
         messageDispatch: { update: updateDispatch },
         clientEvent: { create: clientEventCreate, findFirst: clientEventFindFirst },
+        billingResponse: { upsert: billingResponseUpsert },
       });
     }),
   };
@@ -284,6 +287,7 @@ function serviceFactory({
     clientEventFindFirst,
     updateDispatch,
     updateMany,
+    billingResponseUpsert,
   };
 }
 
@@ -539,7 +543,8 @@ describe('BillingService', () => {
   });
 
   it('sends a due dispatch once and writes timeline only after provider success', async () => {
-    const { service, provider, clientEventCreate, updateDispatch } = serviceFactory();
+    const { service, provider, clientEventCreate, updateDispatch, billingResponseUpsert } =
+      serviceFactory();
 
     const result = await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
 
@@ -551,6 +556,17 @@ describe('BillingService', () => {
     expect(clientEventCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ title: 'Cobranca automatica enviada pelo WhatsApp.' }),
+      }),
+    );
+    expect(billingResponseUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { messageDispatchId: 'dispatch-id' },
+        create: expect.objectContaining({
+          messageDispatchId: 'dispatch-id',
+          receivableId: 'receivable-id',
+          clientReferenceId: 'client-reference-id',
+          clientId: 'client-id',
+        }),
       }),
     );
   });

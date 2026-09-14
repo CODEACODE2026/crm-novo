@@ -12,6 +12,24 @@ import { WhatsAppService } from './whatsapp.service';
 const now = new Date('2026-09-11T00:00:00.000Z');
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
+type TestDispatch = {
+  id: string;
+  clientId: string;
+  whatsAppConnectionId: string;
+  phone: string;
+  body: string;
+  origin: string;
+  status: string;
+  requestId: string;
+  providerMessageId: string | null;
+  errorMessage: string | null;
+  sentAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  client: ReturnType<typeof client>;
+  whatsAppConnection: ReturnType<typeof connection>;
+  [key: string]: unknown;
+};
 
 function connection(overrides: Record<string, unknown> = {}) {
   return {
@@ -44,7 +62,7 @@ function client() {
   };
 }
 
-function clientReference() {
+function clientReference(overrides: Record<string, unknown> = {}) {
   return {
     id: '55555555-5555-4555-8555-555555555555',
     clientId: client().id,
@@ -59,10 +77,11 @@ function clientReference() {
     createdAt: now,
     updatedAt: now,
     plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
+    ...overrides,
   };
 }
 
-function dispatch(overrides: Record<string, unknown> = {}) {
+function dispatch(overrides: Record<string, unknown> = {}): TestDispatch {
   return {
     id: '33333333-3333-4333-8333-333333333333',
     clientId: client().id,
@@ -80,6 +99,54 @@ function dispatch(overrides: Record<string, unknown> = {}) {
     client: client(),
     whatsAppConnection: connection(),
     ...overrides,
+  };
+}
+
+function billingDispatch(overrides: Record<string, unknown> = {}) {
+  return dispatch({
+    origin: 'BILLING',
+    status: 'SENT',
+    clientReferenceId: clientReference().id,
+    receivableId: '66666666-6666-4666-8666-666666666666',
+    providerMessageId: 'provider-billing-id',
+    sentAt: now,
+    billingResponse: {
+      id: '77777777-7777-4777-8777-777777777777',
+      messageDispatchId: dispatch().id,
+      receivableId: '66666666-6666-4666-8666-666666666666',
+      clientReferenceId: clientReference().id,
+      clientId: client().id,
+      inboundMessageId: null,
+      decision: 'PENDING',
+      respondedAt: null,
+      providerMessageId: null,
+      source: 'WHATSAPP',
+      responseText: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    clientReference: clientReference({ status: 'ATIVO' }),
+    receivable: {
+      id: '66666666-6666-4666-8666-666666666666',
+      clientId: client().id,
+      clientReferenceId: clientReference().id,
+      renewalId: null,
+      purpose: 'RENEWAL',
+      description: 'Renovacao Mensal',
+      amount: 50,
+      dueDate: now,
+      status: 'PENDENTE',
+      paidAt: null,
+      canceledAt: null,
+      cancelReason: null,
+      createdAt: now,
+      updatedAt: now,
+      paymentIntents: [],
+    },
+    ...overrides,
+  }) as TestDispatch & {
+    billingResponse: Record<string, unknown>;
+    receivable: Record<string, unknown>;
   };
 }
 
@@ -112,6 +179,26 @@ function pendingContact(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function normalizedInbound(text: string, overrides: Record<string, unknown> = {}) {
+  return {
+    provider: 'KIRAGO',
+    instanceName: 'CRM Principal',
+    providerUserId: 'kirago-user',
+    phone: '5544999999999',
+    contactName: 'Cliente Teste',
+    messageId: `msg-${createHash('sha1').update(text).digest('hex').slice(0, 8)}`,
+    direction: 'INCOMING',
+    messageType: 'text',
+    text,
+    quotedProviderMessageId: null,
+    messageTimestamp: now,
+    receivedAt: now,
+    isGroup: false,
+    mediaMetadata: null,
+    ...overrides,
+  };
+}
+
 function serviceFactory({
   currentConnection = connection(),
   providerOverrides = {},
@@ -123,6 +210,9 @@ function serviceFactory({
   encryptionOverrides?: Record<string, unknown>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
+  const txReceivableUpdate = vi.fn().mockResolvedValue({});
+  const txClientEventCreate = vi.fn().mockResolvedValue({});
+  const txClientEventFindFirst = vi.fn().mockResolvedValue(null);
   const prisma = {
     whatsAppConnection: {
       findFirst: vi.fn().mockResolvedValue(currentConnection),
@@ -171,7 +261,16 @@ function serviceFactory({
         .fn()
         .mockResolvedValue(dispatch({ status: 'FAILED', errorMessage: 'Falha segura' })),
       findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
       findUniqueOrThrow: vi.fn(),
+    },
+    billingResponse: {
+      create: vi.fn().mockResolvedValue(billingDispatch().billingResponse),
+      update: vi
+        .fn()
+        .mockImplementation(({ data }) =>
+          Promise.resolve({ ...billingDispatch().billingResponse, ...data }),
+        ),
     },
     whatsAppInboundMessage: {
       create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
@@ -214,8 +313,11 @@ function serviceFactory({
             dueDate: now,
             status: 'PENDENTE',
           }),
+          update: txReceivableUpdate,
         },
         messageDispatch: {
+          findMany: prisma.messageDispatch.findMany,
+          findFirst: prisma.messageDispatch.findFirst,
           update: vi.fn().mockResolvedValue(
             dispatch({
               status: 'SENT',
@@ -225,8 +327,10 @@ function serviceFactory({
           ),
         },
         clientEvent: {
-          create: vi.fn().mockResolvedValue({}),
+          create: txClientEventCreate,
+          findFirst: txClientEventFindFirst,
         },
+        billingResponse: prisma.billingResponse,
         whatsAppInboundMessage: {
           create: prisma.whatsAppInboundMessage.create,
           update: prisma.whatsAppInboundMessage.update,
@@ -289,6 +393,9 @@ function serviceFactory({
     finance,
     encryption,
     normalizer,
+    txReceivableUpdate,
+    txClientEventCreate,
+    txClientEventFindFirst,
   };
 }
 
@@ -676,6 +783,380 @@ describe('WhatsAppService', () => {
 
     expect(result).toMatchObject({ action: 'client_exists' });
     expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('records controlled SIM as accepted for the matching sent billing dispatch', async () => {
+    const { service, prisma, normalizer, txClientEventCreate } = serviceFactory();
+    prisma.messageDispatch.findFirst.mockResolvedValue(billingDispatch());
+    normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: '5544999999999',
+      contactName: 'Cliente Teste',
+      messageId: 'msg-sim',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: 'SIM',
+      quotedProviderMessageId: 'provider-billing-id',
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'billing_renewal_accepted', decision: 'ACCEPTED' });
+    const updateArgs = (prisma.billingResponse.update as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(updateArgs.data).toMatchObject({
+      decision: 'ACCEPTED',
+      inboundMessageId: 'inbound-id',
+      providerMessageId: 'msg-sim',
+    });
+    expect(eventArgs.data.type).toBe('BILLING_RENEWAL_ACCEPTED');
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each(['sim', 'quero renovar', 'manda o pix', 'pode renovar'])(
+    'classifies "%s" as accepted without requiring a quote',
+    async (text) => {
+      const { service, prisma, normalizer, txReceivableUpdate } = serviceFactory();
+      prisma.messageDispatch.findMany.mockResolvedValue([billingDispatch()]);
+      normalizer.normalize.mockReturnValue(normalizedInbound(text));
+
+      const result = await service.receiveWebhook({ type: 'Message' });
+
+      expect(result).toMatchObject({ action: 'billing_renewal_accepted', decision: 'ACCEPTED' });
+      const updateArgs = (prisma.billingResponse.update as MockWithCalls).mock.calls[0]?.[0] as {
+        data: Record<string, unknown>;
+      };
+      expect(updateArgs.data).toMatchObject({ decision: 'ACCEPTED', responseText: text });
+      expect(txReceivableUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('records controlled NAO as declined and cancels a pending receivable only', async () => {
+    const { service, prisma, normalizer, txReceivableUpdate, txClientEventCreate } =
+      serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([billingDispatch()]);
+    normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: '5544999999999',
+      contactName: 'Cliente Teste',
+      messageId: 'msg-nao',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: 'NÃO',
+      quotedProviderMessageId: null,
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'billing_renewal_declined', decision: 'DECLINED' });
+    const receivableUpdateArgs = (txReceivableUpdate as MockWithCalls).mock.calls[0]?.[0] as {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    };
+    const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(receivableUpdateArgs.where).toEqual({
+      id: '66666666-6666-4666-8666-666666666666',
+    });
+    expect(receivableUpdateArgs.data).toMatchObject({
+      status: 'CANCELADO',
+      cancelReason: 'Cliente informou que nao deseja renovar.',
+    });
+    expect(eventArgs.data.type).toBe('BILLING_RENEWAL_DECLINED');
+  });
+
+  it.each(['não', 'nao quero', 'não vou renovar', 'pode cancelar'])(
+    'classifies "%s" as declined',
+    async (text) => {
+      const { service, prisma, normalizer, txReceivableUpdate } = serviceFactory();
+      prisma.messageDispatch.findMany.mockResolvedValue([billingDispatch()]);
+      normalizer.normalize.mockReturnValue(normalizedInbound(text));
+
+      const result = await service.receiveWebhook({ type: 'Message' });
+
+      expect(result).toMatchObject({ action: 'billing_renewal_declined', decision: 'DECLINED' });
+      const updateArgs = (prisma.billingResponse.update as MockWithCalls).mock.calls[0]?.[0] as {
+        data: Record<string, unknown>;
+      };
+      expect(updateArgs.data).toMatchObject({ decision: 'DECLINED', responseText: text });
+      expect(txReceivableUpdate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['quanto fica?', 'vou ver', 'bom dia', 'ok', 'não sei se quero'])(
+    'keeps "%s" unresolved without financial effects',
+    async (text) => {
+      const { service, prisma, normalizer, txReceivableUpdate, txClientEventCreate } =
+        serviceFactory();
+      prisma.messageDispatch.findMany.mockResolvedValue([billingDispatch()]);
+      normalizer.normalize.mockReturnValue(normalizedInbound(text));
+
+      const result = await service.receiveWebhook({ type: 'Message' });
+
+      expect(result).toMatchObject({
+        action: 'billing_response_unresolved',
+        decision: 'UNRESOLVED',
+      });
+      const updateArgs = (prisma.billingResponse.update as MockWithCalls).mock.calls[0]?.[0] as {
+        data: Record<string, unknown>;
+      };
+      expect(updateArgs.data).toMatchObject({ decision: 'UNRESOLVED', responseText: text });
+      expect(txReceivableUpdate).not.toHaveBeenCalled();
+      const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+        data: Record<string, unknown>;
+      };
+      expect(eventArgs.data.type).toBe('BILLING_RESPONSE_UNRESOLVED');
+    },
+  );
+
+  it('treats a repeated controlled response as idempotent when already answered', async () => {
+    const { service, prisma, normalizer, txReceivableUpdate, txClientEventCreate } =
+      serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      billingDispatch({
+        billingResponse: {
+          ...billingDispatch().billingResponse,
+          decision: 'ACCEPTED',
+          respondedAt: now,
+        },
+      }),
+    ]);
+    normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: '5544999999999',
+      contactName: 'Cliente Teste',
+      messageId: 'msg-sim-repeat',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: '1',
+      quotedProviderMessageId: null,
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'billing_response_already_recorded',
+      decision: 'ACCEPTED',
+    });
+    expect(prisma.billingResponse.update).not.toHaveBeenCalled();
+    expect(txReceivableUpdate).not.toHaveBeenCalled();
+    expect(txClientEventCreate).not.toHaveBeenCalled();
+  });
+
+  it('treats a duplicated webhook as idempotent before billing side effects', async () => {
+    const duplicate = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['whatsAppConnectionId', 'providerMessageId'] },
+    });
+    const { service, prisma, normalizer } = serviceFactory();
+    prisma.whatsAppInboundMessage.create.mockRejectedValue(duplicate);
+    prisma.messageDispatch.findMany.mockResolvedValue([billingDispatch()]);
+    normalizer.normalize.mockReturnValue(normalizedInbound('sim', { messageId: 'msg-duplicate' }));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ received: true, processed: true, action: 'duplicate_message' });
+    expect(prisma.billingResponse.update).not.toHaveBeenCalled();
+  });
+
+  it('evolves an unresolved response to accepted while preserving previous context in timeline', async () => {
+    const { service, prisma, normalizer, txClientEventCreate } = serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([
+      billingDispatch({
+        billingResponse: {
+          ...billingDispatch().billingResponse,
+          decision: 'UNRESOLVED',
+          inboundMessageId: 'old-inbound-id',
+          providerMessageId: 'old-provider-id',
+          responseText: 'quanto fica?',
+          respondedAt: now,
+        },
+      }),
+    ]);
+    normalizer.normalize.mockReturnValue(normalizedInbound('quero renovar'));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'billing_renewal_accepted', decision: 'ACCEPTED' });
+    const updateArgs = (prisma.billingResponse.update as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(updateArgs.data).toMatchObject({
+      decision: 'ACCEPTED',
+      responseText: 'quero renovar',
+    });
+    const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(eventArgs.data.metadata.previousUnresolved).toMatchObject({
+      inboundMessageId: 'old-inbound-id',
+      responseText: 'quanto fica?',
+    });
+  });
+
+  it('keeps repeated unresolved responses visible without overwriting the first response', async () => {
+    const { service, prisma, normalizer, txClientEventCreate, txReceivableUpdate } =
+      serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([
+      billingDispatch({
+        billingResponse: {
+          ...billingDispatch().billingResponse,
+          decision: 'UNRESOLVED',
+          inboundMessageId: 'old-inbound-id',
+          providerMessageId: 'old-provider-id',
+          responseText: 'vou ver',
+          respondedAt: now,
+        },
+      }),
+    ]);
+    normalizer.normalize.mockReturnValue(normalizedInbound('bom dia'));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'billing_response_unresolved',
+      decision: 'UNRESOLVED',
+    });
+    expect(prisma.billingResponse.update).not.toHaveBeenCalled();
+    expect(txReceivableUpdate).not.toHaveBeenCalled();
+    const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(eventArgs.data.type).toBe('BILLING_RESPONSE_UNRESOLVED');
+  });
+
+  it('keeps paid receivable history when a declined response arrives', async () => {
+    const { service, prisma, normalizer, txReceivableUpdate } = serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([
+      billingDispatch({
+        receivable: {
+          ...billingDispatch().receivable,
+          status: 'PAGO',
+          paidAt: now,
+        },
+      }),
+    ]);
+    normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: '5544999999999',
+      contactName: 'Cliente Teste',
+      messageId: 'msg-paid-no',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: '2',
+      quotedProviderMessageId: null,
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'billing_renewal_declined', decision: 'DECLINED' });
+    expect(txReceivableUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps canceled receivable history when a declined response arrives', async () => {
+    const { service, prisma, normalizer, txReceivableUpdate } = serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([
+      billingDispatch({
+        receivable: {
+          ...billingDispatch().receivable,
+          status: 'CANCELADO',
+          canceledAt: now,
+        },
+      }),
+    ]);
+    normalizer.normalize.mockReturnValue(normalizedInbound('pode cancelar'));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'billing_renewal_declined', decision: 'DECLINED' });
+    expect(txReceivableUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not choose arbitrarily when two sent billings are open for the same phone', async () => {
+    const { service, prisma, normalizer, txClientEventCreate } = serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([
+      billingDispatch({ id: 'billing-a' }),
+      billingDispatch({ id: 'billing-b' }),
+    ]);
+    normalizer.normalize.mockReturnValue({
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      phone: '5544999999999',
+      contactName: 'Cliente Teste',
+      messageId: 'msg-ambiguous-billing',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: '1',
+      quotedProviderMessageId: null,
+      messageTimestamp: now,
+      receivedAt: now,
+      isGroup: false,
+      mediaMetadata: null,
+    });
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'billing_response_ambiguous',
+      ambiguousMatches: 2,
+    });
+    expect(prisma.billingResponse.update).not.toHaveBeenCalled();
+    const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(eventArgs.data.type).toBe('BILLING_RESPONSE_AMBIGUOUS');
+  });
+
+  it('does not choose arbitrarily when two references have billings open for the same phone', async () => {
+    const { service, prisma, normalizer, txClientEventCreate } = serviceFactory();
+    prisma.messageDispatch.findMany.mockResolvedValue([
+      billingDispatch({ id: 'billing-reference-a', clientReferenceId: 'reference-a' }),
+      billingDispatch({ id: 'billing-reference-b', clientReferenceId: 'reference-b' }),
+    ]);
+    normalizer.normalize.mockReturnValue(normalizedInbound('quero renovar'));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'billing_response_ambiguous',
+      ambiguousMatches: 2,
+    });
+    expect(prisma.billingResponse.update).not.toHaveBeenCalled();
+    const eventArgs = (txClientEventCreate as MockWithCalls).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(eventArgs.data.type).toBe('BILLING_RESPONSE_AMBIGUOUS');
   });
 
   it('does not choose a client automatically when an incoming phone is ambiguous', async () => {

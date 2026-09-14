@@ -9,8 +9,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  BillingResponseDecision,
   MessageDispatch,
   MessageDispatchOrigin,
+  PaymentIntentStatus,
   Prisma,
   WhatsAppInboundMessageType,
   WhatsAppConnection,
@@ -45,6 +47,33 @@ import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
 const pageSizeLimit = 100;
+const billingResponseCancelReason = 'Cliente informou que nao deseja renovar.';
+const activePixStatuses = ['CREATED', 'WAITING_PAYMENT'] satisfies PaymentIntentStatus[];
+const acceptedBillingResponses = new Set([
+  '1',
+  'sim',
+  'quero',
+  'quero sim',
+  'pode renovar',
+  'pode mandar',
+  'manda o pix',
+  'manda pix',
+  'quero renovar',
+  'pode fazer',
+  'vou renovar',
+  'bora renovar',
+  'pode gerar o pix',
+]);
+const declinedBillingResponses = new Set([
+  '2',
+  'nao',
+  'nao quero',
+  'nao tenho interesse',
+  'pode cancelar',
+  'nao vou renovar',
+  'nao quero renovar',
+  'pode encerrar',
+]);
 
 type InitialActivationResult = {
   initialReceivableId?: string | null;
@@ -54,6 +83,14 @@ type InitialActivationResult = {
   message?: string | null;
   reusedApproval?: boolean;
 };
+
+type BillingResponseDispatch = Prisma.MessageDispatchGetPayload<{
+  include: {
+    billingResponse: true;
+    clientReference: true;
+    receivable: { include: { paymentIntents: { orderBy: { createdAt: 'desc' } } } };
+  };
+}>;
 
 @Injectable()
 export class WhatsAppService {
@@ -841,6 +878,27 @@ export class WhatsAppService {
         });
 
         if (client) {
+          const billingResponse = await this.processBillingResponse(tx, {
+            inboundMessageId: inbound.id,
+            clientId: client.id,
+            phone: normalized.phone,
+            text: normalized.text,
+            providerMessageId: normalized.messageId,
+            quotedProviderMessageId: normalized.quotedProviderMessageId,
+            receivedAt: normalized.messageTimestamp ?? normalized.receivedAt,
+          });
+
+          if (billingResponse) {
+            return {
+              processed: true,
+              action: billingResponse.action,
+              inboundMessageId: inbound.id,
+              billingResponseId: billingResponse.billingResponseId,
+              decision: billingResponse.decision,
+              ambiguousMatches: billingResponse.ambiguousMatches,
+            };
+          }
+
           return { processed: true, action: 'client_exists', inboundMessageId: inbound.id };
         }
 
@@ -900,6 +958,389 @@ export class WhatsAppService {
 
       throw error;
     }
+  }
+
+  private async processBillingResponse(
+    tx: Prisma.TransactionClient,
+    input: {
+      inboundMessageId: string;
+      clientId: string;
+      phone: string;
+      text: string | null;
+      providerMessageId: string | null;
+      quotedProviderMessageId: string | null;
+      receivedAt: Date;
+    },
+  ) {
+    const decision = this.parseBillingResponseDecision(input.text);
+
+    if (!decision) {
+      return null;
+    }
+
+    const dispatch = await this.resolveBillingResponseDispatch(tx, input);
+
+    if (dispatch.status === 'ambiguous') {
+      await this.createClientEventOnce(tx, {
+        clientId: input.clientId,
+        type: 'BILLING_RESPONSE_AMBIGUOUS',
+        title: 'Resposta de cobranca ambigua.',
+        description: 'Mais de uma cobranca enviada esta aguardando resposta para este telefone.',
+        metadata: {
+          inboundMessageId: input.inboundMessageId,
+          providerMessageId: input.providerMessageId,
+          phone: input.phone,
+          candidateDispatchIds: dispatch.candidates.map((item) => item.id),
+        },
+      });
+
+      return {
+        action: 'billing_response_ambiguous',
+        decision,
+        ambiguousMatches: dispatch.candidates.length,
+      };
+    }
+
+    if (!dispatch.item) {
+      return null;
+    }
+
+    const currentResponse =
+      dispatch.item.billingResponse ??
+      (await tx.billingResponse.create({
+        data: {
+          messageDispatchId: dispatch.item.id,
+          receivableId: dispatch.item.receivableId!,
+          clientReferenceId: dispatch.item.clientReferenceId!,
+          clientId: dispatch.item.clientId!,
+        },
+      }));
+
+    if (currentResponse.decision === 'ACCEPTED' || currentResponse.decision === 'DECLINED') {
+      return {
+        action: 'billing_response_already_recorded',
+        billingResponseId: currentResponse.id,
+        decision: currentResponse.decision,
+      };
+    }
+
+    if (currentResponse.decision === 'UNRESOLVED' && decision === 'UNRESOLVED') {
+      await this.recordUnresolvedBillingResponse(tx, currentResponse, dispatch.item, input);
+
+      return {
+        action: 'billing_response_unresolved',
+        billingResponseId: currentResponse.id,
+        decision: currentResponse.decision,
+      };
+    }
+
+    const previousUnresolved: Prisma.InputJsonObject | null =
+      currentResponse.decision === 'UNRESOLVED'
+        ? {
+            inboundMessageId: currentResponse.inboundMessageId,
+            providerMessageId: currentResponse.providerMessageId,
+            responseText: currentResponse.responseText,
+            respondedAt: currentResponse.respondedAt?.toISOString() ?? null,
+          }
+        : null;
+
+    const updatedResponse = await tx.billingResponse.update({
+      where: { id: currentResponse.id },
+      data: {
+        decision,
+        respondedAt: input.receivedAt,
+        inboundMessageId: input.inboundMessageId,
+        providerMessageId: input.providerMessageId,
+        responseText: input.text,
+      },
+    });
+
+    if (decision === 'UNRESOLVED') {
+      await this.recordUnresolvedBillingResponse(tx, updatedResponse, dispatch.item, input);
+
+      return {
+        action: 'billing_response_unresolved',
+        billingResponseId: updatedResponse.id,
+        decision: updatedResponse.decision,
+      };
+    }
+
+    if (decision === 'ACCEPTED') {
+      await this.createClientEventOnce(tx, {
+        clientId: dispatch.item.clientId!,
+        type: 'BILLING_RENEWAL_ACCEPTED',
+        title: 'Cliente aceitou renovar.',
+        description: `Referencia ${dispatch.item.clientReference?.reference ?? '-'} aceita pelo WhatsApp.`,
+        metadata: {
+          ...this.billingResponseEventMetadata(updatedResponse, dispatch.item, input),
+          previousUnresolved,
+        },
+      });
+
+      return {
+        action: 'billing_renewal_accepted',
+        billingResponseId: updatedResponse.id,
+        decision: updatedResponse.decision,
+      };
+    }
+
+    await this.applyBillingDecline(tx, updatedResponse, dispatch.item, input, previousUnresolved);
+
+    return {
+      action: 'billing_renewal_declined',
+      billingResponseId: updatedResponse.id,
+      decision: updatedResponse.decision,
+    };
+  }
+
+  private async resolveBillingResponseDispatch(
+    tx: Prisma.TransactionClient,
+    input: {
+      clientId: string;
+      phone: string;
+      quotedProviderMessageId: string | null;
+    },
+  ): Promise<
+    | { status: 'resolved'; item: BillingResponseDispatch | null }
+    | { status: 'ambiguous'; candidates: BillingResponseDispatch[] }
+  > {
+    if (input.quotedProviderMessageId) {
+      const direct = await tx.messageDispatch.findFirst({
+        where: {
+          origin: 'BILLING',
+          status: 'SENT',
+          providerMessageId: input.quotedProviderMessageId,
+          clientId: input.clientId,
+          receivableId: { not: null },
+          clientReferenceId: { not: null },
+        },
+        include: this.billingResponseDispatchInclude(),
+      });
+
+      if (direct) {
+        return { status: 'resolved', item: direct };
+      }
+    }
+
+    const candidates = await tx.messageDispatch.findMany({
+      where: {
+        origin: 'BILLING',
+        status: 'SENT',
+        phone: input.phone,
+        clientId: input.clientId,
+        receivableId: { not: null },
+        clientReferenceId: { not: null },
+        OR: [
+          { billingResponse: null },
+          { billingResponse: { decision: { in: ['PENDING', 'UNRESOLVED'] } } },
+        ],
+      },
+      include: this.billingResponseDispatchInclude(),
+      orderBy: [{ sentAt: 'desc' }, { createdAt: 'desc' }],
+      take: 2,
+    });
+
+    if (candidates.length > 1) {
+      return { status: 'ambiguous', candidates };
+    }
+
+    if (candidates[0]) {
+      return { status: 'resolved', item: candidates[0] };
+    }
+
+    const answeredCandidates = await tx.messageDispatch.findMany({
+      where: {
+        origin: 'BILLING',
+        status: 'SENT',
+        phone: input.phone,
+        clientId: input.clientId,
+        receivableId: { not: null },
+        clientReferenceId: { not: null },
+        billingResponse: { decision: { in: ['ACCEPTED', 'DECLINED'] } },
+      },
+      include: this.billingResponseDispatchInclude(),
+      orderBy: [{ sentAt: 'desc' }, { createdAt: 'desc' }],
+      take: 2,
+    });
+
+    if (answeredCandidates.length > 1) {
+      return { status: 'ambiguous', candidates: answeredCandidates };
+    }
+
+    return { status: 'resolved', item: answeredCandidates[0] ?? null };
+  }
+
+  private async applyBillingDecline(
+    tx: Prisma.TransactionClient,
+    response: { id: string; clientId: string; messageDispatchId: string; receivableId: string },
+    dispatch: BillingResponseDispatch,
+    input: {
+      inboundMessageId: string;
+      providerMessageId: string | null;
+      text: string | null;
+      receivedAt: Date;
+    },
+    previousUnresolved: Prisma.InputJsonObject | null,
+  ) {
+    const receivable = dispatch.receivable;
+    if (!receivable) {
+      return;
+    }
+    const activeIntents = receivable.paymentIntents.filter((intent) =>
+      activePixStatuses.includes(intent.status as (typeof activePixStatuses)[number]),
+    );
+
+    if (receivable.status === 'PENDENTE') {
+      await tx.receivable.update({
+        where: { id: receivable.id },
+        data: {
+          status: 'CANCELADO',
+          canceledAt: new Date(),
+          cancelReason: billingResponseCancelReason,
+        },
+      });
+    }
+
+    await this.createClientEventOnce(tx, {
+      clientId: response.clientId,
+      type: 'BILLING_RENEWAL_DECLINED',
+      title:
+        receivable.status === 'PAGO'
+          ? 'Cliente recusou renovacao apos conta paga.'
+          : 'Cliente recusou renovacao.',
+      description:
+        receivable.status === 'PAGO'
+          ? 'Pagamento ja confirmado; historico preservado para resolucao administrativa.'
+          : `Referencia ${dispatch.clientReference?.reference ?? '-'} recusada pelo WhatsApp.`,
+      metadata: {
+        ...this.billingResponseEventMetadata(response, dispatch, input),
+        receivableStatusBeforeResponse: receivable.status,
+        activePaymentIntentIds: activeIntents.map((intent) => intent.id),
+        previousUnresolved,
+      },
+    });
+  }
+
+  private parseBillingResponseDecision(text: string | null): BillingResponseDecision | null {
+    const normalized = this.normalizeBillingResponseText(text);
+
+    if (!normalized) {
+      return null;
+    }
+
+    if (acceptedBillingResponses.has(normalized)) {
+      return 'ACCEPTED';
+    }
+
+    if (declinedBillingResponses.has(normalized)) {
+      return 'DECLINED';
+    }
+
+    return 'UNRESOLVED';
+  }
+
+  private normalizeBillingResponseText(text: string | null) {
+    const normalized = text
+      ?.trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[.,!?;:()[\]{}"'`´~^]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return normalized || null;
+  }
+
+  private billingResponseDispatchInclude() {
+    return {
+      billingResponse: true,
+      clientReference: true,
+      receivable: {
+        include: {
+          paymentIntents: { orderBy: { createdAt: 'desc' as const } },
+        },
+      },
+    };
+  }
+
+  private billingResponseEventMetadata(
+    response: { id: string; messageDispatchId: string; receivableId: string },
+    dispatch: BillingResponseDispatch,
+    input?: {
+      inboundMessageId: string;
+      providerMessageId: string | null;
+      text: string | null;
+      receivedAt: Date;
+    },
+  ): Prisma.InputJsonObject {
+    return {
+      billingResponseId: response.id,
+      messageDispatchId: response.messageDispatchId,
+      receivableId: response.receivableId,
+      clientReferenceId: dispatch.clientReferenceId,
+      reference: dispatch.clientReference?.reference ?? null,
+      inboundMessageId: input?.inboundMessageId ?? null,
+      providerMessageId: input?.providerMessageId ?? null,
+      responseText: input?.text ?? null,
+      receivedAt: input?.receivedAt.toISOString() ?? null,
+    };
+  }
+
+  private async recordUnresolvedBillingResponse(
+    tx: Prisma.TransactionClient,
+    response: { id: string; clientId: string; messageDispatchId: string; receivableId: string },
+    dispatch: BillingResponseDispatch,
+    input: {
+      inboundMessageId: string;
+      providerMessageId: string | null;
+      text: string | null;
+      receivedAt: Date;
+    },
+  ) {
+    await this.createClientEventOnce(tx, {
+      clientId: response.clientId,
+      type: 'BILLING_RESPONSE_UNRESOLVED',
+      title: 'Resposta de cobranca pendente de analise.',
+      description: input.text ?? 'Cliente respondeu sem intencao clara de renovacao.',
+      metadata: this.billingResponseEventMetadata(response, dispatch, input),
+    });
+  }
+
+  private async createClientEventOnce(
+    tx: Prisma.TransactionClient,
+    input: {
+      clientId: string;
+      type: Prisma.ClientEventCreateInput['type'];
+      title: string;
+      description?: string;
+      metadata: Prisma.InputJsonValue;
+    },
+  ) {
+    const metadata = input.metadata as Record<string, unknown>;
+    const uniqueValue = metadata.inboundMessageId ?? metadata.billingResponseId;
+    const uniquePath = metadata.inboundMessageId ? 'inboundMessageId' : 'billingResponseId';
+    const existing = uniqueValue
+      ? await tx.clientEvent.findFirst({
+          where: {
+            clientId: input.clientId,
+            type: input.type,
+            metadata: { path: [uniquePath], equals: uniqueValue },
+          },
+        })
+      : null;
+
+    if (existing) return;
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: input.clientId,
+        type: input.type,
+        title: input.title,
+        description: input.description ?? null,
+        metadata: input.metadata,
+      },
+    });
   }
 
   private findConnectionForWebhook(normalized: NormalizedWhatsAppMessage) {

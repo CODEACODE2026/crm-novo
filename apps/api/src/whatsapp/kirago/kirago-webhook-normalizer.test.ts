@@ -48,6 +48,7 @@ describe('KiragoWebhookNormalizer', () => {
       direction: 'INCOMING',
       messageType: 'text',
       text: 'Ola, gostaria de saber como funciona',
+      quotedProviderMessageId: null,
       isGroup: false,
     });
     expect(result?.messageTimestamp?.toISOString()).toBe('2026-09-11T01:00:00.000Z');
@@ -194,5 +195,26 @@ describe('KiragoWebhookNormalizer', () => {
     );
 
     expect(result?.phone).toBe('554498212815');
+  });
+
+  it('extracts quoted provider message id from button/text context', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, Type: 'button' },
+          Message: {
+            buttonsResponseMessage: {
+              selectedButtonId: '1',
+              selectedDisplayText: 'Sim',
+              contextInfo: { stanzaId: 'outgoing-provider-id' },
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result?.text).toBe('Sim');
+    expect(result?.quotedProviderMessageId).toBe('outgoing-provider-id');
   });
 });

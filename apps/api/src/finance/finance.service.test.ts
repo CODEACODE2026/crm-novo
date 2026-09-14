@@ -274,6 +274,9 @@ function createFinancePrisma() {
         return Promise.resolve({ count: 1 });
       },
     },
+    billingResponse: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
     client: {
       update: ({ data }: { data: Partial<typeof client> }) => {
         Object.assign(client, data);
@@ -358,6 +361,7 @@ function createFinancePrisma() {
       },
       clientStatusHistory: tx.clientStatusHistory,
       receivable: tx.receivable,
+      billingResponse: tx.billingResponse,
       paymentIntent: tx.paymentIntent,
       paymentWebhookEvent: tx.paymentWebhookEvent,
       $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => callback(tx),
@@ -557,6 +561,48 @@ describe('FinanceService', () => {
     expect(intent.pixCopyPaste).toContain('MOCK-PIX');
     expect(fake.paymentIntents).toHaveLength(1);
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks PIX for a billing receivable while the renewal response is pending', async () => {
+    const fake = createFinancePrisma();
+    fake.tx.billingResponse.findFirst.mockResolvedValue({
+      id: 'billing-response-id',
+      receivableId: fake.receivable.id,
+      decision: 'PENDING',
+      createdAt: new Date(),
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(service.createReceivablePix(fake.receivable.id, actorUserId)).rejects.toThrow(
+      'Cliente ainda nao aceitou renovar esta cobranca.',
+    );
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
+  it('allows PIX for the same receivable after accepted billing renewal response', async () => {
+    const fake = createFinancePrisma();
+    fake.tx.billingResponse.findFirst.mockResolvedValue({
+      id: 'billing-response-id',
+      receivableId: fake.receivable.id,
+      decision: 'ACCEPTED',
+      createdAt: new Date(),
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    expect(intent.receivableId).toBe(fake.receivable.id);
+    expect(fake.paymentIntents).toHaveLength(1);
   });
 
   it('does not silently create another active PIX for the same receivable', async () => {

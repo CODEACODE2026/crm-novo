@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   Prisma,
+  type BillingResponse,
   type Client,
   type ClientReference,
   type BillingAutomationSettings,
@@ -43,6 +44,7 @@ type BillingDispatch = MessageDispatch & {
     (Receivable & { clientReference?: (ClientReference & { plan?: Plan | null }) | null }) | null;
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
+  billingResponse?: BillingResponse | null;
 };
 
 @Injectable()
@@ -313,6 +315,7 @@ export class BillingService {
           receivable: { include: { clientReference: { include: { plan: true } } } },
           template: true,
           whatsAppConnection: true,
+          billingResponse: true,
         },
         orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
         take: 10,
@@ -391,6 +394,7 @@ export class BillingService {
           receivable: { include: { clientReference: { include: { plan: true } } } },
           template: true,
           whatsAppConnection: true,
+          billingResponse: true,
         },
         orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'desc' }],
         skip: (page - 1) * pageSize,
@@ -419,6 +423,7 @@ export class BillingService {
         receivable: { include: { clientReference: { include: { plan: true } } } },
         template: true,
         whatsAppConnection: true,
+        billingResponse: true,
       },
     });
 
@@ -427,6 +432,75 @@ export class BillingService {
     }
 
     return this.presentDispatch(dispatch);
+  }
+
+  async deactivateBillingResponseReference(id: string, actorUserId: string) {
+    const response = await this.prisma.billingResponse.findUnique({
+      where: { id },
+      include: { clientReference: true },
+    });
+
+    if (!response) {
+      throw new NotFoundException('Resposta de cobranca nao encontrada.');
+    }
+
+    if (response.decision !== 'DECLINED') {
+      throw new ConflictException('Apenas respostas recusadas permitem desativar referencia.');
+    }
+
+    const reference = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.clientReference.findUnique({
+        where: { id: response.clientReferenceId },
+      });
+
+      if (!current) {
+        throw new NotFoundException('Referencia nao encontrada.');
+      }
+
+      if (current.status === 'INATIVO') {
+        return current;
+      }
+
+      const updated = await tx.clientReference.update({
+        where: { id: current.id },
+        data: { status: 'INATIVO' },
+      });
+
+      await tx.clientStatusHistory.create({
+        data: {
+          clientId: response.clientId,
+          clientReferenceId: current.id,
+          previousStatus: current.status,
+          newStatus: 'INATIVO',
+          reason: 'Cliente informou que nao deseja renovar esta referencia.',
+          changedByUserId: actorUserId,
+        },
+      });
+
+      await this.createClientEventOnce(tx, {
+        clientId: response.clientId,
+        type: 'BILLING_REFERENCE_DEACTIVATED',
+        title: 'Referencia desativada apos recusa de renovacao.',
+        description: `Referencia ${current.reference} desativada.`,
+        metadata: {
+          billingResponseId: response.id,
+          messageDispatchId: response.messageDispatchId,
+          receivableId: response.receivableId,
+          clientReferenceId: current.id,
+        },
+        createdByUserId: actorUserId,
+      });
+
+      return updated;
+    });
+
+    return {
+      id: reference.id,
+      clientId: reference.clientId,
+      reference: reference.reference,
+      status: reference.status,
+      billingResponseId: response.id,
+    };
   }
 
   async listTemplates() {
@@ -534,6 +608,7 @@ export class BillingService {
         receivable: { include: { clientReference: { include: { plan: true } } } },
         template: true,
         whatsAppConnection: true,
+        billingResponse: true,
       },
     });
 
@@ -554,6 +629,7 @@ export class BillingService {
           receivable: { include: { clientReference: { include: { plan: true } } } },
           template: true,
           whatsAppConnection: true,
+          billingResponse: true,
         },
       });
 
@@ -599,10 +675,24 @@ export class BillingService {
             receivable: { include: { clientReference: { include: { plan: true } } } },
             template: true,
             whatsAppConnection: true,
+            billingResponse: true,
           },
         });
 
         if (dispatch.client && dispatch.receivable) {
+          if (dispatch.clientReferenceId && dispatch.receivableId) {
+            await tx.billingResponse.upsert({
+              where: { messageDispatchId: id },
+              update: {},
+              create: {
+                messageDispatchId: id,
+                receivableId: dispatch.receivableId,
+                clientReferenceId: dispatch.clientReferenceId,
+                clientId: dispatch.client.id,
+              },
+            });
+          }
+
           const existingEvent = await tx.clientEvent.findFirst({
             where: {
               clientId: dispatch.client.id,
@@ -781,6 +871,7 @@ export class BillingService {
         receivable: { include: { clientReference: { include: { plan: true } } } },
         template: true,
         whatsAppConnection: true,
+        billingResponse: true,
       },
     });
 
@@ -933,7 +1024,7 @@ export class BillingService {
         name: 'Cobranca padrao',
         type: 'BILLING_DUE',
         content:
-          'Bom dia, *{{primeiroNome}}*! Seu serviço vence em {{vencimento}} no valor de {{valor}}. Queria saber se tem interesse em renovar?',
+          'Bom dia, *{{primeiroNome}}*! Seu serviço vence em {{vencimento}} no valor de {{valor}}. Queria saber se tem interesse em renovar?\n\n1 - Sim, quero renovar\n2 - Nao quero renovar',
         active: true,
       },
     });
@@ -1159,7 +1250,53 @@ export class BillingService {
             provider: dispatch.whatsAppConnection.provider,
           }
         : null,
+      billingResponse: dispatch.billingResponse
+        ? {
+            id: dispatch.billingResponse.id,
+            decision: dispatch.billingResponse.decision,
+            respondedAt: dispatch.billingResponse.respondedAt?.toISOString() ?? null,
+            providerMessageId: dispatch.billingResponse.providerMessageId,
+            responseText: dispatch.billingResponse.responseText,
+          }
+        : null,
     };
+  }
+
+  private async createClientEventOnce(
+    tx: Prisma.TransactionClient,
+    input: {
+      clientId: string;
+      type: Prisma.ClientEventCreateInput['type'];
+      title: string;
+      description?: string;
+      metadata: Prisma.InputJsonValue;
+      createdByUserId?: string | null;
+    },
+  ) {
+    const metadata = input.metadata as Record<string, unknown>;
+    const billingResponseId = metadata.billingResponseId;
+    const existing = billingResponseId
+      ? await tx.clientEvent.findFirst({
+          where: {
+            clientId: input.clientId,
+            type: input.type,
+            metadata: { path: ['billingResponseId'], equals: billingResponseId },
+          },
+        })
+      : null;
+
+    if (existing) return;
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: input.clientId,
+        type: input.type,
+        title: input.title,
+        description: input.description ?? null,
+        metadata: input.metadata,
+        createdByUserId: input.createdByUserId ?? null,
+      },
+    });
   }
 
   private isUniqueConstraint(error: unknown) {

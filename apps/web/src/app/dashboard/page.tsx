@@ -51,6 +51,7 @@ import {
   deletePlan,
   deleteFinancialCategory,
   deleteFinancialTransaction,
+  deactivateBillingResponseReference,
   formatCurrency,
   formatDate,
   getClient,
@@ -2690,6 +2691,36 @@ function BillingView() {
     }
   }
 
+  async function runGeneratePix(dispatch: MessageDispatch) {
+    if (!dispatch.receivable?.id) return;
+    setWorking(`pix-${dispatch.id}`);
+    setError('');
+
+    try {
+      await createReceivablePix(dispatch.receivable.id);
+      await loadBilling();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel gerar o PIX.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function runDeactivateReference(dispatch: MessageDispatch) {
+    if (!dispatch.billingResponse?.id) return;
+    setWorking(`reference-${dispatch.id}`);
+    setError('');
+
+    try {
+      await deactivateBillingResponseReference(dispatch.billingResponse.id);
+      await loadBilling();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel desativar a referencia.');
+    } finally {
+      setWorking('');
+    }
+  }
+
   function openTemplate(template: MessageTemplate) {
     setEditingTemplate(template);
     setTemplateContent(template.content);
@@ -2807,10 +2838,12 @@ function BillingView() {
               <thead>
                 <tr>
                   <th>Cliente</th>
-                  <th>Telefone</th>
+                  <th>Referencia</th>
                   <th>Vencimento</th>
-                  <th>Agendada para</th>
-                  <th>Tentativas</th>
+                  <th>Valor</th>
+                  <th>Enviada em</th>
+                  <th>Resposta</th>
+                  <th>Respondido em</th>
                   <th>Status</th>
                   <th>Acoes</th>
                 </tr>
@@ -2823,12 +2856,22 @@ function BillingView() {
                     onClick={() => void selectDispatch(dispatch)}
                   >
                     <td>{dispatch.client?.name ?? 'Cliente nao vinculado'}</td>
-                    <td>{dispatch.phone}</td>
+                    <td>{dispatch.clientReference?.reference ?? '-'}</td>
                     <td>
                       {dispatch.receivable?.dueDate ? formatDate(dispatch.receivable.dueDate) : '-'}
                     </td>
-                    <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
-                    <td>{dispatch.attempts ?? 0}/3</td>
+                    <td>
+                      {dispatch.receivable?.amount
+                        ? formatCurrency(dispatch.receivable.amount)
+                        : '-'}
+                    </td>
+                    <td>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</td>
+                    <td>{billingResponseLabel(dispatch)}</td>
+                    <td>
+                      {dispatch.billingResponse?.respondedAt
+                        ? formatDateTime(dispatch.billingResponse.respondedAt)
+                        : '-'}
+                    </td>
                     <td>
                       <span className={`pill ${dispatch.status.toLowerCase()}`}>
                         {billingStatusLabel(dispatch.status)}
@@ -2850,6 +2893,36 @@ function BillingView() {
                         <Send aria-hidden="true" size={16} />
                         Enviar
                       </button>
+                      {dispatch.billingResponse?.decision === 'ACCEPTED' &&
+                      dispatch.receivable?.status === 'PENDENTE' ? (
+                        <button
+                          className="secondary-button"
+                          disabled={working === `pix-${dispatch.id}`}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void runGeneratePix(dispatch);
+                          }}
+                        >
+                          <QrCode aria-hidden="true" size={16} />
+                          Gerar PIX
+                        </button>
+                      ) : null}
+                      {dispatch.billingResponse?.decision === 'DECLINED' &&
+                      dispatch.clientReference?.status === 'ATIVO' ? (
+                        <button
+                          className="secondary-button"
+                          disabled={working === `reference-${dispatch.id}`}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void runDeactivateReference(dispatch);
+                          }}
+                        >
+                          <Power aria-hidden="true" size={16} />
+                          Desativar referencia
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -2914,7 +2987,9 @@ function BillingView() {
               <dl className="detail-list">
                 <div>
                   <dt>Referencia</dt>
-                  <dd>{selected.client?.reference ?? '-'}</dd>
+                  <dd>
+                    {selected.clientReference?.reference ?? selected.client?.reference ?? '-'}
+                  </dd>
                 </div>
                 <div>
                   <dt>Plano</dt>
@@ -2938,7 +3013,63 @@ function BillingView() {
                   <dt>Enviada em</dt>
                   <dd>{selected.sentAt ? formatDateTime(selected.sentAt) : '-'}</dd>
                 </div>
+                <div>
+                  <dt>Resposta</dt>
+                  <dd>{billingResponseLabel(selected)}</dd>
+                </div>
+                <div>
+                  <dt>Resposta recebida</dt>
+                  <dd>{selected.billingResponse?.responseText ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>Respondido em</dt>
+                  <dd>
+                    {selected.billingResponse?.respondedAt
+                      ? formatDateTime(selected.billingResponse.respondedAt)
+                      : '-'}
+                  </dd>
+                </div>
               </dl>
+              {selected.billingResponse?.decision === 'ACCEPTED' ? (
+                <div className="notice success">Cliente aceitou renovar.</div>
+              ) : null}
+              {selected.billingResponse?.decision === 'DECLINED' ? (
+                <div className="notice warning">
+                  Cliente informou que nao deseja renovar esta referencia.
+                  {selected.clientReference?.status === 'ATIVO' ? (
+                    <div className="button-row">
+                      <button className="secondary-button" type="button" onClick={() => null}>
+                        Manter ativa
+                      </button>
+                      <button
+                        className="primary-button"
+                        disabled={working === `reference-${selected.id}`}
+                        type="button"
+                        onClick={() => void runDeactivateReference(selected)}
+                      >
+                        Desativar referencia
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {selected.billingResponse?.decision === 'UNRESOLVED' ? (
+                <div className="notice warning">
+                  Resposta pendente de analise. Nenhuma acao financeira foi aplicada.
+                </div>
+              ) : null}
+              {selected.billingResponse?.decision === 'ACCEPTED' &&
+              selected.receivable?.status === 'PENDENTE' ? (
+                <button
+                  className="primary-button"
+                  disabled={working === `pix-${selected.id}`}
+                  type="button"
+                  onClick={() => void runGeneratePix(selected)}
+                >
+                  <QrCode aria-hidden="true" size={16} />
+                  Gerar PIX
+                </button>
+              ) : null}
               <div className="preview-box">
                 <span>Mensagem renderizada</span>
                 <strong>{selected.renderedContent ?? selected.body}</strong>
@@ -4767,6 +4898,15 @@ function billingStatusLabel(status: MessageDispatch['status']) {
   };
 
   return labels[status];
+}
+
+function billingResponseLabel(dispatch: MessageDispatch) {
+  if (dispatch.status === 'FAILED') return 'Falha';
+  if (dispatch.billingResponse?.decision === 'ACCEPTED') return 'Aceitou renovar';
+  if (dispatch.billingResponse?.decision === 'DECLINED') return 'Nao vai renovar';
+  if (dispatch.billingResponse?.decision === 'UNRESOLVED') return 'Pendente de analise';
+  if (dispatch.status === 'SENT') return 'Aguardando resposta';
+  return '-';
 }
 
 function recoveryCampaignStatusLabel(status: RecoveryCampaignStatus) {

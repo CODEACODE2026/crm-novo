@@ -29,6 +29,11 @@ enum ClientEventType {
   RECEIVABLE_CANCELED
   FINANCIAL_TRANSACTION_CREATED
   WHATSAPP_MESSAGE_SENT
+  BILLING_RENEWAL_ACCEPTED
+  BILLING_RENEWAL_DECLINED
+  BILLING_RESPONSE_UNRESOLVED
+  BILLING_RESPONSE_AMBIGUOUS
+  BILLING_REFERENCE_DEACTIVATED
   RECOVERY_CAMPAIGN_STARTED
   RECOVERY_CAMPAIGN_CANCELED
   RECOVERY_CAMPAIGN_COMPLETED
@@ -125,6 +130,13 @@ enum MessageTemplateType {
   RECOVERY_DAY_10
   RECOVERY_DAY_15
   RECOVERY_DAY_30
+}
+
+enum BillingResponseDecision {
+  PENDING
+  ACCEPTED
+  DECLINED
+  UNRESOLVED
 }
 
 enum RecoveryCampaignStatus {
@@ -227,6 +239,7 @@ model Client {
   receivables             Receivable[]
   financialTransactions   FinancialTransaction[]
   messageDispatches       MessageDispatch[]
+  billingResponses        BillingResponse[]
   recoveryCampaigns       RecoveryCampaign[]
   whatsappPendingContacts WhatsAppPendingContact[]
   whatsappInboundMessages WhatsAppInboundMessage[]
@@ -259,6 +272,7 @@ model ClientReference {
   receivables           Receivable[]
   recoveryCampaigns     RecoveryCampaign[]
   messageDispatches     MessageDispatch[]
+  billingResponses      BillingResponse[]
   financialTransactions FinancialTransaction[]
   statusHistory         ClientStatusHistory[]
   rewardedReferrals     Referral[]             @relation("ReferralRewardClientReference")
@@ -329,6 +343,7 @@ model MessageDispatch {
   whatsAppConnection   WhatsAppConnection?   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: SetNull)
   recoveryCampaign     RecoveryCampaign?     @relation(fields: [recoveryCampaignId], references: [id], onDelete: SetNull)
   recoveryStep         RecoveryCampaignStep?
+  billingResponse      BillingResponse?
 
   @@index([clientId])
   @@index([clientReferenceId])
@@ -478,6 +493,7 @@ model WhatsAppInboundMessage {
   whatsAppConnection   WhatsAppConnection         @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
   pendingContact       WhatsAppPendingContact?    @relation(fields: [pendingContactId], references: [id], onDelete: SetNull)
   client               Client?                    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  billingResponse      BillingResponse?
 
   @@unique([whatsAppConnectionId, providerMessageId])
   @@index([phoneNormalized])
@@ -487,6 +503,35 @@ model WhatsAppInboundMessage {
   @@index([pendingContactId])
   @@index([clientId])
   @@map("whatsapp_inbound_messages")
+}
+
+model BillingResponse {
+  id                String                  @id @default(uuid()) @db.Uuid
+  messageDispatchId String                  @unique @db.Uuid
+  receivableId      String                  @db.Uuid
+  clientReferenceId String                  @db.Uuid
+  clientId          String                  @db.Uuid
+  inboundMessageId  String?                 @unique @db.Uuid
+  decision          BillingResponseDecision @default(PENDING)
+  respondedAt       DateTime?
+  providerMessageId String?
+  source            String                  @default("WHATSAPP")
+  responseText      String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  messageDispatch   MessageDispatch         @relation(fields: [messageDispatchId], references: [id], onDelete: Cascade)
+  receivable        Receivable              @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  clientReference   ClientReference         @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  client            Client                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  inboundMessage    WhatsAppInboundMessage? @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
+
+  @@index([receivableId])
+  @@index([clientReferenceId])
+  @@index([clientId])
+  @@index([decision])
+  @@index([respondedAt])
+  @@index([providerMessageId])
+  @@map("billing_responses")
 }
 
 model Renewal {
@@ -538,6 +583,7 @@ model Receivable {
   paymentTransaction FinancialTransaction?
   messageDispatches  MessageDispatch[]
   paymentIntents     PaymentIntent[]
+  billingResponses   BillingResponse[]
 
   @@unique([clientReferenceId, purpose, dueDate])
   @@index([clientId])

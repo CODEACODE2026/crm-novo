@@ -108,4 +108,64 @@ describe('Kirago dependency injection', () => {
       phone: '5544888888888',
     });
   });
+
+  it('keeps UUID message ids unchanged for Kirago sends', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const sendText = vi.spyOn(instanceClient, 'sendText').mockResolvedValue({
+      success: true,
+      data: { Id: 'provider-id' },
+    });
+
+    await provider.sendText('instance-token', {
+      phone: '5544999999999',
+      body: 'Teste',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+
+    expect(sendText).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Body: 'Teste',
+      Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+  });
+
+  it('maps CRM billing request ids to stable UUID message ids for Kirago sends', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const sendText = vi.spyOn(instanceClient, 'sendText').mockResolvedValue({
+      success: true,
+      data: { Id: 'provider-id' },
+    });
+    const requestId =
+      'billing:client-id:receivable-id:2026-09-13:0:7cea2ca9-3866-4f85-bb44-3bd4318a9595';
+
+    await provider.sendText('instance-token', {
+      phone: '5544999999999',
+      body: 'Teste de cobranca',
+      requestId,
+    });
+    await provider.sendText('instance-token', {
+      phone: '5544999999999',
+      body: 'Teste de cobranca',
+      requestId,
+    });
+
+    const firstId = sendText.mock.calls[0]?.[1].Id;
+    const secondId = sendText.mock.calls[1]?.[1].Id;
+    expect(firstId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(firstId).toBe(secondId);
+    expect(firstId).not.toContain(':');
+    expect(sendText).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Body: 'Teste de cobranca',
+      Id: firstId,
+    });
+  });
 });

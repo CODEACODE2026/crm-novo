@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import { KiragoAdminClient } from './kirago-admin.client';
 import { KiragoInstanceClient } from './kirago-instance.client';
 import { KiragoHttpClient } from './kirago-http.client';
@@ -12,6 +13,7 @@ import type {
 } from '../provider/whatsapp-provider';
 
 const defaultEvents = ['Message'];
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class KiragoWhatsAppProvider implements WhatsAppProvider {
@@ -125,12 +127,29 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     const response = await this.instanceClient.sendText(instanceToken, {
       Phone: input.phone,
       Body: input.body,
-      Id: input.requestId,
+      Id: this.kiragoMessageId(input.requestId),
     });
 
     return {
       providerMessageId: response.data?.Id ?? null,
     };
+  }
+
+  private kiragoMessageId(requestId: string) {
+    if (uuidPattern.test(requestId)) {
+      return requestId;
+    }
+
+    const hash = createHash('sha256').update(requestId).digest('hex');
+    const variant = ((Number.parseInt(hash[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
+
+    return [
+      hash.slice(0, 8),
+      hash.slice(8, 12),
+      `4${hash.slice(13, 16)}`,
+      `${variant}${hash.slice(17, 20)}`,
+      hash.slice(20, 32),
+    ].join('-');
   }
 
   checkPhone(instanceToken: string, phone: string) {

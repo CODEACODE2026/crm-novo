@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
+  formatSaoPauloBusinessDate,
   parseBusinessDate,
+  parseSaoPauloBusinessDate,
 } from './business-date';
 
 describe('business date helpers', () => {
@@ -15,6 +17,13 @@ describe('business date helpers', () => {
 
   it('rejects invalid calendar dates', () => {
     expect(() => parseBusinessDate('2026-02-31')).toThrow(BadRequestException);
+  });
+
+  it('extracts the Sao Paulo business date around UTC day boundaries', () => {
+    const paidAt = new Date('2026-09-15T01:30:00.000Z');
+
+    expect(formatSaoPauloBusinessDate(paidAt)).toBe('2026-09-14');
+    expect(parseSaoPauloBusinessDate(paidAt)).toEqual(parseBusinessDate('2026-09-14'));
   });
 
   it.each([

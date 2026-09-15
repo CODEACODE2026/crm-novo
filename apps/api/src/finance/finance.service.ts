@@ -24,6 +24,8 @@ import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
   parseBusinessDate,
+  parseSaoPauloBusinessDate,
+  getBusinessDateDay,
 } from '../clients/utils/business-date';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
@@ -681,6 +683,7 @@ export class FinanceService {
       }
 
       const paidAt = providerStatus.paidAt ?? new Date();
+      const paidBusinessDate = parseSaoPauloBusinessDate(paidAt);
       const acquired = await tx.paymentIntent.updateMany({
         where: { id, status: { not: 'PAID' } },
         data: {
@@ -723,7 +726,7 @@ export class FinanceService {
       if (receivableWasPending) {
         await tx.receivable.update({
           where: { id: receivable.id },
-          data: { status: 'PAGO', paidAt },
+          data: { status: 'PAGO', paidAt: paidBusinessDate },
         });
       }
 
@@ -739,7 +742,7 @@ export class FinanceService {
             receivableId: receivable.id,
             description: `Recebimento PIX: ${receivable.description}`,
             amount: receivable.amount,
-            transactionDate: paidAt,
+            transactionDate: paidBusinessDate,
             notes: `PIX ${current.provider}`,
             createdByUserId: actorUserId,
           },
@@ -765,7 +768,7 @@ export class FinanceService {
                 paymentIntentId: id,
                 financialTransactionId: createdTransaction.id,
                 amount: receivable.amount.toString(),
-                paymentDate: formatBusinessDate(paidAt),
+                paymentDate: formatBusinessDate(paidBusinessDate),
                 provider: current.provider,
                 providerTransactionId: current.providerTransactionId,
               },
@@ -1326,9 +1329,15 @@ export class FinanceService {
       return;
     }
 
-    const anchorDay = reference.billingAnchorDay;
+    const paidBusinessDate = receivable.paidAt ?? receivable.dueDate;
+    const paidAfterCurrentDueDate =
+      formatBusinessDate(paidBusinessDate) > formatBusinessDate(reference.dueDate);
+    const baseDate = paidAfterCurrentDueDate ? paidBusinessDate : reference.dueDate;
+    const anchorDay = paidAfterCurrentDueDate
+      ? getBusinessDateDay(paidBusinessDate)
+      : reference.billingAnchorDay;
     const nextDueDate = addCalendarMonthsPreservingAnchor(
-      reference.dueDate,
+      baseDate,
       reference.plan.durationMonths,
       anchorDay,
     );
@@ -1353,8 +1362,10 @@ export class FinanceService {
           receivableId,
           clientReferenceId: reference.id,
           previousDueDate: formatBusinessDate(receivable.dueDate),
+          paidDate: receivable.paidAt ? formatBusinessDate(receivable.paidAt) : null,
           nextDueDate: formatBusinessDate(nextDueDate),
           billingAnchorDay: anchorDay,
+          cycleBaseDate: formatBusinessDate(baseDate),
           planId: reference.planId,
           durationMonths: reference.plan.durationMonths,
         },

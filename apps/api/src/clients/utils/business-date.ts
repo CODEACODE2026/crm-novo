@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 
 const businessDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+const saoPauloTimeZone = 'America/Sao_Paulo';
 
 export function parseBusinessDate(input: string) {
   if (!businessDatePattern.test(input)) {
@@ -18,6 +19,28 @@ export function parseBusinessDate(input: string) {
 
 export function formatBusinessDate(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+export function formatSaoPauloBusinessDate(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: saoPauloTimeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  if (!year || !month || !day) {
+    throw new BadRequestException('Data de pagamento invalida.');
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+export function parseSaoPauloBusinessDate(date: Date) {
+  return parseBusinessDate(formatSaoPauloBusinessDate(date));
 }
 
 export function getBusinessDateDay(date: Date) {

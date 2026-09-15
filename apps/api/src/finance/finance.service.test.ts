@@ -568,6 +568,84 @@ describe('FinanceService', () => {
     expect(fake.events.filter((event) => event.type === 'CLIENT_RENEWED')).toHaveLength(1);
   });
 
+  it('keeps the current anchor when a renewal is paid before due date', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-10', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-09-10'));
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-14'));
+    expect(fake.clientReference.billingAnchorDay).toBe(14);
+    expect(nextReceivables[0]).toMatchObject({
+      dueDate: parseBusinessDate('2026-10-14'),
+      status: 'PENDENTE',
+    });
+  });
+
+  it.each([
+    ['um dia atrasado', '2026-09-15', '2026-10-15', 15],
+    ['varios dias atrasado', '2026-09-17', '2026-10-17', 17],
+  ])(
+    'moves the renewal anchor to payment date when manually paid %s',
+    async (_case, paymentDate, expectedDueDate, expectedAnchor) => {
+      const fake = createFinancePrisma();
+      fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+      fake.clientReference.billingAnchorDay = 14;
+      fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+      const { cycle, nextReceivables } = createCycleRecorder(fake);
+      const recovery = { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) };
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+        undefined,
+        cycle as never,
+        recovery as never,
+      );
+
+      await service.payReceivable(
+        fake.receivable.id,
+        { paymentDate, categoryId: fake.entryCategory.id },
+        actorUserId,
+      );
+
+      expect(fake.receivable.dueDate).toEqual(parseBusinessDate('2026-09-14'));
+      expect(fake.receivable.paidAt).toEqual(parseBusinessDate(paymentDate));
+      expect(fake.clientReference.dueDate).toEqual(parseBusinessDate(expectedDueDate));
+      expect(fake.clientReference.billingAnchorDay).toBe(expectedAnchor);
+      expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+      expect(nextReceivables[0]).toMatchObject({
+        clientReferenceId: fake.clientReference.id,
+        purpose: 'RENEWAL',
+        dueDate: parseBusinessDate(expectedDueDate),
+        status: 'PENDENTE',
+      });
+      expect(recovery.cancelActiveForReceivable).toHaveBeenCalledWith(
+        fake.tx,
+        fake.receivable.id,
+        'RECEIVABLE_PAID',
+        'Conta a receber paga durante campanha de recuperacao.',
+      );
+    },
+  );
+
   it.each([
     ['Mensal', 1, '2026-10-14'],
     ['Bimestral', 2, '2026-11-14'],
@@ -609,6 +687,45 @@ describe('FinanceService', () => {
     },
   );
 
+  it.each([
+    ['Mensal', 1, '2026-10-17'],
+    ['Bimestral', 2, '2026-11-17'],
+    ['Trimestral', 3, '2026-12-17'],
+    ['Semestral', 6, '2027-03-17'],
+    ['Anual', 12, '2027-09-17'],
+  ])(
+    'uses the late payment date with the real %s plan duration',
+    async (_planName, durationMonths, expectedDueDate) => {
+      const fake = createFinancePrisma();
+      fake.plan.durationMonths = durationMonths;
+      fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+      fake.clientReference.billingAnchorDay = 14;
+      fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+      const { cycle, nextReceivables } = createCycleRecorder(fake);
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+        undefined,
+        cycle as never,
+      );
+
+      await service.payReceivable(
+        fake.receivable.id,
+        { paymentDate: '2026-09-17', categoryId: fake.entryCategory.id },
+        actorUserId,
+      );
+
+      expect(fake.clientReference.dueDate).toEqual(parseBusinessDate(expectedDueDate));
+      expect(fake.clientReference.billingAnchorDay).toBe(17);
+      expect(nextReceivables[0]).toMatchObject({
+        dueDate: parseBusinessDate(expectedDueDate),
+        status: 'PENDENTE',
+      });
+    },
+  );
+
   it('preserves billingAnchorDay 31 when renewal advances into February', async () => {
     const fake = createFinancePrisma();
     fake.clientReference.dueDate = parseBusinessDate('2026-01-31');
@@ -639,6 +756,37 @@ describe('FinanceService', () => {
     });
   });
 
+  it('resets anchor 31 to the real late payment day instead of February carryover', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-01-31');
+    fake.clientReference.billingAnchorDay = 31;
+    fake.receivable.dueDate = parseBusinessDate('2026-01-31');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-02-03', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.receivable.dueDate).toEqual(parseBusinessDate('2026-01-31'));
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-02-03'));
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-03-03'));
+    expect(fake.clientReference.billingAnchorDay).toBe(3);
+    expect(nextReceivables[0]).toMatchObject({
+      dueDate: parseBusinessDate('2026-03-03'),
+      status: 'PENDENTE',
+    });
+  });
+
   it('advances the current reference cycle after PIX renewal confirmation', async () => {
     const fake = createFinancePrisma();
     fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
@@ -658,7 +806,7 @@ describe('FinanceService', () => {
       provider: 'MOCK',
       providerTransactionId: intent.providerTransactionId,
       status: 'PAID',
-      paidAt: parseBusinessDate('2026-09-14'),
+      paidAt: new Date('2026-09-14T15:00:00.000Z'),
       failureCode: null,
       failureMessage: null,
     });
@@ -672,6 +820,126 @@ describe('FinanceService', () => {
     expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
     expect(nextReceivables).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'CLIENT_RENEWED')).toHaveLength(1);
+  });
+
+  it('advances PIX renewal from the late provider payment business date', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTPAY';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'fastpay-tx-1';
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-tx-1',
+      status: 'PAID',
+      paidAt: new Date('2026-09-17T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-09-17'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-17'));
+    expect(fake.clientReference.billingAnchorDay).toBe(17);
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    expect(nextReceivables).toHaveLength(1);
+  });
+
+  it('uses Sao Paulo business date for PIX payment near UTC day boundary', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      status: 'PAID',
+      paidAt: new Date('2026-09-15T01:30:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-09-14'));
+    expect(fake.transactions[0]).toMatchObject({
+      transactionDate: parseBusinessDate('2026-09-14'),
+    });
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-14'));
+    expect(fake.clientReference.billingAnchorDay).toBe(14);
+    expect(nextReceivables[0]).toMatchObject({
+      dueDate: parseBusinessDate('2026-10-14'),
+      status: 'PENDENTE',
+    });
+  });
+
+  it('does not advance unrelated references after a late renewal payment', async () => {
+    const fake = createFinancePrisma();
+    const secondReference = {
+      ...fake.clientReference,
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      reference: 'FIN-002',
+      dueDate: parseBusinessDate('2026-09-20'),
+      billingAnchorDay: 20,
+    };
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    (fake.tx.clientReference as { update: unknown }).update = ({
+      where,
+      data,
+    }: {
+      where: { id: string };
+      data: object;
+    }) => {
+      const target = where.id === fake.clientReference.id ? fake.clientReference : secondReference;
+      Object.assign(target, data);
+      return Promise.resolve(target);
+    };
+    const { cycle } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-17', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-17'));
+    expect(secondReference.dueDate).toEqual(parseBusinessDate('2026-09-20'));
+    expect(secondReference.billingAnchorDay).toBe(20);
   });
 
   it('does not advance another reference when receivable relation is inconsistent', async () => {
@@ -862,7 +1130,7 @@ describe('FinanceService', () => {
       provider: 'MOCK',
       providerTransactionId: intent.providerTransactionId,
       status: 'PAID',
-      paidAt: parseBusinessDate('2026-10-10'),
+      paidAt: new Date('2026-10-10T15:00:00.000Z'),
       failureCode: null,
       failureMessage: null,
     });
@@ -902,7 +1170,7 @@ describe('FinanceService', () => {
       provider: 'MOCK',
       providerTransactionId: intent.providerTransactionId,
       status: 'PAID',
-      paidAt: parseBusinessDate('2026-10-10'),
+      paidAt: new Date('2026-10-10T15:00:00.000Z'),
       failureCode: null,
       failureMessage: null,
     });
@@ -970,7 +1238,7 @@ describe('FinanceService', () => {
       provider: 'MOCK',
       providerTransactionId: intent.providerTransactionId,
       status: 'PAID',
-      paidAt: parseBusinessDate('2026-10-10'),
+      paidAt: new Date('2026-10-10T15:00:00.000Z'),
       failureCode: null,
       failureMessage: null,
     });
@@ -1007,6 +1275,48 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PAGO');
     expect(fake.transactions).toHaveLength(1);
     expect(fake.webhookEvents).toHaveLength(1);
+  });
+
+  it('uses the webhook paid instant as Sao Paulo business date for late FastFlow renewal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-17T15:00:00.000Z'));
+    try {
+      const fake = createFinancePrisma();
+      fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+      fake.clientReference.billingAnchorDay = 14;
+      fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+      const { cycle, nextReceivables } = createCycleRecorder(fake);
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        fake.credentials as never,
+        fake.config as never,
+        undefined,
+        cycle as never,
+      );
+      const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+      fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+      fake.paymentIntents.at(0)!.providerTransactionId = 'tx-late-fastflow';
+      const rawPayload = JSON.stringify({ transaction_id: 'tx-late-fastflow', status: 'paid' });
+
+      await service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      );
+
+      expect(intent.id).toBe('intent-1');
+      expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-09-17'));
+      expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-17'));
+      expect(fake.clientReference.billingAnchorDay).toBe(17);
+      expect(nextReceivables[0]).toMatchObject({
+        dueDate: parseBusinessDate('2026-10-17'),
+        status: 'PENDENTE',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects payment webhooks with an invalid signature', async () => {

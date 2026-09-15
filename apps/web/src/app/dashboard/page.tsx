@@ -16,6 +16,7 @@ import {
   Filter,
   Gift,
   LayoutDashboard,
+  Layers,
   ListChecks,
   MessageCircle,
   Pencil,
@@ -24,6 +25,7 @@ import {
   QrCode,
   RefreshCcw,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Send,
@@ -49,8 +51,14 @@ import {
   clientNextDueSummary,
   clientOperationalSummary,
   clientPlanSummary,
+  clientReceivableTotals,
   clientReferenceCountLabel,
   clientReferenceSummary,
+  dispatchReferenceSummary,
+  dispatchStatusTone,
+  referenceStatusRequiresReason,
+  receivableStatusTone,
+  receivableVisualStatus,
 } from '../../components/clients/client-ui-helpers';
 import { PlanForm } from '../../components/plans/plan-form';
 import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
@@ -156,6 +164,7 @@ import {
   type BillingSummary,
   type BillingAutomationSettings,
   type Client,
+  type ClientMessageDispatch,
   type ClientPayload,
   type ClientReference,
   type ClientStatus,
@@ -284,7 +293,6 @@ export default function DashboardPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ClientStatus | ''>('');
   const [planId, setPlanId] = useState('');
-  const [statusReason, setStatusReason] = useState('');
   const [error, setError] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
 
@@ -349,41 +357,42 @@ export default function DashboardPage() {
     setEditingPlan(null);
   }
 
-  async function handleReferenceStatusChange(reference: ClientReference, nextStatus: ClientStatus) {
+  async function handleReferenceStatusChange(
+    reference: ClientReference,
+    nextStatus: ClientStatus,
+    reasonOverride?: string,
+  ) {
     if (!selectedClient) return;
 
     const actionLabel =
       nextStatus === 'INATIVO' ? 'inativar' : nextStatus === 'CANCELADO' ? 'cancelar' : 'ativar';
-    const requiresReason = nextStatus === 'INATIVO' || nextStatus === 'CANCELADO';
-    const reason =
-      requiresReason && !statusReason.trim()
-        ? window.prompt(`Informe o motivo para ${actionLabel} a referência ${reference.reference}:`)
-        : statusReason;
+    const requiresReason = referenceStatusRequiresReason(nextStatus);
+    const reason = reasonOverride;
 
     if (requiresReason && !reason?.trim()) {
       setError('Motivo obrigatório para inativar ou cancelar referência.');
       return;
     }
 
-    const confirmed = window.confirm(
-      [
-        `${actionLabel[0]?.toUpperCase()}${actionLabel.slice(1)} referência?`,
-        `Referência: ${reference.reference}`,
-        `Cliente: ${selectedClient.name}`,
-        `Status atual: ${reference.status}`,
-        `Novo status: ${nextStatus}`,
-        reason?.trim() ? `Motivo: ${reason.trim()}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    );
+    const confirmed =
+      reasonOverride ||
+      window.confirm(
+        [
+          `${actionLabel[0]?.toUpperCase()}${actionLabel.slice(1)} referência?`,
+          `Referência: ${reference.reference}`,
+          `Cliente: ${selectedClient.name}`,
+          `Status atual: ${reference.status}`,
+          `Novo status: ${nextStatus}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
 
     if (!confirmed) {
       return;
     }
 
     await updateClientReferenceStatus(reference.id, nextStatus, reason?.trim() || undefined);
-    setStatusReason('');
     const detailed = await getClient(selectedClient.id);
     setSelectedClient(detailed);
     await loadData();
@@ -535,9 +544,14 @@ export default function DashboardPage() {
           onClearSelection={() => setSelectedClient(null)}
           onRemoveClient={(client) => void handleRemoveClient(client)}
           onRemoveReference={(reference) => void handleRemoveReference(reference)}
-          onReferenceStatusChange={(reference, nextStatus) =>
-            void handleReferenceStatusChange(reference, nextStatus)
+          onReferenceStatusChange={(reference, nextStatus, reason) =>
+            void handleReferenceStatusChange(reference, nextStatus, reason)
           }
+          onFinancialMutation={async (clientId) => {
+            const detailed = await getClient(clientId);
+            setSelectedClient(detailed);
+            await loadData();
+          }}
           onWhatsAppSent={async (clientId) => {
             const detailed = await getClient(clientId);
             setSelectedClient(detailed);
@@ -555,9 +569,7 @@ export default function DashboardPage() {
           setPlanId={setPlanId}
           setSearch={setSearch}
           setStatus={setStatus}
-          setStatusReason={setStatusReason}
           status={status}
-          statusReason={statusReason}
           renewalNotice={renewalNotice}
         />
       ) : null}
@@ -2110,10 +2122,13 @@ function ClientEventIcon({ type }: { type: NonNullable<Client['events']>[number]
   if (type === 'PAYMENT_REGISTERED') return <CircleCheck size={14} />;
   if (type === 'WHATSAPP_MESSAGE_SENT') return <MessageCircle size={14} />;
   if (type === 'CLIENT_RENEWED') return <RefreshCw size={14} />;
+  if (type === 'CLIENT_CREATED' || type === 'CLIENT_UPDATED') return <Layers size={14} />;
+  if (type === 'STATUS_CHANGED') return <RefreshCw size={14} />;
   if (type === 'PIX_PAYMENT_INTENT_CREATED' || type === 'PIX_PAYMENT_STATUS_UPDATED') {
     return <QrCode size={14} />;
   }
   if (type === 'RECEIVABLE_CANCELED') return <XCircle size={14} />;
+  if (type.startsWith('RECOVERY')) return <RotateCcw size={14} />;
   if (type.startsWith('REFERRAL')) return <Gift size={14} />;
   return <Activity size={14} />;
 }
@@ -2136,6 +2151,7 @@ function ClientsView({
   onRemoveClient,
   onRemoveReference,
   onSelect,
+  onFinancialMutation,
   onWhatsAppSent,
   onUpdate,
   planId,
@@ -2145,9 +2161,7 @@ function ClientsView({
   setPlanId,
   setSearch,
   setStatus,
-  setStatusReason,
   status,
-  statusReason,
   renewalNotice,
 }: {
   clientFormOpen: boolean;
@@ -2168,10 +2182,15 @@ function ClientsView({
     reference: ClientReference,
     payload: Partial<Omit<ClientPayload, 'name' | 'phone' | 'email'>>,
   ) => Promise<void>;
-  onReferenceStatusChange: (reference: ClientReference, status: ClientStatus) => void;
+  onReferenceStatusChange: (
+    reference: ClientReference,
+    status: ClientStatus,
+    reason?: string,
+  ) => void;
   onRemoveClient: (client: Client) => void;
   onRemoveReference: (reference: ClientReference) => void;
   onSelect: (client: Client) => void | Promise<void>;
+  onFinancialMutation: (clientId: string) => Promise<void>;
   onWhatsAppSent: (clientId: string) => Promise<void>;
   onUpdate: (payload: ClientUpdatePayload) => Promise<void>;
   onCloseForm: () => void;
@@ -2182,9 +2201,7 @@ function ClientsView({
   setPlanId: (value: string) => void;
   setSearch: (value: string) => void;
   setStatus: (value: ClientStatus | '') => void;
-  setStatusReason: (value: string) => void;
   status: ClientStatus | '';
-  statusReason: string;
   renewalNotice: string;
 }) {
   const [detailTab, setDetailTab] = useState<
@@ -2193,9 +2210,105 @@ function ClientsView({
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
   const [referenceFormOpen, setReferenceFormOpen] = useState(false);
   const [editingReference, setEditingReference] = useState<ClientReference | null>(null);
+  const [referenceStatusModal, setReferenceStatusModal] = useState<{
+    reference: ClientReference;
+    status: Extract<ClientStatus, 'INATIVO' | 'CANCELADO'>;
+  } | null>(null);
+  const [clientFinanceCategories, setClientFinanceCategories] = useState<FinancialCategory[]>([]);
+  const [paymentReceivable, setPaymentReceivable] = useState<Receivable | null>(null);
+  const [pixReceivable, setPixReceivable] = useState<Receivable | null>(null);
+  const [paymentReceivables, setPaymentReceivables] = useState<Receivable[] | null>(null);
+  const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
+  const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
+  const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
+  const [selectedDispatch, setSelectedDispatch] = useState<ClientMessageDispatch | null>(null);
+  const [clientActionNotice, setClientActionNotice] = useState('');
+  const [clientActionError, setClientActionError] = useState('');
   const uniqueSelectedReference =
     selectedClient?.references?.length === 1 ? selectedClient.references[0] : null;
   const selectedReferences = selectedClient?.references ?? [];
+  const selectedReceivables = selectedClient?.receivables ?? [];
+  const receivableTotals = clientReceivableTotals(selectedReceivables);
+  const selectedReceivablesForBulk = selectedReceivables.filter((receivable) =>
+    selectedReceivableIds.includes(receivable.id),
+  );
+  const selectedReceivableTotal = selectedReceivablesForBulk.reduce(
+    (total, receivable) => total + Number(receivable.amount),
+    0,
+  );
+  const selectedPendingReceivablesForBulk = selectedReceivablesForBulk.filter(
+    (receivable) => receivable.status === 'PENDENTE',
+  );
+  const billingTotal = selectedReceivables.reduce(
+    (total, receivable) => total + Number(receivable.amount),
+    0,
+  );
+  const selectedDispatches = selectedClient?.messageDispatches ?? [];
+  const billingSummary = selectedDispatches.reduce(
+    (summary, dispatch) => {
+      if (dispatch.status === 'SENT') summary.sent += 1;
+      else if (dispatch.status === 'FAILED') summary.failed += 1;
+      else summary.scheduled += 1;
+
+      return summary;
+    },
+    { failed: 0, scheduled: 0, sent: 0 },
+  );
+  const pixIntentCount = selectedReceivables.reduce(
+    (total, receivable) => total + (receivable.paymentIntents?.length ?? 0),
+    0,
+  );
+
+  useEffect(() => {
+    setSelectedReceivableIds([]);
+    setSelectedDispatch(null);
+    setReferenceStatusModal(null);
+    setPaymentReceivable(null);
+    setPixReceivable(null);
+    setPaymentReceivables(null);
+    setPixReceivables(null);
+    setCancelingReceivable(null);
+    setClientActionNotice('');
+    setClientActionError('');
+  }, [selectedClient?.id]);
+
+  useEffect(() => {
+    if (!selectedClient) return undefined;
+
+    let active = true;
+
+    listFinancialCategories()
+      .then((categories) => {
+        if (active) {
+          setClientFinanceCategories(categories.filter((category) => category.type === 'ENTRADA'));
+        }
+      })
+      .catch(() => {
+        if (active) setClientActionError('Não foi possível carregar categorias financeiras.');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedClient]);
+
+  async function refreshClientFinance(message: string) {
+    if (!selectedClient) return;
+    setClientActionError('');
+    setClientActionNotice(message);
+    setSelectedReceivableIds([]);
+    await onFinancialMutation(selectedClient.id);
+  }
+
+  function toggleClientReceivableSelection(receivable: Receivable, checked: boolean) {
+    if (receivable.status !== 'PENDENTE') return;
+
+    setSelectedReceivableIds((current) =>
+      checked
+        ? [...new Set([...current, receivable.id])]
+        : current.filter((id) => id !== receivable.id),
+    );
+  }
 
   return (
     <>
@@ -2615,17 +2728,12 @@ function ClientsView({
                       Nova referência
                     </Button>
                   </div>
-                  <div className="status-actions">
+                  <div className="status-guidance">
                     <div className="notice">
                       INATIVO = serviço temporariamente parado e elegivel para recuperação.
                       CANCELADO = encerramento definitivo da referência, sem continuidade de
                       recuperação.
                     </div>
-                    <textarea
-                      placeholder="Justificativa para inativar ou cancelar referência"
-                      value={statusReason}
-                      onChange={(event) => setStatusReason(event.target.value)}
-                    />
                   </div>
                   <div className="reference-grid">
                     {(selectedClient.references ?? []).map((reference) => (
@@ -2695,13 +2803,15 @@ function ClientsView({
                               {
                                 icon: Power,
                                 label: 'Inativar',
-                                onSelect: () => onReferenceStatusChange(reference, 'INATIVO'),
+                                onSelect: () =>
+                                  setReferenceStatusModal({ reference, status: 'INATIVO' }),
                               },
                               {
                                 danger: true,
                                 icon: XCircle,
                                 label: 'Cancelar',
-                                onSelect: () => onReferenceStatusChange(reference, 'CANCELADO'),
+                                onSelect: () =>
+                                  setReferenceStatusModal({ reference, status: 'CANCELADO' }),
                               },
                               {
                                 danger: true,
@@ -2741,49 +2851,231 @@ function ClientsView({
               ) : null}
 
               {detailTab === 'receivables' ? (
-                <div className="mini-list">
-                  {(selectedClient.receivables ?? []).map((receivable) => (
-                    <article key={receivable.id}>
-                      <strong>{receivable.description}</strong>
-                      <span>{formatDate(receivable.dueDate)}</span>
-                      <p>
-                        {formatCurrency(receivable.amount)} | {receivable.displayStatus}
-                      </p>
-                      {receivable.paymentIntents?.length ? (
-                        <div className="step-list">
-                          {receivable.paymentIntents.map((intent) => (
-                            <span key={intent.id}>
-                              PIX {paymentProviderDisplay(intent.provider)} ·{' '}
-                              {paymentIntentStatusLabel(intent.status)}
-                              {intent.externalStatus ? ` · ${intent.externalStatus}` : ''}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
-                  {!selectedClient.receivables?.length ? (
-                    <div className="empty-state">Sem contas a receber.</div>
+                <div className="client-tab-panel finance-client-panel">
+                  {clientActionError ? (
+                    <div className="notice danger">{clientActionError}</div>
+                  ) : null}
+                  {clientActionNotice ? (
+                    <div className="notice success">{clientActionNotice}</div>
+                  ) : null}
+                  <div className="client-tab-summary">
+                    <StatCard label="A receber" value={formatCurrency(receivableTotals.pending)} />
+                    <StatCard
+                      label="Pago"
+                      tone="success"
+                      value={formatCurrency(receivableTotals.paid)}
+                    />
+                    <StatCard
+                      label="Vencido"
+                      tone="danger"
+                      value={formatCurrency(receivableTotals.overdue)}
+                    />
+                    <StatCard
+                      label="Cancelado"
+                      tone="warning"
+                      value={formatCurrency(receivableTotals.canceled)}
+                    />
+                  </div>
+                  {selectedReceivableIds.length ? (
+                    <div className="selection-bar finance-selection-bar">
+                      <span>
+                        {selectedPendingReceivablesForBulk.length} conta(s) pendente(s) ·{' '}
+                        {formatCurrency(selectedReceivableTotal)}
+                      </span>
+                      <div className="button-row">
+                        <Button
+                          disabled={!selectedPendingReceivablesForBulk.length}
+                          icon={QrCode}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setPixReceivables(selectedPendingReceivablesForBulk)}
+                        >
+                          Gerar PIX selecionados
+                        </Button>
+                        <Button
+                          disabled={!selectedPendingReceivablesForBulk.length}
+                          icon={CircleCheck}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setPaymentReceivables(selectedPendingReceivablesForBulk)}
+                        >
+                          Dar baixa selecionados
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="table-wrap compact-table">
+                    <table className="client-finance-table">
+                      <thead>
+                        <tr>
+                          <th aria-label="Selecionar"></th>
+                          <th>Descrição</th>
+                          <th>Referência</th>
+                          <th>Vencimento</th>
+                          <th>Valor</th>
+                          <th>Situação</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedReceivables.map((receivable) => {
+                          const checked = selectedReceivableIds.includes(receivable.id);
+                          const status = receivableVisualStatus(receivable);
+
+                          return (
+                            <tr key={receivable.id}>
+                              <td>
+                                <input
+                                  aria-label={`Selecionar ${receivable.description}`}
+                                  checked={checked}
+                                  disabled={receivable.status !== 'PENDENTE'}
+                                  type="checkbox"
+                                  onChange={(event) => {
+                                    toggleClientReceivableSelection(
+                                      receivable,
+                                      event.target.checked,
+                                    );
+                                  }}
+                                />
+                              </td>
+                              <td>
+                                <strong>{receivable.description}</strong>
+                                {receivable.paymentIntents?.length ? (
+                                  <span>{receivable.paymentIntents.length} PIX vinculado(s)</span>
+                                ) : null}
+                              </td>
+                              <td>{receivable.clientReference?.reference ?? '-'}</td>
+                              <td>{formatDate(receivable.dueDate)}</td>
+                              <td>{formatCurrency(receivable.amount)}</td>
+                              <td>
+                                <span
+                                  className={`finance-status-pill tone-${receivableStatusTone(
+                                    receivable,
+                                  )}`}
+                                >
+                                  {status}
+                                </span>
+                              </td>
+                              <td>
+                                <div className="table-actions">
+                                  <IconButton
+                                    disabled={
+                                      receivable.status !== 'PENDENTE' &&
+                                      !receivable.paymentIntents?.length
+                                    }
+                                    icon={QrCode}
+                                    label="Gerar ou ver PIX"
+                                    onClick={() => setPixReceivable(receivable)}
+                                  />
+                                  <ActionMenu
+                                    items={[
+                                      {
+                                        disabled: receivable.status !== 'PENDENTE',
+                                        icon: QrCode,
+                                        label: 'Gerar PIX',
+                                        onSelect: () => setPixReceivable(receivable),
+                                      },
+                                      {
+                                        disabled: receivable.status !== 'PENDENTE',
+                                        icon: CircleCheck,
+                                        label: 'Dar baixa',
+                                        onSelect: () => setPaymentReceivable(receivable),
+                                      },
+                                      {
+                                        disabled: receivable.status !== 'PENDENTE',
+                                        icon: XCircle,
+                                        label: 'Cancelar',
+                                        onSelect: () => setCancelingReceivable(receivable),
+                                      },
+                                    ]}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {!selectedReceivables.length ? (
+                      <div className="empty-state">Sem contas a receber.</div>
+                    ) : null}
+                  </div>
+                  {selectedReceivables.some((receivable) => receivable.paymentIntents?.length) ? (
+                    <div className="pix-intent-list">
+                      {selectedReceivables.flatMap((receivable) =>
+                        (receivable.paymentIntents ?? []).map((intent) => (
+                          <article className="pix-intent-card" key={intent.id}>
+                            <QrCode aria-hidden="true" size={15} />
+                            <div>
+                              <strong>{formatCurrency(intent.amount)}</strong>
+                              <span>
+                                {paymentIntentStatusLabel(intent.status)} ·{' '}
+                                {paymentProviderDisplay(intent.provider)} · criado em{' '}
+                                {formatDateTime(intent.createdAt)}
+                                {intent.paidAt ? ` · pago em ${formatDateTime(intent.paidAt)}` : ''}
+                              </span>
+                            </div>
+                          </article>
+                        )),
+                      )}
+                    </div>
                   ) : null}
                 </div>
               ) : null}
 
               {detailTab === 'messages' ? (
-                <div className="mini-list">
-                  {(selectedClient.messageDispatches ?? []).map((dispatch) => (
-                    <article key={dispatch.id}>
-                      <strong>{messageOriginLabel(dispatch.origin)}</strong>
-                      <span>{formatDateTime(dispatch.createdAt)}</span>
-                      <p>
-                        {billingStatusLabel(dispatch.status)} | {dispatch.phone} |{' '}
-                        {dispatch.attempts} tentativa(s)
-                      </p>
-                      {dispatch.errorMessage ? <p>{dispatch.errorMessage}</p> : null}
-                    </article>
-                  ))}
-                  {!selectedClient.messageDispatches?.length ? (
-                    <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
-                  ) : null}
+                <div className="client-tab-panel billing-client-panel">
+                  <div className="client-tab-summary">
+                    <StatCard label="Agendadas" value={billingSummary.scheduled} />
+                    <StatCard label="Enviadas" tone="success" value={billingSummary.sent} />
+                    <StatCard label="Falhas" tone="danger" value={billingSummary.failed} />
+                    <StatCard label="PIX vinculados" tone="info" value={pixIntentCount} />
+                  </div>
+                  <div className="table-wrap compact-table">
+                    <table className="client-billing-table">
+                      <thead>
+                        <tr>
+                          <th>Data</th>
+                          <th>Referências</th>
+                          <th>Valor</th>
+                          <th>Tipo</th>
+                          <th>Status</th>
+                          <th>Tentativas</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedDispatches.map((dispatch) => (
+                          <tr key={dispatch.id}>
+                            <td>{formatDateTime(dispatch.createdAt)}</td>
+                            <td>{dispatchReferenceSummary(selectedReferences.length)}</td>
+                            <td>{formatCurrency(billingTotal)}</td>
+                            <td>{messageOriginLabel(dispatch.origin)}</td>
+                            <td>
+                              <span
+                                className={`finance-status-pill tone-${dispatchStatusTone(
+                                  dispatch.status,
+                                )}`}
+                              >
+                                {billingStatusLabel(dispatch.status)}
+                              </span>
+                            </td>
+                            <td>{dispatch.attempts}</td>
+                            <td>
+                              <IconButton
+                                icon={Eye}
+                                label="Abrir detalhe da cobrança"
+                                onClick={() => setSelectedDispatch(dispatch)}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!selectedDispatches.length ? (
+                      <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
 
@@ -2856,7 +3148,10 @@ function ClientsView({
         {clientFormOpen ? (
           <div className="modal-backdrop" role="presentation">
             <section className="modal client-form-modal" aria-labelledby="client-form-title">
-              <header className="modal-header">
+              <header className="modal-header modal-header-with-icon">
+                <span className="modal-icon" aria-hidden="true">
+                  {editingClient ? <Pencil size={15} /> : <UserPlus size={15} />}
+                </span>
                 <div>
                   <span className="metric-label">
                     {editingClient ? 'Editar cliente' : 'Novo cliente'}
@@ -2888,12 +3183,20 @@ function ClientsView({
         {selectedClient && referenceFormOpen ? (
           <div className="modal-backdrop" role="presentation">
             <section className="modal reference-form-modal" aria-labelledby="reference-form-title">
-              <header className="modal-header">
+              <header className="modal-header modal-header-with-icon">
+                <span className="modal-icon" aria-hidden="true">
+                  {editingReference ? <Pencil size={15} /> : <Plus size={15} />}
+                </span>
                 <div>
                   <span className="metric-label">Referência</span>
                   <h2 id="reference-form-title">
                     {editingReference ? 'Editar referência' : 'Nova referência'}
                   </h2>
+                  <p>
+                    {editingReference
+                      ? 'Atualize os dados operacionais desta referência.'
+                      : 'Cadastre uma nova referência para este cliente.'}
+                  </p>
                 </div>
                 <IconButton
                   icon={X}
@@ -2924,6 +3227,84 @@ function ClientsView({
             </section>
           </div>
         ) : null}
+        {referenceStatusModal ? (
+          <ReferenceStatusConfirmationModal
+            target={referenceStatusModal}
+            onClose={() => setReferenceStatusModal(null)}
+            onConfirm={(reason) => {
+              onReferenceStatusChange(
+                referenceStatusModal.reference,
+                referenceStatusModal.status,
+                reason,
+              );
+              setReferenceStatusModal(null);
+            }}
+          />
+        ) : null}
+        {selectedDispatch ? (
+          <DispatchDetailModal
+            dispatch={selectedDispatch}
+            referenceCount={selectedReferences.length}
+            totalAmount={billingTotal}
+            onClose={() => setSelectedDispatch(null)}
+          />
+        ) : null}
+        {paymentReceivable ? (
+          <PayReceivableModal
+            categories={clientFinanceCategories}
+            receivable={paymentReceivable}
+            onClose={() => setPaymentReceivable(null)}
+            onConfirm={async (payload) => {
+              await payReceivable(paymentReceivable.id, payload);
+              setPaymentReceivable(null);
+              await refreshClientFinance('Pagamento registrado.');
+            }}
+          />
+        ) : null}
+        {paymentReceivables ? (
+          <PayReceivablesModal
+            categories={clientFinanceCategories}
+            receivables={paymentReceivables}
+            onClose={() => setPaymentReceivables(null)}
+            onConfirm={async (payload) => {
+              await payReceivables({
+                receivableIds: paymentReceivables.map((receivable) => receivable.id),
+                ...payload,
+              });
+              setPaymentReceivables(null);
+              await refreshClientFinance('Pagamento agrupado registrado.');
+            }}
+          />
+        ) : null}
+        {pixReceivable ? (
+          <PixReceivableModal
+            receivable={pixReceivable}
+            onClose={() => setPixReceivable(null)}
+            onChanged={async (message) => {
+              await refreshClientFinance(message);
+            }}
+          />
+        ) : null}
+        {pixReceivables ? (
+          <PixReceivablesModal
+            receivables={pixReceivables}
+            onClose={() => setPixReceivables(null)}
+            onChanged={async (message) => {
+              await refreshClientFinance(message);
+            }}
+          />
+        ) : null}
+        {cancelingReceivable ? (
+          <CancelReceivableModal
+            receivable={cancelingReceivable}
+            onClose={() => setCancelingReceivable(null)}
+            onConfirm={async (reason) => {
+              await cancelReceivable(cancelingReceivable.id, { reason });
+              setCancelingReceivable(null);
+              await refreshClientFinance('Conta a receber cancelada.');
+            }}
+          />
+        ) : null}
         {whatsAppClient ? (
           <SendWhatsAppModal
             client={whatsAppClient}
@@ -2936,6 +3317,169 @@ function ClientsView({
         ) : null}
       </div>
     </>
+  );
+}
+
+function ReferenceStatusConfirmationModal({
+  target,
+  onClose,
+  onConfirm,
+}: {
+  target: { reference: ClientReference; status: Extract<ClientStatus, 'INATIVO' | 'CANCELADO'> };
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void> | void;
+}) {
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const isCanceling = target.status === 'CANCELADO';
+  const actionLabel = isCanceling ? 'cancelar' : 'inativar';
+  const title = isCanceling ? 'Cancelar referência' : 'Inativar referência';
+
+  async function submit() {
+    if (!reason.trim()) {
+      setError('Informe uma justificativa para continuar.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+
+    try {
+      await onConfirm(reason.trim());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível atualizar a referência.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal reference-status-modal" aria-labelledby="reference-status-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className={`modal-icon ${isCanceling ? 'danger' : 'warning'}`} aria-hidden="true">
+            {isCanceling ? <XCircle size={15} /> : <Power size={15} />}
+          </span>
+          <div>
+            <span className="metric-label">Referência</span>
+            <h2 id="reference-status-title">{title}</h2>
+            <p>Confirme a ação e registre a justificativa para {actionLabel} esta referência.</p>
+          </div>
+          <IconButton icon={X} label="Fechar confirmação" onClick={onClose} />
+        </header>
+        {error ? <div className="notice danger">{error}</div> : null}
+        <dl className="detail-list compact-detail-list">
+          <div>
+            <dt>Referência</dt>
+            <dd>{target.reference.reference}</dd>
+          </div>
+          <div>
+            <dt>Ação</dt>
+            <dd>{title}</dd>
+          </div>
+        </dl>
+        <label className="field">
+          <span>Justificativa</span>
+          <textarea
+            autoFocus
+            required
+            placeholder={`Informe o motivo para ${actionLabel} esta referência`}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+        <div className="form-actions">
+          <span className="error-message">{error}</span>
+          <div className="button-row">
+            <Button disabled={saving} icon={X} variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={saving || !reason.trim()}
+              icon={isCanceling ? XCircle : Power}
+              loading={saving}
+              variant={isCanceling ? 'danger' : 'primary'}
+              onClick={() => void submit()}
+            >
+              {isCanceling ? 'Confirmar cancelamento' : 'Confirmar inativação'}
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DispatchDetailModal({
+  dispatch,
+  referenceCount,
+  totalAmount,
+  onClose,
+}: {
+  dispatch: ClientMessageDispatch;
+  referenceCount: number;
+  totalAmount: number;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal dispatch-detail-modal" aria-labelledby="dispatch-detail-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <MessageCircle size={15} />
+          </span>
+          <div>
+            <span className="metric-label">Cobrança/PIX</span>
+            <h2 id="dispatch-detail-title">Detalhe da cobrança</h2>
+            <p>Dados disponíveis da mensagem de cobrança selecionada.</p>
+          </div>
+          <IconButton icon={X} label="Fechar detalhe da cobrança" onClick={onClose} />
+        </header>
+        <dl className="detail-list compact-detail-list">
+          <div>
+            <dt>Data</dt>
+            <dd>{formatDateTime(dispatch.createdAt)}</dd>
+          </div>
+          <div>
+            <dt>Telefone</dt>
+            <dd>{dispatch.phone}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{billingStatusLabel(dispatch.status)}</dd>
+          </div>
+          <div>
+            <dt>Tentativas</dt>
+            <dd>{dispatch.attempts}</dd>
+          </div>
+          <div>
+            <dt>Tipo</dt>
+            <dd>{messageOriginLabel(dispatch.origin)}</dd>
+          </div>
+          <div>
+            <dt>Referências</dt>
+            <dd>{dispatchReferenceSummary(referenceCount)}</dd>
+          </div>
+          <div>
+            <dt>Valor total</dt>
+            <dd>{formatCurrency(totalAmount)}</dd>
+          </div>
+        </dl>
+        {dispatch.errorMessage ? (
+          <div className="notice danger">
+            <strong>Erro</strong>
+            <span>{dispatch.errorMessage}</span>
+          </div>
+        ) : null}
+        {(dispatch.renderedContent ?? dispatch.body) ? (
+          <div className="notes-box">
+            <span className="metric-label">Mensagem</span>
+            <p>{dispatch.renderedContent ?? dispatch.body}</p>
+          </div>
+        ) : null}
+      </section>
+    </div>
   );
 }
 

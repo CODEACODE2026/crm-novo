@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import type { Client, ClientReference, Plan } from '../../lib/crm-api';
+import type { Client, ClientReference, Plan, Receivable } from '../../lib/crm-api';
 import {
   clientDisplayStatus,
   clientInitial,
   clientNextDueSummary,
   clientOperationalSummary,
   clientPlanSummary,
+  clientReceivableTotals,
   clientReferenceCountLabel,
   clientReferenceSummary,
+  dispatchReferenceSummary,
+  dispatchStatusTone,
+  receivableStatusTone,
+  receivableVisualStatus,
+  referenceStatusRequiresReason,
 } from './client-ui-helpers';
 
 const plan: Plan = {
@@ -64,6 +70,28 @@ function client(references: ClientReference[] = []): Client {
   };
 }
 
+function receivable(overrides: Partial<Receivable> = {}): Receivable {
+  return {
+    amount: '100.00',
+    canceledAt: null,
+    clientId: 'client-1',
+    clientReference: { id: 'reference-1', reference: 'REF-001', status: 'ATIVO' },
+    clientReferenceId: 'reference-1',
+    createdAt: '2026-09-01',
+    description: 'Mensalidade',
+    displayStatus: 'PENDENTE',
+    dueDate: '2026-09-20',
+    id: 'receivable-1',
+    paidAt: null,
+    paymentIntents: [],
+    purpose: 'RENEWAL',
+    renewalId: null,
+    status: 'PENDENTE',
+    updatedAt: '2026-09-01',
+    ...overrides,
+  };
+}
+
 describe('client UI helpers', () => {
   it('formats compact client initials', () => {
     expect(clientInitial('Atualiza')).toBe('A');
@@ -100,5 +128,55 @@ describe('client UI helpers', () => {
     expect(clientNextDueSummary(refs)).toBe('Vários');
     expect(clientOperationalSummary(refs)).toBe('Vários');
     expect(clientDisplayStatus(client(refs))).toBe('PENDENTE_PAGAMENTO');
+  });
+
+  it('classifies receivable visual statuses and totals', () => {
+    const pending = receivable({ amount: '100.00', displayStatus: 'PENDENTE', status: 'PENDENTE' });
+    const paid = receivable({
+      amount: '50.00',
+      displayStatus: 'PAGO',
+      id: 'receivable-2',
+      status: 'PAGO',
+    });
+    const overdue = receivable({
+      amount: '25.00',
+      displayStatus: 'VENCIDO',
+      id: 'receivable-3',
+      status: 'PENDENTE',
+    });
+    const canceled = receivable({
+      amount: '10.00',
+      displayStatus: 'CANCELADO',
+      id: 'receivable-4',
+      status: 'CANCELADO',
+    });
+
+    expect(receivableVisualStatus(overdue)).toBe('VENCIDO');
+    expect(receivableStatusTone(pending)).toBe('warning');
+    expect(receivableStatusTone(paid)).toBe('success');
+    expect(receivableStatusTone(overdue)).toBe('overdue');
+    expect(receivableStatusTone(canceled)).toBe('danger');
+    expect(clientReceivableTotals([pending, paid, overdue, canceled])).toEqual({
+      canceled: 10,
+      overdue: 25,
+      paid: 50,
+      pending: 100,
+    });
+  });
+
+  it('summarizes consolidated billing references and dispatch tones', () => {
+    expect(dispatchReferenceSummary(0)).toBe('-');
+    expect(dispatchReferenceSummary(1)).toBe('1 referência');
+    expect(dispatchReferenceSummary(3)).toBe('3 referências');
+    expect(dispatchStatusTone('SENT')).toBe('success');
+    expect(dispatchStatusTone('FAILED')).toBe('danger');
+    expect(dispatchStatusTone('SCHEDULED')).toBe('warning');
+  });
+
+  it('requires reason only for inactive and canceled reference status changes', () => {
+    expect(referenceStatusRequiresReason('ATIVO')).toBe(false);
+    expect(referenceStatusRequiresReason('PENDENTE_PAGAMENTO')).toBe(false);
+    expect(referenceStatusRequiresReason('INATIVO')).toBe(true);
+    expect(referenceStatusRequiresReason('CANCELADO')).toBe(true);
   });
 });

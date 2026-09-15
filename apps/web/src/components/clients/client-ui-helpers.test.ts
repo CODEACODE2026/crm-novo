@@ -10,7 +10,9 @@ import {
   clientReferenceCountLabel,
   clientReferenceSummary,
   dispatchReferenceSummary,
+  dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
+  dispatchTotalAmountLabel,
   receivableStatusTone,
   receivableVisualStatus,
   referenceStatusRequiresReason,
@@ -171,6 +173,50 @@ describe('client UI helpers', () => {
     expect(dispatchStatusTone('SENT')).toBe('success');
     expect(dispatchStatusTone('FAILED')).toBe('danger');
     expect(dispatchStatusTone('SCHEDULED')).toBe('warning');
+  });
+
+  it('uses MessageDispatch item data for billing reference label and total', () => {
+    const dispatch = {
+      clientReference: { id: 'reference-a', reference: 'teste01', status: 'ATIVO' as const },
+      itemCount: 3,
+      items: [
+        {
+          amount: '30.00',
+          clientReferenceId: 'reference-a',
+          dueDate: '2026-09-15',
+          id: 'item-a',
+          receivableId: 'receivable-a',
+          reference: 'teste01',
+          status: 'PENDENTE' as const,
+        },
+        {
+          amount: '30.00',
+          clientReferenceId: 'reference-b',
+          dueDate: '2026-09-15',
+          id: 'item-b',
+          receivableId: 'receivable-b',
+          reference: 'teste02',
+          status: 'PENDENTE' as const,
+        },
+        {
+          amount: '30.00',
+          clientReferenceId: 'reference-c',
+          dueDate: '2026-09-15',
+          id: 'item-c',
+          receivableId: 'receivable-c',
+          reference: 'teste03',
+          status: 'PENDENTE' as const,
+        },
+      ],
+      totalAmount: '90.00',
+    };
+
+    expect(dispatchReferenceSummaryFromDispatch(dispatch)).toBe('3 referências');
+    expect(dispatchTotalAmountLabel(dispatch)).toMatch(/^R\$\s?90,00$/u);
+  });
+
+  it('does not invent a billing total from unrelated client receivables', () => {
+    expect(dispatchTotalAmountLabel({})).toBe('-');
   });
 
   it('requires reason only for inactive and canceled reference status changes', () => {

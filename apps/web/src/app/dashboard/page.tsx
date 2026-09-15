@@ -14,7 +14,9 @@ import {
   DollarSign,
   Eye,
   Filter,
+  FileText,
   Gift,
+  Info,
   LayoutDashboard,
   Layers,
   ListChecks,
@@ -54,7 +56,8 @@ import {
   clientReceivableTotals,
   clientReferenceCountLabel,
   clientReferenceSummary,
-  dispatchReferenceSummary,
+  dispatchTotalAmountLabel,
+  dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
   referenceStatusRequiresReason,
   receivableStatusTone,
@@ -2210,6 +2213,11 @@ function ClientsView({
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
   const [referenceFormOpen, setReferenceFormOpen] = useState(false);
   const [editingReference, setEditingReference] = useState<ClientReference | null>(null);
+  const [referenceFilter, setReferenceFilter] = useState<
+    'ALL' | 'ATIVO' | 'PENDENTE_PAGAMENTO' | 'INATIVO' | 'CANCELADO'
+  >('ALL');
+  const [referenceSearch, setReferenceSearch] = useState('');
+  const [referenceSort, setReferenceSort] = useState<'recent' | 'dueDate'>('recent');
   const [referenceStatusModal, setReferenceStatusModal] = useState<{
     reference: ClientReference;
     status: Extract<ClientStatus, 'INATIVO' | 'CANCELADO'>;
@@ -2227,6 +2235,30 @@ function ClientsView({
   const uniqueSelectedReference =
     selectedClient?.references?.length === 1 ? selectedClient.references[0] : null;
   const selectedReferences = selectedClient?.references ?? [];
+  const referenceCounts = selectedReferences.reduce(
+    (counts, reference) => {
+      counts.all += 1;
+      if (reference.status === 'ATIVO') counts.active += 1;
+      if (reference.status === 'PENDENTE_PAGAMENTO') counts.pending += 1;
+      if (reference.status === 'INATIVO') counts.inactive += 1;
+      if (reference.status === 'CANCELADO') counts.canceled += 1;
+      return counts;
+    },
+    { active: 0, all: 0, canceled: 0, inactive: 0, pending: 0 },
+  );
+  const visibleReferences = selectedReferences.filter((reference) => {
+    const query = referenceSearch.trim().toLowerCase();
+    if (referenceFilter !== 'ALL' && reference.status !== referenceFilter) return false;
+    if (!query) return true;
+    return (
+      reference.reference.toLowerCase().includes(query) ||
+      reference.plan.name.toLowerCase().includes(query)
+    );
+  });
+  visibleReferences.sort((a, b) => {
+    if (referenceSort === 'dueDate') return a.dueDate.localeCompare(b.dueDate);
+    return b.createdAt.localeCompare(a.createdAt);
+  });
   const selectedReceivables = selectedClient?.receivables ?? [];
   const receivableTotals = clientReceivableTotals(selectedReceivables);
   const selectedReceivablesForBulk = selectedReceivables.filter((receivable) =>
@@ -2238,10 +2270,6 @@ function ClientsView({
   );
   const selectedPendingReceivablesForBulk = selectedReceivablesForBulk.filter(
     (receivable) => receivable.status === 'PENDENTE',
-  );
-  const billingTotal = selectedReceivables.reduce(
-    (total, receivable) => total + Number(receivable.amount),
-    0,
   );
   const selectedDispatches = selectedClient?.messageDispatches ?? [];
   const billingSummary = selectedDispatches.reduce(
@@ -2669,7 +2697,7 @@ function ClientsView({
                     <ol className="timeline compact-timeline">
                       {(selectedClient.events ?? []).slice(0, 4).map((event) => (
                         <li key={event.id}>
-                          <span className="timeline-icon" aria-hidden="true">
+                          <span className="client-timeline-icon" aria-hidden="true">
                             <ClientEventIcon type={event.type} />
                           </span>
                           <div>
@@ -2681,7 +2709,7 @@ function ClientsView({
                       ))}
                       {!selectedClient.events?.length ? (
                         <li>
-                          <span className="timeline-icon" aria-hidden="true">
+                          <span className="client-timeline-icon" aria-hidden="true">
                             <Activity size={14} />
                           </span>
                           <div>
@@ -2699,7 +2727,7 @@ function ClientsView({
                 <ol className="timeline">
                   {(selectedClient.events ?? []).map((event) => (
                     <li key={event.id}>
-                      <span className="timeline-icon" aria-hidden="true">
+                      <span className="client-timeline-icon" aria-hidden="true">
                         <ClientEventIcon type={event.type} />
                       </span>
                       <div>
@@ -2711,7 +2739,7 @@ function ClientsView({
                   ))}
                   {!selectedClient.events?.length ? (
                     <li>
-                      <span className="timeline-icon" aria-hidden="true">
+                      <span className="client-timeline-icon" aria-hidden="true">
                         <Activity size={14} />
                       </span>
                       <div>
@@ -2724,8 +2752,18 @@ function ClientsView({
               ) : null}
 
               {detailTab === 'references' ? (
-                <div className="mini-list">
-                  <div className="button-row">
+                <div className="client-tab-panel references-section">
+                  <div className="references-header">
+                    <div className="references-title">
+                      <span className="section-icon" aria-hidden="true">
+                        <Layers size={16} />
+                      </span>
+                      <div>
+                        <h3>Referências</h3>
+                        <p>Gerencie as referências deste cliente.</p>
+                        <p>Cada referência possui seu próprio plano, valor e vencimento.</p>
+                      </div>
+                    </div>
                     <Button
                       icon={Plus}
                       variant="primary"
@@ -2737,15 +2775,58 @@ function ClientsView({
                       Nova referência
                     </Button>
                   </div>
-                  <div className="status-guidance">
-                    <div className="notice">
-                      INATIVO = serviço temporariamente parado e elegivel para recuperação.
-                      CANCELADO = encerramento definitivo da referência, sem continuidade de
-                      recuperação.
-                    </div>
+                  <div className="reference-toolbar" aria-label="Filtros de referências">
+                    {[
+                      { count: referenceCounts.all, label: 'Todos', value: 'ALL' as const },
+                      { count: referenceCounts.active, label: 'Ativas', value: 'ATIVO' as const },
+                      {
+                        count: referenceCounts.pending,
+                        label: 'Pendentes',
+                        value: 'PENDENTE_PAGAMENTO' as const,
+                      },
+                      {
+                        count: referenceCounts.inactive,
+                        label: 'Inativas',
+                        value: 'INATIVO' as const,
+                      },
+                      {
+                        count: referenceCounts.canceled,
+                        label: 'Canceladas',
+                        value: 'CANCELADO' as const,
+                      },
+                    ].map((item) => (
+                      <button
+                        className={referenceFilter === item.value ? 'active' : ''}
+                        key={item.value}
+                        type="button"
+                        onClick={() => setReferenceFilter(item.value)}
+                      >
+                        {item.label} <span>[{item.count}]</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="reference-controls">
+                    <label className="reference-search">
+                      <Search aria-hidden="true" size={16} />
+                      <input
+                        placeholder="Buscar referência..."
+                        value={referenceSearch}
+                        onChange={(event) => setReferenceSearch(event.target.value)}
+                      />
+                    </label>
+                    <select
+                      aria-label="Ordenar referências"
+                      value={referenceSort}
+                      onChange={(event) =>
+                        setReferenceSort(event.target.value as typeof referenceSort)
+                      }
+                    >
+                      <option value="recent">Mais recentes</option>
+                      <option value="dueDate">Vencimento</option>
+                    </select>
                   </div>
                   <div className="reference-grid">
-                    {(selectedClient.references ?? []).map((reference) => (
+                    {visibleReferences.map((reference) => (
                       <article className="reference-card" key={reference.id}>
                         <header>
                           <div>
@@ -2754,18 +2835,21 @@ function ClientsView({
                           </div>
                           <StatusBadge status={reference.status} />
                         </header>
+                        <div className="reference-price">
+                          <strong>{formatCurrency(reference.recurringValue)}</strong>
+                          <span>/ mês</span>
+                        </div>
+                        <div className="reference-card-divider" aria-hidden="true" />
                         <div className="reference-metrics">
                           <div>
-                            <strong>{formatCurrency(reference.recurringValue)}</strong>
-                            <span>Mensalidade</span>
-                          </div>
-                          <div>
+                            <CalendarClock aria-hidden="true" size={15} />
+                            <span>Vencimento</span>
                             <strong>{formatDate(reference.dueDate)}</strong>
-                            <span>Próx. vencimento</span>
                           </div>
                           <div>
-                            <strong>{reference.billingNoticeDays} dias antes</strong>
+                            <ShieldCheck aria-hidden="true" size={15} />
                             <span>Cobrança</span>
+                            <strong>{reference.billingNoticeDays} dias antes</strong>
                           </div>
                         </div>
                         {reference.inactivatedAt ? (
@@ -2784,6 +2868,8 @@ function ClientsView({
                               : ''}
                           </p>
                         ) : null}
+                        <div className="reference-card-divider" aria-hidden="true" />
+                        <span>Criada em {formatDate(reference.createdAt)}</span>
                         <div className="reference-actions">
                           <Button
                             icon={RefreshCw}
@@ -2834,9 +2920,25 @@ function ClientsView({
                       </article>
                     ))}
                   </div>
-                  {!selectedClient.references?.length ? (
+                  {!visibleReferences.length ? (
                     <div className="empty-state">Sem referências cadastradas.</div>
                   ) : null}
+                  <footer className="references-info">
+                    <span className="section-icon" aria-hidden="true">
+                      <Info size={15} />
+                    </span>
+                    <div>
+                      <strong>Sobre referências</strong>
+                      <p>
+                        Cada referência possui seu próprio plano, valor, vencimento e regras de
+                        cobrança.
+                      </p>
+                      <p>
+                        INATIVO indica serviço temporariamente parado; CANCELADO indica encerramento
+                        definitivo.
+                      </p>
+                    </div>
+                  </footer>
                 </div>
               ) : null}
 
@@ -3057,8 +3159,8 @@ function ClientsView({
                         {selectedDispatches.map((dispatch) => (
                           <tr key={dispatch.id}>
                             <td>{formatDateTime(dispatch.createdAt)}</td>
-                            <td>{dispatchReferenceSummary(selectedReferences.length)}</td>
-                            <td>{formatCurrency(billingTotal)}</td>
+                            <td>{dispatchReferenceSummaryFromDispatch(dispatch)}</td>
+                            <td>{dispatchTotalAmountLabel(dispatch)}</td>
                             <td>{messageOriginLabel(dispatch.origin)}</td>
                             <td>
                               <span
@@ -3194,7 +3296,7 @@ function ClientsView({
             <section className="modal reference-form-modal" aria-labelledby="reference-form-title">
               <header className="modal-header modal-header-with-icon">
                 <span className="modal-icon" aria-hidden="true">
-                  {editingReference ? <Pencil size={15} /> : <Plus size={15} />}
+                  <Layers size={15} />
                 </span>
                 <div>
                   <span className="metric-label">Referência</span>
@@ -3203,8 +3305,8 @@ function ClientsView({
                   </h2>
                   <p>
                     {editingReference
-                      ? 'Atualize os dados operacionais desta referência.'
-                      : 'Cadastre uma nova referência para este cliente.'}
+                      ? `Atualize os dados da referência para o cliente ${selectedClient.name}.`
+                      : `Crie uma nova referência para o cliente ${selectedClient.name}.`}
                   </p>
                 </div>
                 <IconButton
@@ -3253,8 +3355,6 @@ function ClientsView({
         {selectedDispatch ? (
           <DispatchDetailModal
             dispatch={selectedDispatch}
-            referenceCount={selectedReferences.length}
-            totalAmount={billingTotal}
             onClose={() => setSelectedDispatch(null)}
           />
         ) : null}
@@ -3422,13 +3522,9 @@ function ReferenceStatusConfirmationModal({
 
 function DispatchDetailModal({
   dispatch,
-  referenceCount,
-  totalAmount,
   onClose,
 }: {
   dispatch: ClientMessageDispatch;
-  referenceCount: number;
-  totalAmount: number;
   onClose: () => void;
 }) {
   return (
@@ -3468,13 +3564,37 @@ function DispatchDetailModal({
           </div>
           <div>
             <dt>Referências</dt>
-            <dd>{dispatchReferenceSummary(referenceCount)}</dd>
+            <dd>{dispatchReferenceSummaryFromDispatch(dispatch)}</dd>
           </div>
           <div>
             <dt>Valor total</dt>
-            <dd>{formatCurrency(totalAmount)}</dd>
+            <dd>{dispatchTotalAmountLabel(dispatch)}</dd>
           </div>
         </dl>
+        {dispatch.items?.length ? (
+          <div className="table-wrap compact-table">
+            <table className="client-billing-table">
+              <thead>
+                <tr>
+                  <th>Referência</th>
+                  <th>Conta</th>
+                  <th>Valor</th>
+                  <th>Vencimento</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dispatch.items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.reference}</td>
+                    <td>{item.receivableId}</td>
+                    <td>{formatCurrency(item.amount)}</td>
+                    <td>{formatDate(item.dueDate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
         {dispatch.errorMessage ? (
           <div className="notice danger">
             <strong>Erro</strong>
@@ -6388,6 +6508,7 @@ function ClientReferenceForm({
     String(reference?.billingNoticeDays ?? 5),
   );
   const [notes, setNotes] = useState(reference?.notes ?? '');
+  const [activeTab, setActiveTab] = useState<'data' | 'billing'>('data');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -6427,67 +6548,93 @@ function ClientReferenceForm({
       className="entity-form client-reference-form"
       onSubmit={(event) => void handleSubmit(event)}
     >
-      <div className="form-section-title">
-        <span className="section-eyebrow">Dados cobrança</span>
-        <h2>{reference ? 'Editar referência' : 'Criar referência'}</h2>
+      <div className="form-tabs" role="tablist" aria-label="Dados da referência">
+        <button
+          aria-selected={activeTab === 'data'}
+          className={activeTab === 'data' ? 'active' : ''}
+          type="button"
+          role="tab"
+          onClick={() => setActiveTab('data')}
+        >
+          <FileText aria-hidden="true" size={15} />
+          Dados da referência
+        </button>
+        <button
+          aria-selected={activeTab === 'billing'}
+          className={activeTab === 'billing' ? 'active' : ''}
+          type="button"
+          role="tab"
+          onClick={() => setActiveTab('billing')}
+        >
+          <Bell aria-hidden="true" size={15} />
+          Cobrança e notificações
+        </button>
       </div>
-      <div className="form-grid">
-        <label className="field">
-          <span>Referência</span>
-          <input
-            required
-            value={referenceValue}
-            onChange={(event) => setReferenceValue(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Plano</span>
-          <select
-            required
-            value={planId}
-            onChange={(event) => handlePlanChange(event.target.value)}
-          >
-            {plans.map((plan) => (
-              <option key={plan.id} value={plan.id}>
-                {plan.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Valor</span>
-          <input
-            min="0"
-            step="0.01"
-            type="number"
-            value={recurringValue}
-            onChange={(event) => setRecurringValue(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Vencimento</span>
-          <input
-            required
-            type="date"
-            value={dueDate}
-            onChange={(event) => setDueDate(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Antecedência da cobrança</span>
-          <input
-            min="0"
-            type="number"
-            value={billingNoticeDays}
-            onChange={(event) => setBillingNoticeDays(event.target.value)}
-          />
-          <small>Define quantos dias antes do vencimento a cobrança automática será enviada.</small>
-        </label>
-        <label className="field">
-          <span>Observações</span>
-          <input value={notes} onChange={(event) => setNotes(event.target.value)} />
-        </label>
-      </div>
+      {activeTab === 'data' ? (
+        <div className="form-grid">
+          <label className="field">
+            <span>Nome da referência</span>
+            <input
+              required
+              value={referenceValue}
+              onChange={(event) => setReferenceValue(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Plano</span>
+            <select
+              required
+              value={planId}
+              onChange={(event) => handlePlanChange(event.target.value)}
+            >
+              {plans.map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Valor</span>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={recurringValue}
+              onChange={(event) => setRecurringValue(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Vencimento</span>
+            <input
+              required
+              type="date"
+              value={dueDate}
+              onChange={(event) => setDueDate(event.target.value)}
+            />
+          </label>
+          <label className="field form-grid-full">
+            <span>Observações</span>
+            <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </label>
+        </div>
+      ) : null}
+      {activeTab === 'billing' ? (
+        <div className="form-grid">
+          <label className="field">
+            <span>Avisar cobrança (dias antes)</span>
+            <input
+              min="0"
+              type="number"
+              value={billingNoticeDays}
+              onChange={(event) => setBillingNoticeDays(event.target.value)}
+            />
+            <small>
+              Define quantos dias antes do vencimento a cobrança automática será enviada.
+            </small>
+          </label>
+        </div>
+      ) : null}
       <div className="form-actions">
         <span className="error-message">{error}</span>
         <div className="button-row">
@@ -6495,7 +6642,7 @@ function ClientReferenceForm({
             Cancelar
           </Button>
           <Button disabled={saving} icon={Save} loading={saving} type="submit" variant="primary">
-            {reference ? 'Atualizar referência' : 'Criar referência'}
+            Salvar referência
           </Button>
         </div>
       </div>

@@ -2036,7 +2036,7 @@ tbody tr:hover,
 
 .timeline li {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   gap: 10px;
   position: relative;
   padding-bottom: 8px;
@@ -2044,9 +2044,9 @@ tbody tr:hover,
 
 .timeline li::before {
   position: absolute;
-  top: 30px;
+  top: 28px;
   bottom: -8px;
-  left: 14px;
+  left: 13.5px;
   width: 1px;
   background: var(--border);
   content: '';
@@ -2056,15 +2056,28 @@ tbody tr:hover,
   display: none;
 }
 
+.client-timeline-icon,
 .timeline-icon {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
   border: 1px solid rgb(38 198 163 / 24%);
   border-radius: var(--radius-sm);
   background: rgb(38 198 163 / 10%);
   color: var(--accent-strong);
+  line-height: 1;
+}
+
+.client-timeline-icon svg,
+.timeline-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .timeline span,
@@ -2118,14 +2131,123 @@ tbody tr:hover,
   padding: 12px;
 }
 
+.references-section {
+  display: grid;
+  gap: 14px;
+}
+
+.references-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.references-title {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.references-title h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.references-title p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border: 1px solid rgb(38 198 163 / 24%);
+  border-radius: var(--radius-sm);
+  background: rgb(38 198 163 / 10%);
+  color: var(--accent-strong);
+}
+
+.reference-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reference-toolbar button {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.reference-toolbar button.active {
+  border-color: rgb(38 198 163 / 45%);
+  background: rgb(38 198 163 / 11%);
+  color: var(--text);
+}
+
+.reference-toolbar span {
+  display: inline;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.reference-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 170px;
+  gap: 10px;
+}
+
+.reference-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 0 10px;
+}
+
+.reference-search input {
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.reference-controls select {
+  min-height: 36px;
+}
+
 .reference-card {
   display: grid;
-  gap: 12px;
+  align-content: start;
+  gap: 10px;
+  min-height: 246px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
 }
 
 .reference-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
 }
 
@@ -2136,22 +2258,77 @@ tbody tr:hover,
   gap: 10px;
 }
 
+.reference-card header strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.reference-card header span {
+  display: block;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.reference-price {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.reference-price strong {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.reference-card-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+}
+
 .reference-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .reference-metrics div {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: 8px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 2px 6px;
+  align-items: center;
 }
 
-.reference-metrics strong,
+.reference-metrics svg {
+  color: var(--accent-strong);
+}
+
+.reference-metrics strong {
+  grid-column: 2;
+}
+
 .reference-metrics span {
   display: block;
+}
+
+.references-info {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.references-info strong {
+  display: block;
+  font-size: 13px;
+}
+
+.references-info p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .finance-selection-bar {
@@ -2297,10 +2474,13 @@ tbody tr:hover,
 }
 
 .client-form-modal,
-.reference-form-modal,
 .reference-status-modal,
 .dispatch-detail-modal {
   width: min(100%, 860px);
+}
+
+.reference-form-modal {
+  width: min(100%, 680px);
 }
 
 .modal-icon {
@@ -2338,6 +2518,38 @@ tbody tr:hover,
   border: 0;
   background: transparent;
   padding: 0;
+}
+
+.form-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.form-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 11px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.form-tabs button.active {
+  border-color: rgb(38 198 163 / 45%);
+  background: rgb(38 198 163 / 11%);
+  color: var(--text);
+}
+
+.form-grid-full {
+  grid-column: 1 / -1;
 }
 
 .preview-box {
@@ -2686,9 +2898,22 @@ tbody tr:hover,
     width: 100%;
   }
 
+  .references-header,
+  .reference-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .references-header {
+    display: grid;
+  }
+
   .modal-backdrop {
     align-items: end;
     padding: 10px;
+  }
+
+  .reference-form-modal {
+    align-self: center;
   }
 
   .modal {

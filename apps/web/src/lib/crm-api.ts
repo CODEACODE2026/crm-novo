@@ -114,6 +114,9 @@ export interface ClientStatusHistory {
 
 export interface ClientMessageDispatch {
   id: string;
+  clientId?: string | null;
+  clientReferenceId?: string | null;
+  receivableId?: string | null;
   phone: string;
   body: string;
   renderedContent: string | null;
@@ -125,6 +128,22 @@ export interface ClientMessageDispatch {
   errorMessage: string | null;
   sentAt: string | null;
   createdAt: string;
+  itemCount?: number;
+  totalAmount?: string | null;
+  dueDateLabel?: string | null;
+  items?: Array<{
+    id: string;
+    receivableId: string;
+    clientReferenceId: string;
+    reference: string;
+    amount: string;
+    dueDate: string;
+    status: ReceivableStatus;
+  }>;
+  client?: Pick<Client, 'id' | 'name' | 'reference' | 'status'> & { planName?: string | null };
+  clientReference?: Pick<ClientReference, 'id' | 'reference' | 'status'> & {
+    planName?: string | null;
+  };
 }
 
 export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';

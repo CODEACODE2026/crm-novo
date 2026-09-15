@@ -89,6 +89,34 @@ export function dispatchReferenceSummary(referenceCount: number) {
   return `${referenceCount} referências`;
 }
 
+export function dispatchReferenceSummaryFromDispatch(
+  dispatch: Pick<ClientMessageDispatch, 'clientReference' | 'client' | 'itemCount' | 'items'>,
+) {
+  const count = dispatch.itemCount ?? dispatch.items?.length;
+
+  if (count && count > 1) return `${count} referências`;
+  if (count === 1)
+    return dispatch.items?.[0]?.reference ?? dispatch.clientReference?.reference ?? '1 referência';
+
+  return dispatch.clientReference?.reference ?? dispatch.client?.reference ?? '-';
+}
+
+export function dispatchTotalAmountLabel(
+  dispatch: Pick<ClientMessageDispatch, 'totalAmount' | 'items'>,
+) {
+  const explicitTotal = dispatch.totalAmount;
+
+  if (explicitTotal !== undefined && explicitTotal !== null) {
+    return formatCurrency(explicitTotal);
+  }
+
+  if (dispatch.items?.length) {
+    return formatCurrency(dispatch.items.reduce((total, item) => total + Number(item.amount), 0));
+  }
+
+  return '-';
+}
+
 export function referenceStatusRequiresReason(status: Client['status']) {
   return status === 'INATIVO' || status === 'CANCELADO';
 }

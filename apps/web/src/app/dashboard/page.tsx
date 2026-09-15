@@ -2608,9 +2608,9 @@ function ClientsView({
 
               {detailTab === 'overview' ? (
                 <div className="client-overview-grid">
-                  <section className="client-overview-card">
+                  <section className="client-overview-card client-profile-card">
                     <SectionHeader eyebrow="Cliente" title="Informações pessoais" />
-                    <dl className="detail-list">
+                    <dl className="detail-list client-profile-list">
                       <div>
                         <dt>Nome</dt>
                         <dd>{selectedClient.name}</dd>
@@ -2633,26 +2633,35 @@ function ClientsView({
                       <p>{selectedClient.notes ?? 'Sem observações.'}</p>
                     </div>
                   </section>
-                  <section className="client-overview-card">
-                    <SectionHeader eyebrow="Operação" title="Resumo atual" />
-                    <div className="client-kpi-grid">
-                      <StatCard label="Referências" value={selectedReferences.length} />
-                      {uniqueSelectedReference ? (
-                        <>
-                          <StatCard
-                            label="Recorrência"
-                            value={formatCurrency(uniqueSelectedReference.recurringValue)}
-                          />
-                          <StatCard
-                            label="Próximo vencimento"
-                            value={formatDate(uniqueSelectedReference.dueDate)}
-                          />
-                          <StatCard
-                            label="Cobrança"
-                            value={`${uniqueSelectedReference.billingNoticeDays} dias antes`}
-                          />
-                        </>
-                      ) : null}
+                  <section className="client-overview-card client-summary-card">
+                    <SectionHeader eyebrow="Operação" title="Resumo do cliente" />
+                    <div className="client-summary-stack">
+                      <div className="client-summary-status">
+                        <StatusBadge
+                          status={uniqueSelectedReference?.status ?? selectedClient.status}
+                        />
+                        <span>{clientReferenceCountLabel(selectedReferences.length)}</span>
+                      </div>
+                      <dl className="client-summary-list">
+                        <div>
+                          <dt>A receber</dt>
+                          <dd>{formatCurrency(receivableTotals.pending)}</dd>
+                        </div>
+                        <div>
+                          <dt>Total pago</dt>
+                          <dd>{formatCurrency(receivableTotals.paid)}</dd>
+                        </div>
+                        <div>
+                          <dt>Próx. venc.</dt>
+                          <dd>{clientNextDueSummary(selectedReferences)}</dd>
+                        </div>
+                        {uniqueSelectedReference ? (
+                          <div>
+                            <dt>Cobrança</dt>
+                            <dd>{uniqueSelectedReference.billingNoticeDays} dias antes</dd>
+                          </div>
+                        ) : null}
+                      </dl>
                     </div>
                   </section>
                   <section className="client-overview-card client-activity-card">

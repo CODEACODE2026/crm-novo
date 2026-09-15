@@ -19,43 +19,50 @@ async function main() {
     },
     {
       type: 'RECOVERY_DAY_3' as const,
-      name: 'Recuperacao 3 dias',
+      name: 'Recuperação 3 dias',
       content:
-        'Olá, *{{primeiroNome}}*! Identifiquei que existe uma cobrança pendente do vencimento {{vencimento}}. Posso te ajudar a regularizar?',
+        'Olá, {{primeiroNome}}! Tudo bem? Identificamos que o pagamento referente à sua referência {{referencia}}, no valor de {{valor}}, venceu em {{vencimento}} e ainda consta como pendente. Se já realizou o pagamento, pode desconsiderar esta mensagem. Se precisar, estamos à disposição.',
     },
     {
-      type: 'RECOVERY_DAY_10' as const,
-      name: 'Recuperacao 10 dias',
+      type: 'RECOVERY_DAY_7' as const,
+      name: 'Recuperação 7 dias',
       content:
-        'Olá, *{{primeiroNome}}*! A cobrança de {{valor}} vencida em {{vencimento}} ainda consta como pendente. Quer que eu te envie as opções de pagamento?',
+        'Olá, {{primeiroNome}}. O pagamento da referência {{referencia}}, vencido em {{vencimento}}, ainda consta em aberto no valor de {{valor}}. Para evitar que a pendência continue, pedimos que regularize assim que possível. Se precisar de ajuda, fale conosco.',
     },
     {
       type: 'RECOVERY_DAY_15' as const,
-      name: 'Recuperacao 15 dias',
+      name: 'Recuperação 15 dias',
       content:
-        'Oi, *{{primeiroNome}}*! Estou acompanhando a pendência financeira da referência {{referencia}}. Posso te apoiar para resolver hoje?',
+        'Olá, {{primeiroNome}}. Sua referência {{referencia}} está com pagamento pendente há alguns dias. O valor em aberto é {{valor}}, com vencimento em {{vencimento}}. Pedimos que entre em contato conosco para regularizar a situação.',
     },
     {
       type: 'RECOVERY_DAY_30' as const,
-      name: 'Recuperacao 30 dias',
+      name: 'Recuperação 30 dias',
       content:
-        'Olá, *{{primeiroNome}}*! A pendência da referência {{referencia}} segue aberta. Este é o último lembrete automático deste ciclo financeiro.',
+        'Olá, {{primeiroNome}}. O pagamento da referência {{referencia}}, vencido em {{vencimento}}, continua pendente no valor de {{valor}}. Esta é uma notificação de cobrança referente à pendência em aberto. Entre em contato conosco para regularização.',
     },
   ];
 
   for (const template of templates) {
-    await prisma.messageTemplate.upsert({
-      where: {
-        type_name: {
-          type: template.type,
+    const existing = await prisma.messageTemplate.findFirst({
+      where: { type: template.type },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (existing) {
+      await prisma.messageTemplate.update({
+        where: { id: existing.id },
+        data: {
           name: template.name,
+          content: template.content,
+          active: true,
         },
-      },
-      update: {
-        content: template.content,
-        active: true,
-      },
-      create: {
+      });
+      continue;
+    }
+
+    await prisma.messageTemplate.create({
+      data: {
         ...template,
         active: true,
       },

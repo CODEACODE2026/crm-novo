@@ -1,8 +1,9 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class PreviewMessageTemplateDto {
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   content?: string;
 
   @IsOptional()
@@ -24,4 +25,8 @@ export class PreviewMessageTemplateDto {
   @IsOptional()
   @IsString()
   reference?: string;
+
+  @IsOptional()
+  @IsString()
+  daysOverdue?: string;
 }

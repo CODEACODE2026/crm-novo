@@ -6,7 +6,7 @@ describe('BillingTemplateRenderer', () => {
 
   it('renders allowed billing variables without eval', () => {
     const result = renderer.render(
-      'Oi {{primeiroNome}}, {{valor}} vence em {{vencimento}} no plano {{plano}} ref {{referencia}}.',
+      'Oi {{primeiroNome}}, {{valor}} vence em {{vencimento}} no plano {{plano}} ref {{referencia}} atraso {{diasAtraso}}.',
       {
         nome: 'Bruno Code',
         primeiroNome: 'Bruno',
@@ -14,11 +14,14 @@ describe('BillingTemplateRenderer', () => {
         vencimento: '15/09/2026',
         plano: 'Mensal',
         referencia: 'bruno1499',
+        diasAtraso: '7',
         pix: '',
       },
     );
 
-    expect(result).toBe('Oi Bruno, R$ 50,00 vence em 15/09/2026 no plano Mensal ref bruno1499.');
+    expect(result).toBe(
+      'Oi Bruno, R$ 50,00 vence em 15/09/2026 no plano Mensal ref bruno1499 atraso 7.',
+    );
   });
 
   it('removes unknown variables safely', () => {
@@ -29,6 +32,7 @@ describe('BillingTemplateRenderer', () => {
       vencimento: '15/09/2026',
       plano: 'Mensal',
       referencia: 'bruno1499',
+      diasAtraso: '',
       pix: '',
     });
 

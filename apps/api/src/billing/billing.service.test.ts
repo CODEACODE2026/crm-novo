@@ -718,13 +718,37 @@ describe('BillingService', () => {
     const { service } = serviceFactory({ createDispatch });
 
     const result = await service.previewTemplate('template-id', {
-      content: 'Teste {{primeiroNome}} {{valor}} {{desconhecida}}',
+      content: 'Teste {{primeiroNome}} {{valor}} {{diasAtraso}}',
     });
 
     expect(result.renderedContent).toContain('Teste Bruno');
     expect(result.renderedContent).toContain('R$');
-    expect(result.renderedContent).not.toContain('desconhecida');
+    expect(result.renderedContent).toContain('7');
     expect(createDispatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported template variables with a friendly error', async () => {
+    const { service } = serviceFactory();
+
+    await expect(
+      service.previewTemplate('template-id', {
+        content: 'Teste {{cpfDoDinossauro}}',
+      }),
+    ).rejects.toMatchObject({
+      message: 'Variaveis nao suportadas no template: {{cpfDoDinossauro}}.',
+    });
+  });
+
+  it('does not persist unsupported template variables', async () => {
+    const { service } = serviceFactory();
+
+    await expect(
+      service.updateTemplate('template-id', {
+        content: 'Oi {{cpfDoDinossauro}}',
+      }),
+    ).rejects.toMatchObject({
+      message: 'Variaveis nao suportadas no template: {{cpfDoDinossauro}}.',
+    });
   });
 
   it('sends a due dispatch once and finishes without requiring a billing response', async () => {

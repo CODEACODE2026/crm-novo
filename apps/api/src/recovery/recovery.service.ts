@@ -47,7 +47,7 @@ const recoveryStepTemplates = [
     stepNumber: 2,
     enabledKey: 'day10Enabled',
     offsetKey: 'day10OffsetDays',
-    templateType: 'RECOVERY_DAY_10' as const,
+    templateType: 'RECOVERY_DAY_7' as const,
   },
   {
     stepNumber: 3,
@@ -490,7 +490,23 @@ export class RecoveryService {
         step.delayDays,
         effectiveSettings,
       );
-      const renderedContent = this.renderForClient(template.content, client);
+
+      if (!template.active) {
+        await tx.recoveryCampaignStep.create({
+          data: {
+            campaignId: campaign.id,
+            stepNumber: step.stepNumber,
+            delayDays: step.delayDays,
+            templateId: template.id,
+            scheduledFor,
+            status: 'IGNORED',
+            canceledAt: new Date(),
+          },
+        });
+        continue;
+      }
+
+      const renderedContent = this.renderForClient(template.content, client, step.delayDays);
       const idempotencyKey = this.buildIdempotencyKey(
         client.id,
         campaign.receivableId!,
@@ -589,12 +605,34 @@ export class RecoveryService {
       const template = templates.get(expected.templateType);
 
       if (!template?.active) {
-        canceled += await this.cancelStepAndDispatch(
-          this.prisma,
-          step,
-          'RECOVERY_TEMPLATE_INACTIVE',
-          'Template de recuperacao indisponivel.',
-        );
+        if (step) {
+          canceled += await this.cancelStepAndDispatch(
+            this.prisma,
+            step,
+            'RECOVERY_TEMPLATE_INACTIVE',
+            'Template de recuperacao indisponivel.',
+            'IGNORED',
+          );
+        } else {
+          const scheduledFor = await this.calculateThrottledScheduledFor(
+            this.prisma,
+            campaign.startedAt,
+            expected.delayDays,
+            settings,
+          );
+          await this.prisma.recoveryCampaignStep.create({
+            data: {
+              campaignId: campaign.id,
+              stepNumber: expected.stepNumber,
+              delayDays: expected.delayDays,
+              templateId: template?.id ?? null,
+              scheduledFor,
+              status: 'IGNORED',
+              canceledAt: new Date(),
+            },
+          });
+          canceled += 1;
+        }
         continue;
       }
 
@@ -613,31 +651,20 @@ export class RecoveryService {
 
           if (
             step.delayDays !== expected.delayDays ||
-            step.scheduledFor.getTime() !== nextScheduledFor.getTime() ||
-            step.templateId !== template.id ||
-            step.dispatch.templateId !== template.id
+            step.scheduledFor.getTime() !== nextScheduledFor.getTime()
           ) {
-            const renderedContent = this.renderForClient(
-              template.content,
-              this.referenceAsRecoveryClient(campaign.clientReference),
-            );
-
             await this.prisma.$transaction(async (tx) => {
               await tx.recoveryCampaignStep.update({
                 where: { id: step.id },
                 data: {
                   delayDays: expected.delayDays,
                   scheduledFor: nextScheduledFor,
-                  templateId: template.id,
                   status: 'SCHEDULED',
                 },
               });
               await tx.messageDispatch.update({
                 where: { id: step.dispatch!.id },
                 data: {
-                  templateId: template.id,
-                  body: renderedContent,
-                  renderedContent,
                   scheduledFor: nextScheduledFor,
                   nextAttemptAt: nextScheduledFor,
                   status: 'SCHEDULED',
@@ -663,7 +690,8 @@ export class RecoveryService {
         ));
       const renderedContent = this.renderForClient(
         template.content,
-        this.referenceAsRecoveryClient(campaign.clientReference),
+        this.recoveryClientFromCampaign(campaign),
+        expected.delayDays,
       );
       const idempotencyKey = this.buildIdempotencyKey(
         campaign.clientId,
@@ -1274,6 +1302,7 @@ export class RecoveryService {
     step: (RecoveryCampaignStep & { dispatch: MessageDispatch | null }) | undefined,
     errorCode: string,
     errorMessage: string,
+    status: 'CANCELED' | 'IGNORED' = 'CANCELED',
   ) {
     if (!step) {
       return 0;
@@ -1281,13 +1310,13 @@ export class RecoveryService {
 
     await tx.recoveryCampaignStep.update({
       where: { id: step.id },
-      data: { status: 'CANCELED', canceledAt: new Date() },
+      data: { status, canceledAt: new Date() },
     });
 
     if (step.dispatch && ['SCHEDULED', 'FAILED'].includes(step.dispatch.status)) {
       await tx.messageDispatch.update({
         where: { id: step.dispatch.id },
-        data: { status: 'CANCELED', errorCode, errorMessage, nextAttemptAt: null },
+        data: { status, errorCode, errorMessage, nextAttemptAt: null },
       });
       return 1;
     }
@@ -1354,41 +1383,17 @@ export class RecoveryService {
   }
 
   private async ensureRecoveryTemplates(tx: Transaction | PrismaService) {
-    const defaults = [
-      {
-        type: 'RECOVERY_DAY_3' as const,
-        name: 'Recuperacao 3 dias',
-        content:
-          'Olá, *{{primeiroNome}}*! Identifiquei que existe uma cobrança pendente do vencimento {{vencimento}}. Posso te ajudar a regularizar?',
-      },
-      {
-        type: 'RECOVERY_DAY_10' as const,
-        name: 'Recuperacao 10 dias',
-        content:
-          'Olá, *{{primeiroNome}}*! A cobrança de {{valor}} vencida em {{vencimento}} ainda consta como pendente. Quer que eu te envie as opções de pagamento?',
-      },
-      {
-        type: 'RECOVERY_DAY_15' as const,
-        name: 'Recuperacao 15 dias',
-        content:
-          'Oi, *{{primeiroNome}}*! Estou acompanhando a pendência financeira da referência {{referencia}}. Posso te apoiar para resolver hoje?',
-      },
-      {
-        type: 'RECOVERY_DAY_30' as const,
-        name: 'Recuperacao 30 dias',
-        content:
-          'Olá, *{{primeiroNome}}*! A pendência da referência {{referencia}} segue aberta. Este é o último lembrete automático deste ciclo financeiro.',
-      },
-    ];
+    const types = recoveryStepTemplates.map((step) => step.templateType);
+    const savedTemplates = await tx.messageTemplate.findMany({
+      where: { type: { in: types } },
+      orderBy: [{ active: 'desc' }, { updatedAt: 'desc' }],
+    });
     const templates = new Map<string, MessageTemplate>();
 
-    for (const template of defaults) {
-      const saved = await tx.messageTemplate.upsert({
-        where: { type_name: { type: template.type, name: template.name } },
-        update: {},
-        create: { ...template, active: true },
-      });
-      templates.set(saved.type, saved);
+    for (const template of savedTemplates) {
+      if (!templates.has(template.type)) {
+        templates.set(template.type, template);
+      }
     }
 
     return templates;
@@ -1419,7 +1424,7 @@ export class RecoveryService {
     return new Date(`${yyyyMmDd}T${sendTime}:00-03:00`);
   }
 
-  private renderForClient(template: string, client: RecoveryClient) {
+  private renderForClient(template: string, client: RecoveryClient, diasAtraso: number) {
     return this.renderer.render(template, {
       nome: client.name,
       primeiroNome: this.firstName(client.name),
@@ -1427,8 +1432,17 @@ export class RecoveryService {
       vencimento: this.formatDisplayDate(client.dueDate),
       plano: client.plan.name,
       referencia: client.reference,
+      diasAtraso: String(diasAtraso),
       pix: '',
     });
+  }
+
+  private recoveryClientFromCampaign(campaign: RecoveryCampaignWithRelations): RecoveryClient {
+    return {
+      ...this.referenceAsRecoveryClient(campaign.clientReference),
+      recurringValue: campaign.receivable?.amount ?? campaign.clientReference.recurringValue,
+      dueDate: campaign.receivable?.dueDate ?? campaign.clientReference.dueDate,
+    };
   }
 
   private buildIdempotencyKey(

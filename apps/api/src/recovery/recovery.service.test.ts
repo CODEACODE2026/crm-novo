@@ -97,7 +97,48 @@ function createService(
     settings?: Partial<Record<string, unknown>>;
   } = {},
 ) {
-  const templates: Array<Record<string, unknown>> = [];
+  const templates: Array<Record<string, unknown>> = [
+    {
+      id: 'template-1',
+      type: 'RECOVERY_DAY_3',
+      name: 'Recuperação 3 dias',
+      content:
+        'Olá, {{primeiroNome}}! Tudo bem? Identificamos que o pagamento referente à sua referência {{referencia}}, no valor de {{valor}}, venceu em {{vencimento}} e ainda consta como pendente. Se já realizou o pagamento, pode desconsiderar esta mensagem. Se precisar, estamos à disposição.',
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    },
+    {
+      id: 'template-2',
+      type: 'RECOVERY_DAY_7',
+      name: 'Recuperação 7 dias',
+      content:
+        'Olá, {{primeiroNome}}. O pagamento da referência {{referencia}}, vencido em {{vencimento}}, ainda consta em aberto no valor de {{valor}}. Para evitar que a pendência continue, pedimos que regularize assim que possível. Se precisar de ajuda, fale conosco.',
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    },
+    {
+      id: 'template-3',
+      type: 'RECOVERY_DAY_15',
+      name: 'Recuperação 15 dias',
+      content:
+        'Olá, {{primeiroNome}}. Sua referência {{referencia}} está com pagamento pendente há alguns dias. O valor em aberto é {{valor}}, com vencimento em {{vencimento}}. Pedimos que entre em contato conosco para regularizar a situação.',
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    },
+    {
+      id: 'template-4',
+      type: 'RECOVERY_DAY_30',
+      name: 'Recuperação 30 dias',
+      content:
+        'Olá, {{primeiroNome}}. O pagamento da referência {{referencia}}, vencido em {{vencimento}}, continua pendente no valor de {{valor}}. Esta é uma notificação de cobrança referente à pendência em aberto. Entre em contato conosco para regularização.',
+      active: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  ];
   const campaigns: Array<Record<string, unknown>> = [];
   const steps: Array<Record<string, unknown>> = [];
   const dispatches: Array<Record<string, unknown>> = [];
@@ -170,6 +211,13 @@ function createService(
 
   const tx = {
     messageTemplate: {
+      findMany: vi.fn(async ({ where }) => {
+        const allowedTypes = where?.type?.in as string[] | undefined;
+
+        return templates.filter((template) =>
+          allowedTypes ? allowedTypes.includes(template.type as string) : true,
+        );
+      }),
       upsert: vi.fn(async ({ where, create }) => {
         const existing = templates.find(
           (template) =>
@@ -443,6 +491,7 @@ function createService(
     service,
     settings: recoverySettings,
     steps,
+    templates,
     tx,
   };
 }
@@ -463,6 +512,26 @@ describe('RecoveryService', () => {
       status: 'ATIVA',
     });
     expect(steps.map((step) => step.delayDays)).toEqual([3, 7, 15, 30]);
+    expect(steps.map((step) => step.templateId)).toEqual([
+      'template-1',
+      'template-2',
+      'template-3',
+      'template-4',
+    ]);
+    expect(dispatches.map((dispatch) => dispatch.templateId)).toEqual([
+      'template-1',
+      'template-2',
+      'template-3',
+      'template-4',
+    ]);
+    expect(dispatches.map((dispatch) => dispatch.renderedContent)).toEqual([
+      expect.stringContaining('venceu em 10/09/2026'),
+      expect.stringContaining('ainda consta em aberto no valor de R$'),
+      expect.stringContaining('pagamento pendente há alguns dias'),
+      expect.stringContaining('notificação de cobrança referente à pendência em aberto'),
+    ]);
+    expect(dispatches[0]?.renderedContent).toContain('bruno1499');
+    expect(dispatches[0]?.renderedContent).toContain('R$');
     expect(steps.map((step) => (step.scheduledFor as Date).toISOString())).toEqual([
       '2026-09-13T12:00:00.000Z',
       '2026-09-17T12:00:00.000Z',
@@ -476,6 +545,62 @@ describe('RecoveryService', () => {
       'receivable-1',
     ]);
     vi.useRealTimers();
+  });
+
+  it('marks an inactive template step as ignored and continues the campaign', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { dispatches, service, steps, templates } = createService();
+    const day7Template = templates.find((template) => template.type === 'RECOVERY_DAY_7');
+
+    if (day7Template) {
+      day7Template.active = false;
+    }
+
+    await service.reconcile();
+    await service.reconcile();
+
+    const day7Step = steps.find((step) => step.stepNumber === 2);
+
+    expect(day7Step).toMatchObject({ status: 'IGNORED' });
+    expect(dispatches.map((dispatch) => dispatch.templateId)).toEqual([
+      'template-1',
+      'template-3',
+      'template-4',
+    ]);
+    vi.useRealTimers();
+  });
+
+  it('preserves rendered dispatch snapshots when templates are edited later', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { dispatches, service, templates } = createService();
+
+    await service.reconcile();
+
+    const firstDispatch = dispatches[0]!;
+    const firstSnapshot = firstDispatch.renderedContent;
+    const secondSnapshot = dispatches[1]?.renderedContent;
+    dispatches[0] = {
+      ...firstDispatch,
+      status: 'SENT',
+      renderedContent: 'snapshot enviado preservado',
+      body: 'snapshot enviado preservado',
+    };
+
+    const day3Template = templates.find((template) => template.type === 'RECOVERY_DAY_3');
+    const day7Template = templates.find((template) => template.type === 'RECOVERY_DAY_7');
+
+    if (day3Template) {
+      day3Template.content = 'Mensagem D+3 editada {{primeiroNome}}';
+    }
+    if (day7Template) {
+      day7Template.content = 'Mensagem D+7 editada {{primeiroNome}}';
+    }
+
+    await service.reconcile();
+
+    expect(firstSnapshot).not.toBe('snapshot enviado preservado');
+    expect(dispatches[0]?.renderedContent).toBe('snapshot enviado preservado');
+    expect(dispatches[1]?.renderedContent).toBe(secondSnapshot);
   });
 
   it('does not start recovery when a reference is inactivated without overdue debt', async () => {

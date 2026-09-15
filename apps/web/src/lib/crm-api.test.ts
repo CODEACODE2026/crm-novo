@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiFetch, formatCurrency, formatDate, listClientOptions } from './crm-api';
+import {
+  ApiError,
+  apiFetch,
+  formatCurrency,
+  formatDate,
+  listClientOptions,
+  updateMessageTemplate,
+} from './crm-api';
 
 describe('CRM UI formatters', () => {
   afterEach(() => {
@@ -43,6 +50,41 @@ describe('CRM UI formatters', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/clients/options?search=bruno'),
       expect.any(Object),
+    );
+  });
+
+  it('persists edited message template name and content', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'template-id',
+          name: 'Recuperação 7 dias ajustada',
+          type: 'RECOVERY_DAY_7',
+          content: 'Olá, {{primeiroNome}}.',
+          active: true,
+          variables: [],
+          createdAt: '2026-09-14T00:00:00.000Z',
+          updatedAt: '2026-09-14T00:00:00.000Z',
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateMessageTemplate('template-id', {
+      name: 'Recuperação 7 dias ajustada',
+      content: 'Olá, {{primeiroNome}}.',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/billing/templates/template-id'),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: 'Recuperação 7 dias ajustada',
+          content: 'Olá, {{primeiroNome}}.',
+        }),
+      }),
     );
   });
 });

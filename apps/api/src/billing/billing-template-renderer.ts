@@ -7,6 +7,7 @@ export type BillingTemplateContext = {
   vencimento: string;
   plano: string;
   referencia: string;
+  diasAtraso: string;
   pix: string;
 };
 
@@ -17,6 +18,7 @@ const allowedVariables = [
   'vencimento',
   'plano',
   'referencia',
+  'diasAtraso',
   'pix',
 ] as const;
 
@@ -32,6 +34,20 @@ export class BillingTemplateRenderer {
 
       return context[variable];
     });
+  }
+
+  unsupportedVariables(content: string) {
+    const variables = new Set<string>();
+
+    for (const match of content.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) {
+      const variable = match[1];
+
+      if (variable && !this.isAllowedVariable(variable)) {
+        variables.add(variable);
+      }
+    }
+
+    return [...variables];
   }
 
   private isAllowedVariable(variable: string): variable is keyof BillingTemplateContext {

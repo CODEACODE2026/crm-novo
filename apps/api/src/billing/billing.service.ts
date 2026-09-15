@@ -485,15 +485,30 @@ export class BillingService {
       throw new BadRequestException('Template nao pode ficar vazio.');
     }
 
-    const updated = await this.prisma.messageTemplate.update({
-      where: { id },
-      data: {
-        ...(dto.content !== undefined ? { content: dto.content.trim() } : {}),
-        ...(dto.active !== undefined ? { active: dto.active } : {}),
-      },
-    });
+    const content = dto.content?.trim();
+    const name = dto.name?.trim();
 
-    return this.presentTemplate(updated);
+    if (content !== undefined) {
+      this.validateTemplateContent(content);
+    }
+
+    try {
+      const updated = await this.prisma.messageTemplate.update({
+        where: { id },
+        data: {
+          ...(name !== undefined ? { name } : {}),
+          ...(content !== undefined ? { content } : {}),
+          ...(dto.active !== undefined ? { active: dto.active } : {}),
+        },
+      });
+
+      return this.presentTemplate(updated);
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        throw new ConflictException('Ja existe um template com este tipo e nome.');
+      }
+      throw error;
+    }
   }
 
   async previewTemplate(id: string, dto: PreviewMessageTemplateDto) {
@@ -503,15 +518,19 @@ export class BillingService {
       throw new NotFoundException('Template nao encontrado.');
     }
 
+    const content = dto.content?.trim() || template.content;
+    this.validateTemplateContent(content);
+
     return {
       templateId: template.id,
-      renderedContent: this.renderer.render(dto.content?.trim() || template.content, {
+      renderedContent: this.renderer.render(content, {
         nome: dto.name?.trim() || 'Bruno',
         primeiroNome: this.firstName(dto.name?.trim() || 'Bruno'),
         valor: dto.value?.trim() || 'R$ 50,00',
         vencimento: dto.dueDate?.trim() || '15/09/2026',
         plano: dto.plan?.trim() || 'Mensal',
         referencia: dto.reference?.trim() || 'bruno1499',
+        diasAtraso: dto.daysOverdue?.trim() || '7',
         pix: '000201...',
       }),
     };
@@ -1022,6 +1041,7 @@ export class BillingService {
       vencimento: this.formatDisplayDate(receivable.dueDate),
       plano: reference.plan.name,
       referencia: reference.reference,
+      diasAtraso: '',
       pix: '',
     });
   }
@@ -1165,6 +1185,22 @@ export class BillingService {
       ...template,
       variables: this.renderer.variables,
     };
+  }
+
+  private validateTemplateContent(content: string) {
+    if (content.length > 1000) {
+      throw new BadRequestException('Template deve ter no maximo 1000 caracteres.');
+    }
+
+    const unsupported = this.renderer.unsupportedVariables(content);
+
+    if (unsupported.length) {
+      throw new BadRequestException(
+        `Variaveis nao suportadas no template: ${unsupported
+          .map((variable) => `{{${variable}}}`)
+          .join(', ')}.`,
+      );
+    }
   }
 
   private presentDispatch(dispatch: BillingDispatch) {

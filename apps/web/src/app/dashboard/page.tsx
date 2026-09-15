@@ -2803,6 +2803,7 @@ function BillingView() {
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
+  const visibleTemplates = templates.filter((template) => template.type !== 'RECOVERY_DAY_10');
 
   const loadBilling = useCallback(async () => {
     setLoading(true);
@@ -3067,11 +3068,12 @@ function BillingView() {
           <section className="panel template-panel">
             <PanelHeader title="Templates" />
             <div className="mini-list">
-              {templates.map((template) => (
+              {visibleTemplates.map((template) => (
                 <article key={template.id}>
                   <strong>{template.name}</strong>
                   <span>
-                    {template.type} | {template.active ? 'Ativo' : 'Inativo'}
+                    {messageTemplateTypeLabel(template.type)} |{' '}
+                    {template.active ? 'Ativo' : 'Inativo'}
                   </span>
                   <p>{template.content}</p>
                   <div className="button-row">
@@ -3094,7 +3096,7 @@ function BillingView() {
                   </div>
                 </article>
               ))}
-              {!templates.length ? (
+              {!visibleTemplates.length ? (
                 <div className="empty-state">Nenhum template cadastrado.</div>
               ) : null}
             </div>
@@ -3244,6 +3246,42 @@ function BillingView() {
   );
 }
 
+type RecoveryTemplateType = Extract<
+  MessageTemplate['type'],
+  'RECOVERY_DAY_3' | 'RECOVERY_DAY_7' | 'RECOVERY_DAY_15' | 'RECOVERY_DAY_30'
+>;
+
+const recoveryTemplateCards = [
+  { title: '3 dias após vencimento', templateType: 'RECOVERY_DAY_3' },
+  { title: '7 dias após vencimento', templateType: 'RECOVERY_DAY_7' },
+  { title: '15 dias após vencimento', templateType: 'RECOVERY_DAY_15' },
+  { title: '30 dias após vencimento', templateType: 'RECOVERY_DAY_30' },
+] satisfies Array<{ title: string; templateType: RecoveryTemplateType }>;
+
+const recoveryTemplateVariables = [
+  'nome',
+  'primeiroNome',
+  'referencia',
+  'plano',
+  'valor',
+  'vencimento',
+  'diasAtraso',
+];
+
+function messageTemplateTypeLabel(type: MessageTemplate['type']) {
+  const labels: Record<MessageTemplate['type'], string> = {
+    INITIAL_ACTIVATION: 'Ativação inicial',
+    BILLING_DUE: 'Cobrança padrão',
+    RECOVERY_DAY_3: '3 dias após vencimento',
+    RECOVERY_DAY_7: '7 dias após vencimento',
+    RECOVERY_DAY_10: 'Template legado de recuperação',
+    RECOVERY_DAY_15: '15 dias após vencimento',
+    RECOVERY_DAY_30: '30 dias após vencimento',
+  };
+
+  return labels[type];
+}
+
 function AutomationsView() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
@@ -3255,6 +3293,13 @@ function AutomationsView() {
   const [recoveryOffsets, setRecoveryOffsets] = useState(['3', '7', '15', '30']);
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [editingRecoveryTemplate, setEditingRecoveryTemplate] = useState<MessageTemplate | null>(
+    null,
+  );
+  const [recoveryTemplateContent, setRecoveryTemplateContent] = useState('');
+  const [recoveryTemplateName, setRecoveryTemplateName] = useState('');
+  const [recoveryTemplatePreview, setRecoveryTemplatePreview] = useState('');
   const [campaignPagination, setCampaignPagination] = useState<
     PaginatedClients['pagination'] | null
   >(null);
@@ -3270,19 +3315,26 @@ function AutomationsView() {
     setError('');
 
     try {
-      const [nextBilling, nextBillingSettings, nextRecoverySettings, nextRecovery, nextCampaigns] =
-        await Promise.all([
-          getBillingSummary(),
-          getBillingAutomationSettings(),
-          getRecoveryAutomationSettings(),
-          getRecoverySummary(),
-          listRecoveryCampaigns({
-            ...(status ? { status } : {}),
-            ...(search.trim() ? { search: search.trim() } : {}),
-            page,
-            pageSize: 20,
-          }),
-        ]);
+      const [
+        nextBilling,
+        nextBillingSettings,
+        nextRecoverySettings,
+        nextRecovery,
+        nextCampaigns,
+        nextTemplates,
+      ] = await Promise.all([
+        getBillingSummary(),
+        getBillingAutomationSettings(),
+        getRecoveryAutomationSettings(),
+        getRecoverySummary(),
+        listRecoveryCampaigns({
+          ...(status ? { status } : {}),
+          ...(search.trim() ? { search: search.trim() } : {}),
+          page,
+          pageSize: 20,
+        }),
+        listMessageTemplates(),
+      ]);
       setBillingSummary(nextBilling);
       setBillingSettings(nextBillingSettings);
       setSendTime(nextBillingSettings.sendTime);
@@ -3293,6 +3345,7 @@ function AutomationsView() {
       setRecoveryOffsets(nextRecoverySettings.steps.map((step) => String(step.offsetDays)));
       setRecoverySummary(nextRecovery);
       setCampaigns(nextCampaigns.items);
+      setTemplates(nextTemplates);
       setCampaignPagination(nextCampaigns.pagination);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar automações.');
@@ -3314,6 +3367,64 @@ function AutomationsView() {
       await loadAutomations();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível reconciliar recuperação.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  function openRecoveryTemplate(template: MessageTemplate) {
+    setEditingRecoveryTemplate(template);
+    setRecoveryTemplateName(template.name);
+    setRecoveryTemplateContent(template.content);
+    setRecoveryTemplatePreview('');
+    setError('');
+  }
+
+  async function saveRecoveryTemplate() {
+    if (!editingRecoveryTemplate) return;
+    setWorking('recovery-template');
+    setError('');
+
+    try {
+      await updateMessageTemplate(editingRecoveryTemplate.id, {
+        name: recoveryTemplateName,
+        content: recoveryTemplateContent,
+      });
+      setEditingRecoveryTemplate(null);
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar mensagem.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function toggleRecoveryTemplate(template: MessageTemplate) {
+    setWorking(template.id);
+    setError('');
+
+    try {
+      await updateMessageTemplate(template.id, { active: !template.active });
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível alterar mensagem.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function loadRecoveryTemplatePreview() {
+    if (!editingRecoveryTemplate) return;
+    setWorking('recovery-preview');
+    setError('');
+
+    try {
+      const result = await previewMessageTemplate(editingRecoveryTemplate.id, {
+        content: recoveryTemplateContent,
+      });
+      setRecoveryTemplatePreview(result.renderedContent);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível gerar preview.');
     } finally {
       setWorking('');
     }
@@ -3645,7 +3756,7 @@ function AutomationsView() {
                         }}
                       />
                     </td>
-                    <td>{step.templateType}</td>
+                    <td>{messageTemplateTypeLabel(step.templateType)}</td>
                     <td>
                       <input
                         checked={step.enabled}
@@ -3668,6 +3779,50 @@ function AutomationsView() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section className="settings-card template-panel">
+          <div className="settings-card-header">
+            <div>
+              <span className="metric-label">MENSAGENS POR ETAPA</span>
+              <h2>Recuperação</h2>
+            </div>
+          </div>
+          <div className="mini-list">
+            {recoveryTemplateCards.map((card) => {
+              const template = templates.find((item) => item.type === card.templateType);
+
+              return (
+                <article key={card.templateType}>
+                  <strong>{card.title}</strong>
+                  <span>
+                    {template?.name ?? 'Template não cadastrado'} |{' '}
+                    {template?.active ? 'Ativo' : 'Inativo'}
+                  </span>
+                  <p>{template?.content ?? 'Template da etapa indisponível.'}</p>
+                  <div className="button-row">
+                    <button
+                      className="secondary-button"
+                      disabled={!template}
+                      type="button"
+                      onClick={() => template && openRecoveryTemplate(template)}
+                    >
+                      <Pencil aria-hidden="true" size={16} />
+                      Editar
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={!template || working === template.id}
+                      type="button"
+                      onClick={() => template && void toggleRecoveryTemplate(template)}
+                    >
+                      {template?.active ? 'Desativar' : 'Ativar'}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </section>
 
@@ -3926,6 +4081,87 @@ function AutomationsView() {
           </div>
         </dl>
       </aside>
+
+      {editingRecoveryTemplate ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" aria-labelledby="recovery-template-title">
+            <header className="modal-header">
+              <h2 id="recovery-template-title">Editar mensagem de recuperação</h2>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setEditingRecoveryTemplate(null)}
+              >
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <label className="field">
+              <span>Nome do template</span>
+              <input
+                maxLength={80}
+                value={recoveryTemplateName}
+                onChange={(event) => setRecoveryTemplateName(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Conteúdo</span>
+              <textarea
+                maxLength={1000}
+                rows={8}
+                value={recoveryTemplateContent}
+                onChange={(event) => setRecoveryTemplateContent(event.target.value)}
+              />
+            </label>
+            <div className="mini-list">
+              <article>
+                <strong>Variáveis disponíveis</strong>
+                <span>
+                  {recoveryTemplateVariables.map((variable) => `{{${variable}}}`).join(' ')}
+                </span>
+              </article>
+            </div>
+            {recoveryTemplatePreview ? (
+              <div className="preview-box">
+                <span>Preview</span>
+                <strong>{recoveryTemplatePreview}</strong>
+              </div>
+            ) : null}
+            <div className="form-actions">
+              <span className="error-message">{error}</span>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  disabled={working === 'recovery-preview'}
+                  type="button"
+                  onClick={() => void loadRecoveryTemplatePreview()}
+                >
+                  <Eye aria-hidden="true" size={16} />
+                  Preview
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setEditingRecoveryTemplate(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={
+                    working === 'recovery-template' ||
+                    !recoveryTemplateName.trim() ||
+                    !recoveryTemplateContent.trim()
+                  }
+                  type="button"
+                  onClick={() => void saveRecoveryTemplate()}
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

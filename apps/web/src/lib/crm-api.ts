@@ -583,7 +583,13 @@ export interface MessageTemplate {
   id: string;
   name: string;
   type:
-    'BILLING_DUE' | 'RECOVERY_DAY_3' | 'RECOVERY_DAY_10' | 'RECOVERY_DAY_15' | 'RECOVERY_DAY_30';
+    | 'INITIAL_ACTIVATION'
+    | 'BILLING_DUE'
+    | 'RECOVERY_DAY_3'
+    | 'RECOVERY_DAY_7'
+    | 'RECOVERY_DAY_10'
+    | 'RECOVERY_DAY_15'
+    | 'RECOVERY_DAY_30';
   content: string;
   active: boolean;
   variables: string[];
@@ -1525,7 +1531,10 @@ export function listMessageTemplates() {
   return apiFetch<MessageTemplate[]>('/billing/templates');
 }
 
-export function updateMessageTemplate(id: string, payload: { content?: string; active?: boolean }) {
+export function updateMessageTemplate(
+  id: string,
+  payload: { name?: string; content?: string; active?: boolean },
+) {
   return apiFetch<MessageTemplate>(`/billing/templates/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -1541,6 +1550,7 @@ export function previewMessageTemplate(
     dueDate?: string;
     plan?: string;
     reference?: string;
+    daysOverdue?: string;
   },
 ) {
   return apiFetch<{ templateId: string; renderedContent: string }>(

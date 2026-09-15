@@ -1343,8 +1343,9 @@ a {
 }
 
 .clients-layout {
-  align-items: start;
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 0.5fr);
+  display: grid;
+  gap: 18px;
+  min-width: 0;
 }
 
 .workspace-main,
@@ -1361,6 +1362,11 @@ a {
   grid-template-columns: minmax(220px, 1fr) 170px 190px auto;
   gap: 10px;
   margin-bottom: 16px;
+}
+
+.clients-list-view,
+.client-detail-view {
+  width: 100%;
 }
 
 .toolbar select,
@@ -1578,6 +1584,19 @@ a {
   overflow-x: auto;
 }
 
+.clients-table {
+  min-width: 1120px;
+}
+
+.clients-table td {
+  white-space: nowrap;
+}
+
+.clients-table td:first-child,
+.clients-table td:nth-child(2) {
+  white-space: normal;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1640,6 +1659,21 @@ tbody tr:hover,
   white-space: nowrap;
 }
 
+.inline-icon-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text);
+}
+
+.table-actions,
+.reference-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .client-avatar {
   display: grid;
   width: 30px;
@@ -1675,8 +1709,9 @@ tbody tr:hover,
 
 .client-detail-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
   margin-top: 12px;
 }
 
@@ -1697,14 +1732,25 @@ tbody tr:hover,
 .client-detail-actions {
   display: flex;
   flex-wrap: wrap;
-  grid-column: 1 / -1;
+  justify-content: flex-end;
   gap: 8px;
 }
 
 .client-overview-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
   gap: 12px;
+}
+
+.client-activity-card {
+  grid-column: 1 / -1;
+}
+
+.client-detail-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .client-overview-card {
@@ -1957,6 +2003,12 @@ tbody tr:hover,
   gap: 12px;
 }
 
+.reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
 .reference-card header {
   display: flex;
   align-items: flex-start;
@@ -2030,6 +2082,25 @@ tbody tr:hover,
 .modal-header h2 {
   margin: 0;
   font-size: 19px;
+}
+
+.modal-header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.client-form-modal,
+.reference-form-modal {
+  width: min(100%, 860px);
+}
+
+.client-form-modal .entity-form,
+.reference-form-modal .entity-form {
+  margin: 16px 0 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .preview-box {
@@ -2299,6 +2370,19 @@ tbody tr:hover,
     grid-template-columns: 1fr;
   }
 
+  .client-detail-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .client-detail-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .client-detail-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .toolbar,
   .compact-form {
     grid-template-columns: 1fr 1fr;
@@ -2335,8 +2419,19 @@ tbody tr:hover,
   .form-grid,
   .detail-list,
   .reference-metrics,
-  .client-kpi-grid {
+  .client-kpi-grid,
+  .client-detail-kpis {
     grid-template-columns: 1fr;
+  }
+
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .tabs button {
+    flex: 0 0 auto;
   }
 
   .client-detail-actions {
@@ -2346,5 +2441,15 @@ tbody tr:hover,
 
   .client-detail-actions .ui-button {
     width: 100%;
+  }
+
+  .modal-backdrop {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: calc(100vh - 20px);
   }
 }

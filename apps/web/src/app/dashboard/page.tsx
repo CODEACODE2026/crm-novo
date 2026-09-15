@@ -13,6 +13,7 @@ import {
   Download,
   DollarSign,
   Eye,
+  Filter,
   Gift,
   LayoutDashboard,
   ListChecks,
@@ -42,6 +43,15 @@ import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
 import { ClientReferralSelect } from '../../components/clients/client-referral-select';
 import { StatusBadge } from '../../components/clients/status-badge';
+import {
+  clientDisplayStatus,
+  clientInitial,
+  clientNextDueSummary,
+  clientOperationalSummary,
+  clientPlanSummary,
+  clientReferenceCountLabel,
+  clientReferenceSummary,
+} from '../../components/clients/client-ui-helpers';
 import { PlanForm } from '../../components/plans/plan-form';
 import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
 import {
@@ -293,12 +303,8 @@ export default function DashboardPage() {
       setPlans(nextPlans);
       setClientsPayload(nextClients);
       setSelectedClient((current) => {
-        if (!current) return nextClients.items[0] ?? null;
-        return (
-          nextClients.items.find((client) => client.id === current.id) ??
-          nextClients.items[0] ??
-          null
-        );
+        if (!current) return null;
+        return nextClients.items.some((client) => client.id === current.id) ? current : null;
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar clientes e planos.');
@@ -503,7 +509,7 @@ export default function DashboardPage() {
           }}
           onNew={() => {
             setEditingClient(null);
-            setClientFormOpen((open) => !open);
+            setClientFormOpen(true);
           }}
           onRenew={openRenewal}
           onCreateReference={async (client, payload) => {
@@ -518,7 +524,14 @@ export default function DashboardPage() {
             setSelectedClient(detailed);
             await loadData();
           }}
-          onSelect={setSelectedClient}
+          onCloseForm={() => {
+            setClientFormOpen(false);
+            setEditingClient(null);
+          }}
+          onSelect={async (client) => {
+            const detailed = await getClient(client.id);
+            setSelectedClient(detailed);
+          }}
           onClearSelection={() => setSelectedClient(null)}
           onRemoveClient={(client) => void handleRemoveClient(client)}
           onRemoveReference={(reference) => void handleRemoveReference(reference)}
@@ -2115,6 +2128,7 @@ function ClientsView({
   onEdit,
   onNew,
   onClearSelection,
+  onCloseForm,
   onRenew,
   onCreateReference,
   onUpdateReference,
@@ -2157,9 +2171,10 @@ function ClientsView({
   onReferenceStatusChange: (reference: ClientReference, status: ClientStatus) => void;
   onRemoveClient: (client: Client) => void;
   onRemoveReference: (reference: ClientReference) => void;
-  onSelect: (client: Client) => void;
+  onSelect: (client: Client) => void | Promise<void>;
   onWhatsAppSent: (clientId: string) => Promise<void>;
   onUpdate: (payload: ClientUpdatePayload) => Promise<void>;
+  onCloseForm: () => void;
   planId: string;
   plans: Plan[];
   search: string;
@@ -2184,167 +2199,177 @@ function ClientsView({
 
   return (
     <>
-      <PageHeader
-        actions={
-          <Button icon={UserPlus} onClick={onNew} variant="primary">
-            Novo cliente
-          </Button>
-        }
-        subtitle="Base de clientes, referências e histórico"
-        title="Clientes"
-      />
-      <div className="workspace-grid clients-layout">
-        <section className="workspace-main">
-          {renewalNotice ? <div className="notice success">{renewalNotice}</div> : null}
-          <div className="toolbar">
-            <div className="search-row">
-              <Search aria-hidden="true" size={18} />
-              <input
-                placeholder="Buscar por nome, referência ou telefone"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            <select
-              value={status}
-              onChange={(event) => setStatus(event.target.value as ClientStatus | '')}
-            >
-              <option value="">Todos os status</option>
-              <option value="PENDENTE_PAGAMENTO">Pendente pagamento</option>
-              <option value="ATIVO">Ativo</option>
-              <option value="INATIVO">Inativo</option>
-              <option value="CANCELADO">Cancelado</option>
-            </select>
-            <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
-              <option value="">Todos os planos</option>
-              {plans.map((plan) => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.name}
-                </option>
-              ))}
-            </select>
-            <Button onClick={onApplyFilters} variant="secondary">
-              Aplicar
+      {!selectedClient ? (
+        <PageHeader
+          actions={
+            <Button icon={UserPlus} onClick={onNew} variant="primary">
+              Novo cliente
             </Button>
-          </div>
-
-          {clientFormOpen ? (
-            <ClientForm
-              client={editingClient ?? undefined}
-              plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
-              submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
-              onSubmit={async (payload) => {
-                if (editingClient) {
-                  await onUpdate(payload);
-                } else {
-                  await onCreate(payload as ClientPayload);
-                }
-              }}
-            />
-          ) : null}
-
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>CLIENTE</th>
-                  <th>REFERÊNCIAS</th>
-                  <th>WHATSAPP</th>
-                  <th>RESUMO OPERACIONAL</th>
-                  <th>STATUS</th>
-                  <th>AÇÕES</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clients.map((client) => {
-                  const references = client.references ?? [];
-                  const singleReference = references.length === 1 ? references[0] : null;
-                  const referenceSummary = singleReference
-                    ? singleReference.reference
-                    : `${references.length} referências`;
-                  const operationalSummary = singleReference
-                    ? `${formatCurrency(singleReference.recurringValue)} | ${formatDate(singleReference.dueDate)}`
-                    : references.map((reference) => reference.reference).join(', ') || '-';
-                  const statusForRow = singleReference?.status ?? client.status;
-                  const initial = client.name.slice(0, 1).toUpperCase();
-
-                  return (
-                    <tr
-                      className={selectedClient?.id === client.id ? 'selected-row' : ''}
-                      key={client.id}
-                      onClick={() => onSelect(client)}
-                    >
-                      <td>
-                        <div className="client-cell">
-                          <span className="client-avatar" aria-hidden="true">
-                            {initial || 'C'}
-                          </span>
-                          <span>
-                            <strong>{client.name}</strong>
-                            <small>{client.email ?? client.phoneNormalized}</small>
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <strong>{referenceSummary}</strong>
-                        {singleReference ? <span>{singleReference.plan.name}</span> : null}
-                      </td>
-                      <td>{client.phoneNormalized}</td>
-                      <td>
-                        <span>{operationalSummary}</span>
-                      </td>
-                      <td>
-                        <StatusBadge status={statusForRow} />
-                      </td>
-                      <td>
-                        {singleReference ? (
-                          <Button
-                            icon={RefreshCw}
-                            size="sm"
-                            variant="secondary"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onRenew(client, singleReference);
-                            }}
-                          >
-                            Renovar
-                          </Button>
-                        ) : (
-                          <Button
-                            icon={Eye}
-                            size="sm"
-                            variant="secondary"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onSelect(client);
-                            }}
-                          >
-                            Abrir
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {!clients.length ? (
-              <div className="empty-state">
-                {dataLoading ? 'Carregando...' : 'Nenhum cliente encontrado.'}
+          }
+          subtitle="Base de clientes, referências e histórico"
+          title="Clientes"
+        />
+      ) : null}
+      <div className="clients-layout">
+        {!selectedClient ? (
+          <section className="workspace-main clients-list-view" aria-label="Lista de clientes">
+            {renewalNotice ? <div className="notice success">{renewalNotice}</div> : null}
+            <div className="toolbar">
+              <div className="search-row">
+                <Search aria-hidden="true" size={18} />
+                <input
+                  placeholder="Buscar por nome, referência ou telefone..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
               </div>
-            ) : null}
-          </div>
-        </section>
+              <select
+                value={status}
+                onChange={(event) => setStatus(event.target.value as ClientStatus | '')}
+              >
+                <option value="">Todos os status</option>
+                <option value="PENDENTE_PAGAMENTO">Pendente pagamento</option>
+                <option value="ATIVO">Ativo</option>
+                <option value="INATIVO">Inativo</option>
+                <option value="CANCELADO">Cancelado</option>
+              </select>
+              <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
+                <option value="">Todos os planos</option>
+                {plans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name}
+                  </option>
+                ))}
+              </select>
+              <Button icon={Filter} onClick={onApplyFilters} variant="secondary">
+                Aplicar
+              </Button>
+            </div>
 
-        <aside className="detail-panel">
-          {selectedClient ? (
+            <div className="table-wrap">
+              <table className="clients-table">
+                <thead>
+                  <tr>
+                    <th>CLIENTE</th>
+                    <th>REFERÊNCIAS</th>
+                    <th>WHATSAPP</th>
+                    <th>PLANO / RESUMO</th>
+                    <th>PRÓX. VENCIMENTO</th>
+                    <th>STATUS</th>
+                    <th>CADASTRO</th>
+                    <th>AÇÕES</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clients.map((client) => {
+                    const references = client.references ?? [];
+                    const singleReference = references.length === 1 ? references[0] : null;
+
+                    return (
+                      <tr
+                        key={client.id}
+                        tabIndex={0}
+                        onClick={() => void onSelect(client)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            void onSelect(client);
+                          }
+                        }}
+                      >
+                        <td>
+                          <div className="client-cell">
+                            <span className="client-avatar" aria-hidden="true">
+                              {clientInitial(client.name)}
+                            </span>
+                            <span>
+                              <strong>{client.name}</strong>
+                              <small>{client.email ?? client.phoneNormalized}</small>
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <strong>{clientReferenceSummary(references)}</strong>
+                          {singleReference ? <span>{singleReference.plan.name}</span> : null}
+                        </td>
+                        <td>
+                          <span className="inline-icon-cell">
+                            <MessageCircle aria-hidden="true" size={14} />
+                            {client.phoneNormalized}
+                          </span>
+                        </td>
+                        <td>
+                          <strong>{clientPlanSummary(references)}</strong>
+                          <span>{clientOperationalSummary(references)}</span>
+                        </td>
+                        <td>
+                          <span>{clientNextDueSummary(references)}</span>
+                        </td>
+                        <td>
+                          <StatusBadge status={clientDisplayStatus(client)} />
+                        </td>
+                        <td>
+                          <span>{formatDate(client.createdAt)}</span>
+                        </td>
+                        <td>
+                          <div className="table-actions">
+                            <IconButton
+                              icon={Eye}
+                              label={`Abrir cliente ${client.name}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void onSelect(client);
+                              }}
+                            />
+                            <IconButton
+                              icon={Pencil}
+                              label={`Editar cliente ${client.name}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onEdit(client);
+                              }}
+                            />
+                            <ActionMenu
+                              items={[
+                                {
+                                  disabled: !singleReference,
+                                  icon: RefreshCw,
+                                  label: 'Renovar',
+                                  onSelect: () => onRenew(client, singleReference ?? undefined),
+                                },
+                                {
+                                  danger: true,
+                                  icon: Trash2,
+                                  label: 'Remover cliente',
+                                  onSelect: () => onRemoveClient(client),
+                                },
+                              ]}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {!clients.length ? (
+                <div className="empty-state">
+                  {dataLoading ? 'Carregando...' : 'Nenhum cliente encontrado.'}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
+        {selectedClient ? (
+          <section className="detail-panel client-detail-view" aria-label="Detalhe do cliente">
             <>
               <Button icon={ArrowLeft} size="sm" variant="ghost" onClick={onClearSelection}>
                 Voltar para Clientes
               </Button>
               <div className="client-detail-header">
                 <span className="client-avatar large" aria-hidden="true">
-                  {selectedClient.name.slice(0, 1).toUpperCase() || 'C'}
+                  {clientInitial(selectedClient.name)}
                 </span>
                 <div className="client-detail-title">
                   <h2>{selectedClient.name}</h2>
@@ -2352,13 +2377,16 @@ function ClientsView({
                     <StatusBadge
                       status={uniqueSelectedReference?.status ?? selectedClient.status}
                     />
-                    <span>{selectedReferences.length} referências</span>
+                    <span>{clientReferenceCountLabel(selectedReferences.length)}</span>
                     <span>WhatsApp: {selectedClient.phoneNormalized}</span>
+                    {selectedClient.email ? <span>{selectedClient.email}</span> : null}
+                    <span>Cliente desde {formatDate(selectedClient.createdAt)}</span>
                   </div>
                 </div>
                 <div className="client-detail-actions">
                   <Button
                     icon={RefreshCw}
+                    disabled={!uniqueSelectedReference}
                     size="sm"
                     variant="primary"
                     onClick={() => onRenew(selectedClient)}
@@ -2381,6 +2409,11 @@ function ClientsView({
                   <ActionMenu
                     items={[
                       {
+                        icon: Pencil,
+                        label: 'Editar',
+                        onSelect: () => onEdit(selectedClient),
+                      },
+                      {
                         danger: true,
                         icon: Trash2,
                         label: 'Remover cliente',
@@ -2389,6 +2422,30 @@ function ClientsView({
                     ]}
                   />
                 </div>
+              </div>
+
+              <div className="client-detail-kpis">
+                <StatCard label="Referências" value={selectedReferences.length} />
+                <StatCard
+                  label="A receber"
+                  value={formatCurrency(
+                    (selectedClient.receivables ?? [])
+                      .filter((receivable) => receivable.status === 'PENDENTE')
+                      .reduce((total, receivable) => total + Number(receivable.amount), 0),
+                  )}
+                />
+                <StatCard
+                  label="Próximo vencimento"
+                  value={clientNextDueSummary(selectedReferences)}
+                />
+                <StatCard
+                  label="Total pago"
+                  value={formatCurrency(
+                    (selectedClient.receivables ?? [])
+                      .filter((receivable) => receivable.status === 'PAGO')
+                      .reduce((total, receivable) => total + Number(receivable.amount), 0),
+                  )}
+                />
               </div>
 
               <div className="tabs">
@@ -2485,6 +2542,34 @@ function ClientsView({
                       ) : null}
                     </div>
                   </section>
+                  <section className="client-overview-card client-activity-card">
+                    <SectionHeader eyebrow="Histórico" title="Atividade recente" />
+                    <ol className="timeline compact-timeline">
+                      {(selectedClient.events ?? []).slice(0, 4).map((event) => (
+                        <li key={event.id}>
+                          <span className="timeline-icon" aria-hidden="true">
+                            <ClientEventIcon type={event.type} />
+                          </span>
+                          <div>
+                            <strong>{event.title}</strong>
+                            <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
+                            {event.description ? <p>{event.description}</p> : null}
+                          </div>
+                        </li>
+                      ))}
+                      {!selectedClient.events?.length ? (
+                        <li>
+                          <span className="timeline-icon" aria-hidden="true">
+                            <Activity size={14} />
+                          </span>
+                          <div>
+                            <strong>Sem eventos recentes</strong>
+                            <span>O histórico aparecerá aqui quando houver atividade.</span>
+                          </div>
+                        </li>
+                      ) : null}
+                    </ol>
+                  </section>
                 </div>
               ) : null}
 
@@ -2524,31 +2609,12 @@ function ClientsView({
                       variant="primary"
                       onClick={() => {
                         setEditingReference(null);
-                        setReferenceFormOpen((open) => !open);
+                        setReferenceFormOpen(true);
                       }}
                     >
-                      Adicionar referência
+                      Nova referência
                     </Button>
                   </div>
-                  {referenceFormOpen ? (
-                    <ClientReferenceForm
-                      plans={plans}
-                      reference={editingReference}
-                      onCancel={() => {
-                        setReferenceFormOpen(false);
-                        setEditingReference(null);
-                      }}
-                      onSubmit={async (payload) => {
-                        if (editingReference) {
-                          await onUpdateReference(editingReference, payload);
-                        } else {
-                          await onCreateReference(selectedClient, payload);
-                        }
-                        setReferenceFormOpen(false);
-                        setEditingReference(null);
-                      }}
-                    />
-                  ) : null}
                   <div className="status-actions">
                     <div className="notice">
                       INATIVO = serviço temporariamente parado e elegivel para recuperação.
@@ -2561,97 +2627,94 @@ function ClientsView({
                       onChange={(event) => setStatusReason(event.target.value)}
                     />
                   </div>
-                  {(selectedClient.references ?? []).map((reference) => (
-                    <article className="reference-card" key={reference.id}>
-                      <header>
-                        <div>
-                          <strong>{reference.reference}</strong>
-                          <span>{reference.plan.name}</span>
+                  <div className="reference-grid">
+                    {(selectedClient.references ?? []).map((reference) => (
+                      <article className="reference-card" key={reference.id}>
+                        <header>
+                          <div>
+                            <strong>{reference.reference}</strong>
+                            <span>{reference.plan.name}</span>
+                          </div>
+                          <StatusBadge status={reference.status} />
+                        </header>
+                        <div className="reference-metrics">
+                          <div>
+                            <strong>{formatCurrency(reference.recurringValue)}</strong>
+                            <span>Mensalidade</span>
+                          </div>
+                          <div>
+                            <strong>{formatDate(reference.dueDate)}</strong>
+                            <span>Próx. vencimento</span>
+                          </div>
+                          <div>
+                            <strong>{reference.billingNoticeDays} dias antes</strong>
+                            <span>Cobrança</span>
+                          </div>
                         </div>
-                        <StatusBadge status={reference.status} />
-                      </header>
-                      <div className="reference-metrics">
-                        <div>
-                          <strong>{formatCurrency(reference.recurringValue)}</strong>
-                          <span>Mensalidade</span>
+                        {reference.inactivatedAt ? (
+                          <p>
+                            Inativada em {formatDateTime(reference.inactivatedAt)}
+                            {reference.inactivationReason
+                              ? ` | ${reference.inactivationReason}`
+                              : ''}
+                          </p>
+                        ) : null}
+                        {reference.canceledAt ? (
+                          <p>
+                            Cancelada em {formatDateTime(reference.canceledAt)}
+                            {reference.cancellationReason
+                              ? ` | ${reference.cancellationReason}`
+                              : ''}
+                          </p>
+                        ) : null}
+                        <div className="reference-actions">
+                          <Button
+                            icon={RefreshCw}
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => onRenew(selectedClient, reference)}
+                          >
+                            Renovar
+                          </Button>
+                          <IconButton
+                            icon={Pencil}
+                            label={`Editar referência ${reference.reference}`}
+                            onClick={() => {
+                              setEditingReference(reference);
+                              setReferenceFormOpen(true);
+                            }}
+                          />
+                          <ActionMenu
+                            items={[
+                              {
+                                disabled: reference.status === 'CANCELADO',
+                                icon: CircleCheck,
+                                label: 'Ativar',
+                                onSelect: () => onReferenceStatusChange(reference, 'ATIVO'),
+                              },
+                              {
+                                icon: Power,
+                                label: 'Inativar',
+                                onSelect: () => onReferenceStatusChange(reference, 'INATIVO'),
+                              },
+                              {
+                                danger: true,
+                                icon: XCircle,
+                                label: 'Cancelar',
+                                onSelect: () => onReferenceStatusChange(reference, 'CANCELADO'),
+                              },
+                              {
+                                danger: true,
+                                icon: Trash2,
+                                label: 'Remover',
+                                onSelect: () => onRemoveReference(reference),
+                              },
+                            ]}
+                          />
                         </div>
-                        <div>
-                          <strong>{formatDate(reference.dueDate)}</strong>
-                          <span>Próx. vencimento</span>
-                        </div>
-                        <div>
-                          <strong>{reference.billingNoticeDays} dias antes</strong>
-                          <span>Cobrança</span>
-                        </div>
-                      </div>
-                      {reference.inactivatedAt ? (
-                        <p>
-                          Inativada em {formatDateTime(reference.inactivatedAt)}
-                          {reference.inactivationReason ? ` | ${reference.inactivationReason}` : ''}
-                        </p>
-                      ) : null}
-                      {reference.canceledAt ? (
-                        <p>
-                          Cancelada em {formatDateTime(reference.canceledAt)}
-                          {reference.cancellationReason ? ` | ${reference.cancellationReason}` : ''}
-                        </p>
-                      ) : null}
-                      <div className="button-row">
-                        <Button
-                          icon={RefreshCw}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => onRenew(selectedClient, reference)}
-                        >
-                          Renovar
-                        </Button>
-                        <Button
-                          icon={Pencil}
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditingReference(reference);
-                            setReferenceFormOpen(true);
-                          }}
-                        >
-                          Editar
-                        </Button>
-                        <Button
-                          icon={CircleCheck}
-                          disabled={reference.status === 'CANCELADO'}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => onReferenceStatusChange(reference, 'ATIVO')}
-                        >
-                          Ativar
-                        </Button>
-                        <Button
-                          icon={Power}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => onReferenceStatusChange(reference, 'INATIVO')}
-                        >
-                          Inativar
-                        </Button>
-                        <Button
-                          icon={XCircle}
-                          size="sm"
-                          variant="danger"
-                          onClick={() => onReferenceStatusChange(reference, 'CANCELADO')}
-                        >
-                          Cancelar
-                        </Button>
-                        <Button
-                          icon={Trash2}
-                          size="sm"
-                          variant="danger"
-                          onClick={() => onRemoveReference(reference)}
-                        >
-                          Remover
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    ))}
+                  </div>
                   {!selectedClient.references?.length ? (
                     <div className="empty-state">Sem referências cadastradas.</div>
                   ) : null}
@@ -2788,10 +2851,79 @@ function ClientsView({
                 </div>
               ) : null}
             </>
-          ) : (
-            <div className="empty-state">Selecione um cliente para visualizar detalhes.</div>
-          )}
-        </aside>
+          </section>
+        ) : null}
+        {clientFormOpen ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal client-form-modal" aria-labelledby="client-form-title">
+              <header className="modal-header">
+                <div>
+                  <span className="metric-label">
+                    {editingClient ? 'Editar cliente' : 'Novo cliente'}
+                  </span>
+                  <h2 id="client-form-title">
+                    {editingClient ? 'Editar cliente' : 'Novo cliente'}
+                  </h2>
+                  {!editingClient ? (
+                    <p>Cadastre um novo cliente e, se desejar, já crie a primeira referência.</p>
+                  ) : null}
+                </div>
+                <IconButton icon={X} label="Fechar cadastro de cliente" onClick={onCloseForm} />
+              </header>
+              <ClientForm
+                client={editingClient ?? undefined}
+                plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
+                submitLabel={editingClient ? 'Salvar cliente' : 'Salvar cliente'}
+                onSubmit={async (payload) => {
+                  if (editingClient) {
+                    await onUpdate(payload);
+                  } else {
+                    await onCreate(payload as ClientPayload);
+                  }
+                }}
+              />
+            </section>
+          </div>
+        ) : null}
+        {selectedClient && referenceFormOpen ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal reference-form-modal" aria-labelledby="reference-form-title">
+              <header className="modal-header">
+                <div>
+                  <span className="metric-label">Referência</span>
+                  <h2 id="reference-form-title">
+                    {editingReference ? 'Editar referência' : 'Nova referência'}
+                  </h2>
+                </div>
+                <IconButton
+                  icon={X}
+                  label="Fechar referência"
+                  onClick={() => {
+                    setReferenceFormOpen(false);
+                    setEditingReference(null);
+                  }}
+                />
+              </header>
+              <ClientReferenceForm
+                plans={plans}
+                reference={editingReference}
+                onCancel={() => {
+                  setReferenceFormOpen(false);
+                  setEditingReference(null);
+                }}
+                onSubmit={async (payload) => {
+                  if (editingReference) {
+                    await onUpdateReference(editingReference, payload);
+                  } else {
+                    await onCreateReference(selectedClient, payload);
+                  }
+                  setReferenceFormOpen(false);
+                  setEditingReference(null);
+                }}
+              />
+            </section>
+          </div>
+        ) : null}
         {whatsAppClient ? (
           <SendWhatsAppModal
             client={whatsAppClient}

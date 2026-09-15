@@ -1,10 +1,10 @@
 import type { ClientStatus } from '../../lib/crm-api';
 
 const statusLabels: Record<ClientStatus, string> = {
-  PENDENTE_PAGAMENTO: 'Pendente pagamento',
-  ATIVO: 'Ativo',
-  INATIVO: 'Inativo',
-  CANCELADO: 'Cancelado',
+  PENDENTE_PAGAMENTO: 'PENDENTE',
+  ATIVO: 'ATIVO',
+  INATIVO: 'INATIVO',
+  CANCELADO: 'CANCELADO',
 };
 
 export function StatusBadge({ status }: { status: ClientStatus }) {

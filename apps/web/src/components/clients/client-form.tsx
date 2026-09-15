@@ -1,7 +1,9 @@
 'use client';
 
 import { FormEvent, useMemo, useState } from 'react';
+import { Save } from 'lucide-react';
 import type { Client, ClientPayload, ClientUpdatePayload, Plan } from '../../lib/crm-api';
+import { Button } from '../ui/primitives';
 import { ClientReferralSelect } from './client-referral-select';
 
 interface ClientFormProps {
@@ -86,9 +88,12 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
   }
 
   return (
-    <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form className="entity-form client-form-modern" onSubmit={(event) => void handleSubmit(event)}>
       <section className="form-section">
-        <h2>Dados</h2>
+        <div className="form-section-title">
+          <span className="section-eyebrow">Cliente</span>
+          <h2>Dados pessoais</h2>
+        </div>
         <div className="form-grid">
           <label className="field">
             <span>Nome</span>
@@ -117,7 +122,10 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
 
       {!editing ? (
         <section className="form-section">
-          <h2>Contrato/recorrencia</h2>
+          <div className="form-section-title">
+            <span className="section-eyebrow">Primeira referência</span>
+            <h2>Contrato/recorrência</h2>
+          </div>
           <div className="form-grid">
             <label className="field">
               <span>Plano</span>
@@ -170,7 +178,10 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
       ) : null}
 
       <section className="form-section">
-        <h2>Outros</h2>
+        <div className="form-section-title">
+          <span className="section-eyebrow">Contato e notas</span>
+          <h2>Observações</h2>
+        </div>
         <label className="field">
           <span>Observações</span>
           <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
@@ -185,9 +196,9 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
 
       <div className="form-actions">
         <span className="error-message">{error}</span>
-        <button className="primary-button" disabled={loading} type="submit">
-          {loading ? 'Salvando...' : submitLabel}
-        </button>
+        <Button disabled={loading} icon={Save} loading={loading} type="submit" variant="primary">
+          {submitLabel}
+        </Button>
       </div>
     </form>
   );

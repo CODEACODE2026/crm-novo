@@ -3,9 +3,11 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  ArrowLeft,
   BarChart3,
   Bell,
   CalendarClock,
+  CircleCheck,
   Copy,
   CreditCard,
   Download,
@@ -20,15 +22,20 @@ import {
   Power,
   QrCode,
   RefreshCcw,
+  RefreshCw,
+  Save,
   Search,
   Send,
   Settings,
   ShieldCheck,
+  Trash2,
   ToggleLeft,
+  UserPlus,
   Users,
   Wifi,
   WifiOff,
   X,
+  XCircle,
 } from 'lucide-react';
 import type { AuthenticatedUser } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
@@ -37,7 +44,14 @@ import { ClientReferralSelect } from '../../components/clients/client-referral-s
 import { StatusBadge } from '../../components/clients/status-badge';
 import { PlanForm } from '../../components/plans/plan-form';
 import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
-import { Card, SectionHeader, StatCard } from '../../components/ui/primitives';
+import {
+  ActionMenu,
+  Button,
+  Card,
+  IconButton,
+  SectionHeader,
+  StatCard,
+} from '../../components/ui/primitives';
 import {
   cancelReceivable,
   cancelPaymentIntent,
@@ -505,6 +519,7 @@ export default function DashboardPage() {
             await loadData();
           }}
           onSelect={setSelectedClient}
+          onClearSelection={() => setSelectedClient(null)}
           onRemoveClient={(client) => void handleRemoveClient(client)}
           onRemoveReference={(reference) => void handleRemoveReference(reference)}
           onReferenceStatusChange={(reference, nextStatus) =>
@@ -676,9 +691,7 @@ function DeletionConfirmationModal({
             <span className="metric-label">AÇÃO DESTRUTIVA</span>
             <h2 id="deletion-title">{title}</h2>
           </div>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={18} />
-          </button>
+          <IconButton icon={X} label="Fechar confirmação" onClick={onClose} />
         </header>
         {error ? <div className="notice danger">{error}</div> : null}
         <div className="notice danger">
@@ -722,17 +735,17 @@ function DeletionConfirmationModal({
           />
         </label>
         <div className="button-row">
-          <button className="secondary-button" disabled={working} type="button" onClick={onClose}>
+          <Button disabled={working} icon={X} variant="secondary" onClick={onClose}>
             Cancelar
-          </button>
-          <button
-            className="danger-button"
+          </Button>
+          <Button
             disabled={working || confirmation !== 'REMOVER'}
-            type="button"
+            icon={Trash2}
+            variant="danger"
             onClick={() => void submit()}
           >
             Remover definitivamente
-          </button>
+          </Button>
         </div>
       </section>
     </div>
@@ -2080,6 +2093,18 @@ function paymentProviderStatusLabel(status: PaymentProviderCredentialStatus['sta
   return 'NAO CONFIGURADO';
 }
 
+function ClientEventIcon({ type }: { type: NonNullable<Client['events']>[number]['type'] }) {
+  if (type === 'PAYMENT_REGISTERED') return <CircleCheck size={14} />;
+  if (type === 'WHATSAPP_MESSAGE_SENT') return <MessageCircle size={14} />;
+  if (type === 'CLIENT_RENEWED') return <RefreshCw size={14} />;
+  if (type === 'PIX_PAYMENT_INTENT_CREATED' || type === 'PIX_PAYMENT_STATUS_UPDATED') {
+    return <QrCode size={14} />;
+  }
+  if (type === 'RECEIVABLE_CANCELED') return <XCircle size={14} />;
+  if (type.startsWith('REFERRAL')) return <Gift size={14} />;
+  return <Activity size={14} />;
+}
+
 function ClientsView({
   clientFormOpen,
   clients,
@@ -2089,6 +2114,7 @@ function ClientsView({
   onCreate,
   onEdit,
   onNew,
+  onClearSelection,
   onRenew,
   onCreateReference,
   onUpdateReference,
@@ -2118,6 +2144,7 @@ function ClientsView({
   onCreate: (payload: ClientPayload) => Promise<void>;
   onEdit: (client: Client) => void;
   onNew: () => void;
+  onClearSelection: () => void;
   onRenew: (client: Client, reference?: ClientReference) => void;
   onCreateReference: (
     client: Client,
@@ -2146,547 +2173,637 @@ function ClientsView({
   renewalNotice: string;
 }) {
   const [detailTab, setDetailTab] = useState<
-    'timeline' | 'references' | 'renewals' | 'receivables' | 'messages' | 'recovery' | 'referrals'
-  >('timeline');
+    'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more'
+  >('overview');
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
   const [referenceFormOpen, setReferenceFormOpen] = useState(false);
   const [editingReference, setEditingReference] = useState<ClientReference | null>(null);
   const uniqueSelectedReference =
     selectedClient?.references?.length === 1 ? selectedClient.references[0] : null;
+  const selectedReferences = selectedClient?.references ?? [];
 
   return (
-    <div className="workspace-grid">
-      <section className="workspace-main">
-        {renewalNotice ? <div className="notice success">{renewalNotice}</div> : null}
-        <div className="toolbar">
-          <div className="search-row">
-            <Search aria-hidden="true" size={18} />
-            <input
-              placeholder="Buscar por nome, referência ou telefone"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+    <>
+      <PageHeader
+        actions={
+          <Button icon={UserPlus} onClick={onNew} variant="primary">
+            Novo cliente
+          </Button>
+        }
+        subtitle="Base de clientes, referências e histórico"
+        title="Clientes"
+      />
+      <div className="workspace-grid clients-layout">
+        <section className="workspace-main">
+          {renewalNotice ? <div className="notice success">{renewalNotice}</div> : null}
+          <div className="toolbar">
+            <div className="search-row">
+              <Search aria-hidden="true" size={18} />
+              <input
+                placeholder="Buscar por nome, referência ou telefone"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as ClientStatus | '')}
+            >
+              <option value="">Todos os status</option>
+              <option value="PENDENTE_PAGAMENTO">Pendente pagamento</option>
+              <option value="ATIVO">Ativo</option>
+              <option value="INATIVO">Inativo</option>
+              <option value="CANCELADO">Cancelado</option>
+            </select>
+            <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
+              <option value="">Todos os planos</option>
+              {plans.map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name}
+                </option>
+              ))}
+            </select>
+            <Button onClick={onApplyFilters} variant="secondary">
+              Aplicar
+            </Button>
           </div>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value as ClientStatus | '')}
-          >
-            <option value="">Todos os status</option>
-            <option value="PENDENTE_PAGAMENTO">Pendente pagamento</option>
-            <option value="ATIVO">Ativo</option>
-            <option value="INATIVO">Inativo</option>
-            <option value="CANCELADO">Cancelado</option>
-          </select>
-          <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
-            <option value="">Todos os planos</option>
-            {plans.map((plan) => (
-              <option key={plan.id} value={plan.id}>
-                {plan.name}
-              </option>
-            ))}
-          </select>
-          <button className="secondary-button" type="button" onClick={onApplyFilters}>
-            Aplicar
-          </button>
-          <button className="primary-button" type="button" onClick={onNew}>
-            <Plus aria-hidden="true" size={17} />
-            Cliente
-          </button>
-        </div>
 
-        {clientFormOpen ? (
-          <ClientForm
-            client={editingClient ?? undefined}
-            plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
-            submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
-            onSubmit={async (payload) => {
-              if (editingClient) {
-                await onUpdate(payload);
-              } else {
-                await onCreate(payload as ClientPayload);
-              }
-            }}
-          />
-        ) : null}
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>Referências</th>
-                <th>Resumo operacional</th>
-                <th>Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map((client) => {
-                const references = client.references ?? [];
-                const singleReference = references.length === 1 ? references[0] : null;
-                const referenceSummary = singleReference
-                  ? `${singleReference.reference} | ${singleReference.plan.name}`
-                  : `${references.length} referências`;
-                const operationalSummary = singleReference
-                  ? `${formatCurrency(singleReference.recurringValue)} | ${formatDate(singleReference.dueDate)}`
-                  : references.map((reference) => reference.reference).join(', ') || '-';
-
-                return (
-                  <tr
-                    className={selectedClient?.id === client.id ? 'selected-row' : ''}
-                    key={client.id}
-                    onClick={() => onSelect(client)}
-                  >
-                    <td>
-                      <strong>{client.name}</strong>
-                      <span>{client.phoneNormalized}</span>
-                    </td>
-                    <td>{referenceSummary}</td>
-                    <td>
-                      <span>{operationalSummary}</span>
-                      {singleReference ? <StatusBadge status={singleReference.status} /> : null}
-                    </td>
-                    <td>
-                      {singleReference ? (
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onRenew(client, singleReference);
-                          }}
-                        >
-                          <CalendarClock aria-hidden="true" size={16} />
-                          Renovar
-                        </button>
-                      ) : (
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSelect(client);
-                          }}
-                        >
-                          Ver referências
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {!clients.length ? (
-            <div className="empty-state">
-              {dataLoading ? 'Carregando...' : 'Nenhum cliente encontrado.'}
-            </div>
+          {clientFormOpen ? (
+            <ClientForm
+              client={editingClient ?? undefined}
+              plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
+              submitLabel={editingClient ? 'Atualizar cliente' : 'Cadastrar cliente'}
+              onSubmit={async (payload) => {
+                if (editingClient) {
+                  await onUpdate(payload);
+                } else {
+                  await onCreate(payload as ClientPayload);
+                }
+              }}
+            />
           ) : null}
-        </div>
-      </section>
 
-      <aside className="detail-panel">
-        {selectedClient ? (
-          <>
-            <div className="detail-header">
-              <div>
-                <h2>{selectedClient.name}</h2>
-                <span>{selectedClient.references?.length ?? 0} referências operacionais</span>
-              </div>
-              <button
-                className="icon-button"
-                title="Editar cliente"
-                type="button"
-                onClick={() => onEdit(selectedClient)}
-              >
-                <Pencil aria-hidden="true" size={17} />
-              </button>
-              <button
-                className="icon-button danger-icon"
-                title="Remover cliente"
-                type="button"
-                onClick={() => onRemoveClient(selectedClient)}
-              >
-                <X aria-hidden="true" size={17} />
-              </button>
-            </div>
-            <div className="button-row detail-actions">
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() => onRenew(selectedClient)}
-              >
-                <CalendarClock aria-hidden="true" size={16} />
-                Renovar
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setWhatsAppClient(selectedClient)}
-              >
-                <Send aria-hidden="true" size={16} />
-                Enviar WhatsApp
-              </button>
-            </div>
-            <dl className="detail-list">
-              <div>
-                <dt>WhatsApp</dt>
-                <dd>{selectedClient.phone}</dd>
-              </div>
-              <div>
-                <dt>E-mail</dt>
-                <dd>{selectedClient.email ?? '-'}</dd>
-              </div>
-              <div>
-                <dt>Referências</dt>
-                <dd>{selectedClient.references?.length ?? 0}</dd>
-              </div>
-              {uniqueSelectedReference ? (
-                <>
-                  <div>
-                    <dt>Plano</dt>
-                    <dd>{uniqueSelectedReference.plan.name}</dd>
-                  </div>
-                  <div>
-                    <dt>Recorrencia</dt>
-                    <dd>{formatCurrency(uniqueSelectedReference.recurringValue)}</dd>
-                  </div>
-                  <div>
-                    <dt>Cobrança</dt>
-                    <dd>{uniqueSelectedReference.billingNoticeDays} dias antes</dd>
-                  </div>
-                </>
-              ) : null}
-            </dl>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>CLIENTE</th>
+                  <th>REFERÊNCIAS</th>
+                  <th>WHATSAPP</th>
+                  <th>RESUMO OPERACIONAL</th>
+                  <th>STATUS</th>
+                  <th>AÇÕES</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((client) => {
+                  const references = client.references ?? [];
+                  const singleReference = references.length === 1 ? references[0] : null;
+                  const referenceSummary = singleReference
+                    ? singleReference.reference
+                    : `${references.length} referências`;
+                  const operationalSummary = singleReference
+                    ? `${formatCurrency(singleReference.recurringValue)} | ${formatDate(singleReference.dueDate)}`
+                    : references.map((reference) => reference.reference).join(', ') || '-';
+                  const statusForRow = singleReference?.status ?? client.status;
+                  const initial = client.name.slice(0, 1).toUpperCase();
 
-            <div className="tabs">
-              <button
-                className={detailTab === 'timeline' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('timeline')}
-              >
-                Timeline
-              </button>
-              <button
-                className={detailTab === 'references' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('references')}
-              >
-                Referências
-              </button>
-              <button
-                className={detailTab === 'renewals' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('renewals')}
-              >
-                Renovações
-              </button>
-              <button
-                className={detailTab === 'receivables' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('receivables')}
-              >
-                Financeiro
-              </button>
-              <button
-                className={detailTab === 'messages' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('messages')}
-              >
-                Cobranças/PIX
-              </button>
-              <button
-                className={detailTab === 'recovery' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('recovery')}
-              >
-                Recuperação
-              </button>
-              <button
-                className={detailTab === 'referrals' ? 'active' : ''}
-                type="button"
-                onClick={() => setDetailTab('referrals')}
-              >
-                Indicações
-              </button>
-            </div>
-
-            {detailTab === 'timeline' ? (
-              <ol className="timeline">
-                {(selectedClient.events ?? []).map((event) => (
-                  <li key={event.id}>
-                    <strong>{event.title}</strong>
-                    <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
-                    {event.description ? <p>{event.description}</p> : null}
-                  </li>
-                ))}
-              </ol>
+                  return (
+                    <tr
+                      className={selectedClient?.id === client.id ? 'selected-row' : ''}
+                      key={client.id}
+                      onClick={() => onSelect(client)}
+                    >
+                      <td>
+                        <div className="client-cell">
+                          <span className="client-avatar" aria-hidden="true">
+                            {initial || 'C'}
+                          </span>
+                          <span>
+                            <strong>{client.name}</strong>
+                            <small>{client.email ?? client.phoneNormalized}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <strong>{referenceSummary}</strong>
+                        {singleReference ? <span>{singleReference.plan.name}</span> : null}
+                      </td>
+                      <td>{client.phoneNormalized}</td>
+                      <td>
+                        <span>{operationalSummary}</span>
+                      </td>
+                      <td>
+                        <StatusBadge status={statusForRow} />
+                      </td>
+                      <td>
+                        {singleReference ? (
+                          <Button
+                            icon={RefreshCw}
+                            size="sm"
+                            variant="secondary"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onRenew(client, singleReference);
+                            }}
+                          >
+                            Renovar
+                          </Button>
+                        ) : (
+                          <Button
+                            icon={Eye}
+                            size="sm"
+                            variant="secondary"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onSelect(client);
+                            }}
+                          >
+                            Abrir
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {!clients.length ? (
+              <div className="empty-state">
+                {dataLoading ? 'Carregando...' : 'Nenhum cliente encontrado.'}
+              </div>
             ) : null}
+          </div>
+        </section>
 
-            {detailTab === 'references' ? (
-              <div className="mini-list">
-                <div className="button-row">
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={() => {
-                      setEditingReference(null);
-                      setReferenceFormOpen((open) => !open);
-                    }}
+        <aside className="detail-panel">
+          {selectedClient ? (
+            <>
+              <Button icon={ArrowLeft} size="sm" variant="ghost" onClick={onClearSelection}>
+                Voltar para Clientes
+              </Button>
+              <div className="client-detail-header">
+                <span className="client-avatar large" aria-hidden="true">
+                  {selectedClient.name.slice(0, 1).toUpperCase() || 'C'}
+                </span>
+                <div className="client-detail-title">
+                  <h2>{selectedClient.name}</h2>
+                  <div className="client-detail-meta">
+                    <StatusBadge
+                      status={uniqueSelectedReference?.status ?? selectedClient.status}
+                    />
+                    <span>{selectedReferences.length} referências</span>
+                    <span>WhatsApp: {selectedClient.phoneNormalized}</span>
+                  </div>
+                </div>
+                <div className="client-detail-actions">
+                  <Button
+                    icon={RefreshCw}
+                    size="sm"
+                    variant="primary"
+                    onClick={() => onRenew(selectedClient)}
                   >
-                    <Plus aria-hidden="true" size={16} />
-                    Adicionar referência
-                  </button>
-                </div>
-                {referenceFormOpen ? (
-                  <ClientReferenceForm
-                    plans={plans}
-                    reference={editingReference}
-                    onCancel={() => {
-                      setReferenceFormOpen(false);
-                      setEditingReference(null);
-                    }}
-                    onSubmit={async (payload) => {
-                      if (editingReference) {
-                        await onUpdateReference(editingReference, payload);
-                      } else {
-                        await onCreateReference(selectedClient, payload);
-                      }
-                      setReferenceFormOpen(false);
-                      setEditingReference(null);
-                    }}
+                    Renovar
+                  </Button>
+                  <Button
+                    icon={Send}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setWhatsAppClient(selectedClient)}
+                  >
+                    WhatsApp
+                  </Button>
+                  <IconButton
+                    icon={Pencil}
+                    label="Editar cliente"
+                    onClick={() => onEdit(selectedClient)}
                   />
-                ) : null}
-                <div className="status-actions">
-                  <div className="notice">
-                    INATIVO = serviço temporariamente parado e elegivel para recuperação. CANCELADO
-                    = encerramento definitivo da referência, sem continuidade de recuperação.
-                  </div>
-                  <textarea
-                    placeholder="Justificativa para inativar ou cancelar referência"
-                    value={statusReason}
-                    onChange={(event) => setStatusReason(event.target.value)}
+                  <ActionMenu
+                    items={[
+                      {
+                        danger: true,
+                        icon: Trash2,
+                        label: 'Remover cliente',
+                        onSelect: () => onRemoveClient(selectedClient),
+                      },
+                    ]}
                   />
                 </div>
-                {(selectedClient.references ?? []).map((reference) => (
-                  <article key={reference.id}>
-                    <strong>{reference.reference}</strong>
-                    <span>{reference.plan.name}</span>
-                    <p>
-                      {formatCurrency(reference.recurringValue)} | {formatDate(reference.dueDate)} |{' '}
-                      {reference.billingNoticeDays} dias antes
-                    </p>
-                    {reference.inactivatedAt ? (
-                      <p>
-                        Inativada em {formatDateTime(reference.inactivatedAt)}
-                        {reference.inactivationReason ? ` | ${reference.inactivationReason}` : ''}
-                      </p>
-                    ) : null}
-                    {reference.canceledAt ? (
-                      <p>
-                        Cancelada em {formatDateTime(reference.canceledAt)}
-                        {reference.cancellationReason ? ` | ${reference.cancellationReason}` : ''}
-                      </p>
-                    ) : null}
-                    <StatusBadge status={reference.status} />
-                    <div className="button-row">
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => onRenew(selectedClient, reference)}
-                      >
-                        <CalendarClock aria-hidden="true" size={16} />
-                        Renovar
-                      </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => {
-                          setEditingReference(reference);
-                          setReferenceFormOpen(true);
-                        }}
-                      >
-                        <Pencil aria-hidden="true" size={16} />
-                        Editar
-                      </button>
-                      <button
-                        className="secondary-button"
-                        disabled={reference.status === 'CANCELADO'}
-                        type="button"
-                        onClick={() => onReferenceStatusChange(reference, 'ATIVO')}
-                      >
-                        Ativar
-                      </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => onReferenceStatusChange(reference, 'INATIVO')}
-                      >
-                        Inativar referência
-                      </button>
-                      <button
-                        className="danger-button"
-                        type="button"
-                        onClick={() => onReferenceStatusChange(reference, 'CANCELADO')}
-                      >
-                        Cancelar referência
-                      </button>
-                      <button
-                        className="danger-button"
-                        type="button"
-                        onClick={() => onRemoveReference(reference)}
-                      >
-                        Remover referência
-                      </button>
+              </div>
+
+              <div className="tabs">
+                <button
+                  className={detailTab === 'overview' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setDetailTab('overview')}
+                >
+                  Visão Geral
+                </button>
+                <button
+                  className={detailTab === 'references' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setDetailTab('references')}
+                >
+                  Referências
+                </button>
+                <button
+                  className={detailTab === 'receivables' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setDetailTab('receivables')}
+                >
+                  Financeiro
+                </button>
+                <button
+                  className={detailTab === 'messages' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setDetailTab('messages')}
+                >
+                  Cobranças/PIX
+                </button>
+                <button
+                  className={detailTab === 'timeline' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setDetailTab('timeline')}
+                >
+                  Histórico
+                </button>
+                <button
+                  className={detailTab === 'more' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setDetailTab('more')}
+                >
+                  Mais
+                </button>
+              </div>
+
+              {detailTab === 'overview' ? (
+                <div className="client-overview-grid">
+                  <section className="client-overview-card">
+                    <SectionHeader eyebrow="Cliente" title="Informações pessoais" />
+                    <dl className="detail-list">
+                      <div>
+                        <dt>Nome</dt>
+                        <dd>{selectedClient.name}</dd>
+                      </div>
+                      <div>
+                        <dt>WhatsApp</dt>
+                        <dd>{selectedClient.phone}</dd>
+                      </div>
+                      <div>
+                        <dt>E-mail</dt>
+                        <dd>{selectedClient.email ?? '-'}</dd>
+                      </div>
+                      <div>
+                        <dt>Cliente desde</dt>
+                        <dd>{formatDate(selectedClient.createdAt)}</dd>
+                      </div>
+                    </dl>
+                    <div className="notes-box">
+                      <span className="metric-label">Observações internas</span>
+                      <p>{selectedClient.notes ?? 'Sem observações.'}</p>
                     </div>
-                  </article>
-                ))}
-                {!selectedClient.references?.length ? (
-                  <div className="empty-state">Sem referências cadastradas.</div>
-                ) : null}
-              </div>
-            ) : null}
+                  </section>
+                  <section className="client-overview-card">
+                    <SectionHeader eyebrow="Operação" title="Resumo atual" />
+                    <div className="client-kpi-grid">
+                      <StatCard label="Referências" value={selectedReferences.length} />
+                      {uniqueSelectedReference ? (
+                        <>
+                          <StatCard
+                            label="Recorrência"
+                            value={formatCurrency(uniqueSelectedReference.recurringValue)}
+                          />
+                          <StatCard
+                            label="Próximo vencimento"
+                            value={formatDate(uniqueSelectedReference.dueDate)}
+                          />
+                          <StatCard
+                            label="Cobrança"
+                            value={`${uniqueSelectedReference.billingNoticeDays} dias antes`}
+                          />
+                        </>
+                      ) : null}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
 
-            {detailTab === 'renewals' ? (
-              <div className="mini-list">
-                {(selectedClient.renewals ?? []).map((renewal) => (
-                  <article key={renewal.id}>
-                    <strong>{renewal.planName}</strong>
-                    <span>{new Date(renewal.createdAt).toLocaleString('pt-BR')}</span>
-                    <p>
-                      {formatCurrency(renewal.amount)} | {formatDate(renewal.previousDueDate)} para{' '}
-                      {formatDate(renewal.newDueDate)}
-                    </p>
-                  </article>
-                ))}
-                {!selectedClient.renewals?.length ? (
-                  <div className="empty-state">Sem renovações.</div>
-                ) : null}
-              </div>
-            ) : null}
+              {detailTab === 'timeline' ? (
+                <ol className="timeline">
+                  {(selectedClient.events ?? []).map((event) => (
+                    <li key={event.id}>
+                      <span className="timeline-icon" aria-hidden="true">
+                        <ClientEventIcon type={event.type} />
+                      </span>
+                      <div>
+                        <strong>{event.title}</strong>
+                        <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
+                        {event.description ? <p>{event.description}</p> : null}
+                      </div>
+                    </li>
+                  ))}
+                  {!selectedClient.events?.length ? (
+                    <li>
+                      <span className="timeline-icon" aria-hidden="true">
+                        <Activity size={14} />
+                      </span>
+                      <div>
+                        <strong>Sem eventos recentes</strong>
+                        <span>O histórico aparecerá aqui quando houver atividade.</span>
+                      </div>
+                    </li>
+                  ) : null}
+                </ol>
+              ) : null}
 
-            {detailTab === 'receivables' ? (
-              <div className="mini-list">
-                {(selectedClient.receivables ?? []).map((receivable) => (
-                  <article key={receivable.id}>
-                    <strong>{receivable.description}</strong>
-                    <span>{formatDate(receivable.dueDate)}</span>
-                    <p>
-                      {formatCurrency(receivable.amount)} | {receivable.displayStatus}
-                    </p>
-                    {receivable.paymentIntents?.length ? (
+              {detailTab === 'references' ? (
+                <div className="mini-list">
+                  <div className="button-row">
+                    <Button
+                      icon={Plus}
+                      variant="primary"
+                      onClick={() => {
+                        setEditingReference(null);
+                        setReferenceFormOpen((open) => !open);
+                      }}
+                    >
+                      Adicionar referência
+                    </Button>
+                  </div>
+                  {referenceFormOpen ? (
+                    <ClientReferenceForm
+                      plans={plans}
+                      reference={editingReference}
+                      onCancel={() => {
+                        setReferenceFormOpen(false);
+                        setEditingReference(null);
+                      }}
+                      onSubmit={async (payload) => {
+                        if (editingReference) {
+                          await onUpdateReference(editingReference, payload);
+                        } else {
+                          await onCreateReference(selectedClient, payload);
+                        }
+                        setReferenceFormOpen(false);
+                        setEditingReference(null);
+                      }}
+                    />
+                  ) : null}
+                  <div className="status-actions">
+                    <div className="notice">
+                      INATIVO = serviço temporariamente parado e elegivel para recuperação.
+                      CANCELADO = encerramento definitivo da referência, sem continuidade de
+                      recuperação.
+                    </div>
+                    <textarea
+                      placeholder="Justificativa para inativar ou cancelar referência"
+                      value={statusReason}
+                      onChange={(event) => setStatusReason(event.target.value)}
+                    />
+                  </div>
+                  {(selectedClient.references ?? []).map((reference) => (
+                    <article className="reference-card" key={reference.id}>
+                      <header>
+                        <div>
+                          <strong>{reference.reference}</strong>
+                          <span>{reference.plan.name}</span>
+                        </div>
+                        <StatusBadge status={reference.status} />
+                      </header>
+                      <div className="reference-metrics">
+                        <div>
+                          <strong>{formatCurrency(reference.recurringValue)}</strong>
+                          <span>Mensalidade</span>
+                        </div>
+                        <div>
+                          <strong>{formatDate(reference.dueDate)}</strong>
+                          <span>Próx. vencimento</span>
+                        </div>
+                        <div>
+                          <strong>{reference.billingNoticeDays} dias antes</strong>
+                          <span>Cobrança</span>
+                        </div>
+                      </div>
+                      {reference.inactivatedAt ? (
+                        <p>
+                          Inativada em {formatDateTime(reference.inactivatedAt)}
+                          {reference.inactivationReason ? ` | ${reference.inactivationReason}` : ''}
+                        </p>
+                      ) : null}
+                      {reference.canceledAt ? (
+                        <p>
+                          Cancelada em {formatDateTime(reference.canceledAt)}
+                          {reference.cancellationReason ? ` | ${reference.cancellationReason}` : ''}
+                        </p>
+                      ) : null}
+                      <div className="button-row">
+                        <Button
+                          icon={RefreshCw}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => onRenew(selectedClient, reference)}
+                        >
+                          Renovar
+                        </Button>
+                        <Button
+                          icon={Pencil}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditingReference(reference);
+                            setReferenceFormOpen(true);
+                          }}
+                        >
+                          Editar
+                        </Button>
+                        <Button
+                          icon={CircleCheck}
+                          disabled={reference.status === 'CANCELADO'}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => onReferenceStatusChange(reference, 'ATIVO')}
+                        >
+                          Ativar
+                        </Button>
+                        <Button
+                          icon={Power}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => onReferenceStatusChange(reference, 'INATIVO')}
+                        >
+                          Inativar
+                        </Button>
+                        <Button
+                          icon={XCircle}
+                          size="sm"
+                          variant="danger"
+                          onClick={() => onReferenceStatusChange(reference, 'CANCELADO')}
+                        >
+                          Cancelar
+                        </Button>
+                        <Button
+                          icon={Trash2}
+                          size="sm"
+                          variant="danger"
+                          onClick={() => onRemoveReference(reference)}
+                        >
+                          Remover
+                        </Button>
+                      </div>
+                    </article>
+                  ))}
+                  {!selectedClient.references?.length ? (
+                    <div className="empty-state">Sem referências cadastradas.</div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {detailTab === 'more' ? (
+                <div className="mini-list">
+                  <SectionHeader eyebrow="Mais" title="Renovações" />
+                  {(selectedClient.renewals ?? []).map((renewal) => (
+                    <article key={renewal.id}>
+                      <strong>{renewal.planName}</strong>
+                      <span>{new Date(renewal.createdAt).toLocaleString('pt-BR')}</span>
+                      <p>
+                        {formatCurrency(renewal.amount)} | {formatDate(renewal.previousDueDate)}{' '}
+                        para {formatDate(renewal.newDueDate)}
+                      </p>
+                    </article>
+                  ))}
+                  {!selectedClient.renewals?.length ? (
+                    <div className="empty-state">Sem renovações.</div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {detailTab === 'receivables' ? (
+                <div className="mini-list">
+                  {(selectedClient.receivables ?? []).map((receivable) => (
+                    <article key={receivable.id}>
+                      <strong>{receivable.description}</strong>
+                      <span>{formatDate(receivable.dueDate)}</span>
+                      <p>
+                        {formatCurrency(receivable.amount)} | {receivable.displayStatus}
+                      </p>
+                      {receivable.paymentIntents?.length ? (
+                        <div className="step-list">
+                          {receivable.paymentIntents.map((intent) => (
+                            <span key={intent.id}>
+                              PIX {paymentProviderDisplay(intent.provider)} ·{' '}
+                              {paymentIntentStatusLabel(intent.status)}
+                              {intent.externalStatus ? ` · ${intent.externalStatus}` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
+                  {!selectedClient.receivables?.length ? (
+                    <div className="empty-state">Sem contas a receber.</div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {detailTab === 'messages' ? (
+                <div className="mini-list">
+                  {(selectedClient.messageDispatches ?? []).map((dispatch) => (
+                    <article key={dispatch.id}>
+                      <strong>{messageOriginLabel(dispatch.origin)}</strong>
+                      <span>{formatDateTime(dispatch.createdAt)}</span>
+                      <p>
+                        {billingStatusLabel(dispatch.status)} | {dispatch.phone} |{' '}
+                        {dispatch.attempts} tentativa(s)
+                      </p>
+                      {dispatch.errorMessage ? <p>{dispatch.errorMessage}</p> : null}
+                    </article>
+                  ))}
+                  {!selectedClient.messageDispatches?.length ? (
+                    <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {detailTab === 'more' ? (
+                <div className="mini-list">
+                  <SectionHeader eyebrow="Mais" title="Recuperação" />
+                  {(selectedClient.recoveryCampaigns ?? []).map((campaign) => (
+                    <article key={campaign.id}>
+                      <strong>Campanha {recoveryCampaignStatusLabel(campaign.status)}</strong>
+                      <span>Inicio: {formatDateTime(campaign.startedAt)}</span>
                       <div className="step-list">
-                        {receivable.paymentIntents.map((intent) => (
-                          <span key={intent.id}>
-                            PIX {paymentProviderDisplay(intent.provider)} ·{' '}
-                            {paymentIntentStatusLabel(intent.status)}
-                            {intent.externalStatus ? ` · ${intent.externalStatus}` : ''}
+                        {campaign.steps.map((step) => (
+                          <span key={step.id}>
+                            {step.delayDays}d · {recoveryStepStatusLabel(step.status)} ·{' '}
+                            {formatDateTime(step.scheduledFor)}
+                            {step.sentAt ? ` · enviada ${formatDateTime(step.sentAt)}` : ''}
                           </span>
                         ))}
                       </div>
-                    ) : null}
-                  </article>
-                ))}
-                {!selectedClient.receivables?.length ? (
-                  <div className="empty-state">Sem contas a receber.</div>
-                ) : null}
-              </div>
-            ) : null}
+                    </article>
+                  ))}
+                  {!selectedClient.recoveryCampaigns?.length ? (
+                    <div className="empty-state">Sem campanha de recuperação.</div>
+                  ) : null}
+                </div>
+              ) : null}
 
-            {detailTab === 'messages' ? (
-              <div className="mini-list">
-                {(selectedClient.messageDispatches ?? []).map((dispatch) => (
-                  <article key={dispatch.id}>
-                    <strong>{messageOriginLabel(dispatch.origin)}</strong>
-                    <span>{formatDateTime(dispatch.createdAt)}</span>
-                    <p>
-                      {billingStatusLabel(dispatch.status)} | {dispatch.phone} | {dispatch.attempts}{' '}
-                      tentativa(s)
-                    </p>
-                    {dispatch.errorMessage ? <p>{dispatch.errorMessage}</p> : null}
-                  </article>
-                ))}
-                {!selectedClient.messageDispatches?.length ? (
-                  <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {detailTab === 'recovery' ? (
-              <div className="mini-list">
-                {(selectedClient.recoveryCampaigns ?? []).map((campaign) => (
-                  <article key={campaign.id}>
-                    <strong>Campanha {recoveryCampaignStatusLabel(campaign.status)}</strong>
-                    <span>Inicio: {formatDateTime(campaign.startedAt)}</span>
-                    <div className="step-list">
-                      {campaign.steps.map((step) => (
-                        <span key={step.id}>
-                          {step.delayDays}d · {recoveryStepStatusLabel(step.status)} ·{' '}
-                          {formatDateTime(step.scheduledFor)}
-                          {step.sentAt ? ` · enviada ${formatDateTime(step.sentAt)}` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  </article>
-                ))}
-                {!selectedClient.recoveryCampaigns?.length ? (
-                  <div className="empty-state">Sem campanha de recuperação.</div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {detailTab === 'referrals' ? (
-              <div className="mini-list">
-                {selectedClient.referralReceived ? (
-                  <article>
-                    <strong>
-                      Indicado por {selectedClient.referralReceived.referrerClient.name}
-                    </strong>
-                    <span>{referralStatusLabel(selectedClient.referralReceived.status)}</span>
-                    <p>
-                      {selectedClient.referralReceived.rewardType}
-                      {selectedClient.referralReceived.rewardDescription
-                        ? ` · ${selectedClient.referralReceived.rewardDescription}`
-                        : ''}
-                    </p>
-                  </article>
-                ) : null}
-                {selectedClient.referralsMade ? (
-                  <article>
-                    <strong>{selectedClient.referralsMade.total} indicação(oes) feitas</strong>
-                    <span>
-                      {selectedClient.referralsMade.qualified} qualificadas ·{' '}
-                      {selectedClient.referralsMade.rewarded} recompensadas
-                    </span>
-                  </article>
-                ) : null}
-                {(selectedClient.referralsMade?.items ?? []).map((referral) => (
-                  <article key={referral.id}>
-                    <strong>{referral.referredClient.name}</strong>
-                    <span>{referralStatusLabel(referral.status)}</span>
-                    <p>{referral.rewardType}</p>
-                  </article>
-                ))}
-                {!selectedClient.referralReceived && !selectedClient.referralsMade?.items.length ? (
-                  <div className="empty-state">Sem indicações vinculadas.</div>
-                ) : null}
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <div className="empty-state">Selecione um cliente para visualizar detalhes.</div>
-        )}
-      </aside>
-      {whatsAppClient ? (
-        <SendWhatsAppModal
-          client={whatsAppClient}
-          onClose={() => setWhatsAppClient(null)}
-          onSent={async () => {
-            await onWhatsAppSent(whatsAppClient.id);
-            setWhatsAppClient(null);
-          }}
-        />
-      ) : null}
-    </div>
+              {detailTab === 'more' ? (
+                <div className="mini-list">
+                  <SectionHeader eyebrow="Mais" title="Indicações" />
+                  {selectedClient.referralReceived ? (
+                    <article>
+                      <strong>
+                        Indicado por {selectedClient.referralReceived.referrerClient.name}
+                      </strong>
+                      <span>{referralStatusLabel(selectedClient.referralReceived.status)}</span>
+                      <p>
+                        {selectedClient.referralReceived.rewardType}
+                        {selectedClient.referralReceived.rewardDescription
+                          ? ` · ${selectedClient.referralReceived.rewardDescription}`
+                          : ''}
+                      </p>
+                    </article>
+                  ) : null}
+                  {selectedClient.referralsMade ? (
+                    <article>
+                      <strong>{selectedClient.referralsMade.total} indicação(oes) feitas</strong>
+                      <span>
+                        {selectedClient.referralsMade.qualified} qualificadas ·{' '}
+                        {selectedClient.referralsMade.rewarded} recompensadas
+                      </span>
+                    </article>
+                  ) : null}
+                  {(selectedClient.referralsMade?.items ?? []).map((referral) => (
+                    <article key={referral.id}>
+                      <strong>{referral.referredClient.name}</strong>
+                      <span>{referralStatusLabel(referral.status)}</span>
+                      <p>{referral.rewardType}</p>
+                    </article>
+                  ))}
+                  {!selectedClient.referralReceived &&
+                  !selectedClient.referralsMade?.items.length ? (
+                    <div className="empty-state">Sem indicações vinculadas.</div>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="empty-state">Selecione um cliente para visualizar detalhes.</div>
+          )}
+        </aside>
+        {whatsAppClient ? (
+          <SendWhatsAppModal
+            client={whatsAppClient}
+            onClose={() => setWhatsAppClient(null)}
+            onSent={async () => {
+              await onWhatsAppSent(whatsAppClient.id);
+              setWhatsAppClient(null);
+            }}
+          />
+        ) : null}
+      </div>
+    </>
   );
 }
 
@@ -2762,9 +2879,7 @@ function SendWhatsAppModal({
       <section className="modal" aria-labelledby="whatsapp-send-title">
         <header className="modal-header">
           <h2 id="whatsapp-send-title">Enviar WhatsApp</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+          <IconButton icon={X} label="Fechar envio de WhatsApp" onClick={onClose} />
         </header>
 
         <dl className="detail-list">
@@ -2800,17 +2915,18 @@ function SendWhatsAppModal({
         <div className="form-actions">
           <span className="error-message">{error}</span>
           <div className="button-row">
-            <button className="secondary-button" type="button" onClick={onClose}>
+            <Button icon={X} variant="secondary" onClick={onClose}>
               Cancelar
-            </button>
-            <button
-              className="primary-button"
+            </Button>
+            <Button
               disabled={!canSend}
-              type="button"
+              icon={Send}
+              loading={sending}
+              variant="primary"
               onClick={() => void handleSend()}
             >
-              {sending ? 'Enviando...' : 'Enviar mensagem'}
-            </button>
+              Enviar mensagem
+            </Button>
           </div>
         </div>
       </section>
@@ -5622,7 +5738,14 @@ function ClientReferenceForm({
   }
 
   return (
-    <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className="entity-form client-reference-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
+      <div className="form-section-title">
+        <span className="section-eyebrow">Dados cobrança</span>
+        <h2>{reference ? 'Editar referência' : 'Criar referência'}</h2>
+      </div>
       <div className="form-grid">
         <label className="field">
           <span>Referência</span>
@@ -5683,12 +5806,12 @@ function ClientReferenceForm({
       <div className="form-actions">
         <span className="error-message">{error}</span>
         <div className="button-row">
-          <button className="secondary-button" type="button" onClick={onCancel}>
+          <Button icon={X} variant="secondary" onClick={onCancel}>
             Cancelar
-          </button>
-          <button className="primary-button" disabled={saving} type="submit">
-            {saving ? 'Salvando...' : reference ? 'Atualizar referência' : 'Criar referência'}
-          </button>
+          </Button>
+          <Button disabled={saving} icon={Save} loading={saving} type="submit" variant="primary">
+            {reference ? 'Atualizar referência' : 'Criar referência'}
+          </Button>
         </div>
       </div>
     </form>
@@ -5769,9 +5892,7 @@ function RenewalModal({
       <section className="modal" aria-labelledby="renewal-title">
         <header className="modal-header">
           <h2 id="renewal-title">Renovar referência</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+          <IconButton icon={X} label="Fechar renovação" onClick={onClose} />
         </header>
 
         <dl className="detail-list">
@@ -5849,17 +5970,18 @@ function RenewalModal({
         <div className="form-actions">
           <span className="error-message">{error}</span>
           <div className="button-row">
-            <button className="secondary-button" type="button" onClick={onClose}>
+            <Button icon={X} variant="secondary" onClick={onClose}>
               Cancelar
-            </button>
-            <button
-              className="primary-button"
+            </Button>
+            <Button
               disabled={saving || !preview}
-              type="button"
+              icon={RefreshCw}
+              loading={saving}
+              variant="primary"
               onClick={() => void handleConfirm()}
             >
-              {saving ? 'Confirmando...' : 'Confirmar renovação'}
-            </button>
+              Confirmar renovação
+            </Button>
           </div>
         </div>
       </section>

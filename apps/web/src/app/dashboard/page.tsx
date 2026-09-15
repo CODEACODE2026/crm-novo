@@ -181,7 +181,13 @@ import {
   type WhatsAppQrPoller,
   whatsappQrStatus,
 } from '../../lib/whatsapp-connection-flow';
-import { removalCountLabel, reportSummaryLabel } from '../../lib/display-labels';
+import {
+  billingMessageTemplates,
+  messageTemplateTypeLabel,
+  recoveryTemplateCards,
+  removalCountLabel,
+  reportSummaryLabel,
+} from '../../lib/display-labels';
 
 type View =
   | 'dashboard'
@@ -2803,7 +2809,7 @@ function BillingView() {
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
-  const visibleTemplates = templates.filter((template) => template.type !== 'RECOVERY_DAY_10');
+  const visibleTemplates = billingMessageTemplates(templates);
 
   const loadBilling = useCallback(async () => {
     setLoading(true);
@@ -3066,7 +3072,15 @@ function BillingView() {
           </div>
 
           <section className="panel template-panel">
-            <PanelHeader title="Templates" />
+            <div className="settings-card-header">
+              <div>
+                <span className="metric-label">MENSAGEM DE COBRANÇA</span>
+                <h2>Mensagem de cobrança</h2>
+              </div>
+            </div>
+            <p className="helper-text">
+              Mensagem utilizada nas cobranças automáticas antes ou no dia do vencimento.
+            </p>
             <div className="mini-list">
               {visibleTemplates.map((template) => (
                 <article key={template.id}>
@@ -3246,18 +3260,6 @@ function BillingView() {
   );
 }
 
-type RecoveryTemplateType = Extract<
-  MessageTemplate['type'],
-  'RECOVERY_DAY_3' | 'RECOVERY_DAY_7' | 'RECOVERY_DAY_15' | 'RECOVERY_DAY_30'
->;
-
-const recoveryTemplateCards = [
-  { title: '3 dias após vencimento', templateType: 'RECOVERY_DAY_3' },
-  { title: '7 dias após vencimento', templateType: 'RECOVERY_DAY_7' },
-  { title: '15 dias após vencimento', templateType: 'RECOVERY_DAY_15' },
-  { title: '30 dias após vencimento', templateType: 'RECOVERY_DAY_30' },
-] satisfies Array<{ title: string; templateType: RecoveryTemplateType }>;
-
 const recoveryTemplateVariables = [
   'nome',
   'primeiroNome',
@@ -3267,20 +3269,6 @@ const recoveryTemplateVariables = [
   'vencimento',
   'diasAtraso',
 ];
-
-function messageTemplateTypeLabel(type: MessageTemplate['type']) {
-  const labels: Record<MessageTemplate['type'], string> = {
-    INITIAL_ACTIVATION: 'Ativação inicial',
-    BILLING_DUE: 'Cobrança padrão',
-    RECOVERY_DAY_3: '3 dias após vencimento',
-    RECOVERY_DAY_7: '7 dias após vencimento',
-    RECOVERY_DAY_10: 'Template legado de recuperação',
-    RECOVERY_DAY_15: '15 dias após vencimento',
-    RECOVERY_DAY_30: '30 dias após vencimento',
-  };
-
-  return labels[type];
-}
 
 function AutomationsView() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);

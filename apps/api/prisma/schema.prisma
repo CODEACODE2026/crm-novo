@@ -94,6 +94,15 @@ enum PaymentIntentStatus {
   REFUNDED
 }
 
+enum PaymentGroupStatus {
+  CREATED
+  WAITING_PAYMENT
+  PAID
+  EXPIRED
+  CANCELED
+  FAILED
+}
+
 enum WhatsAppProvider {
   KIRAGO
 }
@@ -199,6 +208,7 @@ model User {
   createdRenewals       Renewal[]              @relation("RenewalCreatedBy")
   createdTransactions   FinancialTransaction[] @relation("FinancialTransactionCreatedBy")
   createdReferrals      Referral[]             @relation("ReferralCreatedBy")
+  createdPaymentGroups  PaymentGroup[]         @relation("PaymentGroupCreatedBy")
 
   @@map("users")
 }
@@ -241,6 +251,7 @@ model Client {
   renewals                Renewal[]
   receivables             Receivable[]
   financialTransactions   FinancialTransaction[]
+  paymentGroups           PaymentGroup[]
   messageDispatches       MessageDispatch[]
   billingResponses        BillingResponse[]
   recoveryCampaigns       RecoveryCampaign[]
@@ -621,6 +632,7 @@ model Receivable {
   clientReference    ClientReference       @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
   renewal            Renewal?              @relation(fields: [renewalId], references: [id], onDelete: Restrict)
   paymentTransaction FinancialTransaction?
+  paymentGroupItems  PaymentGroupItem[]
   recoveryCampaigns  RecoveryCampaign[]
   messageDispatches  MessageDispatch[]
   paymentIntents     PaymentIntent[]
@@ -637,7 +649,8 @@ model Receivable {
 
 model PaymentIntent {
   id                    String                @id @default(uuid()) @db.Uuid
-  receivableId          String                @db.Uuid
+  receivableId          String?               @db.Uuid
+  paymentGroupId        String?               @db.Uuid
   provider              PaymentProviderCode
   providerTransactionId String?
   externalStatus        String?
@@ -654,15 +667,53 @@ model PaymentIntent {
   failureMessage        String?
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
-  receivable            Receivable            @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  receivable            Receivable?           @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  paymentGroup          PaymentGroup?         @relation(fields: [paymentGroupId], references: [id], onDelete: Restrict)
   webhookEvents         PaymentWebhookEvent[]
 
   @@unique([provider, providerTransactionId])
   @@index([receivableId])
+  @@index([paymentGroupId])
   @@index([provider])
   @@index([status])
   @@index([expiresAt])
   @@map("payment_intents")
+}
+
+model PaymentGroup {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  clientId              String                 @db.Uuid
+  status                PaymentGroupStatus     @default(CREATED)
+  totalAmount           Decimal                @db.Decimal(12, 2)
+  paidAt                DateTime?              @db.Date
+  createdByUserId       String?                @db.Uuid
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  client                Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  createdBy             User?                  @relation("PaymentGroupCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  items                 PaymentGroupItem[]
+  paymentIntents        PaymentIntent[]
+  financialTransactions FinancialTransaction[]
+
+  @@index([clientId])
+  @@index([status])
+  @@index([paidAt])
+  @@index([createdAt])
+  @@map("payment_groups")
+}
+
+model PaymentGroupItem {
+  id             String       @id @default(uuid()) @db.Uuid
+  paymentGroupId String       @db.Uuid
+  receivableId   String       @db.Uuid
+  amount         Decimal      @db.Decimal(12, 2)
+  createdAt      DateTime     @default(now())
+  paymentGroup   PaymentGroup @relation(fields: [paymentGroupId], references: [id], onDelete: Cascade)
+  receivable     Receivable   @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentGroupId, receivableId])
+  @@index([receivableId])
+  @@map("payment_group_items")
 }
 
 model PaymentProviderCredential {
@@ -732,6 +783,7 @@ model FinancialTransaction {
   clientId          String?                    @db.Uuid
   clientReferenceId String?                    @db.Uuid
   receivableId      String?                    @unique @db.Uuid
+  paymentGroupId    String?                    @db.Uuid
   description       String
   amount            Decimal                    @db.Decimal(12, 2)
   transactionDate   DateTime                   @db.Date
@@ -743,6 +795,7 @@ model FinancialTransaction {
   client            Client?                    @relation(fields: [clientId], references: [id], onDelete: Restrict)
   clientReference   ClientReference?           @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
   receivable        Receivable?                @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  paymentGroup      PaymentGroup?              @relation(fields: [paymentGroupId], references: [id], onDelete: Restrict)
   createdBy         User?                      @relation("FinancialTransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@index([type])
@@ -750,6 +803,7 @@ model FinancialTransaction {
   @@index([categoryId])
   @@index([clientId])
   @@index([clientReferenceId])
+  @@index([paymentGroupId])
   @@index([transactionDate])
   @@index([createdAt])
   @@map("financial_transactions")

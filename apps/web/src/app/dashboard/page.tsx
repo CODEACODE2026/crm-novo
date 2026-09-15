@@ -47,6 +47,7 @@ import {
   createManualEntry,
   createManualExpense,
   createReceivablePix,
+  createReceivablesPix,
   createPlan,
   deleteClient,
   deleteClientReference,
@@ -78,6 +79,7 @@ import {
   downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
+  payReceivables,
   previewDeleteClient,
   previewDeleteClientReference,
   previewReferenceRenewal,
@@ -5814,6 +5816,9 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   const [notice, setNotice] = useState('');
   const [paymentReceivable, setPaymentReceivable] = useState<Receivable | null>(null);
   const [pixReceivable, setPixReceivable] = useState<Receivable | null>(null);
+  const [paymentReceivables, setPaymentReceivables] = useState<Receivable[] | null>(null);
+  const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
+  const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
 
   const loadFinance = useCallback(async () => {
@@ -5861,12 +5866,44 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   }, [initialTab]);
 
   async function reloadWithNotice(message: string) {
+    setSelectedReceivableIds([]);
     setNotice(message);
     await loadFinance();
   }
 
   const entryCategories = categories.filter((category) => category.type === 'ENTRADA');
   const expenseCategories = categories.filter((category) => category.type === 'SAIDA');
+  const selectedReceivables = selectedReceivableIds
+    .map((id) => receivables.find((receivable) => receivable.id === id))
+    .filter((receivable): receivable is Receivable => Boolean(receivable));
+  const selectedClientId = selectedReceivables[0]?.clientId ?? null;
+  const selectedTotal = selectedReceivables.reduce(
+    (total, receivable) => total + Number(receivable.amount),
+    0,
+  );
+
+  function toggleReceivableSelection(receivable: Receivable) {
+    if (receivable.status !== 'PENDENTE') return;
+
+    setSelectedReceivableIds((current) => {
+      if (current.includes(receivable.id)) {
+        return current.filter((id) => id !== receivable.id);
+      }
+
+      const currentReceivables = current
+        .map((id) => receivables.find((item) => item.id === id))
+        .filter((item): item is Receivable => Boolean(item));
+      const currentClientId = currentReceivables[0]?.clientId;
+
+      if (currentClientId && currentClientId !== receivable.clientId) {
+        setError('Selecione contas de apenas um cliente por pagamento agrupado.');
+        return current;
+      }
+
+      setError('');
+      return [...current, receivable.id];
+    });
+  }
 
   return (
     <section className="workspace-main">
@@ -5958,10 +5995,37 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               Aplicar
             </button>
           </div>
+          {selectedReceivables.length ? (
+            <div className="selection-bar">
+              <strong>
+                {selectedReceivables.length} conta{selectedReceivables.length > 1 ? 's' : ''}{' '}
+                selecionada{selectedReceivables.length > 1 ? 's' : ''}
+              </strong>
+              <span>Total: {formatCurrency(selectedTotal)}</span>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setPixReceivables(selectedReceivables)}
+                >
+                  <QrCode aria-hidden="true" size={16} />
+                  Gerar PIX selecionados
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => setPaymentReceivables(selectedReceivables)}
+                >
+                  Dar baixa selecionados
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th>Selecionar</th>
                   <th>Cliente</th>
                   <th>Referência</th>
                   <th>Descrição</th>
@@ -5974,6 +6038,18 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               <tbody>
                 {receivables.map((receivable) => (
                   <tr key={receivable.id}>
+                    <td>
+                      <input
+                        aria-label={`Selecionar ${receivable.description}`}
+                        checked={selectedReceivableIds.includes(receivable.id)}
+                        disabled={
+                          receivable.status !== 'PENDENTE' ||
+                          Boolean(selectedClientId && selectedClientId !== receivable.clientId)
+                        }
+                        type="checkbox"
+                        onChange={() => toggleReceivableSelection(receivable)}
+                      />
+                    </td>
                     <td>{receivable.client?.name ?? '-'}</td>
                     <td>{receivable.client?.reference ?? '-'}</td>
                     <td>{receivable.description}</td>
@@ -6095,10 +6171,36 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
         />
       ) : null}
 
+      {paymentReceivables ? (
+        <PayReceivablesModal
+          categories={entryCategories}
+          receivables={paymentReceivables}
+          onClose={() => setPaymentReceivables(null)}
+          onConfirm={async (payload) => {
+            await payReceivables({
+              receivableIds: paymentReceivables.map((receivable) => receivable.id),
+              ...payload,
+            });
+            setPaymentReceivables(null);
+            await reloadWithNotice('Pagamento agrupado registrado.');
+          }}
+        />
+      ) : null}
+
       {pixReceivable ? (
         <PixReceivableModal
           receivable={pixReceivable}
           onClose={() => setPixReceivable(null)}
+          onChanged={async (message) => {
+            await reloadWithNotice(message);
+          }}
+        />
+      ) : null}
+
+      {pixReceivables ? (
+        <PixReceivablesModal
+          receivables={pixReceivables}
+          onClose={() => setPixReceivables(null)}
           onChanged={async (message) => {
             await reloadWithNotice(message);
           }}
@@ -6644,6 +6746,196 @@ function PixReceivableModal({
   );
 }
 
+function PixReceivablesModal({
+  receivables,
+  onClose,
+  onChanged,
+}: {
+  receivables: Receivable[];
+  onClose: () => void;
+  onChanged: (message: string) => Promise<void>;
+}) {
+  const [activeIntent, setActiveIntent] = useState<PaymentIntent | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const total = receivables.reduce((sum, receivable) => sum + Number(receivable.amount), 0);
+  const canCancel =
+    activeIntent && !['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
+  const canRenderQrImage =
+    activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
+
+  async function runAction(action: () => Promise<PaymentIntent>, success: string) {
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const intent = await action();
+      setActiveIntent(intent);
+      setNotice(success);
+      await onChanged(success);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyPix() {
+    if (!activeIntent?.pixCopyPaste) return;
+    await navigator.clipboard.writeText(activeIntent.pixCopyPaste);
+    setNotice('PIX copiado.');
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="group-pix-title">
+        <header className="modal-header">
+          <h2 id="group-pix-title">PIX selecionados</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <dl className="detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{receivables[0]?.client?.name ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Contas</dt>
+            <dd>{receivables.length}</dd>
+          </div>
+          <div>
+            <dt>Total</dt>
+            <dd>{formatCurrency(total)}</dd>
+          </div>
+        </dl>
+
+        <div className="mini-list">
+          {receivables.map((receivable) => (
+            <article key={receivable.id}>
+              <strong>
+                {receivable.clientReference?.reference ?? receivable.client?.reference}
+              </strong>
+              <span>{formatDate(receivable.dueDate)}</span>
+              <p>{formatCurrency(receivable.amount)}</p>
+            </article>
+          ))}
+        </div>
+
+        {error ? <div className="notice danger">{error}</div> : null}
+        {notice ? <div className="notice success">{notice}</div> : null}
+
+        {activeIntent ? (
+          <div className="pix-panel">
+            <div className="pix-status-row">
+              <strong>{activeIntent.status}</strong>
+              <span>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</span>
+            </div>
+            <label className="field">
+              <span>PIX copia e cola</span>
+              <textarea readOnly rows={4} value={activeIntent.pixCopyPaste ?? ''} />
+            </label>
+            {activeIntent.qrCodeData ? (
+              <div className="pix-qr" aria-label="QR Code PIX">
+                {canRenderQrImage ? (
+                  <img alt="QR Code PIX" src={activeIntent.qrCodeData} />
+                ) : (
+                  <>
+                    <QrCode aria-hidden="true" size={92} />
+                    <span>{activeIntent.qrCodeData}</span>
+                  </>
+                )}
+              </div>
+            ) : null}
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={!activeIntent.pixCopyPaste}
+                type="button"
+                onClick={() => void copyPix()}
+              >
+                <Copy aria-hidden="true" size={16} />
+                Copiar
+              </button>
+              <button
+                className="secondary-button"
+                disabled={busy}
+                type="button"
+                onClick={() =>
+                  void runAction(
+                    () => syncPaymentIntent(activeIntent.id),
+                    'Status do PIX agrupado sincronizado.',
+                  )
+                }
+              >
+                <RefreshCcw aria-hidden="true" size={16} />
+                Sincronizar
+              </button>
+              {activeIntent.provider === 'MOCK' ? (
+                <button
+                  className="primary-button"
+                  disabled={busy || activeIntent.status === 'PAID'}
+                  type="button"
+                  onClick={() =>
+                    void runAction(
+                      () => confirmMockPaymentIntent(activeIntent.id),
+                      'Pagamento PIX agrupado mock confirmado.',
+                    )
+                  }
+                >
+                  <ShieldCheck aria-hidden="true" size={16} />
+                  Confirmar mock
+                </button>
+              ) : null}
+              {canCancel ? (
+                <button
+                  className="danger-button"
+                  disabled={busy}
+                  type="button"
+                  onClick={() =>
+                    void runAction(
+                      () => cancelPaymentIntent(activeIntent.id),
+                      'PIX agrupado cancelado no provider.',
+                    )
+                  }
+                >
+                  Cancelar
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="form-actions">
+          <span>Confirme para gerar um único PIX com o total selecionado.</span>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Fechar
+            </button>
+            <button
+              className="primary-button"
+              disabled={busy || Boolean(activeIntent)}
+              type="button"
+              onClick={() =>
+                void runAction(
+                  () => createReceivablesPix(receivables.map((receivable) => receivable.id)),
+                  'PIX agrupado gerado.',
+                )
+              }
+            >
+              <QrCode aria-hidden="true" size={16} />
+              Gerar PIX
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function PayReceivableModal({
   categories,
   receivable,
@@ -6721,6 +7013,109 @@ function PayReceivableModal({
         </div>
         <div className="form-actions">
           <span>Confirme para registrar a entrada financeira vinculada a esta conta.</span>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void onConfirm({ paymentDate, categoryId, notes })}
+            >
+              Confirmar pagamento
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PayReceivablesModal({
+  categories,
+  receivables,
+  onClose,
+  onConfirm,
+}: {
+  categories: FinancialCategory[];
+  receivables: Receivable[];
+  onClose: () => void;
+  onConfirm: (payload: {
+    paymentDate: string;
+    categoryId?: string;
+    notes?: string;
+  }) => Promise<void>;
+}) {
+  const renewalCategory = categories.find((category) => category.name === 'Renovação');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [categoryId, setCategoryId] = useState(renewalCategory?.id ?? categories[0]?.id ?? '');
+  const [notes, setNotes] = useState('');
+  const total = receivables.reduce((sum, receivable) => sum + Number(receivable.amount), 0);
+
+  useEffect(() => {
+    setCategoryId(renewalCategory?.id ?? categories[0]?.id ?? '');
+  }, [categories, renewalCategory?.id]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="group-payment-title">
+        <header className="modal-header">
+          <h2 id="group-payment-title">Dar baixa selecionados</h2>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+        <dl className="detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{receivables[0]?.client?.name ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Contas</dt>
+            <dd>{receivables.length}</dd>
+          </div>
+          <div>
+            <dt>Total</dt>
+            <dd>{formatCurrency(total)}</dd>
+          </div>
+        </dl>
+        <div className="mini-list">
+          {receivables.map((receivable) => (
+            <article key={receivable.id}>
+              <strong>
+                {receivable.clientReference?.reference ?? receivable.client?.reference}
+              </strong>
+              <span>{formatDate(receivable.dueDate)}</span>
+              <p>{formatCurrency(receivable.amount)}</p>
+            </article>
+          ))}
+        </div>
+        <div className="form-grid">
+          <label className="field">
+            <span>Data do pagamento</span>
+            <input
+              type="date"
+              value={paymentDate}
+              onChange={(event) => setPaymentDate(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Categoria</span>
+            <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Observação</span>
+            <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </label>
+        </div>
+        <div className="form-actions">
+          <span>Confirme para quitar integralmente todas as contas selecionadas.</span>
           <div className="button-row">
             <button className="secondary-button" type="button" onClick={onClose}>
               Cancelar

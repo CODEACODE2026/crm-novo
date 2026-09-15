@@ -905,6 +905,18 @@ a {
   padding: 0 10px;
 }
 
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  margin-bottom: 16px;
+  padding: 12px;
+}
+
 .search-row {
   display: flex;
   align-items: center;
@@ -1548,6 +1560,11 @@ tbody tr:hover,
   .toolbar,
   .compact-form {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .selection-bar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

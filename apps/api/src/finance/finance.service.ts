@@ -31,10 +31,12 @@ import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
+import { CreateReceivablesPixDto } from './dto/create-receivables-pix.dto';
 import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
+import { PayReceivablesDto } from './dto/pay-receivables.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
 import { UpdateManualTransactionDto } from './dto/update-manual-transaction.dto';
 import {
@@ -70,6 +72,14 @@ type TransactionWithRelations = Prisma.FinancialTransactionGetPayload<{
 type PaymentWebhookStatus = PaymentProviderStatus & {
   eventKey: string;
 };
+
+type GroupReceivable = Prisma.ReceivableGetPayload<{
+  include: {
+    client: true;
+    clientReference: { include: { plan: true } };
+    paymentTransaction: true;
+  };
+}>;
 
 @Injectable()
 export class FinanceService {
@@ -310,6 +320,199 @@ export class FinanceService {
 
       throw error;
     }
+  }
+
+  async createReceivablesPix(dto: CreateReceivablesPixDto, actorUserId: string) {
+    const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
+
+    try {
+      const intent = await this.prisma.$transaction(async (tx) => {
+        const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
+        await this.ensureNoActivePixForReceivables(tx, receivableIds);
+
+        const client = receivables[0]!.client;
+        const totalAmount = this.sumReceivables(receivables);
+        const description = this.buildPaymentGroupDescription(receivables);
+        const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+
+        const paymentGroup = await tx.paymentGroup.create({
+          data: {
+            clientId: client.id,
+            status: 'WAITING_PAYMENT',
+            totalAmount,
+            createdByUserId: actorUserId,
+            items: {
+              create: receivables.map((receivable) => ({
+                receivableId: receivable.id,
+                amount: receivable.amount,
+              })),
+            },
+          },
+        });
+
+        const providerPix = await this.paymentProvider.createPix({
+          receivableId: paymentGroup.id,
+          amount: totalAmount,
+          description,
+          expiresAt,
+          clientName: client.name,
+          payerPhone: client.phoneNormalized,
+          notificationUrl: this.getPaymentNotificationUrl(),
+        });
+
+        const created = await tx.paymentIntent.create({
+          data: {
+            paymentGroupId: paymentGroup.id,
+            provider: providerPix.provider,
+            providerTransactionId: providerPix.providerTransactionId,
+            externalStatus: providerPix.externalStatus,
+            externalDepixId: providerPix.externalDepixId,
+            blockchainTxId: providerPix.blockchainTxId,
+            status: providerPix.status,
+            amount: providerPix.amount,
+            pixCopyPaste: providerPix.pixCopyPaste,
+            qrCodeData: providerPix.qrCodeData,
+            expiresAt: providerPix.expiresAt,
+            lastSyncAt: new Date(),
+          },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: client.id,
+            type: 'PIX_PAYMENT_INTENT_CREATED',
+            title: 'PIX agrupado gerado.',
+            description: `${this.formatCurrency(totalAmount)} referente a ${receivables.length} contas a receber.`,
+            metadata: {
+              paymentGroupId: paymentGroup.id,
+              paymentIntentId: created.id,
+              receivableIds,
+              amount: totalAmount.toString(),
+              provider: created.provider,
+              providerTransactionId: created.providerTransactionId,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return created;
+      });
+
+      return this.presentPaymentIntent(intent);
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        throw new ConflictException('Ja existe um PIX ativo ou conflito para este agrupamento.');
+      }
+
+      throw error;
+    }
+  }
+
+  async payReceivables(dto: PayReceivablesDto, actorUserId: string) {
+    const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
+    const paymentDate = parseBusinessDate(dto.paymentDate);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
+      const category = dto.categoryId
+        ? await this.ensureActiveCategory(tx, dto.categoryId, 'ENTRADA')
+        : await this.ensureRenewalCategory(tx);
+      const totalAmount = this.sumReceivables(receivables);
+
+      const paymentGroup = await tx.paymentGroup.create({
+        data: {
+          clientId: receivables[0]!.clientId,
+          status: 'PAID',
+          totalAmount,
+          paidAt: paymentDate,
+          createdByUserId: actorUserId,
+          items: {
+            create: receivables.map((receivable) => ({
+              receivableId: receivable.id,
+              amount: receivable.amount,
+            })),
+          },
+        },
+      });
+
+      const transactions = [];
+
+      for (const receivable of receivables) {
+        const createdTransaction = await tx.financialTransaction.create({
+          data: {
+            type: 'ENTRADA',
+            origin: 'RECEIVABLE_PAYMENT',
+            categoryId: category.id,
+            clientId: receivable.clientId,
+            clientReferenceId: receivable.clientReferenceId,
+            receivableId: receivable.id,
+            paymentGroupId: paymentGroup.id,
+            description: `Recebimento agrupado: ${receivable.description}`,
+            amount: receivable.amount,
+            transactionDate: paymentDate,
+            notes: this.optionalTrim(dto.notes),
+            createdByUserId: actorUserId,
+          },
+        });
+        transactions.push(createdTransaction);
+
+        await tx.receivable.update({
+          where: { id: receivable.id },
+          data: { status: 'PAGO', paidAt: paymentDate },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: receivable.clientId,
+            type: 'PAYMENT_REGISTERED',
+            title: 'Pagamento agrupado registrado.',
+            description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
+            metadata: {
+              paymentGroupId: paymentGroup.id,
+              receivableId: receivable.id,
+              financialTransactionId: createdTransaction.id,
+              amount: receivable.amount.toString(),
+              paymentDate: formatBusinessDate(paymentDate),
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        await this.processPaidReceivableCycle(tx, receivable.id, actorUserId, {
+          receivableWasPending: true,
+        });
+      }
+
+      await tx.clientEvent.create({
+        data: {
+          clientId: paymentGroup.clientId,
+          type: 'PAYMENT_REGISTERED',
+          title: 'Pagamento agrupado confirmado.',
+          description: `${receivables.length} contas quitadas. Total: ${this.formatCurrency(totalAmount)}.`,
+          metadata: {
+            paymentGroupId: paymentGroup.id,
+            receivableIds,
+            amount: totalAmount.toString(),
+            paymentDate: formatBusinessDate(paymentDate),
+          },
+          createdByUserId: actorUserId,
+        },
+      });
+
+      return { paymentGroup, transactions };
+    });
+
+    return {
+      id: result.paymentGroup.id,
+      clientId: result.paymentGroup.clientId,
+      status: result.paymentGroup.status,
+      totalAmount: result.paymentGroup.totalAmount.toFixed(2),
+      paidAt: result.paymentGroup.paidAt ? formatBusinessDate(result.paymentGroup.paidAt) : null,
+      receivableIds,
+      transactionIds: result.transactions.map((transaction) => transaction.id),
+      createdAt: result.paymentGroup.createdAt.toISOString(),
+      updatedAt: result.paymentGroup.updatedAt.toISOString(),
+    };
   }
 
   async listPaymentIntents(receivableId: string) {
@@ -643,7 +846,14 @@ export class FinanceService {
           },
         });
 
-        if (providerStatus.status === 'REFUNDED') {
+        if (current.paymentGroupId) {
+          await tx.paymentGroup.update({
+            where: { id: current.paymentGroupId },
+            data: { status: this.paymentGroupStatusFromIntent(providerStatus.status) },
+          });
+        }
+
+        if (providerStatus.status === 'REFUNDED' && current.receivableId) {
           const receivable = await tx.receivable.findUnique({
             where: { id: current.receivableId },
           });
@@ -684,6 +894,18 @@ export class FinanceService {
 
       const paidAt = providerStatus.paidAt ?? new Date();
       const paidBusinessDate = parseSaoPauloBusinessDate(paidAt);
+
+      if (current.paymentGroupId) {
+        return this.applyPaidPaymentGroupStatus(
+          tx,
+          current,
+          providerStatus,
+          paidAt,
+          paidBusinessDate,
+          actorUserId,
+        );
+      }
+
       const acquired = await tx.paymentIntent.updateMany({
         where: { id, status: { not: 'PAID' } },
         data: {
@@ -710,6 +932,10 @@ export class FinanceService {
             failureMessage: providerStatus.failureMessage,
           },
         });
+      }
+
+      if (!current.receivableId) {
+        throw new ConflictException('Intencao de pagamento sem conta a receber vinculada.');
       }
 
       const receivable = await tx.receivable.findUnique({
@@ -1192,6 +1418,181 @@ export class FinanceService {
     await this.advanceClientReferenceAfterRenewalPayment(tx, receivableId, actorUserId, options);
   }
 
+  private async applyPaidPaymentGroupStatus(
+    tx: Prisma.TransactionClient,
+    current: Prisma.PaymentIntentGetPayload<object>,
+    providerStatus: PaymentProviderStatus,
+    paidAt: Date,
+    paidBusinessDate: Date,
+    actorUserId: string | null,
+  ) {
+    const group = await tx.paymentGroup.findUnique({
+      where: { id: current.paymentGroupId ?? '' },
+      include: {
+        items: {
+          include: {
+            receivable: {
+              include: {
+                client: true,
+                clientReference: { include: { plan: true } },
+                paymentTransaction: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!group) {
+      throw new NotFoundException('Agrupamento de pagamento nao encontrado.');
+    }
+
+    if (current.status === 'PAID' || group.status === 'PAID') {
+      return tx.paymentIntent.update({
+        where: { id: current.id },
+        data: {
+          externalStatus: providerStatus.externalStatus,
+          externalDepixId: providerStatus.externalDepixId,
+          blockchainTxId: providerStatus.blockchainTxId,
+          lastSyncAt: new Date(),
+          failureCode: providerStatus.failureCode,
+          failureMessage: providerStatus.failureMessage,
+        },
+      });
+    }
+
+    const invalid = group.items.find(
+      (item) =>
+        item.receivable.status !== 'PENDENTE' ||
+        Boolean(item.receivable.paymentTransaction) ||
+        !item.amount.equals(item.receivable.amount),
+    );
+
+    if (invalid) {
+      throw new ConflictException(
+        'Pagamento agrupado possui conta divergente. Revise o agrupamento antes de confirmar.',
+      );
+    }
+
+    const acquired = await tx.paymentIntent.updateMany({
+      where: { id: current.id, status: { not: 'PAID' } },
+      data: {
+        status: 'PAID',
+        externalStatus: providerStatus.externalStatus,
+        externalDepixId: providerStatus.externalDepixId,
+        blockchainTxId: providerStatus.blockchainTxId,
+        paidAt,
+        lastSyncAt: new Date(),
+        failureCode: null,
+        failureMessage: null,
+      },
+    });
+
+    if (acquired.count !== 1) {
+      return tx.paymentIntent.update({
+        where: { id: current.id },
+        data: {
+          externalStatus: providerStatus.externalStatus,
+          externalDepixId: providerStatus.externalDepixId,
+          blockchainTxId: providerStatus.blockchainTxId,
+          lastSyncAt: new Date(),
+          failureCode: providerStatus.failureCode,
+          failureMessage: providerStatus.failureMessage,
+        },
+      });
+    }
+
+    await tx.paymentGroup.update({
+      where: { id: group.id },
+      data: { status: 'PAID', paidAt: paidBusinessDate },
+    });
+
+    const category = await this.ensureRenewalCategory(tx);
+    const receivableIds = group.items.map((item) => item.receivableId);
+
+    for (const item of group.items) {
+      const { receivable } = item;
+      const createdTransaction = await tx.financialTransaction.create({
+        data: {
+          type: 'ENTRADA',
+          origin: 'RECEIVABLE_PAYMENT',
+          categoryId: category.id,
+          clientId: receivable.clientId,
+          clientReferenceId: receivable.clientReferenceId,
+          receivableId: receivable.id,
+          paymentGroupId: group.id,
+          description: `Recebimento PIX agrupado: ${receivable.description}`,
+          amount: receivable.amount,
+          transactionDate: paidBusinessDate,
+          notes: `PIX ${current.provider}`,
+          createdByUserId: actorUserId,
+        },
+      });
+
+      await tx.receivable.update({
+        where: { id: receivable.id },
+        data: { status: 'PAGO', paidAt: paidBusinessDate },
+      });
+
+      await tx.clientEvent.create({
+        data: {
+          clientId: receivable.clientId,
+          type: 'PAYMENT_REGISTERED',
+          title: 'Pagamento PIX agrupado confirmado.',
+          description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
+          metadata: {
+            paymentGroupId: group.id,
+            receivableId: receivable.id,
+            paymentIntentId: current.id,
+            financialTransactionId: createdTransaction.id,
+            amount: receivable.amount.toString(),
+            paymentDate: formatBusinessDate(paidBusinessDate),
+            provider: current.provider,
+            providerTransactionId: current.providerTransactionId,
+          },
+          createdByUserId: actorUserId,
+        },
+      });
+
+      await this.processPaidReceivableCycle(tx, receivable.id, actorUserId, {
+        receivableWasPending: true,
+      });
+    }
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: group.clientId,
+        type: 'PAYMENT_REGISTERED',
+        title: 'Pagamento agrupado confirmado.',
+        description: `${group.items.length} contas quitadas. Total: ${this.formatCurrency(group.totalAmount)}.`,
+        metadata: {
+          paymentGroupId: group.id,
+          paymentIntentId: current.id,
+          receivableIds,
+          amount: group.totalAmount.toString(),
+          paymentDate: formatBusinessDate(paidBusinessDate),
+          provider: current.provider,
+          providerTransactionId: current.providerTransactionId,
+        },
+        createdByUserId: actorUserId,
+      },
+    });
+
+    return tx.paymentIntent.findUniqueOrThrow({ where: { id: current.id } });
+  }
+
+  private paymentGroupStatusFromIntent(status: PaymentIntentStatus) {
+    if (status === 'EXPIRED' || status === 'CANCELED' || status === 'FAILED') {
+      return status;
+    }
+
+    if (status === 'PAID') {
+      return 'PAID';
+    }
+
+    return 'WAITING_PAYMENT';
+  }
+
   private async activateClientAfterInitialPayment(
     tx: Prisma.TransactionClient,
     receivableId: string,
@@ -1483,6 +1884,92 @@ export class FinanceService {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
   }
 
+  private uniqueReceivableIds(receivableIds: string[]) {
+    const unique = [...new Set(receivableIds)];
+
+    if (!unique.length) {
+      throw new BadRequestException('Selecione ao menos uma conta a receber.');
+    }
+
+    return unique;
+  }
+
+  private async findGroupedPaymentReceivables(
+    tx: Prisma.TransactionClient,
+    receivableIds: string[],
+  ) {
+    const receivables = await tx.receivable.findMany({
+      where: { id: { in: receivableIds } },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        paymentTransaction: true,
+      },
+    });
+
+    if (receivables.length !== receivableIds.length) {
+      throw new NotFoundException('Uma ou mais contas a receber nao foram encontradas.');
+    }
+
+    const ordered = receivableIds.map((id) =>
+      receivables.find((receivable) => receivable.id === id)!,
+    );
+    const clientId = ordered[0]!.clientId;
+
+    if (ordered.some((receivable) => receivable.clientId !== clientId)) {
+      throw new ConflictException('Pagamento agrupado permite somente contas do mesmo cliente.');
+    }
+
+    const invalid = ordered.find((receivable) => receivable.status !== 'PENDENTE');
+
+    if (invalid) {
+      throw new ConflictException('Pagamento agrupado permite somente contas pendentes.');
+    }
+
+    const paid = ordered.find((receivable) => receivable.paymentTransaction);
+
+    if (paid) {
+      throw new ConflictException('Uma ou mais contas selecionadas ja possuem baixa financeira.');
+    }
+
+    return ordered;
+  }
+
+  private async ensureNoActivePixForReceivables(
+    tx: Prisma.TransactionClient,
+    receivableIds: string[],
+  ) {
+    const activeIntent = await tx.paymentIntent.findFirst({
+      where: {
+        status: { in: [...activePixStatuses] },
+        OR: [
+          { receivableId: { in: receivableIds } },
+          { paymentGroup: { items: { some: { receivableId: { in: receivableIds } } } } },
+        ],
+      },
+    });
+
+    if (activeIntent) {
+      throw new ConflictException('Ja existe um PIX ativo para uma das contas selecionadas.');
+    }
+  }
+
+  private sumReceivables(receivables: Pick<GroupReceivable, 'amount'>[]) {
+    return receivables.reduce(
+      (total, receivable) => total.add(receivable.amount),
+      new Prisma.Decimal('0.00'),
+    );
+  }
+
+  private buildPaymentGroupDescription(receivables: GroupReceivable[]) {
+    const references = receivables
+      .map((receivable) => receivable.clientReference?.reference)
+      .filter(Boolean)
+      .join(', ');
+
+    return `Pagamento agrupado: ${receivables.length} contas${references ? ` (${references})` : ''}`;
+  }
+
   private presentReceivable(receivable: ReceivableWithRelations) {
     return {
       id: receivable.id,
@@ -1528,6 +2015,7 @@ export class FinanceService {
     return {
       id: intent.id,
       receivableId: intent.receivableId,
+      paymentGroupId: intent.paymentGroupId ?? null,
       provider: intent.provider,
       providerTransactionId: intent.providerTransactionId,
       externalStatus: intent.externalStatus,
@@ -1557,6 +2045,7 @@ export class FinanceService {
       clientReferenceId:
         transaction.clientReferenceId ?? transaction.receivable?.clientReferenceId ?? null,
       receivableId: transaction.receivableId,
+      paymentGroupId: transaction.paymentGroupId ?? null,
       description: transaction.description,
       amount: transaction.amount.toFixed(2),
       transactionDate: formatBusinessDate(transaction.transactionDate),

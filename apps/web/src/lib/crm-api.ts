@@ -176,7 +176,8 @@ export interface Receivable {
 
 export interface PaymentIntent {
   id: string;
-  receivableId: string;
+  receivableId: string | null;
+  paymentGroupId?: string | null;
   provider: PaymentProviderCode;
   providerTransactionId: string | null;
   externalStatus: string | null;
@@ -191,6 +192,18 @@ export interface PaymentIntent {
   lastSyncAt: string | null;
   failureCode: string | null;
   failureMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentGroupPaymentResult {
+  id: string;
+  clientId: string;
+  status: string;
+  totalAmount: string;
+  paidAt: string | null;
+  receivableIds: string[];
+  transactionIds: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1259,8 +1272,27 @@ export function payReceivable(
   });
 }
 
+export function payReceivables(payload: {
+  receivableIds: string[];
+  paymentDate: string;
+  categoryId?: string;
+  notes?: string;
+}) {
+  return apiFetch<PaymentGroupPaymentResult>('/receivables/payments', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function createReceivablePix(id: string) {
   return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, { method: 'POST' });
+}
+
+export function createReceivablesPix(receivableIds: string[]) {
+  return apiFetch<PaymentIntent>('/receivables/pix', {
+    method: 'POST',
+    body: JSON.stringify({ receivableIds }),
+  });
 }
 
 export function listPaymentIntents(receivableId: string) {

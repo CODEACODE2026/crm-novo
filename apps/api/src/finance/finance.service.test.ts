@@ -86,7 +86,7 @@ function createFinancePrisma() {
     description: 'Renovacao - Plano Mensal',
     amount: new Prisma.Decimal('50.00'),
     dueDate: parseBusinessDate('2026-10-10'),
-    status: 'PENDENTE' as 'PENDENTE' | 'PAGO' | 'CANCELADO',
+    status: 'PENDENTE',
     paidAt: null as Date | null,
     canceledAt: null as Date | null,
     cancelReason: null as string | null,
@@ -393,7 +393,762 @@ function createCycleRecorder(fake: ReturnType<typeof createFinancePrisma>) {
   return { cycle, nextReceivables };
 }
 
+function createGroupedFinancePrisma() {
+  const entryCategory = {
+    id: '11111111-1111-4111-8111-111111111111',
+    name: 'Renovação',
+    type: 'ENTRADA' as const,
+    active: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const client = {
+    id: '44444444-4444-4444-8444-444444444444',
+    name: 'Cliente Agrupado',
+    phone: '(44) 99999-9999',
+    phoneNormalized: '5544999999999',
+    email: null,
+    reference: 'AGR-001',
+    planId: '55555555-5555-4555-8555-555555555555',
+    recurringValue: new Prisma.Decimal('30.00'),
+    dueDate: parseBusinessDate('2026-09-20'),
+    billingAnchorDay: 20,
+    billingNoticeDays: 5,
+    notes: null,
+    status: 'ATIVO' as const,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const otherClient = {
+    ...client,
+    id: '44444444-4444-4444-8444-444444444445',
+    reference: 'AGR-002',
+  };
+  const plans = [
+    { id: '55555555-5555-4555-8555-555555555551', name: 'Mensal', durationMonths: 1 },
+    { id: '55555555-5555-4555-8555-555555555552', name: 'Bimestral', durationMonths: 2 },
+    { id: '55555555-5555-4555-8555-555555555553', name: 'Trimestral', durationMonths: 3 },
+  ].map((plan) => ({
+    ...plan,
+    defaultValue: new Prisma.Decimal('30.00'),
+    active: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }));
+  const references = [
+    {
+      id: '99999999-9999-4999-8999-999999999991',
+      clientId: client.id,
+      reference: 'ref-01',
+      planId: plans[0]!.id,
+      recurringValue: new Prisma.Decimal('30.00'),
+      dueDate: parseBusinessDate('2026-09-20'),
+      billingAnchorDay: 20,
+      plan: plans[0]!,
+    },
+    {
+      id: '99999999-9999-4999-8999-999999999992',
+      clientId: client.id,
+      reference: 'ref-02',
+      planId: plans[1]!.id,
+      recurringValue: new Prisma.Decimal('40.00'),
+      dueDate: parseBusinessDate('2026-09-25'),
+      billingAnchorDay: 25,
+      plan: plans[1]!,
+    },
+    {
+      id: '99999999-9999-4999-8999-999999999993',
+      clientId: client.id,
+      reference: 'ref-03',
+      planId: plans[2]!.id,
+      recurringValue: new Prisma.Decimal('50.00'),
+      dueDate: parseBusinessDate('2026-09-20'),
+      billingAnchorDay: 20,
+      plan: plans[2]!,
+    },
+  ].map((reference) => ({
+    billingNoticeDays: 5,
+    notes: null,
+    status: 'ATIVO' as const,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...reference,
+  }));
+  const receivables = [
+    { id: '77777777-7777-4777-8777-777777777771', amount: '30.00', reference: references[0]! },
+    { id: '77777777-7777-4777-8777-777777777772', amount: '40.00', reference: references[1]! },
+    { id: '77777777-7777-4777-8777-777777777773', amount: '50.00', reference: references[2]! },
+  ].map((item) => ({
+    id: item.id,
+    clientId: client.id,
+    clientReferenceId: item.reference.id,
+    renewalId: null,
+    purpose: 'RENEWAL' as const,
+    description: `Renovacao - ${item.reference.reference}`,
+    amount: new Prisma.Decimal(item.amount),
+    dueDate: item.reference.dueDate,
+    status: 'PENDENTE',
+    paidAt: null as Date | null,
+    canceledAt: null as Date | null,
+    cancelReason: null as string | null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }));
+  const transactions: Array<Record<string, unknown>> = [];
+  const events: Array<Record<string, unknown>> = [];
+  const paymentGroups: Array<Record<string, unknown>> = [];
+  const paymentIntents: Array<Record<string, unknown>> = [];
+  let failTransactionAt = 0;
+
+  const decorateReceivable = (receivable: (typeof receivables)[number]) => {
+    const reference = references.find((item) => item.id === receivable.clientReferenceId)!;
+    const targetClient = receivable.clientId === client.id ? client : otherClient;
+
+    return {
+      ...receivable,
+      client: targetClient,
+      clientReference: reference,
+      paymentTransaction:
+        transactions.find((transaction) => transaction.receivableId === receivable.id) ?? null,
+    };
+  };
+
+  const tx = {
+    financialCategory: {
+      findFirst: () => Promise.resolve(entryCategory),
+    },
+    receivable: {
+      findMany: ({ where }: { where: { id: { in: string[] } } }) =>
+        Promise.resolve(
+          receivables
+            .filter((receivable) => where.id.in.includes(receivable.id))
+            .map(decorateReceivable),
+        ),
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const receivable = receivables.find((item) => item.id === where.id);
+        return Promise.resolve(receivable ? decorateReceivable(receivable) : null);
+      },
+      update: ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Partial<(typeof receivables)[number]>;
+      }) => {
+        const receivable = receivables.find((item) => item.id === where.id);
+        if (!receivable) throw new Error('Receivable not found');
+        Object.assign(receivable, data);
+        return Promise.resolve(decorateReceivable(receivable));
+      },
+    },
+    paymentGroup: {
+      create: ({
+        data,
+      }: {
+        data: Record<string, unknown> & {
+          items: { create: Array<Record<string, unknown>> };
+        };
+      }) => {
+        const group = {
+          id: `payment-group-${paymentGroups.length + 1}`,
+          createdAt: new Date('2026-09-20T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-20T00:00:00.000Z'),
+          ...data,
+          items: data.items.create.map((item: Record<string, unknown>, index: number) => ({
+            id: `payment-group-item-${paymentGroups.length + 1}-${index + 1}`,
+            paymentGroupId: `payment-group-${paymentGroups.length + 1}`,
+            createdAt: new Date('2026-09-20T00:00:00.000Z'),
+            ...item,
+          })),
+        };
+        paymentGroups.push(group);
+        return Promise.resolve(group);
+      },
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const group = paymentGroups.find((item) => item.id === where.id);
+        if (!group) return Promise.resolve(null);
+
+        return Promise.resolve({
+          ...group,
+          items: (group.items as Array<Record<string, unknown>>).map((item) => ({
+            ...item,
+            receivable: decorateReceivable(
+              receivables.find((receivable) => receivable.id === item.receivableId)!,
+            ),
+          })),
+        });
+      },
+      update: ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const group = paymentGroups.find((item) => item.id === where.id);
+        if (!group) throw new Error('Payment group not found');
+        Object.assign(group, data, { updatedAt: new Date('2026-09-20T00:01:00.000Z') });
+        return Promise.resolve(group);
+      },
+    },
+    paymentIntent: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        const intent = {
+          id: `intent-${paymentIntents.length + 1}`,
+          receivableId: null,
+          paymentGroupId: null,
+          createdAt: new Date('2026-09-20T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-20T00:00:00.000Z'),
+          paidAt: null,
+          lastSyncAt: null,
+          failureCode: null,
+          failureMessage: null,
+          ...data,
+        };
+        paymentIntents.push(intent);
+        return Promise.resolve(intent);
+      },
+      findFirst: ({
+        where,
+      }: {
+        where: {
+          status: { in: string[] };
+          OR?: Array<{ receivableId?: { in: string[] } }>;
+        };
+      }) => {
+        const ids = where.OR?.[0]?.receivableId?.in ?? [];
+        return Promise.resolve(
+          paymentIntents.find((intent) => {
+            const status = String(intent.status);
+            const receivableId =
+              typeof intent.receivableId === 'string' ? intent.receivableId : null;
+            const paymentGroupId =
+              typeof intent.paymentGroupId === 'string' ? intent.paymentGroupId : null;
+
+            if (!where.status.in.includes(status)) return false;
+            if (receivableId && ids.includes(receivableId)) return true;
+            const group = paymentGroups.find((item) => item.id === paymentGroupId);
+            return (group?.items as Array<Record<string, unknown>> | undefined)?.some(
+              (item) => typeof item.receivableId === 'string' && ids.includes(item.receivableId),
+            );
+          }) ?? null,
+        );
+      },
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(paymentIntents.find((intent) => intent.id === where.id) ?? null),
+      findUniqueOrThrow: ({ where }: { where: { id: string } }) => {
+        const intent = paymentIntents.find((item) => item.id === where.id);
+        if (!intent) throw new Error('Intent not found');
+        return Promise.resolve(intent);
+      },
+      update: ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const intent = paymentIntents.find((item) => item.id === where.id);
+        if (!intent) throw new Error('Intent not found');
+        Object.assign(intent, data, { updatedAt: new Date('2026-09-20T00:01:00.000Z') });
+        return Promise.resolve(intent);
+      },
+      updateMany: ({
+        where,
+        data,
+      }: {
+        where: { id: string; status?: { not: string } };
+        data: Record<string, unknown>;
+      }) => {
+        const intent = paymentIntents.find((item) => item.id === where.id);
+        if (!intent || (where.status?.not && intent.status === where.status.not)) {
+          return Promise.resolve({ count: 0 });
+        }
+        Object.assign(intent, data, { updatedAt: new Date('2026-09-20T00:01:00.000Z') });
+        return Promise.resolve({ count: 1 });
+      },
+    },
+    financialTransaction: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        if (failTransactionAt && transactions.length + 1 === failTransactionAt) {
+          throw new Error('forced grouped rollback');
+        }
+        if (
+          data.receivableId &&
+          transactions.some((transaction) => transaction.receivableId === data.receivableId)
+        ) {
+          throw new ConflictException('duplicate receivable transaction');
+        }
+        const transaction = {
+          id: `transaction-${transactions.length + 1}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+        };
+        transactions.push(transaction);
+        return Promise.resolve(transaction);
+      },
+    },
+    clientReference: {
+      update: ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const reference = references.find((item) => item.id === where.id);
+        if (!reference) throw new Error('Reference not found');
+        Object.assign(reference, data);
+        return Promise.resolve(reference);
+      },
+    },
+    clientEvent: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        events.push(data);
+        return Promise.resolve(data);
+      },
+    },
+  };
+  const prisma = {
+    ...tx,
+    $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
+      const snapshots = {
+        receivables: receivables.map((receivable) => ({ ...receivable })),
+        references: references.map((reference) => ({ ...reference })),
+        transactions: transactions.map((transaction) => ({ ...transaction })),
+        events: events.map((event) => ({ ...event })),
+        paymentGroups: paymentGroups.map((group) => ({
+          ...group,
+          items: Array.isArray(group.items)
+            ? group.items.map((item: Record<string, unknown>) => ({ ...item }))
+            : group.items,
+        })),
+        paymentIntents: paymentIntents.map((intent) => ({ ...intent })),
+      };
+      try {
+        return await callback(tx);
+      } catch (error) {
+        receivables.splice(0, receivables.length, ...(snapshots.receivables as typeof receivables));
+        references.splice(0, references.length, ...(snapshots.references as typeof references));
+        transactions.splice(0, transactions.length, ...snapshots.transactions);
+        events.splice(0, events.length, ...snapshots.events);
+        paymentGroups.splice(0, paymentGroups.length, ...snapshots.paymentGroups);
+        paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
+        throw error;
+      }
+    },
+  };
+  const provider = {
+    createPix: vi.fn((input: { amount: Prisma.Decimal }) =>
+      Promise.resolve({
+        provider: 'MOCK' as const,
+        providerTransactionId: `group-provider-${paymentIntents.length + 1}`,
+        externalStatus: 'pending',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'WAITING_PAYMENT' as const,
+        amount: input.amount,
+        pixCopyPaste: `MOCK-GROUP|${input.amount.toFixed(2)}`,
+        qrCodeData: null,
+        expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+      }),
+    ),
+    getPixStatus: vi.fn(),
+    markPixPaid: vi.fn(),
+  };
+  const recovery = {
+    cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined),
+  };
+  const nextReceivables: Array<Record<string, unknown>> = [];
+  const cycle = {
+    ensureCurrentCycleReceivable: vi.fn().mockImplementation((clientReferenceId: string) => {
+      const reference = references.find((item) => item.id === clientReferenceId)!;
+      const receivable = {
+        clientReferenceId,
+        purpose: 'RENEWAL',
+        dueDate: reference.dueDate,
+        amount: reference.recurringValue,
+        status: 'PENDENTE',
+      };
+      nextReceivables.push(receivable);
+      return Promise.resolve({ action: 'created', receivable });
+    }),
+  };
+
+  return {
+    client,
+    otherClient,
+    references,
+    receivables,
+    transactions,
+    events,
+    paymentGroups,
+    paymentIntents,
+    nextReceivables,
+    prisma,
+    provider,
+    config: { get: () => undefined },
+    cycle,
+    recovery,
+    setFailTransactionAt: (index: number) => {
+      failTransactionAt = index;
+    },
+  };
+}
+
 describe('FinanceService', () => {
+  it('pays three selected receivables from the same client as one manual payment group', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+      fake.recovery as never,
+    );
+
+    const group = await service.payReceivables(
+      {
+        receivableIds: fake.receivables.map((receivable) => receivable.id),
+        paymentDate: '2026-09-20',
+        categoryId: '11111111-1111-4111-8111-111111111111',
+      },
+      actorUserId,
+    );
+
+    expect(group).toMatchObject({ status: 'PAID', totalAmount: '120.00' });
+    expect(fake.receivables.every((receivable) => receivable.status === 'PAGO')).toBe(true);
+    expect(fake.transactions).toHaveLength(3);
+    expect(fake.transactions.every((transaction) => transaction.paymentGroupId === group.id)).toBe(
+      true,
+    );
+    expect(fake.cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(3);
+    expect(fake.recovery.cancelActiveForReceivable).toHaveBeenCalledTimes(3);
+    expect(fake.nextReceivables).toHaveLength(3);
+  });
+
+  it('allows paying one selected receivable and later another grouped selection', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+      fake.recovery as never,
+    );
+
+    await service.payReceivables(
+      { receivableIds: [fake.receivables[0]!.id], paymentDate: '2026-09-20' },
+      actorUserId,
+    );
+    await service.payReceivables(
+      {
+        receivableIds: [fake.receivables[1]!.id, fake.receivables[2]!.id],
+        paymentDate: '2026-09-25',
+      },
+      actorUserId,
+    );
+
+    expect(fake.paymentGroups).toHaveLength(2);
+    expect(fake.transactions).toHaveLength(3);
+    expect(fake.receivables.every((receivable) => receivable.status === 'PAGO')).toBe(true);
+  });
+
+  it('rejects grouped payments with different clients or ineligible statuses', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    fake.receivables[2]!.clientId = fake.otherClient.id;
+
+    await expect(
+      service.payReceivables(
+        {
+          receivableIds: [fake.receivables[0]!.id, fake.receivables[2]!.id],
+          paymentDate: '2026-09-20',
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    fake.receivables[2]!.clientId = fake.client.id;
+    fake.receivables[1]!.status = 'PAGO';
+
+    await expect(
+      service.payReceivables(
+        {
+          receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id],
+          paymentDate: '2026-09-20',
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    fake.receivables[1]!.status = 'CANCELADO';
+
+    await expect(
+      service.createReceivablesPix(
+        { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+        actorUserId,
+      ),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('advances each grouped renewal by its own due date and plan duration', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+      fake.recovery as never,
+    );
+
+    await service.payReceivables(
+      {
+        receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id],
+        paymentDate: '2026-09-27',
+      },
+      actorUserId,
+    );
+
+    expect(fake.references[0]!.dueDate).toEqual(parseBusinessDate('2026-10-27'));
+    expect(fake.references[0]!.billingAnchorDay).toBe(27);
+    expect(fake.references[1]!.dueDate).toEqual(parseBusinessDate('2026-11-27'));
+    expect(fake.references[1]!.billingAnchorDay).toBe(27);
+  });
+
+  it('creates one grouped PIX for the selected total and confirms it idempotently', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+      fake.recovery as never,
+    );
+
+    const intent = await service.createReceivablesPix(
+      { receivableIds: fake.receivables.map((receivable) => receivable.id) },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-20T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: new Prisma.Decimal('120.00') }),
+    );
+    expect(fake.transactions).toHaveLength(3);
+    expect(fake.paymentIntents[0]!.status).toBe('PAID');
+    expect(fake.paymentGroups[0]!.status).toBe('PAID');
+    expect(fake.cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(3);
+    expect(fake.recovery.cancelActiveForReceivable).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps concurrent grouped paid sync to one effective write-off', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+    );
+    const intent = await service.createReceivablesPix(
+      { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-20T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    const results = await Promise.allSettled([
+      service.syncPaymentIntent(intent.id, actorUserId),
+      service.syncPaymentIntent(intent.id, actorUserId),
+    ]);
+
+    expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
+    expect(fake.transactions).toHaveLength(2);
+    expect(fake.cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(2);
+    expect(fake.paymentGroups[0]!.status).toBe('PAID');
+  });
+
+  it('keeps grouped PIX receivables pending when provider expires the intent', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablesPix(
+      { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'expired',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'EXPIRED',
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.receivables.every((receivable) => receivable.status === 'PENDENTE')).toBe(true);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.paymentGroups[0]!.status).toBe('EXPIRED');
+  });
+
+  it.each(['CANCELED', 'FAILED'] as const)(
+    'keeps grouped PIX receivables pending when provider returns %s',
+    async (status) => {
+      const fake = createGroupedFinancePrisma();
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+      );
+      const intent = await service.createReceivablesPix(
+        { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+        actorUserId,
+      );
+      fake.provider.getPixStatus.mockResolvedValue({
+        provider: 'MOCK',
+        providerTransactionId: intent.providerTransactionId,
+        externalStatus: status.toLowerCase(),
+        externalDepixId: null,
+        blockchainTxId: null,
+        status,
+        paidAt: null,
+        failureCode: status,
+        failureMessage: null,
+      });
+
+      await service.syncPaymentIntent(intent.id, actorUserId);
+
+      expect(fake.receivables.every((receivable) => receivable.status === 'PENDENTE')).toBe(true);
+      expect(fake.transactions).toHaveLength(0);
+      expect(fake.paymentGroups[0]!.status).toBe(status);
+    },
+  );
+
+  it('rejects grouped PIX confirmation when an item was paid before provider confirmation', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+    );
+    const intent = await service.createReceivablesPix(
+      { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+      actorUserId,
+    );
+    fake.receivables[0]!.status = 'PAGO';
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-20T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await expect(service.syncPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      ConflictException,
+    );
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.paymentIntents[0]!.status).toBe('WAITING_PAYMENT');
+  });
+
+  it('rejects grouped PIX confirmation when an item amount changed after creation', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+    );
+    const intent = await service.createReceivablesPix(
+      { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+      actorUserId,
+    );
+    fake.receivables[1]!.amount = new Prisma.Decimal('45.00');
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-20T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await expect(service.syncPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      ConflictException,
+    );
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.paymentIntents[0]!.status).toBe('WAITING_PAYMENT');
+  });
+
+  it('rolls back the full manual group when one item fails', async () => {
+    const fake = createGroupedFinancePrisma();
+    fake.setFailTransactionAt(2);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      fake.cycle as never,
+    );
+
+    await expect(
+      service.payReceivables(
+        {
+          receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id],
+          paymentDate: '2026-09-20',
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('forced grouped rollback');
+
+    expect(fake.paymentGroups).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.receivables.every((receivable) => receivable.status === 'PENDENTE')).toBe(true);
+  });
+
   it('pays a pending receivable once and registers the client timeline', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(

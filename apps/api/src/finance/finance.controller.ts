@@ -18,10 +18,12 @@ import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
+import { CreateReceivablesPixDto } from './dto/create-receivables-pix.dto';
 import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
+import { PayReceivablesDto } from './dto/pay-receivables.dto';
 import {
   SavePaymentProviderCredentialDto,
   SavePaymentWebhookSecretDto,
@@ -86,9 +88,19 @@ export class FinanceController {
     return this.financeService.payReceivable(id, dto, request.user.id);
   }
 
+  @Post('receivables/payments')
+  payReceivables(@Body() dto: PayReceivablesDto, @Req() request: AuthenticatedRequest) {
+    return this.financeService.payReceivables(dto, request.user.id);
+  }
+
   @Post('receivables/:id/pix')
   createReceivablePix(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
     return this.financeService.createReceivablePix(id, request.user.id);
+  }
+
+  @Post('receivables/pix')
+  createReceivablesPix(@Body() dto: CreateReceivablesPixDto, @Req() request: AuthenticatedRequest) {
+    return this.financeService.createReceivablesPix(dto, request.user.id);
   }
 
   @Get('receivables/:id/payment-intents')

@@ -36,6 +36,8 @@ import { ClientForm } from '../../components/clients/client-form';
 import { ClientReferralSelect } from '../../components/clients/client-referral-select';
 import { StatusBadge } from '../../components/clients/status-badge';
 import { PlanForm } from '../../components/plans/plan-form';
+import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
+import { Card, SectionHeader, StatCard } from '../../components/ui/primitives';
 import {
   cancelReceivable,
   cancelPaymentIntent,
@@ -243,6 +245,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [view, setView] = useState<View>('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [clientsPayload, setClientsPayload] = useState<PaginatedClients | null>(null);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -432,223 +435,202 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar" aria-label="Navegação principal">
-        <div className="brand">
-          <span className="brand-mark">C</span>
-          <span>CRM Novo</span>
-        </div>
-        <nav className="nav-list">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                className={`nav-item ${view === item.id ? 'active' : ''}`}
-                key={item.id}
-                type="button"
-                onClick={() => setView(item.id)}
-              >
-                <Icon aria-hidden="true" size={18} />
-                {item.label}
-              </button>
-            );
-          })}
-          {futureNavItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <span className="nav-item muted" key={item.label}>
-                <Icon aria-hidden="true" size={18} />
-                {item.label}
-              </span>
-            );
-          })}
-        </nav>
-      </aside>
-
-      <main className="main-area">
-        <header className="topbar">
-          <h1>
-            {view === 'plans'
-              ? 'Planos'
-              : view === 'dashboard'
-                ? 'Dashboard'
-                : view === 'finance'
-                  ? 'Financeiro'
-                  : view === 'whatsapp'
-                    ? 'WhatsApp'
-                    : view === 'referrals'
-                      ? 'Indicações'
-                      : view === 'billing'
-                        ? 'Cobranças'
-                        : view === 'automations'
-                          ? 'Automações'
-                          : view === 'reports'
-                            ? 'Relatórios'
-                            : view === 'waitlist'
-                              ? 'Lista de Espera'
-                              : view === 'settings'
-                                ? 'Configurações'
-                                : 'Clientes'}
-          </h1>
-          <span className="topbar-user">{user?.name}</span>
-        </header>
-
-        <section className="content">
-          {error ? <div className="notice danger">{error}</div> : null}
-          {view === 'dashboard' ? (
-            <OperationalDashboard
-              onNewClient={() => {
-                setEditingClient(null);
-                setClientFormOpen(true);
-                setView('clients');
-              }}
-              onOpenClient={async (id) => {
-                const client = await getClient(id);
-                setSelectedClient(client);
-                setView('clients');
-              }}
-              onOpenFinance={(tab) => {
-                setFinanceInitialTab(tab);
-                setView('finance');
-              }}
-              onOpenOperationalView={(nextView) => setView(nextView)}
-              onRenew={async (id, clientReferenceId) => {
-                const client = await getClient(id);
-                const reference = client.references?.find((item) => item.id === clientReferenceId);
-                openRenewal(client, reference);
-              }}
-            />
-          ) : null}
-          {view === 'clients' ? (
-            <ClientsView
-              clientFormOpen={clientFormOpen}
-              clients={clients}
-              dataLoading={dataLoading}
-              editingClient={editingClient}
-              onApplyFilters={() => void loadData()}
-              onCreate={async (payload) => {
-                const client = await createClient(payload);
-                setSelectedClient(client);
-                await reloadAfterMutation();
-              }}
-              onEdit={(client) => {
-                setEditingClient(client);
-                setClientFormOpen(true);
-              }}
-              onNew={() => {
-                setEditingClient(null);
-                setClientFormOpen((open) => !open);
-              }}
-              onRenew={openRenewal}
-              onCreateReference={async (client, payload) => {
-                await createClientReference(client.id, payload);
-                const detailed = await getClient(client.id);
-                setSelectedClient(detailed);
-                await loadData();
-              }}
-              onUpdateReference={async (reference, payload) => {
-                await updateClientReference(reference.id, payload);
-                const detailed = await getClient(reference.clientId);
-                setSelectedClient(detailed);
-                await loadData();
-              }}
-              onSelect={setSelectedClient}
-              onRemoveClient={(client) => void handleRemoveClient(client)}
-              onRemoveReference={(reference) => void handleRemoveReference(reference)}
-              onReferenceStatusChange={(reference, nextStatus) =>
-                void handleReferenceStatusChange(reference, nextStatus)
-              }
-              onWhatsAppSent={async (clientId) => {
-                const detailed = await getClient(clientId);
-                setSelectedClient(detailed);
-              }}
-              onUpdate={async (payload) => {
-                if (!editingClient) return;
-                const client = await updateClient(editingClient.id, payload);
-                setSelectedClient(client);
-                await reloadAfterMutation();
-              }}
-              planId={planId}
-              plans={plans}
-              search={search}
-              selectedClient={selectedClient}
-              setPlanId={setPlanId}
-              setSearch={setSearch}
-              setStatus={setStatus}
-              setStatusReason={setStatusReason}
-              status={status}
-              statusReason={statusReason}
-              renewalNotice={renewalNotice}
-            />
-          ) : null}
-          {view === 'finance' ? (
-            <FinanceView clients={clients} initialTab={financeInitialTab} />
-          ) : null}
-          {view === 'referrals' ? <ReferralsView clients={clients} /> : null}
-          {view === 'plans' ? (
-            <PlansView
-              editingPlan={editingPlan}
-              onCreate={async (payload) => {
-                await createPlan(payload);
-                await reloadAfterMutation();
-              }}
-              onDelete={async (id) => {
-                await deletePlan(id);
-                await reloadAfterMutation();
-              }}
-              onEdit={(plan) => {
-                setEditingPlan(plan);
-                setPlanFormOpen(true);
-              }}
-              onNew={() => {
-                setEditingPlan(null);
-                setPlanFormOpen((open) => !open);
-              }}
-              onUpdate={async (payload) => {
-                if (!editingPlan) return;
-                await updatePlan(editingPlan.id, payload);
-                await reloadAfterMutation();
-              }}
-              planFormOpen={planFormOpen}
-              plans={plans}
-            />
-          ) : null}
-          {view === 'whatsapp' ? <WhatsAppView /> : null}
-          {view === 'billing' ? <BillingView /> : null}
-          {view === 'automations' ? <AutomationsView /> : null}
-          {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
-          {view === 'settings' ? <SettingsView /> : null}
-          {view === 'waitlist' ? (
-            <WaitlistView
-              plans={plans}
-              onClientCreated={async (client) => {
-                await loadData();
-                setSelectedClient(client);
-                setView('clients');
-              }}
-            />
-          ) : null}
-        </section>
-        {renewalTarget ? (
-          <RenewalModal
-            target={renewalTarget}
-            plans={plans.filter(
-              (plan) => plan.active || plan.id === renewalTarget.reference.planId,
-            )}
-            onClose={() => setRenewalTarget(null)}
-            onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
-          />
-        ) : null}
-        {deletionTarget ? (
-          <DeletionConfirmationModal
-            target={deletionTarget}
-            onClose={() => setDeletionTarget(null)}
-            onConfirm={confirmDeletion}
-          />
-        ) : null}
-      </main>
-    </div>
+    <AdminShell
+      activeId={view}
+      collapsed={sidebarCollapsed}
+      disabledItems={futureNavItems}
+      items={navItems}
+      subtitle={viewSubtitle(view)}
+      title={viewTitle(view)}
+      userName={user?.name}
+      onNavigate={setView}
+      onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+    >
+      {error ? <div className="notice danger">{error}</div> : null}
+      {view === 'dashboard' ? (
+        <OperationalDashboard
+          onNewClient={() => {
+            setEditingClient(null);
+            setClientFormOpen(true);
+            setView('clients');
+          }}
+          onOpenClient={async (id) => {
+            const client = await getClient(id);
+            setSelectedClient(client);
+            setView('clients');
+          }}
+          onOpenFinance={(tab) => {
+            setFinanceInitialTab(tab);
+            setView('finance');
+          }}
+          onOpenOperationalView={(nextView) => setView(nextView)}
+          onRenew={async (id, clientReferenceId) => {
+            const client = await getClient(id);
+            const reference = client.references?.find((item) => item.id === clientReferenceId);
+            openRenewal(client, reference);
+          }}
+        />
+      ) : null}
+      {view === 'clients' ? (
+        <ClientsView
+          clientFormOpen={clientFormOpen}
+          clients={clients}
+          dataLoading={dataLoading}
+          editingClient={editingClient}
+          onApplyFilters={() => void loadData()}
+          onCreate={async (payload) => {
+            const client = await createClient(payload);
+            setSelectedClient(client);
+            await reloadAfterMutation();
+          }}
+          onEdit={(client) => {
+            setEditingClient(client);
+            setClientFormOpen(true);
+          }}
+          onNew={() => {
+            setEditingClient(null);
+            setClientFormOpen((open) => !open);
+          }}
+          onRenew={openRenewal}
+          onCreateReference={async (client, payload) => {
+            await createClientReference(client.id, payload);
+            const detailed = await getClient(client.id);
+            setSelectedClient(detailed);
+            await loadData();
+          }}
+          onUpdateReference={async (reference, payload) => {
+            await updateClientReference(reference.id, payload);
+            const detailed = await getClient(reference.clientId);
+            setSelectedClient(detailed);
+            await loadData();
+          }}
+          onSelect={setSelectedClient}
+          onRemoveClient={(client) => void handleRemoveClient(client)}
+          onRemoveReference={(reference) => void handleRemoveReference(reference)}
+          onReferenceStatusChange={(reference, nextStatus) =>
+            void handleReferenceStatusChange(reference, nextStatus)
+          }
+          onWhatsAppSent={async (clientId) => {
+            const detailed = await getClient(clientId);
+            setSelectedClient(detailed);
+          }}
+          onUpdate={async (payload) => {
+            if (!editingClient) return;
+            const client = await updateClient(editingClient.id, payload);
+            setSelectedClient(client);
+            await reloadAfterMutation();
+          }}
+          planId={planId}
+          plans={plans}
+          search={search}
+          selectedClient={selectedClient}
+          setPlanId={setPlanId}
+          setSearch={setSearch}
+          setStatus={setStatus}
+          setStatusReason={setStatusReason}
+          status={status}
+          statusReason={statusReason}
+          renewalNotice={renewalNotice}
+        />
+      ) : null}
+      {view === 'finance' ? <FinanceView clients={clients} initialTab={financeInitialTab} /> : null}
+      {view === 'referrals' ? <ReferralsView clients={clients} /> : null}
+      {view === 'plans' ? (
+        <PlansView
+          editingPlan={editingPlan}
+          onCreate={async (payload) => {
+            await createPlan(payload);
+            await reloadAfterMutation();
+          }}
+          onDelete={async (id) => {
+            await deletePlan(id);
+            await reloadAfterMutation();
+          }}
+          onEdit={(plan) => {
+            setEditingPlan(plan);
+            setPlanFormOpen(true);
+          }}
+          onNew={() => {
+            setEditingPlan(null);
+            setPlanFormOpen((open) => !open);
+          }}
+          onUpdate={async (payload) => {
+            if (!editingPlan) return;
+            await updatePlan(editingPlan.id, payload);
+            await reloadAfterMutation();
+          }}
+          planFormOpen={planFormOpen}
+          plans={plans}
+        />
+      ) : null}
+      {view === 'whatsapp' ? <WhatsAppView /> : null}
+      {view === 'billing' ? <BillingView /> : null}
+      {view === 'automations' ? <AutomationsView /> : null}
+      {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
+      {view === 'settings' ? <SettingsView /> : null}
+      {view === 'waitlist' ? (
+        <WaitlistView
+          plans={plans}
+          onClientCreated={async (client) => {
+            await loadData();
+            setSelectedClient(client);
+            setView('clients');
+          }}
+        />
+      ) : null}
+      {renewalTarget ? (
+        <RenewalModal
+          target={renewalTarget}
+          plans={plans.filter((plan) => plan.active || plan.id === renewalTarget.reference.planId)}
+          onClose={() => setRenewalTarget(null)}
+          onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
+        />
+      ) : null}
+      {deletionTarget ? (
+        <DeletionConfirmationModal
+          target={deletionTarget}
+          onClose={() => setDeletionTarget(null)}
+          onConfirm={confirmDeletion}
+        />
+      ) : null}
+    </AdminShell>
   );
+}
+
+function viewTitle(view: View) {
+  const labels = {
+    automations: 'Automações',
+    billing: 'Cobranças',
+    clients: 'Clientes',
+    dashboard: 'Dashboard',
+    finance: 'Financeiro',
+    plans: 'Planos',
+    referrals: 'Indicações',
+    reports: 'Relatórios',
+    settings: 'Configurações',
+    waitlist: 'Lista de Espera',
+    whatsapp: 'WhatsApp',
+  } satisfies Record<View, string>;
+
+  return labels[view];
+}
+
+function viewSubtitle(view: View) {
+  const subtitles = {
+    automations: 'Rotinas operacionais e recuperação',
+    billing: 'Cobranças, envios e acompanhamento',
+    clients: 'Base de clientes, referências e histórico',
+    dashboard: 'Visão operacional do dia e do período',
+    finance: 'Receitas, despesas e contas a receber',
+    plans: 'Planos comerciais e recorrências',
+    referrals: 'Indicações, benefícios e recompensas',
+    reports: 'Exportações e análises administrativas',
+    settings: 'Configurações técnicas do CRM',
+    waitlist: 'Contatos pendentes de triagem',
+    whatsapp: 'Conexão e mensagens operacionais',
+  } satisfies Record<View, string>;
+
+  return subtitles[view];
 }
 
 function DeletionConfirmationModal({
@@ -808,12 +790,41 @@ function OperationalDashboard({
 
   return (
     <>
+      <PageHeader
+        eyebrow="CRM NOVO UI 2.0"
+        title="Dashboard operacional"
+        subtitle={summary?.period.label ?? 'Indicadores reais do CRM, sem dados simulados.'}
+        actions={
+          <div className="quick-actions">
+            <button className="primary-button" type="button" onClick={onNewClient}>
+              <Plus aria-hidden="true" size={16} />
+              Novo cliente
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => onOpenFinance('entries')}
+            >
+              <DollarSign aria-hidden="true" size={16} />
+              Entrada
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => onOpenFinance('receivables')}
+            >
+              Recebíveis
+            </button>
+          </div>
+        }
+      />
+
       <div className="dashboard-toolbar">
-        <div className="period-controls">
+        <div className="period-controls" aria-label="Período do dashboard">
           {[
-            ['current', 'Mes atual'],
-            ['previous', 'Mes anterior'],
-            ['last30', 'Ultimos 30 dias'],
+            ['current', 'Mês atual'],
+            ['previous', 'Mês anterior'],
+            ['last30', 'Últimos 30 dias'],
             ['custom', 'Personalizado'],
           ].map(([value, label]) => (
             <button
@@ -846,133 +857,128 @@ function OperationalDashboard({
 
       {error ? <div className="notice danger">{error}</div> : null}
 
-      <div className="quick-actions">
-        <button className="primary-button" type="button" onClick={onNewClient}>
-          <Plus aria-hidden="true" size={16} />
-          Novo cliente
-        </button>
-        <button className="secondary-button" type="button" onClick={() => onOpenFinance('entries')}>
-          <DollarSign aria-hidden="true" size={16} />
-          Nova entrada
-        </button>
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => onOpenFinance('expenses')}
-        >
-          <CreditCard aria-hidden="true" size={16} />
-          Nova saída
-        </button>
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => onOpenFinance('receivables')}
-        >
-          Ver contas a receber
-        </button>
-      </div>
-
       <div className="metric-grid dashboard-kpis">
-        {[
-          ['Clientes ativos', summary?.clients.active],
-          ['Clientes inativos', summary?.clients.inactive],
-          ['Clientes cancelados', summary?.clients.canceled],
-          ['Novos clientes', summary?.clients.newInPeriod],
-          ['Vencem hoje', summary?.dueDates.dueToday],
-          ['Próximos 7 dias', summary?.dueDates.upcomingSevenDays],
-          ['Clientes vencidos', summary?.dueDates.overdueClients],
-          ['Renovações', summary?.renewals.count],
-        ].map(([label, value]) => (
-          <article className="metric-card compact" key={label}>
-            <span className="metric-label">{label}</span>
-            <strong className="metric-value">{loading ? '-' : String(value ?? 0)}</strong>
-          </article>
-        ))}
+        <StatCard
+          icon={Users}
+          label="Clientes ativos"
+          tone="primary"
+          value={loading ? '-' : (summary?.clients.active ?? 0)}
+        />
+        <StatCard
+          icon={CalendarClock}
+          label="Vencem hoje"
+          tone="warning"
+          value={loading ? '-' : (summary?.dueDates.dueToday ?? 0)}
+        />
+        <StatCard
+          icon={DollarSign}
+          label="A receber"
+          tone="info"
+          value={loading ? '-' : formatCurrency(String(summary?.finance.receivablePending ?? '0'))}
+        />
+        <StatCard
+          icon={CreditCard}
+          label="Receita do período"
+          tone="success"
+          value={loading ? '-' : formatCurrency(String(summary?.finance.received ?? '0'))}
+        />
+        <StatCard
+          icon={Bell}
+          label="Inadimplentes"
+          tone="danger"
+          value={loading ? '-' : (summary?.dueDates.overdueClients ?? 0)}
+        />
+        <StatCard
+          icon={ListChecks}
+          label="Pendências"
+          tone="neutral"
+          value={
+            loading
+              ? '-'
+              : (summary?.pending.items.reduce((total, item) => total + item.count, 0) ?? 0)
+          }
+        />
       </div>
 
-      <div className="metric-grid finance-kpis">
-        {[
-          ['Recebido', summary?.finance.received],
-          ['A receber', summary?.finance.receivablePending],
-          ['Vencido', summary?.finance.receivableOverdue],
-          ['Entradas', summary?.finance.entries],
-          ['Saídas', summary?.finance.expenses],
-          ['Saldo', summary?.finance.balance],
-          ['Valor renovado', summary?.renewals.amount],
-        ].map(([label, value]) => (
-          <article className="metric-card compact" key={label}>
-            <span className="metric-label">{label}</span>
-            <strong className="metric-value">
-              {loading ? '-' : formatCurrency(String(value ?? '0'))}
-            </strong>
-          </article>
-        ))}
-      </div>
-
-      <div className="dashboard-grid">
-        <section className="panel chart-panel">
-          <h2>Entradas x saídas</h2>
-          <div className="bar-chart">
-            {(summary?.charts.cashflow ?? []).map((item) => (
-              <div className="bar-group" key={item.period}>
-                <span>{formatPeriodLabel(item.period)}</span>
-                <div className="bar-track">
-                  <i
-                    className="bar-entry"
-                    style={{ width: `${chartPercent(item.entries, cashflowMax)}%` }}
-                  />
-                  <i
-                    className="bar-expense"
-                    style={{ width: `${chartPercent(item.expenses, cashflowMax)}%` }}
-                  />
+      <div className="dashboard-primary-grid">
+        <Card className="chart-panel dashboard-finance-panel">
+          <SectionHeader eyebrow="Financeiro" title="Visão financeira" />
+          <div className="finance-split">
+            <div className="bar-chart">
+              {(summary?.charts.cashflow ?? []).map((item) => (
+                <div className="bar-group" key={item.period}>
+                  <span>{formatPeriodLabel(item.period)}</span>
+                  <div className="bar-track">
+                    <i
+                      className="bar-entry"
+                      style={{ width: `${chartPercent(item.entries, cashflowMax)}%` }}
+                    />
+                    <i
+                      className="bar-expense"
+                      style={{ width: `${chartPercent(item.expenses, cashflowMax)}%` }}
+                    />
+                  </div>
                 </div>
-              </div>
+              ))}
+              {!summary?.charts.cashflow.length ? (
+                <div className="empty-state">Sem dados.</div>
+              ) : null}
+            </div>
+            <div className="finance-side-metrics">
+              {[
+                ['Entradas', summary?.finance.entries],
+                ['Saídas', summary?.finance.expenses],
+                ['Saldo', summary?.finance.balance],
+                ['Valor renovado', summary?.renewals.amount],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>{loading ? '-' : formatCurrency(String(value ?? '0'))}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+
+        <Card className="activity-panel">
+          <SectionHeader eyebrow="Timeline" title="Atividade recente" />
+          <div className="activity-list">
+            {(summary?.lists.recentActivity ?? []).map((event) => (
+              <button
+                className="activity-item"
+                key={event.id}
+                type="button"
+                onClick={() => void onOpenClient(event.client.id)}
+              >
+                <Activity aria-hidden="true" size={16} />
+                <span>
+                  <strong>{event.title}</strong>
+                  <small>
+                    {event.client.name} | {new Date(event.createdAt).toLocaleString('pt-BR')}
+                  </small>
+                  {event.description ? <em>{event.description}</em> : null}
+                </span>
+              </button>
             ))}
-            {!summary?.charts.cashflow.length ? (
-              <div className="empty-state">Sem dados.</div>
+            {!summary?.lists.recentActivity.length ? (
+              <div className="empty-state">Sem atividade recente.</div>
             ) : null}
           </div>
-        </section>
-
-        <section className="panel chart-panel">
-          <h2>Recebimentos</h2>
-          <div className="single-bar-chart">
-            {(summary?.charts.received ?? []).map((item) => (
-              <div className="bar-group" key={item.period}>
-                <span>{formatPeriodLabel(item.period)}</span>
-                <div className="bar-track">
-                  <i
-                    className="bar-received"
-                    style={{ width: `${chartPercent(item.amount, receivedMax)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-            {!summary?.charts.received.length ? (
-              <div className="empty-state">Sem dados.</div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="panel chart-panel">
-          <h2>Clientes</h2>
-          <div className="client-distribution">
-            {(summary?.charts.clients ?? []).map((item) => (
-              <div className="distribution-row" key={item.label}>
-                <span>{item.label}</span>
-                <div className="bar-track">
-                  <i style={{ width: `${(item.value / clientMax) * 100}%` }} />
-                </div>
-                <strong>{item.value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
+        </Card>
       </div>
 
-      <div className="dashboard-grid operational-grid">
-        <section className="panel">
-          <PanelHeader title="Pendencias" />
+      <div className="dashboard-secondary-grid">
+        <Card>
+          <SectionHeader title="Vencimentos de hoje" />
+          <CompactClientDueTable
+            items={summary?.lists.dueToday ?? []}
+            onOpen={onOpenClient}
+            onRenew={onRenew}
+          />
+        </Card>
+
+        <Card>
+          <SectionHeader title="Pendências operacionais" />
           <div className="pending-list">
             {(summary?.pending.items ?? []).map((item) => (
               <button
@@ -996,59 +1002,63 @@ function OperationalDashboard({
               <div className="empty-state">Sem pendências operacionais.</div>
             ) : null}
           </div>
-        </section>
+        </Card>
 
-        <section className="panel">
-          <PanelHeader title="Vencimentos de hoje" />
-          <CompactClientDueTable
-            items={summary?.lists.dueToday ?? []}
-            onOpen={onOpenClient}
-            onRenew={onRenew}
+        <Card>
+          <SectionHeader
+            title="Contas vencidas"
+            action={
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={() => onOpenFinance('receivables')}
+              >
+                Ver todos
+              </button>
+            }
           />
-        </section>
-
-        <section className="panel">
-          <PanelHeader title="Próximos vencimentos" />
-          <CompactClientDueTable
-            items={summary?.lists.upcomingDue ?? []}
-            onOpen={onOpenClient}
-            onRenew={onRenew}
-          />
-        </section>
-
-        <section className="panel">
-          <PanelHeader title="Contas vencidas" onViewAll={() => onOpenFinance('receivables')} />
           <OverdueReceivablesTable
             items={summary?.lists.overdueReceivables ?? []}
             onOpenFinance={() => onOpenFinance('receivables')}
           />
-        </section>
+        </Card>
+      </div>
 
-        <section className="panel">
-          <h2>Atividade recente</h2>
-          <div className="activity-list">
-            {(summary?.lists.recentActivity ?? []).map((event) => (
-              <button
-                className="activity-item"
-                key={event.id}
-                type="button"
-                onClick={() => void onOpenClient(event.client.id)}
-              >
-                <Activity aria-hidden="true" size={16} />
-                <span>
-                  <strong>{event.title}</strong>
-                  <small>
-                    {event.client.name} | {new Date(event.createdAt).toLocaleString('pt-BR')}
-                  </small>
-                  {event.description ? <em>{event.description}</em> : null}
-                </span>
-              </button>
+      <div className="dashboard-tertiary-grid">
+        <Card>
+          <SectionHeader eyebrow="Recebimentos" title="Recebido por período" />
+          <div className="single-bar-chart">
+            {(summary?.charts.received ?? []).map((item) => (
+              <div className="bar-group" key={item.period}>
+                <span>{formatPeriodLabel(item.period)}</span>
+                <div className="bar-track">
+                  <i
+                    className="bar-received"
+                    style={{ width: `${chartPercent(item.amount, receivedMax)}%` }}
+                  />
+                </div>
+              </div>
             ))}
-            {!summary?.lists.recentActivity.length ? (
-              <div className="empty-state">Sem atividade recente.</div>
+            {!summary?.charts.received.length ? (
+              <div className="empty-state">Sem dados.</div>
             ) : null}
           </div>
-        </section>
+        </Card>
+
+        <Card>
+          <SectionHeader eyebrow="Clientes" title="Distribuição" />
+          <div className="client-distribution">
+            {(summary?.charts.clients ?? []).map((item) => (
+              <div className="distribution-row" key={item.label}>
+                <span>{item.label}</span>
+                <div className="bar-track">
+                  <i style={{ width: `${(item.value / clientMax) * 100}%` }} />
+                </div>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </>
   );
@@ -1056,14 +1066,16 @@ function OperationalDashboard({
 
 function PanelHeader({ title, onViewAll }: { title: string; onViewAll?: () => void }) {
   return (
-    <div className="panel-header">
-      <h2>{title}</h2>
-      {onViewAll ? (
-        <button className="secondary-button" type="button" onClick={onViewAll}>
-          Ver todos
-        </button>
-      ) : null}
-    </div>
+    <SectionHeader
+      title={title}
+      action={
+        onViewAll ? (
+          <button className="secondary-button compact" type="button" onClick={onViewAll}>
+            Ver todos
+          </button>
+        ) : null
+      }
+    />
   );
 }
 
@@ -1129,18 +1141,22 @@ function CompactClientDueTable({
           <StatusBadge status={client.status} />
           <div className="button-row">
             <button
-              className="secondary-button"
+              aria-label={`Abrir cliente ${client.name}`}
+              className="icon-button"
+              title="Ver cliente"
               type="button"
               onClick={() => void onOpen(client.id)}
             >
-              Ver
+              <Eye aria-hidden="true" size={16} />
             </button>
             <button
-              className="secondary-button"
+              aria-label={`Renovar ${client.reference}`}
+              className="icon-button"
+              title="Renovar"
               type="button"
               onClick={() => void onRenew(client.id, client.clientReferenceId)}
             >
-              Renovar
+              <RefreshCcw aria-hidden="true" size={16} />
             </button>
           </div>
         </article>
@@ -1173,8 +1189,13 @@ function OverdueReceivablesTable({
           <span>{formatCurrency(receivable.amount)}</span>
           <span>{formatDate(receivable.dueDate)}</span>
           <span>{receivable.daysOverdue} dias</span>
-          <button className="secondary-button" type="button" onClick={onOpenFinance}>
-            Dar baixa
+          <button
+            className="icon-button"
+            title="Abrir financeiro"
+            type="button"
+            onClick={onOpenFinance}
+          >
+            <CreditCard aria-hidden="true" size={16} />
           </button>
         </article>
       ))}

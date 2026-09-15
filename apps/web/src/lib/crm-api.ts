@@ -489,9 +489,21 @@ export interface MessageDispatch {
   template?: {
     id: string;
     name: string;
-    type: 'BILLING_DUE';
+    type: 'BILLING_DUE' | 'BILLING_DUE_GROUPED';
     active: boolean;
   } | null;
+  itemCount?: number;
+  totalAmount?: string | null;
+  dueDateLabel?: string | null;
+  items?: Array<{
+    id: string;
+    receivableId: string;
+    clientReferenceId: string;
+    reference: string;
+    amount: string;
+    dueDate: string;
+    status: Receivable['status'];
+  }>;
   connection: Pick<WhatsAppConnection, 'id' | 'name' | 'provider'> | null;
 }
 
@@ -598,6 +610,7 @@ export interface MessageTemplate {
   type:
     | 'INITIAL_ACTIVATION'
     | 'BILLING_DUE'
+    | 'BILLING_DUE_GROUPED'
     | 'RECOVERY_DAY_3'
     | 'RECOVERY_DAY_7'
     | 'RECOVERY_DAY_10'

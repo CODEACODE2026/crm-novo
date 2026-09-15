@@ -3025,16 +3025,22 @@ function BillingView() {
                     onClick={() => void selectDispatch(dispatch)}
                   >
                     <td>{dispatch.client?.name ?? 'Cliente não vinculado'}</td>
+                    <td>{billingDispatchReferenceLabel(dispatch)}</td>
                     <td>
-                      {dispatch.clientReference?.reference ?? dispatch.client?.reference ?? '-'}
+                      {dispatch.totalAmount
+                        ? formatCurrency(dispatch.totalAmount)
+                        : dispatch.receivable?.amount
+                          ? formatCurrency(dispatch.receivable.amount)
+                          : '-'}
                     </td>
                     <td>
-                      {dispatch.receivable?.amount
-                        ? formatCurrency(dispatch.receivable.amount)
-                        : '-'}
-                    </td>
-                    <td>
-                      {dispatch.receivable?.dueDate ? formatDate(dispatch.receivable.dueDate) : '-'}
+                      {dispatch.dueDateLabel === 'Vários'
+                        ? 'Vários'
+                        : dispatch.dueDateLabel
+                          ? formatDate(dispatch.dueDateLabel)
+                          : dispatch.receivable?.dueDate
+                            ? formatDate(dispatch.receivable.dueDate)
+                            : '-'}
                     </td>
                     <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
                     <td>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</td>
@@ -3134,9 +3140,7 @@ function BillingView() {
               <dl className="detail-list">
                 <div>
                   <dt>Referência</dt>
-                  <dd>
-                    {selected.clientReference?.reference ?? selected.client?.reference ?? '-'}
-                  </dd>
+                  <dd>{billingDispatchReferenceLabel(selected)}</dd>
                 </div>
                 <div>
                   <dt>Plano</dt>
@@ -3145,13 +3149,23 @@ function BillingView() {
                 <div>
                   <dt>Valor</dt>
                   <dd>
-                    {selected.receivable?.amount ? formatCurrency(selected.receivable.amount) : '-'}
+                    {selected.totalAmount
+                      ? formatCurrency(selected.totalAmount)
+                      : selected.receivable?.amount
+                        ? formatCurrency(selected.receivable.amount)
+                        : '-'}
                   </dd>
                 </div>
                 <div>
                   <dt>Vencimento</dt>
                   <dd>
-                    {selected.receivable?.dueDate ? formatDate(selected.receivable.dueDate) : '-'}
+                    {selected.dueDateLabel === 'Vários'
+                      ? 'Vários'
+                      : selected.dueDateLabel
+                        ? formatDate(selected.dueDateLabel)
+                        : selected.receivable?.dueDate
+                          ? formatDate(selected.receivable.dueDate)
+                          : '-'}
                   </dd>
                 </div>
                 <div>
@@ -3179,6 +3193,18 @@ function BillingView() {
                 <span>Mensagem renderizada</span>
                 <strong>{selected.renderedContent ?? selected.body}</strong>
               </div>
+              {selected.items?.length && selected.items.length > 1 ? (
+                <div className="mini-list">
+                  {selected.items.map((item) => (
+                    <article key={item.id}>
+                      <strong>{item.reference}</strong>
+                      <span>
+                        {formatCurrency(item.amount)} | {formatDate(item.dueDate)} | {item.status}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
               {selected.errorMessage ? (
                 <div className="notice warning">
                   {selected.errorCode ? `${selected.errorCode}: ` : ''}
@@ -3850,11 +3876,21 @@ function AutomationsView() {
               {(billingSummary?.next ?? []).map((dispatch) => (
                 <tr key={dispatch.id}>
                   <td>{dispatch.client?.name ?? '-'}</td>
-                  <td>{dispatch.clientReference?.reference ?? '-'}</td>
+                  <td>{billingDispatchReferenceLabel(dispatch)}</td>
                   <td>
-                    {dispatch.receivable?.dueDate ? formatDate(dispatch.receivable.dueDate) : '-'}
+                    {dispatch.dueDateLabel === 'Vários'
+                      ? 'Vários'
+                      : dispatch.dueDateLabel
+                        ? formatDate(dispatch.dueDateLabel)
+                        : dispatch.receivable?.dueDate
+                          ? formatDate(dispatch.receivable.dueDate)
+                          : '-'}
                   </td>
-                  <td>{dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias</td>
+                  <td>
+                    {dispatch.idempotencyKey?.startsWith('billing-group')
+                      ? '-'
+                      : `${dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias`}
+                  </td>
                   <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
                   <td>
                     <span className={`pill ${dispatch.status.toLowerCase()}`}>
@@ -5436,6 +5472,14 @@ function billingStatusLabel(status: MessageDispatch['status']) {
   };
 
   return labels[status];
+}
+
+function billingDispatchReferenceLabel(dispatch: MessageDispatch) {
+  if ((dispatch.itemCount ?? 0) > 1) {
+    return `${dispatch.itemCount} referências`;
+  }
+
+  return dispatch.clientReference?.reference ?? dispatch.client?.reference ?? '-';
 }
 
 function recoveryCampaignStatusLabel(status: RecoveryCampaignStatus) {

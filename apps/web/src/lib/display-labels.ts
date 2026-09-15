@@ -33,6 +33,7 @@ const reportSummaryLabels: Record<string, string> = {
 const messageTemplateTypeLabels: Record<string, string> = {
   INITIAL_ACTIVATION: 'Ativação inicial',
   BILLING_DUE: 'Cobrança padrão',
+  BILLING_DUE_GROUPED: 'Cobrança agrupada',
   RECOVERY_DAY_3: '3 dias após vencimento',
   RECOVERY_DAY_7: '7 dias após vencimento',
   RECOVERY_DAY_10: 'Template legado de recuperação',
@@ -67,7 +68,9 @@ export function messageTemplateTypeLabel(type: string) {
 }
 
 export function billingMessageTemplates<T extends { type: string }>(templates: T[]) {
-  return templates.filter((template) => template.type === 'BILLING_DUE');
+  return templates.filter((template) =>
+    ['BILLING_DUE', 'BILLING_DUE_GROUPED'].includes(template.type),
+  );
 }
 
 export function recoveryMessageTemplates<T extends { type: string }>(templates: T[]) {

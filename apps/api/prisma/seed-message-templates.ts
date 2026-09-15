@@ -18,6 +18,12 @@ async function main() {
         'Bom dia, *{{primeiroNome}}*! Seu serviço vence em {{vencimento}} no valor de {{valor}}. Queria saber se tem interesse em renovar?',
     },
     {
+      type: 'BILLING_DUE_GROUPED' as const,
+      name: 'Cobranca agrupada',
+      content:
+        'Olá, {{primeiroNome}}!\n\nVocê possui {{quantidade}} serviços com cobrança programada:\n\n{{itens}}\n\nTotal: {{valorTotal}}',
+    },
+    {
       type: 'RECOVERY_DAY_3' as const,
       name: 'Recuperação 3 dias',
       content:

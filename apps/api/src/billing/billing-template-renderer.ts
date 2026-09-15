@@ -9,6 +9,9 @@ export type BillingTemplateContext = {
   referencia: string;
   diasAtraso: string;
   pix: string;
+  quantidade?: string;
+  itens?: string;
+  valorTotal?: string;
 };
 
 const allowedVariables = [
@@ -20,6 +23,9 @@ const allowedVariables = [
   'referencia',
   'diasAtraso',
   'pix',
+  'quantidade',
+  'itens',
+  'valorTotal',
 ] as const;
 
 @Injectable()
@@ -32,7 +38,7 @@ export class BillingTemplateRenderer {
         return '';
       }
 
-      return context[variable];
+      return context[variable] ?? '';
     });
   }
 

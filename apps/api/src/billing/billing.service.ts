@@ -13,6 +13,7 @@ import {
   type ClientReference,
   type BillingAutomationSettings,
   type MessageDispatch,
+  type MessageDispatchItem,
   type MessageTemplate,
   type Plan,
   type Receivable,
@@ -44,17 +45,34 @@ type BillingDispatch = MessageDispatch & {
   clientReference: (ClientReference & { plan?: Plan | null }) | null;
   receivable:
     (Receivable & { clientReference?: (ClientReference & { plan?: Plan | null }) | null }) | null;
+  items?: BillingDispatchItem[];
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
+};
+
+type BillingDispatchItem = MessageDispatchItem & {
+  clientReference: ClientReference & { plan?: Plan | null };
+  receivable: Receivable & {
+    clientReference?: (ClientReference & { plan?: Plan | null }) | null;
+  };
 };
 
 type BillingReconcileItem = {
   client: Client;
   reference: ClientReference & { plan: Plan; receivables: Receivable[] };
   receivable: Receivable;
+  baseScheduledFor: Date;
+  scheduledFor: Date;
+  businessSendDate: string;
+};
+
+type BillingReconcileGroup = {
+  client: Client;
+  items: BillingReconcileItem[];
   idempotencyKey: string;
   baseScheduledFor: Date;
   scheduledFor: Date;
+  businessSendDate: string;
 };
 
 @Injectable()
@@ -73,6 +91,7 @@ export class BillingService {
   async reconcile(now = new Date()) {
     const settings = await this.getAutomationSettings();
     const template = await this.ensureDefaultTemplate();
+    const groupedTemplate = await this.ensureGroupedTemplate();
     const connection = await this.findOperationalConnection(null);
     const clients = await this.prisma.client.findMany({
       where: {
@@ -99,7 +118,7 @@ export class BillingService {
 
     canceled += await this.cancelNoLongerEligibleDispatches();
 
-    if (!template.active || !connection) {
+    if ((!template.active && !groupedTemplate.active) || !connection) {
       const referencesCount = clients.reduce(
         (total, client) => total + this.billingReferencesForClient(client).length,
         0,
@@ -117,17 +136,6 @@ export class BillingService {
         }
 
         const receivable = this.findReceivableForReferenceDueDate(reference);
-        const expectedKey = receivable
-          ? this.buildIdempotencyKey(
-              client.id,
-              receivable.id,
-              reference.dueDate,
-              reference.billingNoticeDays,
-              template.id,
-            )
-          : null;
-
-        canceled += await this.cancelObsoleteFutureDispatches(client.id, reference.id, expectedKey);
 
         if (!receivable) {
           skipped += 1;
@@ -149,38 +157,54 @@ export class BillingService {
           reference.billingNoticeDays,
           settings,
         );
+        const businessSendDate = formatBusinessDate(baseScheduledFor);
 
         candidates.push({
           client,
           reference,
           receivable,
-          idempotencyKey: expectedKey ?? '',
           baseScheduledFor,
           scheduledFor: baseScheduledFor,
+          businessSendDate,
         });
       }
     }
 
-    const scheduledCandidates = this.scheduleBillingBatch(candidates, settings.sendIntervalSeconds);
+    const scheduledGroups = this.scheduleBillingBatch(
+      this.groupBillingCandidates(candidates),
+      settings.sendIntervalSeconds,
+    );
 
-    for (const {
-      client,
-      reference,
-      receivable,
-      idempotencyKey,
-      scheduledFor,
-    } of scheduledCandidates) {
-      const renderedContent = this.renderForClientReference(
-        template.content,
-        client,
-        reference,
-        receivable,
+    for (const group of scheduledGroups) {
+      const selectedTemplate = group.items.length > 1 ? groupedTemplate : template;
+
+      if (!selectedTemplate.active) {
+        skipped += group.items.length;
+        continue;
+      }
+
+      canceled += await this.cancelObsoleteFutureDispatches(
+        group.client.id,
+        group.businessSendDate,
+        group.idempotencyKey,
       );
+
+      const firstItem = group.items[0]!;
+      const renderedContent =
+        group.items.length > 1
+          ? this.renderForClientReferenceGroup(selectedTemplate.content, group.client, group.items)
+          : this.renderForClientReference(
+              selectedTemplate.content,
+              group.client,
+              firstItem.reference,
+              firstItem.receivable,
+            );
 
       try {
         const rescheduled = await this.rescheduleExistingFutureDispatch(
-          idempotencyKey,
-          scheduledFor,
+          group,
+          selectedTemplate,
+          renderedContent,
           now,
         );
 
@@ -191,20 +215,23 @@ export class BillingService {
 
         const dispatch = await this.prisma.messageDispatch.create({
           data: {
-            clientId: client.id,
-            clientReferenceId: reference.id,
-            receivableId: receivable.id,
-            templateId: template.id,
+            clientId: group.client.id,
+            clientReferenceId: firstItem.reference.id,
+            receivableId: firstItem.receivable.id,
+            templateId: selectedTemplate.id,
             whatsAppConnectionId: connection.id,
-            phone: normalizeBrazilPhone(client.phoneNormalized),
+            phone: normalizeBrazilPhone(group.client.phoneNormalized),
             body: renderedContent,
             renderedContent,
             origin: 'BILLING',
             status: 'SCHEDULED',
-            requestId: idempotencyKey,
-            idempotencyKey,
-            scheduledFor,
-            nextAttemptAt: scheduledFor,
+            requestId: group.idempotencyKey,
+            idempotencyKey: group.idempotencyKey,
+            scheduledFor: group.scheduledFor,
+            nextAttemptAt: group.scheduledFor,
+            items: {
+              create: this.buildDispatchItemCreateInput(group.items),
+            },
           },
         });
 
@@ -343,6 +370,13 @@ export class BillingService {
           client: true,
           clientReference: { include: { plan: true } },
           receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
           template: true,
           whatsAppConnection: true,
         },
@@ -426,6 +460,13 @@ export class BillingService {
           client: true,
           clientReference: { include: { plan: true } },
           receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
           template: true,
           whatsAppConnection: true,
         },
@@ -454,6 +495,13 @@ export class BillingService {
         client: true,
         clientReference: { include: { plan: true } },
         receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+          orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+        },
         template: true,
         whatsAppConnection: true,
       },
@@ -532,6 +580,10 @@ export class BillingService {
         referencia: dto.reference?.trim() || 'bruno1499',
         diasAtraso: dto.daysOverdue?.trim() || '7',
         pix: '000201...',
+        quantidade: '3',
+        itens:
+          '• teste01 — R$ 30,00 — vence 15/09/2026\n• teste02 — R$ 30,00 — vence 15/09/2026\n• teste03 — R$ 30,00 — vence 15/09/2026',
+        valorTotal: 'R$ 90,00',
       }),
     };
   }
@@ -561,12 +613,22 @@ export class BillingService {
     return new Date(`${yyyyMmDd}T${sendTime}:00-03:00`);
   }
 
-  scheduleBillingBatch(items: BillingReconcileItem[], intervalSeconds: number) {
+  scheduleBillingBatch<T extends BillingReconcileItem | BillingReconcileGroup>(
+    items: T[],
+    intervalSeconds: number,
+  ) {
     const safeIntervalSeconds = this.normalizeSendIntervalSeconds(intervalSeconds);
     const offsetsByBaseTime = new Map<string, number>();
 
     return [...items]
-      .sort((left, right) => this.compareBillingReconcileItems(left, right))
+      .sort((left, right) =>
+        'items' in left && 'items' in right
+          ? this.compareBillingReconcileGroups(left, right)
+          : this.compareBillingReconcileItems(
+              left as BillingReconcileItem,
+              right as BillingReconcileItem,
+            ),
+      )
       .map((item) => {
         const baseKey = item.baseScheduledFor.toISOString();
         const offset = offsetsByBaseTime.get(baseKey) ?? 0;
@@ -579,6 +641,34 @@ export class BillingService {
           ),
         };
       });
+  }
+
+  private groupBillingCandidates(items: BillingReconcileItem[]): BillingReconcileGroup[] {
+    const groups = new Map<string, BillingReconcileGroup>();
+
+    for (const item of items) {
+      const idempotencyKey = this.buildGroupedIdempotencyKey(item.client.id, item.businessSendDate);
+      const existing = groups.get(idempotencyKey);
+
+      if (existing) {
+        existing.items.push(item);
+        continue;
+      }
+
+      groups.set(idempotencyKey, {
+        client: item.client,
+        items: [item],
+        idempotencyKey,
+        baseScheduledFor: item.baseScheduledFor,
+        scheduledFor: item.scheduledFor,
+        businessSendDate: item.businessSendDate,
+      });
+    }
+
+    return [...groups.values()].map((group) => ({
+      ...group,
+      items: [...group.items].sort((left, right) => this.compareBillingReconcileItems(left, right)),
+    }));
   }
 
   private async acquireDispatch(id: string, now: Date) {
@@ -602,12 +692,19 @@ export class BillingService {
   }
 
   private async processAcquired(id: string, now: Date) {
-    const dispatch = await this.prisma.messageDispatch.findUnique({
+    let dispatch = await this.prisma.messageDispatch.findUnique({
       where: { id },
       include: {
         client: true,
         clientReference: { include: { plan: true } },
         receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+          orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+        },
         template: true,
         whatsAppConnection: true,
       },
@@ -616,6 +713,34 @@ export class BillingService {
     if (!dispatch) {
       return { id, status: 'missing' };
     }
+
+    const refreshed = await this.refreshDispatchItemsBeforeSend(dispatch);
+
+    if ('code' in refreshed) {
+      const status = refreshed.code === 'RECEIVABLE_CANCELED' ? 'CANCELED' : 'IGNORED';
+      const updated = await this.prisma.messageDispatch.update({
+        where: { id },
+        data: { status, errorCode: refreshed.code, errorMessage: refreshed.message },
+        include: {
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
+          template: true,
+          whatsAppConnection: true,
+        },
+      });
+
+      return this.presentDispatch(updated);
+    }
+
+    dispatch = refreshed;
 
     const ineligible = this.findIneligibleReason(dispatch);
 
@@ -628,6 +753,13 @@ export class BillingService {
           client: true,
           clientReference: { include: { plan: true } },
           receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
           template: true,
           whatsAppConnection: true,
         },
@@ -673,12 +805,21 @@ export class BillingService {
             client: true,
             clientReference: { include: { plan: true } },
             receivable: { include: { clientReference: { include: { plan: true } } } },
+            items: {
+              include: {
+                clientReference: { include: { plan: true } },
+                receivable: { include: { clientReference: { include: { plan: true } } } },
+              },
+              orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+            },
             template: true,
             whatsAppConnection: true,
           },
         });
 
-        if (dispatch.client && dispatch.receivable) {
+        const dispatchItems = this.dispatchItems(dispatch);
+
+        if (dispatch.client && dispatchItems.length) {
           const existingEvent = await tx.clientEvent.findFirst({
             where: {
               clientId: dispatch.client.id,
@@ -696,10 +837,19 @@ export class BillingService {
               clientId: dispatch.client.id,
               type: 'WHATSAPP_MESSAGE_SENT',
               title: 'Cobranca automatica enviada pelo WhatsApp.',
-              description: `Vencimento: ${formatBusinessDate(dispatch.receivable.dueDate)}. Valor: ${this.formatCurrency(dispatch.receivable.amount)}.`,
+              description:
+                dispatchItems.length > 1
+                  ? `${dispatchItems.length} referencias. Total: ${this.formatCurrency(
+                      this.sumDispatchItems(dispatchItems),
+                    )}.`
+                  : `Vencimento: ${formatBusinessDate(
+                      dispatchItems[0]!.receivable.dueDate,
+                    )}. Valor: ${this.formatCurrency(dispatchItems[0]!.receivable.amount)}.`,
               metadata: {
                 messageDispatchId: id,
-                receivableId: dispatch.receivable.id,
+                receivableId: dispatchItems[0]!.receivable.id,
+                receivableIds: dispatchItems.map((item) => item.receivable.id),
+                clientReferenceIds: dispatchItems.map((item) => item.clientReference.id),
                 templateId: dispatch.templateId,
               },
             },
@@ -713,6 +863,110 @@ export class BillingService {
     } catch (error) {
       return this.markRetry(dispatch, 'PROVIDER_ERROR', this.sanitizeError(error), now);
     }
+  }
+
+  private async refreshDispatchItemsBeforeSend(dispatch: BillingDispatch) {
+    const originalItems = this.dispatchItems(dispatch);
+
+    if (!dispatch.client) {
+      return { code: 'CLIENT_MISSING', message: 'Cliente da cobranca nao encontrado.' };
+    }
+
+    if (!originalItems.length) {
+      return { code: 'RECEIVABLE_MISSING', message: 'Conta a receber nao encontrada.' };
+    }
+
+    const currentReceivables = await this.prisma.receivable.findMany({
+      where: { id: { in: originalItems.map((item) => item.receivable.id) } },
+      include: { clientReference: { include: { plan: true } } },
+      orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    });
+    const currentById = new Map(
+      currentReceivables.map((receivable) => [receivable.id, receivable]),
+    );
+    const activeItems = originalItems
+      .map((item) => {
+        const receivable = currentById.get(item.receivable.id);
+        if (!receivable || receivable.status !== 'PENDENTE') return null;
+        if (receivable.clientReference.status !== 'ATIVO') return null;
+
+        return {
+          ...item,
+          receivable,
+          clientReference: receivable.clientReference,
+        };
+      })
+      .filter(Boolean) as BillingDispatchItem[];
+
+    if (!activeItems.length) {
+      const allCanceled = currentReceivables.length
+        ? currentReceivables.every(
+            (receivable) =>
+              receivable.status === 'CANCELADO' ||
+              receivable.clientReference.status === 'CANCELADO',
+          )
+        : false;
+
+      return {
+        code: allCanceled ? 'RECEIVABLE_CANCELED' : 'RECEIVABLE_NO_LONGER_PENDING',
+        message: 'Nenhum item elegivel restou para envio.',
+      };
+    }
+
+    const template =
+      activeItems.length > 1
+        ? await this.ensureGroupedTemplate()
+        : await this.ensureDefaultTemplate();
+
+    if (!template.active) {
+      return { code: 'TEMPLATE_INACTIVE', message: 'Template de cobranca indisponivel.' };
+    }
+
+    const renderedContent = this.renderForDispatchItems(
+      template.content,
+      dispatch.client,
+      activeItems,
+    );
+    const firstItem = activeItems[0]!;
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.messageDispatchItem.deleteMany({ where: { messageDispatchId: dispatch.id } });
+
+      return tx.messageDispatch.update({
+        where: { id: dispatch.id },
+        data: {
+          clientReferenceId: firstItem.clientReference.id,
+          receivableId: firstItem.receivable.id,
+          templateId: template.id,
+          body: renderedContent,
+          renderedContent,
+          items: {
+            create: activeItems.map((item) => ({
+              receivableId: item.receivable.id,
+              clientReferenceId: item.clientReference.id,
+              amount: item.receivable.amount,
+              dueDate: item.receivable.dueDate,
+              referenceSnapshot: item.clientReference.reference,
+              statusSnapshot: item.receivable.status,
+            })),
+          },
+        },
+        include: {
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
+          template: true,
+          whatsAppConnection: true,
+        },
+      });
+    });
   }
 
   private findIneligibleReason(dispatch: BillingDispatch) {
@@ -754,7 +1008,7 @@ export class BillingService {
 
     if (
       !dispatch.template ||
-      dispatch.template.type !== 'BILLING_DUE' ||
+      !['BILLING_DUE', 'BILLING_DUE_GROUPED'].includes(dispatch.template.type) ||
       !dispatch.template.active
     ) {
       return { code: 'TEMPLATE_INACTIVE', message: 'Template de cobranca indisponivel.' };
@@ -769,9 +1023,18 @@ export class BillingService {
       };
     }
 
+    if (!dispatch.client || intent.clientId !== dispatch.client.id) {
+      return {
+        code: 'BILLING_INTENT_MISMATCH',
+        message: 'Intencao de cobranca nao corresponde aos dados atuais.',
+      };
+    }
+
+    if ('businessSendDate' in intent) {
+      return null;
+    }
+
     if (
-      !dispatch.client ||
-      intent.clientId !== dispatch.client.id ||
       intent.receivableId !== dispatch.receivable.id ||
       intent.templateId !== dispatch.template.id
     ) {
@@ -835,6 +1098,50 @@ export class BillingService {
     return client.references ?? [];
   }
 
+  private dispatchItems(dispatch: BillingDispatch): BillingDispatchItem[] {
+    if (dispatch.items?.length) {
+      return dispatch.items;
+    }
+
+    const reference = dispatch.clientReference ?? dispatch.receivable?.clientReference ?? null;
+
+    if (!dispatch.receivable || !reference) {
+      return [];
+    }
+
+    return [
+      {
+        id: `${dispatch.id}:${dispatch.receivable.id}`,
+        messageDispatchId: dispatch.id,
+        receivableId: dispatch.receivable.id,
+        clientReferenceId: reference.id,
+        amount: dispatch.receivable.amount,
+        dueDate: dispatch.receivable.dueDate,
+        referenceSnapshot: reference.reference,
+        statusSnapshot: dispatch.receivable.status,
+        createdAt: dispatch.createdAt,
+        updatedAt: dispatch.updatedAt,
+        clientReference: reference,
+        receivable: dispatch.receivable,
+      },
+    ];
+  }
+
+  private buildDispatchItemCreateInput(items: BillingReconcileItem[]) {
+    return items.map((item) => ({
+      receivableId: item.receivable.id,
+      clientReferenceId: item.reference.id,
+      amount: item.receivable.amount,
+      dueDate: item.receivable.dueDate,
+      referenceSnapshot: item.reference.reference,
+      statusSnapshot: item.receivable.status,
+    }));
+  }
+
+  private sumDispatchItems(items: Array<Pick<BillingDispatchItem, 'receivable'>>) {
+    return items.reduce((total, item) => total + Number(item.receivable.amount), 0);
+  }
+
   private async markRetry(
     dispatch: Pick<MessageDispatch, 'id' | 'attempts'>,
     errorCode: string,
@@ -855,6 +1162,13 @@ export class BillingService {
         client: true,
         clientReference: { include: { plan: true } },
         receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+          orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+        },
         template: true,
         whatsAppConnection: true,
       },
@@ -899,16 +1213,17 @@ export class BillingService {
 
   private async cancelObsoleteFutureDispatches(
     clientId: string,
-    clientReferenceId: string,
-    expectedKey: string | null,
+    businessSendDate: string,
+    expectedKey: string,
   ) {
+    const window = this.businessDateWindowFromDate(businessSendDate);
     const result = await this.prisma.messageDispatch.updateMany({
       where: {
         clientId,
-        clientReferenceId,
         origin: 'BILLING',
         status: 'SCHEDULED',
-        ...(expectedKey ? { idempotencyKey: { not: expectedKey } } : {}),
+        scheduledFor: { gte: window.start, lte: window.end },
+        idempotencyKey: { not: expectedKey },
       },
       data: {
         status: 'CANCELED',
@@ -921,26 +1236,45 @@ export class BillingService {
   }
 
   private async rescheduleExistingFutureDispatch(
-    idempotencyKey: string,
-    scheduledFor: Date,
+    group: BillingReconcileGroup,
+    template: MessageTemplate,
+    renderedContent: string,
     now: Date,
   ) {
-    const result = await this.prisma.messageDispatch.updateMany({
+    const existing = await this.prisma.messageDispatch.findFirst({
       where: {
         origin: 'BILLING',
-        idempotencyKey,
+        idempotencyKey: group.idempotencyKey,
         status: 'SCHEDULED',
         scheduledFor: { gt: now },
       },
-      data: {
-        scheduledFor,
-        nextAttemptAt: scheduledFor,
-        errorCode: null,
-        errorMessage: null,
-      },
+      select: { id: true },
     });
 
-    return result.count > 0;
+    if (!existing) return false;
+
+    const firstItem = group.items[0]!;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.messageDispatchItem.deleteMany({ where: { messageDispatchId: existing.id } });
+      await tx.messageDispatch.update({
+        where: { id: existing.id },
+        data: {
+          clientReferenceId: firstItem.reference.id,
+          receivableId: firstItem.receivable.id,
+          templateId: template.id,
+          body: renderedContent,
+          renderedContent,
+          scheduledFor: group.scheduledFor,
+          nextAttemptAt: group.scheduledFor,
+          errorCode: null,
+          errorMessage: null,
+          items: { create: this.buildDispatchItemCreateInput(group.items) },
+        },
+      });
+    });
+
+    return true;
   }
 
   private async cancelNoLongerEligibleDispatches() {
@@ -950,10 +1284,6 @@ export class BillingService {
         status: 'SCHEDULED',
         OR: [
           { client: { is: null } },
-          { clientReference: { is: null } },
-          { clientReference: { is: { status: { not: 'ATIVO' } } } },
-          { receivable: { is: null } },
-          { receivable: { is: { status: { not: 'PENDENTE' } } } },
           { template: { is: null } },
           { template: { is: { active: false } } },
         ],
@@ -983,6 +1313,13 @@ export class BillingService {
         {
           receivable: { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
         },
+        {
+          items: {
+            some: {
+              clientReference: { reference: { contains: search, mode: 'insensitive' } },
+            },
+          },
+        },
         { phone: { contains: search } },
       ];
     }
@@ -995,7 +1332,19 @@ export class BillingService {
     }
 
     if (query.dueDate) {
-      where.receivable = { dueDate: parseBusinessDate(query.dueDate) };
+      const dueDate = parseBusinessDate(query.dueDate);
+      const dueDateOr: Prisma.MessageDispatchWhereInput[] = [
+        { receivable: { dueDate } },
+        { items: { some: { dueDate } } },
+      ];
+      const dueDateWhere: Prisma.MessageDispatchWhereInput = { OR: dueDateOr };
+
+      if (where.OR) {
+        where.AND = [{ OR: where.OR }, dueDateWhere];
+        delete where.OR;
+      } else {
+        where.OR = dueDateOr;
+      }
     }
 
     return where;
@@ -1010,6 +1359,20 @@ export class BillingService {
         type: 'BILLING_DUE',
         content:
           'Bom dia, *{{primeiroNome}}*! Seu serviço vence em {{vencimento}} no valor de {{valor}}. Queria saber se tem interesse em renovar?',
+        active: true,
+      },
+    });
+  }
+
+  private async ensureGroupedTemplate() {
+    return this.prisma.messageTemplate.upsert({
+      where: { type_name: { type: 'BILLING_DUE_GROUPED', name: 'Cobranca agrupada' } },
+      update: {},
+      create: {
+        name: 'Cobranca agrupada',
+        type: 'BILLING_DUE_GROUPED',
+        content:
+          'Olá, {{primeiroNome}}!\n\nVocê possui {{quantidade}} serviços com cobrança programada:\n\n{{itens}}\n\nTotal: {{valorTotal}}',
         active: true,
       },
     });
@@ -1043,21 +1406,88 @@ export class BillingService {
       referencia: reference.reference,
       diasAtraso: '',
       pix: '',
+      quantidade: '',
+      itens: '',
+      valorTotal: '',
     });
   }
 
-  private buildIdempotencyKey(
-    clientId: string,
-    receivableId: string,
-    dueDate: Date,
-    billingNoticeDays: number,
-    templateId: string,
+  private renderForClientReferenceGroup(
+    template: string,
+    client: Client,
+    items: BillingReconcileItem[],
   ) {
-    return `billing:${clientId}:${receivableId}:${formatBusinessDate(dueDate)}:${billingNoticeDays}:${templateId}`;
+    return this.renderer.render(template, {
+      nome: client.name,
+      primeiroNome: this.firstName(client.name),
+      valor: '',
+      vencimento: '',
+      plano: '',
+      referencia: '',
+      diasAtraso: '',
+      pix: '',
+      quantidade: String(items.length),
+      itens: items
+        .map(
+          (item) =>
+            `• ${item.reference.reference} — ${this.formatCurrency(
+              item.receivable.amount,
+            )} — vence ${this.formatDisplayDate(item.receivable.dueDate)}`,
+        )
+        .join('\n'),
+      valorTotal: this.formatCurrency(
+        items.reduce((total, item) => total + Number(item.receivable.amount), 0),
+      ),
+    });
+  }
+
+  private renderForDispatchItems(template: string, client: Client, items: BillingDispatchItem[]) {
+    const firstItem = items[0]!;
+
+    if (items.length === 1) {
+      return this.renderForClientReference(
+        template,
+        client,
+        firstItem.clientReference as ClientReference & { plan: Plan },
+        firstItem.receivable,
+      );
+    }
+
+    return this.renderer.render(template, {
+      nome: client.name,
+      primeiroNome: this.firstName(client.name),
+      valor: '',
+      vencimento: '',
+      plano: '',
+      referencia: '',
+      diasAtraso: '',
+      pix: '',
+      quantidade: String(items.length),
+      itens: items
+        .map(
+          (item) =>
+            `• ${item.clientReference.reference} — ${this.formatCurrency(
+              item.receivable.amount,
+            )} — vence ${this.formatDisplayDate(item.receivable.dueDate)}`,
+        )
+        .join('\n'),
+      valorTotal: this.formatCurrency(this.sumDispatchItems(items)),
+    });
+  }
+
+  private buildGroupedIdempotencyKey(clientId: string, businessSendDate: string) {
+    return `billing-group:${clientId}:${businessSendDate}`;
   }
 
   private parseIdempotencyKey(key: string) {
     const parts = key.split(':');
+
+    if (parts.length === 3 && parts[0] === 'billing-group') {
+      return {
+        clientId: parts[1],
+        businessSendDate: parts[2],
+      };
+    }
 
     if (parts.length !== 6 || parts[0] !== 'billing') {
       return null;
@@ -1126,6 +1556,14 @@ export class BillingService {
     );
   }
 
+  private compareBillingReconcileGroups(left: BillingReconcileGroup, right: BillingReconcileGroup) {
+    return (
+      left.baseScheduledFor.getTime() - right.baseScheduledFor.getTime() ||
+      left.client.createdAt.getTime() - right.client.createdAt.getTime() ||
+      left.client.id.localeCompare(right.client.id)
+    );
+  }
+
   private normalizeSendIntervalSeconds(value: number) {
     if (
       !Number.isInteger(value) ||
@@ -1154,6 +1592,13 @@ export class BillingService {
     const local = new Date(now.getTime() - 3 * 60 * 60 * 1000);
     const yyyyMmDd = local.toISOString().slice(0, 10);
 
+    return {
+      start: new Date(`${yyyyMmDd}T00:00:00-03:00`),
+      end: new Date(`${yyyyMmDd}T23:59:59.999-03:00`),
+    };
+  }
+
+  private businessDateWindowFromDate(yyyyMmDd: string) {
     return {
       start: new Date(`${yyyyMmDd}T00:00:00-03:00`),
       end: new Date(`${yyyyMmDd}T23:59:59.999-03:00`),
@@ -1204,6 +1649,11 @@ export class BillingService {
   }
 
   private presentDispatch(dispatch: BillingDispatch) {
+    const items = this.dispatchItems(dispatch);
+    const totalAmount = items.length ? this.sumDispatchItems(items) : null;
+    const distinctDueDates = [...new Set(items.map((item) => formatBusinessDate(item.dueDate)))];
+    const primaryItem = items[0] ?? null;
+
     return {
       id: dispatch.id,
       clientId: dispatch.clientId,
@@ -1227,41 +1677,65 @@ export class BillingService {
       sentAt: dispatch.sentAt?.toISOString() ?? null,
       createdAt: dispatch.createdAt.toISOString(),
       updatedAt: dispatch.updatedAt.toISOString(),
+      itemCount: items.length,
+      totalAmount: totalAmount !== null ? totalAmount.toFixed(2) : null,
+      dueDateLabel: distinctDueDates.length > 1 ? 'Vários' : (distinctDueDates[0] ?? null),
+      items: items.map((item) => ({
+        id: item.id,
+        receivableId: item.receivable.id,
+        clientReferenceId: item.clientReference.id,
+        reference: item.clientReference.reference,
+        amount: item.receivable.amount.toString(),
+        dueDate: formatBusinessDate(item.receivable.dueDate),
+        status: item.receivable.status,
+      })),
       client: dispatch.client
         ? {
             id: dispatch.client.id,
             name: dispatch.client.name,
             reference:
+              (items.length > 1
+                ? `${items.length} referencias`
+                : primaryItem?.clientReference.reference) ??
               dispatch.clientReference?.reference ??
-              dispatch.receivable?.clientReference?.reference ??
               dispatch.client.reference,
             status:
+              primaryItem?.clientReference.status ??
               dispatch.clientReference?.status ??
-              dispatch.receivable?.clientReference?.status ??
               dispatch.client.status,
             planName:
+              (items.length > 1 ? null : primaryItem?.clientReference.plan?.name) ??
               dispatch.clientReference?.plan?.name ??
-              dispatch.receivable?.clientReference?.plan?.name ??
               null,
           }
         : null,
       clientReference:
-        (dispatch.clientReference ?? dispatch.receivable?.clientReference)
+        ((items.length === 1 ? primaryItem?.clientReference : null) ??
+        dispatch.clientReference ??
+        dispatch.receivable?.clientReference)
           ? {
-              id: (dispatch.clientReference ?? dispatch.receivable?.clientReference)!.id,
-              reference: (dispatch.clientReference ?? dispatch.receivable?.clientReference)!
-                .reference,
-              status: (dispatch.clientReference ?? dispatch.receivable?.clientReference)!.status,
+              id: ((items.length === 1 ? primaryItem?.clientReference : null) ??
+                dispatch.clientReference ??
+                dispatch.receivable?.clientReference)!.id,
+              reference: ((items.length === 1 ? primaryItem?.clientReference : null) ??
+                dispatch.clientReference ??
+                dispatch.receivable?.clientReference)!.reference,
+              status: ((items.length === 1 ? primaryItem?.clientReference : null) ??
+                dispatch.clientReference ??
+                dispatch.receivable?.clientReference)!.status,
             }
           : null,
-      receivable: dispatch.receivable
-        ? {
-            id: dispatch.receivable.id,
-            amount: dispatch.receivable.amount.toString(),
-            dueDate: formatBusinessDate(dispatch.receivable.dueDate),
-            status: dispatch.receivable.status,
-          }
-        : null,
+      receivable:
+        (primaryItem?.receivable ?? dispatch.receivable)
+          ? {
+              id: (primaryItem?.receivable ?? dispatch.receivable)!.id,
+              amount: (primaryItem?.receivable ?? dispatch.receivable)!.amount.toString(),
+              dueDate: formatBusinessDate(
+                (primaryItem?.receivable ?? dispatch.receivable)!.dueDate,
+              ),
+              status: (primaryItem?.receivable ?? dispatch.receivable)!.status,
+            }
+          : null,
       template: dispatch.template
         ? {
             id: dispatch.template.id,

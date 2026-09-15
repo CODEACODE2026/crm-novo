@@ -224,6 +224,7 @@ function serviceFactory({
   connectionRecord = connection(),
   settingsRecord = automationSettings(),
   existingClientEvent = null,
+  currentReceivables,
 }: {
   clients?: Array<ReturnType<typeof client>>;
   dispatchForProcessing?: ReturnType<typeof dispatch>;
@@ -234,20 +235,51 @@ function serviceFactory({
   connectionRecord?: ReturnType<typeof connection> | null;
   settingsRecord?: ReturnType<typeof automationSettings>;
   existingClientEvent?: Record<string, unknown> | null;
+  currentReceivables?: Array<
+    ReturnType<typeof receivable> & { clientReference?: ReturnType<typeof clientReference> }
+  >;
 } = {}) {
   const clientEventCreate = vi.fn().mockResolvedValue({});
   const clientEventFindFirst = vi.fn().mockResolvedValue(existingClientEvent);
   const billingResponseCreate = vi.fn();
   const billingResponseUpsert = vi.fn();
-  const updateDispatch = vi.fn().mockImplementation(({ data }) =>
-    Promise.resolve(
+  const updateDispatch = vi.fn().mockImplementation(({ data }) => {
+    const updatedReceivable = currentReceivables?.find((item) => item.id === data.receivableId);
+    const updatedReference = updatedReceivable?.clientReference;
+    const dispatchWithOptionalItems = dispatchForProcessing as typeof dispatchForProcessing & {
+      items?: unknown[];
+    };
+
+    return Promise.resolve(
       dispatch({
         ...dispatchForProcessing,
         ...data,
-        status: data.status,
+        receivable: updatedReceivable ?? dispatchForProcessing.receivable,
+        clientReference: updatedReference ?? dispatchForProcessing.clientReference,
+        items: Array.isArray(data.items)
+          ? data.items
+          : updatedReceivable
+            ? [
+                {
+                  id: 'updated-item',
+                  messageDispatchId: dispatchForProcessing.id,
+                  receivableId: updatedReceivable.id,
+                  clientReferenceId: updatedReceivable.clientReferenceId,
+                  amount: updatedReceivable.amount,
+                  dueDate: updatedReceivable.dueDate,
+                  referenceSnapshot: updatedReference?.reference ?? '',
+                  statusSnapshot: updatedReceivable.status,
+                  createdAt: now,
+                  updatedAt: now,
+                  receivable: updatedReceivable,
+                  clientReference: updatedReference,
+                },
+              ]
+            : dispatchWithOptionalItems.items,
+        status: data.status ?? dispatchForProcessing.status,
       }),
-    ),
-  );
+    );
+  });
   const updateMany = vi.fn().mockImplementation(({ data }) => {
     if (data?.status === 'PROCESSING') {
       const count = acquireCount > 0 ? 1 : 0;
@@ -259,7 +291,19 @@ function serviceFactory({
   });
   const prisma = {
     messageTemplate: {
-      upsert: vi.fn().mockResolvedValue(templateRecord),
+      upsert: vi.fn().mockImplementation(({ where }) =>
+        Promise.resolve(
+          where?.type_name?.type === 'BILLING_DUE_GROUPED'
+            ? template({
+                id: 'grouped-template-id',
+                name: 'Cobranca agrupada',
+                type: 'BILLING_DUE_GROUPED',
+                content:
+                  'Oi {{primeiroNome}}, {{quantidade}} cobranças:\n{{itens}}\nTotal: {{valorTotal}}.',
+              })
+            : templateRecord,
+        ),
+      ),
       findMany: vi.fn().mockResolvedValue([templateRecord]),
       findUnique: vi.fn().mockResolvedValue(templateRecord),
       update: vi.fn().mockResolvedValue(templateRecord),
@@ -278,9 +322,22 @@ function serviceFactory({
       create: createDispatch,
       updateMany,
       findMany: vi.fn().mockResolvedValue([dispatch()]),
+      findFirst: vi.fn().mockResolvedValue(null),
       findUnique: vi.fn().mockResolvedValue(dispatchForProcessing),
       update: updateDispatch,
       count: vi.fn().mockResolvedValue(0),
+    },
+    receivable: {
+      findMany: vi.fn().mockResolvedValue(
+        currentReceivables ?? [
+          {
+            ...dispatchForProcessing.receivable,
+            clientReference:
+              dispatchForProcessing.clientReference ??
+              clientReference({ receivables: [dispatchForProcessing.receivable] }),
+          },
+        ],
+      ),
     },
     $transaction: vi.fn(async (input: unknown) => {
       if (Array.isArray(input)) {
@@ -290,6 +347,7 @@ function serviceFactory({
       const callback = input as (tx: unknown) => Promise<unknown>;
       return callback({
         messageDispatch: { update: updateDispatch },
+        messageDispatchItem: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         clientEvent: { create: clientEventCreate, findFirst: clientEventFindFirst },
         billingResponse: { create: billingResponseCreate, upsert: billingResponseUpsert },
       });
@@ -327,6 +385,14 @@ type DispatchCreateArgs = {
     scheduledFor: Date;
     clientReferenceId?: string | null;
     receivableId?: string | null;
+    idempotencyKey?: string;
+    renderedContent?: string;
+    items?: {
+      create: Array<{
+        receivableId: string;
+        clientReferenceId: string;
+      }>;
+    };
   };
 };
 
@@ -389,10 +455,18 @@ describe('BillingService', () => {
         data: expect.objectContaining({
           origin: 'BILLING',
           status: 'SCHEDULED',
-          idempotencyKey: 'billing:client-id:receivable-id:2026-09-15:0:template-id',
+          idempotencyKey: 'billing-group:client-id:2026-09-15',
           scheduledFor: new Date('2026-09-15T12:00:00.000Z'),
           nextAttemptAt: new Date('2026-09-15T12:00:00.000Z'),
           renderedContent: expect.stringContaining('15/09/2026'),
+          items: {
+            create: [
+              expect.objectContaining({
+                receivableId: 'receivable-id',
+                clientReferenceId: 'client-reference-id',
+              }),
+            ],
+          },
         }),
       }),
     );
@@ -437,7 +511,7 @@ describe('BillingService', () => {
     });
   });
 
-  it('keeps two references from the same client independent in the scheduled queue', async () => {
+  it('groups two references from the same client on the same send date', async () => {
     const firstReceivable = receivable({
       id: 'receivable-a',
       clientReferenceId: 'reference-a',
@@ -472,15 +546,150 @@ describe('BillingService', () => {
     await service.reconcile(now);
 
     const dispatches = createdDispatchData(createDispatch);
-    expect(dispatches.map((data) => data.clientReferenceId)).toEqual([
-      'reference-a',
-      'reference-b',
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]!).toMatchObject({
+      clientReferenceId: 'reference-a',
+      receivableId: 'receivable-a',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+    });
+    expect(dispatches[0]!.items?.create).toEqual([
+      expect.objectContaining({ clientReferenceId: 'reference-a', receivableId: 'receivable-a' }),
+      expect.objectContaining({ clientReferenceId: 'reference-b', receivableId: 'receivable-b' }),
     ]);
-    expect(dispatches.map((data) => data.receivableId)).toEqual(['receivable-a', 'receivable-b']);
     expect(dispatches.map((data) => data.scheduledFor.toISOString())).toEqual([
       '2026-09-15T12:00:00.000Z',
-      '2026-09-15T12:00:08.000Z',
     ]);
+  });
+
+  it('consolidates three same-client receivables on the same send date with total and item links', async () => {
+    const refs = [1, 2, 3].map((index) => {
+      const referenceId = `reference-${index}`;
+      const nextReceivable = receivable({
+        id: `receivable-${index}`,
+        clientReferenceId: referenceId,
+        amount: 30,
+      });
+
+      return clientReference({
+        id: referenceId,
+        reference: `teste0${index}`,
+        receivables: [nextReceivable],
+      });
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [
+        client({
+          name: 'Atualiza',
+          receivables: refs.flatMap((reference) => reference.receivables),
+          references: refs,
+        }),
+      ],
+      createDispatch,
+    });
+
+    const result = await service.reconcile(now);
+    const dispatches = createdDispatchData(createDispatch);
+
+    expect(result.created).toBe(1);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]!.renderedContent).toContain('3 cobranças');
+    expect(dispatches[0]!.renderedContent).toContain('Total: R$ 90,00');
+    expect(dispatches[0]!.items?.create).toEqual([
+      expect.objectContaining({ clientReferenceId: 'reference-1', receivableId: 'receivable-1' }),
+      expect.objectContaining({ clientReferenceId: 'reference-2', receivableId: 'receivable-2' }),
+      expect.objectContaining({ clientReferenceId: 'reference-3', receivableId: 'receivable-3' }),
+    ]);
+  });
+
+  it('keeps same-client receivables separated when their effective send dates differ', async () => {
+    const firstReceivable = receivable({
+      id: 'receivable-a',
+      clientReferenceId: 'reference-a',
+      dueDate: new Date('2026-09-17T00:00:00.000Z'),
+    });
+    const secondReceivable = receivable({
+      id: 'receivable-b',
+      clientReferenceId: 'reference-b',
+      dueDate: new Date('2026-09-18T00:00:00.000Z'),
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [
+        client({
+          receivables: [firstReceivable, secondReceivable],
+          references: [
+            clientReference({
+              id: 'reference-a',
+              reference: 'A',
+              dueDate: new Date('2026-09-17T00:00:00.000Z'),
+              receivables: [firstReceivable],
+            }),
+            clientReference({
+              id: 'reference-b',
+              reference: 'B',
+              dueDate: new Date('2026-09-18T00:00:00.000Z'),
+              receivables: [secondReceivable],
+            }),
+          ],
+        }),
+      ],
+      createDispatch,
+    });
+
+    await service.reconcile(now);
+
+    expect(createdDispatchData(createDispatch).map((data) => data.idempotencyKey)).toEqual([
+      'billing-group:client-id:2026-09-17',
+      'billing-group:client-id:2026-09-18',
+    ]);
+  });
+
+  it('consolidates different notice days that resolve to the same effective send date', async () => {
+    const firstDueDate = new Date('2026-09-20T00:00:00.000Z');
+    const secondDueDate = new Date('2026-09-17T00:00:00.000Z');
+    const firstReceivable = receivable({
+      id: 'receivable-a',
+      clientReferenceId: 'reference-a',
+      dueDate: firstDueDate,
+    });
+    const secondReceivable = receivable({
+      id: 'receivable-b',
+      clientReferenceId: 'reference-b',
+      dueDate: secondDueDate,
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [
+        client({
+          receivables: [firstReceivable, secondReceivable],
+          references: [
+            clientReference({
+              id: 'reference-a',
+              reference: 'A',
+              dueDate: firstDueDate,
+              billingNoticeDays: 3,
+              receivables: [firstReceivable],
+            }),
+            clientReference({
+              id: 'reference-b',
+              reference: 'B',
+              dueDate: secondDueDate,
+              billingNoticeDays: 0,
+              receivables: [secondReceivable],
+            }),
+          ],
+        }),
+      ],
+      createDispatch,
+    });
+
+    await service.reconcile(now);
+
+    const dispatches = createdDispatchData(createDispatch);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]!.idempotencyKey).toBe('billing-group:client-id:2026-09-17');
+    expect(dispatches[0]!.items?.create).toHaveLength(2);
   });
 
   it('uses a changed send interval when reconciling future scheduled dispatches', async () => {
@@ -607,7 +816,7 @@ describe('BillingService', () => {
           clientId: 'client-id',
           origin: 'BILLING',
           idempotencyKey: {
-            not: 'billing:client-id:receivable-id:2026-09-15:3:template-id',
+            not: 'billing-group:client-id:2026-09-12',
           },
         }),
         data: expect.objectContaining({ status: 'CANCELED' }),
@@ -634,7 +843,7 @@ describe('BillingService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           idempotencyKey: {
-            not: 'billing:client-id:receivable-id:2026-09-20:0:template-id',
+            not: 'billing-group:client-id:2026-09-20',
           },
         }),
       }),
@@ -642,7 +851,7 @@ describe('BillingService', () => {
     expect(createDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          idempotencyKey: 'billing:client-id:receivable-id:2026-09-20:0:template-id',
+          idempotencyKey: 'billing-group:client-id:2026-09-20',
           scheduledFor: new Date('2026-09-20T12:00:00.000Z'),
         }),
       }),
@@ -669,7 +878,7 @@ describe('BillingService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           idempotencyKey: {
-            not: 'billing:client-id:receivable-id:2026-09-20:3:template-id',
+            not: 'billing-group:client-id:2026-09-17',
           },
         }),
       }),
@@ -677,7 +886,7 @@ describe('BillingService', () => {
     expect(createDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          idempotencyKey: 'billing:client-id:receivable-id:2026-09-20:3:template-id',
+          idempotencyKey: 'billing-group:client-id:2026-09-17',
           scheduledFor: new Date('2026-09-17T12:00:00.000Z'),
         }),
       }),
@@ -698,7 +907,7 @@ describe('BillingService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           idempotencyKey: {
-            not: 'billing:client-id:receivable-renewed-id:2026-09-15:0:template-id',
+            not: 'billing-group:client-id:2026-09-15',
           },
         }),
       }),
@@ -707,7 +916,7 @@ describe('BillingService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           receivableId: 'receivable-renewed-id',
-          idempotencyKey: 'billing:client-id:receivable-renewed-id:2026-09-15:0:template-id',
+          idempotencyKey: 'billing-group:client-id:2026-09-15',
         }),
       }),
     );
@@ -871,7 +1080,7 @@ describe('BillingService', () => {
 
   it.each([
     [client({ status: 'INATIVO' }), 'IGNORED'],
-    [client({ status: 'CANCELADO' }), 'IGNORED'],
+    [client({ status: 'CANCELADO' }), 'CANCELED'],
     [client(), 'IGNORED', receivable({ status: 'PAGO' })],
     [client(), 'CANCELED', receivable({ status: 'CANCELADO' })],
     [client({ dueDate: new Date('2026-09-16T00:00:00.000Z') }), 'IGNORED'],
@@ -991,6 +1200,78 @@ describe('BillingService', () => {
       expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
     );
     expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates grouped dispatch items before sending and removes paid receivables', async () => {
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const refA = clientReference({ id: 'reference-a', reference: 'A' });
+    const refB = clientReference({ id: 'reference-b', reference: 'B' });
+    const receivableA = receivable({
+      id: 'receivable-a',
+      clientReferenceId: 'reference-a',
+      status: 'PAGO',
+    });
+    const receivableB = receivable({ id: 'receivable-b', clientReferenceId: 'reference-b' });
+    const groupedDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+      receivable: receivableA,
+      clientReference: refA,
+      items: [
+        {
+          id: 'item-a',
+          messageDispatchId: 'dispatch-id',
+          receivableId: 'receivable-a',
+          clientReferenceId: 'reference-a',
+          amount: 50,
+          dueDate,
+          referenceSnapshot: 'A',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: receivableA,
+          clientReference: refA,
+        },
+        {
+          id: 'item-b',
+          messageDispatchId: 'dispatch-id',
+          receivableId: 'receivable-b',
+          clientReferenceId: 'reference-b',
+          amount: 50,
+          dueDate,
+          referenceSnapshot: 'B',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: receivableB,
+          clientReference: refB,
+        },
+      ],
+    });
+    const { service, updateDispatch } = serviceFactory({
+      providerSendText,
+      dispatchForProcessing: groupedDispatch,
+      currentReceivables: [
+        { ...receivableA, clientReference: refA },
+        { ...receivableB, clientReference: refB },
+      ],
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          receivableId: 'receivable-b',
+          items: {
+            create: [expect.objectContaining({ receivableId: 'receivable-b' })],
+          },
+        }),
+      }),
+    );
   });
 
   it('searches dispatches by ClientReference.reference without Client.reference fallback', async () => {

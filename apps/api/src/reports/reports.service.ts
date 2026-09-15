@@ -371,7 +371,10 @@ export class ReportsService {
 
     if (scheduledRange) where.scheduledFor = scheduledRange;
     if (query.dispatchStatus) where.status = query.dispatchStatus;
-    if (query.dueDate) where.receivable = { dueDate: parseBusinessDate(query.dueDate) };
+    if (query.dueDate) {
+      const dueDate = parseBusinessDate(query.dueDate);
+      where.OR = [{ receivable: { dueDate } }, { items: { some: { dueDate } } }];
+    }
     if (query.search) {
       const search = query.search.trim();
       where.OR = [
@@ -394,6 +397,10 @@ export class ReportsService {
           client: true,
           clientReference: true,
           receivable: { include: { clientReference: true } },
+          items: {
+            include: { clientReference: true, receivable: true },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
         },
         orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'desc' }],
         take,
@@ -420,11 +427,21 @@ export class ReportsService {
       rows: items.map((dispatch) => ({
         Cliente: dispatch.client?.name ?? '',
         Referencia:
-          dispatch.clientReference?.reference ??
-          dispatch.receivable?.clientReference.reference ??
-          '',
+          dispatch.items.length > 1
+            ? `${dispatch.items.length} referencias`
+            : (dispatch.items[0]?.clientReference.reference ??
+              dispatch.clientReference?.reference ??
+              dispatch.receivable?.clientReference.reference ??
+              ''),
         Telefone: dispatch.phone,
-        Vencimento: dispatch.receivable ? formatBusinessDate(dispatch.receivable.dueDate) : '',
+        Vencimento:
+          dispatch.items.length > 1
+            ? 'Varios'
+            : dispatch.items[0]?.receivable.dueDate
+              ? formatBusinessDate(dispatch.items[0].receivable.dueDate)
+              : dispatch.receivable
+                ? formatBusinessDate(dispatch.receivable.dueDate)
+                : '',
         Status: dispatch.status,
         Tentativas: String(dispatch.attempts),
         Agendada: dispatch.scheduledFor ? this.formatDateTime(dispatch.scheduledFor) : '',

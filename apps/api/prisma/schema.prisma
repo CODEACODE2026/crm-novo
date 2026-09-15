@@ -135,6 +135,7 @@ enum MessageDispatchStatus {
 enum MessageTemplateType {
   INITIAL_ACTIVATION
   BILLING_DUE
+  BILLING_DUE_GROUPED
   RECOVERY_DAY_3
   RECOVERY_DAY_7
   RECOVERY_DAY_10
@@ -294,6 +295,7 @@ model ClientReference {
   receivables           Receivable[]
   recoveryCampaigns     RecoveryCampaign[]
   messageDispatches     MessageDispatch[]
+  messageDispatchItems  MessageDispatchItem[]
   billingResponses      BillingResponse[]
   financialTransactions FinancialTransaction[]
   statusHistory         ClientStatusHistory[]
@@ -368,6 +370,7 @@ model MessageDispatch {
   recoveryCampaign     RecoveryCampaign?     @relation(fields: [recoveryCampaignId], references: [id], onDelete: SetNull)
   recoveryStep         RecoveryCampaignStep?
   billingResponse      BillingResponse?
+  items                MessageDispatchItem[]
 
   @@index([clientId])
   @@index([clientReferenceId])
@@ -381,6 +384,28 @@ model MessageDispatch {
   @@index([nextAttemptAt])
   @@index([createdAt])
   @@map("message_dispatches")
+}
+
+model MessageDispatchItem {
+  id                  String           @id @default(uuid()) @db.Uuid
+  messageDispatchId   String           @db.Uuid
+  receivableId        String           @db.Uuid
+  clientReferenceId   String           @db.Uuid
+  amount              Decimal          @db.Decimal(12, 2)
+  dueDate             DateTime         @db.Date
+  referenceSnapshot   String
+  statusSnapshot      ReceivableStatus
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  messageDispatch     MessageDispatch  @relation(fields: [messageDispatchId], references: [id], onDelete: Cascade)
+  receivable          Receivable       @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  clientReference     ClientReference  @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+
+  @@unique([messageDispatchId, receivableId])
+  @@index([receivableId])
+  @@index([clientReferenceId])
+  @@index([dueDate])
+  @@map("message_dispatch_items")
 }
 
 model MessageTemplate {
@@ -635,6 +660,7 @@ model Receivable {
   paymentGroupItems  PaymentGroupItem[]
   recoveryCampaigns  RecoveryCampaign[]
   messageDispatches  MessageDispatch[]
+  messageDispatchItems  MessageDispatchItem[]
   paymentIntents     PaymentIntent[]
   billingResponses   BillingResponse[]
 

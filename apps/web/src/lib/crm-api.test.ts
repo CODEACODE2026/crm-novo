@@ -18,6 +18,10 @@ describe('CRM UI formatters', () => {
     expect(formatDate('2026-10-10')).toBe('10/10/2026');
   });
 
+  it('formats ISO business dates without leaking the time segment', () => {
+    expect(formatDate('2026-09-14T00:00:00.000Z')).toBe('14/09/2026');
+  });
+
   it('formats BRL values', () => {
     expect(formatCurrency('50.00')).toContain('50,00');
   });

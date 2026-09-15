@@ -936,7 +936,13 @@ export function formatCurrency(value: string | number) {
 }
 
 export function formatDate(value: string) {
-  const [year, month, day] = value.split('-');
+  const [year, month, dayWithTime] = value.split('-');
+  const day = dayWithTime?.slice(0, 2);
+
+  if (!year || !month || !day) {
+    return value;
+  }
+
   return `${day}/${month}/${year}`;
 }
 

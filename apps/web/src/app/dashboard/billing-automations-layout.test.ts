@@ -1,0 +1,91 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
+const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
+
+describe('billing and automations UI 2.0 presentation source', () => {
+  it('renders the billing header, semantic KPIs, and compact toolbar', () => {
+    expect(dashboardSource).toContain('title="Cobranças"');
+    expect(dashboardSource).toContain(
+      'description="Acompanhe os envios e a situação das cobranças dos clientes."',
+    );
+    expect(dashboardSource).toContain('const billingKpis = [');
+    expect(dashboardSource).toContain("label: 'Ignoradas/Canceladas'");
+    expect(dashboardSource).toContain('className="toolbar billing-toolbar"');
+    expect(dashboardSource).toContain('placeholder="Buscar cliente/referência"');
+    expect(dashboardSource).toContain('await reconcileBilling();');
+    expect(stylesSource).toContain('.billing-toolbar');
+  });
+
+  it('keeps billing rows consolidated and aligned with semantic status pills', () => {
+    expect(dashboardSource).toContain('billingDispatchReferenceLabel(dispatch)');
+    expect(dashboardSource).toContain('billingDispatchAmountLabel(dispatch)');
+    expect(dashboardSource).toContain('billingDispatchDueDateLabel(dispatch)');
+    expect(dashboardSource).toContain('className="billing-amount-column"');
+    expect(dashboardSource).toContain('className="finance-status-column">Status');
+    expect(dashboardSource).toContain('className="finance-attempts-column">Tentativas');
+    expect(dashboardSource).toContain('className="finance-actions-column">Ações');
+    expect(dashboardSource).toContain('billingDispatchStatusTone');
+    expect(stylesSource).toContain('.billing-amount-column');
+    expect(stylesSource).toContain('text-align: right;');
+  });
+
+  it('opens billing details in a central modal and preserves send-now handler', () => {
+    expect(dashboardSource).toContain('function BillingDispatchDetailModal');
+    expect(dashboardSource).toContain('Detalhes da cobrança');
+    expect(dashboardSource).toContain('providerMessageId');
+    expect(dashboardSource).toContain('Itens consolidados');
+    expect(dashboardSource).toContain('if (!current) return null;');
+    expect(dashboardSource).toContain('await sendBillingNow(dispatch.id);');
+    expect(dashboardSource).toContain('Enviar agora');
+    expect(dashboardSource).toContain(
+      'className="modal dispatch-detail-modal billing-dispatch-modal"',
+    );
+  });
+
+  it('keeps recovery out of the billing helper scope', () => {
+    expect(dashboardSource).toContain('listBillingDispatches(filters)');
+    expect(dashboardSource).not.toContain("origin: 'RECOVERY'");
+    expect(dashboardSource).toContain("if (status === 'IGNORED') return 'muted'");
+  });
+
+  it('renders automation billing settings, throttle values, timezone, and next dispatches', () => {
+    expect(dashboardSource).toContain('Cobrança automática');
+    expect(dashboardSource).toContain('Envio programado de lembretes de cobrança.');
+    expect(dashboardSource).toContain('Ativar cobrança automática');
+    expect(dashboardSource).toContain('sendIntervalSeconds');
+    expect(dashboardSource).toContain('America/Sao_Paulo');
+    expect(dashboardSource).toContain('1 comunicação por execução');
+    expect(dashboardSource).toContain('Próximos envios');
+    expect(dashboardSource).toContain('automation-schedule-table');
+    expect(dashboardSource).toContain('setSelectedAutomationDispatch(dispatch)');
+  });
+
+  it('renders recovery settings, offsets, campaign rows, and campaign detail steps', () => {
+    expect(dashboardSource).toContain('Recuperação por inadimplência');
+    expect(dashboardSource).toContain('Acompanhamento automático de contas vencidas.');
+    expect(dashboardSource).toContain('recovery-steps-timeline');
+    expect(dashboardSource).toContain('D+{step.offsetDays}');
+    expect(dashboardSource).toContain('Campanhas de recuperação');
+    expect(dashboardSource).toContain('className="recovery-campaign-table"');
+    expect(dashboardSource).toContain('setSelectedCampaign(campaign)');
+    expect(dashboardSource).toContain('function RecoveryCampaignDetailModal');
+    expect(dashboardSource).toContain('D+{step.delayDays}');
+    expect(dashboardSource).toContain('recoveryStepStatusTone(step.status)');
+  });
+
+  it('keeps responsive UI classes for desktop density and mobile stacking', () => {
+    expect(stylesSource).toContain('.automation-summary-grid');
+    expect(stylesSource).toContain('.recovery-steps-timeline');
+    expect(stylesSource).toContain('.recovery-campaign-steps article');
+    expect(stylesSource).toContain('.automation-schedule-table');
+    expect(stylesSource).toContain('.recovery-campaign-table');
+    expect(stylesSource).toContain('@media (max-width: 620px)');
+    expect(stylesSource).toContain('.billing-toolbar,');
+    expect(stylesSource).toContain('.recovery-toolbar,');
+  });
+});

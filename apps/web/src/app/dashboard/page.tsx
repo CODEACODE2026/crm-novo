@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   BarChart3,
   Bell,
+  Bot,
   CalendarDays,
   CalendarClock,
   CircleCheck,
@@ -23,6 +24,7 @@ import {
   Layers,
   ListChecks,
   Mail,
+  MessageSquare,
   MessageCircle,
   Minus,
   Pencil,
@@ -1113,21 +1115,6 @@ function OperationalDashboard({
   );
 }
 
-function PanelHeader({ title, onViewAll }: { title: string; onViewAll?: () => void }) {
-  return (
-    <SectionHeader
-      title={title}
-      action={
-        onViewAll ? (
-          <button className="secondary-button compact" type="button" onClick={onViewAll}>
-            Ver todos
-          </button>
-        ) : null
-      }
-    />
-  );
-}
-
 function PaginationControls({
   pagination,
   onPageChange,
@@ -2177,6 +2164,33 @@ function ClientSectionHeading({
 }) {
   return (
     <div className="client-overview-card-header">
+      <div className="client-overview-heading">
+        <span className="section-icon" aria-hidden="true">
+          <Icon size={16} />
+        </span>
+        <div className="client-overview-heading-copy">
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+      </div>
+      {action ? <div className="client-overview-heading-action">{action}</div> : null}
+    </div>
+  );
+}
+
+function AutomationSectionHeading({
+  action,
+  description,
+  icon: Icon,
+  title,
+}: {
+  action?: ReactNode;
+  description: string;
+  icon: LucideIcon;
+  title: string;
+}) {
+  return (
+    <div className="client-overview-card-header automation-section-heading">
       <div className="client-overview-heading">
         <span className="section-icon" aria-hidden="true">
           <Icon size={16} />
@@ -3920,12 +3934,8 @@ function BillingView() {
       setDispatches(nextDispatches.items);
       setTemplates(nextTemplates);
       setSelected((current) => {
-        if (!current) return nextDispatches.items[0] ?? null;
-        return (
-          nextDispatches.items.find((dispatch) => dispatch.id === current.id) ??
-          nextDispatches.items[0] ??
-          null
-        );
+        if (!current) return null;
+        return nextDispatches.items.find((dispatch) => dispatch.id === current.id) ?? null;
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar cobranças.');
@@ -4027,283 +4037,215 @@ function BillingView() {
     }
   }
 
+  const billingKpis = [
+    {
+      icon: CalendarClock,
+      label: 'Agendadas',
+      tone: 'warning' as const,
+      value: summary?.scheduled ?? 0,
+    },
+    {
+      icon: Send,
+      label: 'Enviadas',
+      tone: 'success' as const,
+      value: summary?.sent ?? 0,
+    },
+    {
+      icon: XCircle,
+      label: 'Falhas',
+      tone: 'danger' as const,
+      value: summary?.failed ?? 0,
+    },
+    {
+      icon: Minus,
+      label: 'Ignoradas/Canceladas',
+      tone: 'info' as const,
+      value: summary?.ignoredOrCanceled ?? 0,
+    },
+  ];
+
   return (
-    <>
+    <div className="billing-view">
       {error ? <div className="notice danger">{error}</div> : null}
       <div className="metric-grid billing-kpis">
-        {[
-          ['Agendadas', summary?.scheduled ?? 0],
-          ['Enviadas', summary?.sent ?? 0],
-          ['Falhas', summary?.failed ?? 0],
-          ['Ignoradas/canceladas', summary?.ignoredOrCanceled ?? 0],
-        ].map(([label, value]) => (
-          <article className="metric-card compact" key={label}>
-            <span className="metric-label">{label}</span>
-            <strong className="metric-value">{loading ? '-' : value}</strong>
-          </article>
+        {billingKpis.map((item) => (
+          <StatCard
+            icon={item.icon}
+            key={item.label}
+            label={item.label}
+            tone={item.tone}
+            value={loading ? '-' : item.value}
+          />
         ))}
       </div>
 
-      <div className="workspace-grid billing-grid">
-        <section className="workspace-main">
-          <div className="toolbar">
-            <div className="search-row">
-              <Search aria-hidden="true" size={18} />
-              <input
-                placeholder="Buscar por cliente, referência ou telefone"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            <select
-              value={status}
-              onChange={(event) => setStatus(event.target.value as MessageDispatch['status'] | '')}
-            >
-              <option value="">Todos os status</option>
-              <option value="SCHEDULED">Agendadas</option>
-              <option value="PROCESSING">Processando</option>
-              <option value="SENT">Enviadas</option>
-              <option value="FAILED">Falhas</option>
-              <option value="CANCELED">Canceladas</option>
-              <option value="IGNORED">Ignoradas</option>
-            </select>
+      <section className="workspace-main billing-workspace">
+        <AutomationSectionHeading
+          icon={Bell}
+          title="Cobranças"
+          description="Acompanhe os envios e a situação das cobranças dos clientes."
+        />
+        <div className="toolbar billing-toolbar">
+          <div className="search-row">
+            <Search aria-hidden="true" size={18} />
             <input
-              aria-label="Vencimento"
-              type="date"
-              value={dueDate}
-              onChange={(event) => setDueDate(event.target.value)}
+              placeholder="Buscar cliente/referência"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
             />
-            <button className="secondary-button" type="button" onClick={() => void loadBilling()}>
-              <RefreshCcw aria-hidden="true" size={16} />
-              Atualizar
-            </button>
-            <button
-              className="primary-button"
-              disabled={working === 'reconcile'}
-              type="button"
-              onClick={() => void runReconcile()}
-            >
-              <CalendarClock aria-hidden="true" size={16} />
-              Reconciliar
-            </button>
           </div>
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as MessageDispatch['status'] | '')}
+          >
+            <option value="">Todos os status</option>
+            <option value="SCHEDULED">Agendadas</option>
+            <option value="PROCESSING">Processando</option>
+            <option value="SENT">Enviadas</option>
+            <option value="FAILED">Falhas</option>
+            <option value="CANCELED">Canceladas</option>
+            <option value="IGNORED">Ignoradas</option>
+          </select>
+          <input
+            aria-label="Vencimento"
+            type="date"
+            value={dueDate}
+            onChange={(event) => setDueDate(event.target.value)}
+          />
+          <button className="secondary-button" type="button" onClick={() => void loadBilling()}>
+            <RefreshCcw aria-hidden="true" size={16} />
+            Atualizar
+          </button>
+          <button
+            className="primary-button"
+            disabled={working === 'reconcile'}
+            type="button"
+            onClick={() => void runReconcile()}
+          >
+            <CalendarClock aria-hidden="true" size={16} />
+            Reconciliar
+          </button>
+        </div>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Referência</th>
-                  <th>Valor</th>
-                  <th>Vencimento</th>
-                  <th>Agendado para</th>
-                  <th>Enviado em</th>
-                  <th>Status</th>
-                  <th>Tentativas</th>
-                  <th>Erro</th>
-                  <th>Ações</th>
+        <div className="table-wrap">
+          <table className="billing-table">
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Referência/Referências</th>
+                <th className="billing-amount-column">Valor</th>
+                <th>Vencimento</th>
+                <th>Agendado para</th>
+                <th>Enviado em</th>
+                <th className="finance-status-column">Status</th>
+                <th className="finance-attempts-column">Tentativas</th>
+                <th className="finance-actions-column">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dispatches.map((dispatch) => (
+                <tr
+                  className={selected?.id === dispatch.id ? 'selected-row' : ''}
+                  key={dispatch.id}
+                >
+                  <td>{dispatch.client?.name ?? 'Cliente não vinculado'}</td>
+                  <td>{billingDispatchReferenceLabel(dispatch)}</td>
+                  <td className="billing-amount-column">{billingDispatchAmountLabel(dispatch)}</td>
+                  <td>{billingDispatchDueDateLabel(dispatch)}</td>
+                  <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
+                  <td>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</td>
+                  <td className="finance-status-column">
+                    <span
+                      className={`finance-status-pill tone-${billingDispatchStatusTone(
+                        dispatch.status,
+                      )}`}
+                    >
+                      {billingStatusLabel(dispatch.status)}
+                    </span>
+                  </td>
+                  <td className="finance-attempts-column">{dispatch.attempts ?? 0}/3</td>
+                  <td className="finance-actions-column">
+                    <IconButton
+                      icon={Eye}
+                      label="Ver detalhes"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void selectDispatch(dispatch);
+                      }}
+                    />
+                    <button
+                      className="secondary-button"
+                      disabled={
+                        working === dispatch.id ||
+                        !['SCHEDULED', 'FAILED'].includes(dispatch.status)
+                      }
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void runSendNow(dispatch);
+                      }}
+                    >
+                      <Send aria-hidden="true" size={16} />
+                      Enviar agora
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {dispatches.map((dispatch) => (
-                  <tr
-                    className={selected?.id === dispatch.id ? 'selected-row' : ''}
-                    key={dispatch.id}
-                    onClick={() => void selectDispatch(dispatch)}
+              ))}
+            </tbody>
+          </table>
+          {!dispatches.length ? (
+            <div className="empty-state">
+              {loading ? 'Carregando...' : 'Nenhuma cobrança encontrada.'}
+            </div>
+          ) : null}
+        </div>
+
+        <section className="panel template-panel">
+          <div className="settings-card-header">
+            <div>
+              <span className="metric-label">MENSAGEM DE COBRANÇA</span>
+              <h2>Mensagem de cobrança</h2>
+            </div>
+          </div>
+          <p className="helper-text">
+            Mensagem utilizada nas cobranças automáticas antes ou no dia do vencimento.
+          </p>
+          <div className="mini-list">
+            {visibleTemplates.map((template) => (
+              <article key={template.id}>
+                <strong>{template.name}</strong>
+                <span>
+                  {messageTemplateTypeLabel(template.type)} |{' '}
+                  {template.active ? 'Ativo' : 'Inativo'}
+                </span>
+                <p>{template.content}</p>
+                <div className="button-row">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => openTemplate(template)}
                   >
-                    <td>{dispatch.client?.name ?? 'Cliente não vinculado'}</td>
-                    <td>{billingDispatchReferenceLabel(dispatch)}</td>
-                    <td>
-                      {dispatch.totalAmount
-                        ? formatCurrency(dispatch.totalAmount)
-                        : dispatch.receivable?.amount
-                          ? formatCurrency(dispatch.receivable.amount)
-                          : '-'}
-                    </td>
-                    <td>
-                      {dispatch.dueDateLabel === 'Vários'
-                        ? 'Vários'
-                        : dispatch.dueDateLabel
-                          ? formatDate(dispatch.dueDateLabel)
-                          : dispatch.receivable?.dueDate
-                            ? formatDate(dispatch.receivable.dueDate)
-                            : '-'}
-                    </td>
-                    <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
-                    <td>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</td>
-                    <td>
-                      <span className={`pill ${dispatch.status.toLowerCase()}`}>
-                        {billingStatusLabel(dispatch.status)}
-                      </span>
-                    </td>
-                    <td>{dispatch.attempts ?? 0}/3</td>
-                    <td>{dispatch.errorCode ?? dispatch.errorMessage ?? '-'}</td>
-                    <td>
-                      <button
-                        className="secondary-button"
-                        disabled={
-                          working === dispatch.id ||
-                          !['SCHEDULED', 'FAILED'].includes(dispatch.status)
-                        }
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void runSendNow(dispatch);
-                        }}
-                      >
-                        <Send aria-hidden="true" size={16} />
-                        Enviar
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!dispatches.length ? (
-              <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhuma cobrança encontrada.'}
-              </div>
+                    <Pencil aria-hidden="true" size={16} />
+                    Editar
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={working === template.id}
+                    type="button"
+                    onClick={() => void toggleTemplate(template)}
+                  >
+                    {template.active ? 'Desativar' : 'Ativar'}
+                  </button>
+                </div>
+              </article>
+            ))}
+            {!visibleTemplates.length ? (
+              <div className="empty-state">Nenhum template cadastrado.</div>
             ) : null}
           </div>
-
-          <section className="panel template-panel">
-            <div className="settings-card-header">
-              <div>
-                <span className="metric-label">MENSAGEM DE COBRANÇA</span>
-                <h2>Mensagem de cobrança</h2>
-              </div>
-            </div>
-            <p className="helper-text">
-              Mensagem utilizada nas cobranças automáticas antes ou no dia do vencimento.
-            </p>
-            <div className="mini-list">
-              {visibleTemplates.map((template) => (
-                <article key={template.id}>
-                  <strong>{template.name}</strong>
-                  <span>
-                    {messageTemplateTypeLabel(template.type)} |{' '}
-                    {template.active ? 'Ativo' : 'Inativo'}
-                  </span>
-                  <p>{template.content}</p>
-                  <div className="button-row">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => openTemplate(template)}
-                    >
-                      <Pencil aria-hidden="true" size={16} />
-                      Editar
-                    </button>
-                    <button
-                      className="secondary-button"
-                      disabled={working === template.id}
-                      type="button"
-                      onClick={() => void toggleTemplate(template)}
-                    >
-                      {template.active ? 'Desativar' : 'Ativar'}
-                    </button>
-                  </div>
-                </article>
-              ))}
-              {!visibleTemplates.length ? (
-                <div className="empty-state">Nenhum template cadastrado.</div>
-              ) : null}
-            </div>
-          </section>
         </section>
-
-        <aside className="detail-panel">
-          {selected ? (
-            <>
-              <div className="detail-header">
-                <div>
-                  <h2>{selected.client?.name ?? 'Cobrança'}</h2>
-                  <span>{selected.idempotencyKey ?? selected.requestId}</span>
-                </div>
-                <span className={`pill ${selected.status.toLowerCase()}`}>
-                  {billingStatusLabel(selected.status)}
-                </span>
-              </div>
-              <dl className="detail-list">
-                <div>
-                  <dt>Referência</dt>
-                  <dd>{billingDispatchReferenceLabel(selected)}</dd>
-                </div>
-                <div>
-                  <dt>Plano</dt>
-                  <dd>{selected.client?.planName ?? '-'}</dd>
-                </div>
-                <div>
-                  <dt>Valor</dt>
-                  <dd>
-                    {selected.totalAmount
-                      ? formatCurrency(selected.totalAmount)
-                      : selected.receivable?.amount
-                        ? formatCurrency(selected.receivable.amount)
-                        : '-'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Vencimento</dt>
-                  <dd>
-                    {selected.dueDateLabel === 'Vários'
-                      ? 'Vários'
-                      : selected.dueDateLabel
-                        ? formatDate(selected.dueDateLabel)
-                        : selected.receivable?.dueDate
-                          ? formatDate(selected.receivable.dueDate)
-                          : '-'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Agendado para</dt>
-                  <dd>{selected.scheduledFor ? formatDateTime(selected.scheduledFor) : '-'}</dd>
-                </div>
-                <div>
-                  <dt>Próxima tentativa</dt>
-                  <dd>{selected.nextAttemptAt ? formatDateTime(selected.nextAttemptAt) : '-'}</dd>
-                </div>
-                <div>
-                  <dt>Tentativas</dt>
-                  <dd>{selected.attempts ?? 0}/3</dd>
-                </div>
-                <div>
-                  <dt>Provider</dt>
-                  <dd>{selected.providerMessageId ?? '-'}</dd>
-                </div>
-                <div>
-                  <dt>Enviada em</dt>
-                  <dd>{selected.sentAt ? formatDateTime(selected.sentAt) : '-'}</dd>
-                </div>
-              </dl>
-              <div className="preview-box">
-                <span>Mensagem renderizada</span>
-                <strong>{selected.renderedContent ?? selected.body}</strong>
-              </div>
-              {selected.items?.length && selected.items.length > 1 ? (
-                <div className="mini-list">
-                  {selected.items.map((item) => (
-                    <article key={item.id}>
-                      <strong>{item.reference}</strong>
-                      <span>
-                        {formatCurrency(item.amount)} | {formatDate(item.dueDate)} | {item.status}
-                      </span>
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-              {selected.errorMessage ? (
-                <div className="notice warning">
-                  {selected.errorCode ? `${selected.errorCode}: ` : ''}
-                  {selected.errorMessage}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="empty-state">Selecione uma cobrança para visualizar detalhes.</div>
-          )}
-        </aside>
-      </div>
+      </section>
 
       {editingTemplate ? (
         <div className="modal-backdrop" role="presentation">
@@ -4371,7 +4313,115 @@ function BillingView() {
           </section>
         </div>
       ) : null}
-    </>
+      {selected ? (
+        <BillingDispatchDetailModal dispatch={selected} onClose={() => setSelected(null)} />
+      ) : null}
+    </div>
+  );
+}
+
+function BillingDispatchDetailModal({
+  dispatch,
+  onClose,
+}: {
+  dispatch: MessageDispatch;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal dispatch-detail-modal billing-dispatch-modal"
+        aria-labelledby="billing-dispatch-detail-title"
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <MessageSquare size={16} />
+          </span>
+          <div>
+            <h2 id="billing-dispatch-detail-title">Detalhes da cobrança</h2>
+            <p>
+              {dispatch.client?.name ?? 'Cliente não vinculado'} |{' '}
+              {billingStatusLabel(dispatch.status)}
+            </p>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <dl className="detail-list compact-detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{dispatch.client?.name ?? 'Cliente não vinculado'}</dd>
+          </div>
+          <div>
+            <dt>Referência(s)</dt>
+            <dd>{billingDispatchReferenceLabel(dispatch)}</dd>
+          </div>
+          <div>
+            <dt>Valor</dt>
+            <dd>{billingDispatchAmountLabel(dispatch)}</dd>
+          </div>
+          <div>
+            <dt>Vencimento</dt>
+            <dd>{billingDispatchDueDateLabel(dispatch)}</dd>
+          </div>
+          <div>
+            <dt>Agendado para</dt>
+            <dd>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</dd>
+          </div>
+          <div>
+            <dt>Enviado em</dt>
+            <dd>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>
+              <span
+                className={`finance-status-pill tone-${billingDispatchStatusTone(dispatch.status)}`}
+              >
+                {billingStatusLabel(dispatch.status)}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>Tentativas</dt>
+            <dd>{dispatch.attempts ?? 0}/3</dd>
+          </div>
+          <div>
+            <dt>Erro</dt>
+            <dd>{dispatch.errorCode ?? dispatch.errorMessage ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>providerMessageId</dt>
+            <dd>{dispatch.providerMessageId ?? '-'}</dd>
+          </div>
+        </dl>
+
+        {dispatch.items?.length ? (
+          <div className="billing-dispatch-items">
+            <span className="metric-label">Itens consolidados</span>
+            <div className="mini-list">
+              {dispatch.items.map((item) => (
+                <article key={item.id}>
+                  <strong>{item.reference}</strong>
+                  <span>
+                    {formatCurrency(item.amount)} | {formatDate(item.dueDate)} | {item.status}
+                  </span>
+                </article>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {(dispatch.renderedContent ?? dispatch.body) ? (
+          <div className="preview-box">
+            <span>Mensagem renderizada</span>
+            <strong>{dispatch.renderedContent ?? dispatch.body}</strong>
+          </div>
+        ) : null}
+      </section>
+    </div>
   );
 }
 
@@ -4403,6 +4453,9 @@ function AutomationsView() {
   const [recoveryTemplateContent, setRecoveryTemplateContent] = useState('');
   const [recoveryTemplateName, setRecoveryTemplateName] = useState('');
   const [recoveryTemplatePreview, setRecoveryTemplatePreview] = useState('');
+  const [selectedAutomationDispatch, setSelectedAutomationDispatch] =
+    useState<MessageDispatch | null>(null);
+  const [selectedCampaign, setSelectedCampaign] = useState<RecoveryCampaign | null>(null);
   const [campaignPagination, setCampaignPagination] = useState<
     PaginatedClients['pagination'] | null
   >(null);
@@ -4662,39 +4715,46 @@ function AutomationsView() {
   }
 
   return (
-    <div className="workspace-grid">
-      <section className="workspace-main">
+    <div className="automations-view">
+      <section className="workspace-main automations-workspace">
         {error ? <div className="notice danger">{error}</div> : null}
         <div className="metric-grid billing-kpis">
-          <article className="metric-card compact">
-            <span className="metric-label">Cobrança automática</span>
-            <strong className="metric-value">
-              {billingSettings?.enabled ? 'ATIVA' : 'DESATIVADA'}
-            </strong>
-            <p>{billingSummary?.scheduledToday ?? 0} agendadas hoje</p>
-          </article>
-          <article className="metric-card compact">
-            <span className="metric-label">Recuperação de clientes</span>
-            <strong className="metric-value">ATIVA</strong>
-            <p>{recoverySummary?.active ?? 0} campanhas ativas</p>
-          </article>
-          <article className="metric-card compact">
-            <span className="metric-label">Recuperação concluida</span>
-            <strong className="metric-value">{recoverySummary?.completed ?? 0}</strong>
-            <p>{recoverySummary?.canceled ?? 0} canceladas</p>
-          </article>
-          <article className="metric-card compact">
-            <span className="metric-label">Pendencias</span>
-            <strong className="metric-value">{recoverySummary?.failed ?? 0}</strong>
-            <p>{recoverySummary?.scheduled ?? 0} mensagens futuras</p>
-          </article>
+          <StatCard
+            icon={Bot}
+            label="Cobrança automática"
+            tone={billingSettings?.enabled ? 'success' : 'info'}
+            value={billingSettings?.enabled ? 'Ativada' : 'Desativada'}
+          />
+          <StatCard
+            icon={CalendarClock}
+            label="Agendadas hoje"
+            tone="warning"
+            value={billingSummary?.scheduledToday ?? 0}
+          />
+          <StatCard
+            icon={Activity}
+            label="Campanhas ativas"
+            tone="info"
+            value={recoverySummary?.active ?? 0}
+          />
+          <StatCard
+            icon={XCircle}
+            label="Pendências"
+            tone={(recoverySummary?.failed ?? 0) > 0 ? 'danger' : 'success'}
+            value={recoverySummary?.failed ?? 0}
+          />
         </div>
 
-        <section className="settings-card">
+        <section className="settings-card automation-section automation-billing-section">
           <div className="settings-card-header">
-            <div>
-              <span className="metric-label">COBRANCA AUTOMATICA</span>
-              <h2>{billingSettings?.enabled ? 'Ativa' : 'Desativada'}</h2>
+            <div className="client-overview-heading">
+              <span className="section-icon" aria-hidden="true">
+                <Bot size={16} />
+              </span>
+              <div className="client-overview-heading-copy">
+                <h3>Cobrança automática</h3>
+                <p>Envio programado de lembretes de cobrança.</p>
+              </div>
             </div>
             <label className="toggle-field compact-toggle">
               <input
@@ -4706,6 +4766,11 @@ function AutomationsView() {
               <span>Ativar cobrança automática</span>
             </label>
           </div>
+          <span
+            className={`finance-status-pill tone-${billingSettings?.enabled ? 'success' : 'muted'}`}
+          >
+            {billingSettings?.enabled ? 'Ativada' : 'Desativada'}
+          </span>
           <div className="form-grid automation-settings-grid">
             <label className="field">
               <span>Horário de envio</span>
@@ -4750,21 +4815,32 @@ function AutomationsView() {
               <input disabled value="America/Sao_Paulo" readOnly />
             </label>
           </div>
-          <p className="helper-text">
-            As cobranças começam as {billingSettings?.sendTime ?? '09:00'} e sao enviadas com
-            intervalo mínimo de {billingSettings?.sendIntervalSeconds ?? 8} segundos entre
-            mensagens.
-          </p>
-          <p className="helper-text">
-            Define o intervalo mínimo entre o envio de uma cobrança e a próxima.
-          </p>
+          <div className="automation-summary-grid">
+            <article>
+              <span>Horário</span>
+              <strong>{billingSettings?.sendTime ?? '09:00'}</strong>
+            </article>
+            <article>
+              <span>Intervalo</span>
+              <strong>{billingSettings?.sendIntervalSeconds ?? 8} segundos</strong>
+            </article>
+            <article>
+              <span>Processamento</span>
+              <strong>1 comunicação por execução</strong>
+            </article>
+          </div>
         </section>
 
-        <section className="settings-card">
+        <section className="settings-card automation-section recovery-section">
           <div className="settings-card-header">
-            <div>
-              <span className="metric-label">RECUPERAÇÃO</span>
-              <h2>{recoverySettings?.enabled ? 'Ativa' : 'Desativada'}</h2>
+            <div className="client-overview-heading">
+              <span className="section-icon" aria-hidden="true">
+                <Activity size={16} />
+              </span>
+              <div className="client-overview-heading-copy">
+                <h3>Recuperação por inadimplência</h3>
+                <p>Acompanhamento automático de contas vencidas.</p>
+              </div>
             </div>
             <label className="toggle-field compact-toggle">
               <input
@@ -4776,6 +4852,11 @@ function AutomationsView() {
               <span>Ativar recuperação automática</span>
             </label>
           </div>
+          <span
+            className={`finance-status-pill tone-${recoverySettings?.enabled ? 'success' : 'muted'}`}
+          >
+            {recoverySettings?.enabled ? 'Ativada' : 'Desativada'}
+          </span>
           <div className="form-grid automation-settings-grid">
             <label className="field">
               <span>Horário de recuperação</span>
@@ -4820,68 +4901,59 @@ function AutomationsView() {
               <input disabled value="America/Sao_Paulo" readOnly />
             </label>
           </div>
-          <div className="table-wrap compact-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Etapa</th>
-                  <th>Dias após vencimento</th>
-                  <th>Template</th>
-                  <th>Ativa</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(recoverySettings?.steps ?? []).map((step, index) => (
-                  <tr key={step.stepNumber}>
-                    <td>Etapa {step.stepNumber}</td>
-                    <td>
-                      <input
-                        min={1}
-                        required
-                        step={1}
-                        type="number"
-                        value={recoveryOffsets[index] ?? String(step.offsetDays)}
-                        onChange={(event) => {
-                          const next = [...recoveryOffsets];
-                          next[index] = event.target.value;
-                          setRecoveryOffsets(next);
-                        }}
-                        onBlur={() => {
-                          try {
-                            void saveRecoverySettings(recoveryPayloadFromOffsets(recoveryOffsets));
-                          } catch (err) {
-                            setError(
-                              err instanceof Error
-                                ? err.message
-                                : 'Etapas de recuperação invalidas.',
-                            );
-                          }
-                        }}
-                      />
-                    </td>
-                    <td>{messageTemplateTypeLabel(step.templateType)}</td>
-                    <td>
-                      <input
-                        checked={step.enabled}
-                        type="checkbox"
-                        onChange={(event) => {
-                          const keys = [
-                            'day3Enabled',
-                            'day10Enabled',
-                            'day15Enabled',
-                            'day30Enabled',
-                          ] as const;
-                          const key = keys[index];
-                          if (key) {
-                            void saveRecoverySettings({ [key]: event.target.checked });
-                          }
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="recovery-steps-timeline">
+            {(recoverySettings?.steps ?? []).map((step, index) => (
+              <article className={step.enabled ? 'enabled' : 'disabled'} key={step.stepNumber}>
+                <div className="recovery-step-marker">D+{step.offsetDays}</div>
+                <div className="recovery-step-body">
+                  <strong>Etapa {step.stepNumber}</strong>
+                  <span>{messageTemplateTypeLabel(step.templateType)}</span>
+                  <label className="field compact-field">
+                    <span>Offset</span>
+                    <input
+                      min={1}
+                      required
+                      step={1}
+                      type="number"
+                      value={recoveryOffsets[index] ?? String(step.offsetDays)}
+                      onChange={(event) => {
+                        const next = [...recoveryOffsets];
+                        next[index] = event.target.value;
+                        setRecoveryOffsets(next);
+                      }}
+                      onBlur={() => {
+                        try {
+                          void saveRecoverySettings(recoveryPayloadFromOffsets(recoveryOffsets));
+                        } catch (err) {
+                          setError(
+                            err instanceof Error ? err.message : 'Etapas de recuperação inválidas.',
+                          );
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="toggle-field compact-toggle">
+                    <input
+                      checked={step.enabled}
+                      type="checkbox"
+                      onChange={(event) => {
+                        const keys = [
+                          'day3Enabled',
+                          'day10Enabled',
+                          'day15Enabled',
+                          'day30Enabled',
+                        ] as const;
+                        const key = keys[index];
+                        if (key) {
+                          void saveRecoverySettings({ [key]: event.target.checked });
+                        }
+                      }}
+                    />
+                    <span>{step.enabled ? 'Ativa' : 'Inativa'}</span>
+                  </label>
+                </div>
+              </article>
+            ))}
           </div>
         </section>
 
@@ -4947,53 +5019,65 @@ function AutomationsView() {
           </article>
         </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>Referência</th>
-                <th>Vencimento</th>
-                <th>Aviso</th>
-                <th>Agendado para</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(billingSummary?.next ?? []).map((dispatch) => (
-                <tr key={dispatch.id}>
-                  <td>{dispatch.client?.name ?? '-'}</td>
-                  <td>{billingDispatchReferenceLabel(dispatch)}</td>
-                  <td>
-                    {dispatch.dueDateLabel === 'Vários'
-                      ? 'Vários'
-                      : dispatch.dueDateLabel
-                        ? formatDate(dispatch.dueDateLabel)
-                        : dispatch.receivable?.dueDate
-                          ? formatDate(dispatch.receivable.dueDate)
-                          : '-'}
-                  </td>
-                  <td>
-                    {dispatch.idempotencyKey?.startsWith('billing-group')
-                      ? '-'
-                      : `${dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias`}
-                  </td>
-                  <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
-                  <td>
-                    <span className={`pill ${dispatch.status.toLowerCase()}`}>
-                      {billingStatusLabel(dispatch.status)}
-                    </span>
-                  </td>
+        <section className="settings-card automation-section">
+          <AutomationSectionHeading
+            icon={CalendarClock}
+            title="Próximos envios"
+            description="Comunicações programadas da cobrança automática."
+          />
+          <div className="table-wrap">
+            <table className="billing-table automation-schedule-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Referência(s)</th>
+                  <th>Vencimento</th>
+                  <th>Aviso</th>
+                  <th>Agendado para</th>
+                  <th className="finance-status-column">Status</th>
+                  <th className="finance-actions-column">Ações</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {!(billingSummary?.next ?? []).length ? (
-            <div className="empty-state">
-              {loading ? 'Carregando...' : 'Nenhum envio futuro encontrado.'}
-            </div>
-          ) : null}
-        </div>
+              </thead>
+              <tbody>
+                {(billingSummary?.next ?? []).map((dispatch) => (
+                  <tr key={dispatch.id}>
+                    <td>{dispatch.client?.name ?? '-'}</td>
+                    <td>{billingDispatchReferenceLabel(dispatch)}</td>
+                    <td>{billingDispatchDueDateLabel(dispatch)}</td>
+                    <td>
+                      {dispatch.idempotencyKey?.startsWith('billing-group')
+                        ? '-'
+                        : `${dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias`}
+                    </td>
+                    <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
+                    <td className="finance-status-column">
+                      <span
+                        className={`finance-status-pill tone-${billingDispatchStatusTone(
+                          dispatch.status,
+                        )}`}
+                      >
+                        {billingStatusLabel(dispatch.status)}
+                      </span>
+                    </td>
+                    <td className="finance-actions-column">
+                      <IconButton
+                        icon={Eye}
+                        label="Ver detalhes"
+                        size="sm"
+                        onClick={() => setSelectedAutomationDispatch(dispatch)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!(billingSummary?.next ?? []).length ? (
+              <div className="empty-state">
+                {loading ? 'Carregando...' : 'Nenhum envio futuro encontrado.'}
+              </div>
+            ) : null}
+          </div>
+        </section>
 
         <section className="settings-card">
           <div className="settings-card-header">
@@ -5059,141 +5143,133 @@ function AutomationsView() {
           </div>
         </section>
 
-        <div className="toolbar">
-          <div className="search-row">
-            <Search aria-hidden="true" size={18} />
-            <input
-              placeholder="Buscar cliente ou referência"
-              value={search}
+        <section className="settings-card automation-section recovery-campaigns-section">
+          <AutomationSectionHeading
+            icon={Activity}
+            title="Campanhas de recuperação"
+            description="Acompanhe as campanhas e etapas de inadimplência em andamento."
+          />
+          <div className="toolbar recovery-toolbar">
+            <div className="search-row">
+              <Search aria-hidden="true" size={18} />
+              <input
+                placeholder="Buscar cliente ou referência"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(1);
+                }}
+              />
+            </div>
+            <select
+              value={status}
               onChange={(event) => {
-                setSearch(event.target.value);
+                setStatus(event.target.value as RecoveryCampaignStatus | '');
                 setPage(1);
               }}
-            />
+            >
+              <option value="">Todas</option>
+              <option value="ATIVA">Ativas</option>
+              <option value="CONCLUIDA">Concluídas</option>
+              <option value="CANCELADA">Canceladas</option>
+            </select>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void loadAutomations()}
+            >
+              <RefreshCcw aria-hidden="true" size={16} />
+              Atualizar
+            </button>
+            <button
+              className="primary-button"
+              disabled={working === 'reconcile'}
+              type="button"
+              onClick={() => void runRecoveryReconcile()}
+            >
+              <CalendarClock aria-hidden="true" size={16} />
+              Reconciliar
+            </button>
           </div>
-          <select
-            value={status}
-            onChange={(event) => {
-              setStatus(event.target.value as RecoveryCampaignStatus | '');
-              setPage(1);
-            }}
-          >
-            <option value="">Todas</option>
-            <option value="ATIVA">Ativas</option>
-            <option value="CONCLUIDA">Concluidas</option>
-            <option value="CANCELADA">Canceladas</option>
-          </select>
-          <button className="secondary-button" type="button" onClick={() => void loadAutomations()}>
-            <RefreshCcw aria-hidden="true" size={16} />
-            Atualizar
-          </button>
-          <button
-            className="primary-button"
-            disabled={working === 'reconcile'}
-            type="button"
-            onClick={() => void runRecoveryReconcile()}
-          >
-            <CalendarClock aria-hidden="true" size={16} />
-            Reconciliar
-          </button>
-        </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>Referência</th>
-                <th>Receivable</th>
-                <th>Vencimento</th>
-                <th>Atraso</th>
-                <th>Status</th>
-                <th>Etapa atual/próxima</th>
-                <th>Próxima data</th>
-                <th>Início</th>
-                <th>Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {campaigns.map((campaign) => {
-                const nextStep =
-                  campaign.steps.find((step) => ['SCHEDULED', 'FAILED'].includes(step.status)) ??
-                  campaign.steps.at(-1);
-                return (
-                  <tr key={campaign.id}>
-                    <td>
-                      <strong>{campaign.client?.name ?? 'Cliente'}</strong>
-                      <span>{campaign.client?.reference ?? campaign.clientId}</span>
-                    </td>
-                    <td>
-                      {campaign.clientReference?.reference ?? campaign.client?.reference ?? '-'}
-                    </td>
-                    <td>{campaign.receivable?.id ?? campaign.receivableId}</td>
-                    <td>{campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}</td>
-                    <td>{campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}</td>
-                    <td>
-                      <span className={`pill ${campaign.status.toLowerCase()}`}>
-                        {recoveryCampaignStatusLabel(campaign.status)}
-                      </span>
-                    </td>
-                    <td>{nextStep ? `${nextStep.delayDays} dias` : '-'}</td>
-                    <td>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</td>
-                    <td>{formatDateTime(campaign.startedAt)}</td>
-                    <td>
-                      <button
-                        className="secondary-button"
-                        disabled={campaign.status !== 'ATIVA' || working === campaign.id}
-                        type="button"
-                        onClick={() => void runCancelCampaign(campaign)}
-                      >
-                        <X aria-hidden="true" size={16} />
-                        Cancelar
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {!campaigns.length ? (
-            <div className="empty-state">
-              {loading ? 'Carregando...' : 'Nenhuma campanha encontrada.'}
-            </div>
-          ) : null}
-          <PaginationControls pagination={campaignPagination} onPageChange={setPage} />
-        </div>
+          <div className="table-wrap">
+            <table className="recovery-campaign-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Referência</th>
+                  <th>Receivable</th>
+                  <th>Vencimento</th>
+                  <th>Atraso</th>
+                  <th className="finance-status-column">Status</th>
+                  <th>Etapa atual/próxima</th>
+                  <th>Próxima data</th>
+                  <th>Início</th>
+                  <th className="finance-actions-column">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.map((campaign) => {
+                  const nextStep =
+                    campaign.steps.find((step) => ['SCHEDULED', 'FAILED'].includes(step.status)) ??
+                    campaign.steps.at(-1);
+                  return (
+                    <tr key={campaign.id}>
+                      <td>
+                        <strong>{campaign.client?.name ?? 'Cliente'}</strong>
+                        <span>{campaign.client?.reference ?? campaign.clientId}</span>
+                      </td>
+                      <td>
+                        {campaign.clientReference?.reference ?? campaign.client?.reference ?? '-'}
+                      </td>
+                      <td>{campaign.receivable?.id ?? campaign.receivableId}</td>
+                      <td>{campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}</td>
+                      <td>
+                        {campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}
+                      </td>
+                      <td className="finance-status-column">
+                        <span
+                          className={`finance-status-pill tone-${recoveryCampaignStatusTone(
+                            campaign.status,
+                          )}`}
+                        >
+                          {recoveryCampaignStatusLabel(campaign.status)}
+                        </span>
+                      </td>
+                      <td>{nextStep ? `D+${nextStep.delayDays}` : '-'}</td>
+                      <td>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</td>
+                      <td>{formatDateTime(campaign.startedAt)}</td>
+                      <td className="finance-actions-column">
+                        <IconButton
+                          icon={Eye}
+                          label="Ver etapas"
+                          size="sm"
+                          onClick={() => setSelectedCampaign(campaign)}
+                        />
+                        <button
+                          className="secondary-button"
+                          disabled={campaign.status !== 'ATIVA' || working === campaign.id}
+                          type="button"
+                          onClick={() => void runCancelCampaign(campaign)}
+                        >
+                          <X aria-hidden="true" size={16} />
+                          Cancelar
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {!campaigns.length ? (
+              <div className="empty-state">
+                {loading ? 'Carregando...' : 'Nenhuma campanha encontrada.'}
+              </div>
+            ) : null}
+            <PaginationControls pagination={campaignPagination} onPageChange={setPage} />
+          </div>
+        </section>
       </section>
-
-      <aside className="detail-panel">
-        <PanelHeader title="Configuração" />
-        <dl className="detail-list">
-          <div>
-            <dt>Recuperação</dt>
-            <dd>{recoverySettings?.enabled ? 'Ativa' : 'Desativada'}</dd>
-          </div>
-          <div>
-            <dt>Etapas</dt>
-            <dd>
-              {(recoverySettings?.steps ?? [])
-                .filter((step) => step.enabled)
-                .map((step) => `${step.offsetDays} dias`)
-                .join(', ') || '-'}
-            </dd>
-          </div>
-          <div>
-            <dt>Horário</dt>
-            <dd>{recoverySettings?.sendTime ?? '09:00'}</dd>
-          </div>
-          <div>
-            <dt>Retry</dt>
-            <dd>3 tentativas</dd>
-          </div>
-          <div>
-            <dt>Kirago real</dt>
-            <dd>PENDENTE</dd>
-          </div>
-        </dl>
-      </aside>
 
       {editingRecoveryTemplate ? (
         <div className="modal-backdrop" role="presentation">
@@ -5275,6 +5351,106 @@ function AutomationsView() {
           </section>
         </div>
       ) : null}
+      {selectedAutomationDispatch ? (
+        <BillingDispatchDetailModal
+          dispatch={selectedAutomationDispatch}
+          onClose={() => setSelectedAutomationDispatch(null)}
+        />
+      ) : null}
+      {selectedCampaign ? (
+        <RecoveryCampaignDetailModal
+          campaign={selectedCampaign}
+          onClose={() => setSelectedCampaign(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function RecoveryCampaignDetailModal({
+  campaign,
+  onClose,
+}: {
+  campaign: RecoveryCampaign;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal recovery-campaign-modal"
+        aria-labelledby="recovery-campaign-detail-title"
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon warning" aria-hidden="true">
+            <Activity size={16} />
+          </span>
+          <div>
+            <h2 id="recovery-campaign-detail-title">Detalhes da campanha</h2>
+            <p>
+              {campaign.client?.name ?? 'Cliente'} | {recoveryCampaignStatusLabel(campaign.status)}
+            </p>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <dl className="detail-list compact-detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{campaign.client?.name ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Referência</dt>
+            <dd>{campaign.clientReference?.reference ?? campaign.client?.reference ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Receivable</dt>
+            <dd>{campaign.receivable?.id ?? campaign.receivableId}</dd>
+          </div>
+          <div>
+            <dt>Vencimento</dt>
+            <dd>{campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}</dd>
+          </div>
+          <div>
+            <dt>Dias em atraso</dt>
+            <dd>{campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>
+              <span
+                className={`finance-status-pill tone-${recoveryCampaignStatusTone(
+                  campaign.status,
+                )}`}
+              >
+                {recoveryCampaignStatusLabel(campaign.status)}
+              </span>
+            </dd>
+          </div>
+        </dl>
+
+        <div className="recovery-campaign-steps">
+          {campaign.steps.map((step) => (
+            <article key={step.id}>
+              <span className="recovery-step-marker">D+{step.delayDays}</span>
+              <div>
+                <strong>
+                  Etapa {step.stepNumber} | {recoveryStepStatusLabel(step.status)}
+                </strong>
+                <span>{step.template?.name ?? 'Template não cadastrado'}</span>
+                <small>
+                  Agendada para {formatDateTime(step.scheduledFor)}
+                  {step.sentAt ? ` | enviada em ${formatDateTime(step.sentAt)}` : ''}
+                </small>
+              </div>
+              <span className={`finance-status-pill tone-${recoveryStepStatusTone(step.status)}`}>
+                {recoveryStepStatusLabel(step.status)}
+              </span>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
@@ -6569,10 +6745,31 @@ function billingDispatchReferenceLabel(dispatch: MessageDispatch) {
   return dispatch.clientReference?.reference ?? dispatch.client?.reference ?? '-';
 }
 
+function billingDispatchAmountLabel(dispatch: MessageDispatch) {
+  if (dispatch.totalAmount) return formatCurrency(dispatch.totalAmount);
+  if (dispatch.receivable?.amount) return formatCurrency(dispatch.receivable.amount);
+  return '-';
+}
+
+function billingDispatchDueDateLabel(dispatch: MessageDispatch) {
+  if (dispatch.dueDateLabel === 'Vários') return 'Vários';
+  if (dispatch.dueDateLabel) return formatDate(dispatch.dueDateLabel);
+  if (dispatch.receivable?.dueDate) return formatDate(dispatch.receivable.dueDate);
+  return '-';
+}
+
+function billingDispatchStatusTone(status: MessageDispatch['status']) {
+  if (status === 'SENT') return 'success';
+  if (status === 'FAILED' || status === 'CANCELED') return 'danger';
+  if (status === 'IGNORED') return 'muted';
+  if (status === 'PROCESSING') return 'info';
+  return 'warning';
+}
+
 function recoveryCampaignStatusLabel(status: RecoveryCampaignStatus) {
   const labels: Record<RecoveryCampaignStatus, string> = {
     ATIVA: 'Ativa',
-    CONCLUIDA: 'Concluida',
+    CONCLUIDA: 'Concluída',
     CANCELADA: 'Cancelada',
   };
 
@@ -6589,6 +6786,19 @@ function recoveryStepStatusLabel(status: RecoveryCampaign['steps'][number]['stat
   };
 
   return labels[status];
+}
+
+function recoveryCampaignStatusTone(status: RecoveryCampaignStatus) {
+  if (status === 'CONCLUIDA') return 'success';
+  if (status === 'CANCELADA') return 'muted';
+  return 'warning';
+}
+
+function recoveryStepStatusTone(status: RecoveryCampaign['steps'][number]['status']) {
+  if (status === 'SENT') return 'success';
+  if (status === 'FAILED') return 'danger';
+  if (status === 'CANCELED' || status === 'IGNORED') return 'muted';
+  return 'warning';
 }
 
 function messageOriginLabel(origin: MessageDispatch['origin']) {

@@ -1994,6 +1994,7 @@ tbody tr:hover,
 .status-badge {
   display: inline-flex;
   width: fit-content;
+  border: 1px solid transparent;
   border-radius: 999px;
   padding: 4px 8px;
   font-size: 11px;
@@ -2002,21 +2003,25 @@ tbody tr:hover,
 }
 
 .status-ativo {
+  border-color: rgb(49 224 186 / 20%);
   background: rgb(38 198 163 / 14%);
   color: var(--accent-strong);
 }
 
 .status-pendente_pagamento {
-  background: rgb(125 211 252 / 14%);
-  color: #7dd3fc;
-}
-
-.status-inativo {
+  border-color: rgb(241 184 75 / 22%);
   background: rgb(241 184 75 / 14%);
   color: var(--warning);
 }
 
+.status-inativo {
+  border-color: rgb(104 169 255 / 20%);
+  background: rgb(104 169 255 / 12%);
+  color: #9fbcdf;
+}
+
 .status-cancelado {
+  border-color: rgb(255 107 107 / 22%);
   background: rgb(255 107 107 / 14%);
   color: var(--danger);
 }
@@ -2181,6 +2186,9 @@ tbody tr:hover,
 }
 
 .reference-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 32px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2198,7 +2206,37 @@ tbody tr:hover,
   color: var(--text);
 }
 
-.reference-toolbar span {
+.reference-filter-dot {
+  display: inline-block;
+  width: 7px;
+  min-width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+}
+
+.reference-filter.tone-primary .reference-filter-dot {
+  background: var(--accent-strong);
+}
+
+.reference-filter.tone-success .reference-filter-dot {
+  background: #4ade80;
+}
+
+.reference-filter.tone-warning .reference-filter-dot {
+  background: var(--warning);
+}
+
+.reference-filter.tone-info .reference-filter-dot {
+  background: #8fa6bf;
+}
+
+.reference-filter.tone-danger .reference-filter-dot {
+  background: var(--danger);
+}
+
+.reference-filter-label,
+.reference-filter-count {
   display: inline;
   margin: 0;
   color: inherit;
@@ -2232,6 +2270,28 @@ tbody tr:hover,
 
 .reference-controls select {
   min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 0 34px 0 10px;
+  outline: none;
+  color-scheme: dark;
+}
+
+.reference-controls select:hover {
+  border-color: rgb(172 185 201 / 34%);
+  background: var(--surface);
+}
+
+.reference-controls select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(38 198 163 / 15%);
+}
+
+.reference-controls select option {
+  background: var(--surface);
+  color: var(--text);
 }
 
 .reference-card {
@@ -2243,6 +2303,22 @@ tbody tr:hover,
   border-radius: 8px;
   background: var(--surface-soft);
   padding: 12px;
+}
+
+.reference-card.status-ativo {
+  border-color: rgb(38 198 163 / 28%);
+}
+
+.reference-card.status-pendente_pagamento {
+  border-color: rgb(241 184 75 / 28%);
+}
+
+.reference-card.status-inativo {
+  border-color: rgb(104 169 255 / 24%);
+}
+
+.reference-card.status-cancelado {
+  border-color: rgb(255 107 107 / 28%);
 }
 
 .reference-grid {
@@ -2300,8 +2376,12 @@ tbody tr:hover,
   align-items: center;
 }
 
-.reference-metrics svg {
-  color: var(--accent-strong);
+.reference-metric-due svg {
+  color: var(--info);
+}
+
+.reference-metric-billing svg {
+  color: var(--muted);
 }
 
 .reference-metrics strong {
@@ -2310,6 +2390,12 @@ tbody tr:hover,
 
 .reference-metrics span {
   display: block;
+}
+
+.reference-created {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .references-info {
@@ -2322,13 +2408,31 @@ tbody tr:hover,
 
 .references-info strong {
   display: block;
+  color: var(--text);
   font-size: 13px;
+  font-weight: 600;
 }
 
 .references-info p {
   margin: 4px 0 0;
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: 12px;
+}
+
+.references-info .section-icon {
+  color: var(--accent-strong);
+}
+
+.reference-info-status {
+  font-weight: 600;
+}
+
+.status-inativo-text {
+  color: #9fbcdf;
+}
+
+.status-cancelado-text {
+  color: var(--danger);
 }
 
 .finance-selection-bar {

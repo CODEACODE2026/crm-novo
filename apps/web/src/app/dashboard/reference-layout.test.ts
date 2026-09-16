@@ -24,6 +24,11 @@ describe('client reference presentation source', () => {
 
   it('includes compact reference filters and search', () => {
     expect(dashboardSource).toContain('reference-toolbar');
+    expect(dashboardSource).toContain('reference-filter-dot');
+    expect(dashboardSource).toContain("tone: 'success'");
+    expect(dashboardSource).toContain("tone: 'warning'");
+    expect(dashboardSource).toContain("tone: 'info'");
+    expect(dashboardSource).toContain("tone: 'danger'");
     expect(dashboardSource).toContain('Buscar referência...');
     expect(dashboardSource).toContain('Mais recentes');
   });
@@ -34,6 +39,33 @@ describe('client reference presentation source', () => {
     expect(dashboardSource).toContain('reference.recurringValue');
     expect(dashboardSource).toContain('reference.dueDate');
     expect(dashboardSource).toContain('reference.billingNoticeDays');
+    expect(dashboardSource).toContain('reference-created');
+    expect(dashboardSource).toContain(
+      'className={`reference-card status-${reference.status.toLowerCase()}`}',
+    );
+    expect(stylesSource).toContain('.reference-card.status-ativo');
+    expect(stylesSource).toContain('.reference-card.status-pendente_pagamento');
+    expect(stylesSource).toContain('.reference-card.status-inativo');
+    expect(stylesSource).toContain('.reference-card.status-cancelado');
+  });
+
+  it('keeps semantic status badge tones available', () => {
+    expect(stylesSource).toContain('.status-ativo');
+    expect(stylesSource).toContain('.status-pendente_pagamento');
+    expect(stylesSource).toContain('.status-inativo');
+    expect(stylesSource).toContain('.status-cancelado');
+  });
+
+  it('covers pending references through component fixtures instead of database rows', () => {
+    const pendingFixtureStatus = 'PENDENTE_PAGAMENTO';
+    const pendingCardClass = `reference-card status-${pendingFixtureStatus.toLowerCase()}`;
+    const pendingBadgeClass = `status-badge status-${pendingFixtureStatus.toLowerCase()}`;
+
+    expect(pendingCardClass).toBe('reference-card status-pendente_pagamento');
+    expect(pendingBadgeClass).toBe('status-badge status-pendente_pagamento');
+    expect(stylesSource).toContain('.reference-filter.tone-warning .reference-filter-dot');
+    expect(stylesSource).toContain('.reference-card.status-pendente_pagamento');
+    expect(stylesSource).toContain('.status-pendente_pagamento');
   });
 
   it('uses a dedicated timeline icon wrapper and centered icon CSS', () => {

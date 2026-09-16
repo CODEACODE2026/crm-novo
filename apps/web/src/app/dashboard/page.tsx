@@ -2777,31 +2777,48 @@ function ClientsView({
                   </div>
                   <div className="reference-toolbar" aria-label="Filtros de referências">
                     {[
-                      { count: referenceCounts.all, label: 'Todos', value: 'ALL' as const },
-                      { count: referenceCounts.active, label: 'Ativas', value: 'ATIVO' as const },
+                      {
+                        count: referenceCounts.all,
+                        label: 'Todos',
+                        tone: 'primary',
+                        value: 'ALL' as const,
+                      },
+                      {
+                        count: referenceCounts.active,
+                        label: 'Ativas',
+                        tone: 'success',
+                        value: 'ATIVO' as const,
+                      },
                       {
                         count: referenceCounts.pending,
                         label: 'Pendentes',
+                        tone: 'warning',
                         value: 'PENDENTE_PAGAMENTO' as const,
                       },
                       {
                         count: referenceCounts.inactive,
                         label: 'Inativas',
+                        tone: 'info',
                         value: 'INATIVO' as const,
                       },
                       {
                         count: referenceCounts.canceled,
                         label: 'Canceladas',
+                        tone: 'danger',
                         value: 'CANCELADO' as const,
                       },
                     ].map((item) => (
                       <button
-                        className={referenceFilter === item.value ? 'active' : ''}
+                        className={`reference-filter tone-${item.tone} ${
+                          referenceFilter === item.value ? 'active' : ''
+                        }`}
                         key={item.value}
                         type="button"
                         onClick={() => setReferenceFilter(item.value)}
                       >
-                        {item.label} <span>[{item.count}]</span>
+                        <span className="reference-filter-dot" aria-hidden="true" />
+                        <span className="reference-filter-label">{item.label}</span>
+                        <span className="reference-filter-count">[{item.count}]</span>
                       </button>
                     ))}
                   </div>
@@ -2827,7 +2844,10 @@ function ClientsView({
                   </div>
                   <div className="reference-grid">
                     {visibleReferences.map((reference) => (
-                      <article className="reference-card" key={reference.id}>
+                      <article
+                        className={`reference-card status-${reference.status.toLowerCase()}`}
+                        key={reference.id}
+                      >
                         <header>
                           <div>
                             <strong>{reference.reference}</strong>
@@ -2841,12 +2861,12 @@ function ClientsView({
                         </div>
                         <div className="reference-card-divider" aria-hidden="true" />
                         <div className="reference-metrics">
-                          <div>
+                          <div className="reference-metric-due">
                             <CalendarClock aria-hidden="true" size={15} />
                             <span>Vencimento</span>
                             <strong>{formatDate(reference.dueDate)}</strong>
                           </div>
-                          <div>
+                          <div className="reference-metric-billing">
                             <ShieldCheck aria-hidden="true" size={15} />
                             <span>Cobrança</span>
                             <strong>{reference.billingNoticeDays} dias antes</strong>
@@ -2869,7 +2889,9 @@ function ClientsView({
                           </p>
                         ) : null}
                         <div className="reference-card-divider" aria-hidden="true" />
-                        <span>Criada em {formatDate(reference.createdAt)}</span>
+                        <span className="reference-created">
+                          Criada em {formatDate(reference.createdAt)}
+                        </span>
                         <div className="reference-actions">
                           <Button
                             icon={RefreshCw}
@@ -2934,8 +2956,12 @@ function ClientsView({
                         cobrança.
                       </p>
                       <p>
-                        INATIVO indica serviço temporariamente parado; CANCELADO indica encerramento
-                        definitivo.
+                        <span className="reference-info-status status-inativo-text">INATIVO</span>{' '}
+                        indica serviço temporariamente parado;{' '}
+                        <span className="reference-info-status status-cancelado-text">
+                          CANCELADO
+                        </span>{' '}
+                        indica encerramento definitivo.
                       </p>
                     </div>
                   </footer>

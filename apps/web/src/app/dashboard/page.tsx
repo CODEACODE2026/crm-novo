@@ -2188,17 +2188,19 @@ function AutomationSectionHeading({
   action,
   description,
   icon: Icon,
+  iconTone = 'primary',
   title,
 }: {
   action?: ReactNode;
   description: string;
   icon: LucideIcon;
+  iconTone?: 'primary' | 'info';
   title: string;
 }) {
   return (
     <div className="client-overview-card-header automation-section-heading">
       <div className="client-overview-heading">
-        <span className="section-icon" aria-hidden="true">
+        <span className={`section-icon tone-${iconTone}`} aria-hidden="true">
           <Icon size={16} />
         </span>
         <div className="client-overview-heading-copy">
@@ -2208,6 +2210,14 @@ function AutomationSectionHeading({
       </div>
       {action ? <div className="client-overview-heading-action">{action}</div> : null}
     </div>
+  );
+}
+
+function AutomationConfigIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return (
+    <span className="automation-config-icon" aria-hidden="true">
+      <Icon size={16} />
+    </span>
   );
 }
 
@@ -4812,7 +4822,7 @@ function AutomationsView() {
               </span>
               <div className="automation-config-grid">
                 <article className="automation-config-card">
-                  <Clock aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Clock} />
                   <div>
                     <span>Horário de envio</span>
                     <strong>{billingSettings?.sendTime ?? '09:00'}</strong>
@@ -4831,7 +4841,7 @@ function AutomationsView() {
                   />
                 </article>
                 <article className="automation-config-card">
-                  <Timer aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Timer} />
                   <div>
                     <span>Intervalo entre mensagens</span>
                     <strong>{billingSettings?.sendIntervalSeconds ?? 8} segundos</strong>
@@ -4860,14 +4870,14 @@ function AutomationsView() {
                   />
                 </article>
                 <article className="automation-config-card readonly">
-                  <Globe2 aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Globe2} />
                   <div>
                     <span>Timezone</span>
                     <strong>America/Sao_Paulo</strong>
                   </div>
                 </article>
                 <article className="automation-config-card readonly">
-                  <Settings aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Settings} />
                   <div>
                     <span>Processamento</span>
                     <strong>1 comunicação por execução</strong>
@@ -4937,6 +4947,7 @@ function AutomationsView() {
             <section className="settings-card automation-section">
               <AutomationSectionHeading
                 icon={CalendarClock}
+                iconTone="info"
                 title="Próximos envios"
                 description="Comunicações programadas da cobrança automática."
               />
@@ -5028,7 +5039,7 @@ function AutomationsView() {
               </span>
               <div className="automation-config-grid">
                 <article className="automation-config-card">
-                  <Clock aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Clock} />
                   <div>
                     <span>Horário de recuperação</span>
                     <strong>{recoverySettings?.sendTime ?? '09:00'}</strong>
@@ -5047,7 +5058,7 @@ function AutomationsView() {
                   />
                 </article>
                 <article className="automation-config-card">
-                  <Timer aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Timer} />
                   <div>
                     <span>Intervalo entre mensagens</span>
                     <strong>{recoverySettings?.sendIntervalSeconds ?? 8} segundos</strong>
@@ -5076,7 +5087,7 @@ function AutomationsView() {
                   />
                 </article>
                 <article className="automation-config-card readonly">
-                  <Globe2 aria-hidden="true" size={16} />
+                  <AutomationConfigIcon icon={Globe2} />
                   <div>
                     <span>Timezone</span>
                     <strong>America/Sao_Paulo</strong>

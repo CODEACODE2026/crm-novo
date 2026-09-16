@@ -1770,6 +1770,54 @@ a {
   gap: 16px;
 }
 
+.automation-section-heading .client-overview-heading {
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.automation-section-heading .section-icon {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+}
+
+.automation-section-heading .section-icon.tone-info {
+  border-color: rgb(104 169 255 / 24%);
+  background: rgb(104 169 255 / 9%);
+  color: var(--info);
+}
+
+.automation-section-heading .section-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.automation-section-heading .client-overview-heading-copy {
+  display: flex;
+  min-height: 32px;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.automation-section-heading .client-overview-heading-copy h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.automation-section-heading .client-overview-heading-copy p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
 .automation-config-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1778,7 +1826,7 @@ a {
 
 .automation-config-card {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 8px 10px;
   border: 1px solid var(--border);
@@ -1787,8 +1835,21 @@ a {
   padding: 12px;
 }
 
-.automation-config-card > svg {
-  color: var(--accent-strong);
+.automation-config-card .automation-config-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgb(104 169 255 / 8%);
+  color: var(--info);
+}
+
+.automation-config-card .automation-config-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .automation-config-card span {

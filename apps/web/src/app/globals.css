@@ -2113,6 +2113,7 @@ tbody tr:hover,
 .client-timeline-icon,
 .timeline-icon {
   display: inline-flex;
+  flex: 0 0 28px;
   align-items: center;
   justify-content: center;
   width: 28px;
@@ -2132,9 +2133,12 @@ tbody tr:hover,
   width: 14px;
   height: 14px;
   margin: 0;
+  padding: 0;
+  position: static;
+  transform: none;
 }
 
-.timeline span,
+.timeline li > div > span,
 .timeline p {
   display: block;
   margin: 4px 0 0;

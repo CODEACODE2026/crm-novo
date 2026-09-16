@@ -13,9 +13,11 @@ import {
   dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
   dispatchTotalAmountLabel,
+  isClientBillingDispatch,
   receivableStatusTone,
   receivableVisualStatus,
   referenceStatusRequiresReason,
+  summarizeClientBillingDispatches,
 } from './client-ui-helpers';
 
 const plan: Plan = {
@@ -90,6 +92,31 @@ function receivable(overrides: Partial<Receivable> = {}): Receivable {
     renewalId: null,
     status: 'PENDENTE',
     updatedAt: '2026-09-01',
+    ...overrides,
+  };
+}
+
+function dispatch(
+  overrides: Partial<Parameters<typeof isClientBillingDispatch>[0]> & {
+    status?: 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
+  } = {},
+) {
+  return {
+    attempts: 0,
+    body: 'Mensagem',
+    clientId: 'client-1',
+    clientReferenceId: 'reference-1',
+    createdAt: '2026-09-01',
+    errorCode: null,
+    errorMessage: null,
+    id: `dispatch-${overrides.origin ?? 'BILLING'}-${overrides.status ?? 'SCHEDULED'}`,
+    origin: 'BILLING' as const,
+    phone: '554491665359',
+    receivableId: 'receivable-1',
+    renderedContent: null,
+    scheduledFor: null,
+    sentAt: null,
+    status: 'SCHEDULED' as const,
     ...overrides,
   };
 }
@@ -173,6 +200,23 @@ describe('client UI helpers', () => {
     expect(dispatchStatusTone('SENT')).toBe('success');
     expect(dispatchStatusTone('FAILED')).toBe('danger');
     expect(dispatchStatusTone('SCHEDULED')).toBe('warning');
+  });
+
+  it('keeps recovery out of the client billing dispatch scope', () => {
+    expect(isClientBillingDispatch(dispatch({ origin: 'BILLING' }))).toBe(true);
+    expect(isClientBillingDispatch(dispatch({ origin: 'MANUAL' }))).toBe(true);
+    expect(isClientBillingDispatch(dispatch({ origin: 'INITIAL_ACTIVATION' }))).toBe(true);
+    expect(isClientBillingDispatch(dispatch({ origin: 'RECOVERY' }))).toBe(false);
+
+    expect(
+      summarizeClientBillingDispatches([
+        dispatch({ origin: 'BILLING', status: 'SCHEDULED' }),
+        dispatch({ origin: 'BILLING', status: 'SENT' }),
+        dispatch({ origin: 'MANUAL', status: 'FAILED' }),
+        dispatch({ origin: 'RECOVERY', status: 'SCHEDULED' }),
+        dispatch({ origin: 'RECOVERY', status: 'FAILED' }),
+      ]),
+    ).toEqual({ failed: 1, scheduled: 1, sent: 1 });
   });
 
   it('uses MessageDispatch item data for billing reference label and total', () => {

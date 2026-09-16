@@ -83,6 +83,23 @@ export function dispatchStatusTone(status: ClientMessageDispatch['status']) {
   return 'warning';
 }
 
+export function isClientBillingDispatch(dispatch: Pick<ClientMessageDispatch, 'origin'>) {
+  return dispatch.origin !== 'RECOVERY';
+}
+
+export function summarizeClientBillingDispatches(dispatches: ClientMessageDispatch[] = []) {
+  return dispatches.filter(isClientBillingDispatch).reduce(
+    (summary, dispatch) => {
+      if (dispatch.status === 'SENT') summary.sent += 1;
+      else if (dispatch.status === 'FAILED') summary.failed += 1;
+      else summary.scheduled += 1;
+
+      return summary;
+    },
+    { failed: 0, scheduled: 0, sent: 0 },
+  );
+}
+
 export function dispatchReferenceSummary(referenceCount: number) {
   if (referenceCount === 0) return '-';
   if (referenceCount === 1) return '1 referência';

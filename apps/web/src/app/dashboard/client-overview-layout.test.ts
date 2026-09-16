@@ -42,4 +42,20 @@ describe('client overview presentation source', () => {
     expect(dashboardSource).toContain("onClick={() => setDetailTab('timeline')}");
     expect(dashboardSource).toContain('Nenhuma atividade recente.');
   });
+
+  it('keeps timeline icon wrappers centered without generic span overrides', () => {
+    expect(stylesSource).toContain('flex: 0 0 28px;');
+    expect(stylesSource).toContain('.client-timeline-icon svg,');
+    expect(stylesSource).toContain('position: static;');
+    expect(stylesSource).toContain('transform: none;');
+    expect(stylesSource).toContain('.timeline li > div > span,');
+    expect(stylesSource).not.toContain('.timeline span,');
+  });
+
+  it('filters recovery dispatches out of the Cobranças/PIX tab only', () => {
+    expect(dashboardSource).toContain('selectedBillingDispatches = selectedDispatches.filter');
+    expect(dashboardSource).toContain('summarizeClientBillingDispatches(selectedDispatches)');
+    expect(dashboardSource).toContain('selectedBillingDispatches.map((dispatch)');
+    expect(dashboardSource).toContain('selectedClient.recoveryCampaigns ?? []');
+  });
 });

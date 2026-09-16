@@ -63,9 +63,11 @@ import {
   dispatchTotalAmountLabel,
   dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
+  isClientBillingDispatch,
   referenceStatusRequiresReason,
   receivableStatusTone,
   receivableVisualStatus,
+  summarizeClientBillingDispatches,
 } from '../../components/clients/client-ui-helpers';
 import { PlanForm } from '../../components/plans/plan-form';
 import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
@@ -2276,16 +2278,8 @@ function ClientsView({
     (receivable) => receivable.status === 'PENDENTE',
   );
   const selectedDispatches = selectedClient?.messageDispatches ?? [];
-  const billingSummary = selectedDispatches.reduce(
-    (summary, dispatch) => {
-      if (dispatch.status === 'SENT') summary.sent += 1;
-      else if (dispatch.status === 'FAILED') summary.failed += 1;
-      else summary.scheduled += 1;
-
-      return summary;
-    },
-    { failed: 0, scheduled: 0, sent: 0 },
-  );
+  const selectedBillingDispatches = selectedDispatches.filter(isClientBillingDispatch);
+  const billingSummary = summarizeClientBillingDispatches(selectedDispatches);
   const pixIntentCount = selectedReceivables.reduce(
     (total, receivable) => total + (receivable.paymentIntents?.length ?? 0),
     0,
@@ -3272,7 +3266,7 @@ function ClientsView({
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedDispatches.map((dispatch) => (
+                        {selectedBillingDispatches.map((dispatch) => (
                           <tr key={dispatch.id}>
                             <td>{formatDateTime(dispatch.createdAt)}</td>
                             <td>{dispatchReferenceSummaryFromDispatch(dispatch)}</td>
@@ -3299,7 +3293,7 @@ function ClientsView({
                         ))}
                       </tbody>
                     </table>
-                    {!selectedDispatches.length ? (
+                    {!selectedBillingDispatches.length ? (
                       <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
                     ) : null}
                   </div>

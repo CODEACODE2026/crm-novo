@@ -61,14 +61,47 @@ describe('billing and automations UI 2.0 presentation source', () => {
 
   it('renders automation billing settings, throttle values, timezone, and next dispatches', () => {
     expect(dashboardSource).toContain('Cobrança automática');
-    expect(dashboardSource).toContain('Envio programado de lembretes de cobrança.');
-    expect(dashboardSource).toContain('Ativar cobrança automática');
+    expect(dashboardSource).toContain(
+      'Configurações gerais da rotina de envio de lembretes de cobrança.',
+    );
+    expect(dashboardSource).toContain('Ativar automação');
+    expect(dashboardSource).toContain('Desativar automação');
     expect(dashboardSource).toContain('sendIntervalSeconds');
     expect(dashboardSource).toContain('America/Sao_Paulo');
     expect(dashboardSource).toContain('1 comunicação por execução');
     expect(dashboardSource).toContain('Próximos envios');
     expect(dashboardSource).toContain('automation-schedule-table');
     expect(dashboardSource).toContain('setSelectedAutomationDispatch(dispatch)');
+  });
+
+  it('splits automations into local tabs and renders only the active panel', () => {
+    expect(dashboardSource).toContain("type AutomationTab = 'billing' | 'recovery' | 'monitoring'");
+    expect(dashboardSource).toContain("useState<AutomationTab>('billing')");
+    expect(dashboardSource).toContain('role="tablist" aria-label="Automações"');
+    expect(dashboardSource).toContain("automationTab === 'billing'");
+    expect(dashboardSource).toContain("automationTab === 'recovery'");
+    expect(dashboardSource).toContain("automationTab === 'monitoring'");
+    expect(dashboardSource).toContain("{automationTab === 'billing' ? (");
+    expect(dashboardSource).toContain("{automationTab === 'recovery' ? (");
+    expect(dashboardSource).toContain("{automationTab === 'monitoring' ? (");
+    expect(dashboardSource).toContain('Cobrança automática');
+    expect(dashboardSource).toContain('Recuperação por inadimplência');
+    expect(dashboardSource).toContain('Monitoramento');
+    expect(stylesSource).toContain('.automation-tabs');
+    expect(stylesSource).toContain('.automation-tab-panel');
+  });
+
+  it('keeps billing, recovery, and monitoring concerns separated visually', () => {
+    expect(dashboardSource).toContain('automation-billing-section');
+    expect(dashboardSource).toContain('recovery-section');
+    expect(dashboardSource).toContain('Pendências operacionais');
+    expect(dashboardSource).toContain('Campanhas de recuperação');
+    expect(dashboardSource).toContain('Verificar ciclos');
+    expect(dashboardSource).toContain('recovery-campaign-table');
+    expect(dashboardSource).toContain('shortUuid(receivableId)');
+    expect(dashboardSource).toContain('title={receivableId ?? undefined}');
+    expect(stylesSource).toContain('.automation-config-grid');
+    expect(stylesSource).toContain('.technical-id');
   });
 
   it('moves billing automation messages to compact automation cards with safe previews', () => {
@@ -97,14 +130,26 @@ describe('billing and automations UI 2.0 presentation source', () => {
   it('renders recovery settings, offsets, campaign rows, and campaign detail steps', () => {
     expect(dashboardSource).toContain('Recuperação por inadimplência');
     expect(dashboardSource).toContain('Acompanhamento automático de contas vencidas.');
+    expect(dashboardSource).toContain('Ativar recuperação');
+    expect(dashboardSource).toContain('Desativar recuperação');
+    expect(dashboardSource).toContain('Etapas de comunicação');
+    expect(dashboardSource).toContain('Configurar etapas');
     expect(dashboardSource).toContain('recovery-steps-timeline');
     expect(dashboardSource).toContain('D+{step.offsetDays}');
+    expect(dashboardSource).toContain('Mensagens de recuperação');
+    expect(dashboardSource).toContain('RecoveryAutomationPreviewModal');
+    expect(dashboardSource).not.toContain('MENSAGENS POR ETAPA');
+    expect(dashboardSource).not.toContain(
+      "<p>{template?.content ?? 'Template da etapa indisponível.'}</p>",
+    );
     expect(dashboardSource).toContain('Campanhas de recuperação');
     expect(dashboardSource).toContain('className="recovery-campaign-table"');
     expect(dashboardSource).toContain('setSelectedCampaign(campaign)');
     expect(dashboardSource).toContain('function RecoveryCampaignDetailModal');
     expect(dashboardSource).toContain('D+{step.delayDays}');
     expect(dashboardSource).toContain('recoveryStepStatusTone(step.status)');
+    expect(dashboardSource).toContain('Etapa atual/próxima');
+    expect(dashboardSource).toContain('Próxima data');
   });
 
   it('keeps responsive UI classes for desktop density and mobile stacking', () => {

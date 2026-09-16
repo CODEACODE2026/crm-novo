@@ -9,7 +9,9 @@ import {
   Bot,
   CalendarDays,
   CalendarClock,
+  CircleAlert,
   CircleCheck,
+  Clock,
   Copy,
   CreditCard,
   Download,
@@ -18,14 +20,16 @@ import {
   Filter,
   FileText,
   Gift,
+  Globe2,
   History,
   Info,
   LayoutDashboard,
   Layers,
   ListChecks,
   Mail,
-  MessageSquare,
   MessageCircle,
+  MessageSquare,
+  MessageSquareText,
   Minus,
   Pencil,
   Plus,
@@ -39,6 +43,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Timer,
   Trash2,
   ToggleLeft,
   UserRound,
@@ -46,6 +51,7 @@ import {
   Users,
   Wifi,
   WifiOff,
+  Workflow,
   X,
   XCircle,
   type LucideIcon,
@@ -4266,6 +4272,15 @@ const recoveryTemplateVariables = [
   'diasAtraso',
 ];
 
+type AutomationTab = 'billing' | 'recovery' | 'monitoring';
+type RecoveryTemplateCard = (typeof recoveryTemplateCards)[number];
+
+const automationTabs = [
+  { id: 'billing', label: 'Cobrança automática' },
+  { id: 'recovery', label: 'Recuperação por inadimplência' },
+  { id: 'monitoring', label: 'Monitoramento' },
+] satisfies Array<{ id: AutomationTab; label: string }>;
+
 function billingAutomationTemplateTitle(type: MessageTemplate['type']) {
   if (type === 'BILLING_DUE_GROUPED') return 'Cobrança agrupada';
   return 'Cobrança individual';
@@ -4277,6 +4292,15 @@ function billingAutomationTemplateDescription(type: MessageTemplate['type']) {
   }
 
   return 'Usada quando existe uma única cobrança para o cliente.';
+}
+
+function recoveryAutomationTemplateTitle(card: RecoveryTemplateCard) {
+  return card.templateType.replace('RECOVERY_DAY_', 'D+');
+}
+
+function shortUuid(value: string | null | undefined) {
+  if (!value) return '-';
+  return value.length > 8 ? `${value.slice(0, 8)}…` : value;
 }
 
 function BillingAutomationPreviewModal({
@@ -4336,7 +4360,55 @@ function BillingAutomationPreviewModal({
   );
 }
 
+function RecoveryAutomationPreviewModal({
+  card,
+  onClose,
+}: {
+  card: RecoveryTemplateCard;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal automation-message-modal" aria-labelledby="recovery-preview-title">
+        <header className="modal-header">
+          <div>
+            <h2 id="recovery-preview-title">Prévia da mensagem</h2>
+            <p>Exemplo de visualização</p>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <div className="automation-preview-card">
+          <span className="metric-label">{recoveryAutomationTemplateTitle(card)}</span>
+          <strong>João</strong>
+          <dl>
+            <div>
+              <dt>Referência</dt>
+              <dd>Plano Mensal</dd>
+            </div>
+            <div>
+              <dt>Valor em aberto</dt>
+              <dd>R$ 30,00</dd>
+            </div>
+            <div>
+              <dt>Vencimento</dt>
+              <dd>20/09/2026</dd>
+            </div>
+            <div>
+              <dt>Etapa</dt>
+              <dd>{card.title}</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AutomationsView() {
+  const [automationTab, setAutomationTab] = useState<AutomationTab>('billing');
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
   const [sendTime, setSendTime] = useState('09:00');
@@ -4360,6 +4432,9 @@ function AutomationsView() {
   const [recoveryTemplateContent, setRecoveryTemplateContent] = useState('');
   const [recoveryTemplateName, setRecoveryTemplateName] = useState('');
   const [recoveryTemplatePreview, setRecoveryTemplatePreview] = useState('');
+  const [previewingRecoveryTemplate, setPreviewingRecoveryTemplate] =
+    useState<RecoveryTemplateCard | null>(null);
+  const [editingRecoverySteps, setEditingRecoverySteps] = useState(false);
   const [selectedAutomationDispatch, setSelectedAutomationDispatch] =
     useState<MessageDispatch | null>(null);
   const [selectedCampaign, setSelectedCampaign] = useState<RecoveryCampaign | null>(null);
@@ -4662,6 +4737,11 @@ function AutomationsView() {
     <div className="automations-view">
       <section className="workspace-main automations-workspace">
         {error ? <div className="notice danger">{error}</div> : null}
+        <AutomationSectionHeading
+          icon={Workflow}
+          title="Automações"
+          description="Rotinas operacionais e recuperação"
+        />
         <div className="metric-grid billing-kpis">
           <StatCard
             icon={Bot}
@@ -4689,592 +4769,686 @@ function AutomationsView() {
           />
         </div>
 
-        <section className="settings-card automation-section automation-billing-section">
-          <div className="settings-card-header">
-            <div className="client-overview-heading">
-              <span className="section-icon" aria-hidden="true">
-                <Bot size={16} />
-              </span>
-              <div className="client-overview-heading-copy">
-                <h3>Cobrança automática</h3>
-                <p>Envio programado de lembretes de cobrança.</p>
-              </div>
-            </div>
-            <label className="toggle-field compact-toggle">
-              <input
-                checked={Boolean(billingSettings?.enabled)}
-                disabled={!billingSettings || working === 'billing-settings'}
-                type="checkbox"
-                onChange={(event) => void saveBillingSettings({ enabled: event.target.checked })}
-              />
-              <span>Ativar cobrança automática</span>
-            </label>
-          </div>
-          <span
-            className={`finance-status-pill tone-${billingSettings?.enabled ? 'success' : 'muted'}`}
-          >
-            {billingSettings?.enabled ? 'Ativada' : 'Desativada'}
-          </span>
-          <div className="form-grid automation-settings-grid">
-            <label className="field">
-              <span>Horário de envio</span>
-              <input
-                required
-                type="time"
-                value={sendTime}
-                onChange={(event) => setSendTime(event.target.value)}
-                onBlur={() => {
-                  if (sendTime && sendTime !== billingSettings?.sendTime) {
-                    void saveBillingSettings({ sendTime });
-                  }
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Intervalo entre mensagens</span>
-              <input
-                min={3}
-                max={300}
-                required
-                step={1}
-                type="number"
-                value={sendIntervalSeconds}
-                onChange={(event) => setSendIntervalSeconds(event.target.value)}
-                onBlur={() => {
-                  const parsed = Number(sendIntervalSeconds);
-
-                  if (
-                    Number.isInteger(parsed) &&
-                    parsed >= 3 &&
-                    parsed <= 300 &&
-                    parsed !== billingSettings?.sendIntervalSeconds
-                  ) {
-                    void saveBillingSettings({ sendIntervalSeconds: parsed });
-                  }
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Timezone</span>
-              <input disabled value="America/Sao_Paulo" readOnly />
-            </label>
-          </div>
-          <div className="automation-summary-grid">
-            <article>
-              <span>Horário</span>
-              <strong>{billingSettings?.sendTime ?? '09:00'}</strong>
-            </article>
-            <article>
-              <span>Intervalo</span>
-              <strong>{billingSettings?.sendIntervalSeconds ?? 8} segundos</strong>
-            </article>
-            <article>
-              <span>Processamento</span>
-              <strong>1 comunicação por execução</strong>
-            </article>
-          </div>
-        </section>
-
-        <section className="settings-card automation-section automation-message-section">
-          <AutomationSectionHeading
-            icon={MessageSquare}
-            title="Mensagens da automação"
-            description="Templates usados pela cobrança automática."
-          />
-          <div className="automation-message-grid">
-            {billingTemplates.map((template) => (
-              <article className="automation-message-card" key={template.id}>
-                <header>
-                  <div>
-                    <strong>{billingAutomationTemplateTitle(template.type)}</strong>
-                    <p>{billingAutomationTemplateDescription(template.type)}</p>
-                  </div>
-                  <span
-                    className={`finance-status-pill tone-${template.active ? 'success' : 'muted'}`}
-                  >
-                    {template.active ? 'Ativa' : 'Inativa'}
-                  </span>
-                </header>
-                <div className="automation-message-actions">
-                  <Button
-                    icon={Eye}
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setPreviewingBillingTemplate(template)}
-                  >
-                    Visualizar
-                  </Button>
-                  <Button
-                    icon={Pencil}
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => openBillingTemplate(template)}
-                  >
-                    Editar
-                  </Button>
-                  <ActionMenu
-                    items={[
-                      {
-                        disabled: working === template.id,
-                        icon: Power,
-                        label: template.active ? 'Desativar' : 'Ativar',
-                        onSelect: () => void toggleBillingTemplate(template),
-                      },
-                    ]}
-                  />
-                </div>
-              </article>
-            ))}
-            {!billingTemplates.length ? (
-              <div className="empty-state">Nenhuma mensagem da automação cadastrada.</div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="settings-card automation-section recovery-section">
-          <div className="settings-card-header">
-            <div className="client-overview-heading">
-              <span className="section-icon" aria-hidden="true">
-                <Activity size={16} />
-              </span>
-              <div className="client-overview-heading-copy">
-                <h3>Recuperação por inadimplência</h3>
-                <p>Acompanhamento automático de contas vencidas.</p>
-              </div>
-            </div>
-            <label className="toggle-field compact-toggle">
-              <input
-                checked={Boolean(recoverySettings?.enabled)}
-                disabled={!recoverySettings || working === 'recovery-settings'}
-                type="checkbox"
-                onChange={(event) => void saveRecoverySettings({ enabled: event.target.checked })}
-              />
-              <span>Ativar recuperação automática</span>
-            </label>
-          </div>
-          <span
-            className={`finance-status-pill tone-${recoverySettings?.enabled ? 'success' : 'muted'}`}
-          >
-            {recoverySettings?.enabled ? 'Ativada' : 'Desativada'}
-          </span>
-          <div className="form-grid automation-settings-grid">
-            <label className="field">
-              <span>Horário de recuperação</span>
-              <input
-                required
-                type="time"
-                value={recoverySendTime}
-                onChange={(event) => setRecoverySendTime(event.target.value)}
-                onBlur={() => {
-                  if (recoverySendTime && recoverySendTime !== recoverySettings?.sendTime) {
-                    void saveRecoverySettings({ sendTime: recoverySendTime });
-                  }
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Intervalo entre mensagens</span>
-              <input
-                min={3}
-                max={300}
-                required
-                step={1}
-                type="number"
-                value={recoverySendIntervalSeconds}
-                onChange={(event) => setRecoverySendIntervalSeconds(event.target.value)}
-                onBlur={() => {
-                  const parsed = Number(recoverySendIntervalSeconds);
-
-                  if (
-                    Number.isInteger(parsed) &&
-                    parsed >= 3 &&
-                    parsed <= 300 &&
-                    parsed !== recoverySettings?.sendIntervalSeconds
-                  ) {
-                    void saveRecoverySettings({ sendIntervalSeconds: parsed });
-                  }
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Timezone</span>
-              <input disabled value="America/Sao_Paulo" readOnly />
-            </label>
-          </div>
-          <div className="recovery-steps-timeline">
-            {(recoverySettings?.steps ?? []).map((step, index) => (
-              <article className={step.enabled ? 'enabled' : 'disabled'} key={step.stepNumber}>
-                <div className="recovery-step-marker">D+{step.offsetDays}</div>
-                <div className="recovery-step-body">
-                  <strong>Etapa {step.stepNumber}</strong>
-                  <span>{messageTemplateTypeLabel(step.templateType)}</span>
-                  <label className="field compact-field">
-                    <span>Offset</span>
-                    <input
-                      min={1}
-                      required
-                      step={1}
-                      type="number"
-                      value={recoveryOffsets[index] ?? String(step.offsetDays)}
-                      onChange={(event) => {
-                        const next = [...recoveryOffsets];
-                        next[index] = event.target.value;
-                        setRecoveryOffsets(next);
-                      }}
-                      onBlur={() => {
-                        try {
-                          void saveRecoverySettings(recoveryPayloadFromOffsets(recoveryOffsets));
-                        } catch (err) {
-                          setError(
-                            err instanceof Error ? err.message : 'Etapas de recuperação inválidas.',
-                          );
-                        }
-                      }}
-                    />
-                  </label>
-                  <label className="toggle-field compact-toggle">
-                    <input
-                      checked={step.enabled}
-                      type="checkbox"
-                      onChange={(event) => {
-                        const keys = [
-                          'day3Enabled',
-                          'day10Enabled',
-                          'day15Enabled',
-                          'day30Enabled',
-                        ] as const;
-                        const key = keys[index];
-                        if (key) {
-                          void saveRecoverySettings({ [key]: event.target.checked });
-                        }
-                      }}
-                    />
-                    <span>{step.enabled ? 'Ativa' : 'Inativa'}</span>
-                  </label>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="settings-card template-panel">
-          <div className="settings-card-header">
-            <div>
-              <span className="metric-label">MENSAGENS POR ETAPA</span>
-              <h2>Recuperação</h2>
-            </div>
-          </div>
-          <div className="mini-list">
-            {recoveryTemplateCards.map((card) => {
-              const template = templates.find((item) => item.type === card.templateType);
-
-              return (
-                <article key={card.templateType}>
-                  <strong>{card.title}</strong>
-                  <span>
-                    {template?.name ?? 'Template não cadastrado'} |{' '}
-                    {template?.active ? 'Ativo' : 'Inativo'}
-                  </span>
-                  <p>{template?.content ?? 'Template da etapa indisponível.'}</p>
-                  <div className="button-row">
-                    <button
-                      className="secondary-button"
-                      disabled={!template}
-                      type="button"
-                      onClick={() => template && openRecoveryTemplate(template)}
-                    >
-                      <Pencil aria-hidden="true" size={16} />
-                      Editar
-                    </button>
-                    <button
-                      className="secondary-button"
-                      disabled={!template || working === template.id}
-                      type="button"
-                      onClick={() => template && void toggleRecoveryTemplate(template)}
-                    >
-                      {template?.active ? 'Desativar' : 'Ativar'}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-
-        <div className="metric-grid billing-kpis">
-          <article className="metric-card compact">
-            <span className="metric-label">Agendadas hoje</span>
-            <strong className="metric-value">{billingSummary?.scheduledToday ?? 0}</strong>
-            <p>{billingSummary?.scheduled ?? 0} futuras totais</p>
-          </article>
-          <article className="metric-card compact">
-            <span className="metric-label">Enviadas hoje</span>
-            <strong className="metric-value">{billingSummary?.sentToday ?? 0}</strong>
-            <p>{billingSummary?.sent ?? 0} histórico</p>
-          </article>
-          <article className="metric-card compact">
-            <span className="metric-label">Falhas hoje</span>
-            <strong className="metric-value">{billingSummary?.failedToday ?? 0}</strong>
-            <p>{billingSummary?.failed ?? 0} pendentes de retry</p>
-          </article>
+        <div className="tabs automation-tabs" role="tablist" aria-label="Automações">
+          {automationTabs.map((tab) => (
+            <button
+              aria-selected={automationTab === tab.id}
+              className={automationTab === tab.id ? 'active' : ''}
+              key={tab.id}
+              role="tab"
+              type="button"
+              onClick={() => setAutomationTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        <section className="settings-card automation-section">
-          <AutomationSectionHeading
-            icon={CalendarClock}
-            title="Próximos envios"
-            description="Comunicações programadas da cobrança automática."
-          />
-          <div className="table-wrap">
-            <table className="billing-table automation-schedule-table">
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Referência(s)</th>
-                  <th>Vencimento</th>
-                  <th>Aviso</th>
-                  <th>Agendado para</th>
-                  <th className="finance-status-column">Status</th>
-                  <th className="finance-actions-column">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(billingSummary?.next ?? []).map((dispatch) => (
-                  <tr key={dispatch.id}>
-                    <td>{dispatch.client?.name ?? '-'}</td>
-                    <td>{billingDispatchReferenceLabel(dispatch)}</td>
-                    <td>{billingDispatchDueDateLabel(dispatch)}</td>
-                    <td>
-                      {dispatch.idempotencyKey?.startsWith('billing-group')
-                        ? '-'
-                        : `${dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias`}
-                    </td>
-                    <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
-                    <td className="finance-status-column">
-                      <span
-                        className={`finance-status-pill tone-${billingDispatchStatusTone(
-                          dispatch.status,
-                        )}`}
-                      >
-                        {billingStatusLabel(dispatch.status)}
-                      </span>
-                    </td>
-                    <td className="finance-actions-column">
-                      <IconButton
-                        icon={Eye}
-                        label="Ver detalhes"
-                        size="sm"
-                        onClick={() => setSelectedAutomationDispatch(dispatch)}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!(billingSummary?.next ?? []).length ? (
-              <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhum envio futuro encontrado.'}
-              </div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="settings-card">
-          <div className="settings-card-header">
-            <div>
-              <span className="metric-label">CICLO FINANCEIRO</span>
-              <h2>Pendencias operacionais</h2>
-            </div>
-            <button
-              className="secondary-button"
-              disabled={working === 'billing-receivables'}
-              type="button"
-              onClick={() => void runBillingReceivablesReconcile()}
-            >
-              <RefreshCcw aria-hidden="true" size={16} />
-              Verificar ciclos
-            </button>
-          </div>
-          <div className="table-wrap compact-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Referência</th>
-                  <th>Plano</th>
-                  <th>Valor</th>
-                  <th>Vencimento</th>
-                  <th>Motivo</th>
-                  <th>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(billingSummary?.cycleIssues ?? []).map((issue) => (
-                  <tr key={issue.clientReferenceId}>
-                    <td>{issue.clientName}</td>
-                    <td>{issue.reference}</td>
-                    <td>{issue.planName}</td>
-                    <td>{formatCurrency(issue.amount)}</td>
-                    <td>{formatDate(issue.dueDate)}</td>
-                    <td>{issue.reason}</td>
-                    <td>
-                      <button
-                        className="secondary-button"
-                        disabled={
-                          issue.code !== 'MISSING_RECEIVABLE' ||
-                          working === `cycle-${issue.clientReferenceId}`
-                        }
-                        type="button"
-                        onClick={() => void runGenerateCycleReceivable(issue.clientReferenceId)}
-                      >
-                        <Plus aria-hidden="true" size={16} />
-                        Gerar conta
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!(billingSummary?.cycleIssues ?? []).length ? (
-              <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhuma pendência de ciclo financeiro.'}
-              </div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="settings-card automation-section recovery-campaigns-section">
-          <AutomationSectionHeading
-            icon={Activity}
-            title="Campanhas de recuperação"
-            description="Acompanhe as campanhas e etapas de inadimplência em andamento."
-          />
-          <div className="toolbar recovery-toolbar">
-            <div className="search-row">
-              <Search aria-hidden="true" size={18} />
-              <input
-                placeholder="Buscar cliente ou referência"
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(1);
-                }}
+        {automationTab === 'billing' ? (
+          <div className="automation-tab-panel" role="tabpanel">
+            <section className="settings-card automation-section automation-billing-section">
+              <AutomationSectionHeading
+                action={
+                  <Button
+                    disabled={!billingSettings || working === 'billing-settings'}
+                    icon={Power}
+                    size="sm"
+                    variant={billingSettings?.enabled ? 'secondary' : 'primary'}
+                    onClick={() => void saveBillingSettings({ enabled: !billingSettings?.enabled })}
+                  >
+                    {billingSettings?.enabled ? 'Desativar automação' : 'Ativar automação'}
+                  </Button>
+                }
+                icon={Send}
+                title="Cobrança automática"
+                description="Configurações gerais da rotina de envio de lembretes de cobrança."
               />
-            </div>
-            <select
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value as RecoveryCampaignStatus | '');
-                setPage(1);
-              }}
-            >
-              <option value="">Todas</option>
-              <option value="ATIVA">Ativas</option>
-              <option value="CONCLUIDA">Concluídas</option>
-              <option value="CANCELADA">Canceladas</option>
-            </select>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void loadAutomations()}
-            >
-              <RefreshCcw aria-hidden="true" size={16} />
-              Atualizar
-            </button>
-            <button
-              className="primary-button"
-              disabled={working === 'reconcile'}
-              type="button"
-              onClick={() => void runRecoveryReconcile()}
-            >
-              <CalendarClock aria-hidden="true" size={16} />
-              Reconciliar
-            </button>
-          </div>
+              <span
+                className={`finance-status-pill tone-${
+                  billingSettings?.enabled ? 'success' : 'muted'
+                }`}
+              >
+                {billingSettings?.enabled ? 'Ativada' : 'Desativada'}
+              </span>
+              <div className="automation-config-grid">
+                <article className="automation-config-card">
+                  <Clock aria-hidden="true" size={16} />
+                  <div>
+                    <span>Horário de envio</span>
+                    <strong>{billingSettings?.sendTime ?? '09:00'}</strong>
+                  </div>
+                  <input
+                    aria-label="Horário de envio"
+                    required
+                    type="time"
+                    value={sendTime}
+                    onChange={(event) => setSendTime(event.target.value)}
+                    onBlur={() => {
+                      if (sendTime && sendTime !== billingSettings?.sendTime) {
+                        void saveBillingSettings({ sendTime });
+                      }
+                    }}
+                  />
+                </article>
+                <article className="automation-config-card">
+                  <Timer aria-hidden="true" size={16} />
+                  <div>
+                    <span>Intervalo entre mensagens</span>
+                    <strong>{billingSettings?.sendIntervalSeconds ?? 8} segundos</strong>
+                  </div>
+                  <input
+                    aria-label="Intervalo entre mensagens"
+                    min={3}
+                    max={300}
+                    required
+                    step={1}
+                    type="number"
+                    value={sendIntervalSeconds}
+                    onChange={(event) => setSendIntervalSeconds(event.target.value)}
+                    onBlur={() => {
+                      const parsed = Number(sendIntervalSeconds);
 
-          <div className="table-wrap">
-            <table className="recovery-campaign-table">
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Referência</th>
-                  <th>Receivable</th>
-                  <th>Vencimento</th>
-                  <th>Atraso</th>
-                  <th className="finance-status-column">Status</th>
-                  <th>Etapa atual/próxima</th>
-                  <th>Próxima data</th>
-                  <th>Início</th>
-                  <th className="finance-actions-column">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {campaigns.map((campaign) => {
-                  const nextStep =
-                    campaign.steps.find((step) => ['SCHEDULED', 'FAILED'].includes(step.status)) ??
-                    campaign.steps.at(-1);
-                  return (
-                    <tr key={campaign.id}>
-                      <td>
-                        <strong>{campaign.client?.name ?? 'Cliente'}</strong>
-                        <span>{campaign.client?.reference ?? campaign.clientId}</span>
-                      </td>
-                      <td>
-                        {campaign.clientReference?.reference ?? campaign.client?.reference ?? '-'}
-                      </td>
-                      <td>{campaign.receivable?.id ?? campaign.receivableId}</td>
-                      <td>{campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}</td>
-                      <td>
-                        {campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}
-                      </td>
-                      <td className="finance-status-column">
-                        <span
-                          className={`finance-status-pill tone-${recoveryCampaignStatusTone(
-                            campaign.status,
-                          )}`}
-                        >
-                          {recoveryCampaignStatusLabel(campaign.status)}
-                        </span>
-                      </td>
-                      <td>{nextStep ? `D+${nextStep.delayDays}` : '-'}</td>
-                      <td>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</td>
-                      <td>{formatDateTime(campaign.startedAt)}</td>
-                      <td className="finance-actions-column">
-                        <IconButton
-                          icon={Eye}
-                          label="Ver etapas"
-                          size="sm"
-                          onClick={() => setSelectedCampaign(campaign)}
-                        />
-                        <button
-                          className="secondary-button"
-                          disabled={campaign.status !== 'ATIVA' || working === campaign.id}
-                          type="button"
-                          onClick={() => void runCancelCampaign(campaign)}
-                        >
-                          <X aria-hidden="true" size={16} />
-                          Cancelar
-                        </button>
-                      </td>
+                      if (
+                        Number.isInteger(parsed) &&
+                        parsed >= 3 &&
+                        parsed <= 300 &&
+                        parsed !== billingSettings?.sendIntervalSeconds
+                      ) {
+                        void saveBillingSettings({ sendIntervalSeconds: parsed });
+                      }
+                    }}
+                  />
+                </article>
+                <article className="automation-config-card readonly">
+                  <Globe2 aria-hidden="true" size={16} />
+                  <div>
+                    <span>Timezone</span>
+                    <strong>America/Sao_Paulo</strong>
+                  </div>
+                </article>
+                <article className="automation-config-card readonly">
+                  <Settings aria-hidden="true" size={16} />
+                  <div>
+                    <span>Processamento</span>
+                    <strong>1 comunicação por execução</strong>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section className="settings-card automation-section automation-message-section">
+              <AutomationSectionHeading
+                icon={MessageSquareText}
+                title="Mensagens da automação"
+                description="Templates usados pela cobrança automática."
+              />
+              <div className="automation-message-grid">
+                {billingTemplates.map((template) => (
+                  <article className="automation-message-card" key={template.id}>
+                    <header>
+                      <div>
+                        <strong>{billingAutomationTemplateTitle(template.type)}</strong>
+                        <p>{billingAutomationTemplateDescription(template.type)}</p>
+                      </div>
+                      <span
+                        className={`finance-status-pill tone-${
+                          template.active ? 'success' : 'muted'
+                        }`}
+                      >
+                        {template.active ? 'Ativa' : 'Inativa'}
+                      </span>
+                    </header>
+                    <div className="automation-message-actions">
+                      <Button
+                        icon={Eye}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setPreviewingBillingTemplate(template)}
+                      >
+                        Visualizar
+                      </Button>
+                      <Button
+                        icon={Pencil}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => openBillingTemplate(template)}
+                      >
+                        Editar
+                      </Button>
+                      <ActionMenu
+                        items={[
+                          {
+                            disabled: working === template.id,
+                            icon: Power,
+                            label: template.active ? 'Desativar' : 'Ativar',
+                            onSelect: () => void toggleBillingTemplate(template),
+                          },
+                        ]}
+                      />
+                    </div>
+                  </article>
+                ))}
+                {!billingTemplates.length ? (
+                  <div className="empty-state">Nenhuma mensagem da automação cadastrada.</div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="settings-card automation-section">
+              <AutomationSectionHeading
+                icon={CalendarClock}
+                title="Próximos envios"
+                description="Comunicações programadas da cobrança automática."
+              />
+              <div className="table-wrap">
+                <table className="billing-table automation-schedule-table">
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Referência(s)</th>
+                      <th>Vencimento</th>
+                      <th>Aviso</th>
+                      <th>Agendado para</th>
+                      <th className="finance-status-column">Status</th>
+                      <th className="finance-actions-column">Ações</th>
                     </tr>
+                  </thead>
+                  <tbody>
+                    {(billingSummary?.next ?? []).map((dispatch) => (
+                      <tr key={dispatch.id}>
+                        <td>{dispatch.client?.name ?? '-'}</td>
+                        <td>{billingDispatchReferenceLabel(dispatch)}</td>
+                        <td>{billingDispatchDueDateLabel(dispatch)}</td>
+                        <td>
+                          {dispatch.idempotencyKey?.startsWith('billing-group')
+                            ? '-'
+                            : `${dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias`}
+                        </td>
+                        <td>
+                          {dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}
+                        </td>
+                        <td className="finance-status-column">
+                          <span
+                            className={`finance-status-pill tone-${billingDispatchStatusTone(
+                              dispatch.status,
+                            )}`}
+                          >
+                            {billingStatusLabel(dispatch.status)}
+                          </span>
+                        </td>
+                        <td className="finance-actions-column">
+                          <IconButton
+                            icon={Eye}
+                            label="Ver detalhes"
+                            size="sm"
+                            onClick={() => setSelectedAutomationDispatch(dispatch)}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!(billingSummary?.next ?? []).length ? (
+                  <div className="empty-state">
+                    {loading ? 'Carregando...' : 'Nenhum envio futuro encontrado.'}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {automationTab === 'recovery' ? (
+          <div className="automation-tab-panel" role="tabpanel">
+            <section className="settings-card automation-section recovery-section">
+              <AutomationSectionHeading
+                action={
+                  <Button
+                    disabled={!recoverySettings || working === 'recovery-settings'}
+                    icon={Power}
+                    size="sm"
+                    variant={recoverySettings?.enabled ? 'secondary' : 'primary'}
+                    onClick={() =>
+                      void saveRecoverySettings({ enabled: !recoverySettings?.enabled })
+                    }
+                  >
+                    {recoverySettings?.enabled ? 'Desativar recuperação' : 'Ativar recuperação'}
+                  </Button>
+                }
+                icon={Activity}
+                title="Recuperação por inadimplência"
+                description="Acompanhamento automático de contas vencidas."
+              />
+              <span
+                className={`finance-status-pill tone-${
+                  recoverySettings?.enabled ? 'success' : 'muted'
+                }`}
+              >
+                {recoverySettings?.enabled ? 'Ativada' : 'Desativada'}
+              </span>
+              <div className="automation-config-grid">
+                <article className="automation-config-card">
+                  <Clock aria-hidden="true" size={16} />
+                  <div>
+                    <span>Horário de recuperação</span>
+                    <strong>{recoverySettings?.sendTime ?? '09:00'}</strong>
+                  </div>
+                  <input
+                    aria-label="Horário de recuperação"
+                    required
+                    type="time"
+                    value={recoverySendTime}
+                    onChange={(event) => setRecoverySendTime(event.target.value)}
+                    onBlur={() => {
+                      if (recoverySendTime && recoverySendTime !== recoverySettings?.sendTime) {
+                        void saveRecoverySettings({ sendTime: recoverySendTime });
+                      }
+                    }}
+                  />
+                </article>
+                <article className="automation-config-card">
+                  <Timer aria-hidden="true" size={16} />
+                  <div>
+                    <span>Intervalo entre mensagens</span>
+                    <strong>{recoverySettings?.sendIntervalSeconds ?? 8} segundos</strong>
+                  </div>
+                  <input
+                    aria-label="Intervalo entre mensagens da recuperação"
+                    min={3}
+                    max={300}
+                    required
+                    step={1}
+                    type="number"
+                    value={recoverySendIntervalSeconds}
+                    onChange={(event) => setRecoverySendIntervalSeconds(event.target.value)}
+                    onBlur={() => {
+                      const parsed = Number(recoverySendIntervalSeconds);
+
+                      if (
+                        Number.isInteger(parsed) &&
+                        parsed >= 3 &&
+                        parsed <= 300 &&
+                        parsed !== recoverySettings?.sendIntervalSeconds
+                      ) {
+                        void saveRecoverySettings({ sendIntervalSeconds: parsed });
+                      }
+                    }}
+                  />
+                </article>
+                <article className="automation-config-card readonly">
+                  <Globe2 aria-hidden="true" size={16} />
+                  <div>
+                    <span>Timezone</span>
+                    <strong>America/Sao_Paulo</strong>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section className="settings-card automation-section recovery-steps-section">
+              <AutomationSectionHeading
+                action={
+                  <Button
+                    icon={Settings}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setEditingRecoverySteps((value) => !value)}
+                  >
+                    Configurar etapas
+                  </Button>
+                }
+                icon={Layers}
+                title="Etapas de comunicação"
+                description="Configuração dos lembretes por tempo de atraso."
+              />
+              <div className="recovery-steps-timeline">
+                {(recoverySettings?.steps ?? []).map((step, index) => (
+                  <article className={step.enabled ? 'enabled' : 'disabled'} key={step.stepNumber}>
+                    <div className="recovery-step-marker">D+{step.offsetDays}</div>
+                    <div className="recovery-step-body">
+                      <strong>Etapa {step.stepNumber}</strong>
+                      <span>{messageTemplateTypeLabel(step.templateType)}</span>
+                      {editingRecoverySteps ? (
+                        <>
+                          <label className="field compact-field">
+                            <span>Offset</span>
+                            <input
+                              min={1}
+                              required
+                              step={1}
+                              type="number"
+                              value={recoveryOffsets[index] ?? String(step.offsetDays)}
+                              onChange={(event) => {
+                                const next = [...recoveryOffsets];
+                                next[index] = event.target.value;
+                                setRecoveryOffsets(next);
+                              }}
+                              onBlur={() => {
+                                try {
+                                  void saveRecoverySettings(
+                                    recoveryPayloadFromOffsets(recoveryOffsets),
+                                  );
+                                } catch (err) {
+                                  setError(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Etapas de recuperação inválidas.',
+                                  );
+                                }
+                              }}
+                            />
+                          </label>
+                          <label className="toggle-field compact-toggle">
+                            <input
+                              checked={step.enabled}
+                              type="checkbox"
+                              onChange={(event) => {
+                                const keys = [
+                                  'day3Enabled',
+                                  'day10Enabled',
+                                  'day15Enabled',
+                                  'day30Enabled',
+                                ] as const;
+                                const key = keys[index];
+                                if (key) {
+                                  void saveRecoverySettings({ [key]: event.target.checked });
+                                }
+                              }}
+                            />
+                            <span>{step.enabled ? 'Ativa' : 'Inativa'}</span>
+                          </label>
+                        </>
+                      ) : (
+                        <small>{step.enabled ? 'Ativa' : 'Inativa'}</small>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="settings-card automation-section template-panel">
+              <AutomationSectionHeading
+                icon={MessageSquareText}
+                title="Mensagens de recuperação"
+                description="Mensagens utilizadas em cada etapa da recuperação."
+              />
+              <div className="automation-message-grid">
+                {recoveryTemplateCards.map((card) => {
+                  const template = templates.find((item) => item.type === card.templateType);
+
+                  return (
+                    <article className="automation-message-card" key={card.templateType}>
+                      <header>
+                        <div>
+                          <strong>{recoveryAutomationTemplateTitle(card)}</strong>
+                          <p>{card.title}</p>
+                        </div>
+                        <span
+                          className={`finance-status-pill tone-${
+                            template?.active ? 'success' : 'muted'
+                          }`}
+                        >
+                          {template?.active ? 'Ativa' : 'Inativa'}
+                        </span>
+                      </header>
+                      <div className="automation-message-actions">
+                        <Button
+                          disabled={!template}
+                          icon={Eye}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setPreviewingRecoveryTemplate(card)}
+                        >
+                          Visualizar
+                        </Button>
+                        <Button
+                          disabled={!template}
+                          icon={Pencil}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => template && openRecoveryTemplate(template)}
+                        >
+                          Editar
+                        </Button>
+                        <ActionMenu
+                          items={[
+                            {
+                              disabled: !template || working === template.id,
+                              icon: Power,
+                              label: template?.active ? 'Desativar' : 'Ativar',
+                              onSelect: () => template && void toggleRecoveryTemplate(template),
+                            },
+                          ]}
+                        />
+                      </div>
+                    </article>
                   );
                 })}
-              </tbody>
-            </table>
-            {!campaigns.length ? (
-              <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhuma campanha encontrada.'}
               </div>
-            ) : null}
-            <PaginationControls pagination={campaignPagination} onPageChange={setPage} />
+            </section>
           </div>
-        </section>
+        ) : null}
+
+        {automationTab === 'monitoring' ? (
+          <div className="automation-tab-panel" role="tabpanel">
+            <section className="settings-card automation-section">
+              <AutomationSectionHeading
+                action={
+                  <Button
+                    disabled={working === 'billing-receivables'}
+                    icon={RefreshCcw}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void runBillingReceivablesReconcile()}
+                  >
+                    Verificar ciclos
+                  </Button>
+                }
+                icon={CircleAlert}
+                title="Pendências operacionais"
+                description="Ciclos financeiros que exigem conferência antes da automação."
+              />
+              <div className="table-wrap compact-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Referência</th>
+                      <th>Plano</th>
+                      <th>Valor</th>
+                      <th>Vencimento</th>
+                      <th>Motivo</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(billingSummary?.cycleIssues ?? []).map((issue) => (
+                      <tr key={issue.clientReferenceId}>
+                        <td>{issue.clientName}</td>
+                        <td>{issue.reference}</td>
+                        <td>{issue.planName}</td>
+                        <td>{formatCurrency(issue.amount)}</td>
+                        <td>{formatDate(issue.dueDate)}</td>
+                        <td>{issue.reason}</td>
+                        <td>
+                          <button
+                            className="secondary-button"
+                            disabled={
+                              issue.code !== 'MISSING_RECEIVABLE' ||
+                              working === `cycle-${issue.clientReferenceId}`
+                            }
+                            type="button"
+                            onClick={() => void runGenerateCycleReceivable(issue.clientReferenceId)}
+                          >
+                            <Plus aria-hidden="true" size={16} />
+                            Gerar conta
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!(billingSummary?.cycleIssues ?? []).length ? (
+                  <div className="empty-state">
+                    {loading ? 'Carregando...' : 'Nenhuma pendência de ciclo financeiro.'}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="settings-card automation-section recovery-campaigns-section">
+              <AutomationSectionHeading
+                icon={Activity}
+                title="Campanhas de recuperação"
+                description="Acompanhe campanhas e etapas de inadimplência em andamento."
+              />
+              <div className="toolbar recovery-toolbar">
+                <div className="search-row">
+                  <Search aria-hidden="true" size={18} />
+                  <input
+                    placeholder="Buscar cliente ou referência"
+                    value={search}
+                    onChange={(event) => {
+                      setSearch(event.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+                <select
+                  value={status}
+                  onChange={(event) => {
+                    setStatus(event.target.value as RecoveryCampaignStatus | '');
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todas</option>
+                  <option value="ATIVA">Ativas</option>
+                  <option value="CONCLUIDA">Concluídas</option>
+                  <option value="CANCELADA">Canceladas</option>
+                </select>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void loadAutomations()}
+                >
+                  <RefreshCcw aria-hidden="true" size={16} />
+                  Atualizar
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={working === 'reconcile'}
+                  type="button"
+                  onClick={() => void runRecoveryReconcile()}
+                >
+                  <CalendarClock aria-hidden="true" size={16} />
+                  Reconciliar
+                </button>
+              </div>
+
+              <div className="table-wrap">
+                <table className="recovery-campaign-table">
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Referência</th>
+                      <th>Receivable</th>
+                      <th>Vencimento</th>
+                      <th>Atraso</th>
+                      <th className="finance-status-column">Status</th>
+                      <th>Etapa atual/próxima</th>
+                      <th>Próxima data</th>
+                      <th>Início</th>
+                      <th className="finance-actions-column">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {campaigns.map((campaign) => {
+                      const receivableId = campaign.receivable?.id ?? campaign.receivableId;
+                      const nextStep =
+                        campaign.steps.find((step) =>
+                          ['SCHEDULED', 'FAILED'].includes(step.status),
+                        ) ?? campaign.steps.at(-1);
+                      return (
+                        <tr key={campaign.id}>
+                          <td>
+                            <strong>{campaign.client?.name ?? 'Cliente'}</strong>
+                            <span>{campaign.client?.reference ?? campaign.clientId}</span>
+                          </td>
+                          <td>
+                            {campaign.clientReference?.reference ??
+                              campaign.client?.reference ??
+                              '-'}
+                          </td>
+                          <td>
+                            <span className="technical-id" title={receivableId ?? undefined}>
+                              {shortUuid(receivableId)}
+                            </span>
+                          </td>
+                          <td>
+                            {campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}
+                          </td>
+                          <td>
+                            {campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}
+                          </td>
+                          <td className="finance-status-column">
+                            <span
+                              className={`finance-status-pill tone-${recoveryCampaignStatusTone(
+                                campaign.status,
+                              )}`}
+                            >
+                              {recoveryCampaignStatusLabel(campaign.status)}
+                            </span>
+                          </td>
+                          <td>{nextStep ? `D+${nextStep.delayDays}` : '-'}</td>
+                          <td>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</td>
+                          <td>{formatDateTime(campaign.startedAt)}</td>
+                          <td className="finance-actions-column">
+                            <IconButton
+                              icon={Eye}
+                              label="Ver etapas"
+                              size="sm"
+                              onClick={() => setSelectedCampaign(campaign)}
+                            />
+                            <ActionMenu
+                              items={[
+                                {
+                                  danger: true,
+                                  disabled: campaign.status !== 'ATIVA' || working === campaign.id,
+                                  icon: X,
+                                  label: 'Cancelar campanha',
+                                  onSelect: () => void runCancelCampaign(campaign),
+                                },
+                              ]}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {!campaigns.length ? (
+                  <div className="empty-state">
+                    {loading ? 'Carregando...' : 'Nenhuma campanha encontrada.'}
+                  </div>
+                ) : null}
+                <PaginationControls pagination={campaignPagination} onPageChange={setPage} />
+              </div>
+            </section>
+          </div>
+        ) : null}
       </section>
 
       {previewingBillingTemplate ? (
         <BillingAutomationPreviewModal
           template={previewingBillingTemplate}
           onClose={() => setPreviewingBillingTemplate(null)}
+        />
+      ) : null}
+      {previewingRecoveryTemplate ? (
+        <RecoveryAutomationPreviewModal
+          card={previewingRecoveryTemplate}
+          onClose={() => setPreviewingRecoveryTemplate(null)}
         />
       ) : null}
       {editingBillingTemplate ? (
@@ -5439,6 +5613,10 @@ function RecoveryCampaignDetailModal({
   campaign: RecoveryCampaign;
   onClose: () => void;
 }) {
+  const nextStep =
+    campaign.steps.find((step) => ['SCHEDULED', 'FAILED'].includes(step.status)) ??
+    campaign.steps.at(-1);
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section
@@ -5471,14 +5649,21 @@ function RecoveryCampaignDetailModal({
           </div>
           <div>
             <dt>Receivable</dt>
-            <dd>{campaign.receivable?.id ?? campaign.receivableId}</dd>
+            <dd>
+              <span
+                className="technical-id"
+                title={campaign.receivable?.id ?? campaign.receivableId}
+              >
+                {shortUuid(campaign.receivable?.id ?? campaign.receivableId)}
+              </span>
+            </dd>
           </div>
           <div>
             <dt>Vencimento</dt>
             <dd>{campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}</dd>
           </div>
           <div>
-            <dt>Dias em atraso</dt>
+            <dt>Atraso</dt>
             <dd>{campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}</dd>
           </div>
           <div>
@@ -5493,8 +5678,25 @@ function RecoveryCampaignDetailModal({
               </span>
             </dd>
           </div>
+          <div>
+            <dt>Início</dt>
+            <dd>{formatDateTime(campaign.startedAt)}</dd>
+          </div>
+          <div>
+            <dt>Etapa atual/próxima</dt>
+            <dd>{nextStep ? `D+${nextStep.delayDays}` : '-'}</dd>
+          </div>
+          <div>
+            <dt>Próxima data</dt>
+            <dd>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</dd>
+          </div>
         </dl>
 
+        <AutomationSectionHeading
+          icon={Activity}
+          title="Etapas da campanha"
+          description="Status operacional de cada lembrete da recuperação."
+        />
         <div className="recovery-campaign-steps">
           {campaign.steps.map((step) => (
             <article key={step.id}>

@@ -2914,6 +2914,18 @@ tbody tr:hover,
   width: min(100%, 680px);
 }
 
+.finance-transaction-modal {
+  width: min(100%, 720px);
+}
+
+.finance-transaction-modal-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 16px 0 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
 .modal-icon {
   display: grid;
   width: 30px;
@@ -3356,5 +3368,9 @@ tbody tr:hover,
   .modal {
     width: 100%;
     max-height: calc(100vh - 20px);
+  }
+
+  .finance-transaction-modal-form {
+    grid-template-columns: 1fr;
   }
 }

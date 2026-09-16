@@ -6984,6 +6984,10 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
   const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
+  const [transactionModal, setTransactionModal] = useState<{
+    kind: FinancialTransactionType;
+    transaction: FinancialTransaction | undefined;
+  } | null>(null);
 
   const loadFinance = useCallback(async () => {
     setLoading(true);
@@ -7140,6 +7144,13 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     });
   }
 
+  function openTransactionModal(
+    kind: FinancialTransactionType,
+    transaction?: FinancialTransaction,
+  ) {
+    setTransactionModal({ kind, transaction });
+  }
+
   return (
     <section className="workspace-main finance-workspace">
       <PageHeader
@@ -7147,10 +7158,10 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
         subtitle="Controle de contas, movimentações e fluxo financeiro"
         actions={
           <div className="quick-actions">
-            <Button icon={Plus} variant="primary" onClick={() => setTab('entries')}>
+            <Button icon={Plus} variant="primary" onClick={() => openTransactionModal('ENTRADA')}>
               Nova entrada
             </Button>
-            <Button icon={Minus} variant="secondary" onClick={() => setTab('expenses')}>
+            <Button icon={Minus} variant="secondary" onClick={() => openTransactionModal('SAIDA')}>
               Nova saída
             </Button>
           </div>
@@ -7382,43 +7393,27 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
       {tab === 'entries' ? (
         <TransactionSection
-          categories={entryCategories}
-          clients={clients}
           items={entries}
           kind="ENTRADA"
-          onCreate={async (payload) => {
-            await createManualEntry(payload);
-            await reloadWithNotice('Entrada registrada.');
-          }}
+          onCreateRequest={() => openTransactionModal('ENTRADA')}
           onDelete={async (id) => {
             await deleteFinancialTransaction(id);
             await reloadWithNotice('Entrada removida.');
           }}
-          onUpdate={async (id, payload) => {
-            await updateFinancialTransaction(id, payload);
-            await reloadWithNotice('Entrada atualizada.');
-          }}
+          onUpdateRequest={(transaction) => openTransactionModal('ENTRADA', transaction)}
         />
       ) : null}
 
       {tab === 'expenses' ? (
         <TransactionSection
-          categories={expenseCategories}
-          clients={clients}
           items={expenses}
           kind="SAIDA"
-          onCreate={async (payload) => {
-            await createManualExpense(payload);
-            await reloadWithNotice('Saida registrada.');
-          }}
+          onCreateRequest={() => openTransactionModal('SAIDA')}
           onDelete={async (id) => {
             await deleteFinancialTransaction(id);
             await reloadWithNotice('Saida removida.');
           }}
-          onUpdate={async (id, payload) => {
-            await updateFinancialTransaction(id, payload);
-            await reloadWithNotice('Saida atualizada.');
-          }}
+          onUpdateRequest={(transaction) => openTransactionModal('SAIDA', transaction)}
         />
       ) : null}
 
@@ -7500,171 +7495,94 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
           }}
         />
       ) : null}
+      {transactionModal ? (
+        <TransactionModal
+          categories={transactionModal.kind === 'ENTRADA' ? entryCategories : expenseCategories}
+          clients={clients}
+          kind={transactionModal.kind}
+          transaction={transactionModal.transaction}
+          onClose={() => setTransactionModal(null)}
+          onCreate={async (payload) => {
+            if (transactionModal.kind === 'ENTRADA') {
+              await createManualEntry(payload);
+              await reloadWithNotice('Entrada registrada.');
+              return;
+            }
+
+            await createManualExpense(payload);
+            await reloadWithNotice('Saida registrada.');
+          }}
+          onUpdate={async (id, payload) => {
+            await updateFinancialTransaction(id, payload);
+            await reloadWithNotice(
+              transactionModal.kind === 'ENTRADA' ? 'Entrada atualizada.' : 'Saida atualizada.',
+            );
+          }}
+        />
+      ) : null}
     </section>
   );
 }
 
-function TransactionSection({
-  categories,
-  clients,
-  items,
-  kind,
-  onCreate,
-  onDelete,
-  onUpdate,
-}: {
-  categories: FinancialCategory[];
-  clients: Client[];
-  items: FinancialTransaction[];
-  kind: FinancialTransactionType;
-  onCreate: (payload: FinancialTransactionPayload) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
-  onUpdate: (id: string, payload: Partial<FinancialTransactionPayload>) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState<FinancialTransaction | null>(null);
-  const [form, setForm] = useState({
+type TransactionFormState = {
+  description: string;
+  categoryId: string;
+  amount: string;
+  transactionDate: string;
+  clientId: string;
+  notes: string;
+};
+
+function transactionInitialForm(categories: FinancialCategory[]): TransactionFormState {
+  return {
     description: '',
     categoryId: categories[0]?.id ?? '',
     amount: '',
     transactionDate: new Date().toISOString().slice(0, 10),
     clientId: '',
     notes: '',
-  });
+  };
+}
 
-  useEffect(() => {
-    setForm((current) => ({
-      ...current,
-      categoryId: current.categoryId || categories[0]?.id || '',
-    }));
-  }, [categories]);
+function transactionFormFromRecord(transaction: FinancialTransaction): TransactionFormState {
+  return {
+    description: transaction.description,
+    categoryId: transaction.categoryId,
+    amount: transaction.amount,
+    transactionDate: transaction.transactionDate,
+    clientId: transaction.clientId ?? '',
+    notes: transaction.notes ?? '',
+  };
+}
 
-  function startEdit(transaction: FinancialTransaction) {
-    setEditing(transaction);
-    setForm({
-      description: transaction.description,
-      categoryId: transaction.categoryId,
-      amount: transaction.amount,
-      transactionDate: transaction.transactionDate,
-      clientId: transaction.clientId ?? '',
-      notes: transaction.notes ?? '',
-    });
-  }
-
-  function resetForm() {
-    setEditing(null);
-    setForm({
-      description: '',
-      categoryId: categories[0]?.id ?? '',
-      amount: '',
-      transactionDate: new Date().toISOString().slice(0, 10),
-      clientId: '',
-      notes: '',
-    });
-  }
-
-  async function submitForm() {
-    const payload = {
-      description: form.description,
-      categoryId: form.categoryId,
-      amount: Number(form.amount),
-      transactionDate: form.transactionDate,
-      ...(form.clientId ? { clientId: form.clientId } : {}),
-      ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
-    };
-
-    if (editing) {
-      await onUpdate(editing.id, payload);
-    } else {
-      await onCreate(payload);
-    }
-
-    resetForm();
-  }
-
+function TransactionSection({
+  items,
+  kind,
+  onCreateRequest,
+  onDelete,
+  onUpdateRequest,
+}: {
+  items: FinancialTransaction[];
+  kind: FinancialTransactionType;
+  onCreateRequest: () => void;
+  onDelete: (id: string) => Promise<void>;
+  onUpdateRequest: (transaction: FinancialTransaction) => void;
+}) {
   return (
     <Card className="finance-panel">
       <SectionHeader
+        action={
+          <Button
+            icon={kind === 'ENTRADA' ? Plus : Minus}
+            variant="primary"
+            onClick={onCreateRequest}
+          >
+            {kind === 'ENTRADA' ? 'Nova entrada' : 'Nova saída'}
+          </Button>
+        }
         eyebrow={kind === 'ENTRADA' ? 'Entradas' : 'Saídas'}
         title={kind === 'ENTRADA' ? 'Movimentações de entrada' : 'Movimentações de saída'}
       />
-      <div className="entity-form finance-transaction-form">
-        <label className="field">
-          <span>Descrição</span>
-          <input
-            value={form.description}
-            onChange={(event) => setForm({ ...form, description: event.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>Categoria</span>
-          <select
-            value={form.categoryId}
-            onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
-          >
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Valor</span>
-          <input
-            min="0.01"
-            step="0.01"
-            type="number"
-            value={form.amount}
-            onChange={(event) => setForm({ ...form, amount: event.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>Data</span>
-          <input
-            type="date"
-            value={form.transactionDate}
-            onChange={(event) => setForm({ ...form, transactionDate: event.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>Cliente</span>
-          <select
-            value={form.clientId}
-            onChange={(event) => setForm({ ...form, clientId: event.target.value })}
-          >
-            <option value="">Sem cliente</option>
-            {clients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Observação</span>
-          <input
-            value={form.notes}
-            onChange={(event) => setForm({ ...form, notes: event.target.value })}
-          />
-        </label>
-        <div className="form-actions">
-          <span />
-          <div className="button-row">
-            {editing ? (
-              <Button variant="secondary" onClick={resetForm}>
-                Cancelar edicao
-              </Button>
-            ) : null}
-            <Button
-              icon={kind === 'ENTRADA' ? Plus : Minus}
-              variant="primary"
-              onClick={() => void submitForm()}
-            >
-              {editing ? 'Atualizar' : kind === 'ENTRADA' ? 'Nova entrada' : 'Nova saída'}
-            </Button>
-          </div>
-        </div>
-      </div>
 
       <div className="table-wrap finance-table-wrap">
         <table className="finance-global-table">
@@ -7710,7 +7628,7 @@ function TransactionSection({
                       icon={Pencil}
                       size="sm"
                       variant="secondary"
-                      onClick={() => startEdit(transaction)}
+                      onClick={() => onUpdateRequest(transaction)}
                     >
                       Editar
                     </Button>
@@ -7734,6 +7652,199 @@ function TransactionSection({
         {!items.length ? <div className="empty-state">Nenhuma movimentação encontrada.</div> : null}
       </div>
     </Card>
+  );
+}
+
+function TransactionModal({
+  categories,
+  clients,
+  kind,
+  transaction,
+  onClose,
+  onCreate,
+  onUpdate,
+}: {
+  categories: FinancialCategory[];
+  clients: Client[];
+  kind: FinancialTransactionType;
+  transaction: FinancialTransaction | undefined;
+  onClose: () => void;
+  onCreate: (payload: FinancialTransactionPayload) => Promise<void>;
+  onUpdate: (id: string, payload: Partial<FinancialTransactionPayload>) => Promise<void>;
+}) {
+  const editing = Boolean(transaction);
+  const [form, setForm] = useState<TransactionFormState>(() =>
+    transaction ? transactionFormFromRecord(transaction) : transactionInitialForm(categories),
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  useEffect(() => {
+    setForm(
+      transaction ? transactionFormFromRecord(transaction) : transactionInitialForm(categories),
+    );
+    setFormError('');
+  }, [categories, transaction]);
+
+  useEffect(() => {
+    setForm((current) => ({
+      ...current,
+      categoryId: current.categoryId || categories[0]?.id || '',
+    }));
+  }, [categories]);
+
+  function closeAndReset() {
+    setForm(transactionInitialForm(categories));
+    setFormError('');
+    onClose();
+  }
+
+  async function submitForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError('');
+
+    const amount = Number(form.amount);
+    if (!form.description.trim() || !form.categoryId || !form.transactionDate || amount <= 0) {
+      setFormError('Preencha descrição, categoria, valor e data antes de salvar.');
+      return;
+    }
+
+    const payload = {
+      description: form.description.trim(),
+      categoryId: form.categoryId,
+      amount,
+      transactionDate: form.transactionDate,
+      ...(form.clientId ? { clientId: form.clientId } : {}),
+      ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
+    };
+
+    try {
+      setSubmitting(true);
+      if (transaction) {
+        await onUpdate(transaction.id, payload);
+      } else {
+        await onCreate(payload);
+      }
+      closeAndReset();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Não foi possível salvar movimentação.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const title = editing
+    ? kind === 'ENTRADA'
+      ? 'Editar entrada'
+      : 'Editar saída'
+    : kind === 'ENTRADA'
+      ? 'Nova entrada'
+      : 'Nova saída';
+  const description =
+    kind === 'ENTRADA'
+      ? 'Registre uma nova movimentação de entrada.'
+      : 'Registre uma nova movimentação de saída.';
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal finance-transaction-modal"
+        aria-labelledby="transaction-modal-title"
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span
+            className={kind === 'ENTRADA' ? 'modal-icon' : 'modal-icon warning'}
+            aria-hidden="true"
+          >
+            {kind === 'ENTRADA' ? <Plus size={16} /> : <Minus size={16} />}
+          </span>
+          <div>
+            <h2 id="transaction-modal-title">{title}</h2>
+            <p>{description}</p>
+          </div>
+          <IconButton icon={X} label="Fechar" onClick={closeAndReset} />
+        </header>
+
+        {formError ? <div className="notice danger">{formError}</div> : null}
+
+        <form
+          className="entity-form finance-transaction-modal-form"
+          onSubmit={(event) => void submitForm(event)}
+        >
+          <label className="field">
+            <span>Descrição</span>
+            <input
+              required
+              value={form.description}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Categoria</span>
+            <select
+              required
+              value={form.categoryId}
+              onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
+            >
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Valor</span>
+            <input
+              min="0.01"
+              required
+              step="0.01"
+              type="number"
+              value={form.amount}
+              onChange={(event) => setForm({ ...form, amount: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Data</span>
+            <input
+              required
+              type="date"
+              value={form.transactionDate}
+              onChange={(event) => setForm({ ...form, transactionDate: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Cliente</span>
+            <select
+              value={form.clientId}
+              onChange={(event) => setForm({ ...form, clientId: event.target.value })}
+            >
+              <option value="">Sem cliente</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Observação</span>
+            <input
+              value={form.notes}
+              onChange={(event) => setForm({ ...form, notes: event.target.value })}
+            />
+          </label>
+          <div className="form-actions">
+            <Button icon={X} variant="secondary" onClick={closeAndReset}>
+              Cancelar
+            </Button>
+            <Button icon={Save} loading={submitting} type="submit" variant="primary">
+              {kind === 'ENTRADA' ? 'Salvar entrada' : 'Salvar saída'}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 

@@ -13,8 +13,8 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain(
       'subtitle="Controle de contas, movimentações e fluxo financeiro"',
     );
-    expect(dashboardSource).toContain("onClick={() => setTab('entries')}");
-    expect(dashboardSource).toContain("onClick={() => setTab('expenses')}");
+    expect(dashboardSource).toContain("onClick={() => openTransactionModal('ENTRADA')}");
+    expect(dashboardSource).toContain("onClick={() => openTransactionModal('SAIDA')}");
   });
 
   it('renders the operational KPI row from existing summary fields only', () => {
@@ -65,11 +65,69 @@ describe('global finance presentation source', () => {
 
   it('keeps central UI 2.0 modal headers for finance flows', () => {
     expect(dashboardSource).toContain('modal-header modal-header-with-icon');
+    expect(dashboardSource).toContain('modal finance-transaction-modal');
+    expect(dashboardSource).toContain('Registre uma nova movimentação de entrada.');
+    expect(dashboardSource).toContain('Registre uma nova movimentação de saída.');
     expect(dashboardSource).toContain('Gerar, copiar e sincronizar pagamento desta conta.');
     expect(dashboardSource).toContain('Gerar um único PIX para as contas selecionadas.');
     expect(dashboardSource).toContain('Registrar pagamento desta conta a receber.');
     expect(dashboardSource).toContain('Registrar pagamento agrupado das contas selecionadas.');
     expect(dashboardSource).toContain('Informar o motivo antes de cancelar esta conta.');
+  });
+
+  it('opens entry and expense modals without calling creation endpoints from buttons', () => {
+    expect(dashboardSource).toContain('const [transactionModal, setTransactionModal]');
+    expect(dashboardSource).toContain("openTransactionModal('ENTRADA')");
+    expect(dashboardSource).toContain("openTransactionModal('SAIDA')");
+    expect(dashboardSource).toContain('onCreateRequest={() => openTransactionModal');
+    expect(dashboardSource).not.toContain('onClick={() => void submitForm()}');
+    expect(dashboardSource).not.toContain('onClick={() => void createManualEntry');
+    expect(dashboardSource).not.toContain('onClick={() => void createManualExpense');
+  });
+
+  it('keeps entry and expense creation behind the modal submit action only', () => {
+    expect(dashboardSource).toContain(
+      'async function submitForm(event: FormEvent<HTMLFormElement>)',
+    );
+    expect(dashboardSource).toContain('event.preventDefault();');
+    expect(dashboardSource).toContain('await createManualEntry(payload);');
+    expect(dashboardSource).toContain('await createManualExpense(payload);');
+    expect(dashboardSource).toContain('type="submit" variant="primary"');
+    expect(dashboardSource).toContain('Salvar entrada');
+    expect(dashboardSource).toContain('Salvar saída');
+  });
+
+  it('validates required transaction fields before hitting the API', () => {
+    expect(dashboardSource).toContain(
+      'if (!form.description.trim() || !form.categoryId || !form.transactionDate || amount <= 0)',
+    );
+    expect(dashboardSource).toContain(
+      'Preencha descrição, categoria, valor e data antes de salvar.',
+    );
+    expect(dashboardSource).toContain('required');
+    expect(dashboardSource).toContain('min="0.01"');
+  });
+
+  it('closes transaction modals without API calls and removes inline transaction forms', () => {
+    expect(dashboardSource).toContain('function closeAndReset()');
+    expect(dashboardSource).toContain('onClick={closeAndReset}');
+    expect(dashboardSource).toContain('Cancelar');
+    expect(dashboardSource).not.toContain('className="entity-form finance-transaction-form"');
+    expect(stylesSource).toContain('.finance-transaction-modal-form');
+    expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+  });
+
+  it('routes edit actions through the same transaction modal', () => {
+    expect(dashboardSource).toContain('transactionFormFromRecord(transaction)');
+    expect(dashboardSource).toContain(
+      "onUpdateRequest={(transaction) => openTransactionModal('ENTRADA', transaction)}",
+    );
+    expect(dashboardSource).toContain(
+      "onUpdateRequest={(transaction) => openTransactionModal('SAIDA', transaction)}",
+    );
+    expect(dashboardSource).toContain('await updateFinancialTransaction(id, payload);');
+    expect(dashboardSource).toContain('Editar entrada');
+    expect(dashboardSource).toContain('Editar saída');
   });
 
   it('uses dense semantic styling for finance tabs, panels, and tables', () => {

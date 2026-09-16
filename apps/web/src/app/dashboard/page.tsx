@@ -2513,9 +2513,6 @@ function ClientsView({
                 <div className="client-detail-title">
                   <h2>{selectedClient.name}</h2>
                   <div className="client-detail-meta">
-                    <StatusBadge
-                      status={uniqueSelectedReference?.status ?? selectedClient.status}
-                    />
                     <span>{clientReferenceCountLabel(selectedReferences.length)}</span>
                     <span>WhatsApp: {selectedClient.phoneNormalized}</span>
                     {selectedClient.email ? <span>{selectedClient.email}</span> : null}
@@ -2717,9 +2714,6 @@ function ClientsView({
                     </div>
                     <div className="client-summary-compact">
                       <div className="client-summary-status-row">
-                        <StatusBadge
-                          status={uniqueSelectedReference?.status ?? selectedClient.status}
-                        />
                         <span>{clientReferenceCountLabel(selectedReferences.length)}</span>
                       </div>
                       <dl className="client-summary-metrics">

@@ -19,6 +19,12 @@ Status: em formalizacao documental.
 - Criar orientacao inicial de ambiente/devops.
 - Revisar consistencia dos documentos.
 
+## Proximos Ajustes de UI
+
+- Auditar a lista de clientes para remover o fallback visual de status agregado baseado em
+  `Client.status` quando houver multiplas `ClientReference`; preservar
+  `ClientReference.status` e `Receivable.status` como fontes operacionais.
+
 ## Sprint 1 - Fundacao
 
 Objetivo: criar base tecnica sem funcionalidades de negocio complexas.

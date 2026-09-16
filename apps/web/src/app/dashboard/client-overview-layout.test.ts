@@ -22,10 +22,13 @@ describe('client overview presentation source', () => {
     expect(stylesSource).toContain('.muted-value');
   });
 
-  it('renders the operational summary with existing frontend metrics and status', () => {
+  it('renders the operational summary with existing frontend metrics and no global client status', () => {
     expect(dashboardSource).toContain('Resumo operacional');
     expect(dashboardSource).toContain('Situação atual do cliente');
-    expect(dashboardSource).toContain('StatusBadge');
+    expect(dashboardSource).toContain('client-summary-status-row');
+    expect(dashboardSource).not.toMatch(
+      /<StatusBadge\s+status=\{uniqueSelectedReference\?\.status \?\? selectedClient\.status\}\s+\/>/,
+    );
     expect(dashboardSource).toContain('referenceCounts.active');
     expect(dashboardSource).toContain('formatCurrency(receivableTotals.pending)');
     expect(dashboardSource).toContain('formatCurrency(receivableTotals.paid)');
@@ -34,6 +37,26 @@ describe('client overview presentation source', () => {
     expect(stylesSource).toContain('.metric-value-primary');
     expect(stylesSource).toContain('.metric-value-success');
     expect(stylesSource).toContain('.metric-value-info');
+  });
+
+  it('does not render the legacy aggregated client status in the detail header', () => {
+    expect(dashboardSource).toContain('<h2>{selectedClient.name}</h2>');
+    expect(dashboardSource).toContain(
+      '<span>{clientReferenceCountLabel(selectedReferences.length)}</span>',
+    );
+    expect(dashboardSource).toContain('<span>WhatsApp: {selectedClient.phoneNormalized}</span>');
+    expect(dashboardSource).toContain(
+      '<span>Cliente desde {formatDate(selectedClient.createdAt)}</span>',
+    );
+    expect(dashboardSource).not.toMatch(
+      /<StatusBadge\s+status=\{uniqueSelectedReference\?\.status \?\? selectedClient\.status\}\s+\/>/,
+    );
+  });
+
+  it('keeps reference and receivable statuses bound to their operational sources', () => {
+    expect(dashboardSource).toContain('<StatusBadge status={reference.status} />');
+    expect(dashboardSource).toContain('<td>{receivable.displayStatus}</td>');
+    expect(dashboardSource).toContain("receivable.status === 'PENDENTE'");
   });
 
   it('limits overview activity to five events and links to the full history tab', () => {

@@ -3901,18 +3901,13 @@ function SendWhatsAppModal({
 function BillingView() {
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [dispatches, setDispatches] = useState<MessageDispatch[]>([]);
-  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [selected, setSelected] = useState<MessageDispatch | null>(null);
-  const [editingTemplate, setEditingTemplate] = useState<MessageTemplate | null>(null);
-  const [templateContent, setTemplateContent] = useState('');
-  const [preview, setPreview] = useState('');
   const [status, setStatus] = useState<MessageDispatch['status'] | ''>('');
   const [search, setSearch] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
-  const visibleTemplates = billingMessageTemplates(templates);
 
   const loadBilling = useCallback(async () => {
     setLoading(true);
@@ -3925,14 +3920,12 @@ function BillingView() {
       if (searchTerm) filters.search = searchTerm;
       if (dueDate) filters.dueDate = dueDate;
 
-      const [nextSummary, nextDispatches, nextTemplates] = await Promise.all([
+      const [nextSummary, nextDispatches] = await Promise.all([
         getBillingSummary(),
         listBillingDispatches(filters),
-        listMessageTemplates(),
       ]);
       setSummary(nextSummary);
       setDispatches(nextDispatches.items);
-      setTemplates(nextTemplates);
       setSelected((current) => {
         if (!current) return null;
         return nextDispatches.items.find((dispatch) => dispatch.id === current.id) ?? null;
@@ -3981,57 +3974,6 @@ function BillingView() {
       await loadBilling();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível processar a cobrança.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  function openTemplate(template: MessageTemplate) {
-    setEditingTemplate(template);
-    setTemplateContent(template.content);
-    setPreview('');
-  }
-
-  async function saveTemplate() {
-    if (!editingTemplate) return;
-    setWorking('template');
-    setError('');
-
-    try {
-      await updateMessageTemplate(editingTemplate.id, { content: templateContent });
-      setEditingTemplate(null);
-      await loadBilling();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível salvar o template.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  async function toggleTemplate(template: MessageTemplate) {
-    setWorking(template.id);
-    setError('');
-
-    try {
-      await updateMessageTemplate(template.id, { active: !template.active });
-      await loadBilling();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível alterar o template.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  async function loadPreview() {
-    if (!editingTemplate) return;
-    setWorking('preview');
-    setError('');
-
-    try {
-      const result = await previewMessageTemplate(editingTemplate.id, { content: templateContent });
-      setPreview(result.renderedContent);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível gerar preview.');
     } finally {
       setWorking('');
     }
@@ -4200,119 +4142,8 @@ function BillingView() {
             </div>
           ) : null}
         </div>
-
-        <section className="panel template-panel">
-          <div className="settings-card-header">
-            <div>
-              <span className="metric-label">MENSAGEM DE COBRANÇA</span>
-              <h2>Mensagem de cobrança</h2>
-            </div>
-          </div>
-          <p className="helper-text">
-            Mensagem utilizada nas cobranças automáticas antes ou no dia do vencimento.
-          </p>
-          <div className="mini-list">
-            {visibleTemplates.map((template) => (
-              <article key={template.id}>
-                <strong>{template.name}</strong>
-                <span>
-                  {messageTemplateTypeLabel(template.type)} |{' '}
-                  {template.active ? 'Ativo' : 'Inativo'}
-                </span>
-                <p>{template.content}</p>
-                <div className="button-row">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => openTemplate(template)}
-                  >
-                    <Pencil aria-hidden="true" size={16} />
-                    Editar
-                  </button>
-                  <button
-                    className="secondary-button"
-                    disabled={working === template.id}
-                    type="button"
-                    onClick={() => void toggleTemplate(template)}
-                  >
-                    {template.active ? 'Desativar' : 'Ativar'}
-                  </button>
-                </div>
-              </article>
-            ))}
-            {!visibleTemplates.length ? (
-              <div className="empty-state">Nenhum template cadastrado.</div>
-            ) : null}
-          </div>
-        </section>
       </section>
 
-      {editingTemplate ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="modal" aria-labelledby="billing-template-title">
-            <header className="modal-header">
-              <h2 id="billing-template-title">Editar template</h2>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setEditingTemplate(null)}
-              >
-                <X aria-hidden="true" size={17} />
-              </button>
-            </header>
-            <label className="field">
-              <span>Conteudo</span>
-              <textarea
-                rows={7}
-                value={templateContent}
-                onChange={(event) => setTemplateContent(event.target.value)}
-              />
-            </label>
-            <div className="mini-list">
-              <article>
-                <strong>Variaveis</strong>
-                <span>
-                  {editingTemplate.variables.map((variable) => `{{${variable}}}`).join(' ')}
-                </span>
-              </article>
-            </div>
-            {preview ? (
-              <div className="preview-box">
-                <span>Preview</span>
-                <strong>{preview}</strong>
-              </div>
-            ) : null}
-            <div className="form-actions">
-              <span className="error-message">{error}</span>
-              <div className="button-row">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void loadPreview()}
-                >
-                  <Eye aria-hidden="true" size={16} />
-                  Preview
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setEditingTemplate(null)}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={working === 'template' || !templateContent.trim()}
-                  type="button"
-                  onClick={() => void saveTemplate()}
-                >
-                  Salvar
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
       {selected ? (
         <BillingDispatchDetailModal dispatch={selected} onClose={() => setSelected(null)} />
       ) : null}
@@ -4435,6 +4266,76 @@ const recoveryTemplateVariables = [
   'diasAtraso',
 ];
 
+function billingAutomationTemplateTitle(type: MessageTemplate['type']) {
+  if (type === 'BILLING_DUE_GROUPED') return 'Cobrança agrupada';
+  return 'Cobrança individual';
+}
+
+function billingAutomationTemplateDescription(type: MessageTemplate['type']) {
+  if (type === 'BILLING_DUE_GROUPED') {
+    return 'Usada quando várias cobranças são consolidadas em uma única mensagem.';
+  }
+
+  return 'Usada quando existe uma única cobrança para o cliente.';
+}
+
+function BillingAutomationPreviewModal({
+  template,
+  onClose,
+}: {
+  template: MessageTemplate;
+  onClose: () => void;
+}) {
+  const grouped = template.type === 'BILLING_DUE_GROUPED';
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal automation-message-modal" aria-labelledby="billing-preview-title">
+        <header className="modal-header">
+          <div>
+            <h2 id="billing-preview-title">Prévia da mensagem</h2>
+            <p>Exemplo de visualização</p>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <X aria-hidden="true" size={17} />
+          </button>
+        </header>
+
+        <div className="automation-preview-card">
+          <span className="metric-label">{billingAutomationTemplateTitle(template.type)}</span>
+          <strong>João</strong>
+          {grouped ? (
+            <>
+              <p>3 serviços</p>
+              <ul>
+                <li>teste01 — R$ 30,00 — vence 20/09/2026</li>
+                <li>teste02 — R$ 30,00 — vence 20/09/2026</li>
+                <li>teste03 — R$ 30,00 — vence 20/09/2026</li>
+              </ul>
+              <strong>Total: R$ 90,00</strong>
+            </>
+          ) : (
+            <dl>
+              <div>
+                <dt>Plano</dt>
+                <dd>Plano Mensal</dd>
+              </div>
+              <div>
+                <dt>Valor</dt>
+                <dd>R$ 30,00</dd>
+              </div>
+              <div>
+                <dt>Vencimento</dt>
+                <dd>20/09/2026</dd>
+              </div>
+            </dl>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AutomationsView() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
@@ -4447,6 +4348,12 @@ function AutomationsView() {
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [previewingBillingTemplate, setPreviewingBillingTemplate] =
+    useState<MessageTemplate | null>(null);
+  const [editingBillingTemplate, setEditingBillingTemplate] = useState<MessageTemplate | null>(
+    null,
+  );
+  const [billingTemplateContent, setBillingTemplateContent] = useState('');
   const [editingRecoveryTemplate, setEditingRecoveryTemplate] = useState<MessageTemplate | null>(
     null,
   );
@@ -4465,6 +4372,7 @@ function AutomationsView() {
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
+  const billingTemplates = billingMessageTemplates(templates);
 
   const loadAutomations = useCallback(async () => {
     setLoading(true);
@@ -4513,6 +4421,42 @@ function AutomationsView() {
   useEffect(() => {
     void loadAutomations();
   }, [loadAutomations]);
+
+  function openBillingTemplate(template: MessageTemplate) {
+    setEditingBillingTemplate(template);
+    setBillingTemplateContent(template.content);
+    setError('');
+  }
+
+  async function saveBillingTemplate() {
+    if (!editingBillingTemplate) return;
+    setWorking('billing-template');
+    setError('');
+
+    try {
+      await updateMessageTemplate(editingBillingTemplate.id, { content: billingTemplateContent });
+      setEditingBillingTemplate(null);
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar mensagem.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function toggleBillingTemplate(template: MessageTemplate) {
+    setWorking(template.id);
+    setError('');
+
+    try {
+      await updateMessageTemplate(template.id, { active: !template.active });
+      await loadAutomations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível alterar mensagem.');
+    } finally {
+      setWorking('');
+    }
+  }
 
   async function runRecoveryReconcile() {
     setWorking('reconcile');
@@ -4828,6 +4772,62 @@ function AutomationsView() {
               <span>Processamento</span>
               <strong>1 comunicação por execução</strong>
             </article>
+          </div>
+        </section>
+
+        <section className="settings-card automation-section automation-message-section">
+          <AutomationSectionHeading
+            icon={MessageSquare}
+            title="Mensagens da automação"
+            description="Templates usados pela cobrança automática."
+          />
+          <div className="automation-message-grid">
+            {billingTemplates.map((template) => (
+              <article className="automation-message-card" key={template.id}>
+                <header>
+                  <div>
+                    <strong>{billingAutomationTemplateTitle(template.type)}</strong>
+                    <p>{billingAutomationTemplateDescription(template.type)}</p>
+                  </div>
+                  <span
+                    className={`finance-status-pill tone-${template.active ? 'success' : 'muted'}`}
+                  >
+                    {template.active ? 'Ativa' : 'Inativa'}
+                  </span>
+                </header>
+                <div className="automation-message-actions">
+                  <Button
+                    icon={Eye}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setPreviewingBillingTemplate(template)}
+                  >
+                    Visualizar
+                  </Button>
+                  <Button
+                    icon={Pencil}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => openBillingTemplate(template)}
+                  >
+                    Editar
+                  </Button>
+                  <ActionMenu
+                    items={[
+                      {
+                        disabled: working === template.id,
+                        icon: Power,
+                        label: template.active ? 'Desativar' : 'Ativar',
+                        onSelect: () => void toggleBillingTemplate(template),
+                      },
+                    ]}
+                  />
+                </div>
+              </article>
+            ))}
+            {!billingTemplates.length ? (
+              <div className="empty-state">Nenhuma mensagem da automação cadastrada.</div>
+            ) : null}
           </div>
         </section>
 
@@ -5271,6 +5271,71 @@ function AutomationsView() {
         </section>
       </section>
 
+      {previewingBillingTemplate ? (
+        <BillingAutomationPreviewModal
+          template={previewingBillingTemplate}
+          onClose={() => setPreviewingBillingTemplate(null)}
+        />
+      ) : null}
+      {editingBillingTemplate ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal automation-message-modal"
+            aria-labelledby="billing-template-title"
+          >
+            <header className="modal-header">
+              <div>
+                <h2 id="billing-template-title">Editar mensagem da automação</h2>
+                <p>{billingAutomationTemplateTitle(editingBillingTemplate.type)}</p>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setEditingBillingTemplate(null)}
+              >
+                <X aria-hidden="true" size={17} />
+              </button>
+            </header>
+            <label className="field">
+              <span>Conteúdo da mensagem</span>
+              <textarea
+                maxLength={1000}
+                rows={8}
+                value={billingTemplateContent}
+                onChange={(event) => setBillingTemplateContent(event.target.value)}
+              />
+            </label>
+            <div className="mini-list">
+              <article>
+                <strong>Variáveis disponíveis</strong>
+                <span>
+                  {editingBillingTemplate.variables.map((variable) => `{{${variable}}}`).join(' ')}
+                </span>
+              </article>
+            </div>
+            <div className="form-actions">
+              <span className="error-message">{error}</span>
+              <div className="button-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setEditingBillingTemplate(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={working === 'billing-template' || !billingTemplateContent.trim()}
+                  type="button"
+                  onClick={() => void saveBillingTemplate()}
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {editingRecoveryTemplate ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal" aria-labelledby="recovery-template-title">

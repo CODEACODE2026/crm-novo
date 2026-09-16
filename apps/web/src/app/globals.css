@@ -1782,6 +1782,97 @@ a {
   font-size: 14px;
 }
 
+.automation-message-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.automation-message-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.automation-message-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.automation-message-card strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.automation-message-card p,
+.automation-preview-card p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.automation-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.automation-message-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.automation-preview-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.automation-preview-card dl,
+.automation-preview-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.automation-preview-card li {
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.automation-preview-card dl div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.automation-preview-card dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.automation-preview-card dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .recovery-steps-timeline {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3428,6 +3519,7 @@ tbody tr:hover,
   }
 
   .automation-summary-grid,
+  .automation-message-grid,
   .recovery-steps-timeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3463,6 +3555,7 @@ tbody tr:hover,
   .recovery-toolbar,
   .compact-form,
   .automation-summary-grid,
+  .automation-message-grid,
   .recovery-steps-timeline,
   .form-grid,
   .detail-list,

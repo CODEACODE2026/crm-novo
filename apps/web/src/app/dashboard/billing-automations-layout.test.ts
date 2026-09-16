@@ -21,6 +21,12 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.billing-toolbar');
   });
 
+  it('keeps billing template administration out of the operational billing screen', () => {
+    expect(dashboardSource).not.toContain('MENSAGEM DE COBRANÇA');
+    expect(dashboardSource).not.toContain('Mensagem de cobrança</h2>');
+    expect(dashboardSource).not.toContain('<p>{template.content}</p>');
+  });
+
   it('keeps billing rows consolidated and aligned with semantic status pills', () => {
     expect(dashboardSource).toContain('billingDispatchReferenceLabel(dispatch)');
     expect(dashboardSource).toContain('billingDispatchAmountLabel(dispatch)');
@@ -63,6 +69,29 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('Próximos envios');
     expect(dashboardSource).toContain('automation-schedule-table');
     expect(dashboardSource).toContain('setSelectedAutomationDispatch(dispatch)');
+  });
+
+  it('moves billing automation messages to compact automation cards with safe previews', () => {
+    expect(dashboardSource).toContain('title="Mensagens da automação"');
+    expect(dashboardSource).toContain('Cobrança individual');
+    expect(dashboardSource).toContain('Cobrança agrupada');
+    expect(dashboardSource).toContain('Usada quando existe uma única cobrança para o cliente.');
+    expect(dashboardSource).toContain(
+      'Usada quando várias cobranças são consolidadas em uma única mensagem.',
+    );
+    expect(dashboardSource).toContain('Prévia da mensagem');
+    expect(dashboardSource).toContain('Exemplo de visualização');
+    expect(dashboardSource).toContain('Plano Mensal');
+    expect(dashboardSource).toContain('teste01 — R$ 30,00 — vence 20/09/2026');
+    expect(dashboardSource).toContain('Total: R$ 90,00');
+    expect(dashboardSource).toContain('Conteúdo da mensagem');
+    expect(dashboardSource).toContain(
+      'editingBillingTemplate.variables.map((variable) => `{{${variable}}}`).join',
+    );
+    expect(dashboardSource).toContain("label: template.active ? 'Desativar' : 'Ativar'");
+    expect(stylesSource).toContain('.automation-message-grid');
+    expect(stylesSource).toContain('.automation-message-card');
+    expect(stylesSource).toContain('.automation-preview-card');
   });
 
   it('renders recovery settings, offsets, campaign rows, and campaign detail steps', () => {

@@ -2075,6 +2075,53 @@ tbody tr:hover,
   color: var(--danger);
 }
 
+.reference-status-summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  max-width: 220px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.reference-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+}
+
+.reference-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentcolor;
+}
+
+.reference-status-item.tone-success {
+  color: var(--accent-strong);
+}
+
+.reference-status-item.tone-warning {
+  color: var(--warning);
+}
+
+.reference-status-item.tone-info {
+  color: #9fbcdf;
+}
+
+.reference-status-item.tone-danger {
+  color: var(--danger);
+}
+
+.reference-status-item.tone-muted {
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .detail-panel h3 {
   margin: 22px 0 12px;
   font-size: 15px;

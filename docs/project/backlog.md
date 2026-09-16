@@ -21,9 +21,9 @@ Status: em formalizacao documental.
 
 ## Proximos Ajustes de UI
 
-- Auditar a lista de clientes para remover o fallback visual de status agregado baseado em
-  `Client.status` quando houver multiplas `ClientReference`; preservar
-  `ClientReference.status` e `Receivable.status` como fontes operacionais.
+- Resolvido: a lista de clientes nao usa mais `Client.status` como fallback visual quando ha
+  `ClientReference`; a coluna Situação resume exclusivamente `ClientReference.status` e preserva
+  `Receivable.status` como fonte financeira separada.
 
 ## Sprint 1 - Fundacao
 

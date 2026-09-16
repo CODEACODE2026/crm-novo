@@ -59,6 +59,18 @@ describe('client overview presentation source', () => {
     expect(dashboardSource).toContain("receivable.status === 'PENDENTE'");
   });
 
+  it('renders the client list situation from reference status summaries', () => {
+    expect(dashboardSource).toContain('<th>SITUAÇÃO</th>');
+    expect(dashboardSource).toContain('items={clientReferenceStatusSummary(client)}');
+    expect(dashboardSource).toContain('Situação baseada nas referências do cliente.');
+    expect(stylesSource).toContain('.reference-status-summary');
+    expect(stylesSource).toContain('.reference-status-item.tone-success');
+    expect(stylesSource).toContain('.reference-status-item.tone-warning');
+    expect(stylesSource).toContain('.reference-status-item.tone-info');
+    expect(stylesSource).toContain('.reference-status-item.tone-danger');
+    expect(dashboardSource).not.toContain('clientDisplayStatus(client)');
+  });
+
   it('limits overview activity to five events and links to the full history tab', () => {
     expect(dashboardSource).toContain('(selectedClient.events ?? []).slice(0, 5)');
     expect(dashboardSource).toContain('Ver histórico completo');

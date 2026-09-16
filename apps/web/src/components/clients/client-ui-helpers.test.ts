@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Client, ClientReference, Plan, Receivable } from '../../lib/crm-api';
 import {
-  clientDisplayStatus,
   clientInitial,
   clientNextDueSummary,
   clientOperationalSummary,
@@ -9,6 +8,7 @@ import {
   clientReceivableTotals,
   clientReferenceCountLabel,
   clientReferenceSummary,
+  clientReferenceStatusSummary,
   dispatchReferenceSummary,
   dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
@@ -72,6 +72,14 @@ function client(references: ClientReference[] = []): Client {
     status: 'PENDENTE_PAGAMENTO',
     updatedAt: '2026-09-01',
   };
+}
+
+function summaryLabels(target: Client) {
+  return clientReferenceStatusSummary(target).map((item) => item.label);
+}
+
+function summaryTones(target: Client) {
+  return clientReferenceStatusSummary(target).map((item) => item.tone);
 }
 
 function receivable(overrides: Partial<Receivable> = {}): Receivable {
@@ -142,7 +150,6 @@ describe('client UI helpers', () => {
     expect(clientPlanSummary(refs)).toBe('Mensal');
     expect(clientNextDueSummary(refs)).toBe('20/09/2026');
     expect(clientOperationalSummary(refs)).toMatch(/^R\$\s?100,00 \| 20\/09\/2026$/u);
-    expect(clientDisplayStatus(client(refs))).toBe('ATIVO');
   });
 
   it('uses safe summaries for multiple references', () => {
@@ -156,7 +163,86 @@ describe('client UI helpers', () => {
     expect(clientPlanSummary(refs)).toBe('Vários');
     expect(clientNextDueSummary(refs)).toBe('Vários');
     expect(clientOperationalSummary(refs)).toBe('Vários');
-    expect(clientDisplayStatus(client(refs))).toBe('PENDENTE_PAGAMENTO');
+  });
+
+  it('summarizes zero and single reference statuses without reading Client.status', () => {
+    expect(summaryLabels(client([]))).toEqual(['Sem referências']);
+    expect(summaryLabels(client([reference({ status: 'ATIVO' })]))).toEqual(['ATIVO']);
+    expect(summaryLabels(client([reference({ status: 'PENDENTE_PAGAMENTO' })]))).toEqual([
+      'PENDENTE',
+    ]);
+    expect(summaryLabels(client([reference({ status: 'INATIVO' })]))).toEqual(['INATIVO']);
+    expect(summaryLabels(client([reference({ status: 'CANCELADO' })]))).toEqual(['CANCELADO']);
+  });
+
+  it('summarizes multiple reference statuses in the approved semantic order', () => {
+    const allActive = client([
+      reference({ id: 'reference-1', status: 'ATIVO' }),
+      reference({ id: 'reference-2', status: 'ATIVO' }),
+      reference({ id: 'reference-3', status: 'ATIVO' }),
+    ]);
+    const activeInactive = client([
+      reference({ id: 'reference-1', status: 'ATIVO' }),
+      reference({ id: 'reference-2', status: 'ATIVO' }),
+      reference({ id: 'reference-3', status: 'INATIVO' }),
+    ]);
+    const activeCanceled = client([
+      reference({ id: 'reference-1', status: 'ATIVO' }),
+      reference({ id: 'reference-2', status: 'CANCELADO' }),
+    ]);
+    const activePending = client([
+      reference({ id: 'reference-1', status: 'ATIVO' }),
+      reference({ id: 'reference-2', status: 'PENDENTE_PAGAMENTO' }),
+    ]);
+    const mixed = client([
+      reference({ id: 'reference-1', status: 'CANCELADO' }),
+      reference({ id: 'reference-2', status: 'INATIVO' }),
+      reference({ id: 'reference-3', status: 'PENDENTE_PAGAMENTO' }),
+      reference({ id: 'reference-4', status: 'ATIVO' }),
+    ]);
+
+    expect(summaryLabels(allActive)).toEqual(['3 ativas']);
+    expect(summaryLabels(activeInactive)).toEqual(['2 ativas', '1 inativa']);
+    expect(summaryLabels(activeCanceled)).toEqual(['1 ativa', '1 cancelada']);
+    expect(summaryLabels(activePending)).toEqual(['1 ativa', '1 pendente']);
+    expect(summaryLabels(mixed)).toEqual(['1 ativa', '1 pendente', '1 inativa', '1 cancelada']);
+  });
+
+  it('uses existing semantic tones for reference status summaries', () => {
+    const mixed = client([
+      reference({ id: 'reference-1', status: 'ATIVO' }),
+      reference({ id: 'reference-2', status: 'PENDENTE_PAGAMENTO' }),
+      reference({ id: 'reference-3', status: 'INATIVO' }),
+      reference({ id: 'reference-4', status: 'CANCELADO' }),
+    ]);
+
+    expect(summaryTones(client([]))).toEqual(['muted']);
+    expect(summaryTones(mixed)).toEqual(['success', 'warning', 'info', 'danger']);
+  });
+
+  it('ignores receivables and legacy Client.status when summarizing references', () => {
+    const allActiveReferences = [
+      reference({ id: 'reference-1', status: 'ATIVO' }),
+      reference({ id: 'reference-2', status: 'ATIVO' }),
+      reference({ id: 'reference-3', status: 'ATIVO' }),
+    ];
+    const pendingLegacyClient = {
+      ...client(allActiveReferences),
+      receivables: [receivable({ displayStatus: 'PENDENTE', status: 'PENDENTE' })],
+      status: 'PENDENTE_PAGAMENTO' as const,
+    };
+    const canceledLegacyClient = {
+      ...client([reference({ status: 'ATIVO' })]),
+      status: 'CANCELADO' as const,
+    };
+
+    expect(summaryLabels(pendingLegacyClient)).toEqual(['3 ativas']);
+    expect(summaryLabels(canceledLegacyClient)).toEqual(['ATIVO']);
+    expect(clientReferenceStatusSummary(pendingLegacyClient)[0]).toMatchObject({
+      count: 3,
+      status: 'ATIVO',
+      tone: 'success',
+    });
   });
 
   it('classifies receivable visual statuses and totals', () => {

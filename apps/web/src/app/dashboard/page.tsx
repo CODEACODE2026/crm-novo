@@ -52,10 +52,10 @@ import { ClientForm } from '../../components/clients/client-form';
 import { ClientReferralSelect } from '../../components/clients/client-referral-select';
 import { StatusBadge } from '../../components/clients/status-badge';
 import {
-  clientDisplayStatus,
   clientInitial,
   clientNextDueSummary,
   clientOperationalSummary,
+  clientReferenceStatusSummary,
   clientPlanSummary,
   clientReceivableTotals,
   clientReferenceCountLabel,
@@ -1156,6 +1156,26 @@ function PaginationControls({
       >
         Próxima
       </button>
+    </div>
+  );
+}
+
+function ClientReferenceStatusSummary({
+  items,
+}: {
+  items: ReturnType<typeof clientReferenceStatusSummary>;
+}) {
+  return (
+    <div className="reference-status-summary" title="Situação baseada nas referências do cliente.">
+      {items.map((item) => (
+        <span
+          className={`reference-status-item tone-${item.tone}`}
+          key={item.status ?? 'sem-referencias'}
+        >
+          {item.status ? <span className="reference-status-dot" aria-hidden="true" /> : null}
+          <span>{item.label}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -2394,7 +2414,7 @@ function ClientsView({
                     <th>WHATSAPP</th>
                     <th>PLANO / RESUMO</th>
                     <th>PRÓX. VENCIMENTO</th>
-                    <th>STATUS</th>
+                    <th>SITUAÇÃO</th>
                     <th>CADASTRO</th>
                     <th>AÇÕES</th>
                   </tr>
@@ -2445,7 +2465,9 @@ function ClientsView({
                           <span>{clientNextDueSummary(references)}</span>
                         </td>
                         <td>
-                          <StatusBadge status={clientDisplayStatus(client)} />
+                          <ClientReferenceStatusSummary
+                            items={clientReferenceStatusSummary(client)}
+                          />
                         </td>
                         <td>
                           <span>{formatDate(client.createdAt)}</span>

@@ -1,5 +1,67 @@
-import type { Client, ClientMessageDispatch, ClientReference, Receivable } from '../../lib/crm-api';
+import type {
+  Client,
+  ClientMessageDispatch,
+  ClientReference,
+  ClientStatus,
+  Receivable,
+} from '../../lib/crm-api';
 import { formatCurrency, formatDate } from '../../lib/crm-api';
+
+export type ClientReferenceStatusSummaryItem =
+  | {
+      count: number;
+      label: string;
+      status: ClientStatus;
+      tone: 'success' | 'warning' | 'info' | 'danger';
+    }
+  | {
+      count: 0;
+      label: 'Sem referências';
+      status: null;
+      tone: 'muted';
+    };
+
+const referenceStatusOrder: ClientStatus[] = [
+  'ATIVO',
+  'PENDENTE_PAGAMENTO',
+  'INATIVO',
+  'CANCELADO',
+];
+
+const referenceStatusSummaryLabels = {
+  ATIVO: {
+    multiple: 'ativas',
+    single: 'ATIVO',
+    singular: 'ativa',
+    tone: 'success',
+  },
+  PENDENTE_PAGAMENTO: {
+    multiple: 'pendentes',
+    single: 'PENDENTE',
+    singular: 'pendente',
+    tone: 'warning',
+  },
+  INATIVO: {
+    multiple: 'inativas',
+    single: 'INATIVO',
+    singular: 'inativa',
+    tone: 'info',
+  },
+  CANCELADO: {
+    multiple: 'canceladas',
+    single: 'CANCELADO',
+    singular: 'cancelada',
+    tone: 'danger',
+  },
+} satisfies Record<
+  ClientStatus,
+  {
+    multiple: string;
+    single: string;
+    singular: string;
+    tone: Exclude<ClientReferenceStatusSummaryItem['tone'], 'muted'>;
+  }
+>;
 
 export function clientInitial(name: string) {
   return name.trim().slice(0, 1).toUpperCase() || 'C';
@@ -41,10 +103,44 @@ export function clientOperationalSummary(references: ClientReference[] = []) {
   return 'Vários';
 }
 
-export function clientDisplayStatus(client: Client) {
+export function clientReferenceStatusSummary(
+  client: Pick<Client, 'references'>,
+): ClientReferenceStatusSummaryItem[] {
   const references = client.references ?? [];
-  const reference = references[0];
-  return references.length === 1 && reference ? reference.status : client.status;
+
+  if (!references.length) {
+    return [{ count: 0, label: 'Sem referências', status: null, tone: 'muted' }];
+  }
+
+  if (references.length === 1 && references[0]) {
+    const status = references[0].status;
+    const metadata = referenceStatusSummaryLabels[status];
+
+    return [{ count: 1, label: metadata.single, status, tone: metadata.tone }];
+  }
+
+  const counts = references.reduce(
+    (summary, reference) => {
+      summary[reference.status] += 1;
+      return summary;
+    },
+    {
+      ATIVO: 0,
+      CANCELADO: 0,
+      INATIVO: 0,
+      PENDENTE_PAGAMENTO: 0,
+    } satisfies Record<ClientStatus, number>,
+  );
+
+  return referenceStatusOrder
+    .filter((status) => counts[status] > 0)
+    .map((status) => {
+      const count = counts[status];
+      const metadata = referenceStatusSummaryLabels[status];
+      const label = `${count} ${count === 1 ? metadata.singular : metadata.multiple}`;
+
+      return { count, label, status, tone: metadata.tone };
+    });
 }
 
 export function receivableVisualStatus(receivable: Pick<Receivable, 'displayStatus' | 'status'>) {

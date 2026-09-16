@@ -692,6 +692,16 @@ a {
   line-height: 1.15;
 }
 
+.page-title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-title-with-icon svg {
+  color: var(--info);
+}
+
 .page-header p {
   margin: 5px 0 0;
   color: var(--text-muted);
@@ -1622,6 +1632,162 @@ a {
 .compact-form {
   grid-template-columns: minmax(180px, 1fr) 110px 140px 90px auto;
   align-items: end;
+}
+
+.plans-view {
+  display: grid;
+  gap: 14px;
+}
+
+.plans-kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.plans-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.plan-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.plan-card-header {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.plan-card-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid rgb(104 169 255 / 22%);
+  border-radius: var(--radius-sm);
+  background: rgb(104 169 255 / 10%);
+  color: var(--info);
+}
+
+.plan-card h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.plan-card-header span:not(.status-badge) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-card-value {
+  color: var(--accent-strong);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.plan-card-meta {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.plan-card-meta div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 2%);
+  padding: 10px;
+}
+
+.plan-card-meta dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-card-meta dt svg {
+  color: var(--info);
+}
+
+.plan-card-meta dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.plan-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-card-actions .secondary-button {
+  gap: 7px;
+}
+
+.plans-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-height: 230px;
+  align-content: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 28px;
+  text-align: center;
+}
+
+.plans-empty-state svg {
+  color: var(--info);
+}
+
+.plans-empty-state strong {
+  font-size: 16px;
+}
+
+.plans-empty-state span {
+  max-width: 360px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.plan-form-modal {
+  width: min(100%, 620px);
+}
+
+.plan-form-modal-body {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 16px 0 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.plan-form-modal-body .toggle-field,
+.plan-form-modal-body .form-actions {
+  grid-column: 1 / -1;
 }
 
 .form-section {
@@ -3590,6 +3756,10 @@ tbody tr:hover,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .plans-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .finance-kpis,
   .finance-receivable-kpis,
   .finance-summary-grid,
@@ -3682,6 +3852,8 @@ tbody tr:hover,
   }
 
   .metric-grid,
+  .plans-kpis,
+  .plans-grid,
   .nav-list,
   .toolbar,
   .billing-toolbar,
@@ -3750,6 +3922,10 @@ tbody tr:hover,
   }
 
   .finance-transaction-modal-form {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-form-modal-body {
     grid-template-columns: 1fr;
   }
 }

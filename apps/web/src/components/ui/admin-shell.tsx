@@ -132,11 +132,13 @@ export function AdminShell<T extends string>({
 export function PageHeader({
   actions,
   eyebrow,
+  icon: Icon,
   subtitle,
   title,
 }: {
   actions?: ReactNode;
   eyebrow?: string;
+  icon?: LucideIcon;
   subtitle?: string;
   title: string;
 }) {
@@ -144,7 +146,10 @@ export function PageHeader({
     <div className="page-header">
       <div>
         {eyebrow ? <span className="page-eyebrow">{eyebrow}</span> : null}
-        <h2>{title}</h2>
+        <h2 className={Icon ? 'page-title-with-icon' : undefined}>
+          {Icon ? <Icon aria-hidden="true" size={20} /> : null}
+          {title}
+        </h2>
         {subtitle ? <p>{subtitle}</p> : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}

@@ -31,6 +31,8 @@ import {
   MessageSquare,
   MessageSquareText,
   Minus,
+  Package,
+  PackageOpen,
   Pencil,
   Plus,
   Power,
@@ -611,7 +613,11 @@ export default function DashboardPage() {
           }}
           onNew={() => {
             setEditingPlan(null);
-            setPlanFormOpen((open) => !open);
+            setPlanFormOpen(true);
+          }}
+          onCloseForm={() => {
+            setEditingPlan(null);
+            setPlanFormOpen(false);
           }}
           onUpdate={async (payload) => {
             if (!editingPlan) return;
@@ -9139,6 +9145,7 @@ function PlansView({
   onCreate,
   onDelete,
   onEdit,
+  onCloseForm,
   onNew,
   onUpdate,
   planFormOpen,
@@ -9148,67 +9155,135 @@ function PlansView({
   onCreate: Parameters<typeof PlanForm>[0]['onSubmit'];
   onDelete: (id: string) => Promise<void>;
   onEdit: (plan: Plan) => void;
+  onCloseForm: () => void;
   onNew: () => void;
   onUpdate: Parameters<typeof PlanForm>[0]['onSubmit'];
   planFormOpen: boolean;
   plans: Plan[];
 }) {
+  const activePlans = plans.filter((plan) => plan.active).length;
+  const inactivePlans = plans.length - activePlans;
+
   return (
-    <section className="workspace-main">
-      <div className="toolbar">
-        <button className="primary-button" type="button" onClick={onNew}>
-          <Plus aria-hidden="true" size={17} />
-          Plano
-        </button>
-      </div>
+    <>
+      <PageHeader
+        icon={Layers}
+        title="Planos"
+        subtitle="Gerencie os planos utilizados nas referências dos clientes."
+        actions={
+          <button className="primary-button" type="button" onClick={onNew}>
+            <Plus aria-hidden="true" size={17} />
+            Novo plano
+          </button>
+        }
+      />
 
       {planFormOpen ? (
-        <PlanForm
-          plan={editingPlan ?? undefined}
-          submitLabel={editingPlan ? 'Atualizar plano' : 'Criar plano'}
-          onSubmit={editingPlan ? onUpdate : onCreate}
-        />
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal plan-form-modal" aria-labelledby="plan-form-title">
+            <header className="modal-header modal-header-with-icon">
+              <span className="modal-icon info" aria-hidden="true">
+                <Package size={17} />
+              </span>
+              <div>
+                <span className="metric-label">Plano</span>
+                <h2 id="plan-form-title">{editingPlan ? 'Editar plano' : 'Novo plano'}</h2>
+                <p>
+                  {editingPlan
+                    ? 'Atualize o plano preservando as regras atuais de referências.'
+                    : 'Cadastre um novo plano para utilização nas referências.'}
+                </p>
+              </div>
+              <IconButton icon={X} label="Fechar plano" onClick={onCloseForm} />
+            </header>
+            <PlanForm
+              onCancel={onCloseForm}
+              plan={editingPlan ?? undefined}
+              submitLabel="Salvar plano"
+              onSubmit={editingPlan ? onUpdate : onCreate}
+            />
+          </section>
+        </div>
       ) : null}
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Plano</th>
-              <th>Duração</th>
-              <th>Valor padrão</th>
-              <th>Status</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plans.map((plan) => (
-              <tr key={plan.id}>
-                <td>
-                  <strong>{plan.name}</strong>
-                </td>
-                <td>{plan.durationMonths} meses</td>
-                <td>{formatCurrency(plan.defaultValue)}</td>
-                <td>{plan.active ? 'Ativo' : 'Inativo'}</td>
-                <td>
-                  <div className="button-row">
-                    <button className="secondary-button" type="button" onClick={() => onEdit(plan)}>
+      <section className="plans-view">
+        <div className="metric-grid plans-kpis">
+          <StatCard icon={Package} label="Planos" tone="primary" value={plans.length} />
+          <StatCard icon={CircleCheck} label="Ativos" tone="success" value={activePlans} />
+          <StatCard icon={Minus} label="Inativos" tone="info" value={inactivePlans} />
+        </div>
+
+        <section className="workspace-main plans-workspace" aria-label="Lista de planos">
+          {plans.length ? (
+            <div className="plans-grid">
+              {plans.map((plan) => (
+                <article className="plan-card" key={plan.id}>
+                  <div className="plan-card-header">
+                    <span className="plan-card-icon" aria-hidden="true">
+                      <Package size={17} />
+                    </span>
+                    <div>
+                      <h3>{plan.name}</h3>
+                      <span>Plano comercial</span>
+                    </div>
+                    <span className={`status-badge status-${plan.active ? 'ativo' : 'inativo'}`}>
+                      {plan.active ? 'ATIVO' : 'INATIVO'}
+                    </span>
+                  </div>
+
+                  <strong className="plan-card-value">{formatCurrency(plan.defaultValue)}</strong>
+
+                  <dl className="plan-card-meta">
+                    <div>
+                      <dt>
+                        <Clock aria-hidden="true" size={14} />
+                        Duração
+                      </dt>
+                      <dd>{formatPlanDuration(plan.durationMonths)}</dd>
+                    </div>
+                  </dl>
+
+                  <div className="plan-card-actions">
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      onClick={() => onEdit(plan)}
+                    >
+                      <Pencil aria-hidden="true" size={14} />
                       Editar
                     </button>
-                    <button
-                      className="danger-button"
-                      type="button"
-                      onClick={() => void onDelete(plan.id)}
-                    >
-                      Remover
-                    </button>
+                    <ActionMenu
+                      items={[
+                        {
+                          danger: true,
+                          icon: Trash2,
+                          label: 'Remover',
+                          onSelect: () => void onDelete(plan.id),
+                        },
+                      ]}
+                      label={`Mais ações de ${plan.name}`}
+                    />
                   </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state plans-empty-state">
+              <PackageOpen aria-hidden="true" size={32} />
+              <strong>Nenhum plano cadastrado</strong>
+              <span>Cadastre um plano para começar a utilizá-lo nas referências.</span>
+              <button className="primary-button" type="button" onClick={onNew}>
+                <Plus aria-hidden="true" size={16} />
+                Novo plano
+              </button>
+            </div>
+          )}
+        </section>
+      </section>
+    </>
   );
+}
+
+function formatPlanDuration(durationMonths: number) {
+  return durationMonths === 1 ? '1 mês' : `${durationMonths} meses`;
 }

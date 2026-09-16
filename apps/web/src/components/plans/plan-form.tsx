@@ -4,12 +4,13 @@ import { FormEvent, useState } from 'react';
 import type { Plan, PlanPayload } from '../../lib/crm-api';
 
 interface PlanFormProps {
+  onCancel?: () => void;
   plan?: Plan | undefined;
   submitLabel: string;
   onSubmit: (payload: PlanPayload) => Promise<void>;
 }
 
-export function PlanForm({ plan, submitLabel, onSubmit }: PlanFormProps) {
+export function PlanForm({ onCancel, plan, submitLabel, onSubmit }: PlanFormProps) {
   const [name, setName] = useState(plan?.name ?? '');
   const [durationMonths, setDurationMonths] = useState(String(plan?.durationMonths ?? 1));
   const [defaultValue, setDefaultValue] = useState(plan?.defaultValue ?? '0.00');
@@ -37,7 +38,10 @@ export function PlanForm({ plan, submitLabel, onSubmit }: PlanFormProps) {
   }
 
   return (
-    <form className="compact-form" onSubmit={(event) => void handleSubmit(event)}>
+    <form
+      className={`compact-form plan-form ${onCancel ? 'plan-form-modal-body' : ''}`.trim()}
+      onSubmit={(event) => void handleSubmit(event)}
+    >
       <label className="field">
         <span>Nome</span>
         <input required value={name} onChange={(event) => setName(event.target.value)} />
@@ -73,6 +77,11 @@ export function PlanForm({ plan, submitLabel, onSubmit }: PlanFormProps) {
       </label>
       <div className="form-actions">
         <span className="error-message">{error}</span>
+        {onCancel ? (
+          <button className="secondary-button" disabled={loading} type="button" onClick={onCancel}>
+            Cancelar
+          </button>
+        ) : null}
         <button className="primary-button" disabled={loading} type="submit">
           {loading ? 'Salvando...' : submitLabel}
         </button>

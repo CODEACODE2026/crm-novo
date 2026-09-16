@@ -3,6 +3,7 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { Save } from 'lucide-react';
 import type { Client, ClientPayload, ClientUpdatePayload, Plan } from '../../lib/crm-api';
+import { sortPlansByDuration } from '../../lib/plan-utils';
 import { Button } from '../ui/primitives';
 import { ClientReferralSelect } from './client-referral-select';
 
@@ -14,9 +15,10 @@ interface ClientFormProps {
 }
 
 export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormProps) {
+  const sortedPlans = useMemo(() => sortPlansByDuration(plans), [plans]);
   const initialPlan = useMemo(
-    () => plans.find((plan) => plan.id === client?.planId) ?? plans[0],
-    [client?.planId, plans],
+    () => sortedPlans.find((plan) => plan.id === client?.planId) ?? sortedPlans[0],
+    [client?.planId, sortedPlans],
   );
   const [name, setName] = useState(client?.name ?? '');
   const [phone, setPhone] = useState(client?.phone ?? '');
@@ -39,7 +41,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
-    const selectedPlan = plans.find((plan) => plan.id === nextPlanId);
+    const selectedPlan = sortedPlans.find((plan) => plan.id === nextPlanId);
 
     if (!valueTouched && selectedPlan) {
       setRecurringValue(selectedPlan.defaultValue);
@@ -134,7 +136,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
                 value={planId}
                 onChange={(event) => handlePlanChange(event.target.value)}
               >
-                {plans.map((plan) => (
+                {sortedPlans.map((plan) => (
                   <option key={plan.id} value={plan.id}>
                     {plan.name}
                   </option>

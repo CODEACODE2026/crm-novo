@@ -10,6 +10,14 @@ const planFormSource = readFileSync(
   join(currentDir, '../../components/plans/plan-form.tsx'),
   'utf8',
 );
+const clientFormSource = readFileSync(
+  join(currentDir, '../../components/clients/client-form.tsx'),
+  'utf8',
+);
+
+function sourceOccurrences(source: string, value: string) {
+  return source.split(value).length - 1;
+}
 
 describe('plans UI 2.0 presentation source', () => {
   it('renders the approved header, real payload KPIs, and compact cards', () => {
@@ -82,5 +90,27 @@ describe('plans UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.plans-grid {');
     expect(stylesSource).toContain('@media (max-width: 620px)');
     expect(stylesSource).toContain('.plan-form-modal-body {');
+  });
+
+  it('uses the shared duration ordering helper for cards and plan selects', () => {
+    expect(dashboardSource).toContain(
+      "import { sortPlansByDuration } from '../../lib/plan-utils';",
+    );
+    expect(
+      sourceOccurrences(dashboardSource, 'const sortedPlans = sortPlansByDuration(plans);'),
+    ).toBe(6);
+    expect(dashboardSource).toContain(
+      'plans.filter((plan) => plan.active || plan.id === editingClient?.planId)',
+    );
+    expect(sourceOccurrences(dashboardSource, '{sortedPlans.map((plan) => (')).toBe(6);
+    expect(dashboardSource).toContain('plans={selectableClientPlans}');
+    expect(clientFormSource).toContain(
+      "import { sortPlansByDuration } from '../../lib/plan-utils';",
+    );
+    expect(clientFormSource).toContain(
+      'const sortedPlans = useMemo(() => sortPlansByDuration(plans), [plans]);',
+    );
+    expect(clientFormSource).toContain('{sortedPlans.map((plan) => (');
+    expect(clientFormSource).toContain('value={plan.id}');
   });
 });

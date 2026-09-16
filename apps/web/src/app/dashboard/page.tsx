@@ -246,6 +246,7 @@ import {
   removalCountLabel,
   reportSummaryLabel,
 } from '../../lib/display-labels';
+import { sortPlansByDuration } from '../../lib/plan-utils';
 
 type View =
   | 'dashboard'
@@ -1602,6 +1603,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
   const [report, setReport] = useState<OperationalReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const sortedPlans = sortPlansByDuration(plans);
 
   const loadReport = useCallback(async () => {
     setLoading(true);
@@ -1703,7 +1705,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
               onChange={(event) => updateFilter('planId', event.target.value)}
             >
               <option value="">Todos os planos</option>
-              {plans.map((plan) => (
+              {sortedPlans.map((plan) => (
                 <option key={plan.id} value={plan.id}>
                   {plan.name}
                 </option>
@@ -2298,6 +2300,10 @@ function ClientsView({
   status: ClientStatus | '';
   renewalNotice: string;
 }) {
+  const sortedPlans = sortPlansByDuration(plans);
+  const selectableClientPlans = sortPlansByDuration(
+    plans.filter((plan) => plan.active || plan.id === editingClient?.planId),
+  );
   const [detailTab, setDetailTab] = useState<
     'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more'
   >('overview');
@@ -2459,7 +2465,7 @@ function ClientsView({
               </select>
               <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
                 <option value="">Todos os planos</option>
-                {plans.map((plan) => (
+                {sortedPlans.map((plan) => (
                   <option key={plan.id} value={plan.id}>
                     {plan.name}
                   </option>
@@ -3459,7 +3465,7 @@ function ClientsView({
               </header>
               <ClientForm
                 client={editingClient ?? undefined}
-                plans={plans.filter((plan) => plan.active || plan.id === editingClient?.planId)}
+                plans={selectableClientPlans}
                 submitLabel={editingClient ? 'Salvar cliente' : 'Salvar cliente'}
                 onSubmit={async (payload) => {
                   if (editingClient) {
@@ -6784,7 +6790,8 @@ function ApprovePendingContactModal({
   onClose: () => void;
   onApproved: (client: Client) => Promise<void>;
 }) {
-  const initialPlan = plans[0];
+  const sortedPlans = sortPlansByDuration(plans);
+  const initialPlan = sortedPlans[0];
   const [name, setName] = useState(contact.contactName ?? '');
   const [phone] = useState(contact.phoneNormalized);
   const [email, setEmail] = useState('');
@@ -6802,7 +6809,7 @@ function ApprovePendingContactModal({
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
-    const selectedPlan = plans.find((plan) => plan.id === nextPlanId);
+    const selectedPlan = sortedPlans.find((plan) => plan.id === nextPlanId);
     if (selectedPlan) setRecurringValue(selectedPlan.defaultValue);
   }
 
@@ -6876,7 +6883,7 @@ function ApprovePendingContactModal({
                 value={planId}
                 onChange={(event) => handlePlanChange(event.target.value)}
               >
-                {plans.map((plan) => (
+                {sortedPlans.map((plan) => (
                   <option key={plan.id} value={plan.id}>
                     {plan.name}
                   </option>
@@ -7136,7 +7143,8 @@ function ClientReferenceForm({
   onCancel: () => void;
   onSubmit: (payload: Omit<ClientPayload, 'name' | 'phone' | 'email'>) => Promise<void>;
 }) {
-  const initialPlan = reference?.plan ?? plans[0];
+  const sortedPlans = sortPlansByDuration(plans);
+  const initialPlan = reference?.plan ?? sortedPlans[0];
   const [referenceValue, setReferenceValue] = useState(reference?.reference ?? '');
   const [planId, setPlanId] = useState(reference?.planId ?? initialPlan?.id ?? '');
   const [recurringValue, setRecurringValue] = useState(
@@ -7153,7 +7161,7 @@ function ClientReferenceForm({
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
-    const selectedPlan = plans.find((plan) => plan.id === nextPlanId);
+    const selectedPlan = sortedPlans.find((plan) => plan.id === nextPlanId);
     if (selectedPlan && !reference) setRecurringValue(selectedPlan.defaultValue);
   }
 
@@ -7226,7 +7234,7 @@ function ClientReferenceForm({
               value={planId}
               onChange={(event) => handlePlanChange(event.target.value)}
             >
-              {plans.map((plan) => (
+              {sortedPlans.map((plan) => (
                 <option key={plan.id} value={plan.id}>
                   {plan.name}
                 </option>
@@ -7301,6 +7309,7 @@ function RenewalModal({
   onConfirm: (payload: { planId: string; amount: number; idempotencyKey: string }) => Promise<void>;
 }) {
   const { client, reference } = target;
+  const sortedPlans = sortPlansByDuration(plans);
   const [planId, setPlanId] = useState(reference.planId);
   const [amount, setAmount] = useState(reference.recurringValue);
   const [preview, setPreview] = useState<RenewalPreview | null>(null);
@@ -7404,7 +7413,7 @@ function RenewalModal({
           <label className="field">
             <span>Plano</span>
             <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
-              {plans.map((plan) => (
+              {sortedPlans.map((plan) => (
                 <option key={plan.id} value={plan.id}>
                   {plan.name}
                 </option>
@@ -9163,6 +9172,7 @@ function PlansView({
 }) {
   const activePlans = plans.filter((plan) => plan.active).length;
   const inactivePlans = plans.length - activePlans;
+  const sortedPlans = sortPlansByDuration(plans);
 
   return (
     <>
@@ -9214,9 +9224,9 @@ function PlansView({
         </div>
 
         <section className="workspace-main plans-workspace" aria-label="Lista de planos">
-          {plans.length ? (
+          {sortedPlans.length ? (
             <div className="plans-grid">
-              {plans.map((plan) => (
+              {sortedPlans.map((plan) => (
                 <article className="plan-card" key={plan.id}>
                   <div className="plan-card-header">
                     <span className="plan-card-icon" aria-hidden="true">

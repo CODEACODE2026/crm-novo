@@ -56,7 +56,7 @@ describe('client overview presentation source', () => {
 
   it('keeps reference and receivable statuses bound to their operational sources', () => {
     expect(dashboardSource).toContain('<StatusBadge status={reference.status} />');
-    expect(dashboardSource).toContain('<td>{receivable.displayStatus}</td>');
+    expect(dashboardSource).toContain('{receivable.displayStatus}');
     expect(dashboardSource).toContain("receivable.status === 'PENDENTE'");
   });
 

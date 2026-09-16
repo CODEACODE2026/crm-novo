@@ -24,6 +24,7 @@ import {
   ListChecks,
   Mail,
   MessageCircle,
+  Minus,
   Pencil,
   Plus,
   Power,
@@ -7044,6 +7045,77 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     (total, receivable) => total + Number(receivable.amount),
     0,
   );
+  const receivableTotals = clientReceivableTotals(receivables);
+  const financeKpis = summary
+    ? ([
+        {
+          icon: DollarSign,
+          label: 'A receber',
+          tone: 'info',
+          value: summary.receivablePending,
+        },
+        {
+          icon: CircleCheck,
+          label: 'Recebido',
+          tone: 'success',
+          value: summary.received,
+        },
+        {
+          icon: Bell,
+          label: 'Vencido',
+          tone: 'danger',
+          value: summary.receivableOverdue,
+        },
+        {
+          icon: Minus,
+          label: 'Saídas',
+          tone: 'warning',
+          value: summary.expenses,
+        },
+        {
+          icon: CreditCard,
+          label: 'Saldo',
+          tone: Number(summary.balance) < 0 ? 'danger' : 'success',
+          value: summary.balance,
+        },
+      ] satisfies Array<{
+        icon: LucideIcon;
+        label: string;
+        tone: 'success' | 'warning' | 'danger' | 'info';
+        value: string;
+      }>)
+    : [];
+  const receivableKpis = [
+    {
+      icon: DollarSign,
+      label: 'A receber',
+      tone: 'warning',
+      value: receivableTotals.pending,
+    },
+    {
+      icon: CircleCheck,
+      label: 'Pago',
+      tone: 'success',
+      value: receivableTotals.paid,
+    },
+    {
+      icon: Bell,
+      label: 'Vencido',
+      tone: 'danger',
+      value: receivableTotals.overdue,
+    },
+    {
+      icon: XCircle,
+      label: 'Cancelado',
+      tone: 'neutral',
+      value: receivableTotals.canceled,
+    },
+  ] satisfies Array<{
+    icon: LucideIcon;
+    label: string;
+    tone: 'neutral' | 'success' | 'warning' | 'danger';
+    value: number;
+  }>;
 
   function toggleReceivableSelection(receivable: Receivable) {
     if (receivable.status !== 'PENDENTE') return;
@@ -7069,7 +7141,22 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   }
 
   return (
-    <section className="workspace-main">
+    <section className="workspace-main finance-workspace">
+      <PageHeader
+        title="Financeiro"
+        subtitle="Controle de contas, movimentações e fluxo financeiro"
+        actions={
+          <div className="quick-actions">
+            <Button icon={Plus} variant="primary" onClick={() => setTab('entries')}>
+              Nova entrada
+            </Button>
+            <Button icon={Minus} variant="secondary" onClick={() => setTab('expenses')}>
+              Nova saída
+            </Button>
+          </div>
+        }
+      />
+
       {error ? <div className="notice danger">{error}</div> : null}
       {notice ? <div className="notice success">{notice}</div> : null}
 
@@ -7112,28 +7199,56 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       </div>
 
       {tab === 'summary' && summary ? (
-        <div className="metric-grid">
-          {(
-            [
-              ['Recebido', summary.received],
-              ['A receber', summary.receivablePending],
-              ['Vencido', summary.receivableOverdue],
-              ['Entradas', summary.entries],
-              ['Saídas', summary.expenses],
-              ['Saldo', summary.balance],
-            ] satisfies Array<[string, string]>
-          ).map(([label, value]) => (
-            <article className="metric-card" key={label}>
-              <span className="metric-label">{label}</span>
-              <strong className="metric-value">{loading ? '-' : formatCurrency(value)}</strong>
-            </article>
-          ))}
-        </div>
+        <>
+          <div className="metric-grid finance-kpis">
+            {financeKpis.map((item) => (
+              <StatCard
+                icon={item.icon}
+                key={item.label}
+                label={item.label}
+                tone={item.tone}
+                value={loading ? '-' : formatCurrency(item.value)}
+              />
+            ))}
+          </div>
+
+          <Card className="finance-summary-panel">
+            <SectionHeader eyebrow="Visão Geral" title="Resumo financeiro do período" />
+            <div className="finance-summary-grid">
+              <div>
+                <span className="metric-label">Período</span>
+                <strong>
+                  {formatDate(summary.startDate)} até {formatDate(summary.endDate)}
+                </strong>
+              </div>
+              <div>
+                <span className="metric-label">Entradas manuais</span>
+                <strong>{loading ? '-' : formatCurrency(summary.entries)}</strong>
+              </div>
+              <div>
+                <span className="metric-label">Receita confirmada</span>
+                <strong>{loading ? '-' : formatCurrency(summary.received)}</strong>
+              </div>
+            </div>
+          </Card>
+        </>
       ) : null}
 
       {tab === 'receivables' ? (
-        <>
-          <div className="toolbar">
+        <Card className="finance-panel">
+          <SectionHeader eyebrow="Contas a Receber" title="Carteira de recebíveis" />
+          <div className="metric-grid finance-receivable-kpis">
+            {receivableKpis.map((item) => (
+              <StatCard
+                icon={item.icon}
+                key={item.label}
+                label={item.label}
+                tone={item.tone}
+                value={loading ? '-' : formatCurrency(item.value)}
+              />
+            ))}
+          </div>
+          <div className="toolbar finance-toolbar">
             <div className="search-row">
               <Search aria-hidden="true" size={18} />
               <input
@@ -7154,54 +7269,53 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               <option value="PAGO">Pago</option>
               <option value="CANCELADO">Cancelado</option>
             </select>
-            <button className="secondary-button" type="button" onClick={() => void loadFinance()}>
+            <Button icon={Filter} variant="secondary" onClick={() => void loadFinance()}>
               Aplicar
-            </button>
+            </Button>
           </div>
           {selectedReceivables.length ? (
-            <div className="selection-bar">
+            <div className="selection-bar finance-selection-bar">
               <strong>
                 {selectedReceivables.length} conta{selectedReceivables.length > 1 ? 's' : ''}{' '}
                 selecionada{selectedReceivables.length > 1 ? 's' : ''}
               </strong>
               <span>Total: {formatCurrency(selectedTotal)}</span>
               <div className="button-row">
-                <button
-                  className="secondary-button"
-                  type="button"
+                <Button
+                  icon={QrCode}
+                  variant="secondary"
                   onClick={() => setPixReceivables(selectedReceivables)}
                 >
-                  <QrCode aria-hidden="true" size={16} />
                   Gerar PIX selecionados
-                </button>
-                <button
-                  className="primary-button"
-                  type="button"
+                </Button>
+                <Button
+                  icon={CircleCheck}
+                  variant="primary"
                   onClick={() => setPaymentReceivables(selectedReceivables)}
                 >
                   Dar baixa selecionados
-                </button>
+                </Button>
               </div>
             </div>
           ) : null}
-          <div className="table-wrap">
-            <table>
+          <div className="table-wrap finance-table-wrap">
+            <table className="finance-global-table">
               <thead>
                 <tr>
-                  <th>Selecionar</th>
+                  <th className="finance-select-column">Selecionar</th>
                   <th>Cliente</th>
                   <th>Referência</th>
                   <th>Descrição</th>
                   <th>Vencimento</th>
-                  <th>Valor</th>
-                  <th>Situação</th>
-                  <th>Ações</th>
+                  <th className="finance-amount-column">Valor</th>
+                  <th className="finance-status-column">Situação</th>
+                  <th className="finance-actions-column">Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {receivables.map((receivable) => (
                   <tr key={receivable.id}>
-                    <td>
+                    <td className="finance-select-column">
                       <input
                         aria-label={`Selecionar ${receivable.description}`}
                         checked={selectedReceivableIds.includes(receivable.id)}
@@ -7217,35 +7331,40 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                     <td>{receivable.client?.reference ?? '-'}</td>
                     <td>{receivable.description}</td>
                     <td>{formatDate(receivable.dueDate)}</td>
-                    <td>{formatCurrency(receivable.amount)}</td>
-                    <td>{receivable.displayStatus}</td>
-                    <td>
-                      <div className="button-row">
-                        <button
-                          className="secondary-button"
+                    <td className="finance-amount-column">{formatCurrency(receivable.amount)}</td>
+                    <td className="finance-status-column">
+                      <span
+                        className={`finance-status-pill tone-${financeReceivableTone(receivable)}`}
+                      >
+                        {receivable.displayStatus}
+                      </span>
+                    </td>
+                    <td className="finance-actions-column">
+                      <div className="table-actions">
+                        <IconButton
                           disabled={receivable.status !== 'PENDENTE'}
-                          type="button"
+                          icon={QrCode}
+                          label={`Gerar PIX para ${receivable.description}`}
+                          variant="secondary"
                           onClick={() => setPixReceivable(receivable)}
-                        >
-                          <QrCode aria-hidden="true" size={16} />
-                          Gerar PIX
-                        </button>
-                        <button
-                          className="secondary-button"
-                          disabled={receivable.status !== 'PENDENTE'}
-                          type="button"
-                          onClick={() => setPaymentReceivable(receivable)}
-                        >
-                          Dar baixa
-                        </button>
-                        <button
-                          className="danger-button"
-                          disabled={receivable.status !== 'PENDENTE'}
-                          type="button"
-                          onClick={() => setCancelingReceivable(receivable)}
-                        >
-                          Cancelar
-                        </button>
+                        />
+                        <ActionMenu
+                          items={[
+                            {
+                              disabled: receivable.status !== 'PENDENTE',
+                              icon: CircleCheck,
+                              label: 'Dar baixa',
+                              onSelect: () => setPaymentReceivable(receivable),
+                            },
+                            {
+                              danger: true,
+                              disabled: receivable.status !== 'PENDENTE',
+                              icon: XCircle,
+                              label: 'Cancelar',
+                              onSelect: () => setCancelingReceivable(receivable),
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -7258,7 +7377,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               </div>
             ) : null}
           </div>
-        </>
+        </Card>
       ) : null}
 
       {tab === 'entries' ? (
@@ -7463,8 +7582,12 @@ function TransactionSection({
   }
 
   return (
-    <>
-      <div className="entity-form">
+    <Card className="finance-panel">
+      <SectionHeader
+        eyebrow={kind === 'ENTRADA' ? 'Entradas' : 'Saídas'}
+        title={kind === 'ENTRADA' ? 'Movimentações de entrada' : 'Movimentações de saída'}
+      />
+      <div className="entity-form finance-transaction-form">
         <label className="field">
           <span>Descrição</span>
           <input
@@ -7528,29 +7651,32 @@ function TransactionSection({
           <span />
           <div className="button-row">
             {editing ? (
-              <button className="secondary-button" type="button" onClick={resetForm}>
+              <Button variant="secondary" onClick={resetForm}>
                 Cancelar edicao
-              </button>
+              </Button>
             ) : null}
-            <button className="primary-button" type="button" onClick={() => void submitForm()}>
-              <DollarSign aria-hidden="true" size={16} />
+            <Button
+              icon={kind === 'ENTRADA' ? Plus : Minus}
+              variant="primary"
+              onClick={() => void submitForm()}
+            >
               {editing ? 'Atualizar' : kind === 'ENTRADA' ? 'Nova entrada' : 'Nova saída'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
-      <div className="table-wrap">
-        <table>
+      <div className="table-wrap finance-table-wrap">
+        <table className="finance-global-table">
           <thead>
             <tr>
               <th>Data</th>
               <th>Descrição</th>
               <th>Categoria</th>
               <th>Cliente</th>
-              <th>Valor</th>
-              <th>Origem</th>
-              <th>Ações</th>
+              <th className="finance-amount-column">Valor</th>
+              <th className="finance-status-column">Origem</th>
+              <th className="finance-actions-column">Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -7559,31 +7685,46 @@ function TransactionSection({
                 <td>{formatDate(transaction.transactionDate)}</td>
                 <td>{transaction.description}</td>
                 <td>{transaction.category.name}</td>
-                <td>{transaction.client?.name ?? '-'}</td>
-                <td>{formatCurrency(transaction.amount)}</td>
-                <td>{transaction.origin}</td>
                 <td>
+                  {transaction.client?.name ?? '-'}
+                  {transaction.client?.reference ? (
+                    <span>{transaction.client.reference}</span>
+                  ) : null}
+                </td>
+                <td
+                  className={`finance-amount-column ${
+                    kind === 'ENTRADA' ? 'finance-value-success' : 'finance-value-warning'
+                  }`}
+                >
+                  {formatCurrency(transaction.amount)}
+                </td>
+                <td className="finance-status-column">
+                  <span className="finance-status-pill tone-info">{transaction.origin}</span>
+                </td>
+                <td className="finance-actions-column">
                   <div className="button-row">
-                    <button
-                      className="secondary-button"
+                    <Button
                       disabled={
                         transaction.origin !== 'MANUAL' || Boolean(transaction.receivableId)
                       }
-                      type="button"
+                      icon={Pencil}
+                      size="sm"
+                      variant="secondary"
                       onClick={() => startEdit(transaction)}
                     >
                       Editar
-                    </button>
-                    <button
-                      className="danger-button"
+                    </Button>
+                    <Button
                       disabled={
                         transaction.origin !== 'MANUAL' || Boolean(transaction.receivableId)
                       }
-                      type="button"
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
                       onClick={() => void onDelete(transaction.id)}
                     >
                       Remover
-                    </button>
+                    </Button>
                   </div>
                 </td>
               </tr>
@@ -7592,7 +7733,7 @@ function TransactionSection({
         </table>
         {!items.length ? <div className="empty-state">Nenhuma movimentação encontrada.</div> : null}
       </div>
-    </>
+    </Card>
   );
 }
 
@@ -7624,8 +7765,9 @@ function FinancialCategoriesView({
   }
 
   return (
-    <>
-      <div className="compact-form">
+    <Card className="finance-panel">
+      <SectionHeader eyebrow="Categorias" title="Classificação financeira" />
+      <div className="compact-form finance-category-form">
         <label className="field">
           <span>Nome</span>
           <input value={name} onChange={(event) => setName(event.target.value)} />
@@ -7640,52 +7782,82 @@ function FinancialCategoriesView({
             <option value="SAIDA">Saida</option>
           </select>
         </label>
-        <button className="primary-button" type="button" onClick={() => void submitCategory()}>
-          <Plus aria-hidden="true" size={16} />
+        <Button icon={Plus} variant="primary" onClick={() => void submitCategory()}>
           Categoria
-        </button>
+        </Button>
       </div>
-      <div className="table-wrap">
-        <table>
+      <div className="table-wrap finance-table-wrap">
+        <table className="finance-global-table">
           <thead>
             <tr>
               <th>Nome</th>
-              <th>Tipo</th>
-              <th>Status</th>
-              <th>Ações</th>
+              <th className="finance-status-column">Tipo</th>
+              <th className="finance-status-column">Status</th>
+              <th className="finance-actions-column">Ações</th>
             </tr>
           </thead>
           <tbody>
             {categories.map((category) => (
               <tr key={category.id}>
                 <td>{category.name}</td>
-                <td>{category.type}</td>
-                <td>{category.active ? 'Ativa' : 'Inativa'}</td>
-                <td>
+                <td className="finance-status-column">
+                  <span
+                    className={`finance-status-pill ${
+                      category.type === 'ENTRADA' ? 'tone-success' : 'tone-warning'
+                    }`}
+                  >
+                    {category.type}
+                  </span>
+                </td>
+                <td className="finance-status-column">
+                  <span
+                    className={`finance-status-pill ${
+                      category.active ? 'tone-success' : 'tone-danger'
+                    }`}
+                  >
+                    {category.active ? 'Ativa' : 'Inativa'}
+                  </span>
+                </td>
+                <td className="finance-actions-column">
                   <div className="button-row">
-                    <button
-                      className="secondary-button"
-                      type="button"
+                    <Button
+                      icon={Power}
+                      size="sm"
+                      variant="secondary"
                       onClick={() => void onUpdate(category.id, { active: !category.active })}
                     >
                       {category.active ? 'Inativar' : 'Ativar'}
-                    </button>
-                    <button
-                      className="danger-button"
-                      type="button"
+                    </Button>
+                    <Button
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
                       onClick={() => void onDelete(category.id)}
                     >
                       Remover
-                    </button>
+                    </Button>
                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {!categories.length ? (
+          <div className="empty-state">Nenhuma categoria encontrada.</div>
+        ) : null}
       </div>
-    </>
+    </Card>
   );
+}
+
+function financeReceivableTone(receivable: Pick<Receivable, 'displayStatus' | 'status'>) {
+  const status = receivableVisualStatus(receivable);
+
+  if (status === 'PENDENTE') return 'warning';
+  if (status === 'PAGO') return 'success';
+  if (status === 'CANCELADO') return 'muted';
+
+  return 'danger';
 }
 
 function PixReceivableModal({
@@ -7761,11 +7933,15 @@ function PixReceivableModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="pix-title">
-        <header className="modal-header">
-          <h2 id="pix-title">PIX</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <QrCode size={16} />
+          </span>
+          <div>
+            <h2 id="pix-title">PIX</h2>
+            <p>Gerar, copiar e sincronizar pagamento desta conta.</p>
+          </div>
+          <IconButton icon={X} label="Fechar PIX" onClick={onClose} />
         </header>
 
         <dl className="detail-list">
@@ -7954,11 +8130,15 @@ function PixReceivablesModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="group-pix-title">
-        <header className="modal-header">
-          <h2 id="group-pix-title">PIX selecionados</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <QrCode size={16} />
+          </span>
+          <div>
+            <h2 id="group-pix-title">PIX selecionados</h2>
+            <p>Gerar um único PIX para as contas selecionadas.</p>
+          </div>
+          <IconButton icon={X} label="Fechar PIX selecionados" onClick={onClose} />
         </header>
 
         <dl className="detail-list">
@@ -8126,11 +8306,15 @@ function PayReceivableModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="payment-title">
-        <header className="modal-header">
-          <h2 id="payment-title">Dar baixa</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <CircleCheck size={16} />
+          </span>
+          <div>
+            <h2 id="payment-title">Dar baixa</h2>
+            <p>Registrar pagamento desta conta a receber.</p>
+          </div>
+          <IconButton icon={X} label="Fechar baixa" onClick={onClose} />
         </header>
         <dl className="detail-list">
           <div>
@@ -8222,11 +8406,15 @@ function PayReceivablesModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="group-payment-title">
-        <header className="modal-header">
-          <h2 id="group-payment-title">Dar baixa selecionados</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <CircleCheck size={16} />
+          </span>
+          <div>
+            <h2 id="group-payment-title">Dar baixa selecionados</h2>
+            <p>Registrar pagamento agrupado das contas selecionadas.</p>
+          </div>
+          <IconButton icon={X} label="Fechar baixa agrupada" onClick={onClose} />
         </header>
         <dl className="detail-list">
           <div>
@@ -8311,11 +8499,15 @@ function CancelReceivableModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal" aria-labelledby="cancel-receivable-title">
-        <header className="modal-header">
-          <h2 id="cancel-receivable-title">Cancelar recebivel</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon danger" aria-hidden="true">
+            <XCircle size={16} />
+          </span>
+          <div>
+            <h2 id="cancel-receivable-title">Cancelar recebivel</h2>
+            <p>Informar o motivo antes de cancelar esta conta.</p>
+          </div>
+          <IconButton icon={X} label="Fechar cancelamento" onClick={onClose} />
         </header>
         <p>{receivable.description}</p>
         <label className="field">

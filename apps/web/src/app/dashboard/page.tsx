@@ -1,6 +1,6 @@
 'use client';
 
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
@@ -45,6 +45,7 @@ import {
   WifiOff,
   X,
   XCircle,
+  type LucideIcon,
 } from 'lucide-react';
 import type { AuthenticatedUser } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
@@ -2162,6 +2163,33 @@ function ClientEventIcon({ type }: { type: NonNullable<Client['events']>[number]
   return <Activity size={14} />;
 }
 
+function ClientSectionHeading({
+  action,
+  description,
+  icon: Icon,
+  title,
+}: {
+  action?: ReactNode;
+  description: string;
+  icon: LucideIcon;
+  title: string;
+}) {
+  return (
+    <div className="client-overview-card-header">
+      <div className="client-overview-heading">
+        <span className="section-icon" aria-hidden="true">
+          <Icon size={16} />
+        </span>
+        <div className="client-overview-heading-copy">
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+      </div>
+      {action ? <div className="client-overview-heading-action">{action}</div> : null}
+    </div>
+  );
+}
+
 function ClientsView({
   clientFormOpen,
   clients,
@@ -2654,22 +2682,18 @@ function ClientsView({
               {detailTab === 'overview' ? (
                 <div className="client-overview-grid">
                   <section className="client-overview-card client-profile-card">
-                    <div className="client-overview-card-header">
-                      <div className="client-overview-heading">
-                        <span className="section-icon" aria-hidden="true">
-                          <UserRound size={16} />
-                        </span>
-                        <div>
-                          <h3>Informações pessoais</h3>
-                          <p>Dados cadastrais e contato</p>
-                        </div>
-                      </div>
-                      <IconButton
-                        icon={Pencil}
-                        label="Editar cliente"
-                        onClick={() => onEdit(selectedClient)}
-                      />
-                    </div>
+                    <ClientSectionHeading
+                      description="Dados cadastrais e contato"
+                      icon={UserRound}
+                      title="Informações pessoais"
+                      action={
+                        <IconButton
+                          icon={Pencil}
+                          label="Editar cliente"
+                          onClick={() => onEdit(selectedClient)}
+                        />
+                      }
+                    />
                     <dl className="client-info-grid">
                       {[
                         {
@@ -2723,17 +2747,11 @@ function ClientsView({
                     </div>
                   </section>
                   <section className="client-overview-card client-summary-card">
-                    <div className="client-overview-card-header">
-                      <div className="client-overview-heading">
-                        <span className="section-icon" aria-hidden="true">
-                          <Activity size={16} />
-                        </span>
-                        <div>
-                          <h3>Resumo operacional</h3>
-                          <p>Situação atual do cliente</p>
-                        </div>
-                      </div>
-                    </div>
+                    <ClientSectionHeading
+                      description="Situação atual do cliente"
+                      icon={Activity}
+                      title="Resumo operacional"
+                    />
                     <div className="client-summary-compact">
                       <div className="client-summary-status-row">
                         <span>{clientReferenceCountLabel(selectedReferences.length)}</span>
@@ -2775,25 +2793,21 @@ function ClientsView({
                     </div>
                   </section>
                   <section className="client-overview-card client-activity-card">
-                    <div className="client-overview-card-header">
-                      <div className="client-overview-heading">
-                        <span className="section-icon" aria-hidden="true">
-                          <History size={16} />
-                        </span>
-                        <div>
-                          <h3>Atividade recente</h3>
-                          <p>Últimos movimentos do cliente</p>
-                        </div>
-                      </div>
-                      <Button
-                        icon={History}
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setDetailTab('timeline')}
-                      >
-                        Ver histórico completo
-                      </Button>
-                    </div>
+                    <ClientSectionHeading
+                      description="Últimos movimentos do cliente"
+                      icon={History}
+                      title="Atividade recente"
+                      action={
+                        <Button
+                          icon={History}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDetailTab('timeline')}
+                        >
+                          Ver histórico completo
+                        </Button>
+                      }
+                    />
                     <ol className="timeline compact-timeline">
                       {(selectedClient.events ?? []).slice(0, 5).map((event) => (
                         <li key={event.id}>
@@ -3145,13 +3159,13 @@ function ClientsView({
                     <table className="client-finance-table">
                       <thead>
                         <tr>
-                          <th aria-label="Selecionar"></th>
+                          <th aria-label="Selecionar" className="finance-select-column"></th>
                           <th>Descrição</th>
                           <th>Referência</th>
                           <th>Vencimento</th>
-                          <th>Valor</th>
-                          <th>Situação</th>
-                          <th>Ações</th>
+                          <th className="finance-amount-column">Valor</th>
+                          <th className="finance-status-column">Situação</th>
+                          <th className="finance-actions-column">Ações</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3161,7 +3175,7 @@ function ClientsView({
 
                           return (
                             <tr key={receivable.id}>
-                              <td>
+                              <td className="finance-select-column">
                                 <input
                                   aria-label={`Selecionar ${receivable.description}`}
                                   checked={checked}
@@ -3183,8 +3197,10 @@ function ClientsView({
                               </td>
                               <td>{receivable.clientReference?.reference ?? '-'}</td>
                               <td>{formatDate(receivable.dueDate)}</td>
-                              <td>{formatCurrency(receivable.amount)}</td>
-                              <td>
+                              <td className="finance-amount-column">
+                                {formatCurrency(receivable.amount)}
+                              </td>
+                              <td className="finance-status-column">
                                 <span
                                   className={`finance-status-pill tone-${receivableStatusTone(
                                     receivable,
@@ -3193,7 +3209,7 @@ function ClientsView({
                                   {status}
                                 </span>
                               </td>
-                              <td>
+                              <td className="finance-actions-column">
                                 <div className="table-actions">
                                   <IconButton
                                     disabled={
@@ -3276,9 +3292,9 @@ function ClientsView({
                           <th>Referências</th>
                           <th>Valor</th>
                           <th>Tipo</th>
-                          <th>Status</th>
-                          <th>Tentativas</th>
-                          <th>Ações</th>
+                          <th className="finance-status-column">Status</th>
+                          <th className="finance-attempts-column">Tentativas</th>
+                          <th className="finance-actions-column">Ações</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3288,7 +3304,7 @@ function ClientsView({
                             <td>{dispatchReferenceSummaryFromDispatch(dispatch)}</td>
                             <td>{dispatchTotalAmountLabel(dispatch)}</td>
                             <td>{messageOriginLabel(dispatch.origin)}</td>
-                            <td>
+                            <td className="finance-status-column">
                               <span
                                 className={`finance-status-pill tone-${dispatchStatusTone(
                                   dispatch.status,
@@ -3297,13 +3313,15 @@ function ClientsView({
                                 {billingStatusLabel(dispatch.status)}
                               </span>
                             </td>
-                            <td>{dispatch.attempts}</td>
-                            <td>
-                              <IconButton
-                                icon={Eye}
-                                label="Abrir detalhe da cobrança"
-                                onClick={() => setSelectedDispatch(dispatch)}
-                              />
+                            <td className="finance-attempts-column">{dispatch.attempts}</td>
+                            <td className="finance-actions-column">
+                              <div className="table-actions">
+                                <IconButton
+                                  icon={Eye}
+                                  label="Abrir detalhe da cobrança"
+                                  onClick={() => setSelectedDispatch(dispatch)}
+                                />
+                              </div>
                             </td>
                           </tr>
                         ))}

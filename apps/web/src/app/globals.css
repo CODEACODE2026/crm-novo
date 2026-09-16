@@ -1681,6 +1681,11 @@ tbody tr:hover,
   gap: 6px;
 }
 
+.table-actions {
+  justify-content: center;
+  vertical-align: middle;
+}
+
 .client-avatar {
   display: grid;
   width: 30px;
@@ -1782,19 +1787,46 @@ tbody tr:hover,
 
 .client-overview-card-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+  min-height: 32px;
 }
 
 .client-overview-heading {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
   gap: 10px;
 }
 
-.client-overview-heading h3 {
+.client-overview-heading .section-icon {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  margin: 0;
+  line-height: 1;
+}
+
+.client-overview-heading .section-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+}
+
+.client-overview-heading-copy {
+  display: flex;
+  min-height: 32px;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.client-overview-card .client-overview-heading h3 {
   margin: 0;
   color: var(--text-primary);
   font-size: 16px;
@@ -1802,10 +1834,18 @@ tbody tr:hover,
   line-height: 1.2;
 }
 
-.client-overview-heading p {
-  margin: 4px 0 0;
+.client-overview-card .client-overview-heading p {
+  margin: 3px 0 0;
   color: var(--text-muted);
   font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.client-overview-heading-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .client-profile-card,
@@ -1824,14 +1864,17 @@ tbody tr:hover,
 
 .client-info-item {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .client-info-item svg,
 .client-notes-title svg {
-  margin-top: 1px;
+  display: block;
+  width: 15px;
+  height: 15px;
+  margin: 1px auto 0;
   color: var(--text-muted);
 }
 
@@ -1866,9 +1909,10 @@ tbody tr:hover,
 }
 
 .client-notes-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
@@ -1904,9 +1948,9 @@ tbody tr:hover,
 }
 
 .client-summary-metrics div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
   gap: 12px;
   border-top: 1px solid rgb(39 52 68 / 58%);
   padding-top: 9px;
@@ -1922,6 +1966,7 @@ tbody tr:hover,
 }
 
 .client-summary-metrics dd {
+  justify-self: end;
   text-align: right;
 }
 
@@ -2544,27 +2589,78 @@ tbody tr:hover,
   min-width: 880px;
 }
 
+.client-finance-table th,
+.client-finance-table td,
+.client-billing-table th,
+.client-billing-table td {
+  vertical-align: middle;
+}
+
 .client-finance-table tbody tr,
 .client-billing-table tbody tr {
   cursor: default;
+}
+
+.finance-select-column,
+.finance-status-column,
+.finance-actions-column,
+.finance-attempts-column {
+  text-align: center;
+}
+
+.finance-amount-column {
+  text-align: right;
+}
+
+.client-finance-table .finance-select-column {
+  width: 42px;
+}
+
+.client-finance-table .finance-status-column,
+.client-billing-table .finance-status-column {
+  width: 118px;
+}
+
+.client-finance-table .finance-actions-column,
+.client-billing-table .finance-actions-column {
+  width: 92px;
+}
+
+.client-billing-table .finance-attempts-column {
+  width: 98px;
+}
+
+.finance-select-column,
+.finance-status-column,
+.finance-actions-column,
+.finance-attempts-column {
+  align-items: center;
+  justify-content: center;
 }
 
 .client-finance-table input[type='checkbox'] {
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
+  margin: 0;
+  vertical-align: middle;
 }
 
-.finance-status-pill {
+.finance-status-pill,
+.compact-table .finance-status-pill {
   display: inline-flex;
   width: fit-content;
+  min-width: 76px;
   min-height: 24px;
   align-items: center;
+  justify-content: center;
   border-radius: 999px;
   margin: 0;
   padding: 0 8px;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
+  text-align: center;
 }
 
 .finance-status-pill.tone-warning {

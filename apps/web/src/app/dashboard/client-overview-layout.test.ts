@@ -25,6 +25,7 @@ describe('client overview presentation source', () => {
   it('renders the operational summary with existing frontend metrics and no global client status', () => {
     expect(dashboardSource).toContain('Resumo operacional');
     expect(dashboardSource).toContain('Situação atual do cliente');
+    expect(dashboardSource).toContain('<ClientSectionHeading');
     expect(dashboardSource).toContain('client-summary-status-row');
     expect(dashboardSource).not.toMatch(
       /<StatusBadge\s+status=\{uniqueSelectedReference\?\.status \?\? selectedClient\.status\}\s+\/>/,
@@ -59,6 +60,20 @@ describe('client overview presentation source', () => {
     expect(dashboardSource).toContain("receivable.status === 'PENDENTE'");
   });
 
+  it('uses a shared overview section heading primitive with fixed icon geometry', () => {
+    expect(dashboardSource).toContain('function ClientSectionHeading');
+    expect(dashboardSource).toContain('client-overview-heading-copy');
+    expect(dashboardSource).toContain('client-overview-heading-action');
+    expect(dashboardSource.match(/<ClientSectionHeading/g)).toHaveLength(3);
+    expect(stylesSource).toContain('.client-overview-heading .section-icon');
+    expect(stylesSource).toContain('flex: 0 0 32px;');
+    expect(stylesSource).toContain('width: 32px;');
+    expect(stylesSource).toContain('height: 32px;');
+    expect(stylesSource).toContain('.client-overview-heading .section-icon svg');
+    expect(stylesSource).toContain('width: 16px;');
+    expect(stylesSource).toContain('height: 16px;');
+  });
+
   it('renders the client list situation from reference status summaries', () => {
     expect(dashboardSource).toContain('<th>SITUAÇÃO</th>');
     expect(dashboardSource).toContain('items={clientReferenceStatusSummary(client)}');
@@ -85,6 +100,21 @@ describe('client overview presentation source', () => {
     expect(stylesSource).toContain('transform: none;');
     expect(stylesSource).toContain('.timeline li > div > span,');
     expect(stylesSource).not.toContain('.timeline span,');
+  });
+
+  it('centers finance and billing status/actions with dedicated table columns', () => {
+    expect(dashboardSource).toContain('className="finance-status-column">Situação');
+    expect(dashboardSource).toContain('className="finance-status-column">Status');
+    expect(dashboardSource).toContain('<td className="finance-status-column">');
+    expect(dashboardSource).toContain('className="finance-actions-column">Ações');
+    expect(dashboardSource).toContain('<td className="finance-actions-column">');
+    expect(dashboardSource).toContain('className="finance-select-column"');
+    expect(dashboardSource).toContain('className="finance-amount-column"');
+    expect(stylesSource).toContain('.finance-status-column');
+    expect(stylesSource).toContain('text-align: center;');
+    expect(stylesSource).toContain('justify-content: center;');
+    expect(stylesSource).toContain('min-width: 76px;');
+    expect(stylesSource).toContain('vertical-align: middle;');
   });
 
   it('filters recovery dispatches out of the Cobranças/PIX tab only', () => {

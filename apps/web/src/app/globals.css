@@ -1780,67 +1780,114 @@ tbody tr:hover,
   padding: 14px;
 }
 
-.client-overview-card .section-header {
-  margin-bottom: 12px;
+.client-overview-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
-.client-overview-card .section-header h2 {
+.client-overview-heading {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.client-overview-heading h3 {
+  margin: 0;
   color: var(--text-primary);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.2;
 }
 
-.client-overview-card .section-eyebrow,
-.client-overview-card .metric-label {
+.client-overview-heading p {
+  margin: 4px 0 0;
   color: var(--text-muted);
-  font-weight: 500;
+  font-size: 12px;
 }
 
-.client-profile-card {
+.client-profile-card,
+.client-summary-card {
   display: grid;
+  align-content: start;
   gap: 12px;
 }
 
-.client-profile-list {
+.client-info-grid {
+  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 14px 18px;
+  margin: 0;
 }
 
-.client-profile-list div,
-.client-summary-list div {
-  border: 1px solid rgb(39 52 68 / 78%);
-  border-radius: 8px;
-  background: rgb(17 24 33 / 72%);
-  padding: 10px;
+.client-info-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
 }
 
-.client-profile-list dt,
-.client-summary-list dt {
-  margin-bottom: 4px;
+.client-info-item svg,
+.client-notes-title svg {
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+.client-info-item dt,
+.client-summary-metrics dt {
+  margin: 0 0 3px;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 500;
 }
 
-.client-profile-list dd,
-.client-summary-list dd {
-  color: var(--text-secondary);
+.client-info-item dd,
+.client-summary-metrics dd {
+  margin: 0;
+  color: var(--text-primary);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
-.client-summary-card {
-  min-height: 100%;
+.muted-value {
+  color: var(--text-muted) !important;
+  font-weight: 500 !important;
 }
 
-.client-summary-stack {
+.client-notes-block {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.client-notes-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.client-notes-block p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.client-summary-compact {
   display: grid;
   gap: 12px;
 }
 
-.client-summary-status {
+.client-summary-status-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1850,16 +1897,48 @@ tbody tr:hover,
   font-weight: 500;
 }
 
-.client-summary-list {
+.client-summary-metrics {
   display: grid;
-  gap: 10px;
+  gap: 9px;
   margin: 0;
 }
 
-.client-summary-list dd {
-  color: var(--text-primary);
-  font-size: 18px;
-  font-weight: 700;
+.client-summary-metrics div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid rgb(39 52 68 / 58%);
+  padding-top: 9px;
+}
+
+.client-summary-metrics div:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.client-summary-metrics dt {
+  margin: 0;
+}
+
+.client-summary-metrics dd {
+  text-align: right;
+}
+
+.metric-value-primary {
+  color: var(--accent-strong) !important;
+}
+
+.metric-value-success {
+  color: var(--accent-strong) !important;
+}
+
+.metric-value-info {
+  color: var(--info) !important;
+}
+
+.metric-value-warning {
+  color: var(--warning) !important;
 }
 
 .client-activity-card {
@@ -1875,36 +1954,6 @@ tbody tr:hover,
 .client-kpi-grid .metric-value {
   font-size: 18px;
   line-height: 1.12;
-}
-
-.client-overview-card .detail-list {
-  grid-template-columns: 1fr;
-  gap: 8px;
-}
-
-.client-overview-card .detail-list dd {
-  overflow-wrap: anywhere;
-}
-
-.notes-box {
-  display: grid;
-  gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: rgb(17 24 33 / 72%);
-  padding: 10px;
-}
-
-.client-overview-card .notes-box p {
-  color: var(--text-secondary);
-  font-weight: 400;
-}
-
-.notes-box p {
-  margin: 0;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .detail-header h2 {
@@ -2975,6 +3024,7 @@ tbody tr:hover,
   .compact-form,
   .form-grid,
   .detail-list,
+  .client-info-grid,
   .reference-metrics,
   .client-kpi-grid,
   .client-detail-kpis,

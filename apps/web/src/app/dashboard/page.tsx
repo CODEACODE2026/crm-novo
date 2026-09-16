@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   BarChart3,
   Bell,
+  CalendarDays,
   CalendarClock,
   CircleCheck,
   Copy,
@@ -16,10 +17,12 @@ import {
   Filter,
   FileText,
   Gift,
+  History,
   Info,
   LayoutDashboard,
   Layers,
   ListChecks,
+  Mail,
   MessageCircle,
   Pencil,
   Plus,
@@ -35,6 +38,7 @@ import {
   ShieldCheck,
   Trash2,
   ToggleLeft,
+  UserRound,
   UserPlus,
   Users,
   Wifi,
@@ -2637,51 +2641,119 @@ function ClientsView({
               {detailTab === 'overview' ? (
                 <div className="client-overview-grid">
                   <section className="client-overview-card client-profile-card">
-                    <SectionHeader eyebrow="Cliente" title="Informações pessoais" />
-                    <dl className="detail-list client-profile-list">
-                      <div>
-                        <dt>Nome</dt>
-                        <dd>{selectedClient.name}</dd>
+                    <div className="client-overview-card-header">
+                      <div className="client-overview-heading">
+                        <span className="section-icon" aria-hidden="true">
+                          <UserRound size={16} />
+                        </span>
+                        <div>
+                          <h3>Informações pessoais</h3>
+                          <p>Dados cadastrais e contato</p>
+                        </div>
                       </div>
-                      <div>
-                        <dt>WhatsApp</dt>
-                        <dd>{selectedClient.phone}</dd>
-                      </div>
-                      <div>
-                        <dt>E-mail</dt>
-                        <dd>{selectedClient.email ?? '-'}</dd>
-                      </div>
-                      <div>
-                        <dt>Cliente desde</dt>
-                        <dd>{formatDate(selectedClient.createdAt)}</dd>
-                      </div>
+                      <IconButton
+                        icon={Pencil}
+                        label="Editar cliente"
+                        onClick={() => onEdit(selectedClient)}
+                      />
+                    </div>
+                    <dl className="client-info-grid">
+                      {[
+                        {
+                          icon: UserRound,
+                          label: 'Nome',
+                          muted: false,
+                          value: selectedClient.name,
+                        },
+                        {
+                          icon: MessageCircle,
+                          label: 'WhatsApp',
+                          muted: false,
+                          value:
+                            normalizeWhatsAppDisplayPhone(selectedClient.phoneNormalized) ??
+                            selectedClient.phoneNormalized,
+                        },
+                        {
+                          icon: Mail,
+                          label: 'E-mail',
+                          muted: !selectedClient.email,
+                          value: selectedClient.email ?? 'Não informado',
+                        },
+                        {
+                          icon: CalendarDays,
+                          label: 'Cliente desde',
+                          muted: false,
+                          value: formatDate(selectedClient.createdAt),
+                        },
+                      ].map((item) => {
+                        const Icon = item.icon;
+
+                        return (
+                          <div className="client-info-item" key={item.label}>
+                            <Icon aria-hidden="true" size={15} />
+                            <div>
+                              <dt>{item.label}</dt>
+                              <dd className={item.muted ? 'muted-value' : ''}>{item.value}</dd>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </dl>
-                    <div className="notes-box">
-                      <span className="metric-label">Observações internas</span>
-                      <p>{selectedClient.notes ?? 'Sem observações.'}</p>
+                    <div className="client-notes-block">
+                      <div className="client-notes-title">
+                        <FileText aria-hidden="true" size={15} />
+                        <span>Observações internas</span>
+                      </div>
+                      <p className={!selectedClient.notes ? 'muted-value' : ''}>
+                        {selectedClient.notes ?? 'Nenhuma observação cadastrada.'}
+                      </p>
                     </div>
                   </section>
                   <section className="client-overview-card client-summary-card">
-                    <SectionHeader eyebrow="Operação" title="Resumo do cliente" />
-                    <div className="client-summary-stack">
-                      <div className="client-summary-status">
+                    <div className="client-overview-card-header">
+                      <div className="client-overview-heading">
+                        <span className="section-icon" aria-hidden="true">
+                          <Activity size={16} />
+                        </span>
+                        <div>
+                          <h3>Resumo operacional</h3>
+                          <p>Situação atual do cliente</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="client-summary-compact">
+                      <div className="client-summary-status-row">
                         <StatusBadge
                           status={uniqueSelectedReference?.status ?? selectedClient.status}
                         />
                         <span>{clientReferenceCountLabel(selectedReferences.length)}</span>
                       </div>
-                      <dl className="client-summary-list">
+                      <dl className="client-summary-metrics">
+                        <div>
+                          <dt>Referências</dt>
+                          <dd className="metric-value-primary">{selectedReferences.length}</dd>
+                        </div>
+                        <div>
+                          <dt>Ativas</dt>
+                          <dd className="metric-value-success">{referenceCounts.active}</dd>
+                        </div>
                         <div>
                           <dt>A receber</dt>
-                          <dd>{formatCurrency(receivableTotals.pending)}</dd>
+                          <dd className="metric-value-primary">
+                            {formatCurrency(receivableTotals.pending)}
+                          </dd>
                         </div>
                         <div>
                           <dt>Total pago</dt>
-                          <dd>{formatCurrency(receivableTotals.paid)}</dd>
+                          <dd className="metric-value-success">
+                            {formatCurrency(receivableTotals.paid)}
+                          </dd>
                         </div>
                         <div>
-                          <dt>Próx. venc.</dt>
-                          <dd>{clientNextDueSummary(selectedReferences)}</dd>
+                          <dt>Próx. vencimento</dt>
+                          <dd className="metric-value-info">
+                            {clientNextDueSummary(selectedReferences)}
+                          </dd>
                         </div>
                         {uniqueSelectedReference ? (
                           <div>
@@ -2693,9 +2765,27 @@ function ClientsView({
                     </div>
                   </section>
                   <section className="client-overview-card client-activity-card">
-                    <SectionHeader eyebrow="Histórico" title="Atividade recente" />
+                    <div className="client-overview-card-header">
+                      <div className="client-overview-heading">
+                        <span className="section-icon" aria-hidden="true">
+                          <History size={16} />
+                        </span>
+                        <div>
+                          <h3>Atividade recente</h3>
+                          <p>Últimos movimentos do cliente</p>
+                        </div>
+                      </div>
+                      <Button
+                        icon={History}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDetailTab('timeline')}
+                      >
+                        Ver histórico completo
+                      </Button>
+                    </div>
                     <ol className="timeline compact-timeline">
-                      {(selectedClient.events ?? []).slice(0, 4).map((event) => (
+                      {(selectedClient.events ?? []).slice(0, 5).map((event) => (
                         <li key={event.id}>
                           <span className="client-timeline-icon" aria-hidden="true">
                             <ClientEventIcon type={event.type} />
@@ -2710,10 +2800,10 @@ function ClientsView({
                       {!selectedClient.events?.length ? (
                         <li>
                           <span className="client-timeline-icon" aria-hidden="true">
-                            <Activity size={14} />
+                            <History size={14} />
                           </span>
                           <div>
-                            <strong>Sem eventos recentes</strong>
+                            <strong>Nenhuma atividade recente.</strong>
                             <span>O histórico aparecerá aqui quando houver atividade.</span>
                           </div>
                         </li>

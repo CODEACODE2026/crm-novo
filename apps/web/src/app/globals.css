@@ -1200,8 +1200,50 @@ a {
   margin-bottom: 16px;
 }
 
-.waitlist-grid {
-  align-items: start;
+.waitlist-workspace {
+  width: 100%;
+}
+
+.waitlist-table {
+  min-width: 1040px;
+}
+
+.waitlist-table th:nth-child(3),
+.waitlist-table td:nth-child(3) {
+  width: 28%;
+}
+
+.waitlist-message-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 0;
+  color: var(--text);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+.waitlist-message-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.waitlist-row-actions {
+  justify-content: center;
+}
+
+.waitlist-empty-state {
+  display: grid;
+  gap: 6px;
+}
+
+.waitlist-empty-state span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .pill {
@@ -1218,18 +1260,135 @@ a {
 }
 
 .pill.pendente {
+  border-color: rgb(241 184 75 / 42%);
+  color: var(--warning);
+}
+
+.pill.aprovado {
   border-color: rgb(38 198 163 / 45%);
   color: var(--accent-strong);
 }
 
-.pill.aprovado {
+.pill.ignorado {
   border-color: rgb(104 169 255 / 42%);
   color: var(--info);
 }
 
-.pill.ignorado {
-  border-color: rgb(241 184 75 / 42%);
-  color: var(--warning);
+.waitlist-detail-modal,
+.waitlist-approve-modal {
+  width: min(100%, 920px);
+}
+
+.waitlist-ignore-modal {
+  width: min(100%, 520px);
+}
+
+.waitlist-contact-summary,
+.waitlist-detail-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.waitlist-contact-summary span,
+.waitlist-detail-status strong {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 6px 9px;
+}
+
+.waitlist-detail-grid {
+  margin-top: 10px;
+}
+
+.waitlist-message-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.waitlist-message-pair article,
+.waitlist-approval-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.waitlist-message-pair span,
+.section-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.waitlist-message-pair p,
+.waitlist-approval-section p {
+  margin: 6px 0 0;
+}
+
+.waitlist-history {
+  display: grid;
+  gap: 10px;
+}
+
+.waitlist-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.waitlist-section-title svg {
+  color: var(--accent-strong);
+}
+
+.waitlist-section-title h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.waitlist-approve-modal .entity-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 0;
+}
+
+.waitlist-approval-summary ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.waitlist-approval-summary li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.waitlist-approval-summary li::before {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgb(38 198 163 / 14%);
+  color: var(--accent-strong);
+  content: '✓';
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.waitlist-ignore-modal .field {
+  margin-top: 14px;
 }
 
 .provider-health,

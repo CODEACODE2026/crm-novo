@@ -18,6 +18,7 @@ import {
   Download,
   DollarSign,
   Eye,
+  EyeOff,
   Filter,
   FileText,
   Gift,
@@ -31,6 +32,7 @@ import {
   MessageCircle,
   MessageSquare,
   MessageSquareText,
+  MessagesSquare,
   Minus,
   Package,
   PackageOpen,
@@ -40,6 +42,7 @@ import {
   QrCode,
   RefreshCcw,
   RefreshCw,
+  Receipt,
   RotateCcw,
   Save,
   Search,
@@ -50,6 +53,7 @@ import {
   Trash2,
   ToggleLeft,
   UserRound,
+  UserCheck,
   UsersRound,
   UserPlus,
   Users,
@@ -6881,13 +6885,15 @@ function WaitlistView({
 }) {
   const [summary, setSummary] = useState<WhatsAppPendingContactsSummary | null>(null);
   const [contacts, setContacts] = useState<WhatsAppPendingContact[]>([]);
-  const [selected, setSelected] = useState<WhatsAppPendingContact | null>(null);
+  const [detailContact, setDetailContact] = useState<WhatsAppPendingContact | null>(null);
+  const [approveContact, setApproveContact] = useState<WhatsAppPendingContact | null>(null);
+  const [ignoreContact, setIgnoreContact] = useState<WhatsAppPendingContact | null>(null);
   const [status, setStatus] = useState<WhatsAppPendingContactStatus | ''>('PENDENTE');
   const [search, setSearch] = useState('');
-  const [approveOpen, setApproveOpen] = useState(false);
   const [ignoreReason, setIgnoreReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const total = contacts.length;
 
   const loadWaitlist = useCallback(async () => {
     setLoading(true);
@@ -6907,14 +6913,6 @@ function WaitlistView({
       ]);
       setSummary(nextSummary);
       setContacts(nextContacts.items);
-      setSelected((current) => {
-        if (!current) return nextContacts.items[0] ?? null;
-        return (
-          nextContacts.items.find((contact) => contact.id === current.id) ??
-          nextContacts.items[0] ??
-          null
-        );
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar a lista.');
     } finally {
@@ -6931,7 +6929,7 @@ function WaitlistView({
 
     try {
       const detail = await getWhatsAppPendingContact(contact.id);
-      setSelected(detail);
+      setDetailContact(detail);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível abrir o contato.');
     }
@@ -6946,7 +6944,8 @@ function WaitlistView({
         ignoreReason.trim() || undefined,
       );
       setIgnoreReason('');
-      setSelected(updated);
+      setIgnoreContact(null);
+      setDetailContact((current) => (current?.id === updated.id ? updated : current));
       await loadWaitlist();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível ignorar o contato.');
@@ -6958,7 +6957,7 @@ function WaitlistView({
 
     try {
       const updated = await reopenWhatsAppPendingContact(contact.id);
-      setSelected(updated);
+      setDetailContact((current) => (current?.id === updated.id ? updated : current));
       await loadWaitlist();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível reabrir o contato.');
@@ -6967,204 +6966,377 @@ function WaitlistView({
 
   return (
     <>
+      <PageHeader
+        eyebrow="CRM NOVO UI 2.0"
+        icon={Clock}
+        title="Lista de Espera"
+        subtitle="Contatos recebidos pelo WhatsApp aguardando atendimento."
+      />
       {error ? <div className="notice danger">{error}</div> : null}
       <div className="metric-grid waitlist-kpis">
         {[
-          ['Pendentes', summary?.pending ?? 0],
-          ['Aprovados hoje', summary?.approvedToday ?? 0],
-          ['Ignorados', summary?.ignored ?? 0],
-        ].map(([label, value]) => (
-          <article className="metric-card compact" key={label}>
-            <span className="metric-label">{label}</span>
-            <strong className="metric-value">{loading ? '-' : value}</strong>
+          { label: 'Pendentes', value: summary?.pending ?? 0, tone: 'warning' },
+          { label: 'Aprovados hoje', value: summary?.approvedToday ?? 0, tone: 'success' },
+          { label: 'Ignorados', value: summary?.ignored ?? 0, tone: 'info' },
+          { label: 'Total filtrado', value: total, tone: 'primary' },
+        ].map((item) => (
+          <article className={`metric-card compact stat-card tone-${item.tone}`} key={item.label}>
+            <span className="metric-label">{item.label}</span>
+            <strong className="metric-value">{loading ? '-' : item.value}</strong>
           </article>
         ))}
       </div>
 
-      <div className="workspace-grid waitlist-grid">
-        <section className="workspace-main">
-          <div className="toolbar">
-            <div className="search-row">
-              <Search aria-hidden="true" size={18} />
-              <input
-                placeholder="Buscar por nome ou telefone"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            <select
-              value={status}
-              onChange={(event) =>
-                setStatus(event.target.value as WhatsAppPendingContactStatus | '')
-              }
-            >
-              <option value="">Todos os status</option>
-              <option value="PENDENTE">Pendentes</option>
-              <option value="APROVADO">Aprovados</option>
-              <option value="IGNORADO">Ignorados</option>
-            </select>
-            <button className="secondary-button" type="button" onClick={() => void loadWaitlist()}>
-              <RefreshCcw aria-hidden="true" size={16} />
-              Atualizar
-            </button>
+      <section className="workspace-main waitlist-workspace">
+        <div className="toolbar">
+          <div className="search-row">
+            <Search aria-hidden="true" size={18} />
+            <input
+              placeholder="Buscar por nome ou telefone"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
           </div>
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as WhatsAppPendingContactStatus | '')}
+          >
+            <option value="">Todos os status</option>
+            <option value="PENDENTE">Pendentes</option>
+            <option value="APROVADO">Aprovados</option>
+            <option value="IGNORADO">Ignorados</option>
+          </select>
+          <Button icon={RefreshCcw} onClick={() => void loadWaitlist()} variant="secondary">
+            Atualizar
+          </Button>
+        </div>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Nome</th>
-                  <th>WhatsApp</th>
-                  <th>Ultima mensagem</th>
-                  <th>Primeiro contato</th>
-                  <th>Ultimo contato</th>
-                  <th>Mensagens</th>
-                  <th>Status</th>
-                  <th>Ações</th>
+        <div className="table-wrap waitlist-table-wrap">
+          <table className="waitlist-table">
+            <thead>
+              <tr>
+                <th>Contato</th>
+                <th>WhatsApp</th>
+                <th>Ultima mensagem</th>
+                <th>Mensagens</th>
+                <th>Ultima interação</th>
+                <th className="finance-status-column">Status</th>
+                <th className="finance-actions-column">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((contact) => (
+                <tr key={contact.id}>
+                  <td>
+                    <strong>{waitlistContactName(contact)}</strong>
+                    <span>{contact.connection.name}</span>
+                  </td>
+                  <td>{formatWaitlistPhone(contact.phoneNormalized)}</td>
+                  <td>
+                    <span className="waitlist-message-preview" title={waitlistFullMessage(contact)}>
+                      {waitlistFullMessage(contact)}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="waitlist-message-count">
+                      <MessageCircle aria-hidden="true" size={15} />
+                      {contact.messageCount}
+                    </span>
+                  </td>
+                  <td>{formatDateTime(contact.lastContactAt)}</td>
+                  <td className="finance-status-column">
+                    <WaitlistStatusBadge status={contact.status} />
+                  </td>
+                  <td className="finance-actions-column">
+                    <div className="button-row waitlist-row-actions">
+                      <IconButton
+                        icon={Eye}
+                        label="Visualizar contato"
+                        onClick={() => void selectContact(contact)}
+                        variant="secondary"
+                      />
+                      {contact.status === 'PENDENTE' ? (
+                        <>
+                          <Button
+                            icon={UserCheck}
+                            onClick={() => setApproveContact(contact)}
+                            size="sm"
+                            variant="primary"
+                          >
+                            Aprovar
+                          </Button>
+                          <ActionMenu
+                            label="Mais ações do contato"
+                            items={[
+                              {
+                                danger: true,
+                                icon: EyeOff,
+                                label: 'Ignorar',
+                                onSelect: () => {
+                                  setIgnoreReason('');
+                                  setIgnoreContact(contact);
+                                },
+                              },
+                            ]}
+                          />
+                        </>
+                      ) : null}
+                      {contact.status === 'IGNORADO' ? (
+                        <IconButton
+                          icon={RotateCcw}
+                          label="Reabrir contato"
+                          onClick={() => void handleReopen(contact)}
+                          variant="secondary"
+                        />
+                      ) : null}
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {contacts.map((contact) => (
-                  <tr
-                    className={selected?.id === contact.id ? 'selected-row' : ''}
-                    key={contact.id}
-                    onClick={() => void selectContact(contact)}
-                  >
-                    <td>{contact.contactName ?? 'Contato sem nome'}</td>
-                    <td>{contact.phoneNormalized}</td>
-                    <td>{waitlistMessagePreview(contact)}</td>
-                    <td>{formatDateTime(contact.firstContactAt)}</td>
-                    <td>{formatDateTime(contact.lastContactAt)}</td>
-                    <td>{contact.messageCount}</td>
-                    <td>
-                      <span className={`pill ${contact.status.toLowerCase()}`}>
-                        {contact.status}
-                      </span>
-                    </td>
-                    <td>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void selectContact(contact);
-                        }}
-                      >
-                        <Eye aria-hidden="true" size={16} />
-                        Ver
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!contacts.length ? (
-              <div className="empty-state">
-                {loading ? 'Carregando...' : 'Nenhum contato na lista de espera.'}
-              </div>
-            ) : null}
-          </div>
-        </section>
-
-        <aside className="detail-panel">
-          {selected ? (
-            <>
-              <div className="detail-header">
-                <div>
-                  <h2>{selected.contactName ?? 'Contato WhatsApp'}</h2>
-                  <span>{selected.phoneNormalized}</span>
-                </div>
-                <span className={`pill ${selected.status.toLowerCase()}`}>{selected.status}</span>
-              </div>
-              <dl className="detail-list">
-                <div>
-                  <dt>Instancia</dt>
-                  <dd>{selected.connection.name}</dd>
-                </div>
-                <div>
-                  <dt>Primeiro contato</dt>
-                  <dd>{formatDateTime(selected.firstContactAt)}</dd>
-                </div>
-                <div>
-                  <dt>Ultimo contato</dt>
-                  <dd>{formatDateTime(selected.lastContactAt)}</dd>
-                </div>
-                <div>
-                  <dt>Mensagens</dt>
-                  <dd>{selected.messageCount}</dd>
-                </div>
-              </dl>
-
-              <div className="button-row detail-actions">
-                <button
-                  className="primary-button"
-                  disabled={selected.status === 'APROVADO'}
-                  type="button"
-                  onClick={() => setApproveOpen(true)}
-                >
-                  <Plus aria-hidden="true" size={16} />
-                  Aprovar
-                </button>
-                {selected.status === 'IGNORADO' ? (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void handleReopen(selected)}
-                  >
-                    Reabrir
-                  </button>
-                ) : (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void handleIgnore(selected)}
-                  >
-                    Ignorar
-                  </button>
-                )}
-              </div>
-
-              {selected.status !== 'IGNORADO' ? (
-                <label className="field">
-                  <span>Motivo para ignorar</span>
-                  <textarea
-                    value={ignoreReason}
-                    onChange={(event) => setIgnoreReason(event.target.value)}
-                  />
-                </label>
+              ))}
+            </tbody>
+          </table>
+          {!contacts.length ? (
+            <div className="empty-state waitlist-empty-state">
+              {loading ? 'Carregando...' : 'Nenhum contato encontrado.'}
+              {!loading ? (
+                <span>Novos contatos recebidos pelo WhatsApp aparecerão aqui.</span>
               ) : null}
+            </div>
+          ) : null}
+        </div>
+      </section>
 
-              <div className="mini-list">
-                {(selected.inboundMessages ?? []).map((message) => (
-                  <article key={message.id}>
-                    <strong>{messageTypeLabel(message.messageType)}</strong>
-                    <span>{formatDateTime(message.messageTimestamp ?? message.receivedAt)}</span>
-                    <p>{message.text ?? messageTypePreview(message.messageType)}</p>
-                  </article>
-                ))}
-                {!selected.inboundMessages?.length ? (
-                  <div className="empty-state">Abra um contato para ver o histórico mínimo.</div>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">Selecione um contato para visualizar detalhes.</div>
-          )}
-        </aside>
-      </div>
+      {detailContact ? (
+        <WaitlistContactDetailModal
+          contact={detailContact}
+          onApprove={(contact) => setApproveContact(contact)}
+          onClose={() => setDetailContact(null)}
+          onIgnore={(contact) => {
+            setIgnoreReason('');
+            setIgnoreContact(contact);
+          }}
+          onReopen={(contact) => void handleReopen(contact)}
+        />
+      ) : null}
 
-      {approveOpen && selected ? (
+      {approveContact ? (
         <ApprovePendingContactModal
-          contact={selected}
+          contact={approveContact}
           plans={plans}
-          onClose={() => setApproveOpen(false)}
+          onClose={() => setApproveContact(null)}
           onApproved={async (client) => {
-            setApproveOpen(false);
+            setApproveContact(null);
+            setDetailContact(null);
             await onClientCreated(client);
           }}
         />
       ) : null}
+
+      {ignoreContact ? (
+        <IgnorePendingContactModal
+          contact={ignoreContact}
+          reason={ignoreReason}
+          onChangeReason={setIgnoreReason}
+          onClose={() => {
+            setIgnoreContact(null);
+            setIgnoreReason('');
+          }}
+          onConfirm={() => void handleIgnore(ignoreContact)}
+        />
+      ) : null}
     </>
+  );
+}
+
+function WaitlistContactDetailModal({
+  contact,
+  onApprove,
+  onClose,
+  onIgnore,
+  onReopen,
+}: {
+  contact: WhatsAppPendingContact;
+  onApprove: (contact: WhatsAppPendingContact) => void;
+  onClose: () => void;
+  onIgnore: (contact: WhatsAppPendingContact) => void;
+  onReopen: (contact: WhatsAppPendingContact) => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal waitlist-detail-modal" aria-labelledby="waitlist-detail-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <MessageCircle size={17} />
+          </span>
+          <div>
+            <h2 id="waitlist-detail-title">Detalhes do contato</h2>
+            <p>Informações recebidas pelo WhatsApp.</p>
+          </div>
+          <IconButton icon={X} label="Fechar detalhes do contato" onClick={onClose} />
+        </header>
+
+        <div className="waitlist-detail-status">
+          <strong>{waitlistContactName(contact)}</strong>
+          <WaitlistStatusBadge status={contact.status} />
+        </div>
+
+        <dl className="detail-list waitlist-detail-grid">
+          <div>
+            <dt>Nome</dt>
+            <dd>{waitlistContactName(contact)}</dd>
+          </div>
+          <div>
+            <dt>WhatsApp</dt>
+            <dd>{formatWaitlistPhone(contact.phoneNormalized)}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{waitlistStatusLabel(contact.status)}</dd>
+          </div>
+          <div>
+            <dt>Origem</dt>
+            <dd>WhatsApp</dd>
+          </div>
+          <div>
+            <dt>Conexão</dt>
+            <dd>{contact.connection.name}</dd>
+          </div>
+          <div>
+            <dt>Primeiro contato</dt>
+            <dd>{formatDateTime(contact.firstContactAt)}</dd>
+          </div>
+          <div>
+            <dt>Último contato</dt>
+            <dd>{formatDateTime(contact.lastContactAt)}</dd>
+          </div>
+          <div>
+            <dt>Mensagens</dt>
+            <dd>{contact.messageCount}</dd>
+          </div>
+          {contact.status === 'APROVADO' && contact.client ? (
+            <div>
+              <dt>Cliente criado</dt>
+              <dd>
+                {contact.client.name} · {contact.client.reference}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+
+        <div className="waitlist-message-pair">
+          <article>
+            <span>Primeira mensagem</span>
+            <p>{contact.firstMessageText ?? messageTypePreview(contact.firstMessageType)}</p>
+          </article>
+          <article>
+            <span>Última mensagem</span>
+            <p>{contact.lastMessageText ?? messageTypePreview(contact.lastMessageType)}</p>
+          </article>
+        </div>
+
+        <section className="waitlist-history">
+          <WaitlistSectionTitle icon={MessagesSquare} title="Histórico recebido" />
+          <div className="mini-list">
+            {(contact.inboundMessages ?? []).map((message) => (
+              <article key={message.id}>
+                <strong>{messageTypeLabel(message.messageType)}</strong>
+                <span>{formatDateTime(message.messageTimestamp ?? message.receivedAt)}</span>
+                <p>{message.text ?? messageTypePreview(message.messageType)}</p>
+              </article>
+            ))}
+            {!contact.inboundMessages?.length ? (
+              <div className="empty-state">Nenhum histórico recebido disponível.</div>
+            ) : null}
+          </div>
+        </section>
+
+        <div className="form-actions">
+          <div />
+          <div className="button-row">
+            {contact.status === 'PENDENTE' ? (
+              <>
+                <Button icon={EyeOff} onClick={() => onIgnore(contact)} variant="danger">
+                  Ignorar
+                </Button>
+                <Button icon={UserCheck} onClick={() => onApprove(contact)} variant="primary">
+                  Aprovar
+                </Button>
+              </>
+            ) : null}
+            {contact.status === 'IGNORADO' ? (
+              <Button icon={RotateCcw} onClick={() => onReopen(contact)} variant="secondary">
+                Reabrir
+              </Button>
+            ) : null}
+            {contact.status === 'APROVADO' ? (
+              <div className="notice">
+                <CircleCheck aria-hidden="true" size={16} />
+                Cliente criado
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function IgnorePendingContactModal({
+  contact,
+  onChangeReason,
+  onClose,
+  onConfirm,
+  reason,
+}: {
+  contact: WhatsAppPendingContact;
+  onChangeReason: (value: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+  reason: string;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal waitlist-ignore-modal" aria-labelledby="waitlist-ignore-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon warning" aria-hidden="true">
+            <EyeOff size={17} />
+          </span>
+          <div>
+            <h2 id="waitlist-ignore-title">Ignorar contato</h2>
+            <p>Este contato sairá da fila de pendentes e poderá ser reaberto depois.</p>
+          </div>
+          <IconButton icon={X} label="Fechar confirmação de ignorar" onClick={onClose} />
+        </header>
+        <div className="waitlist-contact-summary">
+          <span>{waitlistContactName(contact)}</span>
+          <span>{formatWaitlistPhone(contact.phoneNormalized)}</span>
+        </div>
+        <label className="field">
+          <span>Motivo (opcional)</span>
+          <textarea value={reason} onChange={(event) => onChangeReason(event.target.value)} />
+        </label>
+        <div className="form-actions">
+          <div />
+          <div className="button-row">
+            <Button onClick={onClose} variant="secondary">
+              Cancelar
+            </Button>
+            <Button icon={EyeOff} onClick={onConfirm} variant="danger">
+              Ignorar contato
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WaitlistSectionTitle({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
+  return (
+    <div className="waitlist-section-title">
+      <Icon aria-hidden="true" size={16} />
+      <h3>{title}</h3>
+    </div>
   );
 }
 
@@ -7195,6 +7367,7 @@ function ApprovePendingContactModal({
   const [referrerClientId, setReferrerClientId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const shouldSendPix = generateInitialReceivable && sendPixWhatsAppNow;
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -7232,98 +7405,113 @@ function ApprovePendingContactModal({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="modal" aria-labelledby="approve-pending-title">
-        <header className="modal-header">
-          <h2 id="approve-pending-title">Transformar contato em cliente</h2>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
-        </header>
-        <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
-          <div className="form-grid">
-            <label className="field">
-              <span>Nome</span>
-              <input required value={name} onChange={(event) => setName(event.target.value)} />
-            </label>
-            <label className="field">
-              <span>WhatsApp</span>
-              <input readOnly value={phone} />
-            </label>
-            <label className="field">
-              <span>E-mail</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Referência</span>
-              <input
-                required
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Plano</span>
-              <select
-                required
-                value={planId}
-                onChange={(event) => handlePlanChange(event.target.value)}
-              >
-                {sortedPlans.map((plan) => (
-                  <option key={plan.id} value={plan.id}>
-                    {plan.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Valor</span>
-              <input
-                min="0"
-                step="0.01"
-                type="number"
-                value={recurringValue}
-                onChange={(event) => setRecurringValue(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Vencimento</span>
-              <input
-                required
-                type="date"
-                value={dueDate}
-                onChange={(event) => setDueDate(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Avisar cobrança</span>
-              <input
-                min="0"
-                type="number"
-                value={billingNoticeDays}
-                onChange={(event) => setBillingNoticeDays(event.target.value)}
-              />
-            </label>
+      <section className="modal waitlist-approve-modal" aria-labelledby="approve-pending-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <UserCheck size={17} />
+          </span>
+          <div>
+            <h2 id="approve-pending-title">Aprovar contato</h2>
+            <p>Converta este contato em cliente e configure o primeiro serviço.</p>
           </div>
-          <label className="field">
-            <span>Observações</span>
-            <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>Indicado por</span>
-            <ClientReferralSelect value={referrerClientId} onChange={setReferrerClientId} />
-          </label>
-          <section className="inline-panel">
-            <div>
-              <strong>Cobrança inicial</strong>
-              <p>
-                O cliente será criado como pendente de pagamento. A ativação acontece somente depois
-                do primeiro pagamento.
-              </p>
+          <IconButton icon={X} label="Fechar aprovação" onClick={onClose} />
+        </header>
+        <div className="waitlist-contact-summary">
+          <span>{waitlistContactName(contact)}</span>
+          <span>{formatWaitlistPhone(contact.phoneNormalized)}</span>
+          <span>{contact.connection.name}</span>
+        </div>
+        <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
+          <section className="waitlist-approval-section">
+            <WaitlistSectionTitle icon={UserRound} title="Dados do cliente" />
+            <div className="form-grid">
+              <label className="field">
+                <span>Nome</span>
+                <input required value={name} onChange={(event) => setName(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>WhatsApp</span>
+                <input readOnly value={formatWaitlistPhone(phone)} />
+              </label>
+              <label className="field">
+                <span>E-mail</span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </label>
             </div>
+            <label className="field">
+              <span>Observações</span>
+              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+            </label>
+          </section>
+
+          <section className="waitlist-approval-section">
+            <WaitlistSectionTitle icon={FileText} title="Primeira referência" />
+            <div className="form-grid">
+              <label className="field">
+                <span>Referência</span>
+                <input
+                  required
+                  value={reference}
+                  onChange={(event) => setReference(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Plano</span>
+                <select
+                  required
+                  value={planId}
+                  onChange={(event) => handlePlanChange(event.target.value)}
+                >
+                  {sortedPlans.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Valor</span>
+                <input
+                  min="0"
+                  step="0.01"
+                  type="number"
+                  value={recurringValue}
+                  onChange={(event) => setRecurringValue(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Vencimento</span>
+                <input
+                  required
+                  type="date"
+                  value={dueDate}
+                  onChange={(event) => setDueDate(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Avisar cobrança</span>
+                <input
+                  min="0"
+                  type="number"
+                  value={billingNoticeDays}
+                  onChange={(event) => setBillingNoticeDays(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="notice">
+              Cliente e primeira referência serão criados como Pendente pagamento.
+            </div>
+          </section>
+
+          <section className="waitlist-approval-section">
+            <WaitlistSectionTitle icon={Receipt} title="Cobrança inicial" />
+            <p className="section-note">
+              Cria uma cobrança de ativação vinculada à primeira referência.
+            </p>
             <label className="checkbox-row">
               <input
                 checked={generateInitialReceivable}
@@ -7333,37 +7521,57 @@ function ApprovePendingContactModal({
               Gerar cobrança inicial
             </label>
             {generateInitialReceivable ? (
-              <label className="checkbox-row">
-                <input
-                  checked={sendPixWhatsAppNow}
-                  type="checkbox"
-                  onChange={(event) => setSendPixWhatsAppNow(event.target.checked)}
-                />
-                Enviar PIX pelo WhatsApp agora
-              </label>
+              <>
+                <label className="checkbox-row">
+                  <input
+                    checked={sendPixWhatsAppNow}
+                    type="checkbox"
+                    onChange={(event) => setSendPixWhatsAppNow(event.target.checked)}
+                  />
+                  Enviar PIX pelo WhatsApp agora
+                </label>
+                <p className="section-note">
+                  Após criar o cliente e a cobrança, o sistema tentará gerar o PIX e enviá-lo pelo
+                  WhatsApp.
+                </p>
+                <div className="notice">
+                  O cadastro pode ser concluído mesmo se a geração ou o envio do PIX falhar.
+                </div>
+              </>
             ) : null}
+          </section>
+
+          <section className="waitlist-approval-section">
+            <WaitlistSectionTitle icon={UsersRound} title="Indicação" />
+            <label className="field">
+              <span>Indicado por</span>
+              <ClientReferralSelect value={referrerClientId} onChange={setReferrerClientId} />
+            </label>
             <div className="notice">
-              <strong>Resumo</strong>
-              <span>
-                {name || 'Cliente'} ficara como Pendente pagamento
-                {generateInitialReceivable
-                  ? `, com cobrança inicial de ${formatCurrency(Number(recurringValue || 0))} para ${dueDate || 'data selecionada'}`
-                  : ', sem cobrança inicial gerada agora'}
-                {generateInitialReceivable && sendPixWhatsAppNow
-                  ? ' e envio imediato do PIX.'
-                  : '.'}
-              </span>
+              {referrerClientId ? 'Benefício padrão: Mês grátis.' : 'Nenhuma indicação.'}
             </div>
           </section>
+
+          <section className="waitlist-approval-section waitlist-approval-summary">
+            <WaitlistSectionTitle icon={CircleCheck} title="Resumo antes de aprovar" />
+            <ul>
+              <li>Cliente</li>
+              <li>Primeira referência</li>
+              {generateInitialReceivable ? <li>Cobrança inicial</li> : null}
+              {referrerClientId ? <li>Indicação pendente</li> : null}
+              {shouldSendPix ? <li>Tentará gerar e enviar PIX após o cadastro</li> : null}
+            </ul>
+          </section>
+
           <div className="form-actions">
             <span className="error-message">{error}</span>
             <div className="button-row">
-              <button className="secondary-button" type="button" onClick={onClose}>
+              <Button onClick={onClose} variant="secondary">
                 Cancelar
-              </button>
-              <button className="primary-button" disabled={loading} type="submit">
-                {loading ? 'Criando...' : 'Criar cliente'}
-              </button>
+              </Button>
+              <Button icon={UserCheck} loading={loading} type="submit" variant="primary">
+                Aprovar e criar cliente
+              </Button>
             </div>
           </div>
         </form>
@@ -7372,9 +7580,37 @@ function ApprovePendingContactModal({
   );
 }
 
-function waitlistMessagePreview(contact: WhatsAppPendingContact) {
-  const text = contact.lastMessageText ?? messageTypePreview(contact.lastMessageType);
-  return text.length > 42 ? `${text.slice(0, 42)}...` : text;
+function waitlistFullMessage(contact: WhatsAppPendingContact) {
+  return contact.lastMessageText ?? messageTypePreview(contact.lastMessageType);
+}
+
+function waitlistContactName(contact: WhatsAppPendingContact) {
+  return contact.contactName ?? 'Contato sem nome';
+}
+
+function formatWaitlistPhone(value: string) {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length === 13 && digits.startsWith('55')) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.length === 12 && digits.startsWith('55')) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8)}`;
+  }
+  return value;
+}
+
+function waitlistStatusLabel(status: WhatsAppPendingContactStatus) {
+  const labels: Record<WhatsAppPendingContactStatus, string> = {
+    APROVADO: 'Aprovado',
+    IGNORADO: 'Ignorado',
+    PENDENTE: 'Pendente',
+  };
+
+  return labels[status];
+}
+
+function WaitlistStatusBadge({ status }: { status: WhatsAppPendingContactStatus }) {
+  return <span className={`pill ${status.toLowerCase()}`}>{waitlistStatusLabel(status)}</span>;
 }
 
 function messageTypePreview(type: WhatsAppInboundMessageType) {

@@ -14,7 +14,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:seed:finance": "tsx prisma/seed-financial-categories.ts",
     "prisma:seed:message-templates": "tsx prisma/seed-message-templates.ts",
-    "prisma:seed:plans": "tsx prisma/seed-plans.ts"
+    "prisma:seed:plans": "tsx prisma/seed-plans.ts",
+    "referrals:reconcile-historical": "tsx prisma/reconcile-historical-referrals.ts"
   },
   "dependencies": {
     "@crm-novo/shared": "workspace:*",

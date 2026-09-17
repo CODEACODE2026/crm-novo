@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsOptional, IsString, IsUUID } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class PayReceivablesDto {
   @IsArray()
@@ -15,5 +15,6 @@ export class PayReceivablesDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   notes?: string;
 }

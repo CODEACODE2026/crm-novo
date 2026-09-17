@@ -932,6 +932,24 @@ export interface RenewalResult {
   newDueDate: string;
 }
 
+const paymentNotesMaxLength = 2000;
+
+type PaymentPayloadInput = {
+  paymentDate: string;
+  categoryId?: string;
+  notes?: string;
+};
+
+function paymentPayload(payload: PaymentPayloadInput) {
+  const notes = payload.notes?.trim().slice(0, paymentNotesMaxLength);
+
+  return {
+    paymentDate: payload.paymentDate,
+    ...(payload.categoryId ? { categoryId: payload.categoryId } : {}),
+    ...(notes ? { notes } : {}),
+  };
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(buildApiUrl(path), {
     credentials: 'include',
@@ -1304,7 +1322,7 @@ export function payReceivable(
 ) {
   return apiFetch<FinancialTransaction>(`/receivables/${id}/payment`, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(paymentPayload(payload)),
   });
 }
 
@@ -1316,7 +1334,10 @@ export function payReceivables(payload: {
 }) {
   return apiFetch<PaymentGroupPaymentResult>('/receivables/payments', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      receivableIds: payload.receivableIds,
+      ...paymentPayload(payload),
+    }),
   });
 }
 

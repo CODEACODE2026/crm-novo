@@ -5,8 +5,19 @@ import {
   formatCurrency,
   formatDate,
   listClientOptions,
+  payReceivable,
+  payReceivables,
   updateMessageTemplate,
 } from './crm-api';
+
+function latestJsonBody(fetchMock: ReturnType<typeof vi.fn>) {
+  const call = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit | undefined] | undefined;
+  const body = call?.[1]?.body;
+
+  expect(typeof body).toBe('string');
+
+  return JSON.parse(body as string) as Record<string, unknown>;
+}
 
 describe('CRM UI formatters', () => {
   afterEach(() => {
@@ -90,5 +101,51 @@ describe('CRM UI formatters', () => {
         }),
       }),
     );
+  });
+
+  it('sends a compact payment DTO even when the caller passes a large object', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const largeNotes = `  ${'x'.repeat(74000)}  `;
+
+    await payReceivable('receivable-id', {
+      paymentDate: '2026-09-17',
+      categoryId: '11111111-1111-4111-8111-111111111111',
+      notes: largeNotes,
+      receivable: { qrCodeData: 'data:image/png;base64,ignored' },
+    } as never);
+
+    const body = latestJsonBody(fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/receivable-id/payment'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(body).toEqual({
+      paymentDate: '2026-09-17',
+      categoryId: '11111111-1111-4111-8111-111111111111',
+      notes: 'x'.repeat(2000),
+    });
+    expect(JSON.stringify(body).length).toBeLessThan(2500);
+  });
+
+  it('sends grouped payment ids with the same compact payment DTO', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await payReceivables({
+      receivableIds: ['77777777-7777-4777-8777-777777777777'],
+      paymentDate: '2026-09-17',
+      notes: '  Pago via conferência manual  ',
+      paymentGroup: { items: [{ qrCodeData: 'ignored' }] },
+    } as never);
+
+    const body = latestJsonBody(fetchMock);
+
+    expect(body).toEqual({
+      receivableIds: ['77777777-7777-4777-8777-777777777777'],
+      paymentDate: '2026-09-17',
+      notes: 'Pago via conferência manual',
+    });
   });
 });

@@ -9830,7 +9830,11 @@ function PayReceivableModal({
           </label>
           <label className="field">
             <span>Observação</span>
-            <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+            <input
+              maxLength={2000}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
           </label>
         </div>
         <div className="form-actions">
@@ -9937,7 +9941,11 @@ function PayReceivablesModal({
           </label>
           <label className="field">
             <span>Observação</span>
-            <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+            <input
+              maxLength={2000}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
           </label>
         </div>
         <div className="form-actions">

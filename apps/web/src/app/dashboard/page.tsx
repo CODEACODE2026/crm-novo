@@ -24,6 +24,7 @@ import {
   Gift,
   Globe2,
   History,
+  Inbox,
   Info,
   LayoutDashboard,
   Layers,
@@ -52,6 +53,7 @@ import {
   Trash2,
   ToggleLeft,
   UserRound,
+  UserRoundPlus,
   UserCheck,
   UsersRound,
   UserPlus,
@@ -3491,21 +3493,221 @@ function ClientsView({
               ) : null}
 
               {detailTab === 'more' ? (
-                <div className="mini-list">
-                  <SectionHeader eyebrow="Mais" title="Renovações" />
-                  {(selectedClient.renewals ?? []).map((renewal) => (
-                    <article key={renewal.id}>
-                      <strong>{renewal.planName}</strong>
-                      <span>{new Date(renewal.createdAt).toLocaleString('pt-BR')}</span>
-                      <p>
-                        {formatCurrency(renewal.amount)} | {formatDate(renewal.previousDueDate)}{' '}
-                        para {formatDate(renewal.newDueDate)}
-                      </p>
-                    </article>
-                  ))}
-                  {!selectedClient.renewals?.length ? (
-                    <div className="empty-state">Sem renovações.</div>
-                  ) : null}
+                <div className="client-tab-panel client-more-workspace">
+                  <section className="client-overview-card client-more-card">
+                    <ClientSectionHeading
+                      description="Histórico de renovações deste cliente."
+                      icon={RefreshCw}
+                      title="Renovações"
+                    />
+                    {(selectedClient.renewals ?? []).length ? (
+                      <div className="client-more-list">
+                        {(selectedClient.renewals ?? []).map((renewal) => (
+                          <article className="client-more-list-item" key={renewal.id}>
+                            <div>
+                              <strong>{renewal.planName}</strong>
+                              <span>{formatDateTime(renewal.createdAt)}</span>
+                            </div>
+                            <dl>
+                              <div>
+                                <dt>Valor</dt>
+                                <dd>{formatCurrency(renewal.amount)}</dd>
+                              </div>
+                              <div>
+                                <dt>Vencimento</dt>
+                                <dd>
+                                  {formatDate(renewal.previousDueDate)} para{' '}
+                                  {formatDate(renewal.newDueDate)}
+                                </dd>
+                              </div>
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="client-more-empty">
+                        <RefreshCw aria-hidden="true" size={18} />
+                        <div>
+                          <strong>Nenhuma renovação registrada</strong>
+                          <span>As renovações deste cliente aparecerão aqui.</span>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="client-overview-card client-more-card">
+                    <ClientSectionHeading
+                      description="Acompanhamento de campanhas de inadimplência."
+                      icon={Activity}
+                      title="Recuperação"
+                    />
+                    {(selectedClient.recoveryCampaigns ?? []).length ? (
+                      <div className="client-more-list">
+                        {(selectedClient.recoveryCampaigns ?? []).map((campaign) => {
+                          const nextStep =
+                            campaign.steps.find((step) => !step.sentAt && !step.canceledAt) ??
+                            campaign.steps.at(-1);
+
+                          return (
+                            <article className="client-recovery-card" key={campaign.id}>
+                              <header>
+                                <div>
+                                  <strong>Campanha de recuperação</strong>
+                                  <span>Início {formatDateTime(campaign.startedAt)}</span>
+                                </div>
+                                <span
+                                  className={`finance-status-pill tone-${recoveryCampaignStatusTone(
+                                    campaign.status,
+                                  )}`}
+                                >
+                                  {recoveryCampaignStatusLabel(campaign.status)}
+                                </span>
+                              </header>
+                              <dl className="client-more-meta-grid">
+                                <div>
+                                  <dt>Etapa atual</dt>
+                                  <dd>{nextStep ? `D+${nextStep.delayDays}` : '-'}</dd>
+                                </div>
+                                <div>
+                                  <dt>Próxima ação</dt>
+                                  <dd>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</dd>
+                                </div>
+                              </dl>
+                              <div className="client-recovery-steps">
+                                {campaign.steps.map((step) => (
+                                  <span key={step.id}>
+                                    D+{step.delayDays} · {recoveryStepStatusLabel(step.status)} ·{' '}
+                                    {formatDateTime(step.scheduledFor)}
+                                    {step.sentAt ? ` · enviada ${formatDateTime(step.sentAt)}` : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="client-more-empty">
+                        <Activity aria-hidden="true" size={18} />
+                        <div>
+                          <strong>Nenhuma campanha de recuperação</strong>
+                          <span>Este cliente não possui campanha de recuperação ativa.</span>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="client-overview-card client-more-card client-referrals-panel">
+                    <ClientSectionHeading
+                      description="Indicações recebidas e realizadas pelo cliente."
+                      icon={UsersRound}
+                      title="Indicações"
+                    />
+
+                    <div className="client-referral-section">
+                      <div className="client-more-subheading">
+                        <span className="section-icon" aria-hidden="true">
+                          <UserRoundPlus size={16} />
+                        </span>
+                        <h4>Indicação recebida</h4>
+                      </div>
+                      {selectedClient.referralReceived ? (
+                        <article className="client-referral-card">
+                          <div>
+                            <span>Indicado por</span>
+                            <strong>{selectedClient.referralReceived.referrerClient.name}</strong>
+                          </div>
+                          <div>
+                            <span>Benefício</span>
+                            <strong>{referralBenefitLabel(selectedClient.referralReceived)}</strong>
+                          </div>
+                          <span
+                            className={`finance-status-pill tone-${referralStatusTone(
+                              selectedClient.referralReceived.status,
+                            )}`}
+                          >
+                            {referralStatusLabel(selectedClient.referralReceived.status)}
+                          </span>
+                          {selectedClient.referralReceived.qualifiedAt ? (
+                            <small>
+                              Qualificada em{' '}
+                              {formatDateTime(selectedClient.referralReceived.qualifiedAt)}
+                            </small>
+                          ) : null}
+                          {selectedClient.referralReceived.appliedAt ? (
+                            <small>
+                              Benefício aplicado em{' '}
+                              {formatDateTime(selectedClient.referralReceived.appliedAt)}
+                            </small>
+                          ) : null}
+                        </article>
+                      ) : (
+                        <div className="client-more-empty compact">
+                          <Inbox aria-hidden="true" size={18} />
+                          <div>
+                            <strong>Este cliente não possui indicação recebida.</strong>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="client-referral-section">
+                      <div className="client-more-subheading">
+                        <span className="section-icon" aria-hidden="true">
+                          <UsersRound size={16} />
+                        </span>
+                        <h4>Indicações feitas</h4>
+                      </div>
+                      <div className="client-referral-summary">
+                        <div>
+                          <span>Total</span>
+                          <strong>{selectedClient.referralsMade?.total ?? 0}</strong>
+                        </div>
+                        <div>
+                          <span>Qualificadas</span>
+                          <strong>{selectedClient.referralsMade?.qualified ?? 0}</strong>
+                        </div>
+                        <div>
+                          <span>Benefícios aplicados</span>
+                          <strong>{selectedClient.referralsMade?.rewarded ?? 0}</strong>
+                        </div>
+                      </div>
+                      {(selectedClient.referralsMade?.items ?? []).length ? (
+                        <div className="client-referral-list">
+                          {(selectedClient.referralsMade?.items ?? []).map((referral) => (
+                            <article className="client-referral-card" key={referral.id}>
+                              <div>
+                                <strong>{referral.referredClient.name}</strong>
+                                <span>{referralBenefitLabel(referral)}</span>
+                              </div>
+                              <span
+                                className={`finance-status-pill tone-${referralStatusTone(
+                                  referral.status,
+                                )}`}
+                              >
+                                {referralStatusLabel(referral.status)}
+                              </span>
+                              {referral.qualifiedAt ? (
+                                <small>Qualificada em {formatDateTime(referral.qualifiedAt)}</small>
+                              ) : null}
+                              {referral.appliedAt ? (
+                                <small>
+                                  Benefício aplicado em {formatDateTime(referral.appliedAt)}
+                                </small>
+                              ) : null}
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="client-more-empty compact">
+                          <Inbox aria-hidden="true" size={18} />
+                          <div>
+                            <strong>Nenhuma indicação realizada.</strong>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </section>
                 </div>
               ) : null}
 
@@ -3737,98 +3939,6 @@ function ClientsView({
                     </table>
                     {!selectedBillingDispatches.length ? (
                       <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-
-              {detailTab === 'more' ? (
-                <div className="mini-list">
-                  <SectionHeader eyebrow="Mais" title="Recuperação" />
-                  {(selectedClient.recoveryCampaigns ?? []).map((campaign) => (
-                    <article key={campaign.id}>
-                      <strong>Campanha {recoveryCampaignStatusLabel(campaign.status)}</strong>
-                      <span>Inicio: {formatDateTime(campaign.startedAt)}</span>
-                      <div className="step-list">
-                        {campaign.steps.map((step) => (
-                          <span key={step.id}>
-                            {step.delayDays}d · {recoveryStepStatusLabel(step.status)} ·{' '}
-                            {formatDateTime(step.scheduledFor)}
-                            {step.sentAt ? ` · enviada ${formatDateTime(step.sentAt)}` : ''}
-                          </span>
-                        ))}
-                      </div>
-                    </article>
-                  ))}
-                  {!selectedClient.recoveryCampaigns?.length ? (
-                    <div className="empty-state">Sem campanha de recuperação.</div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {detailTab === 'more' ? (
-                <div className="client-referrals-panel">
-                  <SectionHeader eyebrow="Mais" title="Indicações" />
-                  <div className="client-referral-section">
-                    <h3>Indicação recebida</h3>
-                    {selectedClient.referralReceived ? (
-                      <article>
-                        <div>
-                          <strong>
-                            Indicado por {selectedClient.referralReceived.referrerClient.name}
-                          </strong>
-                          <span>{referralBenefitLabel(selectedClient.referralReceived)}</span>
-                        </div>
-                        <span
-                          className={`finance-status-pill tone-${referralStatusTone(
-                            selectedClient.referralReceived.status,
-                          )}`}
-                        >
-                          {referralStatusLabel(selectedClient.referralReceived.status)}
-                        </span>
-                      </article>
-                    ) : (
-                      <div className="empty-state">Este cliente não possui indicação recebida.</div>
-                    )}
-                  </div>
-
-                  <div className="client-referral-section">
-                    <h3>Indicações feitas</h3>
-                    {selectedClient.referralsMade ? (
-                      <div className="client-referral-summary">
-                        <div>
-                          <span>Total</span>
-                          <strong>{selectedClient.referralsMade.total}</strong>
-                        </div>
-                        <div>
-                          <span>Qualificadas</span>
-                          <strong>{selectedClient.referralsMade.qualified}</strong>
-                        </div>
-                        <div>
-                          <span>Benefícios aplicados</span>
-                          <strong>{selectedClient.referralsMade.rewarded}</strong>
-                        </div>
-                      </div>
-                    ) : null}
-                    <div className="mini-list client-referral-list">
-                      {(selectedClient.referralsMade?.items ?? []).map((referral) => (
-                        <article key={referral.id}>
-                          <div>
-                            <strong>{referral.referredClient.name}</strong>
-                            <span>{referralBenefitLabel(referral)}</span>
-                          </div>
-                          <span
-                            className={`finance-status-pill tone-${referralStatusTone(
-                              referral.status,
-                            )}`}
-                          >
-                            {referralStatusLabel(referral.status)}
-                          </span>
-                        </article>
-                      ))}
-                    </div>
-                    {!selectedClient.referralsMade?.items.length ? (
-                      <div className="empty-state">Nenhuma indicação realizada.</div>
                     ) : null}
                   </div>
                 </div>

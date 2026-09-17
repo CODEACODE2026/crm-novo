@@ -2854,41 +2854,178 @@ tbody tr:hover,
   color: var(--info);
 }
 
-.client-referrals-panel {
-  display: grid;
+.client-more-workspace {
   gap: 14px;
 }
 
-.client-referral-section {
+.client-more-card {
   display: grid;
-  gap: 8px;
+  gap: 12px;
+  height: auto;
+  padding: 14px;
 }
 
-.client-referral-section h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 14px;
+.client-more-card .client-overview-card-header {
+  margin-bottom: 0;
 }
 
-.client-referral-section article,
-.client-referral-list article {
+.client-more-card .client-overview-heading {
+  gap: 10px;
+}
+
+.client-more-list,
+.client-referrals-panel,
+.client-referral-section,
+.client-referral-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  gap: 10px;
+}
+
+.client-more-list-item,
+.client-recovery-card,
+.client-referral-card {
+  display: grid;
   gap: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
+  padding: 12px;
+}
+
+.client-more-list-item > div,
+.client-recovery-card header,
+.client-referral-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.client-more-list-item strong,
+.client-recovery-card strong,
+.client-referral-card strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.client-more-list-item > div > div,
+.client-recovery-card header > div,
+.client-referral-card > div {
+  display: grid;
+  gap: 4px;
+}
+
+.client-more-list-item span,
+.client-recovery-card span,
+.client-referral-card span,
+.client-referral-card small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.client-more-list-item dl,
+.client-more-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.client-more-list-item dl div,
+.client-more-meta-grid div,
+.client-referral-summary div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 3%);
   padding: 10px;
+}
+
+.client-more-list-item dt,
+.client-more-meta-grid dt,
+.client-referral-summary span,
+.client-referral-card > div > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.client-more-list-item dd,
+.client-more-meta-grid dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.client-more-empty {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 3%);
+  padding: 12px;
+}
+
+.client-more-empty.compact {
+  padding: 10px;
+}
+
+.client-more-empty > svg {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  padding: 7px;
+}
+
+.client-more-empty strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.client-more-empty span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.client-recovery-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.client-recovery-steps span {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 3%);
+  padding: 8px 10px;
+}
+
+.client-more-subheading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.client-more-subheading h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.client-referral-card > small {
+  grid-column: 1 / -1;
 }
 
 .client-referral-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.client-referral-list {
   gap: 8px;
 }
 
@@ -4384,7 +4521,9 @@ tbody tr:hover,
   .referrals-kpis,
   .referral-detail-grid,
   .referral-progress,
-  .client-referral-summary {
+  .client-referral-summary,
+  .client-more-list-item dl,
+  .client-more-meta-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -4449,8 +4588,11 @@ tbody tr:hover,
   .referral-detail-grid,
   .referral-progress,
   .client-referral-summary,
-  .client-referral-section article,
-  .client-referral-list article {
+  .client-more-list-item > div,
+  .client-recovery-card header,
+  .client-referral-card,
+  .client-more-list-item dl,
+  .client-more-meta-grid {
     grid-template-columns: 1fr;
   }
 

@@ -6,6 +6,10 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
+const clientMoreSource = dashboardSource.slice(
+  dashboardSource.indexOf('className="client-tab-panel client-more-workspace"'),
+  dashboardSource.indexOf("{detailTab === 'receivables' ? ("),
+);
 
 describe('client overview presentation source', () => {
   it('uses compact profile rows instead of the old large readonly field blocks', () => {
@@ -64,7 +68,9 @@ describe('client overview presentation source', () => {
     expect(dashboardSource).toContain('function ClientSectionHeading');
     expect(dashboardSource).toContain('client-overview-heading-copy');
     expect(dashboardSource).toContain('client-overview-heading-action');
-    expect(dashboardSource.match(/<ClientSectionHeading/g)).toHaveLength(3);
+    expect((dashboardSource.match(/<ClientSectionHeading/g) ?? []).length).toBeGreaterThanOrEqual(
+      3,
+    );
     expect(stylesSource).toContain('.client-overview-heading .section-icon');
     expect(stylesSource).toContain('flex: 0 0 32px;');
     expect(stylesSource).toContain('width: 32px;');
@@ -122,5 +128,89 @@ describe('client overview presentation source', () => {
     expect(dashboardSource).toContain('summarizeClientBillingDispatches(selectedDispatches)');
     expect(dashboardSource).toContain('selectedBillingDispatches.map((dispatch)');
     expect(dashboardSource).toContain('selectedClient.recoveryCampaigns ?? []');
+  });
+
+  it('polishes the client Mais tab without repeated Mais section eyebrows', () => {
+    expect(clientMoreSource).toContain('client-more-workspace');
+    expect(clientMoreSource).not.toContain('eyebrow="Mais"');
+    expect(clientMoreSource).not.toContain('<SectionHeader');
+    expect(clientMoreSource).toContain('title="Renovações"');
+    expect(clientMoreSource).toContain('title="Recuperação"');
+    expect(clientMoreSource).toContain('title="Indicações"');
+    expect(clientMoreSource).toContain('Histórico de renovações deste cliente.');
+    expect(clientMoreSource).toContain('Acompanhamento de campanhas de inadimplência.');
+    expect(clientMoreSource).toContain('Indicações recebidas e realizadas pelo cliente.');
+    expect(stylesSource).toContain('.client-more-workspace');
+    expect(stylesSource).toContain('.client-more-card');
+  });
+
+  it('renders compact empty states for client renewals and recovery', () => {
+    expect(clientMoreSource).toContain('Nenhuma renovação registrada');
+    expect(clientMoreSource).toContain('As renovações deste cliente aparecerão aqui.');
+    expect(clientMoreSource).toContain('Nenhuma campanha de recuperação');
+    expect(clientMoreSource).toContain('Este cliente não possui campanha de recuperação ativa.');
+    expect(clientMoreSource).toContain('<RefreshCw aria-hidden="true" size={18} />');
+    expect(clientMoreSource).toContain('<Activity aria-hidden="true" size={18} />');
+    expect(stylesSource).toContain('.client-more-empty');
+    expect(stylesSource).toContain('height: auto;');
+  });
+
+  it('keeps renewal and recovery cards bound to existing client payload fields only', () => {
+    expect(clientMoreSource).toContain('(selectedClient.renewals ?? []).map((renewal)');
+    expect(clientMoreSource).toContain('renewal.planName');
+    expect(clientMoreSource).toContain('renewal.amount');
+    expect(clientMoreSource).toContain('renewal.previousDueDate');
+    expect(clientMoreSource).toContain('renewal.newDueDate');
+    expect(clientMoreSource).toContain('(selectedClient.recoveryCampaigns ?? []).map((campaign)');
+    expect(clientMoreSource).toContain('campaign.status');
+    expect(clientMoreSource).toContain('campaign.startedAt');
+    expect(clientMoreSource).toContain('campaign.steps.map((step)');
+    expect(clientMoreSource).toContain('step.delayDays');
+    expect(clientMoreSource).toContain('step.scheduledFor');
+    expect(clientMoreSource).toContain('step.sentAt');
+  });
+
+  it('separates received and made referrals with read-only mini KPIs and compact lists', () => {
+    expect(clientMoreSource).toContain('Indicação recebida');
+    expect(clientMoreSource).toContain('Indicações feitas');
+    expect(clientMoreSource).toContain('selectedClient.referralReceived.referrerClient.name');
+    expect(clientMoreSource).toContain('referralBenefitLabel(selectedClient.referralReceived)');
+    expect(clientMoreSource).toContain(
+      'referralStatusLabel(selectedClient.referralReceived.status)',
+    );
+    expect(clientMoreSource).toContain('selectedClient.referralsMade?.total ?? 0');
+    expect(clientMoreSource).toContain('selectedClient.referralsMade?.qualified ?? 0');
+    expect(clientMoreSource).toContain('selectedClient.referralsMade?.rewarded ?? 0');
+    expect(clientMoreSource).toContain('(selectedClient.referralsMade?.items ?? []).map');
+    expect(clientMoreSource).toContain('referral.referredClient.name');
+    expect(clientMoreSource).toContain('referralStatusLabel(referral.status)');
+    expect(clientMoreSource).toContain('Este cliente não possui indicação recebida.');
+    expect(clientMoreSource).toContain('Nenhuma indicação realizada.');
+    expect(stylesSource).toContain('.client-referral-summary');
+    expect(stylesSource).toContain('.client-referral-card');
+  });
+
+  it('uses referral status and benefit labels without adding client referral actions', () => {
+    expect(dashboardSource).toContain("PENDING: 'Pendente'");
+    expect(dashboardSource).toContain("QUALIFIED: 'Qualificada'");
+    expect(dashboardSource).toContain("REWARDED: 'Benefício aplicado'");
+    expect(dashboardSource).toContain("CANCELED: 'Cancelada'");
+    expect(dashboardSource).toContain("FREE_MONTH: 'Mês grátis'");
+    expect(dashboardSource).toContain("CREDIT: 'Crédito'");
+    expect(dashboardSource).toContain("CUSTOM: 'Personalizado'");
+    expect(clientMoreSource).not.toContain('applyReferralReward');
+    expect(clientMoreSource).not.toContain('cancelReferral');
+    expect(clientMoreSource).not.toContain('Aplicar benefício');
+    expect(clientMoreSource).not.toContain('Cancelar indicação');
+    expect(clientMoreSource).not.toContain('Nova indicação');
+  });
+
+  it('keeps the client Mais tab structurally ready for mobile', () => {
+    expect(stylesSource).toContain('.client-more-list-item > div,');
+    expect(stylesSource).toContain('.client-recovery-card header,');
+    expect(stylesSource).toContain('.client-referral-card,');
+    expect(stylesSource).toContain('.client-more-list-item dl,');
+    expect(stylesSource).toContain('.client-more-meta-grid');
+    expect(stylesSource).toContain('@media (max-width: 620px)');
   });
 });

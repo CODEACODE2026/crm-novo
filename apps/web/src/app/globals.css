@@ -1200,17 +1200,110 @@ a {
   margin-bottom: 16px;
 }
 
+.waitlist-kpis .stat-card {
+  min-height: 108px;
+}
+
+.waitlist-kpis .tone-primary .stat-icon {
+  background: rgb(104 169 255 / 12%);
+  color: var(--info);
+}
+
+.waitlist-kpis .tone-success .stat-icon {
+  background: rgb(38 198 163 / 12%);
+  color: var(--accent-strong);
+}
+
+.waitlist-kpis .tone-warning .stat-icon {
+  background: rgb(241 184 75 / 12%);
+  color: var(--warning);
+}
+
+.waitlist-kpis .tone-info .stat-icon {
+  background: rgb(104 169 255 / 12%);
+  color: var(--info);
+}
+
+.waitlist-kpi-helper {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .waitlist-workspace {
   width: 100%;
+}
+
+.waitlist-toolbar {
+  grid-template-columns: minmax(260px, 1fr) 170px 190px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  margin-bottom: 14px;
+  padding: 12px;
 }
 
 .waitlist-table {
   min-width: 1040px;
 }
 
+.waitlist-table th:first-child,
+.waitlist-table td:first-child {
+  min-width: 210px;
+}
+
+.waitlist-table th:nth-child(2),
+.waitlist-table td:nth-child(2) {
+  min-width: 145px;
+}
+
+.waitlist-table th,
+.waitlist-table td {
+  padding-block: 14px;
+}
+
 .waitlist-table th:nth-child(3),
 .waitlist-table td:nth-child(3) {
   width: 28%;
+}
+
+.waitlist-table th:nth-child(4),
+.waitlist-table td:nth-child(4),
+.waitlist-table th:nth-child(6),
+.waitlist-table td:nth-child(6),
+.waitlist-table th:nth-child(7),
+.waitlist-table td:nth-child(7) {
+  text-align: center;
+}
+
+.waitlist-table th:nth-child(7),
+.waitlist-table td:nth-child(7) {
+  min-width: 160px;
+}
+
+.waitlist-contact-cell {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.waitlist-contact-cell strong {
+  display: block;
+  line-height: 1.15;
+}
+
+.waitlist-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgb(38 198 163 / 24%);
+  border-radius: var(--radius-sm);
+  background: rgb(38 198 163 / 10%);
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .waitlist-message-preview {
@@ -1233,7 +1326,28 @@ a {
 }
 
 .waitlist-row-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
   justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.button-row.waitlist-row-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.waitlist-row-actions .action-menu {
+  flex: 0 0 auto;
+}
+
+.waitlist-row-actions .action-menu .ui-icon-button {
+  width: 30px;
+  height: 30px;
+  border-color: var(--border);
+  background: var(--surface-strong);
+  color: var(--text);
 }
 
 .waitlist-empty-state {
@@ -1284,7 +1398,7 @@ a {
 }
 
 .waitlist-contact-summary,
-.waitlist-detail-status {
+.waitlist-detail-hero {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1293,12 +1407,19 @@ a {
 }
 
 .waitlist-contact-summary span,
-.waitlist-detail-status strong {
+.waitlist-detail-hero strong,
+.waitlist-detail-hero > div > span {
   min-height: 28px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-soft);
   padding: 6px 9px;
+}
+
+.waitlist-detail-hero > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .waitlist-detail-grid {
@@ -1356,6 +1477,48 @@ a {
   display: grid;
   gap: 12px;
   margin-top: 0;
+}
+
+.waitlist-stepper {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.waitlist-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.waitlist-step span {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 5%);
+  color: inherit;
+  font-size: 11px;
+}
+
+.waitlist-step.active {
+  border-color: rgb(38 198 163 / 42%);
+  background: rgb(38 198 163 / 10%);
+  color: var(--text);
+}
+
+.waitlist-step.complete {
+  border-color: rgb(38 198 163 / 24%);
+  color: var(--accent-strong);
 }
 
 .waitlist-approval-summary ul {
@@ -3849,8 +4012,8 @@ tbody tr:hover,
 
 .modal-icon {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border: 1px solid rgb(38 198 163 / 24%);
   border-radius: var(--radius-sm);
@@ -4210,6 +4373,7 @@ tbody tr:hover,
   }
 
   .toolbar,
+  .waitlist-toolbar,
   .referrals-toolbar,
   .billing-toolbar,
   .recovery-toolbar,
@@ -4261,6 +4425,7 @@ tbody tr:hover,
   .plans-grid,
   .nav-list,
   .toolbar,
+  .waitlist-toolbar,
   .referrals-toolbar,
   .billing-toolbar,
   .recovery-toolbar,
@@ -4306,6 +4471,27 @@ tbody tr:hover,
 
   .tabs button {
     flex: 0 0 auto;
+  }
+
+  .waitlist-stepper {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .waitlist-step {
+    flex: 0 0 auto;
+    min-width: 132px;
+  }
+
+  .waitlist-detail-hero,
+  .waitlist-contact-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .waitlist-message-pair {
+    grid-template-columns: 1fr;
   }
 
   .client-detail-actions {

@@ -32,7 +32,6 @@ import {
   MessageCircle,
   MessageSquare,
   MessageSquareText,
-  MessagesSquare,
   Minus,
   Package,
   PackageOpen,
@@ -56,6 +55,7 @@ import {
   UserCheck,
   UsersRound,
   UserPlus,
+  UserX,
   Users,
   Wifi,
   WifiOff,
@@ -699,7 +699,7 @@ function viewSubtitle(view: View) {
     referrals: 'Indicações, benefícios e recompensas',
     reports: 'Exportações e análises administrativas',
     settings: 'Configurações técnicas do CRM',
-    waitlist: 'Contatos pendentes de triagem',
+    waitlist: 'Contatos recebidos pelo WhatsApp aguardando atendimento.',
     whatsapp: 'Conexão e mensagens operacionais',
   } satisfies Record<View, string>;
 
@@ -6894,6 +6894,36 @@ function WaitlistView({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const total = contacts.length;
+  const waitlistMetrics = [
+    {
+      description: 'Aguardando atendimento',
+      icon: Clock,
+      label: 'Pendentes',
+      tone: 'warning',
+      value: summary?.pending ?? 0,
+    },
+    {
+      description: 'Convertidos em clientes',
+      icon: UserCheck,
+      label: 'Aprovados hoje',
+      tone: 'success',
+      value: summary?.approvedToday ?? 0,
+    },
+    {
+      description: 'Descartados',
+      icon: EyeOff,
+      label: 'Ignorados',
+      tone: 'info',
+      value: summary?.ignored ?? 0,
+    },
+    {
+      description: 'Contatos nesta visualização',
+      icon: BarChart3,
+      label: 'Total filtrado',
+      tone: 'primary',
+      value: total,
+    },
+  ] as const;
 
   const loadWaitlist = useCallback(async () => {
     setLoading(true);
@@ -6966,33 +6996,31 @@ function WaitlistView({
 
   return (
     <>
-      <PageHeader
-        eyebrow="CRM NOVO UI 2.0"
-        icon={Clock}
-        title="Lista de Espera"
-        subtitle="Contatos recebidos pelo WhatsApp aguardando atendimento."
-      />
       {error ? <div className="notice danger">{error}</div> : null}
       <div className="metric-grid waitlist-kpis">
-        {[
-          { label: 'Pendentes', value: summary?.pending ?? 0, tone: 'warning' },
-          { label: 'Aprovados hoje', value: summary?.approvedToday ?? 0, tone: 'success' },
-          { label: 'Ignorados', value: summary?.ignored ?? 0, tone: 'info' },
-          { label: 'Total filtrado', value: total, tone: 'primary' },
-        ].map((item) => (
-          <article className={`metric-card compact stat-card tone-${item.tone}`} key={item.label}>
-            <span className="metric-label">{item.label}</span>
-            <strong className="metric-value">{loading ? '-' : item.value}</strong>
-          </article>
-        ))}
+        {waitlistMetrics.map((item) => {
+          const Icon = item.icon;
+          return (
+            <article className={`metric-card compact stat-card tone-${item.tone}`} key={item.label}>
+              <div className="stat-card-top">
+                <span className="metric-label">{item.label}</span>
+                <span className="stat-icon" aria-hidden="true">
+                  <Icon size={16} />
+                </span>
+              </div>
+              <strong className="metric-value">{loading ? '-' : item.value}</strong>
+              <span className="waitlist-kpi-helper">{item.description}</span>
+            </article>
+          );
+        })}
       </div>
 
       <section className="workspace-main waitlist-workspace">
-        <div className="toolbar">
+        <div className="toolbar waitlist-toolbar">
           <div className="search-row">
             <Search aria-hidden="true" size={18} />
             <input
-              placeholder="Buscar por nome ou telefone"
+              placeholder="Buscar por nome ou telefone..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -7028,8 +7056,13 @@ function WaitlistView({
               {contacts.map((contact) => (
                 <tr key={contact.id}>
                   <td>
-                    <strong>{waitlistContactName(contact)}</strong>
-                    <span>{contact.connection.name}</span>
+                    <div className="waitlist-contact-cell">
+                      <WaitlistContactAvatar contact={contact} />
+                      <div>
+                        <strong>{waitlistContactName(contact)}</strong>
+                        <span>{contact.connection.name}</span>
+                      </div>
+                    </div>
                   </td>
                   <td>{formatWaitlistPhone(contact.phoneNormalized)}</td>
                   <td>
@@ -7053,12 +7086,13 @@ function WaitlistView({
                         icon={Eye}
                         label="Visualizar contato"
                         onClick={() => void selectContact(contact)}
+                        size="sm"
                         variant="secondary"
                       />
                       {contact.status === 'PENDENTE' ? (
                         <>
                           <Button
-                            icon={UserCheck}
+                            icon={UserPlus}
                             onClick={() => setApproveContact(contact)}
                             size="sm"
                             variant="primary"
@@ -7086,6 +7120,7 @@ function WaitlistView({
                           icon={RotateCcw}
                           label="Reabrir contato"
                           onClick={() => void handleReopen(contact)}
+                          size="sm"
                           variant="secondary"
                         />
                       ) : null}
@@ -7109,9 +7144,13 @@ function WaitlistView({
       {detailContact ? (
         <WaitlistContactDetailModal
           contact={detailContact}
-          onApprove={(contact) => setApproveContact(contact)}
+          onApprove={(contact) => {
+            setDetailContact(null);
+            setApproveContact(contact);
+          }}
           onClose={() => setDetailContact(null)}
           onIgnore={(contact) => {
+            setDetailContact(null);
             setIgnoreReason('');
             setIgnoreContact(contact);
           }}
@@ -7166,7 +7205,7 @@ function WaitlistContactDetailModal({
       <section className="modal waitlist-detail-modal" aria-labelledby="waitlist-detail-title">
         <header className="modal-header modal-header-with-icon">
           <span className="modal-icon info" aria-hidden="true">
-            <MessageCircle size={17} />
+            <UserRound size={16} />
           </span>
           <div>
             <h2 id="waitlist-detail-title">Detalhes do contato</h2>
@@ -7175,24 +7214,16 @@ function WaitlistContactDetailModal({
           <IconButton icon={X} label="Fechar detalhes do contato" onClick={onClose} />
         </header>
 
-        <div className="waitlist-detail-status">
-          <strong>{waitlistContactName(contact)}</strong>
+        <div className="waitlist-detail-hero">
+          <WaitlistContactAvatar contact={contact} />
+          <div>
+            <strong>{waitlistContactName(contact)}</strong>
+            <span>{formatWaitlistPhone(contact.phoneNormalized)}</span>
+          </div>
           <WaitlistStatusBadge status={contact.status} />
         </div>
 
         <dl className="detail-list waitlist-detail-grid">
-          <div>
-            <dt>Nome</dt>
-            <dd>{waitlistContactName(contact)}</dd>
-          </div>
-          <div>
-            <dt>WhatsApp</dt>
-            <dd>{formatWaitlistPhone(contact.phoneNormalized)}</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd>{waitlistStatusLabel(contact.status)}</dd>
-          </div>
           <div>
             <dt>Origem</dt>
             <dd>WhatsApp</dd>
@@ -7235,7 +7266,7 @@ function WaitlistContactDetailModal({
         </div>
 
         <section className="waitlist-history">
-          <WaitlistSectionTitle icon={MessagesSquare} title="Histórico recebido" />
+          <WaitlistSectionTitle icon={MessageCircle} title="Conversa" />
           <div className="mini-list">
             {(contact.inboundMessages ?? []).map((message) => (
               <article key={message.id}>
@@ -7251,7 +7282,9 @@ function WaitlistContactDetailModal({
         </section>
 
         <div className="form-actions">
-          <div />
+          <Button onClick={onClose} variant="secondary">
+            Fechar
+          </Button>
           <div className="button-row">
             {contact.status === 'PENDENTE' ? (
               <>
@@ -7298,12 +7331,12 @@ function IgnorePendingContactModal({
     <div className="modal-backdrop" role="presentation">
       <section className="modal waitlist-ignore-modal" aria-labelledby="waitlist-ignore-title">
         <header className="modal-header modal-header-with-icon">
-          <span className="modal-icon warning" aria-hidden="true">
-            <EyeOff size={17} />
+          <span className="modal-icon danger" aria-hidden="true">
+            <UserX size={16} />
           </span>
           <div>
             <h2 id="waitlist-ignore-title">Ignorar contato</h2>
-            <p>Este contato sairá da fila de pendentes e poderá ser reaberto depois.</p>
+            <p>Este contato será removido da fila de atendimento.</p>
           </div>
           <IconButton icon={X} label="Fechar confirmação de ignorar" onClick={onClose} />
         </header>
@@ -7340,6 +7373,18 @@ function WaitlistSectionTitle({ icon: Icon, title }: { icon: LucideIcon; title: 
   );
 }
 
+type WaitlistApprovalStep = 'client' | 'reference' | 'billing' | 'referral';
+
+const waitlistApprovalSteps: ReadonlyArray<{
+  id: WaitlistApprovalStep;
+  label: string;
+}> = [
+  { id: 'client', label: 'Cliente' },
+  { id: 'reference', label: 'Referência' },
+  { id: 'billing', label: 'Cobrança' },
+  { id: 'referral', label: 'Indicação' },
+];
+
 function ApprovePendingContactModal({
   contact,
   plans,
@@ -7365,9 +7410,21 @@ function ApprovePendingContactModal({
   const [generateInitialReceivable, setGenerateInitialReceivable] = useState(true);
   const [sendPixWhatsAppNow, setSendPixWhatsAppNow] = useState(true);
   const [referrerClientId, setReferrerClientId] = useState('');
+  const [activeStep, setActiveStep] = useState<WaitlistApprovalStep>('client');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const shouldSendPix = generateInitialReceivable && sendPixWhatsAppNow;
+  const activeStepIndex = waitlistApprovalSteps.findIndex((step) => step.id === activeStep);
+  const isLastStep = activeStep === 'referral';
+  const selectedPlan = sortedPlans.find((plan) => plan.id === planId);
+
+  function goToStep(direction: 'previous' | 'next') {
+    const nextIndex =
+      direction === 'next'
+        ? Math.min(activeStepIndex + 1, waitlistApprovalSteps.length - 1)
+        : Math.max(activeStepIndex - 1, 0);
+    setActiveStep(waitlistApprovalSteps[nextIndex]?.id ?? activeStep);
+  }
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -7378,6 +7435,13 @@ function ApprovePendingContactModal({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
+
+    if (!isLastStep) {
+      return;
+    }
+
+    if (loading) return;
+
     setLoading(true);
 
     try {
@@ -7414,7 +7478,7 @@ function ApprovePendingContactModal({
             <h2 id="approve-pending-title">Aprovar contato</h2>
             <p>Converta este contato em cliente e configure o primeiro serviço.</p>
           </div>
-          <IconButton icon={X} label="Fechar aprovação" onClick={onClose} />
+          <IconButton icon={X} label="Fechar aprovação" type="button" onClick={onClose} />
         </header>
         <div className="waitlist-contact-summary">
           <span>{waitlistContactName(contact)}</span>
@@ -7422,156 +7486,210 @@ function ApprovePendingContactModal({
           <span>{contact.connection.name}</span>
         </div>
         <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
-          <section className="waitlist-approval-section">
-            <WaitlistSectionTitle icon={UserRound} title="Dados do cliente" />
-            <div className="form-grid">
-              <label className="field">
-                <span>Nome</span>
-                <input required value={name} onChange={(event) => setName(event.target.value)} />
-              </label>
-              <label className="field">
-                <span>WhatsApp</span>
-                <input readOnly value={formatWaitlistPhone(phone)} />
-              </label>
-              <label className="field">
-                <span>E-mail</span>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </label>
-            </div>
-            <label className="field">
-              <span>Observações</span>
-              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
-            </label>
-          </section>
+          <div className="waitlist-stepper" aria-label="Etapas da aprovação">
+            {waitlistApprovalSteps.map((step, index) => (
+              <button
+                className={[
+                  'waitlist-step',
+                  index === activeStepIndex ? 'active' : '',
+                  index < activeStepIndex ? 'complete' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                key={step.id}
+                type="button"
+                onClick={() => setActiveStep(step.id)}
+              >
+                <span>{index + 1}</span>
+                {step.label}
+              </button>
+            ))}
+          </div>
 
-          <section className="waitlist-approval-section">
-            <WaitlistSectionTitle icon={FileText} title="Primeira referência" />
-            <div className="form-grid">
-              <label className="field">
-                <span>Referência</span>
-                <input
-                  required
-                  value={reference}
-                  onChange={(event) => setReference(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Plano</span>
-                <select
-                  required
-                  value={planId}
-                  onChange={(event) => handlePlanChange(event.target.value)}
-                >
-                  {sortedPlans.map((plan) => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Valor</span>
-                <input
-                  min="0"
-                  step="0.01"
-                  type="number"
-                  value={recurringValue}
-                  onChange={(event) => setRecurringValue(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Vencimento</span>
-                <input
-                  required
-                  type="date"
-                  value={dueDate}
-                  onChange={(event) => setDueDate(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Avisar cobrança</span>
-                <input
-                  min="0"
-                  type="number"
-                  value={billingNoticeDays}
-                  onChange={(event) => setBillingNoticeDays(event.target.value)}
-                />
-              </label>
-            </div>
-            <div className="notice">
-              Cliente e primeira referência serão criados como Pendente pagamento.
-            </div>
-          </section>
-
-          <section className="waitlist-approval-section">
-            <WaitlistSectionTitle icon={Receipt} title="Cobrança inicial" />
-            <p className="section-note">
-              Cria uma cobrança de ativação vinculada à primeira referência.
-            </p>
-            <label className="checkbox-row">
-              <input
-                checked={generateInitialReceivable}
-                type="checkbox"
-                onChange={(event) => setGenerateInitialReceivable(event.target.checked)}
-              />
-              Gerar cobrança inicial
-            </label>
-            {generateInitialReceivable ? (
-              <>
-                <label className="checkbox-row">
-                  <input
-                    checked={sendPixWhatsAppNow}
-                    type="checkbox"
-                    onChange={(event) => setSendPixWhatsAppNow(event.target.checked)}
-                  />
-                  Enviar PIX pelo WhatsApp agora
+          {activeStep === 'client' ? (
+            <section className="waitlist-approval-section">
+              <WaitlistSectionTitle icon={UserRound} title="Dados do cliente" />
+              <div className="form-grid">
+                <label className="field">
+                  <span>Nome</span>
+                  <input required value={name} onChange={(event) => setName(event.target.value)} />
                 </label>
-                <p className="section-note">
-                  Após criar o cliente e a cobrança, o sistema tentará gerar o PIX e enviá-lo pelo
-                  WhatsApp.
-                </p>
+                <label className="field">
+                  <span>WhatsApp</span>
+                  <input readOnly value={formatWaitlistPhone(phone)} />
+                </label>
+                <label className="field">
+                  <span>E-mail</span>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="field">
+                <span>Observações</span>
+                <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+              </label>
+            </section>
+          ) : null}
+
+          {activeStep === 'reference' ? (
+            <section className="waitlist-approval-section">
+              <WaitlistSectionTitle icon={Layers} title="Primeira referência" />
+              <div className="form-grid">
+                <label className="field">
+                  <span>Referência</span>
+                  <input
+                    required
+                    value={reference}
+                    onChange={(event) => setReference(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Plano</span>
+                  <select
+                    required
+                    value={planId}
+                    onChange={(event) => handlePlanChange(event.target.value)}
+                  >
+                    {sortedPlans.map((plan) => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Valor</span>
+                  <input
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={recurringValue}
+                    onChange={(event) => setRecurringValue(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Vencimento</span>
+                  <input
+                    required
+                    type="date"
+                    value={dueDate}
+                    onChange={(event) => setDueDate(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Avisar cobrança</span>
+                  <input
+                    min="0"
+                    type="number"
+                    value={billingNoticeDays}
+                    onChange={(event) => setBillingNoticeDays(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="notice">
+                Cliente e primeira referência serão criados como Pendente pagamento.
+              </div>
+            </section>
+          ) : null}
+
+          {activeStep === 'billing' ? (
+            <section className="waitlist-approval-section">
+              <WaitlistSectionTitle icon={Receipt} title="Cobrança inicial" />
+              <p className="section-note">
+                Cria uma cobrança de ativação vinculada à primeira referência.
+              </p>
+              <label className="checkbox-row">
+                <input
+                  checked={generateInitialReceivable}
+                  type="checkbox"
+                  onChange={(event) => setGenerateInitialReceivable(event.target.checked)}
+                />
+                Gerar cobrança inicial
+              </label>
+              {generateInitialReceivable ? (
+                <>
+                  <label className="checkbox-row">
+                    <input
+                      checked={sendPixWhatsAppNow}
+                      type="checkbox"
+                      onChange={(event) => setSendPixWhatsAppNow(event.target.checked)}
+                    />
+                    Enviar PIX pelo WhatsApp agora
+                  </label>
+                  <p className="section-note">
+                    Após criar o cliente e a cobrança, o sistema tentará gerar o PIX e enviá-lo pelo
+                    WhatsApp.
+                  </p>
+                  <div className="notice">
+                    O cadastro pode ser concluído mesmo se a geração ou o envio do PIX falhar.
+                  </div>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {activeStep === 'referral' ? (
+            <>
+              <section className="waitlist-approval-section">
+                <WaitlistSectionTitle icon={UsersRound} title="Indicação" />
+                <label className="field">
+                  <span>Indicado por</span>
+                  <ClientReferralSelect value={referrerClientId} onChange={setReferrerClientId} />
+                </label>
                 <div className="notice">
-                  O cadastro pode ser concluído mesmo se a geração ou o envio do PIX falhar.
+                  {referrerClientId ? 'Benefício padrão: Mês grátis.' : 'Nenhuma indicação.'}
                 </div>
-              </>
-            ) : null}
-          </section>
+              </section>
 
-          <section className="waitlist-approval-section">
-            <WaitlistSectionTitle icon={UsersRound} title="Indicação" />
-            <label className="field">
-              <span>Indicado por</span>
-              <ClientReferralSelect value={referrerClientId} onChange={setReferrerClientId} />
-            </label>
-            <div className="notice">
-              {referrerClientId ? 'Benefício padrão: Mês grátis.' : 'Nenhuma indicação.'}
-            </div>
-          </section>
-
-          <section className="waitlist-approval-section waitlist-approval-summary">
-            <WaitlistSectionTitle icon={CircleCheck} title="Resumo antes de aprovar" />
-            <ul>
-              <li>Cliente</li>
-              <li>Primeira referência</li>
-              {generateInitialReceivable ? <li>Cobrança inicial</li> : null}
-              {referrerClientId ? <li>Indicação pendente</li> : null}
-              {shouldSendPix ? <li>Tentará gerar e enviar PIX após o cadastro</li> : null}
-            </ul>
-          </section>
+              <section className="waitlist-approval-section waitlist-approval-summary">
+                <WaitlistSectionTitle icon={CircleCheck} title="Resumo antes de aprovar" />
+                <ul>
+                  {name ? <li>Cliente: {name}</li> : null}
+                  {reference ? <li>Referência: {reference}</li> : null}
+                  {selectedPlan ? <li>Plano: {selectedPlan.name}</li> : null}
+                  {generateInitialReceivable ? (
+                    <li>Cobrança inicial: {formatCurrency(Number(recurringValue || 0))}</li>
+                  ) : null}
+                  {referrerClientId ? <li>Indicação pendente</li> : null}
+                  {shouldSendPix ? <li>Tentará gerar e enviar PIX após o cadastro</li> : null}
+                </ul>
+              </section>
+            </>
+          ) : null}
 
           <div className="form-actions">
             <span className="error-message">{error}</span>
             <div className="button-row">
-              <Button onClick={onClose} variant="secondary">
+              <Button type="button" onClick={onClose} variant="secondary">
                 Cancelar
               </Button>
-              <Button icon={UserCheck} loading={loading} type="submit" variant="primary">
-                Aprovar e criar cliente
-              </Button>
+              {activeStepIndex > 0 ? (
+                <Button
+                  icon={ArrowLeft}
+                  type="button"
+                  onClick={() => goToStep('previous')}
+                  variant="secondary"
+                >
+                  Voltar
+                </Button>
+              ) : null}
+              {isLastStep ? (
+                <Button icon={UserCheck} loading={loading} type="submit" variant="primary">
+                  Aprovar contato
+                </Button>
+              ) : (
+                <Button
+                  icon={ArrowRight}
+                  type="button"
+                  onClick={() => goToStep('next')}
+                  variant="primary"
+                >
+                  Continuar
+                </Button>
+              )}
             </div>
           </div>
         </form>
@@ -7586,6 +7704,14 @@ function waitlistFullMessage(contact: WhatsAppPendingContact) {
 
 function waitlistContactName(contact: WhatsAppPendingContact) {
   return contact.contactName ?? 'Contato sem nome';
+}
+
+function WaitlistContactAvatar({ contact }: { contact: WhatsAppPendingContact }) {
+  return (
+    <span className="waitlist-avatar" aria-hidden="true">
+      {waitlistContactName(contact).slice(0, 1).toUpperCase()}
+    </span>
+  );
 }
 
 function formatWaitlistPhone(value: string) {

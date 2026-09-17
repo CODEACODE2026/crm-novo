@@ -1274,6 +1274,57 @@ describe('BillingService', () => {
     );
   });
 
+  it('does not send a grouped dispatch when its scheduled cycle is obsolete', async () => {
+    const providerSendText = vi.fn();
+    const currentDueDate = new Date('2026-09-20T00:00:00.000Z');
+    const currentReference = clientReference({
+      dueDate: currentDueDate,
+      billingNoticeDays: 0,
+    });
+    const currentReceivable = receivable({ dueDate: currentDueDate });
+    const obsoleteDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+      receivable: currentReceivable,
+      clientReference: currentReference,
+      items: [
+        {
+          id: 'item-current',
+          messageDispatchId: 'dispatch-id',
+          receivableId: 'receivable-id',
+          clientReferenceId: 'client-reference-id',
+          amount: 50,
+          dueDate: currentDueDate,
+          referenceSnapshot: 'bruno1499',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: currentReceivable,
+          clientReference: currentReference,
+        },
+      ],
+    });
+    const { service, updateDispatch } = serviceFactory({
+      providerSendText,
+      dispatchForProcessing: obsoleteDispatch,
+      currentReceivables: [{ ...currentReceivable, clientReference: currentReference }],
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'BILLING_INTENT_MISMATCH',
+        }),
+      }),
+    );
+  });
+
   it('searches dispatches by ClientReference.reference without Client.reference fallback', async () => {
     const { service, prisma } = serviceFactory();
 

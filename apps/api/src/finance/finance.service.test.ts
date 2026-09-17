@@ -311,6 +311,9 @@ function createFinancePrisma() {
         return Promise.resolve(data);
       },
     },
+    messageDispatch: {
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
     paymentWebhookEvent: {
       create: ({ data }: { data: Record<string, unknown> }) => {
         if (
@@ -357,6 +360,7 @@ function createFinancePrisma() {
           Promise.resolve(where.id === client.id ? 1 : 0),
       },
       clientStatusHistory: tx.clientStatusHistory,
+      messageDispatch: tx.messageDispatch,
       receivable: tx.receivable,
       paymentIntent: tx.paymentIntent,
       paymentWebhookEvent: tx.paymentWebhookEvent,
@@ -691,6 +695,9 @@ function createGroupedFinancePrisma() {
         return Promise.resolve(data);
       },
     },
+    messageDispatch: {
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
   };
   const prisma = {
     ...tx,
@@ -810,6 +817,23 @@ describe('FinanceService', () => {
     expect(fake.cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(3);
     expect(fake.recovery.cancelActiveForReceivable).toHaveBeenCalledTimes(3);
     expect(fake.nextReceivables).toHaveLength(3);
+    expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalledTimes(3);
+    expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: fake.receivables[0]!.id },
+          { items: { some: { receivableId: fake.receivables[0]!.id } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'RECEIVABLE_PAID',
+        errorMessage: 'Cobranca futura cancelada porque a conta a receber foi paga.',
+        nextAttemptAt: null,
+      },
+    });
   });
 
   it('allows paying one selected receivable and later another grouped selection', async () => {
@@ -1184,6 +1208,22 @@ describe('FinanceService', () => {
           event.metadata.receivableId === fake.receivable.id,
       ),
     ).toBe(true);
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: fake.receivable.id },
+          { items: { some: { receivableId: fake.receivable.id } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'RECEIVABLE_PAID',
+        errorMessage: 'Cobranca futura cancelada porque a conta a receber foi paga.',
+        nextAttemptAt: null,
+      },
+    });
 
     await expect(
       service.payReceivable(
@@ -1787,6 +1827,22 @@ describe('FinanceService', () => {
           event.metadata.receivableId === fake.receivable.id,
       ),
     ).toBe(true);
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: fake.receivable.id },
+          { items: { some: { receivableId: fake.receivable.id } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'RECEIVABLE_CANCELED',
+        errorMessage: 'Cobranca futura cancelada porque a conta a receber foi cancelada.',
+        nextAttemptAt: null,
+      },
+    });
   });
 
   it('rejects an expense using an entry category', async () => {

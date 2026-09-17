@@ -320,12 +320,22 @@ export class ReferralsService {
           rewardReference.billingAnchorDay,
         );
 
-        await this.receivableCycleService?.cancelPendingCurrentCycleReceivable(
-          rewardReference.id,
-          rewardReference.dueDate,
-          'Ciclo bonificado por indicacao FREE_MONTH.',
-          tx,
-        );
+        const canceledReceivable =
+          await this.receivableCycleService?.cancelPendingCurrentCycleReceivable(
+            rewardReference.id,
+            rewardReference.dueDate,
+            'Ciclo bonificado por indicacao FREE_MONTH.',
+            tx,
+          );
+
+        if (canceledReceivable) {
+          await this.cancelFutureBillingDispatchesForReceivable(
+            tx,
+            canceledReceivable.id,
+            'FREE_MONTH_RECEIVABLE_CANCELED',
+            'Cobranca futura cancelada porque o ciclo foi bonificado por indicacao FREE_MONTH.',
+          );
+        }
 
         await tx.clientReference.update({
           where: { id: rewardReference.id },
@@ -464,6 +474,27 @@ export class ReferralsService {
     }
 
     return where;
+  }
+
+  private async cancelFutureBillingDispatchesForReceivable(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    errorCode: string,
+    errorMessage: string,
+  ) {
+    await tx.messageDispatch.updateMany({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [{ receivableId }, { items: { some: { receivableId } } }],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode,
+        errorMessage,
+        nextAttemptAt: null,
+      },
+    });
   }
 
   private presentReferral(referral: ReferralWithClients) {

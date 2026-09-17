@@ -416,6 +416,13 @@ export class ClientsService {
           if (!moved) {
             await this.currentCycle().ensureCurrentCycleReceivable(id, tx);
           }
+
+          await this.cancelFutureReferenceBillingDispatches(
+            tx,
+            id,
+            'CLIENT_REFERENCE_CYCLE_CHANGED',
+            'Cobranca futura cancelada porque o ciclo da referencia foi alterado.',
+          );
         }
 
         await tx.clientEvent.create({
@@ -526,7 +533,14 @@ export class ClientsService {
       });
 
       if (dto.status === 'INATIVO' || dto.status === 'CANCELADO') {
-        await this.cancelFutureReferenceBillingDispatches(tx, id, dto.status);
+        await this.cancelFutureReferenceBillingDispatches(
+          tx,
+          id,
+          dto.status === 'CANCELADO' ? 'CLIENT_REFERENCE_CANCELED' : 'CLIENT_REFERENCE_INACTIVE',
+          dto.status === 'CANCELADO'
+            ? 'Referencia cancelada antes do envio da cobranca.'
+            : 'Referencia inativada antes do envio da cobranca.',
+        );
       }
 
       if (reference.status === 'INATIVO' && dto.status === 'ATIVO') {
@@ -1198,22 +1212,19 @@ export class ClientsService {
   private async cancelFutureReferenceBillingDispatches(
     tx: Prisma.TransactionClient,
     clientReferenceId: string,
-    status: ClientStatus,
+    errorCode: string,
+    errorMessage: string,
   ) {
     await tx.messageDispatch.updateMany({
       where: {
-        clientReferenceId,
         origin: 'BILLING',
         status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [{ clientReferenceId }, { items: { some: { clientReferenceId } } }],
       },
       data: {
         status: 'CANCELED',
-        errorCode:
-          status === 'CANCELADO' ? 'CLIENT_REFERENCE_CANCELED' : 'CLIENT_REFERENCE_INACTIVE',
-        errorMessage:
-          status === 'CANCELADO'
-            ? 'Referencia cancelada antes do envio da cobranca.'
-            : 'Referencia inativada antes do envio da cobranca.',
+        errorCode,
+        errorMessage,
         nextAttemptAt: null,
       },
     });

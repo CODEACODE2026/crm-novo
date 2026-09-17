@@ -204,6 +204,36 @@ describe('ClientsService legacy client updates', () => {
     expect(fake.recoveryService.handleClientStatusChange).not.toHaveBeenCalled();
     expect(fake.recoveryService.handleClientReferenceStatusChange).not.toHaveBeenCalled();
   });
+
+  it('cancels future billing dispatches when a reference cycle changes', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+
+    await fake.service.updateReference('ref-1', { dueDate: '2026-10-20' }, 'user-id');
+
+    expect(fake.receivableCycleService.updatePendingCurrentCycleReceivable).toHaveBeenCalledWith(
+      'ref-1',
+      parseBusinessDate('2026-10-10'),
+      expect.objectContaining({
+        dueDate: parseBusinessDate('2026-10-20'),
+        amount: new Prisma.Decimal('100.00'),
+        planName: 'Mensal',
+      }),
+      fake.prisma,
+    );
+    expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [{ clientReferenceId: 'ref-1' }, { items: { some: { clientReferenceId: 'ref-1' } } }],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+        errorMessage: 'Cobranca futura cancelada porque o ciclo da referencia foi alterado.',
+        nextAttemptAt: null,
+      },
+    });
+  });
 });
 
 function createClientUpdateService({
@@ -261,11 +291,38 @@ function createClientUpdateService({
       findUnique: vi.fn().mockImplementation(() => Promise.resolve(clientWithRelations())),
     },
     clientReference: {
+      findUnique: vi.fn(({ where }: { where: { id: string } }) => {
+        const reference = references.find((item) => item.id === where.id);
+        return Promise.resolve(reference ? { ...reference, plan } : null);
+      }),
       findFirst: vi.fn(),
-      update: vi.fn(),
+      update: vi.fn(
+        ({
+          where,
+          data,
+          include,
+        }: {
+          where: { id: string };
+          data: Partial<ReturnType<typeof clientReference>>;
+          include?: { plan?: boolean };
+        }) => {
+          const reference = references.find((item) => item.id === where.id);
+          if (!reference) throw new Error('Reference not found');
+          Object.assign(reference, data);
+          return Promise.resolve(include?.plan ? { ...reference, plan } : reference);
+        },
+      ),
+      findUniqueOrThrow: vi.fn(({ where }: { where: { id: string } }) => {
+        const reference = references.find((item) => item.id === where.id);
+        if (!reference) throw new Error('Reference not found');
+        return Promise.resolve({ ...reference, plan });
+      }),
     },
     clientEvent: {
       create: vi.fn().mockResolvedValue({}),
+    },
+    messageDispatch: {
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
   };
@@ -273,14 +330,19 @@ function createClientUpdateService({
     handleClientStatusChange: vi.fn(),
     handleClientReferenceStatusChange: vi.fn(),
   };
+  const receivableCycleService = {
+    updatePendingCurrentCycleReceivable: vi.fn().mockResolvedValue({ id: 'receivable-id' }),
+    ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'kept' }),
+  };
   const service = new ClientsService(
     prisma as never,
-    { ensureActivePlan: vi.fn() } as never,
+    { ensureActivePlan: vi.fn().mockResolvedValue(undefined) } as never,
     recoveryService as never,
     { cancelPendingForClientBeforePayment: vi.fn() } as never,
+    receivableCycleService as never,
   );
 
-  return { service, prisma, client, references, recoveryService };
+  return { service, prisma, client, references, recoveryService, receivableCycleService };
 }
 
 function clientReference(overrides: Partial<ReturnType<typeof baseClientReference>> = {}) {

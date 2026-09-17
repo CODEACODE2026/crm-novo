@@ -913,6 +913,32 @@ export class BillingService {
       };
     }
 
+    const groupedIntent = this.parseIdempotencyKey(dispatch.idempotencyKey ?? dispatch.requestId);
+
+    if (groupedIntent && 'businessSendDate' in groupedIntent) {
+      const settings = await this.getAutomationSettings();
+      const stillMatchesIntent = activeItems.every((item) => {
+        const expectedScheduledFor = this.calculateScheduledFor(
+          item.receivable.dueDate,
+          item.clientReference.billingNoticeDays,
+          settings,
+        );
+
+        return (
+          formatBusinessDate(expectedScheduledFor) === groupedIntent.businessSendDate &&
+          formatBusinessDate(item.receivable.dueDate) ===
+            formatBusinessDate(item.clientReference.dueDate)
+        );
+      });
+
+      if (!stillMatchesIntent) {
+        return {
+          code: 'BILLING_INTENT_MISMATCH',
+          message: 'Intencao de cobranca nao corresponde ao ciclo atual.',
+        };
+      }
+    }
+
     const template =
       activeItems.length > 1
         ? await this.ensureGroupedTemplate()

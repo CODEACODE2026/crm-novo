@@ -807,6 +807,13 @@ export class FinanceService {
         'Conta a receber cancelada durante campanha de recuperacao.',
       );
 
+      await this.cancelFutureBillingDispatchesForReceivable(
+        tx,
+        existing.id,
+        'RECEIVABLE_CANCELED',
+        'Cobranca futura cancelada porque a conta a receber foi cancelada.',
+      );
+
       return updated;
     });
 
@@ -1406,6 +1413,13 @@ export class FinanceService {
     options: { receivableWasPending: boolean },
   ) {
     if (options.receivableWasPending) {
+      await this.cancelFutureBillingDispatchesForReceivable(
+        tx,
+        receivableId,
+        'RECEIVABLE_PAID',
+        'Cobranca futura cancelada porque a conta a receber foi paga.',
+      );
+
       await this.recoveryService?.cancelActiveForReceivable(
         tx,
         receivableId,
@@ -1591,6 +1605,27 @@ export class FinanceService {
     }
 
     return 'WAITING_PAYMENT';
+  }
+
+  private async cancelFutureBillingDispatchesForReceivable(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    errorCode: string,
+    errorMessage: string,
+  ) {
+    await tx.messageDispatch.updateMany({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [{ receivableId }, { items: { some: { receivableId } } }],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode,
+        errorMessage,
+        nextAttemptAt: null,
+      },
+    });
   }
 
   private async activateClientAfterInitialPayment(

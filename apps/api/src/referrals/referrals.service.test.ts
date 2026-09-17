@@ -102,6 +102,7 @@ function createReferralPrisma() {
   const renewals: Array<Record<string, unknown>> = [];
   const receivables: Array<Record<string, unknown>> = [];
   const transactions: Array<Record<string, unknown>> = [];
+  const messageDispatchUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
 
   const withReferences = (client: TestClient | undefined) =>
     client
@@ -250,6 +251,9 @@ function createReferralPrisma() {
         return Promise.resolve({ count: data.length });
       },
     },
+    messageDispatch: {
+      updateMany: messageDispatchUpdateMany,
+    },
     $transaction: async <T>(input: Promise<T>[] | ((client: MockTx) => Promise<T>)) =>
       Array.isArray(input) ? Promise.all(input) : input(tx),
   };
@@ -264,6 +268,7 @@ function createReferralPrisma() {
     receivables,
     referrals,
     renewals,
+    messageDispatchUpdateMany,
     transactions,
   };
 }
@@ -427,6 +432,23 @@ describe('ReferralsService', () => {
       fake.clientReferences[0]!.id,
       expect.any(Object),
     );
+    expect(fake.messageDispatchUpdateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: 'old-receivable' },
+          { items: { some: { receivableId: 'old-receivable' } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'FREE_MONTH_RECEIVABLE_CANCELED',
+        errorMessage:
+          'Cobranca futura cancelada porque o ciclo foi bonificado por indicacao FREE_MONTH.',
+        nextAttemptAt: null,
+      },
+    });
     expect(fake.renewals).toHaveLength(0);
     expect(fake.transactions).toHaveLength(0);
   });

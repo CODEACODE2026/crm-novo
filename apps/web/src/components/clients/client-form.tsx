@@ -34,6 +34,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
     String(client?.billingNoticeDays ?? 0),
   );
   const [notes, setNotes] = useState(client?.notes ?? '');
+  const [generateInitialReceivable, setGenerateInitialReceivable] = useState(false);
   const [referrerClientId, setReferrerClientId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -72,6 +73,7 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
         recurringValue: Number(recurringValue),
         dueDate,
         billingNoticeDays: Number(billingNoticeDays),
+        generateInitialReceivable,
       };
 
       if (email) payload.email = email;
@@ -176,6 +178,27 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
               <small>0 no dia do vencimento, 1 um dia antes, 2 dois dias antes.</small>
             </label>
           </div>
+          <div className="initial-billing-choice form-grid-full">
+            <label className="checkbox-row">
+              <input
+                checked={generateInitialReceivable}
+                type="checkbox"
+                onChange={(event) => setGenerateInitialReceivable(event.target.checked)}
+              />
+              <span>Aguardar pagamento para ativar este serviço</span>
+            </label>
+            <p>O serviço ficará pendente até a confirmação do primeiro pagamento.</p>
+            <dl className="initial-billing-summary">
+              <div>
+                <dt>Status inicial</dt>
+                <dd>{generateInitialReceivable ? 'Pendente de pagamento' : 'Ativo'}</dd>
+              </div>
+              <div>
+                <dt>Primeira cobrança</dt>
+                <dd>{generateInitialReceivable ? 'Ativação inicial' : 'Renovação'}</dd>
+              </div>
+            </dl>
+          </div>
         </section>
       ) : null}
 
@@ -192,6 +215,12 @@ export function ClientForm({ client, plans, submitLabel, onSubmit }: ClientFormP
           <div className="field">
             <span>Indicado por</span>
             <ClientReferralSelect value={referrerClientId} onChange={setReferrerClientId} />
+            {referrerClientId && !generateInitialReceivable ? (
+              <div className="notice warning compact-notice">
+                Sem cobrança inicial, esta indicação não será qualificada automaticamente por
+                pagamento de ativação.
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>

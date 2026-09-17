@@ -1332,6 +1332,41 @@ describe('FinanceService', () => {
     );
   });
 
+  it('activates a pending reference after initial activation payment without referral', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-10');
+    fake.clientReference.billingAnchorDay = 10;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-10');
+    const referrals = {
+      qualifyAfterInitialActivation: vi.fn().mockResolvedValue(null),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      referrals as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-15', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
+      fake.tx,
+      fake.client.id,
+      fake.receivable.id,
+      actorUserId,
+    );
+  });
+
   it('qualifies referral for an already active reference after initial activation payment', async () => {
     const fake = createFinancePrisma();
     fake.clientReference.status = 'ATIVO';

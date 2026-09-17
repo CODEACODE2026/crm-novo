@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsInt,
@@ -66,4 +67,8 @@ export class CreateClientDto {
   @IsOptional()
   @IsString()
   referralRewardDescription?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  generateInitialReceivable?: boolean;
 }

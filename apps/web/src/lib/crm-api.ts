@@ -868,6 +868,7 @@ export interface ClientPayload {
   referralRewardType?: ReferralRewardType | undefined;
   referralRewardValue?: number | undefined;
   referralRewardDescription?: string | undefined;
+  generateInitialReceivable?: boolean | undefined;
 }
 
 export interface ClientUpdatePayload {

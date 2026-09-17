@@ -97,6 +97,19 @@ function getReferenceContains(condition: Prisma.ClientWhereInput) {
   return undefined;
 }
 
+function manualClientDto(overrides: Partial<Parameters<ClientsService['create']>[0]> = {}) {
+  return {
+    name: 'Maria Inicial',
+    phone: '(44) 99999-3030',
+    reference: 'MARIA-001',
+    planId: 'plan-id',
+    recurringValue: 30,
+    dueDate: '2026-10-20',
+    billingNoticeDays: 0,
+    ...overrides,
+  };
+}
+
 describe('ClientsService options', () => {
   it('searches lightweight client options by name', async () => {
     const service = createService();
@@ -127,6 +140,93 @@ describe('ClientsService options', () => {
 
     await expect(service.options({ search: 'inexistente' })).resolves.toEqual([]);
     await expect(service.options({ search: '' })).resolves.toEqual([]);
+  });
+});
+
+describe('ClientsService manual client creation', () => {
+  it('keeps immediate activation as the default manual creation behavior', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(manualClientDto(), 'user-id');
+
+    expect(fake.clients[0]).toMatchObject({ status: 'ATIVO' });
+    expect(fake.references[0]).toMatchObject({ status: 'ATIVO' });
+    expect(fake.receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.references[0]!.id,
+      fake.prisma,
+    );
+    expect(fake.receivables).toHaveLength(0);
+  });
+
+  it('creates an initial activation receivable when manual creation waits for payment', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(manualClientDto({ generateInitialReceivable: true }), 'user-id');
+
+    expect(fake.clients[0]).toMatchObject({ status: 'ATIVO' });
+    expect(fake.references[0]).toMatchObject({ status: 'PENDENTE_PAGAMENTO' });
+    expect(fake.receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.receivables).toHaveLength(1);
+    expect(fake.receivables[0]).toMatchObject({
+      clientId: fake.clients[0]!.id,
+      clientReferenceId: fake.references[0]!.id,
+      purpose: 'INITIAL_ACTIVATION',
+      description: 'Cobranca inicial de ativacao - Mensal',
+      status: 'PENDENTE',
+    });
+    expect(fake.receivables[0]!.amount.toString()).toBe('30');
+    expect(fake.receivables[0]!.dueDate).toEqual(parseBusinessDate('2026-10-20'));
+  });
+
+  it('keeps referral pending when manual creation waits for initial payment', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(
+      manualClientDto({
+        generateInitialReceivable: true,
+        referrerClientId: 'referrer-id',
+        referralRewardType: 'FREE_MONTH',
+      }),
+      'user-id',
+    );
+
+    expect(fake.referralsService.createPending).toHaveBeenCalledWith(fake.prisma, {
+      referredClientId: fake.clients[0]!.id,
+      referrerClientId: 'referrer-id',
+      rewardType: 'FREE_MONTH',
+      rewardValue: undefined,
+      rewardDescription: undefined,
+      actorUserId: 'user-id',
+    });
+    expect(fake.references[0]).toMatchObject({ status: 'PENDENTE_PAGAMENTO' });
+    expect(fake.receivables[0]).toMatchObject({
+      purpose: 'INITIAL_ACTIVATION',
+      status: 'PENDENTE',
+    });
+  });
+
+  it('preserves current pending referral behavior without initial activation', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(
+      manualClientDto({
+        referrerClientId: 'referrer-id',
+        referralRewardType: 'FREE_MONTH',
+      }),
+      'user-id',
+    );
+
+    expect(fake.references[0]).toMatchObject({ status: 'ATIVO' });
+    expect(fake.receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    expect(fake.receivables).toHaveLength(0);
+    expect(fake.referralsService.createPending).toHaveBeenCalledWith(fake.prisma, {
+      referredClientId: fake.clients[0]!.id,
+      referrerClientId: 'referrer-id',
+      rewardType: 'FREE_MONTH',
+      rewardValue: undefined,
+      rewardDescription: undefined,
+      actorUserId: 'user-id',
+    });
   });
 });
 
@@ -235,6 +335,146 @@ describe('ClientsService legacy client updates', () => {
     });
   });
 });
+
+function createClientCreationService() {
+  const plan = {
+    id: 'plan-id',
+    name: 'Mensal',
+    durationMonths: 1,
+    defaultValue: new Prisma.Decimal('30.00'),
+    active: true,
+    createdAt: new Date('2026-09-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+  const clientsCreated: Array<Record<string, unknown> & { id: string; status: string }> = [];
+  const references: Array<Record<string, unknown> & { id: string; status: string }> = [];
+  const receivables: Array<
+    Record<string, unknown> & {
+      id: string;
+      amount: Prisma.Decimal;
+      dueDate: Date;
+      purpose: string;
+      status: string;
+    }
+  > = [];
+  const events: Array<Record<string, unknown> & { id: string }> = [];
+  const prisma = {
+    client: {
+      create: vi.fn(
+        ({ data, include }: { data: Record<string, unknown>; include?: { plan?: boolean } }) => {
+          const client = {
+            id: 'created-client-id',
+            ...data,
+            status: typeof data.status === 'string' ? data.status : 'ATIVO',
+            createdAt: new Date('2026-09-17T00:00:00.000Z'),
+            updatedAt: new Date('2026-09-17T00:00:00.000Z'),
+          };
+          clientsCreated.push(client);
+
+          return Promise.resolve(include?.plan ? { ...client, plan } : client);
+        },
+      ),
+      findUnique: vi.fn(() => {
+        const client = clientsCreated[0];
+
+        if (!client) return Promise.resolve(null);
+
+        return Promise.resolve({
+          ...client,
+          plan,
+          references: references.map((reference) => ({ ...reference, plan })),
+          renewals: [],
+          receivables: receivables.map((receivable) => ({
+            ...receivable,
+            paymentIntents: [],
+          })),
+          messageDispatches: [],
+          statusHistory: [],
+          events,
+          recoveryCampaigns: [],
+          referralReceived: null,
+          referralsMade: [],
+        });
+      }),
+    },
+    clientReference: {
+      create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
+        const reference = {
+          id: 'created-reference-id',
+          ...data,
+          status: typeof data.status === 'string' ? data.status : 'ATIVO',
+          notes: data.notes ?? null,
+          createdAt: new Date('2026-09-17T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-17T00:00:00.000Z'),
+        };
+        references.push(reference);
+
+        return Promise.resolve(reference);
+      }),
+    },
+    receivable: {
+      create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
+        const receivable = {
+          id: 'initial-receivable-id',
+          ...data,
+          amount: new Prisma.Decimal(String(data.amount)),
+          dueDate: data.dueDate instanceof Date ? data.dueDate : parseBusinessDate('2026-10-20'),
+          purpose: typeof data.purpose === 'string' ? data.purpose : 'RENEWAL',
+          status: typeof data.status === 'string' ? data.status : 'PENDENTE',
+          paidAt: null,
+          canceledAt: null,
+          cancelReason: null,
+          createdAt: new Date('2026-09-17T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-17T00:00:00.000Z'),
+        };
+        receivables.push(receivable);
+
+        return Promise.resolve(receivable);
+      }),
+    },
+    clientEvent: {
+      create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
+        events.push({
+          id: `event-${events.length + 1}`,
+          description: null,
+          createdAt: new Date('2026-09-17T00:00:00.000Z'),
+          ...data,
+        });
+
+        return Promise.resolve(events.at(-1));
+      }),
+    },
+    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
+  };
+  const referralsService = {
+    createPending: vi.fn().mockResolvedValue({
+      id: 'referral-id',
+      status: 'PENDING',
+      rewardType: 'FREE_MONTH',
+    }),
+  };
+  const receivableCycleService = {
+    ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
+  };
+  const service = new ClientsService(
+    prisma as never,
+    { ensureActivePlan: vi.fn().mockResolvedValue(undefined) } as never,
+    {} as never,
+    referralsService as never,
+    receivableCycleService as never,
+  );
+
+  return {
+    service,
+    prisma,
+    clients: clientsCreated,
+    references,
+    receivables,
+    events,
+    referralsService,
+    receivableCycleService,
+  };
+}
 
 function createClientUpdateService({
   references,

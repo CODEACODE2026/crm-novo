@@ -1783,6 +1783,10 @@ a {
   color: #fde68a;
 }
 
+.compact-notice {
+  margin: 10px 0 0;
+}
+
 .inline-panel {
   display: grid;
   gap: 10px;
@@ -3402,6 +3406,48 @@ tbody tr:hover,
   accent-color: var(--accent);
 }
 
+.initial-billing-choice {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 3%);
+  padding: 12px;
+}
+
+.initial-billing-choice p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.initial-billing-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.initial-billing-summary div {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 8px 10px;
+}
+
+.initial-billing-summary dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.initial-billing-summary dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .step-chips,
 .step-list {
   display: flex;
@@ -4574,6 +4620,7 @@ tbody tr:hover,
   .automation-message-grid,
   .recovery-steps-timeline,
   .form-grid,
+  .initial-billing-summary,
   .detail-list,
   .client-info-grid,
   .reference-metrics,

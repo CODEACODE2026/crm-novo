@@ -194,6 +194,7 @@ export class ClientsService {
   async create(dto: CreateClientDto, actorUserId: string) {
     const dueDate = parseBusinessDate(dto.dueDate);
     const phoneNormalized = normalizeBrazilPhone(dto.phone);
+    const generateInitialReceivable = dto.generateInitialReceivable ?? false;
 
     await this.plansService.ensureActivePlan(dto.planId);
 
@@ -225,17 +226,36 @@ export class ClientsService {
             dueDate,
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
-            status: 'ATIVO',
+            status: generateInitialReceivable ? 'PENDENTE_PAGAMENTO' : 'ATIVO',
           },
         });
 
-        await this.currentCycle().ensureCurrentCycleReceivable(clientReference.id, tx);
+        if (generateInitialReceivable) {
+          await tx.receivable.create({
+            data: {
+              clientId: created.id,
+              clientReferenceId: clientReference.id,
+              purpose: 'INITIAL_ACTIVATION',
+              description: `Cobranca inicial de ativacao - ${created.plan.name}`,
+              amount: dto.recurringValue,
+              dueDate,
+              status: 'PENDENTE',
+            },
+          });
+        } else {
+          await this.currentCycle().ensureCurrentCycleReceivable(clientReference.id, tx);
+        }
 
         await tx.clientEvent.create({
           data: {
             clientId: created.id,
             type: 'CLIENT_CREATED',
             title: 'Cliente cadastrado.',
+            metadata: {
+              clientReferenceId: clientReference.id,
+              generateInitialReceivable,
+              referenceStatus: clientReference.status,
+            },
             createdByUserId: actorUserId,
           },
         });

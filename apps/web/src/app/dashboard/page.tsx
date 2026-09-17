@@ -3,6 +3,7 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  ArrowRight,
   ArrowLeft,
   BarChart3,
   Bell,
@@ -49,6 +50,7 @@ import {
   Trash2,
   ToggleLeft,
   UserRound,
+  UsersRound,
   UserPlus,
   Users,
   Wifi,
@@ -161,6 +163,7 @@ import {
   generateCurrentCycleReceivable,
   getRecoverySummary,
   getRecoveryAutomationSettings,
+  getReferral,
   getReferralSummary,
   listBillingDispatches,
   listMessageTemplates,
@@ -1328,6 +1331,10 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   const [status, setStatus] = useState<ReferralStatus | ''>('');
   const [referrerClientId, setReferrerClientId] = useState('');
   const [confirming, setConfirming] = useState<Referral | null>(null);
+  const [detail, setDetail] = useState<Referral | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [canceling, setCanceling] = useState<Referral | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
   const [rewardClientReferenceId, setRewardClientReferenceId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1354,6 +1361,21 @@ function ReferralsView({ clients }: { clients: Client[] }) {
     void loadReferrals();
   }, [loadReferrals]);
 
+  async function openReferralDetail(referral: Referral) {
+    setDetail(referral);
+    setDetailLoading(true);
+    setError('');
+
+    try {
+      const current = await getReferral(referral.id);
+      setDetail(current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível abrir a indicação.');
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   async function applyReward(referral: Referral) {
     setError('');
 
@@ -1372,200 +1394,253 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   }
 
   async function cancelCurrentReferral(referral: Referral) {
-    const reason = window.prompt('Motivo do cancelamento');
+    const reason = cancelReason.trim();
 
-    if (!reason) return;
+    if (!reason) {
+      setError('Informe o motivo do cancelamento.');
+      return;
+    }
 
     setError('');
-
     try {
       await cancelReferral(referral.id, reason);
+      setCanceling(null);
+      setCancelReason('');
       await loadReferrals();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível cancelar a indicação.');
     }
   }
 
+  const totalReferrals = summary
+    ? summary.pending + summary.qualified + summary.rewarded + summary.canceled
+    : 0;
+  const kpis = [
+    { icon: UsersRound, label: 'Total', tone: 'primary', value: totalReferrals },
+    { icon: Clock, label: 'Pendentes', tone: 'warning', value: summary?.pending ?? 0 },
+    { icon: CalendarDays, label: 'Qualificadas', tone: 'info', value: summary?.qualified ?? 0 },
+    { icon: Gift, label: 'Benefícios aplicados', tone: 'success', value: summary?.rewarded ?? 0 },
+    { icon: XCircle, label: 'Canceladas', tone: 'danger', value: summary?.canceled ?? 0 },
+  ] satisfies Array<{
+    icon: LucideIcon;
+    label: string;
+    tone: 'warning' | 'info' | 'success' | 'primary' | 'danger';
+    value: number;
+  }>;
+
   return (
-    <section className="workspace-main">
+    <section className="referrals-view">
+      <PageHeader
+        eyebrow="CRM NOVO UI 2.0"
+        title="Indicações"
+        subtitle="Acompanhe indicações, qualificações e benefícios dos clientes."
+        icon={UsersRound}
+      />
       {error ? <div className="notice danger">{error}</div> : null}
-      <div className="metric-grid">
-        {[
-          ['Pendentes', summary?.pending ?? 0],
-          ['Qualificadas', summary?.qualified ?? 0],
-          ['Benefícios aplicados', summary?.rewarded ?? 0],
-          ['Aguardando benefício', summary?.awaitingReward ?? 0],
-        ].map(([label, value]) => (
-          <article className="metric-card" key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </article>
+
+      <div className="metric-grid referrals-kpis">
+        {kpis.map((kpi) => (
+          <StatCard
+            icon={kpi.icon}
+            key={kpi.label}
+            label={kpi.label}
+            tone={kpi.tone}
+            value={loading ? '-' : kpi.value}
+          />
         ))}
       </div>
-      <div className="toolbar">
-        <div className="search-row">
-          <Search aria-hidden="true" size={18} />
-          <input
-            placeholder="Buscar indicador ou indicado"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
-        <select
-          value={status}
-          onChange={(event) => setStatus(event.target.value as ReferralStatus | '')}
-        >
-          <option value="">Todos os status</option>
-          <option value="PENDING">Pendente</option>
-          <option value="QUALIFIED">Qualificada</option>
-          <option value="REWARDED">Recompensada</option>
-          <option value="CANCELED">Cancelada</option>
-        </select>
-        <select
-          value={referrerClientId}
-          onChange={(event) => setReferrerClientId(event.target.value)}
-        >
-          <option value="">Todos os indicadores</option>
-          {clients.map((client) => (
-            <option key={client.id} value={client.id}>
-              {client.name} · {client.reference}
-            </option>
-          ))}
-        </select>
-        <button className="secondary-button" type="button" onClick={() => void loadReferrals()}>
-          Aplicar
-        </button>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Indicado</th>
-              <th>Indicador</th>
-              <th>Data</th>
-              <th>Status</th>
-              <th>Beneficio</th>
-              <th>Qualificação</th>
-              <th>Aplicação</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((referral) => (
-              <tr key={referral.id}>
-                <td>
-                  <strong>{referral.referredClient.name}</strong>
-                  <span>{referral.referredClient.reference}</span>
-                </td>
-                <td>
-                  <strong>{referral.referrerClient.name}</strong>
-                  <span>{referral.referrerClient.status}</span>
-                </td>
-                <td>{formatDateTime(referral.createdAt)}</td>
-                <td>{referralStatusLabel(referral.status)}</td>
-                <td>{referral.rewardLabel}</td>
-                <td>{referral.qualifiedAt ? formatDateTime(referral.qualifiedAt) : '-'}</td>
-                <td>{referral.appliedAt ? formatDateTime(referral.appliedAt) : '-'}</td>
-                <td>
-                  <div className="row-actions">
-                    {referral.status === 'QUALIFIED' ? (
-                      <button
-                        className="secondary-button compact"
-                        type="button"
-                        onClick={() => {
-                          setRewardClientReferenceId('');
-                          setConfirming(referral);
-                        }}
-                      >
-                        Aplicar benefício
-                      </button>
-                    ) : null}
-                    {referral.status !== 'REWARDED' && referral.status !== 'CANCELED' ? (
-                      <button
-                        className="ghost-button compact"
-                        type="button"
-                        onClick={() => void cancelCurrentReferral(referral)}
-                      >
-                        Cancelar
-                      </button>
-                    ) : null}
-                  </div>
-                </td>
-              </tr>
+
+      <Card className="referrals-workspace">
+        <SectionHeader
+          eyebrow="Indicações"
+          title="Acompanhe o ciclo das indicações realizadas pelos clientes."
+        />
+        <div className="toolbar referrals-toolbar">
+          <div className="search-row">
+            <Search aria-hidden="true" size={18} />
+            <input
+              placeholder="Buscar indicador ou indicado"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <select
+            aria-label="Status da indicação"
+            value={status}
+            onChange={(event) => setStatus(event.target.value as ReferralStatus | '')}
+          >
+            <option value="">Todos os status</option>
+            <option value="PENDING">Pendente</option>
+            <option value="QUALIFIED">Qualificada</option>
+            <option value="REWARDED">Benefício aplicado</option>
+            <option value="CANCELED">Cancelada</option>
+          </select>
+          <select
+            aria-label="Indicador"
+            value={referrerClientId}
+            onChange={(event) => setReferrerClientId(event.target.value)}
+          >
+            <option value="">Todos os indicadores</option>
+            {clients.map((client) => (
+              <option key={client.id} value={client.id}>
+                {client.name} · {clientReferenceCountLabel(client.references?.length ?? 1)}
+              </option>
             ))}
-            {!items.length ? (
+          </select>
+          <Button icon={Filter} onClick={() => void loadReferrals()}>
+            Aplicar
+          </Button>
+        </div>
+        <div className="table-wrap referrals-table-wrap">
+          <table className="referrals-table">
+            <thead>
               <tr>
-                <td colSpan={8}>{loading ? 'Carregando...' : 'Nenhuma indicação encontrada.'}</td>
+                <th>Indicado</th>
+                <th>Indicador</th>
+                <th className="date-column">Data</th>
+                <th className="finance-status-column">Status</th>
+                <th>Benefício</th>
+                <th className="date-column">Qualificação</th>
+                <th className="date-column">Aplicação</th>
+                <th className="finance-actions-column">Ações</th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-      {confirming ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="modal">
-            <header className="modal-header">
-              <h2>Aplicar benefício</h2>
-              <button className="icon-button" type="button" onClick={() => setConfirming(null)}>
-                <X aria-hidden="true" size={17} />
-              </button>
-            </header>
-            <div className="mini-list">
-              <article>
-                <strong>Indicador</strong>
-                <span>{confirming.referrerClient.name}</span>
-                <p>Status atual: {confirming.referrerClient.status}</p>
-              </article>
-              <article>
-                <strong>Beneficio</strong>
-                <span>{confirming.rewardLabel}</span>
-              </article>
-              {confirming.rewardType === 'FREE_MONTH' ? (
-                <label className="field">
-                  <span>Referência beneficiada</span>
-                  <select
-                    required
-                    value={rewardClientReferenceId}
-                    onChange={(event) => setRewardClientReferenceId(event.target.value)}
-                  >
-                    <option value="">Selecione uma referência</option>
-                    {clients
-                      .find((client) => client.id === confirming.referrerClientId)
-                      ?.references?.filter((reference) => reference.status !== 'CANCELADO')
-                      .map((reference) => (
-                        <option key={reference.id} value={reference.id}>
-                          {reference.reference} · {formatDate(reference.dueDate)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
+            </thead>
+            <tbody>
+              {items.map((referral) => (
+                <tr key={referral.id}>
+                  <td>
+                    <ReferralClientCell client={referral.referredClient} role="Indicado" />
+                  </td>
+                  <td>
+                    <ReferralClientCell client={referral.referrerClient} role="Indicador" />
+                  </td>
+                  <td className="date-column">{formatDateTime(referral.createdAt)}</td>
+                  <td className="finance-status-column">
+                    <span
+                      className={`finance-status-pill tone-${referralStatusTone(referral.status)}`}
+                    >
+                      {referralStatusLabel(referral.status)}
+                    </span>
+                  </td>
+                  <td>
+                    <strong>{referralRewardTypeLabel(referral.rewardType)}</strong>
+                    <span>{referralBenefitLabel(referral)}</span>
+                  </td>
+                  <td className="date-column">
+                    {referral.qualifiedAt ? formatDateTime(referral.qualifiedAt) : '—'}
+                  </td>
+                  <td className="date-column">
+                    {referral.appliedAt ? formatDateTime(referral.appliedAt) : '—'}
+                  </td>
+                  <td className="finance-actions-column">
+                    <div className="table-actions">
+                      <IconButton
+                        icon={Eye}
+                        label={`Visualizar indicação de ${referral.referredClient.name}`}
+                        onClick={() => void openReferralDetail(referral)}
+                      />
+                      {referral.status === 'QUALIFIED' ? (
+                        <Button
+                          icon={Gift}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setRewardClientReferenceId('');
+                            setConfirming(referral);
+                          }}
+                        >
+                          Aplicar benefício
+                        </Button>
+                      ) : null}
+                      {referral.status !== 'REWARDED' && referral.status !== 'CANCELED' ? (
+                        <ActionMenu
+                          items={[
+                            {
+                              danger: true,
+                              icon: XCircle,
+                              label: 'Cancelar',
+                              onSelect: () => {
+                                setCancelReason('');
+                                setCanceling(referral);
+                              },
+                            },
+                          ]}
+                        />
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!items.length ? (
+                <tr>
+                  <td colSpan={8}>
+                    <div className="empty-state">
+                      <UsersRound aria-hidden="true" size={20} />
+                      <strong>{loading ? 'Carregando...' : 'Nenhuma indicação encontrada'}</strong>
+                      {!loading ? (
+                        <span>Nenhum registro corresponde aos filtros atuais.</span>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
               ) : null}
-              <article>
-                <strong>Vencimento atual</strong>
-                <span>{confirming.rewardPreview?.currentDueDate ?? '-'}</span>
-              </article>
-              <article>
-                <strong>Novo vencimento</strong>
-                <span>{confirming.rewardPreview?.newDueDate ?? '-'}</span>
-              </article>
-            </div>
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {detail ? (
+        <ReferralDetailModal
+          loading={detailLoading}
+          referral={detail}
+          onClose={() => setDetail(null)}
+        />
+      ) : null}
+      {confirming ? (
+        <ReferralRewardModal
+          clients={clients}
+          referral={confirming}
+          rewardClientReferenceId={rewardClientReferenceId}
+          onApply={() => void applyReward(confirming)}
+          onChangeReference={setRewardClientReferenceId}
+          onClose={() => setConfirming(null)}
+        />
+      ) : null}
+      {canceling ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal referral-cancel-modal" aria-labelledby="referral-cancel-title">
+            <header className="modal-header modal-header-with-icon">
+              <span className="modal-icon danger" aria-hidden="true">
+                <XCircle size={16} />
+              </span>
+              <div>
+                <span className="metric-label">Cancelamento</span>
+                <h2 id="referral-cancel-title">Cancelar indicação</h2>
+                <p>Informe o motivo antes de cancelar esta indicação.</p>
+              </div>
+              <IconButton
+                icon={X}
+                label="Fechar cancelamento da indicação"
+                onClick={() => setCanceling(null)}
+              />
+            </header>
+            <label className="field referral-cancel-reason">
+              <span>Motivo do cancelamento</span>
+              <textarea
+                value={cancelReason}
+                onChange={(event) => setCancelReason(event.target.value)}
+              />
+            </label>
             <div className="form-actions">
               <div className="button-row">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setConfirming(null)}
+                <Button onClick={() => setCanceling(null)}>Cancelar</Button>
+                <Button
+                  icon={XCircle}
+                  variant="danger"
+                  onClick={() => void cancelCurrentReferral(canceling)}
                 >
-                  Cancelar
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={confirming.rewardType === 'FREE_MONTH' && !rewardClientReferenceId}
-                  type="button"
-                  onClick={() => void applyReward(confirming)}
-                >
-                  Aplicar benefício
-                </button>
+                  Confirmar cancelamento
+                </Button>
               </div>
             </div>
           </section>
@@ -1575,15 +1650,266 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   );
 }
 
+function ReferralClientCell({
+  client,
+  role,
+}: {
+  client: Referral['referredClient'];
+  role: 'Indicador' | 'Indicado';
+}) {
+  return (
+    <div className="referral-client-cell">
+      <span className="referral-client-role">{role}</span>
+      <strong>{client.name}</strong>
+      <span>{client.reference}</span>
+    </div>
+  );
+}
+
 function referralStatusLabel(status: ReferralStatus) {
   const labels = {
     PENDING: 'Pendente',
     QUALIFIED: 'Qualificada',
-    REWARDED: 'Recompensada',
+    REWARDED: 'Benefício aplicado',
     CANCELED: 'Cancelada',
   } satisfies Record<ReferralStatus, string>;
 
   return labels[status];
+}
+
+function referralStatusTone(status: ReferralStatus) {
+  const tones = {
+    PENDING: 'warning',
+    QUALIFIED: 'info',
+    REWARDED: 'success',
+    CANCELED: 'danger',
+  } satisfies Record<ReferralStatus, 'warning' | 'info' | 'success' | 'danger'>;
+
+  return tones[status];
+}
+
+function referralRewardTypeLabel(type: Referral['rewardType']) {
+  const labels = {
+    FREE_MONTH: 'Mês grátis',
+    CREDIT: 'Crédito',
+    CUSTOM: 'Personalizado',
+  } satisfies Record<Referral['rewardType'], string>;
+
+  return labels[type];
+}
+
+function referralBenefitLabel(
+  referral: Pick<Referral, 'rewardType' | 'rewardValue' | 'rewardDescription'>,
+) {
+  if (referral.rewardType === 'FREE_MONTH') return 'Mês grátis';
+  if (referral.rewardType === 'CREDIT') {
+    return referral.rewardValue
+      ? `${formatCurrency(referral.rewardValue)} · Benefício registrado`
+      : 'Benefício registrado';
+  }
+
+  return referral.rewardDescription ?? 'Benefício personalizado';
+}
+
+function ReferralDetailModal({
+  loading,
+  onClose,
+  referral,
+}: {
+  loading: boolean;
+  onClose: () => void;
+  referral: Referral;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal referral-detail-modal" aria-labelledby="referral-detail-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <UsersRound size={16} />
+          </span>
+          <div>
+            <span className="metric-label">Indicações</span>
+            <h2 id="referral-detail-title">Detalhes da indicação</h2>
+            <p>{loading ? 'Atualizando dados da indicação...' : 'Ciclo atual da indicação.'}</p>
+          </div>
+          <IconButton icon={X} label="Fechar detalhes da indicação" onClick={onClose} />
+        </header>
+
+        <div className="referral-detail-grid">
+          {[
+            ['Indicador', referral.referrerClient.name],
+            ['Indicado', referral.referredClient.name],
+            ['Data da indicação', formatDateTime(referral.createdAt)],
+            ['Status', referralStatusLabel(referral.status)],
+            ['Tipo de benefício', referralRewardTypeLabel(referral.rewardType)],
+            ['Qualificada em', referral.qualifiedAt ? formatDateTime(referral.qualifiedAt) : null],
+            [
+              'Benefício aplicado em',
+              referral.appliedAt ? formatDateTime(referral.appliedAt) : null,
+            ],
+            ['Cancelada em', referral.canceledAt ? formatDateTime(referral.canceledAt) : null],
+            ['Motivo do cancelamento', referral.cancellationReason],
+          ]
+            .filter(([, value]) => Boolean(value))
+            .map(([label, value]) => (
+              <div key={label}>
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+        </div>
+
+        <ReferralProgress referral={referral} />
+      </section>
+    </div>
+  );
+}
+
+function ReferralProgress({ referral }: { referral: Referral }) {
+  const steps =
+    referral.status === 'CANCELED'
+      ? [
+          { date: referral.createdAt, icon: UsersRound, label: 'Indicação criada', tone: 'info' },
+          { date: referral.canceledAt, icon: XCircle, label: 'Cancelada', tone: 'danger' },
+        ]
+      : [
+          { date: referral.createdAt, icon: UsersRound, label: 'Indicação criada', tone: 'info' },
+          { date: referral.qualifiedAt, icon: CircleCheck, label: 'Qualificada', tone: 'info' },
+          { date: referral.appliedAt, icon: Gift, label: 'Benefício aplicado', tone: 'success' },
+        ];
+
+  return (
+    <div className="referral-progress">
+      {steps.map((step, index) => {
+        const Icon = step.icon;
+        return (
+          <article className={step.date ? 'complete' : 'pending'} key={step.label}>
+            <span className={`referral-progress-icon tone-${step.tone}`} aria-hidden="true">
+              <Icon size={15} />
+            </span>
+            <div>
+              <strong>{step.label}</strong>
+              <small>{step.date ? formatDateTime(step.date) : '—'}</small>
+            </div>
+            {index < steps.length - 1 ? <ArrowRight aria-hidden="true" size={16} /> : null}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReferralRewardModal({
+  clients,
+  onApply,
+  onChangeReference,
+  onClose,
+  referral,
+  rewardClientReferenceId,
+}: {
+  clients: Client[];
+  onApply: () => void;
+  onChangeReference: (id: string) => void;
+  onClose: () => void;
+  referral: Referral;
+  rewardClientReferenceId: string;
+}) {
+  const referrer = clients.find((client) => client.id === referral.referrerClientId);
+  const eligibleReferences =
+    referrer?.references?.filter((reference) => reference.status !== 'CANCELADO') ?? [];
+  const selectedReference = eligibleReferences.find(
+    (reference) => reference.id === rewardClientReferenceId,
+  );
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal referral-reward-modal" aria-labelledby="referral-reward-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <Gift size={16} />
+          </span>
+          <div>
+            <span className="metric-label">Benefício</span>
+            <h2 id="referral-reward-title">Aplicar benefício</h2>
+            <p>Conceda o benefício ao cliente que realizou a indicação.</p>
+          </div>
+          <IconButton icon={X} label="Fechar aplicação de benefício" onClick={onClose} />
+        </header>
+
+        <div className="referral-detail-grid">
+          <div>
+            <span>Indicador</span>
+            <strong>{referral.referrerClient.name}</strong>
+          </div>
+          <div>
+            <span>Indicado</span>
+            <strong>{referral.referredClient.name}</strong>
+          </div>
+          <div>
+            <span>Tipo de benefício</span>
+            <strong>{referralRewardTypeLabel(referral.rewardType)}</strong>
+          </div>
+        </div>
+
+        {referral.rewardType === 'FREE_MONTH' ? (
+          <>
+            <label className="field">
+              <span>Referência que receberá o benefício</span>
+              <p className="field-help">
+                Escolha qual serviço do cliente indicador receberá o mês grátis.
+              </p>
+              <select
+                required
+                value={rewardClientReferenceId}
+                onChange={(event) => onChangeReference(event.target.value)}
+              >
+                <option value="">Selecione uma referência</option>
+                {eligibleReferences.map((reference) => (
+                  <option key={reference.id} value={reference.id}>
+                    {reference.reference} · {reference.plan.name} · próximo vencimento{' '}
+                    {formatDate(reference.dueDate)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="free-month-preview">
+              <article>
+                <span>Vencimento atual</span>
+                <strong>
+                  {referral.rewardPreview?.currentDueDate ??
+                    (selectedReference ? formatDate(selectedReference.dueDate) : '—')}
+                </strong>
+              </article>
+              <ArrowRight aria-hidden="true" size={18} />
+              <article>
+                <span>Novo vencimento</span>
+                <strong>{referral.rewardPreview?.newDueDate ?? '—'}</strong>
+              </article>
+            </div>
+          </>
+        ) : (
+          <div className="notice">
+            <strong>{referralBenefitLabel(referral)}</strong>
+            <span>Benefício registrado na indicação.</span>
+          </div>
+        )}
+
+        <div className="form-actions">
+          <div className="button-row">
+            <Button onClick={onClose}>Cancelar</Button>
+            <Button
+              disabled={referral.rewardType === 'FREE_MONTH' && !rewardClientReferenceId}
+              icon={Gift}
+              variant="primary"
+              onClick={onApply}
+            >
+              Aplicar benefício
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 const reportDefinitions = [
@@ -3402,42 +3728,70 @@ function ClientsView({
               ) : null}
 
               {detailTab === 'more' ? (
-                <div className="mini-list">
+                <div className="client-referrals-panel">
                   <SectionHeader eyebrow="Mais" title="Indicações" />
-                  {selectedClient.referralReceived ? (
-                    <article>
-                      <strong>
-                        Indicado por {selectedClient.referralReceived.referrerClient.name}
-                      </strong>
-                      <span>{referralStatusLabel(selectedClient.referralReceived.status)}</span>
-                      <p>
-                        {selectedClient.referralReceived.rewardType}
-                        {selectedClient.referralReceived.rewardDescription
-                          ? ` · ${selectedClient.referralReceived.rewardDescription}`
-                          : ''}
-                      </p>
-                    </article>
-                  ) : null}
-                  {selectedClient.referralsMade ? (
-                    <article>
-                      <strong>{selectedClient.referralsMade.total} indicação(oes) feitas</strong>
-                      <span>
-                        {selectedClient.referralsMade.qualified} qualificadas ·{' '}
-                        {selectedClient.referralsMade.rewarded} recompensadas
-                      </span>
-                    </article>
-                  ) : null}
-                  {(selectedClient.referralsMade?.items ?? []).map((referral) => (
-                    <article key={referral.id}>
-                      <strong>{referral.referredClient.name}</strong>
-                      <span>{referralStatusLabel(referral.status)}</span>
-                      <p>{referral.rewardType}</p>
-                    </article>
-                  ))}
-                  {!selectedClient.referralReceived &&
-                  !selectedClient.referralsMade?.items.length ? (
-                    <div className="empty-state">Sem indicações vinculadas.</div>
-                  ) : null}
+                  <div className="client-referral-section">
+                    <h3>Indicação recebida</h3>
+                    {selectedClient.referralReceived ? (
+                      <article>
+                        <div>
+                          <strong>
+                            Indicado por {selectedClient.referralReceived.referrerClient.name}
+                          </strong>
+                          <span>{referralBenefitLabel(selectedClient.referralReceived)}</span>
+                        </div>
+                        <span
+                          className={`finance-status-pill tone-${referralStatusTone(
+                            selectedClient.referralReceived.status,
+                          )}`}
+                        >
+                          {referralStatusLabel(selectedClient.referralReceived.status)}
+                        </span>
+                      </article>
+                    ) : (
+                      <div className="empty-state">Este cliente não possui indicação recebida.</div>
+                    )}
+                  </div>
+
+                  <div className="client-referral-section">
+                    <h3>Indicações feitas</h3>
+                    {selectedClient.referralsMade ? (
+                      <div className="client-referral-summary">
+                        <div>
+                          <span>Total</span>
+                          <strong>{selectedClient.referralsMade.total}</strong>
+                        </div>
+                        <div>
+                          <span>Qualificadas</span>
+                          <strong>{selectedClient.referralsMade.qualified}</strong>
+                        </div>
+                        <div>
+                          <span>Benefícios aplicados</span>
+                          <strong>{selectedClient.referralsMade.rewarded}</strong>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="mini-list client-referral-list">
+                      {(selectedClient.referralsMade?.items ?? []).map((referral) => (
+                        <article key={referral.id}>
+                          <div>
+                            <strong>{referral.referredClient.name}</strong>
+                            <span>{referralBenefitLabel(referral)}</span>
+                          </div>
+                          <span
+                            className={`finance-status-pill tone-${referralStatusTone(
+                              referral.status,
+                            )}`}
+                          >
+                            {referralStatusLabel(referral.status)}
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                    {!selectedClient.referralsMade?.items.length ? (
+                      <div className="empty-state">Nenhuma indicação realizada.</div>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
             </>

@@ -2337,6 +2337,247 @@ tbody tr:hover,
   vertical-align: middle;
 }
 
+.referrals-view,
+.referrals-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.referrals-view .page-header {
+  margin-bottom: 0;
+}
+
+.referrals-kpis {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.referrals-workspace {
+  padding: 16px;
+}
+
+.referrals-workspace .panel-header {
+  margin-bottom: 0;
+}
+
+.referrals-toolbar {
+  grid-template-columns: minmax(260px, 1fr) 170px 220px auto;
+  margin-bottom: 0;
+}
+
+.referrals-table {
+  min-width: 980px;
+}
+
+.referrals-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.referrals-table th,
+.referrals-table td {
+  padding: 10px;
+}
+
+.referrals-table .finance-actions-column {
+  min-width: 84px;
+}
+
+.referrals-table tbody tr {
+  cursor: default;
+}
+
+.referral-client-cell {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.referral-client-cell strong {
+  overflow: hidden;
+  max-width: 180px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.referral-client-cell span {
+  margin: 0;
+}
+
+.referral-client-role {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.referrals-table .empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 18px;
+  text-align: center;
+}
+
+.referrals-table .empty-state svg {
+  color: var(--info);
+}
+
+.referrals-table .empty-state strong {
+  color: var(--text);
+}
+
+.referrals-table .empty-state span {
+  color: var(--text-muted);
+}
+
+.date-column {
+  min-width: 112px;
+  white-space: nowrap;
+}
+
+.referral-detail-modal,
+.referral-reward-modal,
+.referral-cancel-modal {
+  width: min(100%, 760px);
+}
+
+.referral-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-block: 16px;
+}
+
+.referral-detail-grid div,
+.free-month-preview article,
+.client-referral-summary div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.referral-detail-grid span,
+.free-month-preview span,
+.client-referral-summary span,
+.field-help {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.field-help {
+  margin: -2px 0 0;
+}
+
+.referral-progress {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.referral-progress article {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.referral-progress article.pending {
+  opacity: 0.62;
+}
+
+.referral-progress small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.referral-progress-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 4%);
+}
+
+.referral-progress-icon.tone-info {
+  color: var(--info);
+}
+
+.referral-progress-icon.tone-success {
+  color: var(--accent-strong);
+}
+
+.referral-progress-icon.tone-danger {
+  color: var(--danger);
+}
+
+.free-month-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.free-month-preview > svg {
+  justify-self: center;
+  color: var(--info);
+}
+
+.client-referrals-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.client-referral-section {
+  display: grid;
+  gap: 8px;
+}
+
+.client-referral-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.client-referral-section article,
+.client-referral-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.client-referral-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.client-referral-list {
+  gap: 8px;
+}
+
+.referral-cancel-reason {
+  margin-top: 16px;
+}
+
 .client-avatar {
   display: grid;
   width: 30px;
@@ -3814,10 +4055,18 @@ tbody tr:hover,
   }
 
   .toolbar,
+  .referrals-toolbar,
   .billing-toolbar,
   .recovery-toolbar,
   .compact-form {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .referrals-kpis,
+  .referral-detail-grid,
+  .referral-progress,
+  .client-referral-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .automation-config-grid,
@@ -3852,10 +4101,12 @@ tbody tr:hover,
   }
 
   .metric-grid,
+  .referrals-kpis,
   .plans-kpis,
   .plans-grid,
   .nav-list,
   .toolbar,
+  .referrals-toolbar,
   .billing-toolbar,
   .recovery-toolbar,
   .compact-form,
@@ -3872,6 +4123,19 @@ tbody tr:hover,
   .client-tab-summary,
   .compact-detail-list {
     grid-template-columns: 1fr;
+  }
+
+  .free-month-preview,
+  .referral-detail-grid,
+  .referral-progress,
+  .client-referral-summary,
+  .client-referral-section article,
+  .client-referral-list article {
+    grid-template-columns: 1fr;
+  }
+
+  .free-month-preview > svg {
+    transform: rotate(90deg);
   }
 
   .recovery-campaign-steps article {

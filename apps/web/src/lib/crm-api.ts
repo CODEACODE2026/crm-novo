@@ -1244,6 +1244,10 @@ export function getReferralSummary() {
   return apiFetch<ReferralSummary>('/referrals/summary');
 }
 
+export function getReferral(id: string) {
+  return apiFetch<Referral>(`/referrals/${id}`);
+}
+
 export function applyReferralReward(
   id: string,
   payload: { clientReferenceId?: string; rewardValue?: number; rewardDescription?: string } = {},

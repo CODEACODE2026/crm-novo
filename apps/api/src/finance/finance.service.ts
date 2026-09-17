@@ -1647,81 +1647,91 @@ export class FinanceService {
 
     const reference = receivable.clientReference ?? receivable.client;
 
-    if (receivable.status !== 'PAGO' || reference.status !== 'PENDENTE_PAGAMENTO') {
+    if (receivable.status !== 'PAGO') {
       return;
     }
 
-    const previousStatus = reference.status;
-    const anchorDay = reference.billingAnchorDay;
-    const nextDueDate = addCalendarMonthsPreservingAnchor(
-      receivable.dueDate,
-      'plan' in reference ? reference.plan.durationMonths : receivable.client.plan.durationMonths,
-      anchorDay,
-    );
+    if (!['PENDENTE_PAGAMENTO', 'ATIVO'].includes(reference.status)) {
+      return;
+    }
 
-    if (tx.clientReference) {
-      await tx.clientReference.update({
-        where: { id: receivable.clientReferenceId },
+    if (reference.status === 'PENDENTE_PAGAMENTO') {
+      const previousStatus = reference.status;
+      const anchorDay = reference.billingAnchorDay;
+      const nextDueDate = addCalendarMonthsPreservingAnchor(
+        receivable.dueDate,
+        'plan' in reference ? reference.plan.durationMonths : receivable.client.plan.durationMonths,
+        anchorDay,
+      );
+
+      if (tx.clientReference) {
+        await tx.clientReference.update({
+          where: { id: receivable.clientReferenceId },
+          data: {
+            status: 'ATIVO',
+            dueDate: nextDueDate,
+            billingAnchorDay: anchorDay,
+          },
+        });
+
+        await this.receivableCycleService?.ensureCurrentCycleReceivable(
+          receivable.clientReferenceId,
+          tx,
+        );
+      } else {
+        await tx.client.update({
+          where: { id: receivable.clientId },
+          data: {
+            status: 'ATIVO',
+            dueDate: nextDueDate,
+            billingAnchorDay: anchorDay,
+          },
+        });
+      }
+
+      await tx.clientStatusHistory.create({
         data: {
-          status: 'ATIVO',
-          dueDate: nextDueDate,
-          billingAnchorDay: anchorDay,
+          clientId: receivable.clientId,
+          ...(receivable.clientReferenceId
+            ? { clientReferenceId: receivable.clientReferenceId }
+            : {}),
+          previousStatus,
+          newStatus: 'ATIVO',
+          reason: 'Ativacao automatica apos pagamento inicial.',
+          changedByUserId: actorUserId,
         },
       });
 
-      await this.receivableCycleService?.ensureCurrentCycleReceivable(
-        receivable.clientReferenceId,
-        tx,
-      );
-    } else {
-      await tx.client.update({
-        where: { id: receivable.clientId },
+      await tx.clientEvent.create({
         data: {
-          status: 'ATIVO',
-          dueDate: nextDueDate,
-          billingAnchorDay: anchorDay,
+          clientId: receivable.clientId,
+          type: 'STATUS_CHANGED',
+          title: 'Referencia ativada pelo primeiro pagamento.',
+          description: `Status alterado de ${previousStatus} para ATIVO. Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
+          metadata: {
+            receivableId,
+            clientReferenceId: receivable.clientReferenceId,
+            previousStatus,
+            newStatus: 'ATIVO',
+            originalDueDate: formatBusinessDate(receivable.dueDate),
+            nextDueDate: formatBusinessDate(nextDueDate),
+            billingAnchorDay: anchorDay,
+            planId: reference.planId,
+            durationMonths:
+              'plan' in reference
+                ? reference.plan.durationMonths
+                : receivable.client.plan.durationMonths,
+          },
+          createdByUserId: actorUserId,
         },
       });
     }
 
-    await tx.clientStatusHistory.create({
-      data: {
-        clientId: receivable.clientId,
-        ...(receivable.clientReferenceId
-          ? { clientReferenceId: receivable.clientReferenceId }
-          : {}),
-        previousStatus,
-        newStatus: 'ATIVO',
-        reason: 'Ativacao automatica apos pagamento inicial.',
-        changedByUserId: actorUserId,
-      },
-    });
+    if (!this.referralsService) {
+      throw new ConflictException('Servico de indicacoes indisponivel para qualificar indicacao.');
+    }
 
-    await tx.clientEvent.create({
-      data: {
-        clientId: receivable.clientId,
-        type: 'STATUS_CHANGED',
-        title: 'Referencia ativada pelo primeiro pagamento.',
-        description: `Status alterado de ${previousStatus} para ATIVO. Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
-        metadata: {
-          receivableId,
-          clientReferenceId: receivable.clientReferenceId,
-          previousStatus,
-          newStatus: 'ATIVO',
-          originalDueDate: formatBusinessDate(receivable.dueDate),
-          nextDueDate: formatBusinessDate(nextDueDate),
-          billingAnchorDay: anchorDay,
-          planId: reference.planId,
-          durationMonths:
-            'plan' in reference
-              ? reference.plan.durationMonths
-              : receivable.client.plan.durationMonths,
-        },
-        createdByUserId: actorUserId,
-      },
-    });
-
-    await this.referralsService?.qualifyAfterInitialActivation(
+    await this.referralsService.qualifyAfterInitialActivation(
       tx,
       receivable.clientId,
       receivableId,

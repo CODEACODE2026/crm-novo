@@ -397,6 +397,30 @@ function createCycleRecorder(fake: ReturnType<typeof createFinancePrisma>) {
   return { cycle, nextReceivables };
 }
 
+function createReferralQualificationDouble(
+  status: 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED' = 'PENDING',
+) {
+  const referral = {
+    id: 'referral-1',
+    status,
+    qualifiedAt:
+      status === 'QUALIFIED' || status === 'REWARDED' ? new Date('2026-09-01T00:00:00.000Z') : null,
+  };
+  const referrals = {
+    qualifyAfterInitialActivation: vi.fn(() => {
+      if (referral.status !== 'PENDING') {
+        return Promise.resolve(null);
+      }
+
+      referral.status = 'QUALIFIED';
+      referral.qualifiedAt = new Date('2026-09-15T00:00:00.000Z');
+      return Promise.resolve(referral);
+    }),
+  };
+
+  return { referral, referrals };
+}
+
 function createGroupedFinancePrisma() {
   const entryCategory = {
     id: '11111111-1111-4111-8111-111111111111',
@@ -1243,11 +1267,13 @@ describe('FinanceService', () => {
     fake.receivable.purpose = 'INITIAL_ACTIVATION';
     fake.receivable.renewalId = null;
     fake.receivable.dueDate = parseBusinessDate('2026-09-10');
+    const { referral, referrals } = createReferralQualificationDouble();
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       {} as never,
       fake.config as never,
+      referrals as never,
     );
 
     await service.payReceivable(
@@ -1261,6 +1287,14 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(1);
     expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(1);
+    expect(referral.status).toBe('QUALIFIED');
+    expect(referral.qualifiedAt).toBeInstanceOf(Date);
+    expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
+      fake.tx,
+      fake.client.id,
+      fake.receivable.id,
+      actorUserId,
+    );
   });
 
   it('ensures the next renewal receivable after initial activation payment', async () => {
@@ -1274,12 +1308,13 @@ describe('FinanceService', () => {
     const cycle = {
       ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
     };
+    const { referrals } = createReferralQualificationDouble();
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       {} as never,
       fake.config as never,
-      undefined,
+      referrals as never,
       cycle as never,
     );
 
@@ -1296,6 +1331,139 @@ describe('FinanceService', () => {
       fake.tx,
     );
   });
+
+  it('qualifies referral for an already active reference after initial activation payment', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.status = 'ATIVO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-10-10');
+    fake.clientReference.billingAnchorDay = 10;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-10');
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
+    const { referral, referrals } = createReferralQualificationDouble();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      referrals as never,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-15', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(fake.clientReference.billingAnchorDay).toBe(10);
+    expect(referral.status).toBe('QUALIFIED');
+    expect(referral.qualifiedAt).toBeInstanceOf(Date);
+    expect(cycle.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(nextReceivables).toHaveLength(0);
+    expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(0);
+    expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(0);
+    expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
+      fake.tx,
+      fake.client.id,
+      fake.receivable.id,
+      actorUserId,
+    );
+  });
+
+  it.each(['INATIVO' as const, 'CANCELADO' as const])(
+    'does not qualify referral for %s reference after initial activation payment',
+    async (status) => {
+      const fake = createFinancePrisma();
+      fake.clientReference.status = status;
+      fake.clientReference.dueDate = parseBusinessDate('2026-10-10');
+      fake.receivable.purpose = 'INITIAL_ACTIVATION';
+      fake.receivable.renewalId = null;
+      fake.receivable.dueDate = parseBusinessDate('2026-09-10');
+      const { referral, referrals } = createReferralQualificationDouble();
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+        referrals as never,
+      );
+
+      await service.payReceivable(
+        fake.receivable.id,
+        { paymentDate: '2026-09-15', categoryId: fake.entryCategory.id },
+        actorUserId,
+      );
+
+      expect(fake.clientReference.status).toBe(status);
+      expect(referral.status).toBe('PENDING');
+      expect(referrals.qualifyAfterInitialActivation).not.toHaveBeenCalled();
+      expect(fake.events.filter((event) => event.type === 'STATUS_CHANGED')).toHaveLength(0);
+    },
+  );
+
+  it('does not qualify referral after renewal payment', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.status = 'ATIVO';
+    fake.receivable.purpose = 'RENEWAL';
+    const { cycle } = createCycleRecorder(fake);
+    const { referral, referrals } = createReferralQualificationDouble();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      referrals as never,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-10-10', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(referral.status).toBe('PENDING');
+    expect(referrals.qualifyAfterInitialActivation).not.toHaveBeenCalled();
+  });
+
+  it.each(['QUALIFIED' as const, 'REWARDED' as const, 'CANCELED' as const])(
+    'does not regress a %s referral after initial activation payment',
+    async (status) => {
+      const fake = createFinancePrisma();
+      fake.clientReference.status = 'ATIVO';
+      fake.receivable.purpose = 'INITIAL_ACTIVATION';
+      fake.receivable.renewalId = null;
+      const { referral, referrals } = createReferralQualificationDouble(status);
+      const originalQualifiedAt = referral.qualifiedAt;
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+        referrals as never,
+      );
+
+      await service.payReceivable(
+        fake.receivable.id,
+        { paymentDate: '2026-10-10', categoryId: fake.entryCategory.id },
+        actorUserId,
+      );
+
+      expect(referral.status).toBe(status);
+      expect(referral.qualifiedAt).toBe(originalQualifiedAt);
+      expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
+        fake.tx,
+        fake.client.id,
+        fake.receivable.id,
+        actorUserId,
+      );
+    },
+  );
 
   it('advances the current reference cycle after manual renewal payment', async () => {
     const fake = createFinancePrisma();
@@ -1772,12 +1940,13 @@ describe('FinanceService', () => {
     fake.receivable.status = status;
     const originalDueDate = fake.clientReference.dueDate;
     const { cycle } = createCycleRecorder(fake);
+    const { referrals } = createReferralQualificationDouble();
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       {} as never,
       fake.config as never,
-      undefined,
+      referrals as never,
       cycle as never,
     );
 
@@ -2010,11 +2179,13 @@ describe('FinanceService', () => {
     fake.receivable.purpose = 'INITIAL_ACTIVATION';
     fake.receivable.renewalId = null;
     fake.receivable.dueDate = parseBusinessDate('2026-01-31');
+    const { referrals } = createReferralQualificationDouble();
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       {} as never,
       fake.config as never,
+      referrals as never,
     );
     const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
     fake.provider.getPixStatus.mockResolvedValue({

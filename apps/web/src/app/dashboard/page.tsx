@@ -1509,10 +1509,10 @@ function ReferralsView({ clients }: { clients: Client[] }) {
               {items.map((referral) => (
                 <tr key={referral.id}>
                   <td>
-                    <ReferralClientCell client={referral.referredClient} role="Indicado" />
+                    <ReferralClientCell client={referral.referredClient} />
                   </td>
                   <td>
-                    <ReferralClientCell client={referral.referrerClient} role="Indicador" />
+                    <ReferralClientCell client={referral.referrerClient} />
                   </td>
                   <td className="date-column">{formatDateTime(referral.createdAt)}</td>
                   <td className="finance-status-column">
@@ -1650,16 +1650,9 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   );
 }
 
-function ReferralClientCell({
-  client,
-  role,
-}: {
-  client: Referral['referredClient'];
-  role: 'Indicador' | 'Indicado';
-}) {
+function ReferralClientCell({ client }: { client: Referral['referredClient'] }) {
   return (
     <div className="referral-client-cell">
-      <span className="referral-client-role">{role}</span>
       <strong>{client.name}</strong>
       <span>{client.reference}</span>
     </div>
@@ -1766,25 +1759,15 @@ function ReferralDetailModal({
 }
 
 function ReferralProgress({ referral }: { referral: Referral }) {
-  const steps =
-    referral.status === 'CANCELED'
-      ? [
-          { date: referral.createdAt, icon: UsersRound, label: 'Indicação criada', tone: 'info' },
-          { date: referral.canceledAt, icon: XCircle, label: 'Cancelada', tone: 'danger' },
-        ]
-      : [
-          { date: referral.createdAt, icon: UsersRound, label: 'Indicação criada', tone: 'info' },
-          { date: referral.qualifiedAt, icon: CircleCheck, label: 'Qualificada', tone: 'info' },
-          { date: referral.appliedAt, icon: Gift, label: 'Benefício aplicado', tone: 'success' },
-        ];
+  const steps = referralProgressSteps(referral);
 
   return (
     <div className="referral-progress">
       {steps.map((step, index) => {
         const Icon = step.icon;
         return (
-          <article className={step.date ? 'complete' : 'pending'} key={step.label}>
-            <span className={`referral-progress-icon tone-${step.tone}`} aria-hidden="true">
+          <article className={`step-${step.state}`} key={step.label}>
+            <span className={`referral-progress-icon state-${step.state}`} aria-hidden="true">
               <Icon size={15} />
             </span>
             <div>
@@ -1798,6 +1781,58 @@ function ReferralProgress({ referral }: { referral: Referral }) {
     </div>
   );
 }
+
+function referralProgressSteps(referral: Referral) {
+  if (referral.status === 'CANCELED') {
+    return [
+      {
+        date: referral.createdAt,
+        icon: UsersRound,
+        label: 'Indicação criada',
+        state: 'complete',
+      },
+      {
+        date: referral.canceledAt,
+        icon: XCircle,
+        label: 'Cancelada',
+        state: 'canceled',
+      },
+    ] satisfies Array<ReferralProgressStep>;
+  }
+
+  return [
+    {
+      date: referral.createdAt,
+      icon: UsersRound,
+      label: 'Indicação criada',
+      state: 'complete',
+    },
+    {
+      date: referral.qualifiedAt,
+      icon: CircleCheck,
+      label: 'Qualificada',
+      state:
+        referral.status === 'PENDING'
+          ? 'future'
+          : referral.status === 'QUALIFIED'
+            ? 'current'
+            : 'complete',
+    },
+    {
+      date: referral.appliedAt,
+      icon: Gift,
+      label: 'Benefício aplicado',
+      state: referral.status === 'REWARDED' ? 'complete' : 'future',
+    },
+  ] satisfies Array<ReferralProgressStep>;
+}
+
+type ReferralProgressStep = {
+  date: string | null;
+  icon: LucideIcon;
+  label: string;
+  state: 'complete' | 'current' | 'future' | 'canceled';
+};
 
 function ReferralRewardModal({
   clients,

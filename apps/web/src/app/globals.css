@@ -2404,14 +2404,6 @@ tbody tr:hover,
   margin: 0;
 }
 
-.referral-client-role {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
 .referrals-table .empty-state {
   display: grid;
   justify-items: center;
@@ -2491,7 +2483,7 @@ tbody tr:hover,
   padding: 10px;
 }
 
-.referral-progress article.pending {
+.referral-progress article.step-future {
   opacity: 0.62;
 }
 
@@ -2511,15 +2503,19 @@ tbody tr:hover,
   background: rgb(255 255 255 / 4%);
 }
 
-.referral-progress-icon.tone-info {
-  color: var(--info);
-}
-
-.referral-progress-icon.tone-success {
+.referral-progress-icon.state-complete {
   color: var(--accent-strong);
 }
 
-.referral-progress-icon.tone-danger {
+.referral-progress-icon.state-current {
+  color: var(--info);
+}
+
+.referral-progress-icon.state-future {
+  color: var(--text-muted);
+}
+
+.referral-progress-icon.state-canceled {
   color: var(--danger);
 }
 

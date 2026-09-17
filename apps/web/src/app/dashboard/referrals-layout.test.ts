@@ -33,9 +33,8 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('<th className="date-column">Data</th>');
     expect(dashboardSource).toContain('<th className="finance-status-column">Status</th>');
     expect(dashboardSource).toContain('<th>Benefício</th>');
-    expect(dashboardSource).toContain('role="Indicado"');
-    expect(dashboardSource).toContain('role="Indicador"');
-    expect(stylesSource).toContain('.referral-client-role');
+    expect(dashboardSource).toContain('function ReferralClientCell');
+    expect(dashboardSource).not.toContain('referral-client-role');
     expect(dashboardSource).not.toContain('Referência do indicador</th>');
     expect(dashboardSource).not.toContain('referência que indicou');
   });
@@ -70,6 +69,16 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('Qualificada');
     expect(dashboardSource).toContain('Benefício aplicado');
     expect(dashboardSource).toContain('Cancelada');
+    expect(dashboardSource).toContain('function referralProgressSteps');
+    expect(dashboardSource).toContain("state: 'complete'");
+    expect(dashboardSource).toContain("state: 'canceled'");
+    expect(dashboardSource).toContain("? 'future'");
+    expect(dashboardSource).toContain("? 'current'");
+    expect(dashboardSource).toContain("'complete' | 'current' | 'future' | 'canceled'");
+    expect(stylesSource).toContain('.referral-progress-icon.state-complete');
+    expect(stylesSource).toContain('.referral-progress-icon.state-current');
+    expect(stylesSource).toContain('.referral-progress-icon.state-future');
+    expect(stylesSource).toContain('.referral-progress-icon.state-canceled');
   });
 
   it('keeps apply reward behind the modal submit action only', () => {

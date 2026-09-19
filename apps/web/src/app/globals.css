@@ -1338,6 +1338,10 @@ a {
   gap: 6px;
 }
 
+.waitlist-final-actions {
+  justify-content: flex-start;
+}
+
 .waitlist-row-actions .action-menu {
   flex: 0 0 auto;
 }

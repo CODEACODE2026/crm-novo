@@ -79,11 +79,12 @@ describe('waitlist UI 7 presentation source', () => {
     expect(dashboardSource).toContain("label: 'Cobrança'");
     expect(dashboardSource).toContain("label: 'Indicação'");
     expect(dashboardSource).toContain('className="waitlist-stepper"');
-    expect(dashboardSource).toContain('onClick={() => setActiveStep(step.id)}');
-    expect(dashboardSource).toContain("goToStep('next')");
-    expect(dashboardSource).toContain("goToStep('previous')");
+    expect(dashboardSource).toContain('onClick={() => goToStep(step.id)}');
+    expect(dashboardSource).toContain('function handleNext()');
+    expect(dashboardSource).toContain('function handlePrevious()');
+    expect(dashboardSource).toContain('function handleFormKeyDown');
     expect(dashboardSource).toContain('if (!isLastStep)');
-    expect(dashboardSource).toContain('if (loading) return;');
+    expect(dashboardSource).toContain('if (loading || approvalSubmittingRef.current) return;');
     expect(dashboardSource).toContain('Dados do cliente');
     expect(dashboardSource).toContain('Primeira referência');
     expect(dashboardSource).toContain('Cobrança inicial');
@@ -109,19 +110,56 @@ describe('waitlist UI 7 presentation source', () => {
       'async function handleSubmit(event: FormEvent<HTMLFormElement>)',
     );
     expect(approveModalSource).toContain('event.preventDefault();');
-    expect(approveModalSource).toContain('if (!isLastStep) {\n      return;\n    }');
-    expect(approveModalSource).toContain('if (loading) return;');
-    expect(approveModalSource).toContain('type="submit" variant="primary"');
+    expect(approveModalSource).toContain('if (!isLastStep) {');
+    expect(approveModalSource).toContain('if (loading || approvalSubmittingRef.current) return;');
+    expect(approveModalSource).toContain('onKeyDown={handleFormKeyDown}');
+    expect(approveModalSource).toContain('const approvalSubmittingRef = useRef(false);');
+    expect(approveModalSource).toContain('approvalSubmittingRef.current = true;');
+    expect(approveModalSource).toContain('approvalSubmittingRef.current = false;');
+    expect(approveModalSource).toContain('waitlist-final-actions');
+    expect(approveModalSource).toContain('key="approve-contact"');
+    expect(approveModalSource).toContain('key="continue-approval-step"');
+    expect(approveModalSource).toContain('type="submit"');
     expect(approveModalSource).toContain('Aprovar contato');
-    expect(approveModalSource).toContain(
-      'type="button"\n                  onClick={() => goToStep(\'next\')}',
-    );
-    expect(approveModalSource).toContain(
-      'type="button"\n                  onClick={() => goToStep(\'previous\')}',
-    );
+    expect(approveModalSource).toContain('onClick={handleNext}');
+    expect(approveModalSource).toContain('onClick={handlePrevious}');
     expect(approveModalSource).toContain('type="button" onClick={onClose}');
     expect(approveModalSource).toContain('label="Fechar aprovação" type="button"');
-    expect(approveModalSource).not.toContain("if (!isLastStep) {\n      goToStep('next');");
+    expect(approveModalSource.match(/type="submit"/g)).toHaveLength(1);
+    expect(approveModalSource).not.toContain('finalApprovalReady');
+    expect(approveModalSource).not.toContain('setTimeout');
+    expect(approveModalSource).not.toContain(
+      'approveWhatsAppPendingContact(contact.id, { name });',
+    );
+  });
+
+  it('keeps billing step navigation away from the approval mutation', () => {
+    expect(dashboardSource).toContain(
+      "type WaitlistApprovalStep = 'client' | 'reference' | 'billing' | 'referral'",
+    );
+    expect(dashboardSource).toContain("{ id: 'client', label: 'Cliente' }");
+    expect(dashboardSource).toContain("{ id: 'reference', label: 'Referência' }");
+    expect(dashboardSource).toContain("{ id: 'billing', label: 'Cobrança' }");
+    expect(dashboardSource).toContain("{ id: 'referral', label: 'Indicação' }");
+    expect(approveModalSource).toContain("const isLastStep = activeStep === 'referral';");
+    expect(approveModalSource).toContain(
+      'const nextIndex = Math.min(activeStepIndex + 1, waitlistApprovalSteps.length - 1);',
+    );
+    expect(approveModalSource).toContain('onClick={handleNext}');
+    expect(approveModalSource).toContain('type="button"');
+
+    const billingSection = approveModalSource.slice(
+      approveModalSource.indexOf("{activeStep === 'billing'"),
+      approveModalSource.indexOf("{activeStep === 'referral'"),
+    );
+    const submitStart = approveModalSource.indexOf('async function handleSubmit');
+    const submitSource = approveModalSource.slice(
+      submitStart,
+      approveModalSource.indexOf('return (', submitStart),
+    );
+
+    expect(billingSection).not.toContain('approveWhatsAppPendingContact');
+    expect(submitSource).toContain('approveWhatsAppPendingContact(contact.id, {');
   });
 
   it('keeps approved and ignored actions constrained to existing lifecycle transitions', () => {
@@ -144,6 +182,7 @@ describe('waitlist UI 7 presentation source', () => {
     expect(stylesSource).toContain('.waitlist-ignore-modal');
     expect(stylesSource).toContain('.waitlist-stepper');
     expect(stylesSource).toContain('.waitlist-step.active');
+    expect(stylesSource).toContain('.waitlist-final-actions');
     expect(stylesSource).toContain('.waitlist-approval-section');
     expect(stylesSource).toContain('.waitlist-approval-summary');
     expect(stylesSource).toContain('@media (max-width: 620px)');

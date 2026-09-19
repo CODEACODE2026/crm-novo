@@ -1,6 +1,14 @@
 'use client';
 
-import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   Activity,
   ArrowRight,
@@ -7558,17 +7566,34 @@ function ApprovePendingContactModal({
   const [activeStep, setActiveStep] = useState<WaitlistApprovalStep>('client');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const approvalSubmittingRef = useRef(false);
   const shouldSendPix = generateInitialReceivable && sendPixWhatsAppNow;
   const activeStepIndex = waitlistApprovalSteps.findIndex((step) => step.id === activeStep);
   const isLastStep = activeStep === 'referral';
   const selectedPlan = sortedPlans.find((plan) => plan.id === planId);
 
-  function goToStep(direction: 'previous' | 'next') {
-    const nextIndex =
-      direction === 'next'
-        ? Math.min(activeStepIndex + 1, waitlistApprovalSteps.length - 1)
-        : Math.max(activeStepIndex - 1, 0);
+  function goToStep(step: WaitlistApprovalStep) {
+    setActiveStep(step);
+  }
+
+  function handleNext() {
+    const nextIndex = Math.min(activeStepIndex + 1, waitlistApprovalSteps.length - 1);
+
     setActiveStep(waitlistApprovalSteps[nextIndex]?.id ?? activeStep);
+  }
+
+  function handlePrevious() {
+    const nextIndex = Math.max(activeStepIndex - 1, 0);
+
+    setActiveStep(waitlistApprovalSteps[nextIndex]?.id ?? activeStep);
+  }
+
+  function handleFormKeyDown(event: ReactKeyboardEvent<HTMLFormElement>) {
+    if (event.key !== 'Enter' || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+
+    event.preventDefault();
   }
 
   function handlePlanChange(nextPlanId: string) {
@@ -7585,8 +7610,9 @@ function ApprovePendingContactModal({
       return;
     }
 
-    if (loading) return;
+    if (loading || approvalSubmittingRef.current) return;
 
+    approvalSubmittingRef.current = true;
     setLoading(true);
 
     try {
@@ -7608,6 +7634,7 @@ function ApprovePendingContactModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível aprovar o contato.');
     } finally {
+      approvalSubmittingRef.current = false;
       setLoading(false);
     }
   }
@@ -7630,7 +7657,11 @@ function ApprovePendingContactModal({
           <span>{formatWaitlistPhone(contact.phoneNormalized)}</span>
           <span>{contact.connection.name}</span>
         </div>
-        <form className="entity-form" onSubmit={(event) => void handleSubmit(event)}>
+        <form
+          className="entity-form"
+          onKeyDown={handleFormKeyDown}
+          onSubmit={(event) => void handleSubmit(event)}
+        >
           <div className="waitlist-stepper" aria-label="Etapas da aprovação">
             {waitlistApprovalSteps.map((step, index) => (
               <button
@@ -7643,7 +7674,7 @@ function ApprovePendingContactModal({
                   .join(' ')}
                 key={step.id}
                 type="button"
-                onClick={() => setActiveStep(step.id)}
+                onClick={() => goToStep(step.id)}
               >
                 <span>{index + 1}</span>
                 {step.label}
@@ -7805,31 +7836,37 @@ function ApprovePendingContactModal({
             </>
           ) : null}
 
-          <div className="form-actions">
+          <div
+            className={['form-actions', isLastStep ? 'waitlist-final-actions' : '']
+              .filter(Boolean)
+              .join(' ')}
+          >
             <span className="error-message">{error}</span>
             <div className="button-row">
               <Button type="button" onClick={onClose} variant="secondary">
                 Cancelar
               </Button>
               {activeStepIndex > 0 ? (
-                <Button
-                  icon={ArrowLeft}
-                  type="button"
-                  onClick={() => goToStep('previous')}
-                  variant="secondary"
-                >
+                <Button icon={ArrowLeft} type="button" onClick={handlePrevious} variant="secondary">
                   Voltar
                 </Button>
               ) : null}
               {isLastStep ? (
-                <Button icon={UserCheck} loading={loading} type="submit" variant="primary">
+                <Button
+                  icon={UserCheck}
+                  key="approve-contact"
+                  loading={loading}
+                  type="submit"
+                  variant="primary"
+                >
                   Aprovar contato
                 </Button>
               ) : (
                 <Button
                   icon={ArrowRight}
+                  key="continue-approval-step"
                   type="button"
-                  onClick={() => goToStep('next')}
+                  onClick={handleNext}
                   variant="primary"
                 >
                   Continuar

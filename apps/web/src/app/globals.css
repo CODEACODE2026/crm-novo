@@ -2770,6 +2770,7 @@ tbody tr:hover,
 
 .referral-detail-grid div,
 .free-month-preview article,
+.selected-reward-reference,
 .client-referral-summary div {
   display: grid;
   gap: 4px;
@@ -2781,6 +2782,8 @@ tbody tr:hover,
 
 .referral-detail-grid span,
 .free-month-preview span,
+.selected-reward-reference span,
+.selected-reward-reference small,
 .client-referral-summary span,
 .field-help {
   color: var(--text-muted);
@@ -2850,12 +2853,16 @@ tbody tr:hover,
   grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .free-month-preview > svg {
   justify-self: center;
   color: var(--info);
+}
+
+.selected-reward-reference {
+  margin-top: 12px;
 }
 
 .client-more-workspace {

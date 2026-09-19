@@ -4,6 +4,12 @@ export const USER_ROLE_ADMIN = 'ADMIN';
 
 export type UserRole = typeof USER_ROLE_ADMIN;
 
+export {
+  addCalendarMonthsPreservingAnchor,
+  formatBusinessDate,
+  parseBusinessDate,
+} from './business-date';
+
 export interface AuthenticatedUser {
   id: string;
   name: string;

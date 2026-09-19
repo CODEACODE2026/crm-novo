@@ -90,7 +90,7 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).not.toContain('onClick={() => void applyReward(referral)}');
   });
 
-  it('makes FREE_MONTH reference selection explicit and preserves current preview fields', () => {
+  it('makes FREE_MONTH reference selection explicit and calculates local preview fields', () => {
     expect(dashboardSource).toContain('Referência que receberá o benefício');
     expect(dashboardSource).toContain(
       'Escolha qual serviço do cliente indicador receberá o mês grátis.',
@@ -98,9 +98,37 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('eligibleReferences.map((reference)');
     expect(dashboardSource).toContain('reference.plan.name');
     expect(dashboardSource).toContain('formatDate(reference.dueDate)');
-    expect(dashboardSource).toContain('referral.rewardPreview?.currentDueDate');
-    expect(dashboardSource).toContain('referral.rewardPreview?.newDueDate');
+    expect(dashboardSource).toContain('function buildFreeMonthPreview');
+    expect(dashboardSource).toContain('addCalendarMonthsPreservingAnchor');
+    expect(dashboardSource).toContain('reference.billingAnchorDay');
+    expect(dashboardSource).toContain('freeMonthPreview?.currentDueDateLabel');
+    expect(dashboardSource).toContain('freeMonthPreview?.newDueDateLabel');
+    expect(dashboardSource).toContain('O mês grátis adia o próximo vencimento em 1 mês.');
+    expect(dashboardSource).toContain('Boolean(freeMonthPreview)');
+    expect(dashboardSource).toContain('disabled={isApplyDisabled}');
     expect(stylesSource).toContain('.free-month-preview');
+    expect(stylesSource).toContain('.selected-reward-reference');
+  });
+
+  it('keeps FREE_MONTH selection local until the apply action posts once', () => {
+    const modalSource = dashboardSource.slice(
+      dashboardSource.indexOf('function ReferralRewardModal'),
+      dashboardSource.indexOf('const reportDefinitions'),
+    );
+    const applyRewardSource = dashboardSource.slice(
+      dashboardSource.indexOf('async function applyReward'),
+      dashboardSource.indexOf('async function cancelCurrentReferral'),
+    );
+
+    expect(modalSource).toContain('onChange={(event) => onChangeReference(event.target.value)}');
+    expect(modalSource).not.toContain('applyReferralReward(');
+    expect(modalSource).not.toContain('POST');
+    expect(modalSource).not.toContain('PATCH');
+    expect(modalSource).not.toContain('PUT');
+    expect(modalSource).not.toContain('DELETE');
+    expect(applyRewardSource.match(/applyReferralReward\(/g)).toHaveLength(1);
+    expect(applyRewardSource).toContain('clientReferenceId: rewardClientReferenceId');
+    expect(applyRewardSource).not.toContain('newDueDate');
   });
 
   it('keeps canceling secondary and blocks rewarded/canceled apply actions visually', () => {

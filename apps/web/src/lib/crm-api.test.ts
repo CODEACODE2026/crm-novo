@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   apiFetch,
+  applyReferralReward,
   formatCurrency,
   formatDate,
   listClientOptions,
@@ -65,6 +66,22 @@ describe('CRM UI formatters', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/clients/options?search=bruno'),
       expect.any(Object),
+    );
+  });
+
+  it('applies a referral reward with exactly one POST carrying only the selected reference id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await applyReferralReward('referral-id', { clientReferenceId: 'reference-id' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/referrals/referral-id/apply-reward'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ clientReferenceId: 'reference-id' }),
+      }),
     );
   });
 

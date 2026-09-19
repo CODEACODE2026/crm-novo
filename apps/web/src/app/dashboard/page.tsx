@@ -66,7 +66,12 @@ import {
   XCircle,
   type LucideIcon,
 } from 'lucide-react';
-import type { AuthenticatedUser } from '@crm-novo/shared';
+import {
+  addCalendarMonthsPreservingAnchor,
+  formatBusinessDate,
+  parseBusinessDate,
+  type AuthenticatedUser,
+} from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
 import { ClientReferralSelect } from '../../components/clients/client-referral-select';
@@ -1861,6 +1866,10 @@ function ReferralRewardModal({
   const selectedReference = eligibleReferences.find(
     (reference) => reference.id === rewardClientReferenceId,
   );
+  const freeMonthPreview = buildFreeMonthPreview(selectedReference);
+  const canApplyFreeMonthReward =
+    Boolean(rewardClientReferenceId) && Boolean(selectedReference) && Boolean(freeMonthPreview);
+  const isApplyDisabled = referral.rewardType === 'FREE_MONTH' && !canApplyFreeMonthReward;
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -1913,20 +1922,25 @@ function ReferralRewardModal({
                 ))}
               </select>
             </label>
+            {selectedReference ? (
+              <div className="selected-reward-reference">
+                <span>Referência que receberá o benefício</span>
+                <strong>{selectedReference.reference}</strong>
+                <small>{selectedReference.plan.name}</small>
+              </div>
+            ) : null}
             <div className="free-month-preview">
               <article>
                 <span>Vencimento atual</span>
-                <strong>
-                  {referral.rewardPreview?.currentDueDate ??
-                    (selectedReference ? formatDate(selectedReference.dueDate) : '—')}
-                </strong>
+                <strong>{freeMonthPreview?.currentDueDateLabel ?? '—'}</strong>
               </article>
               <ArrowRight aria-hidden="true" size={18} />
               <article>
                 <span>Novo vencimento</span>
-                <strong>{referral.rewardPreview?.newDueDate ?? '—'}</strong>
+                <strong>{freeMonthPreview?.newDueDateLabel ?? '—'}</strong>
               </article>
             </div>
+            <p className="field-help">O mês grátis adia o próximo vencimento em 1 mês.</p>
           </>
         ) : (
           <div className="notice">
@@ -1938,12 +1952,7 @@ function ReferralRewardModal({
         <div className="form-actions">
           <div className="button-row">
             <Button onClick={onClose}>Cancelar</Button>
-            <Button
-              disabled={referral.rewardType === 'FREE_MONTH' && !rewardClientReferenceId}
-              icon={Gift}
-              variant="primary"
-              onClick={onApply}
-            >
+            <Button disabled={isApplyDisabled} icon={Gift} variant="primary" onClick={onApply}>
               Aplicar benefício
             </Button>
           </div>
@@ -1951,6 +1960,32 @@ function ReferralRewardModal({
       </section>
     </div>
   );
+}
+
+function buildFreeMonthPreview(reference?: ClientReference) {
+  if (!reference) {
+    return null;
+  }
+
+  try {
+    const currentDueDate = reference.dueDate.slice(0, 10);
+    const newDueDate = formatBusinessDate(
+      addCalendarMonthsPreservingAnchor(
+        parseBusinessDate(currentDueDate),
+        1,
+        reference.billingAnchorDay,
+      ),
+    );
+
+    return {
+      currentDueDate,
+      currentDueDateLabel: formatDate(currentDueDate),
+      newDueDate,
+      newDueDateLabel: formatDate(newDueDate),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const reportDefinitions = [

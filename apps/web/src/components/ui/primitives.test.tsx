@@ -93,7 +93,8 @@ describe('UI primitives', () => {
       />,
     );
 
-    expect(html).toContain('Mostrando 1-10 de 47 registros');
+    expect(html).toContain('Mostrando 1–10 de 47 registros');
+    expect(html).toContain('Página 1 de 5');
     expect(html).toContain('disabled=""');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('Próxima');

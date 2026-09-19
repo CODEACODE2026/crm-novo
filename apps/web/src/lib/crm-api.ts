@@ -903,6 +903,8 @@ export interface PlanPayload {
 }
 
 export interface ClientListFilters {
+  page?: number | undefined;
+  pageSize?: number | undefined;
   search?: string | undefined;
   status?: ClientStatus | '' | undefined;
   planId?: string | undefined;
@@ -1035,6 +1037,8 @@ export function deletePlan(id: string) {
 export function listClients(filters: ClientListFilters = {}) {
   const params = new URLSearchParams();
 
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
   if (filters.search) params.set('search', filters.search);
   if (filters.status) params.set('status', filters.status);
   if (filters.planId) params.set('planId', filters.planId);

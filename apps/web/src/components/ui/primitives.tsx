@@ -364,7 +364,7 @@ export function PaginationControls({
   return (
     <nav className="pagination" aria-label="Paginação">
       <span className="pagination-summary">
-        Mostrando {from}-{to} de {pagination.total} {itemLabel}
+        Mostrando {from}–{to} de {pagination.total} {itemLabel}
       </span>
       {showPages ? (
         <div className="pagination-actions">
@@ -396,6 +396,9 @@ export function PaginationControls({
               ),
             )}
           </div>
+          <span className="pagination-current">
+            Página {page} de {totalPages}
+          </span>
           <button
             className="secondary-button pagination-button"
             disabled={page >= totalPages}

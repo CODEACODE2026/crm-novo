@@ -29,9 +29,11 @@ describe('global finance presentation source', () => {
   });
 
   it('renders receivable status KPIs and preserves grouped selection actions', () => {
-    expect(dashboardSource).toContain(
-      'const receivableTotals = clientReceivableTotals(receivables)',
-    );
+    expect(dashboardSource).toContain('const [receivableStatusTotals, setReceivableStatusTotals]');
+    expect(dashboardSource).toContain('pendingReceivables.pagination.total');
+    expect(dashboardSource).toContain('paidReceivables.pagination.total');
+    expect(dashboardSource).toContain('overdueReceivables.pagination.total');
+    expect(dashboardSource).toContain('canceledReceivables.pagination.total');
     expect(dashboardSource).toContain("label: 'A receber'");
     expect(dashboardSource).toContain("label: 'Pago'");
     expect(dashboardSource).toContain("label: 'Vencido'");

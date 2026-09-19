@@ -5,7 +5,12 @@ import {
   applyReferralReward,
   formatCurrency,
   formatDate,
+  listBillingDispatches,
   listClientOptions,
+  listClients,
+  listFinancialTransactions,
+  listReceivables,
+  listWhatsAppPendingContacts,
   payReceivable,
   payReceivables,
   updateMessageTemplate,
@@ -65,6 +70,113 @@ describe('CRM UI formatters', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/clients/options?search=bruno'),
+      expect.any(Object),
+    );
+  });
+
+  it('sends client list pagination parameters to the API', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            pagination: { page: 2, pageSize: 10, total: 27, totalPages: 3 },
+          }),
+          {
+            status: 200,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listClients({ page: 2, pageSize: 10, search: 'ana', status: 'ATIVO' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/clients?page=2&pageSize=10&search=ana&status=ATIVO'),
+      expect.any(Object),
+    );
+  });
+
+  it('sends finance pagination independently for receivables, entries and expenses', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            pagination: { page: 2, pageSize: 10, total: 27, totalPages: 3 },
+          }),
+          {
+            status: 200,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listReceivables({ page: 2, pageSize: 10, status: 'PENDENTE', search: 'boleto' });
+    await listFinancialTransactions({ page: 2, pageSize: 10, type: 'ENTRADA' });
+    await listFinancialTransactions({ page: 3, pageSize: 10, type: 'SAIDA' });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('/receivables?status=PENDENTE&search=boleto&page=2&pageSize=10'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/financial-transactions?type=ENTRADA&page=2&pageSize=10'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('/financial-transactions?type=SAIDA&page=3&pageSize=10'),
+      expect.any(Object),
+    );
+  });
+
+  it('sends billing and waitlist pagination with their filters', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            pagination: { page: 2, pageSize: 10, total: 26, totalPages: 3 },
+          }),
+          {
+            status: 200,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listBillingDispatches({
+      dueDate: '2026-09-19',
+      page: 2,
+      pageSize: 10,
+      search: 'maria',
+      status: 'SCHEDULED',
+    });
+    await listWhatsAppPendingContacts({
+      page: 2,
+      pageSize: 10,
+      search: 'maria',
+      status: 'PENDENTE',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        '/billing/dispatches?status=SCHEDULED&search=maria&dueDate=2026-09-19&page=2&pageSize=10',
+      ),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining(
+        '/whatsapp/pending-contacts?status=PENDENTE&search=maria&page=2&pageSize=10',
+      ),
       expect.any(Object),
     );
   });

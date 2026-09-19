@@ -300,6 +300,7 @@ const navItems = [
 ] satisfies Array<{ id: View; label: string; icon: typeof LayoutDashboard }>;
 
 const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
+const listPageSize = 10;
 
 type RenewalTarget = {
   client: Client;
@@ -338,6 +339,7 @@ export default function DashboardPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ClientStatus | ''>('');
   const [planId, setPlanId] = useState('');
+  const [clientsPage, setClientsPage] = useState(1);
   const [error, setError] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
 
@@ -350,11 +352,24 @@ export default function DashboardPage() {
     try {
       const [nextPlans, nextClients] = await Promise.all([
         listPlans(),
-        listClients({ search: search.trim() || undefined, status, planId: planId || undefined }),
+        listClients({
+          page: clientsPage,
+          pageSize: listPageSize,
+          search: search.trim() || undefined,
+          status,
+          planId: planId || undefined,
+        }),
       ]);
 
       setPlans(nextPlans);
       setClientsPayload(nextClients);
+      if (
+        !nextClients.items.length &&
+        nextClients.pagination.page > 1 &&
+        nextClients.pagination.total > 0
+      ) {
+        setClientsPage(Math.max(1, nextClients.pagination.totalPages));
+      }
       setSelectedClient((current) => {
         if (!current) return null;
         return nextClients.items.some((client) => client.id === current.id) ? current : null;
@@ -364,7 +379,7 @@ export default function DashboardPage() {
     } finally {
       setDataLoading(false);
     }
-  }, [planId, search, status]);
+  }, [clientsPage, planId, search, status]);
 
   useEffect(() => {
     async function loadSession() {
@@ -549,6 +564,7 @@ export default function DashboardPage() {
         <ClientsView
           clientFormOpen={clientFormOpen}
           clients={clients}
+          clientsPagination={clientsPayload?.pagination ?? null}
           dataLoading={dataLoading}
           editingClient={editingClient}
           onApplyFilters={() => void loadData()}
@@ -592,6 +608,7 @@ export default function DashboardPage() {
           onReferenceStatusChange={(reference, nextStatus, reason) =>
             void handleReferenceStatusChange(reference, nextStatus, reason)
           }
+          onClientsPageChange={setClientsPage}
           onFinancialMutation={async (clientId) => {
             const detailed = await getClient(clientId);
             setSelectedClient(detailed);
@@ -611,9 +628,18 @@ export default function DashboardPage() {
           plans={plans}
           search={search}
           selectedClient={selectedClient}
-          setPlanId={setPlanId}
-          setSearch={setSearch}
-          setStatus={setStatus}
+          setPlanId={(value) => {
+            setPlanId(value);
+            setClientsPage(1);
+          }}
+          setSearch={(value) => {
+            setSearch(value);
+            setClientsPage(1);
+          }}
+          setStatus={(value) => {
+            setStatus(value);
+            setClientsPage(1);
+          }}
           status={status}
           renewalNotice={renewalNotice}
         />
@@ -2609,6 +2635,7 @@ function AutomationConfigIcon({ icon: Icon }: { icon: LucideIcon }) {
 function ClientsView({
   clientFormOpen,
   clients,
+  clientsPagination,
   dataLoading,
   editingClient,
   onApplyFilters,
@@ -2624,6 +2651,7 @@ function ClientsView({
   onRemoveClient,
   onRemoveReference,
   onSelect,
+  onClientsPageChange,
   onFinancialMutation,
   onWhatsAppSent,
   onUpdate,
@@ -2639,6 +2667,7 @@ function ClientsView({
 }: {
   clientFormOpen: boolean;
   clients: Client[];
+  clientsPagination: PaginatedClients['pagination'] | null;
   dataLoading: boolean;
   editingClient: Client | null;
   onApplyFilters: () => void;
@@ -2663,6 +2692,7 @@ function ClientsView({
   onRemoveClient: (client: Client) => void;
   onRemoveReference: (reference: ClientReference) => void;
   onSelect: (client: Client) => void | Promise<void>;
+  onClientsPageChange: (page: number) => void;
   onFinancialMutation: (clientId: string) => Promise<void>;
   onWhatsAppSent: (clientId: string) => Promise<void>;
   onUpdate: (payload: ClientUpdatePayload) => Promise<void>;
@@ -2966,6 +2996,11 @@ function ClientsView({
                   {dataLoading ? 'Carregando...' : 'Nenhum cliente encontrado.'}
                 </div>
               ) : null}
+              <PaginationControls
+                itemLabel="clientes"
+                pagination={clientsPagination}
+                onPageChange={onClientsPageChange}
+              />
             </div>
           </section>
         ) : null}
@@ -4446,6 +4481,8 @@ function BillingView() {
   const [status, setStatus] = useState<MessageDispatch['status'] | ''>('');
   const [search, setSearch] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginatedClients['pagination'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
@@ -4455,7 +4492,11 @@ function BillingView() {
     setError('');
 
     try {
-      const filters: Parameters<typeof listBillingDispatches>[0] = { status, pageSize: 50 };
+      const filters: Parameters<typeof listBillingDispatches>[0] = {
+        status,
+        page,
+        pageSize: listPageSize,
+      };
       const searchTerm = search.trim();
 
       if (searchTerm) filters.search = searchTerm;
@@ -4467,6 +4508,14 @@ function BillingView() {
       ]);
       setSummary(nextSummary);
       setDispatches(nextDispatches.items);
+      setPagination(nextDispatches.pagination);
+      if (
+        !nextDispatches.items.length &&
+        nextDispatches.pagination.page > 1 &&
+        nextDispatches.pagination.total > 0
+      ) {
+        setPage(Math.max(1, nextDispatches.pagination.totalPages));
+      }
       setSelected((current) => {
         if (!current) return null;
         return nextDispatches.items.find((dispatch) => dispatch.id === current.id) ?? null;
@@ -4476,7 +4525,7 @@ function BillingView() {
     } finally {
       setLoading(false);
     }
-  }, [dueDate, search, status]);
+  }, [dueDate, page, search, status]);
 
   useEffect(() => {
     void loadBilling();
@@ -4574,12 +4623,18 @@ function BillingView() {
             <input
               placeholder="Buscar cliente/referência"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
             />
           </div>
           <select
             value={status}
-            onChange={(event) => setStatus(event.target.value as MessageDispatch['status'] | '')}
+            onChange={(event) => {
+              setStatus(event.target.value as MessageDispatch['status'] | '');
+              setPage(1);
+            }}
           >
             <option value="">Todos os status</option>
             <option value="SCHEDULED">Agendadas</option>
@@ -4593,7 +4648,10 @@ function BillingView() {
             aria-label="Vencimento"
             type="date"
             value={dueDate}
-            onChange={(event) => setDueDate(event.target.value)}
+            onChange={(event) => {
+              setDueDate(event.target.value);
+              setPage(1);
+            }}
           />
           <button className="secondary-button" type="button" onClick={() => void loadBilling()}>
             <RefreshCcw aria-hidden="true" size={16} />
@@ -4682,6 +4740,11 @@ function BillingView() {
               {loading ? 'Carregando...' : 'Nenhuma cobrança encontrada.'}
             </div>
           ) : null}
+          <PaginationControls
+            itemLabel="cobranças"
+            pagination={pagination}
+            onPageChange={setPage}
+          />
         </div>
       </section>
 
@@ -7010,10 +7073,12 @@ function WaitlistView({
   const [ignoreContact, setIgnoreContact] = useState<WhatsAppPendingContact | null>(null);
   const [status, setStatus] = useState<WhatsAppPendingContactStatus | ''>('PENDENTE');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginatedClients['pagination'] | null>(null);
   const [ignoreReason, setIgnoreReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const total = contacts.length;
+  const total = pagination?.total ?? contacts.length;
   const waitlistMetrics = [
     {
       description: 'Aguardando atendimento',
@@ -7050,7 +7115,11 @@ function WaitlistView({
     setError('');
 
     try {
-      const filters: Parameters<typeof listWhatsAppPendingContacts>[0] = { status, pageSize: 50 };
+      const filters: Parameters<typeof listWhatsAppPendingContacts>[0] = {
+        status,
+        page,
+        pageSize: listPageSize,
+      };
       const searchTerm = search.trim();
 
       if (searchTerm) {
@@ -7063,12 +7132,20 @@ function WaitlistView({
       ]);
       setSummary(nextSummary);
       setContacts(nextContacts.items);
+      setPagination(nextContacts.pagination);
+      if (
+        !nextContacts.items.length &&
+        nextContacts.pagination.page > 1 &&
+        nextContacts.pagination.total > 0
+      ) {
+        setPage(Math.max(1, nextContacts.pagination.totalPages));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar a lista.');
     } finally {
       setLoading(false);
     }
-  }, [search, status]);
+  }, [page, search, status]);
 
   useEffect(() => {
     void loadWaitlist();
@@ -7142,12 +7219,18 @@ function WaitlistView({
             <input
               placeholder="Buscar por nome ou telefone..."
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
             />
           </div>
           <select
             value={status}
-            onChange={(event) => setStatus(event.target.value as WhatsAppPendingContactStatus | '')}
+            onChange={(event) => {
+              setStatus(event.target.value as WhatsAppPendingContactStatus | '');
+              setPage(1);
+            }}
           >
             <option value="">Todos os status</option>
             <option value="PENDENTE">Pendentes</option>
@@ -7258,6 +7341,7 @@ function WaitlistView({
               ) : null}
             </div>
           ) : null}
+          <PaginationControls itemLabel="contatos" pagination={pagination} onPageChange={setPage} />
         </div>
       </section>
 
@@ -8376,8 +8460,26 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   const [receivables, setReceivables] = useState<Receivable[]>([]);
   const [entries, setEntries] = useState<FinancialTransaction[]>([]);
   const [expenses, setExpenses] = useState<FinancialTransaction[]>([]);
+  const [receivablesPagination, setReceivablesPagination] = useState<
+    PaginatedClients['pagination'] | null
+  >(null);
+  const [entriesPagination, setEntriesPagination] = useState<PaginatedClients['pagination'] | null>(
+    null,
+  );
+  const [expensesPagination, setExpensesPagination] = useState<
+    PaginatedClients['pagination'] | null
+  >(null);
   const [receivableStatus, setReceivableStatus] = useState<ReceivableDisplayStatus | ''>('');
+  const [receivableStatusTotals, setReceivableStatusTotals] = useState({
+    canceled: 0,
+    overdue: 0,
+    paid: 0,
+    pending: 0,
+  });
   const [financeSearch, setFinanceSearch] = useState('');
+  const [receivablesPage, setReceivablesPage] = useState(1);
+  const [entriesPage, setEntriesPage] = useState(1);
+  const [expensesPage, setExpensesPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -8398,35 +8500,91 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
     try {
       const receivableFilters: Parameters<typeof listReceivables>[0] = {
+        page: receivablesPage,
+        pageSize: listPageSize,
         status: receivableStatus,
-        pageSize: 50,
       };
       const trimmedSearch = financeSearch.trim();
 
       if (trimmedSearch) {
         receivableFilters.search = trimmedSearch;
       }
+      const receivableCountFilters = (nextStatus: ReceivableDisplayStatus) => ({
+        page: 1,
+        pageSize: 1,
+        ...(trimmedSearch ? { search: trimmedSearch } : {}),
+        status: nextStatus,
+      });
 
       const [nextSummary, nextCategories, nextReceivables, nextEntries, nextExpenses] =
         await Promise.all([
           getFinancialSummary(),
           listFinancialCategories(),
           listReceivables(receivableFilters),
-          listFinancialTransactions({ type: 'ENTRADA', pageSize: 50 }),
-          listFinancialTransactions({ type: 'SAIDA', pageSize: 50 }),
+          listFinancialTransactions({
+            type: 'ENTRADA',
+            page: entriesPage,
+            pageSize: listPageSize,
+          }),
+          listFinancialTransactions({
+            type: 'SAIDA',
+            page: expensesPage,
+            pageSize: listPageSize,
+          }),
         ]);
+
+      if (tab === 'receivables') {
+        const [pendingReceivables, paidReceivables, overdueReceivables, canceledReceivables] =
+          await Promise.all([
+            listReceivables(receivableCountFilters('PENDENTE')),
+            listReceivables(receivableCountFilters('PAGO')),
+            listReceivables(receivableCountFilters('VENCIDO')),
+            listReceivables(receivableCountFilters('CANCELADO')),
+          ]);
+
+        setReceivableStatusTotals({
+          canceled: canceledReceivables.pagination.total,
+          overdue: overdueReceivables.pagination.total,
+          paid: paidReceivables.pagination.total,
+          pending: pendingReceivables.pagination.total,
+        });
+      }
 
       setSummary(nextSummary);
       setCategories(nextCategories);
       setReceivables(nextReceivables.items);
+      setReceivablesPagination(nextReceivables.pagination);
       setEntries(nextEntries.items);
+      setEntriesPagination(nextEntries.pagination);
       setExpenses(nextExpenses.items);
+      setExpensesPagination(nextExpenses.pagination);
+      if (
+        !nextReceivables.items.length &&
+        nextReceivables.pagination.page > 1 &&
+        nextReceivables.pagination.total > 0
+      ) {
+        setReceivablesPage(Math.max(1, nextReceivables.pagination.totalPages));
+      }
+      if (
+        !nextEntries.items.length &&
+        nextEntries.pagination.page > 1 &&
+        nextEntries.pagination.total > 0
+      ) {
+        setEntriesPage(Math.max(1, nextEntries.pagination.totalPages));
+      }
+      if (
+        !nextExpenses.items.length &&
+        nextExpenses.pagination.page > 1 &&
+        nextExpenses.pagination.total > 0
+      ) {
+        setExpensesPage(Math.max(1, nextExpenses.pagination.totalPages));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar financeiro.');
     } finally {
       setLoading(false);
     }
-  }, [financeSearch, receivableStatus]);
+  }, [entriesPage, expensesPage, financeSearch, receivableStatus, receivablesPage, tab]);
 
   useEffect(() => {
     void loadFinance();
@@ -8435,6 +8593,10 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    setSelectedReceivableIds([]);
+  }, [financeSearch, receivableStatus, receivablesPage]);
 
   async function reloadWithNotice(message: string) {
     setSelectedReceivableIds([]);
@@ -8452,7 +8614,6 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     (total, receivable) => total + Number(receivable.amount),
     0,
   );
-  const receivableTotals = clientReceivableTotals(receivables);
   const financeKpis = summary
     ? ([
         {
@@ -8497,25 +8658,25 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       icon: DollarSign,
       label: 'A receber',
       tone: 'warning',
-      value: receivableTotals.pending,
+      value: receivableStatusTotals.pending,
     },
     {
       icon: CircleCheck,
       label: 'Pago',
       tone: 'success',
-      value: receivableTotals.paid,
+      value: receivableStatusTotals.paid,
     },
     {
       icon: Bell,
       label: 'Vencido',
       tone: 'danger',
-      value: receivableTotals.overdue,
+      value: receivableStatusTotals.overdue,
     },
     {
       icon: XCircle,
       label: 'Cancelado',
       tone: 'neutral',
-      value: receivableTotals.canceled,
+      value: receivableStatusTotals.canceled,
     },
   ] satisfies Array<{
     icon: LucideIcon;
@@ -8621,7 +8782,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                 key={item.label}
                 label={item.label}
                 tone={item.tone}
-                value={loading ? '-' : formatCurrency(item.value)}
+                value={loading ? '-' : item.value}
               />
             ))}
           </div>
@@ -8668,14 +8829,18 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               <input
                 placeholder="Buscar cliente, referência ou descrição"
                 value={financeSearch}
-                onChange={(event) => setFinanceSearch(event.target.value)}
+                onChange={(event) => {
+                  setFinanceSearch(event.target.value);
+                  setReceivablesPage(1);
+                }}
               />
             </div>
             <select
               value={receivableStatus}
-              onChange={(event) =>
-                setReceivableStatus(event.target.value as ReceivableDisplayStatus | '')
-              }
+              onChange={(event) => {
+                setReceivableStatus(event.target.value as ReceivableDisplayStatus | '');
+                setReceivablesPage(1);
+              }}
             >
               <option value="">Todas as situações</option>
               <option value="PENDENTE">Pendente</option>
@@ -8790,6 +8955,11 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                 {loading ? 'Carregando...' : 'Nenhuma conta a receber encontrada.'}
               </div>
             ) : null}
+            <PaginationControls
+              itemLabel="contas"
+              pagination={receivablesPagination}
+              onPageChange={setReceivablesPage}
+            />
           </div>
         </Card>
       ) : null}
@@ -8803,6 +8973,8 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             await deleteFinancialTransaction(id);
             await reloadWithNotice('Entrada removida.');
           }}
+          pagination={entriesPagination}
+          onPageChange={setEntriesPage}
           onUpdateRequest={(transaction) => openTransactionModal('ENTRADA', transaction)}
         />
       ) : null}
@@ -8816,6 +8988,8 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             await deleteFinancialTransaction(id);
             await reloadWithNotice('Saida removida.');
           }}
+          pagination={expensesPagination}
+          onPageChange={setExpensesPage}
           onUpdateRequest={(transaction) => openTransactionModal('SAIDA', transaction)}
         />
       ) : null}
@@ -8963,13 +9137,17 @@ function TransactionSection({
   kind,
   onCreateRequest,
   onDelete,
+  onPageChange,
   onUpdateRequest,
+  pagination,
 }: {
   items: FinancialTransaction[];
   kind: FinancialTransactionType;
   onCreateRequest: () => void;
   onDelete: (id: string) => Promise<void>;
+  onPageChange: (page: number) => void;
   onUpdateRequest: (transaction: FinancialTransaction) => void;
+  pagination: PaginatedClients['pagination'] | null;
 }) {
   return (
     <Card className="finance-panel">
@@ -9053,6 +9231,11 @@ function TransactionSection({
           </tbody>
         </table>
         {!items.length ? <div className="empty-state">Nenhuma movimentação encontrada.</div> : null}
+        <PaginationControls
+          itemLabel="movimentações"
+          pagination={pagination}
+          onPageChange={onPageChange}
+        />
       </div>
     </Card>
   );

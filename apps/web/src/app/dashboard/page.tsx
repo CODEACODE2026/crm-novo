@@ -137,6 +137,7 @@ import {
   getDashboardSummary,
   getReport,
   getFinancialSummary,
+  getReceivablesSummary,
   getWhatsAppConnection,
   getWhatsAppPendingContact,
   getWhatsAppPendingContactsSummary,
@@ -227,6 +228,7 @@ import {
   type PaymentProviderCode,
   type Receivable,
   type ReceivableDisplayStatus,
+  type ReceivablesSummary,
   type OperationalReport,
   type Plan,
   type ReportFilters,
@@ -301,6 +303,27 @@ const navItems = [
 
 const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
 const listPageSize = 10;
+const monthNamesPt = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+];
+
+type FinancePeriod = {
+  endDate: string;
+  label: string;
+  monthStart: Date;
+  startDate: string;
+};
 
 type RenewalTarget = {
   client: Client;
@@ -1315,6 +1338,31 @@ function buildDashboardPeriod(
   const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + monthOffset + 1, 0));
 
   return { startDate: toDateInput(start), endDate: toDateInput(end) };
+}
+
+function buildFinancePeriod(monthStart: Date): FinancePeriod {
+  const start = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
+  const monthName = monthNamesPt[start.getUTCMonth()] ?? '';
+
+  return {
+    endDate: formatBusinessDate(end),
+    label: `${monthName} ${start.getUTCFullYear()}`,
+    monthStart: start,
+    startDate: formatBusinessDate(start),
+  };
+}
+
+function currentFinancePeriod() {
+  return buildFinancePeriod(new Date());
+}
+
+function shiftFinancePeriod(period: FinancePeriod, months: number) {
+  return buildFinancePeriod(
+    new Date(
+      Date.UTC(period.monthStart.getUTCFullYear(), period.monthStart.getUTCMonth() + months, 1),
+    ),
+  );
 }
 
 function maxChartValue(values: string[]) {
@@ -8455,7 +8503,9 @@ function RenewalModal({
 
 function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: FinanceTab }) {
   const [tab, setTab] = useState<FinanceTab>(initialTab);
+  const [financePeriod, setFinancePeriod] = useState<FinancePeriod>(() => currentFinancePeriod());
   const [summary, setSummary] = useState<FinancialSummary | null>(null);
+  const [receivablesSummary, setReceivablesSummary] = useState<ReceivablesSummary | null>(null);
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [receivables, setReceivables] = useState<Receivable[]>([]);
   const [entries, setEntries] = useState<FinancialTransaction[]>([]);
@@ -8470,12 +8520,6 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     PaginatedClients['pagination'] | null
   >(null);
   const [receivableStatus, setReceivableStatus] = useState<ReceivableDisplayStatus | ''>('');
-  const [receivableStatusTotals, setReceivableStatusTotals] = useState({
-    canceled: 0,
-    overdue: 0,
-    paid: 0,
-    pending: 0,
-  });
   const [financeSearch, setFinanceSearch] = useState('');
   const [receivablesPage, setReceivablesPage] = useState(1);
   const [entriesPage, setEntriesPage] = useState(1);
@@ -8500,8 +8544,10 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
     try {
       const receivableFilters: Parameters<typeof listReceivables>[0] = {
+        endDate: financePeriod.endDate,
         page: receivablesPage,
         pageSize: listPageSize,
+        startDate: financePeriod.startDate,
         status: receivableStatus,
       };
       const trimmedSearch = financeSearch.trim();
@@ -8509,48 +8555,45 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       if (trimmedSearch) {
         receivableFilters.search = trimmedSearch;
       }
-      const receivableCountFilters = (nextStatus: ReceivableDisplayStatus) => ({
-        page: 1,
-        pageSize: 1,
+      const receivableSummaryFilters = {
+        endDate: financePeriod.endDate,
         ...(trimmedSearch ? { search: trimmedSearch } : {}),
-        status: nextStatus,
-      });
+        startDate: financePeriod.startDate,
+      };
 
-      const [nextSummary, nextCategories, nextReceivables, nextEntries, nextExpenses] =
-        await Promise.all([
-          getFinancialSummary(),
-          listFinancialCategories(),
-          listReceivables(receivableFilters),
-          listFinancialTransactions({
-            type: 'ENTRADA',
-            page: entriesPage,
-            pageSize: listPageSize,
-          }),
-          listFinancialTransactions({
-            type: 'SAIDA',
-            page: expensesPage,
-            pageSize: listPageSize,
-          }),
-        ]);
-
-      if (tab === 'receivables') {
-        const [pendingReceivables, paidReceivables, overdueReceivables, canceledReceivables] =
-          await Promise.all([
-            listReceivables(receivableCountFilters('PENDENTE')),
-            listReceivables(receivableCountFilters('PAGO')),
-            listReceivables(receivableCountFilters('VENCIDO')),
-            listReceivables(receivableCountFilters('CANCELADO')),
-          ]);
-
-        setReceivableStatusTotals({
-          canceled: canceledReceivables.pagination.total,
-          overdue: overdueReceivables.pagination.total,
-          paid: paidReceivables.pagination.total,
-          pending: pendingReceivables.pagination.total,
-        });
-      }
+      const [
+        nextSummary,
+        nextReceivablesSummary,
+        nextCategories,
+        nextReceivables,
+        nextEntries,
+        nextExpenses,
+      ] = await Promise.all([
+        getFinancialSummary({
+          endDate: financePeriod.endDate,
+          startDate: financePeriod.startDate,
+        }),
+        getReceivablesSummary(receivableSummaryFilters),
+        listFinancialCategories(),
+        listReceivables(receivableFilters),
+        listFinancialTransactions({
+          endDate: financePeriod.endDate,
+          page: entriesPage,
+          pageSize: listPageSize,
+          startDate: financePeriod.startDate,
+          type: 'ENTRADA',
+        }),
+        listFinancialTransactions({
+          endDate: financePeriod.endDate,
+          page: expensesPage,
+          pageSize: listPageSize,
+          startDate: financePeriod.startDate,
+          type: 'SAIDA',
+        }),
+      ]);
 
       setSummary(nextSummary);
+      setReceivablesSummary(nextReceivablesSummary);
       setCategories(nextCategories);
       setReceivables(nextReceivables.items);
       setReceivablesPagination(nextReceivables.pagination);
@@ -8584,7 +8627,15 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     } finally {
       setLoading(false);
     }
-  }, [entriesPage, expensesPage, financeSearch, receivableStatus, receivablesPage, tab]);
+  }, [
+    entriesPage,
+    expensesPage,
+    financePeriod.endDate,
+    financePeriod.startDate,
+    financeSearch,
+    receivableStatus,
+    receivablesPage,
+  ]);
 
   useEffect(() => {
     void loadFinance();
@@ -8596,12 +8647,19 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
   useEffect(() => {
     setSelectedReceivableIds([]);
-  }, [financeSearch, receivableStatus, receivablesPage]);
+  }, [financePeriod.startDate, financeSearch, receivableStatus, receivablesPage]);
 
   async function reloadWithNotice(message: string) {
     setSelectedReceivableIds([]);
     setNotice(message);
     await loadFinance();
+  }
+
+  function changeFinanceMonth(months: number) {
+    setFinancePeriod((current) => shiftFinancePeriod(current, months));
+    setReceivablesPage(1);
+    setEntriesPage(1);
+    setExpensesPage(1);
   }
 
   const entryCategories = categories.filter((category) => category.type === 'ENTRADA');
@@ -8658,31 +8716,31 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       icon: DollarSign,
       label: 'A receber',
       tone: 'warning',
-      value: receivableStatusTotals.pending,
+      value: receivablesSummary?.pendingAmount ?? '0.00',
     },
     {
       icon: CircleCheck,
       label: 'Pago',
       tone: 'success',
-      value: receivableStatusTotals.paid,
+      value: receivablesSummary?.paidAmount ?? '0.00',
     },
     {
       icon: Bell,
       label: 'Vencido',
       tone: 'danger',
-      value: receivableStatusTotals.overdue,
+      value: receivablesSummary?.overdueAmount ?? '0.00',
     },
     {
       icon: XCircle,
       label: 'Cancelado',
       tone: 'neutral',
-      value: receivableStatusTotals.canceled,
+      value: receivablesSummary?.canceledAmount ?? '0.00',
     },
   ] satisfies Array<{
     icon: LucideIcon;
     label: string;
     tone: 'neutral' | 'success' | 'warning' | 'danger';
-    value: number;
+    value: string;
   }>;
 
   function toggleReceivableSelection(receivable: Receivable) {
@@ -8734,6 +8792,28 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
       {error ? <div className="notice danger">{error}</div> : null}
       {notice ? <div className="notice success">{notice}</div> : null}
+
+      <div className="finance-period-bar" aria-label="Período financeiro">
+        <CalendarDays aria-hidden="true" size={18} />
+        <IconButton
+          icon={ArrowLeft}
+          label="Mês anterior"
+          size="sm"
+          variant="secondary"
+          onClick={() => changeFinanceMonth(-1)}
+        />
+        <strong>{financePeriod.label}</strong>
+        <IconButton
+          icon={ArrowRight}
+          label="Próximo mês"
+          size="sm"
+          variant="secondary"
+          onClick={() => changeFinanceMonth(1)}
+        />
+        <span>
+          {formatDate(financePeriod.startDate)} até {formatDate(financePeriod.endDate)}
+        </span>
+      </div>
 
       <div className="tabs finance-tabs">
         <button

@@ -45,7 +45,9 @@ describe('phase B server-side pagination wiring', () => {
     expect(financeSource).toContain('page: entriesPage');
     expect(financeSource).toContain('page: expensesPage');
     expect(financeSource).toContain('setSelectedReceivableIds([]);');
-    expect(financeSource).toContain('}, [financeSearch, receivableStatus, receivablesPage]);');
+    expect(financeSource).toContain(
+      '}, [financePeriod.startDate, financeSearch, receivableStatus, receivablesPage]);',
+    );
   });
 
   it('renders pagination for receivables, entries and expenses with current page reload semantics', () => {
@@ -67,16 +69,19 @@ describe('phase B server-side pagination wiring', () => {
   });
 
   it('keeps finance KPIs away from the current page collection', () => {
-    expect(financeSource).toContain('getFinancialSummary()');
+    expect(financeSource).toContain('getFinancialSummary({');
+    expect(financeSource).toContain('getReceivablesSummary(receivableSummaryFilters)');
     expect(financeSource).toContain('value: summary.receivablePending');
     expect(financeSource).toContain('value: summary.received');
     expect(financeSource).toContain('value: summary.receivableOverdue');
     expect(financeSource).toContain('value: summary.expenses');
-    expect(financeSource).toContain('const [receivableStatusTotals, setReceivableStatusTotals]');
-    expect(financeSource).toContain('pendingReceivables.pagination.total');
+    expect(financeSource).toContain('const [receivablesSummary, setReceivablesSummary]');
+    expect(financeSource).toContain("value: receivablesSummary?.pendingAmount ?? '0.00'");
+    expect(financeSource).toContain("value: receivablesSummary?.paidAmount ?? '0.00'");
     expect(financeSource).not.toContain(
       'const receivableTotals = clientReceivableTotals(receivables);',
     );
+    expect(financeSource).not.toContain('pendingReceivables.pagination.total');
   });
 
   it('uses server pagination for billing while preserving summary KPIs and filter resets', () => {

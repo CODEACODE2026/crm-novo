@@ -74,6 +74,11 @@ export class FinanceController {
     return this.financeService.listReceivables(query);
   }
 
+  @Get('receivables/summary')
+  receivablesSummary(@Query() query: ListReceivablesDto) {
+    return this.financeService.receivablesSummary(query);
+  }
+
   @Get('receivables/:id')
   getReceivable(@Param('id') id: string) {
     return this.financeService.getReceivable(id);

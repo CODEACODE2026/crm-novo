@@ -28,12 +28,24 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('summary.entries');
   });
 
+  it('uses a shared monthly finance period for summaries and paginated finance lists', () => {
+    expect(dashboardSource).toContain('const [financePeriod, setFinancePeriod]');
+    expect(dashboardSource).toContain('function changeFinanceMonth(months: number)');
+    expect(dashboardSource).toContain('setReceivablesPage(1);');
+    expect(dashboardSource).toContain('setEntriesPage(1);');
+    expect(dashboardSource).toContain('setExpensesPage(1);');
+    expect(dashboardSource).toContain('startDate: financePeriod.startDate');
+    expect(dashboardSource).toContain('endDate: financePeriod.endDate');
+    expect(dashboardSource).toContain('aria-label="Período financeiro"');
+  });
+
   it('renders receivable status KPIs and preserves grouped selection actions', () => {
-    expect(dashboardSource).toContain('const [receivableStatusTotals, setReceivableStatusTotals]');
-    expect(dashboardSource).toContain('pendingReceivables.pagination.total');
-    expect(dashboardSource).toContain('paidReceivables.pagination.total');
-    expect(dashboardSource).toContain('overdueReceivables.pagination.total');
-    expect(dashboardSource).toContain('canceledReceivables.pagination.total');
+    expect(dashboardSource).toContain('const [receivablesSummary, setReceivablesSummary]');
+    expect(dashboardSource).toContain('getReceivablesSummary(receivableSummaryFilters)');
+    expect(dashboardSource).toContain("value: receivablesSummary?.pendingAmount ?? '0.00'");
+    expect(dashboardSource).toContain("value: receivablesSummary?.paidAmount ?? '0.00'");
+    expect(dashboardSource).toContain("value: receivablesSummary?.overdueAmount ?? '0.00'");
+    expect(dashboardSource).toContain("value: receivablesSummary?.canceledAmount ?? '0.00'");
     expect(dashboardSource).toContain("label: 'A receber'");
     expect(dashboardSource).toContain("label: 'Pago'");
     expect(dashboardSource).toContain("label: 'Vencido'");

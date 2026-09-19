@@ -5,6 +5,8 @@ import {
   applyReferralReward,
   formatCurrency,
   formatDate,
+  getFinancialSummary,
+  getReceivablesSummary,
   listBillingDispatches,
   listClientOptions,
   listClients,
@@ -114,23 +116,79 @@ describe('CRM UI formatters', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await listReceivables({ page: 2, pageSize: 10, status: 'PENDENTE', search: 'boleto' });
-    await listFinancialTransactions({ page: 2, pageSize: 10, type: 'ENTRADA' });
-    await listFinancialTransactions({ page: 3, pageSize: 10, type: 'SAIDA' });
+    await listReceivables({
+      endDate: '2026-09-30',
+      page: 2,
+      pageSize: 10,
+      search: 'boleto',
+      startDate: '2026-09-01',
+      status: 'PENDENTE',
+    });
+    await listFinancialTransactions({
+      endDate: '2026-09-30',
+      page: 2,
+      pageSize: 10,
+      startDate: '2026-09-01',
+      type: 'ENTRADA',
+    });
+    await listFinancialTransactions({
+      endDate: '2026-09-30',
+      page: 3,
+      pageSize: 10,
+      startDate: '2026-09-01',
+      type: 'SAIDA',
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining('/receivables?status=PENDENTE&search=boleto&page=2&pageSize=10'),
+      expect.stringContaining(
+        '/receivables?status=PENDENTE&search=boleto&startDate=2026-09-01&endDate=2026-09-30&page=2&pageSize=10',
+      ),
       expect.any(Object),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('/financial-transactions?type=ENTRADA&page=2&pageSize=10'),
+      expect.stringContaining(
+        '/financial-transactions?type=ENTRADA&startDate=2026-09-01&endDate=2026-09-30&page=2&pageSize=10',
+      ),
       expect.any(Object),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining('/financial-transactions?type=SAIDA&page=3&pageSize=10'),
+      expect.stringContaining(
+        '/financial-transactions?type=SAIDA&startDate=2026-09-01&endDate=2026-09-30&page=3&pageSize=10',
+      ),
+      expect.any(Object),
+    );
+  });
+
+  it('sends financial period filters to summaries', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({}), {
+          status: 200,
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getFinancialSummary({ startDate: '2026-09-01', endDate: '2026-09-30' });
+    await getReceivablesSummary({
+      endDate: '2026-09-30',
+      search: 'Bruno',
+      startDate: '2026-09-01',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('/finance/summary?startDate=2026-09-01&endDate=2026-09-30'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining(
+        '/receivables/summary?search=Bruno&startDate=2026-09-01&endDate=2026-09-30',
+      ),
       expect.any(Object),
     );
   });

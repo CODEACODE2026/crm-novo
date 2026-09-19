@@ -378,6 +378,91 @@ function createWebhookSignature(payload: string, secret = 'webhook-secret') {
   return `sha256=${createHmac('sha256', secret).update(Buffer.from(payload)).digest('hex')}`;
 }
 
+type SummaryReceivable = {
+  amount: Prisma.Decimal;
+  client: { name: string };
+  clientId: string;
+  clientReference: { reference: string };
+  clientReferenceId: string;
+  description: string;
+  dueDate: Date;
+  status: 'PENDENTE' | 'PAGO' | 'CANCELADO';
+};
+
+function createReceivablesSummaryPrisma(receivables: SummaryReceivable[]) {
+  const matchesStringFilter = (value: string, filter: { contains: string }) =>
+    value.toLocaleLowerCase().includes(filter.contains.toLocaleLowerCase());
+  const matchesDateFilter = (value: Date, filter: { gte?: Date; lte?: Date; lt?: Date }) => {
+    const time = value.getTime();
+
+    if (filter.gte && time < filter.gte.getTime()) return false;
+    if (filter.lte && time > filter.lte.getTime()) return false;
+    if (filter.lt && time >= filter.lt.getTime()) return false;
+    return true;
+  };
+  const matchesWhere = (receivable: SummaryReceivable, where: Record<string, unknown>): boolean => {
+    if (Array.isArray(where.AND)) {
+      return where.AND.every((item) => matchesWhere(receivable, item as Record<string, unknown>));
+    }
+
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item) => matchesWhere(receivable, item as Record<string, unknown>));
+    }
+
+    if (where.clientId && receivable.clientId !== where.clientId) return false;
+    if (where.clientReferenceId && receivable.clientReferenceId !== where.clientReferenceId) {
+      return false;
+    }
+    if (where.status && receivable.status !== where.status) return false;
+    if (where.dueDate) {
+      const dueDate = where.dueDate;
+
+      if (dueDate instanceof Date && receivable.dueDate.getTime() !== dueDate.getTime()) {
+        return false;
+      }
+      if (!(dueDate instanceof Date) && !matchesDateFilter(receivable.dueDate, dueDate)) {
+        return false;
+      }
+    }
+    if (where.description) {
+      const filter = where.description as { contains: string };
+      if (!matchesStringFilter(receivable.description, filter)) return false;
+    }
+    if (where.client) {
+      const clientWhere = where.client as { name?: { contains: string } };
+      if (clientWhere.name && !matchesStringFilter(receivable.client.name, clientWhere.name)) {
+        return false;
+      }
+    }
+    if (where.clientReference) {
+      const referenceWhere = where.clientReference as { reference?: { contains: string } };
+      if (
+        referenceWhere.reference &&
+        !matchesStringFilter(receivable.clientReference.reference, referenceWhere.reference)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const receivable = {
+    aggregate: vi.fn(({ where }: { where: Record<string, unknown> }) => {
+      const amount = receivables
+        .filter((item) => matchesWhere(item, where))
+        .reduce((total, item) => total.add(item.amount), new Prisma.Decimal('0.00'));
+
+      return Promise.resolve({ _sum: { amount } });
+    }),
+  };
+
+  return {
+    receivable,
+    $transaction: <T>(items: Array<Promise<T>>) => Promise.all(items),
+  };
+}
+
 function createCycleRecorder(fake: ReturnType<typeof createFinancePrisma>) {
   const nextReceivables: Array<Record<string, unknown>> = [];
   const cycle = {
@@ -811,6 +896,203 @@ function createGroupedFinancePrisma() {
 }
 
 describe('FinanceService', () => {
+  it('summarizes receivables amounts by period without double counting overdue pending items', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-19T12:00:00.000Z'));
+    const prisma = createReceivablesSummaryPrisma([
+      {
+        amount: new Prisma.Decimal('999.00'),
+        client: { name: 'Bruno Agosto' },
+        clientId: 'client-august',
+        clientReference: { reference: 'AGO' },
+        clientReferenceId: 'ref-august',
+        description: 'Fora agosto',
+        dueDate: parseBusinessDate('2026-08-31'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('100.00'),
+        client: { name: 'Bruno Setembro' },
+        clientId: 'client-bruno',
+        clientReference: { reference: 'SET-001' },
+        clientReferenceId: 'ref-bruno',
+        description: 'Pendente futuro',
+        dueDate: parseBusinessDate('2026-09-30'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('200.00'),
+        client: { name: 'Bruno Setembro' },
+        clientId: 'client-bruno',
+        clientReference: { reference: 'SET-001' },
+        clientReferenceId: 'ref-bruno',
+        description: 'Pendente vencido',
+        dueDate: parseBusinessDate('2026-09-01'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('300.00'),
+        client: { name: 'Cliente Pago' },
+        clientId: 'client-paid',
+        clientReference: { reference: 'SET-002' },
+        clientReferenceId: 'ref-paid',
+        description: 'Recebido setembro',
+        dueDate: parseBusinessDate('2026-09-15'),
+        status: 'PAGO',
+      },
+      {
+        amount: new Prisma.Decimal('400.00'),
+        client: { name: 'Cliente Cancelado' },
+        clientId: 'client-canceled',
+        clientReference: { reference: 'SET-003' },
+        clientReferenceId: 'ref-canceled',
+        description: 'Cancelado setembro',
+        dueDate: parseBusinessDate('2026-09-30'),
+        status: 'CANCELADO',
+      },
+      {
+        amount: new Prisma.Decimal('999.00'),
+        client: { name: 'Bruno Outubro' },
+        clientId: 'client-october',
+        clientReference: { reference: 'OUT' },
+        clientReferenceId: 'ref-october',
+        description: 'Fora outubro',
+        dueDate: parseBusinessDate('2026-10-01'),
+        status: 'PAGO',
+      },
+    ]);
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(
+      service.receivablesSummary({ startDate: '2026-09-01', endDate: '2026-09-30' }),
+    ).resolves.toEqual({
+      canceledAmount: '400.00',
+      overdueAmount: '200.00',
+      paidAmount: '300.00',
+      pendingAmount: '100.00',
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('classifies pending receivables by current business date across historical and future periods', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-19T12:00:00.000Z'));
+    const prisma = createReceivablesSummaryPrisma([
+      {
+        amount: new Prisma.Decimal('80.00'),
+        client: { name: 'Cliente Agosto' },
+        clientId: 'client-august',
+        clientReference: { reference: 'AGO-001' },
+        clientReferenceId: 'ref-august',
+        description: 'Pendente histórico',
+        dueDate: parseBusinessDate('2026-08-15'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('50.00'),
+        client: { name: 'Cliente Hoje' },
+        clientId: 'client-today',
+        clientReference: { reference: 'HOJE-001' },
+        clientReferenceId: 'ref-today',
+        description: 'Pendente hoje',
+        dueDate: parseBusinessDate('2026-09-19'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('120.00'),
+        client: { name: 'Cliente Outubro' },
+        clientId: 'client-october',
+        clientReference: { reference: 'OUT-001' },
+        clientReferenceId: 'ref-october',
+        description: 'Pendente futuro',
+        dueDate: parseBusinessDate('2026-10-15'),
+        status: 'PENDENTE',
+      },
+    ]);
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(
+      service.receivablesSummary({ startDate: '2026-08-01', endDate: '2026-08-31' }),
+    ).resolves.toMatchObject({ overdueAmount: '80.00', pendingAmount: '0.00' });
+    await expect(
+      service.receivablesSummary({ startDate: '2026-09-01', endDate: '2026-09-30' }),
+    ).resolves.toMatchObject({ overdueAmount: '0.00', pendingAmount: '50.00' });
+    await expect(
+      service.receivablesSummary({ startDate: '2026-10-01', endDate: '2026-10-31' }),
+    ).resolves.toMatchObject({ overdueAmount: '0.00', pendingAmount: '120.00' });
+
+    vi.useRealTimers();
+  });
+
+  it('keeps receivables summary independent from pagination and table status filters', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-19T12:00:00.000Z'));
+    const prisma = createReceivablesSummaryPrisma([
+      {
+        amount: new Prisma.Decimal('100.00'),
+        client: { name: 'Bruno Silva' },
+        clientId: 'client-bruno',
+        clientReference: { reference: 'BRU-001' },
+        clientReferenceId: 'ref-bruno',
+        description: 'Mensalidade Bruno',
+        dueDate: parseBusinessDate('2026-09-30'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('250.00'),
+        client: { name: 'Bruno Silva' },
+        clientId: 'client-bruno',
+        clientReference: { reference: 'BRU-001' },
+        clientReferenceId: 'ref-bruno',
+        description: 'Pago Bruno',
+        dueDate: parseBusinessDate('2026-09-15'),
+        status: 'PAGO',
+      },
+      {
+        amount: new Prisma.Decimal('700.00'),
+        client: { name: 'Soraia Lima' },
+        clientId: 'client-soraia',
+        clientReference: { reference: 'SOR-001' },
+        clientReferenceId: 'ref-soraia',
+        description: 'Pago Soraia',
+        dueDate: parseBusinessDate('2026-09-15'),
+        status: 'PAGO',
+      },
+    ]);
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+    const baseQuery = {
+      endDate: '2026-09-30',
+      page: 1,
+      pageSize: 10,
+      search: 'Bruno',
+      startDate: '2026-09-01',
+    };
+
+    const all = await service.receivablesSummary(baseQuery);
+    const paidPageTwo = await service.receivablesSummary({
+      ...baseQuery,
+      page: 2,
+      status: 'PAGO',
+    });
+    const canceledPageThree = await service.receivablesSummary({
+      ...baseQuery,
+      page: 3,
+      status: 'CANCELADO',
+    });
+
+    expect(all).toEqual({
+      canceledAmount: '0.00',
+      overdueAmount: '0.00',
+      paidAmount: '250.00',
+      pendingAmount: '100.00',
+    });
+    expect(paidPageTwo).toEqual(all);
+    expect(canceledPageThree).toEqual(all);
+
+    vi.useRealTimers();
+  });
+
   it('pays three selected receivables from the same client as one manual payment group', async () => {
     const fake = createGroupedFinancePrisma();
     const service = new FinanceService(

@@ -899,6 +899,31 @@ a {
   color: var(--accent-strong);
 }
 
+.finance-period-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 6px 8px;
+}
+
+.finance-period-bar strong {
+  min-width: 132px;
+  color: var(--text);
+  font-size: 14px;
+  text-align: center;
+}
+
+.finance-period-bar span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .finance-summary-panel,
 .finance-panel {
   display: grid;
@@ -4701,6 +4726,19 @@ tbody tr:hover,
   .page-actions,
   .quick-actions {
     justify-content: flex-start;
+  }
+
+  .finance-period-bar {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .finance-period-bar strong {
+    min-width: 0;
+  }
+
+  .finance-period-bar span {
+    display: none;
   }
 
   .metric-grid,

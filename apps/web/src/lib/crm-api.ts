@@ -358,6 +358,13 @@ export interface PaginatedFinancialTransactions {
   pagination: PaginatedClients['pagination'];
 }
 
+export interface ReceivablesSummary {
+  pendingAmount: string;
+  paidAmount: string;
+  overdueAmount: string;
+  canceledAmount: string;
+}
+
 export interface FinancialSummary {
   startDate: string;
   endDate: string;
@@ -1215,8 +1222,14 @@ export function deleteFinancialCategory(id: string) {
   return apiFetch<FinancialCategory>(`/financial-categories/${id}`, { method: 'DELETE' });
 }
 
-export function getFinancialSummary() {
-  return apiFetch<FinancialSummary>('/finance/summary');
+export function getFinancialSummary(filters: { startDate?: string; endDate?: string } = {}) {
+  const params = new URLSearchParams();
+
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
+
+  const query = params.toString();
+  return apiFetch<FinancialSummary>(`/finance/summary${query ? `?${query}` : ''}`);
 }
 
 export function getDashboardSummary(filters: { startDate?: string; endDate?: string } = {}) {
@@ -1304,21 +1317,50 @@ export async function downloadReportCsv(type: ReportType, filters: ReportFilters
 
 export function listReceivables(
   filters: {
+    clientId?: string;
+    clientReferenceId?: string;
     status?: ReceivableDisplayStatus | '';
     search?: string;
+    startDate?: string;
+    endDate?: string;
     page?: number;
     pageSize?: number;
   } = {},
 ) {
   const params = new URLSearchParams();
 
+  if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
   if (filters.status) params.set('status', filters.status);
   if (filters.search) params.set('search', filters.search);
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
 
   const query = params.toString();
   return apiFetch<PaginatedReceivables>(`/receivables${query ? `?${query}` : ''}`);
+}
+
+export function getReceivablesSummary(
+  filters: {
+    clientId?: string;
+    clientReferenceId?: string;
+    search?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
+
+  const query = params.toString();
+  return apiFetch<ReceivablesSummary>(`/receivables/summary${query ? `?${query}` : ''}`);
 }
 
 export function payReceivable(
@@ -1448,7 +1490,11 @@ export function listFinancialTransactions(
   filters: {
     type?: FinancialTransactionType;
     origin?: FinancialTransactionOrigin;
+    clientId?: string;
+    clientReferenceId?: string;
     search?: string;
+    startDate?: string;
+    endDate?: string;
     page?: number;
     pageSize?: number;
   } = {},
@@ -1457,7 +1503,11 @@ export function listFinancialTransactions(
 
   if (filters.type) params.set('type', filters.type);
   if (filters.origin) params.set('origin', filters.origin);
+  if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
   if (filters.search) params.set('search', filters.search);
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
 

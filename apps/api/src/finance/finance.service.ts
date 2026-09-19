@@ -206,6 +206,37 @@ export class FinanceService {
     };
   }
 
+  async receivablesSummary(query: ListReceivablesDto) {
+    const baseWhere = this.buildReceivableWhere(query, { includeStatus: false });
+    const today = parseBusinessDate(formatBusinessDate(new Date()));
+
+    const [pending, paid, overdue, canceled] = await this.prisma.$transaction([
+      this.prisma.receivable.aggregate({
+        where: { AND: [baseWhere, { status: 'PENDENTE' }, { dueDate: { gte: today } }] },
+        _sum: { amount: true },
+      }),
+      this.prisma.receivable.aggregate({
+        where: { AND: [baseWhere, { status: 'PAGO' }] },
+        _sum: { amount: true },
+      }),
+      this.prisma.receivable.aggregate({
+        where: { AND: [baseWhere, { status: 'PENDENTE' }, { dueDate: { lt: today } }] },
+        _sum: { amount: true },
+      }),
+      this.prisma.receivable.aggregate({
+        where: { AND: [baseWhere, { status: 'CANCELADO' }] },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    return {
+      pendingAmount: this.formatDecimal(pending._sum.amount),
+      paidAmount: this.formatDecimal(paid._sum.amount),
+      overdueAmount: this.formatDecimal(overdue._sum.amount),
+      canceledAmount: this.formatDecimal(canceled._sum.amount),
+    };
+  }
+
   async getReceivable(id: string) {
     const receivable = await this.prisma.receivable.findUnique({
       where: { id },
@@ -1271,8 +1302,12 @@ export class FinanceService {
     return this.presentTransaction(transaction);
   }
 
-  private buildReceivableWhere(query: ListReceivablesDto): Prisma.ReceivableWhereInput {
+  private buildReceivableWhere(
+    query: ListReceivablesDto,
+    options: { includeStatus?: boolean } = {},
+  ): Prisma.ReceivableWhereInput {
     const where: Prisma.ReceivableWhereInput = {};
+    const includeStatus = options.includeStatus ?? true;
 
     if (query.clientId) {
       where.clientId = query.clientId;
@@ -1282,10 +1317,10 @@ export class FinanceService {
       where.clientReferenceId = query.clientReferenceId;
     }
 
-    if (query.status === 'VENCIDO') {
+    if (includeStatus && query.status === 'VENCIDO') {
       where.status = 'PENDENTE';
       where.dueDate = { lt: parseBusinessDate(formatBusinessDate(new Date())) };
-    } else if (query.status) {
+    } else if (includeStatus && query.status && query.status !== 'VENCIDO') {
       where.status = query.status;
     }
 

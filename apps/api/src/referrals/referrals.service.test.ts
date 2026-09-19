@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type ReferralStatus } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { ReferralsService } from './referrals.service';
@@ -273,7 +273,293 @@ function createReferralPrisma() {
   };
 }
 
+function createReferralListPrisma(statuses: ReferralStatus[]) {
+  const referrerBruno = {
+    id: '11111111-1111-4111-8111-111111111111',
+    name: 'Bruno',
+    phone: '(11) 99999-9999',
+    phoneNormalized: '5511999999999',
+    reference: 'BRU-001',
+    status: 'ATIVO',
+    references: [
+      {
+        id: 'ref-bruno',
+        reference: 'BRU-001',
+        dueDate: parseBusinessDate('2026-10-10'),
+        billingAnchorDay: 10,
+        status: 'ATIVO',
+      },
+    ],
+  };
+  const referrerSoraia = {
+    ...referrerBruno,
+    id: '33333333-3333-4333-8333-333333333333',
+    name: 'Soraia',
+    phoneNormalized: '5511988888888',
+    reference: 'SOR-001',
+    references: [
+      {
+        id: 'ref-soraia',
+        reference: 'SOR-001',
+        dueDate: parseBusinessDate('2026-10-15'),
+        billingAnchorDay: 15,
+        status: 'ATIVO',
+      },
+    ],
+  };
+  const referrals = statuses.map((status, index) => {
+    const referredClient = {
+      ...referrerBruno,
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(index + 1).padStart(12, '0')}`,
+      name: index % 2 === 0 ? `Cliente Bruno ${index + 1}` : `Cliente Soraia ${index + 1}`,
+      phoneNormalized: `5511977${String(index + 1).padStart(7, '0')}`,
+      reference: index % 2 === 0 ? `CBR-${index + 1}` : `SOR-${index + 1}`,
+      references: [
+        {
+          id: `ref-referred-${index + 1}`,
+          reference: index % 2 === 0 ? `CBR-${index + 1}` : `SOR-${index + 1}`,
+          dueDate: parseBusinessDate('2026-11-10'),
+          billingAnchorDay: 10,
+          status: 'ATIVO',
+        },
+      ],
+    };
+    const referrerClient = index < 18 ? referrerBruno : referrerSoraia;
+
+    return {
+      id: `bbbbbbbb-bbbb-4bbb-8bbb-${String(index + 1).padStart(12, '0')}`,
+      referredClientId: referredClient.id,
+      referrerClientId: referrerClient.id,
+      status,
+      rewardType: 'FREE_MONTH',
+      rewardValue: null,
+      rewardDescription: null,
+      qualifiedAt: status === 'PENDING' ? null : new Date('2026-09-12T00:00:00.000Z'),
+      appliedAt: status === 'REWARDED' ? new Date('2026-09-13T00:00:00.000Z') : null,
+      canceledAt: status === 'CANCELED' ? new Date('2026-09-14T00:00:00.000Z') : null,
+      cancellationReason: status === 'CANCELED' ? 'Cancelada em teste.' : null,
+      appliedPreviousDueDate: null,
+      appliedNewDueDate: null,
+      rewardClientReferenceId: null,
+      rewardClientReference: null,
+      referredClient,
+      referrerClient,
+      createdAt: new Date(`2026-09-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`),
+      updatedAt: new Date(`2026-09-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`),
+    };
+  });
+
+  const matchesText = (value: string, filter: { contains: string }) =>
+    value.toLocaleLowerCase().includes(filter.contains.toLocaleLowerCase());
+  const matchesReference = (
+    references: Array<{ reference: string }>,
+    filter: { some: { reference: { contains: string } } },
+  ) => references.some((reference) => matchesText(reference.reference, filter.some.reference));
+  const matchesWhere = (
+    referral: (typeof referrals)[number],
+    where: Record<string, unknown>,
+  ): boolean => {
+    if (Array.isArray(where.AND)) {
+      return where.AND.every((item): boolean =>
+        matchesWhere(referral, item as Record<string, unknown>),
+      );
+    }
+
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item): boolean =>
+        matchesWhere(referral, item as Record<string, unknown>),
+      );
+    }
+
+    if (where.status && referral.status !== where.status) return false;
+    if (where.referrerClientId && referral.referrerClientId !== where.referrerClientId) {
+      return false;
+    }
+    if (where.referredClient) {
+      const clientWhere = where.referredClient as {
+        name?: { contains: string };
+        phoneNormalized?: { contains: string };
+        references?: { some: { reference: { contains: string } } };
+      };
+
+      if (clientWhere.name && !matchesText(referral.referredClient.name, clientWhere.name)) {
+        return false;
+      }
+      if (
+        clientWhere.phoneNormalized &&
+        !referral.referredClient.phoneNormalized.includes(clientWhere.phoneNormalized.contains)
+      ) {
+        return false;
+      }
+      if (
+        clientWhere.references &&
+        !matchesReference(referral.referredClient.references, clientWhere.references)
+      ) {
+        return false;
+      }
+    }
+    if (where.referrerClient) {
+      const clientWhere = where.referrerClient as {
+        name?: { contains: string };
+        phoneNormalized?: { contains: string };
+        references?: { some: { reference: { contains: string } } };
+      };
+
+      if (clientWhere.name && !matchesText(referral.referrerClient.name, clientWhere.name)) {
+        return false;
+      }
+      if (
+        clientWhere.phoneNormalized &&
+        !referral.referrerClient.phoneNormalized.includes(clientWhere.phoneNormalized.contains)
+      ) {
+        return false;
+      }
+      if (
+        clientWhere.references &&
+        !matchesReference(referral.referrerClient.references, clientWhere.references)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+  const filtered = (where: Record<string, unknown> = {}) =>
+    referrals.filter((referral) => matchesWhere(referral, where));
+  const referral = {
+    count: vi.fn(({ where }: { where?: Record<string, unknown> } = {}) =>
+      Promise.resolve(filtered(where).length),
+    ),
+    findMany: vi.fn(
+      ({
+        skip = 0,
+        take = 100,
+        where,
+      }: {
+        skip?: number;
+        take?: number;
+        where?: Record<string, unknown>;
+      }) =>
+        Promise.resolve(
+          [...filtered(where)]
+            .sort(
+              (left, right) =>
+                right.createdAt.getTime() - left.createdAt.getTime() ||
+                right.id.localeCompare(left.id),
+            )
+            .slice(skip, skip + take),
+        ),
+    ),
+  };
+
+  return {
+    referrerBruno,
+    referrals,
+    prisma: {
+      referral,
+      $transaction: <T>(items: Array<Promise<T>>) => Promise.all(items),
+    },
+  };
+}
+
 describe('ReferralsService', () => {
+  it('paginates referrals with a real total and stable page windows', async () => {
+    const fake = createReferralListPrisma(Array.from({ length: 27 }, () => 'PENDING'));
+    const service = new ReferralsService(fake.prisma as never);
+
+    const pageOne = await service.list({ page: 1, pageSize: 10 });
+    const pageTwo = await service.list({ page: 2, pageSize: 10 });
+    const pageThree = await service.list({ page: 3, pageSize: 10 });
+
+    expect(pageOne.items).toHaveLength(10);
+    expect(pageTwo.items).toHaveLength(10);
+    expect(pageThree.items).toHaveLength(7);
+    expect(pageOne.pagination).toEqual({ page: 1, pageSize: 10, total: 27, totalPages: 3 });
+    expect(pageTwo.pagination).toEqual({ page: 2, pageSize: 10, total: 27, totalPages: 3 });
+    expect(pageThree.pagination).toEqual({ page: 3, pageSize: 10, total: 27, totalPages: 3 });
+    expect(fake.prisma.referral.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 10, take: 10 }),
+    );
+    expect(fake.prisma.referral.count).toHaveBeenCalledWith({ where: {} });
+  });
+
+  it('applies search, referrer and status filters to findMany and count', async () => {
+    const fake = createReferralListPrisma([
+      'PENDING',
+      'QUALIFIED',
+      'REWARDED',
+      'CANCELED',
+      'QUALIFIED',
+      'PENDING',
+    ]);
+    const service = new ReferralsService(fake.prisma as never);
+
+    const result = await service.list({
+      page: 1,
+      pageSize: 10,
+      referrerClientId: fake.referrerBruno.id,
+      search: 'CBR-5',
+      status: 'QUALIFIED',
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ status: 'QUALIFIED' });
+    const findManyCall = fake.prisma.referral.findMany.mock.calls[0]?.[0] as {
+      where: Record<string, unknown>;
+    };
+    const countCall = fake.prisma.referral.count.mock.calls[0]?.[0] as {
+      where: Record<string, unknown>;
+    };
+
+    expect(findManyCall.where).toMatchObject({
+      referrerClientId: fake.referrerBruno.id,
+      status: 'QUALIFIED',
+    });
+    expect(countCall.where).toMatchObject({
+      referrerClientId: fake.referrerBruno.id,
+      status: 'QUALIFIED',
+    });
+    expect(Array.isArray(findManyCall.where.OR)).toBe(true);
+    expect(Array.isArray(countCall.where.OR)).toBe(true);
+    expect(result.pagination).toMatchObject({ total: 1, totalPages: 1 });
+  });
+
+  it('summarizes filtered referrals independently from page and status filters', async () => {
+    const fake = createReferralListPrisma([
+      ...Array.from({ length: 10 }, () => 'PENDING' as const),
+      ...Array.from({ length: 6 }, () => 'QUALIFIED' as const),
+      ...Array.from({ length: 5 }, () => 'REWARDED' as const),
+      ...Array.from({ length: 4 }, () => 'CANCELED' as const),
+    ]);
+    const service = new ReferralsService(fake.prisma as never);
+
+    const all = await service.summary({ page: 1, pageSize: 10 });
+    const pageThreeQualified = await service.summary({
+      page: 3,
+      pageSize: 10,
+      status: 'QUALIFIED',
+    });
+    const bruno = await service.summary({ referrerClientId: fake.referrerBruno.id });
+
+    expect(all).toEqual({
+      awaitingReward: 6,
+      canceled: 4,
+      pending: 10,
+      qualified: 6,
+      rewarded: 5,
+      total: 25,
+    });
+    expect(pageThreeQualified).toEqual(all);
+    expect(bruno).toEqual({
+      awaitingReward: 6,
+      canceled: 0,
+      pending: 10,
+      qualified: 6,
+      rewarded: 2,
+      total: 18,
+    });
+  });
+
   it('keeps clients without referral unchanged', async () => {
     const fake = createReferralPrisma();
     const service = new ReferralsService(fake.prisma as never);

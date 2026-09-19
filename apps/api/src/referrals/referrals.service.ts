@@ -49,6 +49,8 @@ export class ReferralsService {
   ) {}
 
   async list(query: ListReferralsDto) {
+    const page = query.page ?? 1;
+    const pageSize = Math.min(query.pageSize ?? 20, pageSizeLimit);
     const where = this.buildWhere(query);
 
     const [items, total] = await this.prisma.$transaction([
@@ -59,30 +61,40 @@ export class ReferralsService {
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
-        orderBy: [{ createdAt: 'desc' }],
-        take: pageSizeLimit,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
       this.prisma.referral.count({ where }),
     ]);
 
     return {
       items: items.map((referral) => this.presentReferral(referral)),
-      pagination: { page: 1, pageSize: pageSizeLimit, total, totalPages: 1 },
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
     };
   }
 
-  async summary() {
-    const [pending, qualified, rewarded, canceled, awaitingReward] = await this.prisma.$transaction(
-      [
-        this.prisma.referral.count({ where: { status: 'PENDING' } }),
-        this.prisma.referral.count({ where: { status: 'QUALIFIED' } }),
-        this.prisma.referral.count({ where: { status: 'REWARDED' } }),
-        this.prisma.referral.count({ where: { status: 'CANCELED' } }),
-        this.prisma.referral.count({ where: { status: 'QUALIFIED', appliedAt: null } }),
-      ],
-    );
+  async summary(query: ListReferralsDto = {}) {
+    const baseWhere = this.buildWhere(query, { includeStatus: false });
 
-    return { pending, qualified, rewarded, canceled, awaitingReward };
+    const [total, pending, qualified, rewarded, canceled, awaitingReward] =
+      await this.prisma.$transaction([
+        this.prisma.referral.count({ where: baseWhere }),
+        this.prisma.referral.count({ where: { AND: [baseWhere, { status: 'PENDING' }] } }),
+        this.prisma.referral.count({ where: { AND: [baseWhere, { status: 'QUALIFIED' }] } }),
+        this.prisma.referral.count({ where: { AND: [baseWhere, { status: 'REWARDED' }] } }),
+        this.prisma.referral.count({ where: { AND: [baseWhere, { status: 'CANCELED' }] } }),
+        this.prisma.referral.count({
+          where: { AND: [baseWhere, { status: 'QUALIFIED', appliedAt: null }] },
+        }),
+      ]);
+
+    return { total, pending, qualified, rewarded, canceled, awaitingReward };
   }
 
   async get(id: string) {
@@ -444,10 +456,14 @@ export class ReferralsService {
     return this.presentReferral(referral);
   }
 
-  private buildWhere(query: ListReferralsDto): Prisma.ReferralWhereInput {
+  private buildWhere(
+    query: ListReferralsDto,
+    options: { includeStatus?: boolean } = {},
+  ): Prisma.ReferralWhereInput {
     const where: Prisma.ReferralWhereInput = {};
+    const includeStatus = options.includeStatus ?? true;
 
-    if (query.status) where.status = query.status;
+    if (includeStatus && query.status) where.status = query.status;
     if (query.referrerClientId) where.referrerClientId = query.referrerClientId;
 
     const createdRange = this.dateRange(query.startDate, query.endDate);

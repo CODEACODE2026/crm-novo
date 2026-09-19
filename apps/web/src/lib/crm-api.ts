@@ -298,6 +298,7 @@ export interface ClientReferralsMade {
 }
 
 export interface ReferralSummary {
+  total: number;
   pending: number;
   qualified: number;
   rewarded: number;
@@ -1264,6 +1265,8 @@ export function listReferrals(
     referrerClientId?: string;
     startDate?: string;
     endDate?: string;
+    page?: number;
+    pageSize?: number;
   } = {},
 ) {
   const params = new URLSearchParams();
@@ -1276,8 +1279,22 @@ export function listReferrals(
   return apiFetch<PaginatedReferrals>(`/referrals${query ? `?${query}` : ''}`);
 }
 
-export function getReferralSummary() {
-  return apiFetch<ReferralSummary>('/referrals/summary');
+export function getReferralSummary(
+  filters: {
+    search?: string;
+    referrerClientId?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, String(value));
+  });
+
+  const query = params.toString();
+  return apiFetch<ReferralSummary>(`/referrals/summary${query ? `?${query}` : ''}`);
 }
 
 export function getReferral(id: string) {

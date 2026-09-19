@@ -20,8 +20,8 @@ export class ReferralsController {
   }
 
   @Get('summary')
-  summary() {
-    return this.referralsService.summary();
+  summary(@Query() query: ListReferralsDto) {
+    return this.referralsService.summary(query);
   }
 
   @Get(':id')

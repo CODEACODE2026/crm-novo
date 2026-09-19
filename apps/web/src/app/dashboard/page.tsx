@@ -1390,6 +1390,8 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<ReferralStatus | ''>('');
   const [referrerClientId, setReferrerClientId] = useState('');
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginatedClients['pagination'] | null>(null);
   const [confirming, setConfirming] = useState<Referral | null>(null);
   const [detail, setDetail] = useState<Referral | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -1404,18 +1406,33 @@ function ReferralsView({ clients }: { clients: Client[] }) {
     setError('');
 
     try {
+      const trimmedSearch = search.trim();
+      const summaryFilters = {
+        ...(trimmedSearch ? { search: trimmedSearch } : {}),
+        ...(referrerClientId ? { referrerClientId } : {}),
+      };
       const [list, nextSummary] = await Promise.all([
-        listReferrals({ search, status, referrerClientId }),
-        getReferralSummary(),
+        listReferrals({
+          page,
+          pageSize: listPageSize,
+          ...(trimmedSearch ? { search: trimmedSearch } : {}),
+          ...(status ? { status } : {}),
+          ...(referrerClientId ? { referrerClientId } : {}),
+        }),
+        getReferralSummary(summaryFilters),
       ]);
       setItems(list.items);
+      setPagination(list.pagination);
       setSummary(nextSummary);
+      if (!list.items.length && list.pagination.page > 1 && list.pagination.total > 0) {
+        setPage(Math.max(1, list.pagination.totalPages));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar indicações.');
     } finally {
       setLoading(false);
     }
-  }, [referrerClientId, search, status]);
+  }, [page, referrerClientId, search, status]);
 
   useEffect(() => {
     void loadReferrals();
@@ -1472,9 +1489,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
     }
   }
 
-  const totalReferrals = summary
-    ? summary.pending + summary.qualified + summary.rewarded + summary.canceled
-    : 0;
+  const totalReferrals = summary?.total ?? 0;
   const kpis = [
     { icon: UsersRound, label: 'Total', tone: 'primary', value: totalReferrals },
     { icon: Clock, label: 'Pendentes', tone: 'warning', value: summary?.pending ?? 0 },
@@ -1521,13 +1536,19 @@ function ReferralsView({ clients }: { clients: Client[] }) {
             <input
               placeholder="Buscar indicador ou indicado"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
             />
           </div>
           <select
             aria-label="Status da indicação"
             value={status}
-            onChange={(event) => setStatus(event.target.value as ReferralStatus | '')}
+            onChange={(event) => {
+              setStatus(event.target.value as ReferralStatus | '');
+              setPage(1);
+            }}
           >
             <option value="">Todos os status</option>
             <option value="PENDING">Pendente</option>
@@ -1538,7 +1559,10 @@ function ReferralsView({ clients }: { clients: Client[] }) {
           <select
             aria-label="Indicador"
             value={referrerClientId}
-            onChange={(event) => setReferrerClientId(event.target.value)}
+            onChange={(event) => {
+              setReferrerClientId(event.target.value);
+              setPage(1);
+            }}
           >
             <option value="">Todos os indicadores</option>
             {clients.map((client) => (
@@ -1646,6 +1670,11 @@ function ReferralsView({ clients }: { clients: Client[] }) {
               ) : null}
             </tbody>
           </table>
+          <PaginationControls
+            itemLabel="indicações"
+            pagination={pagination}
+            onPageChange={setPage}
+          />
         </div>
       </Card>
 

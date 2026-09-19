@@ -6,11 +6,13 @@ import {
   formatCurrency,
   formatDate,
   getFinancialSummary,
+  getReferralSummary,
   getReceivablesSummary,
   listBillingDispatches,
   listClientOptions,
   listClients,
   listFinancialTransactions,
+  listReferrals,
   listReceivables,
   listWhatsAppPendingContacts,
   payReceivable,
@@ -191,6 +193,49 @@ describe('CRM UI formatters', () => {
       ),
       expect.any(Object),
     );
+  });
+
+  it('sends referrals pagination and summary filters without status in summary', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            pagination: { page: 2, pageSize: 10, total: 27, totalPages: 3 },
+          }),
+          {
+            status: 200,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listReferrals({
+      page: 2,
+      pageSize: 10,
+      referrerClientId: 'client-bruno',
+      search: 'soraia',
+      status: 'QUALIFIED',
+    });
+    await getReferralSummary({
+      referrerClientId: 'client-bruno',
+      search: 'soraia',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        '/referrals?page=2&pageSize=10&referrerClientId=client-bruno&search=soraia&status=QUALIFIED',
+      ),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/referrals/summary?referrerClientId=client-bruno&search=soraia'),
+      expect.any(Object),
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('status=');
   });
 
   it('sends billing and waitlist pagination with their filters', async () => {

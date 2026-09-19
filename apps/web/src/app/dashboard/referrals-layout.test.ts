@@ -39,6 +39,37 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).not.toContain('referência que indicou');
   });
 
+  it('uses server-side pagination and keeps referral summary independent from status pages', () => {
+    const referralsSource = dashboardSource.slice(
+      dashboardSource.indexOf('function ReferralsView'),
+      dashboardSource.indexOf('function ReferralClientCell'),
+    );
+
+    expect(referralsSource).toContain('const [page, setPage] = useState(1);');
+    expect(referralsSource).toContain('const [pagination, setPagination]');
+    expect(referralsSource).toContain('pageSize: listPageSize');
+    expect(referralsSource).toContain('getReferralSummary(summaryFilters)');
+    expect(referralsSource).toContain('...(status ? { status } : {})');
+    expect(referralsSource).toContain('setPagination(list.pagination);');
+    expect(referralsSource).toContain('setPage(Math.max(1, list.pagination.totalPages));');
+    expect(referralsSource).toContain('pagination={pagination}');
+    expect(referralsSource).toContain('itemLabel="indicações"');
+    expect(referralsSource).toContain('onPageChange={setPage}');
+    expect(referralsSource).not.toContain('slice(');
+  });
+
+  it('resets referrals page when search, status, or referrer filters change', () => {
+    const referralsSource = dashboardSource.slice(
+      dashboardSource.indexOf('function ReferralsView'),
+      dashboardSource.indexOf('function ReferralClientCell'),
+    );
+
+    expect(referralsSource.match(/setPage\(1\);/g)).toHaveLength(3);
+    expect(referralsSource).toContain('setSearch(event.target.value);');
+    expect(referralsSource).toContain("setStatus(event.target.value as ReferralStatus | '');");
+    expect(referralsSource).toContain('setReferrerClientId(event.target.value);');
+  });
+
   it('uses semantic status and neutral benefit labels without changing enums', () => {
     const referralBenefitSource = dashboardSource.slice(
       dashboardSource.indexOf('function referralBenefitLabel'),

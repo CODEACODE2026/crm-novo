@@ -845,6 +845,11 @@ export interface PaginatedClients {
   };
 }
 
+export interface PaginatedClientEvents {
+  items: ClientEvent[];
+  pagination: PaginatedClients['pagination'];
+}
+
 export interface RemovalPreview<TTarget> {
   target: TTarget;
   counts: Record<string, number>;
@@ -1067,6 +1072,16 @@ export function listClientOptions(search: string) {
 
 export function getClient(id: string) {
   return apiFetch<Client>(`/clients/${id}`);
+}
+
+export function getClientEvents(id: string, filters: { page?: number; pageSize?: number } = {}) {
+  const params = new URLSearchParams();
+
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+
+  const query = params.toString();
+  return apiFetch<PaginatedClientEvents>(`/clients/${id}/events${query ? `?${query}` : ''}`);
 }
 
 export function createClient(payload: ClientPayload) {

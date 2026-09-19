@@ -18,6 +18,7 @@ import { ClientsService } from './clients.service';
 import { CreateClientReferenceDto } from './dto/create-client-reference.dto';
 import { CreateClientDto } from './dto/create-client.dto';
 import { DeleteClientConfirmationDto } from './dto/delete-client-confirmation.dto';
+import { ListClientEventsDto } from './dto/list-client-events.dto';
 import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientReferenceStatusDto } from './dto/update-client-reference-status.dto';
@@ -76,6 +77,11 @@ export class ClientsController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.clientsService.updateReferenceStatus(referenceId, dto, request.user.id);
+  }
+
+  @Get(':id/events')
+  listEvents(@Param('id') id: string, @Query() query: ListClientEventsDto) {
+    return this.clientsService.listEvents(id, query);
   }
 
   @Get(':id')

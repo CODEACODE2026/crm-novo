@@ -16,6 +16,7 @@ import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CreateClientReferenceDto } from './dto/create-client-reference.dto';
 import { CreateClientDto } from './dto/create-client.dto';
 import { DeleteClientConfirmationDto } from './dto/delete-client-confirmation.dto';
+import { ListClientEventsDto } from './dto/list-client-events.dto';
 import { ListClientOptionsDto } from './dto/list-client-options.dto';
 import { ListClientsDto } from './dto/list-clients.dto';
 import { UpdateClientReferenceStatusDto } from './dto/update-client-reference-status.dto';
@@ -189,6 +190,34 @@ export class ClientsService {
     }
 
     return this.presentClient(client);
+  }
+
+  async listEvents(id: string, query: ListClientEventsDto) {
+    await this.ensureExists(id);
+
+    const page = query.page ?? 1;
+    const pageSize = Math.min(query.pageSize ?? 10, pageSizeLimit);
+    const where: Prisma.ClientEventWhereInput = { clientId: id };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.clientEvent.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.clientEvent.count({ where }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    };
   }
 
   async create(dto: CreateClientDto, actorUserId: string) {

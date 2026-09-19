@@ -1,5 +1,9 @@
+import 'reflect-metadata';
 import { Prisma } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { describe, expect, it, vi } from 'vitest';
+import { ListClientEventsDto } from './dto/list-client-events.dto';
 import { ClientsService } from './clients.service';
 import { parseBusinessDate } from './utils/business-date';
 
@@ -110,6 +114,111 @@ function manualClientDto(overrides: Partial<Parameters<ClientsService['create']>
   };
 }
 
+function createClientEventsService() {
+  const clientAId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const clientBId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const sharedCreatedAt = new Date('2026-09-19T12:00:00.000Z');
+  const olderBase = new Date('2026-09-18T12:00:00.000Z').getTime();
+  const clientAEvents = [
+    eventRecord({
+      clientId: clientAId,
+      createdAt: sharedCreatedAt,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      title: 'Evento empatado menor',
+    }),
+    eventRecord({
+      clientId: clientAId,
+      createdAt: sharedCreatedAt,
+      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      title: 'Evento empatado maior',
+    }),
+    ...Array.from({ length: 25 }, (_, index) =>
+      eventRecord({
+        clientId: clientAId,
+        createdAt: new Date(olderBase - index * 24 * 60 * 60 * 1000),
+        id: `${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`,
+        title: `Evento ${index + 1}`,
+      }),
+    ),
+  ];
+  const events = [
+    ...clientAEvents,
+    eventRecord({
+      clientId: clientBId,
+      createdAt: new Date('2026-09-20T12:00:00.000Z'),
+      id: '99999999-9999-4999-8999-999999999999',
+      title: 'Evento de outro cliente',
+    }),
+  ];
+
+  const prisma = {
+    client: {
+      count: vi.fn(({ where }: Prisma.ClientCountArgs) =>
+        Promise.resolve(where?.id === clientAId || where?.id === clientBId ? 1 : 0),
+      ),
+    },
+    clientEvent: {
+      findMany: vi.fn(({ where, orderBy, skip, take }: Prisma.ClientEventFindManyArgs) => {
+        expect(orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+
+        return Promise.resolve(
+          events
+            .filter((event) => event.clientId === clientEventWhereClientId(where))
+            .sort(
+              (left, right) =>
+                right.createdAt.getTime() - left.createdAt.getTime() ||
+                right.id.localeCompare(left.id),
+            )
+            .slice(skip, Number(skip) + Number(take)),
+        );
+      }),
+      count: vi.fn(({ where }: Prisma.ClientEventCountArgs) =>
+        Promise.resolve(
+          events.filter((event) => event.clientId === clientEventWhereClientId(where)).length,
+        ),
+      ),
+    },
+    $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+  };
+
+  return {
+    clientAId,
+    clientBId,
+    service: new ClientsService(prisma as never, {} as never, {} as never, {} as never),
+  };
+}
+
+function clientEventWhereClientId(where: Prisma.ClientEventWhereInput | undefined) {
+  return typeof where?.clientId === 'string' ? where.clientId : undefined;
+}
+
+function eventRecord({
+  clientId,
+  createdAt,
+  id,
+  title,
+}: {
+  clientId: string;
+  createdAt: Date;
+  id: string;
+  title: string;
+}) {
+  return {
+    clientId,
+    createdAt,
+    createdByUserId: null,
+    description: null,
+    id,
+    metadata: null,
+    title,
+    type: 'CLIENT_UPDATED' as const,
+  };
+}
+
+function validateClientEventsQuery(payload: Record<string, unknown>) {
+  return validate(plainToInstance(ListClientEventsDto, payload));
+}
+
 describe('ClientsService options', () => {
   it('searches lightweight client options by name', async () => {
     const service = createService();
@@ -140,6 +249,42 @@ describe('ClientsService options', () => {
 
     await expect(service.options({ search: 'inexistente' })).resolves.toEqual([]);
     await expect(service.options({ search: '' })).resolves.toEqual([]);
+  });
+});
+
+describe('ClientsService client events pagination', () => {
+  it('paginates client events with total and deterministic id tie-breaker', async () => {
+    const fake = createClientEventsService();
+    const page1 = await fake.service.listEvents(fake.clientAId, { page: 1, pageSize: 10 });
+    const page2 = await fake.service.listEvents(fake.clientAId, { page: 2, pageSize: 10 });
+    const page3 = await fake.service.listEvents(fake.clientAId, { page: 3, pageSize: 10 });
+
+    expect(page1.items).toHaveLength(10);
+    expect(page2.items).toHaveLength(10);
+    expect(page3.items).toHaveLength(7);
+    expect(page1.pagination).toEqual({ page: 1, pageSize: 10, total: 27, totalPages: 3 });
+    expect(page2.pagination).toEqual({ page: 2, pageSize: 10, total: 27, totalPages: 3 });
+    expect(page3.pagination).toEqual({ page: 3, pageSize: 10, total: 27, totalPages: 3 });
+    expect(page1.items.map((event) => event.id).slice(0, 2)).toEqual([
+      'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    ]);
+  });
+
+  it('keeps events isolated by client id', async () => {
+    const fake = createClientEventsService();
+
+    const result = await fake.service.listEvents(fake.clientAId, { page: 1, pageSize: 50 });
+
+    expect(result.items).toHaveLength(27);
+    expect(result.items.every((event) => event.clientId === fake.clientAId)).toBe(true);
+    expect(result.items.some((event) => event.clientId === fake.clientBId)).toBe(false);
+  });
+
+  it('validates invalid pagination query values', async () => {
+    await expect(validateClientEventsQuery({ page: 0 })).resolves.not.toHaveLength(0);
+    await expect(validateClientEventsQuery({ pageSize: 0 })).resolves.not.toHaveLength(0);
+    await expect(validateClientEventsQuery({ pageSize: 101 })).resolves.not.toHaveLength(0);
   });
 });
 

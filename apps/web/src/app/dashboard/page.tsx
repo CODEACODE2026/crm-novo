@@ -134,6 +134,7 @@ import {
   formatCurrency,
   formatDate,
   getClient,
+  getClientEvents,
   getDashboardSummary,
   getReport,
   getFinancialSummary,
@@ -209,6 +210,7 @@ import {
   type BillingSummary,
   type BillingAutomationSettings,
   type Client,
+  type ClientEvent,
   type ClientMessageDispatch,
   type ClientPayload,
   type ClientReference,
@@ -222,6 +224,7 @@ import {
   type FinancialTransactionPayload,
   type FinancialTransactionType,
   type PaginatedClients,
+  type PaginatedClientEvents,
   type PaymentIntent,
   type PaymentIntentStatus,
   type PaymentProviderCredentialStatus,
@@ -2813,6 +2816,13 @@ function ClientsView({
   const [selectedDispatch, setSelectedDispatch] = useState<ClientMessageDispatch | null>(null);
   const [clientActionNotice, setClientActionNotice] = useState('');
   const [clientActionError, setClientActionError] = useState('');
+  const [timelineItems, setTimelineItems] = useState<ClientEvent[]>([]);
+  const [timelinePagination, setTimelinePagination] = useState<
+    PaginatedClientEvents['pagination'] | null
+  >(null);
+  const [timelinePage, setTimelinePage] = useState(1);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState('');
   const uniqueSelectedReference =
     selectedClient?.references?.length === 1 ? selectedClient.references[0] : null;
   const selectedReferences = selectedClient?.references ?? [];
@@ -2871,7 +2881,49 @@ function ClientsView({
     setCancelingReceivable(null);
     setClientActionNotice('');
     setClientActionError('');
+    setTimelineItems([]);
+    setTimelinePagination(null);
+    setTimelinePage(1);
+    setTimelineLoading(false);
+    setTimelineError('');
   }, [selectedClient?.id]);
+
+  useEffect(() => {
+    if (!selectedClient || detailTab !== 'timeline') return undefined;
+
+    let active = true;
+    setTimelineLoading(true);
+    setTimelineError('');
+
+    getClientEvents(selectedClient.id, { page: timelinePage, pageSize: listPageSize })
+      .then((timeline) => {
+        if (!active) return;
+        setTimelineItems(timeline.items);
+        setTimelinePagination(timeline.pagination);
+        if (
+          !timeline.items.length &&
+          timeline.pagination.page > 1 &&
+          timeline.pagination.total > 0
+        ) {
+          setTimelinePage(Math.max(1, timeline.pagination.totalPages));
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setTimelineItems([]);
+        setTimelinePagination(null);
+        setTimelineError(
+          err instanceof Error ? err.message : 'Não foi possível carregar o histórico.',
+        );
+      })
+      .finally(() => {
+        if (active) setTimelineLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [detailTab, selectedClient?.id, timelinePage]);
 
   useEffect(() => {
     if (!selectedClient) return undefined;
@@ -3370,31 +3422,44 @@ function ClientsView({
               ) : null}
 
               {detailTab === 'timeline' ? (
-                <ol className="timeline">
-                  {(selectedClient.events ?? []).map((event) => (
-                    <li key={event.id}>
-                      <span className="client-timeline-icon" aria-hidden="true">
-                        <ClientEventIcon type={event.type} />
-                      </span>
-                      <div>
-                        <strong>{event.title}</strong>
-                        <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
-                        {event.description ? <p>{event.description}</p> : null}
-                      </div>
-                    </li>
-                  ))}
-                  {!selectedClient.events?.length ? (
-                    <li>
-                      <span className="client-timeline-icon" aria-hidden="true">
-                        <Activity size={14} />
-                      </span>
-                      <div>
-                        <strong>Sem eventos recentes</strong>
-                        <span>O histórico aparecerá aqui quando houver atividade.</span>
-                      </div>
-                    </li>
+                <>
+                  {timelineLoading ? (
+                    <div className="empty-state">Carregando histórico...</div>
                   ) : null}
-                </ol>
+                  {timelineError ? <div className="notice danger">{timelineError}</div> : null}
+                  <ol className="timeline">
+                    {timelineItems.map((event) => (
+                      <li key={event.id}>
+                        <span className="client-timeline-icon" aria-hidden="true">
+                          <ClientEventIcon type={event.type} />
+                        </span>
+                        <div>
+                          <strong>{event.title}</strong>
+                          <span>{new Date(event.createdAt).toLocaleString('pt-BR')}</span>
+                          {event.description ? <p>{event.description}</p> : null}
+                        </div>
+                      </li>
+                    ))}
+                    {!timelineLoading && !timelineError && !timelineItems.length ? (
+                      <li>
+                        <span className="client-timeline-icon" aria-hidden="true">
+                          <Activity size={14} />
+                        </span>
+                        <div>
+                          <strong>Sem eventos recentes</strong>
+                          <span>O histórico aparecerá aqui quando houver atividade.</span>
+                        </div>
+                      </li>
+                    ) : null}
+                  </ol>
+                  {timelinePagination && timelinePagination.total > 0 ? (
+                    <PaginationControls
+                      itemLabel="eventos"
+                      pagination={timelinePagination}
+                      onPageChange={setTimelinePage}
+                    />
+                  ) : null}
+                </>
               ) : null}
 
               {detailTab === 'references' ? (

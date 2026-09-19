@@ -37,6 +37,39 @@ describe('phase B server-side pagination wiring', () => {
     );
   });
 
+  it('uses server pagination only for the client history tab', () => {
+    expect(dashboardSource).toContain('getClientEvents');
+    expect(clientsSource).toContain('const [timelineItems, setTimelineItems]');
+    expect(clientsSource).toContain('const [timelinePagination, setTimelinePagination]');
+    expect(clientsSource).toContain('const [timelinePage, setTimelinePage] = useState(1);');
+    expect(clientsSource).toContain('const [timelineLoading, setTimelineLoading]');
+    expect(clientsSource).toContain('const [timelineError, setTimelineError]');
+    expect(clientsSource).toContain(
+      "if (!selectedClient || detailTab !== 'timeline') return undefined;",
+    );
+    expect(clientsSource).toContain(
+      'getClientEvents(selectedClient.id, { page: timelinePage, pageSize: listPageSize })',
+    );
+    expect(clientsSource).toContain('setTimelineItems(timeline.items);');
+    expect(clientsSource).toContain('setTimelinePagination(timeline.pagination);');
+    expect(clientsSource).toContain('itemLabel="eventos"');
+    expect(clientsSource).toContain('pagination={timelinePagination}');
+    expect(clientsSource).toContain('onPageChange={setTimelinePage}');
+  });
+
+  it('clears client history pagination on client changes and preserves overview recent activity', () => {
+    expect(clientsSource).toContain('setTimelineItems([]);');
+    expect(clientsSource).toContain('setTimelinePagination(null);');
+    expect(clientsSource).toContain('setTimelinePage(1);');
+    expect(clientsSource).toContain("setTimelineError('');");
+    expect(clientsSource).toContain('Carregando histórico...');
+    expect(clientsSource).toContain('Não foi possível carregar o histórico.');
+    expect(clientsSource).toContain('!timelineLoading && !timelineError && !timelineItems.length');
+    expect(clientsSource).toContain('(selectedClient.events ?? []).slice(0, 5).map((event) =>');
+    expect(clientsSource).toContain('timelineItems.map((event) =>');
+    expect(clientsSource).not.toContain('(selectedClient.events ?? []).map((event) =>');
+  });
+
   it('keeps finance pages independent and clears selected receivables on page changes', () => {
     expect(financeSource).toContain('const [receivablesPage, setReceivablesPage] = useState(1);');
     expect(financeSource).toContain('const [entriesPage, setEntriesPage] = useState(1);');

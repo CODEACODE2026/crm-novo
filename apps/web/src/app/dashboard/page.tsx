@@ -109,6 +109,7 @@ import {
   Button,
   Card,
   IconButton,
+  PaginationControls,
   SectionHeader,
   StatCard,
 } from '../../components/ui/primitives';
@@ -1147,40 +1148,6 @@ function OperationalDashboard({
         </Card>
       </div>
     </>
-  );
-}
-
-function PaginationControls({
-  pagination,
-  onPageChange,
-}: {
-  pagination: PaginatedClients['pagination'] | null;
-  onPageChange: (page: number) => void;
-}) {
-  if (!pagination || pagination.totalPages <= 1) return null;
-
-  return (
-    <div className="pagination-row">
-      <button
-        className="secondary-button"
-        disabled={pagination.page <= 1}
-        type="button"
-        onClick={() => onPageChange(pagination.page - 1)}
-      >
-        Anterior
-      </button>
-      <span>
-        Página {pagination.page} de {pagination.totalPages} | {pagination.total} registros
-      </span>
-      <button
-        className="secondary-button"
-        disabled={pagination.page >= pagination.totalPages}
-        type="button"
-        onClick={() => onPageChange(pagination.page + 1)}
-      >
-        Próxima
-      </button>
-    </div>
   );
 }
 

@@ -551,6 +551,13 @@ export interface BillingSummary {
   settings?: BillingAutomationSettings;
 }
 
+export interface BillingDispatchSummary {
+  scheduled: number;
+  sent: number;
+  failed: number;
+  ignoredOrCanceled: number;
+}
+
 export type ReceivableCycleCode =
   | 'OK'
   | 'MISSING_RECEIVABLE'
@@ -1684,8 +1691,12 @@ export function generateCurrentCycleReceivable(clientReferenceId: string) {
 
 export function listBillingDispatches(
   filters: {
+    clientId?: string;
+    clientReferenceId?: string;
     status?: MessageDispatch['status'] | '';
     search?: string;
+    startDate?: string;
+    endDate?: string;
     dueDate?: string;
     page?: number;
     pageSize?: number;
@@ -1693,14 +1704,43 @@ export function listBillingDispatches(
 ) {
   const params = new URLSearchParams();
 
+  if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
   if (filters.status) params.set('status', filters.status);
   if (filters.search) params.set('search', filters.search);
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
   if (filters.dueDate) params.set('dueDate', filters.dueDate);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
 
   const query = params.toString();
   return apiFetch<PaginatedBillingDispatches>(`/billing/dispatches${query ? `?${query}` : ''}`);
+}
+
+export function getBillingDispatchSummary(
+  filters: {
+    clientId?: string;
+    clientReferenceId?: string;
+    status?: MessageDispatch['status'] | '';
+    search?: string;
+    startDate?: string;
+    endDate?: string;
+    dueDate?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate) params.set('endDate', filters.endDate);
+  if (filters.dueDate) params.set('dueDate', filters.dueDate);
+
+  const query = params.toString();
+  return apiFetch<BillingDispatchSummary>(`/billing/dispatches/summary${query ? `?${query}` : ''}`);
 }
 
 export function getBillingDispatch(id: string) {

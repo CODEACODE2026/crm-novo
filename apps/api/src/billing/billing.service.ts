@@ -488,6 +488,28 @@ export class BillingService {
     };
   }
 
+  async dispatchesSummary(query: ListBillingDispatchesDto) {
+    const where = this.buildDispatchWhere(query, { includeStatus: false });
+
+    const [scheduled, sent, failed, ignoredOrCanceled] = await this.prisma.$transaction([
+      this.prisma.messageDispatch.count({
+        where: { ...where, status: { in: ['PENDING', 'SCHEDULED', 'PROCESSING'] } },
+      }),
+      this.prisma.messageDispatch.count({ where: { ...where, status: 'SENT' } }),
+      this.prisma.messageDispatch.count({ where: { ...where, status: 'FAILED' } }),
+      this.prisma.messageDispatch.count({
+        where: { ...where, status: { in: ['IGNORED', 'CANCELED'] } },
+      }),
+    ]);
+
+    return {
+      scheduled,
+      sent,
+      failed,
+      ignoredOrCanceled,
+    };
+  }
+
   async getDispatch(id: string) {
     const dispatch = await this.prisma.messageDispatch.findUnique({
       where: { id },
@@ -1324,30 +1346,63 @@ export class BillingService {
     return result.count;
   }
 
-  private buildDispatchWhere(query: ListBillingDispatchesDto): Prisma.MessageDispatchWhereInput {
+  private buildDispatchWhere(
+    query: ListBillingDispatchesDto,
+    options: { includeStatus?: boolean } = {},
+  ): Prisma.MessageDispatchWhereInput {
+    const includeStatus = options.includeStatus ?? true;
     const where: Prisma.MessageDispatchWhereInput = { origin: 'BILLING' };
+    const and: Prisma.MessageDispatchWhereInput[] = [];
 
-    if (query.status) {
+    if (includeStatus && query.status) {
       where.status = query.status;
+    }
+
+    if (query.clientId) {
+      and.push({
+        OR: [
+          { clientId: query.clientId },
+          { clientReference: { clientId: query.clientId } },
+          { receivable: { clientId: query.clientId } },
+          { items: { some: { clientReference: { clientId: query.clientId } } } },
+          { items: { some: { receivable: { clientId: query.clientId } } } },
+        ],
+      });
+    }
+
+    if (query.clientReferenceId) {
+      and.push({
+        OR: [
+          { clientReferenceId: query.clientReferenceId },
+          { receivable: { clientReferenceId: query.clientReferenceId } },
+          { items: { some: { clientReferenceId: query.clientReferenceId } } },
+        ],
+      });
     }
 
     if (query.search) {
       const search = query.search.trim();
-      where.OR = [
-        { client: { name: { contains: search, mode: 'insensitive' } } },
-        { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
-        {
-          receivable: { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
-        },
-        {
-          items: {
-            some: {
-              clientReference: { reference: { contains: search, mode: 'insensitive' } },
+      if (search) {
+        and.push({
+          OR: [
+            { client: { name: { contains: search, mode: 'insensitive' } } },
+            { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
+            {
+              receivable: {
+                clientReference: { reference: { contains: search, mode: 'insensitive' } },
+              },
             },
-          },
-        },
-        { phone: { contains: search } },
-      ];
+            {
+              items: {
+                some: {
+                  clientReference: { reference: { contains: search, mode: 'insensitive' } },
+                },
+              },
+            },
+            { phone: { contains: search } },
+          ],
+        });
+      }
     }
 
     if (query.startDate || query.endDate) {
@@ -1359,18 +1414,13 @@ export class BillingService {
 
     if (query.dueDate) {
       const dueDate = parseBusinessDate(query.dueDate);
-      const dueDateOr: Prisma.MessageDispatchWhereInput[] = [
-        { receivable: { dueDate } },
-        { items: { some: { dueDate } } },
-      ];
-      const dueDateWhere: Prisma.MessageDispatchWhereInput = { OR: dueDateOr };
+      and.push({
+        OR: [{ receivable: { dueDate } }, { items: { some: { dueDate } } }],
+      });
+    }
 
-      if (where.OR) {
-        where.AND = [{ OR: where.OR }, dueDateWhere];
-        delete where.OR;
-      } else {
-        where.OR = dueDateOr;
-      }
+    if (and.length) {
+      where.AND = and;
     }
 
     return where;

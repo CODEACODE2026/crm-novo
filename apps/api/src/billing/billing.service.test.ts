@@ -1333,13 +1333,17 @@ describe('BillingService', () => {
     expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          OR: expect.arrayContaining([
-            { clientReference: { reference: { contains: 'REF-001', mode: 'insensitive' } } },
-            {
-              receivable: {
-                clientReference: { reference: { contains: 'REF-001', mode: 'insensitive' } },
-              },
-            },
+          AND: expect.arrayContaining([
+            expect.objectContaining({
+              OR: expect.arrayContaining([
+                { clientReference: { reference: { contains: 'REF-001', mode: 'insensitive' } } },
+                {
+                  receivable: {
+                    clientReference: { reference: { contains: 'REF-001', mode: 'insensitive' } },
+                  },
+                },
+              ]),
+            }),
           ]),
         }),
       }),
@@ -1352,6 +1356,191 @@ describe('BillingService', () => {
           ]),
         }),
       }),
+    );
+  });
+
+  it('filters billing dispatches by client across direct, receivable, reference and grouped items', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listDispatches({ clientId: 'client-a', search: 'Maria' });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          origin: 'BILLING',
+          AND: expect.arrayContaining([
+            {
+              OR: [
+                { clientId: 'client-a' },
+                { clientReference: { clientId: 'client-a' } },
+                { receivable: { clientId: 'client-a' } },
+                { items: { some: { clientReference: { clientId: 'client-a' } } } },
+                { items: { some: { receivable: { clientId: 'client-a' } } } },
+              ],
+            },
+            expect.objectContaining({
+              OR: expect.arrayContaining([
+                { client: { name: { contains: 'Maria', mode: 'insensitive' } } },
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('filters billing dispatches by client reference across direct, receivable and grouped items', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listDispatches({ clientReferenceId: 'reference-a' });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          origin: 'BILLING',
+          AND: expect.arrayContaining([
+            {
+              OR: [
+                { clientReferenceId: 'reference-a' },
+                { receivable: { clientReferenceId: 'reference-a' } },
+                { items: { some: { clientReferenceId: 'reference-a' } } },
+              ],
+            },
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('combines client and reference filters as independent constraints', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listDispatches({
+      clientId: 'client-a',
+      clientReferenceId: 'reference-a',
+      page: 3,
+      pageSize: 10,
+    });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          origin: 'BILLING',
+          AND: expect.arrayContaining([
+            expect.objectContaining({ OR: expect.arrayContaining([{ clientId: 'client-a' }]) }),
+            expect.objectContaining({
+              OR: expect.arrayContaining([{ clientReferenceId: 'reference-a' }]),
+            }),
+          ]),
+        }),
+        skip: 20,
+        take: 10,
+      }),
+    );
+  });
+
+  it('preserves due date and scheduled date filters for billing dispatches', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listDispatches({
+      startDate: '2026-09-10',
+      endDate: '2026-09-20',
+      dueDate: '2026-09-15',
+    });
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          origin: 'BILLING',
+          scheduledFor: {
+            gte: new Date('2026-09-10T00:00:00.000Z'),
+            lte: new Date('2026-09-20T23:59:59.999Z'),
+          },
+          AND: expect.arrayContaining([
+            {
+              OR: [
+                { receivable: { dueDate: new Date('2026-09-15T00:00:00.000Z') } },
+                { items: { some: { dueDate: new Date('2026-09-15T00:00:00.000Z') } } },
+              ],
+            },
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('keeps the global billing dispatch list behavior without client filters', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listDispatches({});
+
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { origin: 'BILLING' },
+        orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'desc' }],
+        skip: 0,
+        take: 20,
+      }),
+    );
+  });
+
+  it('summarizes billing dispatches with filtered status classification independent from page', async () => {
+    const { service, prisma } = serviceFactory();
+    prisma.messageDispatch.count
+      .mockResolvedValueOnce(6)
+      .mockResolvedValueOnce(4)
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(2);
+
+    await expect(
+      service.dispatchesSummary({
+        clientId: 'client-a',
+        clientReferenceId: 'reference-a',
+        status: 'FAILED',
+        page: 3,
+        pageSize: 10,
+      }),
+    ).resolves.toEqual({
+      scheduled: 6,
+      sent: 4,
+      failed: 3,
+      ignoredOrCanceled: 2,
+    });
+
+    expect(prisma.messageDispatch.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          origin: 'BILLING',
+          status: { in: ['PENDING', 'SCHEDULED', 'PROCESSING'] },
+          AND: expect.arrayContaining([
+            expect.objectContaining({ OR: expect.arrayContaining([{ clientId: 'client-a' }]) }),
+            expect.objectContaining({
+              OR: expect.arrayContaining([{ clientReferenceId: 'reference-a' }]),
+            }),
+          ]),
+        }),
+      }),
+    );
+    expect(prisma.messageDispatch.count).toHaveBeenCalledTimes(4);
+  });
+
+  it('excludes recovery dispatches from filtered billing summaries', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.dispatchesSummary({ clientId: 'client-a' });
+
+    expect(prisma.messageDispatch.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          origin: 'BILLING',
+          AND: expect.arrayContaining([
+            expect.objectContaining({ OR: expect.arrayContaining([{ clientId: 'client-a' }]) }),
+          ]),
+        }),
+      }),
+    );
+    expect(prisma.messageDispatch.count).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ origin: 'RECOVERY' }) }),
     );
   });
 });

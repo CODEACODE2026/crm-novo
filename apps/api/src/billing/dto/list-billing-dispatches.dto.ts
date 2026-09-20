@@ -1,8 +1,16 @@
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { MessageDispatchStatus } from '@prisma/client';
 
 export class ListBillingDispatchesDto {
+  @IsOptional()
+  @IsUUID()
+  clientId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  clientReferenceId?: string;
+
   @IsOptional()
   @IsEnum(MessageDispatchStatus)
   status?: MessageDispatchStatus;

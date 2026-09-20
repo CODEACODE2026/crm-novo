@@ -5,6 +5,7 @@ import {
   applyReferralReward,
   formatCurrency,
   formatDate,
+  getBillingDispatchSummary,
   getFinancialSummary,
   getPaymentIntentsSummary,
   getReferralSummary,
@@ -324,10 +325,14 @@ describe('CRM UI formatters', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await listBillingDispatches({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      clientReferenceId: '550e8400-e29b-41d4-a716-446655440001',
       dueDate: '2026-09-19',
+      endDate: '2026-09-30',
       page: 2,
       pageSize: 10,
       search: 'maria',
+      startDate: '2026-09-01',
       status: 'SCHEDULED',
     });
     await listWhatsAppPendingContacts({
@@ -340,7 +345,7 @@ describe('CRM UI formatters', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       expect.stringContaining(
-        '/billing/dispatches?status=SCHEDULED&search=maria&dueDate=2026-09-19&page=2&pageSize=10',
+        '/billing/dispatches?clientId=550e8400-e29b-41d4-a716-446655440000&clientReferenceId=550e8400-e29b-41d4-a716-446655440001&status=SCHEDULED&search=maria&startDate=2026-09-01&endDate=2026-09-30&dueDate=2026-09-19&page=2&pageSize=10',
       ),
       expect.any(Object),
     );
@@ -351,6 +356,34 @@ describe('CRM UI formatters', () => {
       ),
       expect.any(Object),
     );
+  });
+
+  it('sends billing dispatch summary filters without pagination', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ scheduled: 3, sent: 2, failed: 1, ignoredOrCanceled: 4 }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getBillingDispatchSummary({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      clientReferenceId: '550e8400-e29b-41d4-a716-446655440001',
+      dueDate: '2026-09-19',
+      endDate: '2026-09-30',
+      search: 'maria',
+      startDate: '2026-09-01',
+      status: 'FAILED',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/billing/dispatches/summary?clientId=550e8400-e29b-41d4-a716-446655440000&clientReferenceId=550e8400-e29b-41d4-a716-446655440001&status=FAILED&search=maria&startDate=2026-09-01&endDate=2026-09-30&dueDate=2026-09-19',
+      ),
+      expect.any(Object),
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('page=');
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('pageSize=');
   });
 
   it('applies a referral reward with exactly one POST carrying only the selected reference id', async () => {

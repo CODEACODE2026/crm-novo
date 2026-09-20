@@ -41,6 +41,11 @@ export class BillingController {
     return this.billingService.listDispatches(query);
   }
 
+  @Get('dispatches/summary')
+  dispatchesSummary(@Query() query: ListBillingDispatchesDto) {
+    return this.billingService.dispatchesSummary(query);
+  }
+
   @Get('dispatches/:id')
   getDispatch(@Param('id') id: string) {
     return this.billingService.getDispatch(id);

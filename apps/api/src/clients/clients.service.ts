@@ -62,6 +62,7 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
   };
 }>;
 
+type ClientDetailWithRelations = Omit<ClientWithRelations, 'statusHistory'>;
 type ClientReferenceWithPlan = Prisma.ClientReferenceGetPayload<{ include: { plan: true } }>;
 
 @Injectable()
@@ -167,8 +168,7 @@ export class ClientsService {
           orderBy: { createdAt: 'desc' },
           include: { paymentIntents: { orderBy: { createdAt: 'desc' } } },
         },
-        statusHistory: { orderBy: { createdAt: 'desc' } },
-        events: { orderBy: { createdAt: 'desc' } },
+        events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 5 },
         messageDispatches: { orderBy: { createdAt: 'desc' }, take: 20 },
         recoveryCampaigns: {
           orderBy: { startedAt: 'desc' },
@@ -763,7 +763,10 @@ export class ClientsService {
   }
 
   private presentClient(
-    client: Prisma.ClientGetPayload<{ include: { plan: true } }> | ClientWithRelations,
+    client:
+      | Prisma.ClientGetPayload<{ include: { plan: true } }>
+      | ClientWithRelations
+      | ClientDetailWithRelations,
   ) {
     return {
       ...client,

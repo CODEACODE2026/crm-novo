@@ -288,6 +288,131 @@ describe('ClientsService client events pagination', () => {
   });
 });
 
+describe('ClientsService client detail payload', () => {
+  it('limits embedded detail events and does not request status history', async () => {
+    const createdAt = new Date('2026-09-19T12:00:00.000Z');
+    const allEvents = Array.from({ length: 12 }, (_, index) => ({
+      id: `event-${String(index + 1).padStart(2, '0')}`,
+      clientId: 'client-id',
+      type: 'CLIENT_UPDATED',
+      title: `Evento ${index + 1}`,
+      description: null,
+      metadata: null,
+      createdByUserId: null,
+      createdAt,
+    }));
+    const statusHistory = [
+      {
+        id: 'status-history-id',
+        clientId: 'client-id',
+        clientReferenceId: null,
+        previousStatus: 'PENDENTE_PAGAMENTO',
+        newStatus: 'ATIVO',
+        reason: null,
+        changedByUserId: null,
+        createdAt,
+      },
+    ];
+    const plan = {
+      id: 'plan-id',
+      name: 'Mensal',
+      durationMonths: 1,
+      defaultValue: new Prisma.Decimal('100.00'),
+      active: true,
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+    };
+    const client = {
+      id: 'client-id',
+      name: 'Bruno',
+      phone: '(44) 99821-2815',
+      phoneNormalized: '5544998212815',
+      email: null,
+      reference: 'LEGACY-001',
+      planId: plan.id,
+      recurringValue: new Prisma.Decimal('100.00'),
+      dueDate: parseBusinessDate('2026-10-10'),
+      billingAnchorDay: 10,
+      billingNoticeDays: 3,
+      notes: null,
+      status: 'ATIVO',
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+      plan,
+      references: [],
+      renewals: [],
+      receivables: [],
+      messageDispatches: [],
+      recoveryCampaigns: [],
+      referralReceived: null,
+      referralsMade: [],
+    };
+    const orderedEvents = () =>
+      [...allEvents].sort(
+        (left, right) =>
+          right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id),
+      );
+    const findUnique = vi.fn((args: Prisma.ClientFindUniqueArgs) => {
+      const eventsInclude = args.include?.events as { take?: number } | undefined;
+      const events = eventsInclude ? orderedEvents().slice(0, eventsInclude.take) : [];
+      const response =
+        args.include && 'statusHistory' in args.include
+          ? { ...client, events, statusHistory }
+          : { ...client, events };
+
+      return Promise.resolve(response);
+    });
+    const findManyEvents = vi.fn(({ skip = 0, take = 20 }: Prisma.ClientEventFindManyArgs) =>
+      Promise.resolve(orderedEvents().slice(skip, skip + take)),
+    );
+    const prisma = {
+      client: {
+        findUnique,
+        count: vi.fn().mockResolvedValue(1),
+      },
+      clientEvent: {
+        findMany: findManyEvents,
+        count: vi.fn().mockResolvedValue(allEvents.length),
+      },
+      $transaction: vi.fn((queries: Array<Promise<unknown>>) => Promise.all(queries)),
+    };
+    const service = new ClientsService(prisma as never, {} as never, {} as never, {} as never);
+
+    const detail = await service.get(client.id);
+    const page1 = await service.listEvents(client.id, { page: 1, pageSize: 10 });
+    const page2 = await service.listEvents(client.id, { page: 2, pageSize: 10 });
+
+    expect(detail).toMatchObject({
+      id: client.id,
+      events: [
+        { id: 'event-12' },
+        { id: 'event-11' },
+        { id: 'event-10' },
+        { id: 'event-09' },
+        { id: 'event-08' },
+      ],
+    });
+    expect('statusHistory' in detail).toBe(false);
+    expect(page1.items).toHaveLength(10);
+    expect(page2.items).toHaveLength(2);
+    expect(page1.items[0]?.id).toBe('event-12');
+    expect(page2.items.map((event) => event.id)).toEqual(['event-02', 'event-01']);
+    expect(findManyEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: 0,
+        take: 10,
+      }),
+    );
+    const findUniqueArgs = findUnique.mock.calls[0]?.[0];
+    expect(findUniqueArgs?.where).toEqual({ id: client.id });
+    expect(findUniqueArgs?.include).toMatchObject({
+      events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 5 },
+    });
+    expect(findUniqueArgs?.include).not.toHaveProperty('statusHistory');
+  });
+});
+
 describe('ClientsService manual client creation', () => {
   it('keeps immediate activation as the default manual creation behavior', async () => {
     const fake = createClientCreationService();

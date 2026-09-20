@@ -2807,6 +2807,19 @@ function ClientsView({
     status: Extract<ClientStatus, 'INATIVO' | 'CANCELADO'>;
   } | null>(null);
   const [clientFinanceCategories, setClientFinanceCategories] = useState<FinancialCategory[]>([]);
+  const [clientFinanceItems, setClientFinanceItems] = useState<Receivable[]>([]);
+  const [clientFinancePagination, setClientFinancePagination] = useState<
+    PaginatedClients['pagination'] | null
+  >(null);
+  const [clientFinanceSummary, setClientFinanceSummary] = useState<ReceivablesSummary | null>(null);
+  const [clientFinancePage, setClientFinancePage] = useState(1);
+  const [clientFinancePeriod, setClientFinancePeriod] = useState<FinancePeriod>(() =>
+    currentFinancePeriod(),
+  );
+  const [clientFinanceReferenceId, setClientFinanceReferenceId] = useState('');
+  const [clientFinanceStatus, setClientFinanceStatus] = useState<ReceivableDisplayStatus | ''>('');
+  const [clientFinanceLoading, setClientFinanceLoading] = useState(false);
+  const [clientFinanceError, setClientFinanceError] = useState('');
   const [paymentReceivable, setPaymentReceivable] = useState<Receivable | null>(null);
   const [pixReceivable, setPixReceivable] = useState<Receivable | null>(null);
   const [paymentReceivables, setPaymentReceivables] = useState<Receivable[] | null>(null);
@@ -2852,7 +2865,7 @@ function ClientsView({
   });
   const selectedReceivables = selectedClient?.receivables ?? [];
   const receivableTotals = clientReceivableTotals(selectedReceivables);
-  const selectedReceivablesForBulk = selectedReceivables.filter((receivable) =>
+  const selectedReceivablesForBulk = clientFinanceItems.filter((receivable) =>
     selectedReceivableIds.includes(receivable.id),
   );
   const selectedReceivableTotal = selectedReceivablesForBulk.reduce(
@@ -2869,6 +2882,60 @@ function ClientsView({
     (total, receivable) => total + (receivable.paymentIntents?.length ?? 0),
     0,
   );
+  const selectedClientId = selectedClient?.id;
+
+  const loadClientFinance = useCallback(async () => {
+    if (!selectedClientId) return;
+
+    setClientFinanceLoading(true);
+    setClientFinanceError('');
+
+    const baseFilters = {
+      clientId: selectedClientId,
+      ...(clientFinanceReferenceId ? { clientReferenceId: clientFinanceReferenceId } : {}),
+      endDate: clientFinancePeriod.endDate,
+      startDate: clientFinancePeriod.startDate,
+    };
+
+    try {
+      const [nextReceivables, nextSummary] = await Promise.all([
+        listReceivables({
+          ...baseFilters,
+          page: clientFinancePage,
+          pageSize: listPageSize,
+          status: clientFinanceStatus,
+        }),
+        getReceivablesSummary(baseFilters),
+      ]);
+
+      setClientFinanceItems(nextReceivables.items);
+      setClientFinancePagination(nextReceivables.pagination);
+      setClientFinanceSummary(nextSummary);
+      if (
+        !nextReceivables.items.length &&
+        nextReceivables.pagination.page > 1 &&
+        nextReceivables.pagination.total > 0
+      ) {
+        setClientFinancePage(Math.max(1, nextReceivables.pagination.totalPages));
+      }
+    } catch (err) {
+      setClientFinanceItems([]);
+      setClientFinancePagination(null);
+      setClientFinanceSummary(null);
+      setClientFinanceError(
+        err instanceof Error ? err.message : 'Não foi possível carregar financeiro do cliente.',
+      );
+    } finally {
+      setClientFinanceLoading(false);
+    }
+  }, [
+    clientFinancePage,
+    clientFinancePeriod.endDate,
+    clientFinancePeriod.startDate,
+    clientFinanceReferenceId,
+    clientFinanceStatus,
+    selectedClientId,
+  ]);
 
   useEffect(() => {
     setSelectedReceivableIds([]);
@@ -2881,12 +2948,35 @@ function ClientsView({
     setCancelingReceivable(null);
     setClientActionNotice('');
     setClientActionError('');
+    setClientFinanceItems([]);
+    setClientFinancePagination(null);
+    setClientFinanceSummary(null);
+    setClientFinancePage(1);
+    setClientFinancePeriod(currentFinancePeriod());
+    setClientFinanceReferenceId('');
+    setClientFinanceStatus('');
+    setClientFinanceLoading(false);
+    setClientFinanceError('');
     setTimelineItems([]);
     setTimelinePagination(null);
     setTimelinePage(1);
     setTimelineLoading(false);
     setTimelineError('');
   }, [selectedClient?.id]);
+
+  useEffect(() => {
+    if (!selectedClientId || detailTab !== 'receivables') return;
+    void loadClientFinance();
+  }, [detailTab, loadClientFinance, selectedClientId]);
+
+  useEffect(() => {
+    setSelectedReceivableIds([]);
+  }, [
+    clientFinancePage,
+    clientFinancePeriod.startDate,
+    clientFinanceReferenceId,
+    clientFinanceStatus,
+  ]);
 
   useEffect(() => {
     if (!selectedClient || detailTab !== 'timeline') return undefined;
@@ -2950,7 +3040,7 @@ function ClientsView({
     setClientActionError('');
     setClientActionNotice(message);
     setSelectedReceivableIds([]);
-    await onFinancialMutation(selectedClient.id);
+    await Promise.all([loadClientFinance(), onFinancialMutation(selectedClient.id)]);
   }
 
   function toggleClientReceivableSelection(receivable: Receivable, checked: boolean) {
@@ -2961,6 +3051,11 @@ function ClientsView({
         ? [...new Set([...current, receivable.id])]
         : current.filter((id) => id !== receivable.id),
     );
+  }
+
+  function changeClientFinanceMonth(months: number) {
+    setClientFinancePeriod((current) => shiftFinancePeriod(current, months));
+    setClientFinancePage(1);
   }
 
   return (
@@ -3906,23 +4001,87 @@ function ClientsView({
                   {clientActionNotice ? (
                     <div className="notice success">{clientActionNotice}</div>
                   ) : null}
+                  {clientFinanceError ? (
+                    <div className="notice danger">{clientFinanceError}</div>
+                  ) : null}
+                  <div className="finance-period-bar" aria-label="Período financeiro do cliente">
+                    <CalendarDays aria-hidden="true" size={18} />
+                    <IconButton
+                      icon={ArrowLeft}
+                      label="Mês anterior"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => changeClientFinanceMonth(-1)}
+                    />
+                    <strong>{clientFinancePeriod.label}</strong>
+                    <IconButton
+                      icon={ArrowRight}
+                      label="Próximo mês"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => changeClientFinanceMonth(1)}
+                    />
+                    <span>
+                      {formatDate(clientFinancePeriod.startDate)} até{' '}
+                      {formatDate(clientFinancePeriod.endDate)}
+                    </span>
+                  </div>
                   <div className="client-tab-summary">
-                    <StatCard label="A receber" value={formatCurrency(receivableTotals.pending)} />
+                    <StatCard
+                      label="A receber"
+                      value={formatCurrency(clientFinanceSummary?.pendingAmount ?? '0.00')}
+                    />
                     <StatCard
                       label="Pago"
                       tone="success"
-                      value={formatCurrency(receivableTotals.paid)}
+                      value={formatCurrency(clientFinanceSummary?.paidAmount ?? '0.00')}
                     />
                     <StatCard
                       label="Vencido"
                       tone="danger"
-                      value={formatCurrency(receivableTotals.overdue)}
+                      value={formatCurrency(clientFinanceSummary?.overdueAmount ?? '0.00')}
                     />
                     <StatCard
                       label="Cancelado"
                       tone="warning"
-                      value={formatCurrency(receivableTotals.canceled)}
+                      value={formatCurrency(clientFinanceSummary?.canceledAmount ?? '0.00')}
                     />
+                  </div>
+                  <div className="toolbar finance-toolbar">
+                    <select
+                      value={clientFinanceReferenceId}
+                      onChange={(event) => {
+                        setClientFinanceReferenceId(event.target.value);
+                        setClientFinancePage(1);
+                      }}
+                    >
+                      <option value="">Todas as referências</option>
+                      {selectedReferences.map((reference) => (
+                        <option key={reference.id} value={reference.id}>
+                          {reference.reference}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={clientFinanceStatus}
+                      onChange={(event) => {
+                        setClientFinanceStatus(event.target.value as ReceivableDisplayStatus | '');
+                        setClientFinancePage(1);
+                      }}
+                    >
+                      <option value="">Todas as situações</option>
+                      <option value="PENDENTE">Pendente</option>
+                      <option value="PAGO">Pago</option>
+                      <option value="VENCIDO">Vencido</option>
+                      <option value="CANCELADO">Cancelado</option>
+                    </select>
+                    <Button
+                      icon={Filter}
+                      variant="secondary"
+                      onClick={() => void loadClientFinance()}
+                    >
+                      Aplicar
+                    </Button>
                   </div>
                   {selectedReceivableIds.length ? (
                     <div className="selection-bar finance-selection-bar">
@@ -3966,7 +4125,7 @@ function ClientsView({
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedReceivables.map((receivable) => {
+                        {clientFinanceItems.map((receivable) => {
                           const checked = selectedReceivableIds.includes(receivable.id);
                           const status = receivableVisualStatus(receivable);
 
@@ -4046,13 +4205,22 @@ function ClientsView({
                         })}
                       </tbody>
                     </table>
-                    {!selectedReceivables.length ? (
-                      <div className="empty-state">Sem contas a receber.</div>
+                    {!clientFinanceItems.length ? (
+                      <div className="empty-state">
+                        {clientFinanceLoading
+                          ? 'Carregando financeiro...'
+                          : 'Sem contas a receber.'}
+                      </div>
                     ) : null}
+                    <PaginationControls
+                      itemLabel="contas"
+                      pagination={clientFinancePagination}
+                      onPageChange={setClientFinancePage}
+                    />
                   </div>
-                  {selectedReceivables.some((receivable) => receivable.paymentIntents?.length) ? (
+                  {clientFinanceItems.some((receivable) => receivable.paymentIntents?.length) ? (
                     <div className="pix-intent-list">
-                      {selectedReceivables.flatMap((receivable) =>
+                      {clientFinanceItems.flatMap((receivable) =>
                         (receivable.paymentIntents ?? []).map((intent) => (
                           <article className="pix-intent-card" key={intent.id}>
                             <QrCode aria-hidden="true" size={15} />

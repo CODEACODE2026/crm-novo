@@ -195,6 +195,56 @@ describe('CRM UI formatters', () => {
     );
   });
 
+  it('sends client finance filters to receivables endpoints', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            pagination: { page: 1, pageSize: 10, total: 0, totalPages: 0 },
+          }),
+          {
+            status: 200,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listReceivables({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      clientReferenceId: '550e8400-e29b-41d4-a716-446655440001',
+      endDate: '2026-09-30',
+      page: 3,
+      pageSize: 10,
+      startDate: '2026-09-01',
+      status: 'VENCIDO',
+    });
+    await getReceivablesSummary({
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      clientReferenceId: '550e8400-e29b-41d4-a716-446655440001',
+      endDate: '2026-09-30',
+      startDate: '2026-09-01',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        '/receivables?clientId=550e8400-e29b-41d4-a716-446655440000&clientReferenceId=550e8400-e29b-41d4-a716-446655440001&status=VENCIDO&startDate=2026-09-01&endDate=2026-09-30&page=3&pageSize=10',
+      ),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining(
+        '/receivables/summary?clientId=550e8400-e29b-41d4-a716-446655440000&clientReferenceId=550e8400-e29b-41d4-a716-446655440001&startDate=2026-09-01&endDate=2026-09-30',
+      ),
+      expect.any(Object),
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('status=');
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('page=');
+  });
+
   it('sends referrals pagination and summary filters without status in summary', async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(

@@ -67,7 +67,6 @@ type ClientDetailWithRelations = Prisma.ClientGetPayload<{
     plan: true;
     renewals: { orderBy: { createdAt: 'desc' }; include: { receivable: true } };
     events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]; take: 5 };
-    messageDispatches: { orderBy: { createdAt: 'desc' }; take: 20 };
     recoveryCampaigns: {
       orderBy: { startedAt: 'desc' };
       include: {
@@ -184,7 +183,6 @@ export class ClientsService {
         plan: true,
         renewals: { orderBy: { createdAt: 'desc' }, include: { receivable: true } },
         events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 5 },
-        messageDispatches: { orderBy: { createdAt: 'desc' }, take: 20 },
         recoveryCampaigns: {
           orderBy: { startedAt: 'desc' },
           include: {
@@ -833,20 +831,24 @@ export class ClientsService {
                   })),
                 }
               : {}),
-            messageDispatches: client.messageDispatches.map((dispatch) => ({
-              id: dispatch.id,
-              phone: dispatch.phone,
-              body: dispatch.body,
-              renderedContent: dispatch.renderedContent,
-              origin: dispatch.origin,
-              status: dispatch.status,
-              scheduledFor: dispatch.scheduledFor?.toISOString() ?? null,
-              attempts: dispatch.attempts,
-              errorCode: dispatch.errorCode,
-              errorMessage: dispatch.errorMessage,
-              sentAt: dispatch.sentAt?.toISOString() ?? null,
-              createdAt: dispatch.createdAt.toISOString(),
-            })),
+            ...('messageDispatches' in client
+              ? {
+                  messageDispatches: client.messageDispatches.map((dispatch) => ({
+                    id: dispatch.id,
+                    phone: dispatch.phone,
+                    body: dispatch.body,
+                    renderedContent: dispatch.renderedContent,
+                    origin: dispatch.origin,
+                    status: dispatch.status,
+                    scheduledFor: dispatch.scheduledFor?.toISOString() ?? null,
+                    attempts: dispatch.attempts,
+                    errorCode: dispatch.errorCode,
+                    errorMessage: dispatch.errorMessage,
+                    sentAt: dispatch.sentAt?.toISOString() ?? null,
+                    createdAt: dispatch.createdAt.toISOString(),
+                  })),
+                }
+              : {}),
             recoveryCampaigns: client.recoveryCampaigns.map((campaign) => ({
               id: campaign.id,
               clientId: campaign.clientId,

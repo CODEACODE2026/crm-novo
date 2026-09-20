@@ -359,8 +359,12 @@ describe('ClientsService client detail payload', () => {
       delete (clientWithoutReceivables as { receivables?: unknown }).receivables;
       const baseClient =
         args.include && 'receivables' in args.include ? client : clientWithoutReceivables;
+      const clientWithRequestedRelations = { ...baseClient };
+      if (!args.include || !('messageDispatches' in args.include)) {
+        delete (clientWithRequestedRelations as { messageDispatches?: unknown }).messageDispatches;
+      }
       const response = {
-        ...baseClient,
+        ...clientWithRequestedRelations,
         events,
         ...(args.include && 'statusHistory' in args.include ? { statusHistory } : {}),
       };
@@ -399,6 +403,7 @@ describe('ClientsService client detail payload', () => {
     });
     expect('statusHistory' in detail).toBe(false);
     expect('receivables' in detail).toBe(false);
+    expect('messageDispatches' in detail).toBe(false);
     expect(page1.items).toHaveLength(10);
     expect(page2.items).toHaveLength(2);
     expect(page1.items[0]?.id).toBe('event-12');
@@ -417,6 +422,7 @@ describe('ClientsService client detail payload', () => {
     });
     expect(findUniqueArgs?.include).not.toHaveProperty('statusHistory');
     expect(findUniqueArgs?.include).not.toHaveProperty('receivables');
+    expect(findUniqueArgs?.include).not.toHaveProperty('messageDispatches');
   });
 });
 

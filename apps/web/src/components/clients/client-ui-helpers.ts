@@ -3,9 +3,12 @@ import type {
   ClientMessageDispatch,
   ClientReference,
   ClientStatus,
+  MessageDispatch,
   Receivable,
 } from '../../lib/crm-api';
 import { formatCurrency, formatDate } from '../../lib/crm-api';
+
+type BillingDispatchLike = ClientMessageDispatch | MessageDispatch;
 
 export type ClientReferenceStatusSummaryItem =
   | {
@@ -172,7 +175,7 @@ export function clientReceivableTotals(receivables: Receivable[] = []) {
   );
 }
 
-export function dispatchStatusTone(status: ClientMessageDispatch['status']) {
+export function dispatchStatusTone(status: BillingDispatchLike['status']) {
   if (status === 'SENT') return 'success';
   if (status === 'FAILED' || status === 'CANCELED') return 'danger';
   if (status === 'PROCESSING') return 'info';
@@ -203,7 +206,7 @@ export function dispatchReferenceSummary(referenceCount: number) {
 }
 
 export function dispatchReferenceSummaryFromDispatch(
-  dispatch: Pick<ClientMessageDispatch, 'clientReference' | 'client' | 'itemCount' | 'items'>,
+  dispatch: Pick<BillingDispatchLike, 'clientReference' | 'client' | 'itemCount' | 'items'>,
 ) {
   const count = dispatch.itemCount ?? dispatch.items?.length;
 
@@ -215,7 +218,7 @@ export function dispatchReferenceSummaryFromDispatch(
 }
 
 export function dispatchTotalAmountLabel(
-  dispatch: Pick<ClientMessageDispatch, 'totalAmount' | 'items'>,
+  dispatch: Pick<BillingDispatchLike, 'totalAmount' | 'items'>,
 ) {
   const explicitTotal = dispatch.totalAmount;
 

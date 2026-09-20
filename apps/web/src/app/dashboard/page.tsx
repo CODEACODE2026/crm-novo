@@ -95,11 +95,9 @@ import {
   dispatchTotalAmountLabel,
   dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
-  isClientBillingDispatch,
   referenceStatusRequiresReason,
   receivableStatusTone,
   receivableVisualStatus,
-  summarizeClientBillingDispatches,
 } from '../../components/clients/client-ui-helpers';
 import { PlanForm } from '../../components/plans/plan-form';
 import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
@@ -181,6 +179,7 @@ import {
   cancelReferral,
   getBillingAutomationSettings,
   getBillingDispatch,
+  getBillingDispatchSummary,
   getBillingSummary,
   generateCurrentCycleReceivable,
   getRecoverySummary,
@@ -208,10 +207,10 @@ import {
   deactivatePaymentProviderCredential,
   registerPaymentWebhook,
   type BillingSummary,
+  type BillingDispatchSummary,
   type BillingAutomationSettings,
   type Client,
   type ClientEvent,
-  type ClientMessageDispatch,
   type ClientPayload,
   type ClientReference,
   type ClientStatus,
@@ -2837,7 +2836,21 @@ function ClientsView({
   const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
   const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
-  const [selectedDispatch, setSelectedDispatch] = useState<ClientMessageDispatch | null>(null);
+  const [selectedDispatch, setSelectedDispatch] = useState<MessageDispatch | null>(null);
+  const [clientBillingDispatches, setClientBillingDispatches] = useState<MessageDispatch[]>([]);
+  const [clientBillingPagination, setClientBillingPagination] = useState<
+    PaginatedClients['pagination'] | null
+  >(null);
+  const [clientBillingSummary, setClientBillingSummary] = useState<BillingDispatchSummary | null>(
+    null,
+  );
+  const [clientBillingPage, setClientBillingPage] = useState(1);
+  const [clientBillingReferenceId, setClientBillingReferenceId] = useState('');
+  const [clientBillingStatus, setClientBillingStatus] = useState<MessageDispatch['status'] | ''>(
+    '',
+  );
+  const [clientBillingLoading, setClientBillingLoading] = useState(false);
+  const [clientBillingError, setClientBillingError] = useState('');
   const [clientActionNotice, setClientActionNotice] = useState('');
   const [clientActionError, setClientActionError] = useState('');
   const [timelineItems, setTimelineItems] = useState<ClientEvent[]>([]);
@@ -2884,9 +2897,6 @@ function ClientsView({
   const selectedPendingReceivablesForBulk = selectedReceivablesForBulk.filter(
     (receivable) => receivable.status === 'PENDENTE',
   );
-  const selectedDispatches = selectedClient?.messageDispatches ?? [];
-  const selectedBillingDispatches = selectedDispatches.filter(isClientBillingDispatch);
-  const billingSummary = summarizeClientBillingDispatches(selectedDispatches);
   const selectedClientId = selectedClient?.id;
 
   const clientOverviewAmount = (key: keyof ReceivablesSummary) => {
@@ -2981,6 +2991,71 @@ function ClientsView({
     selectedClientId,
   ]);
 
+  const loadClientBillingDispatches = useCallback(
+    async (pageOverride = clientBillingPage) => {
+      if (!selectedClientId) return;
+
+      setClientBillingLoading(true);
+      setClientBillingError('');
+
+      const filters = {
+        clientId: selectedClientId,
+        ...(clientBillingReferenceId ? { clientReferenceId: clientBillingReferenceId } : {}),
+        page: pageOverride,
+        pageSize: listPageSize,
+        status: clientBillingStatus,
+      };
+
+      try {
+        const nextDispatches = await listBillingDispatches(filters);
+
+        setClientBillingDispatches(nextDispatches.items);
+        setClientBillingPagination(nextDispatches.pagination);
+        if (
+          !nextDispatches.items.length &&
+          nextDispatches.pagination.page > 1 &&
+          nextDispatches.pagination.total > 0
+        ) {
+          setClientBillingPage(Math.max(1, nextDispatches.pagination.totalPages));
+        }
+        setSelectedDispatch((current) => {
+          if (!current) return null;
+          return nextDispatches.items.find((dispatch) => dispatch.id === current.id) ?? null;
+        });
+      } catch (err) {
+        setClientBillingDispatches([]);
+        setClientBillingPagination(null);
+        setClientBillingError(
+          err instanceof Error ? err.message : 'Não foi possível carregar cobranças do cliente.',
+        );
+      } finally {
+        setClientBillingLoading(false);
+      }
+    },
+    [clientBillingPage, clientBillingReferenceId, clientBillingStatus, selectedClientId],
+  );
+
+  const loadClientBillingSummary = useCallback(async () => {
+    if (!selectedClientId) return;
+
+    setClientBillingError('');
+
+    const baseFilters = {
+      clientId: selectedClientId,
+      ...(clientBillingReferenceId ? { clientReferenceId: clientBillingReferenceId } : {}),
+    };
+
+    try {
+      const nextSummary = await getBillingDispatchSummary(baseFilters);
+      setClientBillingSummary(nextSummary);
+    } catch (err) {
+      setClientBillingSummary(null);
+      setClientBillingError(
+        err instanceof Error ? err.message : 'Não foi possível carregar resumo de cobranças.',
+      );
+    }
+  }, [clientBillingReferenceId, selectedClientId]);
+
   useEffect(() => {
     setSelectedReceivableIds([]);
     setSelectedDispatch(null);
@@ -2999,6 +3074,14 @@ function ClientsView({
     setClientOverviewSummaryError('');
     setClientPixSummary(null);
     setClientPixSummaryError('');
+    setClientBillingDispatches([]);
+    setClientBillingPagination(null);
+    setClientBillingSummary(null);
+    setClientBillingPage(1);
+    setClientBillingReferenceId('');
+    setClientBillingStatus('');
+    setClientBillingLoading(false);
+    setClientBillingError('');
     setClientFinancePage(1);
     setClientFinancePeriod(currentFinancePeriod());
     setClientFinanceReferenceId('');
@@ -3028,6 +3111,16 @@ function ClientsView({
   }, [detailTab, loadClientPixSummary, selectedClientId]);
 
   useEffect(() => {
+    if (!selectedClientId || detailTab !== 'messages') return;
+    void loadClientBillingDispatches();
+  }, [detailTab, loadClientBillingDispatches, selectedClientId]);
+
+  useEffect(() => {
+    if (!selectedClientId || detailTab !== 'messages') return;
+    void loadClientBillingSummary();
+  }, [detailTab, loadClientBillingSummary, selectedClientId]);
+
+  useEffect(() => {
     setSelectedReceivableIds([]);
   }, [
     clientFinancePage,
@@ -3035,6 +3128,10 @@ function ClientsView({
     clientFinanceReferenceId,
     clientFinanceStatus,
   ]);
+
+  useEffect(() => {
+    setSelectedDispatch(null);
+  }, [clientBillingPage, clientBillingReferenceId, clientBillingStatus]);
 
   useEffect(() => {
     if (!selectedClient || detailTab !== 'timeline') return undefined;
@@ -4292,10 +4389,21 @@ function ClientsView({
 
               {detailTab === 'messages' ? (
                 <div className="client-tab-panel billing-client-panel">
+                  {clientBillingError ? (
+                    <div className="notice danger">{clientBillingError}</div>
+                  ) : null}
                   <div className="client-tab-summary">
-                    <StatCard label="Agendadas" value={billingSummary.scheduled} />
-                    <StatCard label="Enviadas" tone="success" value={billingSummary.sent} />
-                    <StatCard label="Falhas" tone="danger" value={billingSummary.failed} />
+                    <StatCard label="Agendadas" value={clientBillingSummary?.scheduled ?? 0} />
+                    <StatCard
+                      label="Enviadas"
+                      tone="success"
+                      value={clientBillingSummary?.sent ?? 0}
+                    />
+                    <StatCard
+                      label="Falhas"
+                      tone="danger"
+                      value={clientBillingSummary?.failed ?? 0}
+                    />
                     <StatCard
                       label="PIX vinculados"
                       tone="info"
@@ -4307,6 +4415,52 @@ function ClientsView({
                             : 0
                       }
                     />
+                  </div>
+                  <div className="toolbar finance-toolbar">
+                    <select
+                      value={clientBillingReferenceId}
+                      onChange={(event) => {
+                        setClientBillingReferenceId(event.target.value);
+                        setClientBillingPage(1);
+                      }}
+                    >
+                      <option value="">Todas as referências</option>
+                      {selectedReferences.map((reference) => (
+                        <option key={reference.id} value={reference.id}>
+                          {reference.reference}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={clientBillingStatus}
+                      onChange={(event) => {
+                        setClientBillingStatus(
+                          event.target.value as MessageDispatch['status'] | '',
+                        );
+                        setClientBillingPage(1);
+                      }}
+                    >
+                      <option value="">Todos os status</option>
+                      <option value="SCHEDULED">Agendadas</option>
+                      <option value="PROCESSING">Processando</option>
+                      <option value="SENT">Enviadas</option>
+                      <option value="FAILED">Falhas</option>
+                      <option value="CANCELED">Canceladas</option>
+                      <option value="IGNORED">Ignoradas</option>
+                    </select>
+                    <Button
+                      icon={Filter}
+                      variant="secondary"
+                      onClick={() => {
+                        if (clientBillingPage !== 1) {
+                          setClientBillingPage(1);
+                        } else {
+                          void loadClientBillingDispatches();
+                        }
+                      }}
+                    >
+                      Aplicar
+                    </Button>
                   </div>
                   <div className="table-wrap compact-table">
                     <table className="client-billing-table">
@@ -4322,7 +4476,7 @@ function ClientsView({
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedBillingDispatches.map((dispatch) => (
+                        {clientBillingDispatches.map((dispatch) => (
                           <tr key={dispatch.id}>
                             <td>{formatDateTime(dispatch.createdAt)}</td>
                             <td>{dispatchReferenceSummaryFromDispatch(dispatch)}</td>
@@ -4337,7 +4491,7 @@ function ClientsView({
                                 {billingStatusLabel(dispatch.status)}
                               </span>
                             </td>
-                            <td className="finance-attempts-column">{dispatch.attempts}</td>
+                            <td className="finance-attempts-column">{dispatch.attempts ?? 0}</td>
                             <td className="finance-actions-column">
                               <div className="table-actions">
                                 <IconButton
@@ -4351,9 +4505,18 @@ function ClientsView({
                         ))}
                       </tbody>
                     </table>
-                    {!selectedBillingDispatches.length ? (
-                      <div className="empty-state">Sem mensagens ou cobranças recentes.</div>
+                    {!clientBillingDispatches.length ? (
+                      <div className="empty-state">
+                        {clientBillingLoading
+                          ? 'Carregando cobranças...'
+                          : 'Sem mensagens ou cobranças recentes.'}
+                      </div>
                     ) : null}
+                    <PaginationControls
+                      itemLabel="cobranças"
+                      pagination={clientBillingPagination}
+                      onPageChange={setClientBillingPage}
+                    />
                   </div>
                 </div>
               ) : null}
@@ -4628,7 +4791,7 @@ function DispatchDetailModal({
   dispatch,
   onClose,
 }: {
-  dispatch: ClientMessageDispatch;
+  dispatch: MessageDispatch;
   onClose: () => void;
 }) {
   return (
@@ -4660,7 +4823,7 @@ function DispatchDetailModal({
           </div>
           <div>
             <dt>Tentativas</dt>
-            <dd>{dispatch.attempts}</dd>
+            <dd>{dispatch.attempts ?? 0}</dd>
           </div>
           <div>
             <dt>Tipo</dt>

@@ -124,10 +124,17 @@ describe('client overview presentation source', () => {
     expect(stylesSource).toContain('vertical-align: middle;');
   });
 
-  it('filters recovery dispatches out of the Cobranças/PIX tab only', () => {
-    expect(dashboardSource).toContain('selectedBillingDispatches = selectedDispatches.filter');
-    expect(dashboardSource).toContain('summarizeClientBillingDispatches(selectedDispatches)');
-    expect(dashboardSource).toContain('selectedBillingDispatches.map((dispatch)');
+  it('loads the Cobranças/PIX tab from billing endpoints without embedded client dispatches', () => {
+    expect(dashboardSource).toContain("if (!selectedClientId || detailTab !== 'messages') return;");
+    expect(dashboardSource).toContain('void loadClientPixSummary();');
+    expect(dashboardSource).toContain('void loadClientBillingDispatches();');
+    expect(dashboardSource).toContain('void loadClientBillingSummary();');
+    expect(dashboardSource).toContain('const loadClientBillingDispatches = useCallback(');
+    expect(dashboardSource).toContain('const loadClientBillingSummary = useCallback(async () => {');
+    expect(dashboardSource).toContain('listBillingDispatches(filters)');
+    expect(dashboardSource).toContain('getBillingDispatchSummary(baseFilters)');
+    expect(dashboardSource).toContain('clientBillingDispatches.map((dispatch)');
+    expect(dashboardSource).not.toContain('selectedClient?.messageDispatches ?? []');
     expect(dashboardSource).toContain('getPaymentIntentsSummary({ clientId: selectedClientId })');
     expect(dashboardSource).toContain('clientPixSummaryError');
     expect(dashboardSource).toContain('clientPixSummary.summary.total');

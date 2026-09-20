@@ -366,6 +366,10 @@ export interface ReceivablesSummary {
   canceledAmount: string;
 }
 
+export interface PaymentIntentsSummary {
+  total: number;
+}
+
 export interface FinancialSummary {
   startDate: string;
   endDate: string;
@@ -1433,6 +1437,14 @@ export function createReceivablesPix(receivableIds: string[]) {
 
 export function listPaymentIntents(receivableId: string) {
   return apiFetch<PaymentIntent[]>(`/receivables/${receivableId}/payment-intents`);
+}
+
+export function getPaymentIntentsSummary(filters: { clientId: string }) {
+  const params = new URLSearchParams();
+
+  params.set('clientId', filters.clientId);
+
+  return apiFetch<PaymentIntentsSummary>(`/payment-intents/summary?${params.toString()}`);
 }
 
 export function syncPaymentIntent(id: string) {

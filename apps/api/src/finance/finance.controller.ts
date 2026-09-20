@@ -22,6 +22,7 @@ import { CreateReceivablesPixDto } from './dto/create-receivables-pix.dto';
 import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
+import { PaymentIntentsSummaryDto } from './dto/payment-intents-summary.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
 import { PayReceivablesDto } from './dto/pay-receivables.dto';
 import {
@@ -111,6 +112,11 @@ export class FinanceController {
   @Get('receivables/:id/payment-intents')
   listPaymentIntents(@Param('id') id: string) {
     return this.financeService.listPaymentIntents(id);
+  }
+
+  @Get('payment-intents/summary')
+  paymentIntentsSummary(@Query() query: PaymentIntentsSummaryDto) {
+    return this.financeService.paymentIntentsSummary(query);
   }
 
   @Post('payment-intents/:id/sync')

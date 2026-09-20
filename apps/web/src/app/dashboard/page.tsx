@@ -90,7 +90,6 @@ import {
   clientOperationalSummary,
   clientReferenceStatusSummary,
   clientPlanSummary,
-  clientReceivableTotals,
   clientReferenceCountLabel,
   clientReferenceSummary,
   dispatchTotalAmountLabel,
@@ -138,6 +137,7 @@ import {
   getDashboardSummary,
   getReport,
   getFinancialSummary,
+  getPaymentIntentsSummary,
   getReceivablesSummary,
   getWhatsAppConnection,
   getWhatsAppPendingContact,
@@ -226,6 +226,7 @@ import {
   type PaginatedClients,
   type PaginatedClientEvents,
   type PaymentIntent,
+  type PaymentIntentsSummary,
   type PaymentIntentStatus,
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
@@ -2812,6 +2813,16 @@ function ClientsView({
     PaginatedClients['pagination'] | null
   >(null);
   const [clientFinanceSummary, setClientFinanceSummary] = useState<ReceivablesSummary | null>(null);
+  const [clientOverviewSummary, setClientOverviewSummary] = useState<{
+    clientId: string;
+    summary: ReceivablesSummary;
+  } | null>(null);
+  const [clientOverviewSummaryError, setClientOverviewSummaryError] = useState('');
+  const [clientPixSummary, setClientPixSummary] = useState<{
+    clientId: string;
+    summary: PaymentIntentsSummary;
+  } | null>(null);
+  const [clientPixSummaryError, setClientPixSummaryError] = useState('');
   const [clientFinancePage, setClientFinancePage] = useState(1);
   const [clientFinancePeriod, setClientFinancePeriod] = useState<FinancePeriod>(() =>
     currentFinancePeriod(),
@@ -2863,8 +2874,6 @@ function ClientsView({
     if (referenceSort === 'dueDate') return a.dueDate.localeCompare(b.dueDate);
     return b.createdAt.localeCompare(a.createdAt);
   });
-  const selectedReceivables = selectedClient?.receivables ?? [];
-  const receivableTotals = clientReceivableTotals(selectedReceivables);
   const selectedReceivablesForBulk = clientFinanceItems.filter((receivable) =>
     selectedReceivableIds.includes(receivable.id),
   );
@@ -2878,11 +2887,46 @@ function ClientsView({
   const selectedDispatches = selectedClient?.messageDispatches ?? [];
   const selectedBillingDispatches = selectedDispatches.filter(isClientBillingDispatch);
   const billingSummary = summarizeClientBillingDispatches(selectedDispatches);
-  const pixIntentCount = selectedReceivables.reduce(
-    (total, receivable) => total + (receivable.paymentIntents?.length ?? 0),
-    0,
-  );
   const selectedClientId = selectedClient?.id;
+
+  const clientOverviewAmount = (key: keyof ReceivablesSummary) => {
+    if (clientOverviewSummaryError) return 'Falha';
+    const summary = clientOverviewSummary;
+    if (!summary || summary.clientId !== selectedClientId) return formatCurrency('0.00');
+    return formatCurrency(summary.summary[key]);
+  };
+
+  const loadClientOverviewSummary = useCallback(async () => {
+    if (!selectedClientId) return;
+
+    setClientOverviewSummaryError('');
+
+    try {
+      const nextSummary = await getReceivablesSummary({ clientId: selectedClientId });
+      setClientOverviewSummary({ clientId: selectedClientId, summary: nextSummary });
+    } catch (err) {
+      setClientOverviewSummary(null);
+      setClientOverviewSummaryError(
+        err instanceof Error ? err.message : 'Não foi possível carregar resumo financeiro.',
+      );
+    }
+  }, [selectedClientId]);
+
+  const loadClientPixSummary = useCallback(async () => {
+    if (!selectedClientId) return;
+
+    setClientPixSummaryError('');
+
+    try {
+      const nextSummary = await getPaymentIntentsSummary({ clientId: selectedClientId });
+      setClientPixSummary({ clientId: selectedClientId, summary: nextSummary });
+    } catch (err) {
+      setClientPixSummary(null);
+      setClientPixSummaryError(
+        err instanceof Error ? err.message : 'Não foi possível carregar resumo PIX.',
+      );
+    }
+  }, [selectedClientId]);
 
   const loadClientFinance = useCallback(async () => {
     if (!selectedClientId) return;
@@ -2951,6 +2995,10 @@ function ClientsView({
     setClientFinanceItems([]);
     setClientFinancePagination(null);
     setClientFinanceSummary(null);
+    setClientOverviewSummary(null);
+    setClientOverviewSummaryError('');
+    setClientPixSummary(null);
+    setClientPixSummaryError('');
     setClientFinancePage(1);
     setClientFinancePeriod(currentFinancePeriod());
     setClientFinanceReferenceId('');
@@ -2962,12 +3010,22 @@ function ClientsView({
     setTimelinePage(1);
     setTimelineLoading(false);
     setTimelineError('');
-  }, [selectedClient?.id]);
+  }, [selectedClient]);
+
+  useEffect(() => {
+    if (!selectedClientId) return;
+    void loadClientOverviewSummary();
+  }, [loadClientOverviewSummary, selectedClientId]);
 
   useEffect(() => {
     if (!selectedClientId || detailTab !== 'receivables') return;
     void loadClientFinance();
   }, [detailTab, loadClientFinance, selectedClientId]);
+
+  useEffect(() => {
+    if (!selectedClientId || detailTab !== 'messages') return;
+    void loadClientPixSummary();
+  }, [detailTab, loadClientPixSummary, selectedClientId]);
 
   useEffect(() => {
     setSelectedReceivableIds([]);
@@ -3040,7 +3098,12 @@ function ClientsView({
     setClientActionError('');
     setClientActionNotice(message);
     setSelectedReceivableIds([]);
-    await Promise.all([loadClientFinance(), onFinancialMutation(selectedClient.id)]);
+    await Promise.all([
+      loadClientFinance(),
+      loadClientOverviewSummary(),
+      clientPixSummary?.clientId === selectedClient.id ? loadClientPixSummary() : Promise.resolve(),
+      onFinancialMutation(selectedClient.id),
+    ]);
   }
 
   function toggleClientReceivableSelection(receivable: Receivable, checked: boolean) {
@@ -3291,26 +3354,12 @@ function ClientsView({
 
               <div className="client-detail-kpis">
                 <StatCard label="Referências" value={selectedReferences.length} />
-                <StatCard
-                  label="A receber"
-                  value={formatCurrency(
-                    (selectedClient.receivables ?? [])
-                      .filter((receivable) => receivable.status === 'PENDENTE')
-                      .reduce((total, receivable) => total + Number(receivable.amount), 0),
-                  )}
-                />
+                <StatCard label="A receber" value={clientOverviewAmount('pendingAmount')} />
                 <StatCard
                   label="Próximo vencimento"
                   value={clientNextDueSummary(selectedReferences)}
                 />
-                <StatCard
-                  label="Total pago"
-                  value={formatCurrency(
-                    (selectedClient.receivables ?? [])
-                      .filter((receivable) => receivable.status === 'PAGO')
-                      .reduce((total, receivable) => total + Number(receivable.amount), 0),
-                  )}
-                />
+                <StatCard label="Total pago" value={clientOverviewAmount('paidAmount')} />
               </div>
 
               <div className="tabs">
@@ -3447,13 +3496,13 @@ function ClientsView({
                         <div>
                           <dt>A receber</dt>
                           <dd className="metric-value-primary">
-                            {formatCurrency(receivableTotals.pending)}
+                            {clientOverviewAmount('pendingAmount')}
                           </dd>
                         </div>
                         <div>
                           <dt>Total pago</dt>
                           <dd className="metric-value-success">
-                            {formatCurrency(receivableTotals.paid)}
+                            {clientOverviewAmount('paidAmount')}
                           </dd>
                         </div>
                         <div>
@@ -4247,7 +4296,17 @@ function ClientsView({
                     <StatCard label="Agendadas" value={billingSummary.scheduled} />
                     <StatCard label="Enviadas" tone="success" value={billingSummary.sent} />
                     <StatCard label="Falhas" tone="danger" value={billingSummary.failed} />
-                    <StatCard label="PIX vinculados" tone="info" value={pixIntentCount} />
+                    <StatCard
+                      label="PIX vinculados"
+                      tone="info"
+                      value={
+                        clientPixSummaryError
+                          ? 'Falha'
+                          : clientPixSummary && clientPixSummary.clientId === selectedClientId
+                            ? clientPixSummary.summary.total
+                            : 0
+                      }
+                    />
                   </div>
                   <div className="table-wrap compact-table">
                     <table className="client-billing-table">

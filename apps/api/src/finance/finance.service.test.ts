@@ -463,6 +463,45 @@ function createReceivablesSummaryPrisma(receivables: SummaryReceivable[]) {
   };
 }
 
+type SummaryPaymentIntent = {
+  id: string;
+  receivableClientId?: string | null;
+  paymentGroupClientId?: string | null;
+  status: string;
+};
+
+function createPaymentIntentsSummaryPrisma(paymentIntents: SummaryPaymentIntent[]) {
+  return {
+    paymentIntent: {
+      count: vi.fn(
+        ({
+          where,
+        }: {
+          where: {
+            OR: Array<{
+              receivable?: { clientId: string };
+              paymentGroup?: { clientId: string };
+            }>;
+          };
+        }) => {
+          const total = paymentIntents.filter((intent) =>
+            where.OR.some((filter) => {
+              if (filter.receivable)
+                return intent.receivableClientId === filter.receivable.clientId;
+              if (filter.paymentGroup) {
+                return intent.paymentGroupClientId === filter.paymentGroup.clientId;
+              }
+              return false;
+            }),
+          ).length;
+
+          return Promise.resolve(total);
+        },
+      ),
+    },
+  };
+}
+
 function createCycleRecorder(fake: ReturnType<typeof createFinancePrisma>) {
   const nextReceivables: Array<Record<string, unknown>> = [];
   const cycle = {
@@ -896,6 +935,29 @@ function createGroupedFinancePrisma() {
 }
 
 describe('FinanceService', () => {
+  it('summarizes all payment intents for a client without double counting grouped PIX', async () => {
+    const clientA = '550e8400-e29b-41d4-a716-446655440000';
+    const clientB = '550e8400-e29b-41d4-a716-446655440001';
+    const prisma = createPaymentIntentsSummaryPrisma([
+      { id: 'intent-a1-1', receivableClientId: clientA, status: 'WAITING_PAYMENT' },
+      { id: 'intent-a1-2', receivableClientId: clientA, status: 'PAID' },
+      { id: 'intent-a2-1', receivableClientId: clientA, status: 'CANCELED' },
+      { id: 'intent-group-a', paymentGroupClientId: clientA, status: 'EXPIRED' },
+      { id: 'intent-b1-1', receivableClientId: clientB, status: 'WAITING_PAYMENT' },
+      { id: 'intent-b-group', paymentGroupClientId: clientB, status: 'PAID' },
+    ]);
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(service.paymentIntentsSummary({ clientId: clientA })).resolves.toEqual({
+      total: 4,
+    });
+    expect(prisma.paymentIntent.count).toHaveBeenCalledWith({
+      where: {
+        OR: [{ receivable: { clientId: clientA } }, { paymentGroup: { clientId: clientA } }],
+      },
+    });
+  });
+
   it('summarizes receivables amounts by period without double counting overdue pending items', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-19T12:00:00.000Z'));

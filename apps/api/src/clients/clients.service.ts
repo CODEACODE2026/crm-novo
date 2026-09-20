@@ -62,7 +62,26 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
   };
 }>;
 
-type ClientDetailWithRelations = Omit<ClientWithRelations, 'statusHistory'>;
+type ClientDetailWithRelations = Prisma.ClientGetPayload<{
+  include: {
+    plan: true;
+    renewals: { orderBy: { createdAt: 'desc' }; include: { receivable: true } };
+    events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]; take: 5 };
+    messageDispatches: { orderBy: { createdAt: 'desc' }; take: 20 };
+    recoveryCampaigns: {
+      orderBy: { startedAt: 'desc' };
+      include: {
+        steps: { include: { template: true; dispatch: true }; orderBy: { stepNumber: 'asc' } };
+      };
+    };
+    referralReceived: { include: { referrerClient: true } };
+    referralsMade: {
+      orderBy: { createdAt: 'desc' };
+      include: { referredClient: true };
+    };
+    references: { orderBy: { createdAt: 'asc' }; include: { plan: true } };
+  };
+}>;
 type ClientReferenceWithPlan = Prisma.ClientReferenceGetPayload<{ include: { plan: true } }>;
 
 @Injectable()
@@ -164,10 +183,6 @@ export class ClientsService {
       include: {
         plan: true,
         renewals: { orderBy: { createdAt: 'desc' }, include: { receivable: true } },
-        receivables: {
-          orderBy: { createdAt: 'desc' },
-          include: { paymentIntents: { orderBy: { createdAt: 'desc' } } },
-        },
         events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 5 },
         messageDispatches: { orderBy: { createdAt: 'desc' }, take: 20 },
         recoveryCampaigns: {
@@ -798,19 +813,26 @@ export class ClientsService {
                   }
                 : null,
             })),
-            receivables: client.receivables.map((receivable) => ({
-              ...receivable,
-              amount: receivable.amount.toString(),
-              dueDate: formatBusinessDate(receivable.dueDate),
-              displayStatus: getReceivableDisplayStatus(receivable.status, receivable.dueDate),
-              paymentIntents: receivable.paymentIntents.map((intent) => ({
-                ...intent,
-                amount: intent.amount.toString(),
-                expiresAt: intent.expiresAt?.toISOString() ?? null,
-                paidAt: intent.paidAt?.toISOString() ?? null,
-                lastSyncAt: intent.lastSyncAt?.toISOString() ?? null,
-              })),
-            })),
+            ...('receivables' in client
+              ? {
+                  receivables: client.receivables.map((receivable) => ({
+                    ...receivable,
+                    amount: receivable.amount.toString(),
+                    dueDate: formatBusinessDate(receivable.dueDate),
+                    displayStatus: getReceivableDisplayStatus(
+                      receivable.status,
+                      receivable.dueDate,
+                    ),
+                    paymentIntents: receivable.paymentIntents.map((intent) => ({
+                      ...intent,
+                      amount: intent.amount.toString(),
+                      expiresAt: intent.expiresAt?.toISOString() ?? null,
+                      paidAt: intent.paidAt?.toISOString() ?? null,
+                      lastSyncAt: intent.lastSyncAt?.toISOString() ?? null,
+                    })),
+                  })),
+                }
+              : {}),
             messageDispatches: client.messageDispatches.map((dispatch) => ({
               id: dispatch.id,
               phone: dispatch.phone,

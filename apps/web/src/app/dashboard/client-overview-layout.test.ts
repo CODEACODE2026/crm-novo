@@ -35,8 +35,9 @@ describe('client overview presentation source', () => {
       /<StatusBadge\s+status=\{uniqueSelectedReference\?\.status \?\? selectedClient\.status\}\s+\/>/,
     );
     expect(dashboardSource).toContain('referenceCounts.active');
-    expect(dashboardSource).toContain('formatCurrency(receivableTotals.pending)');
-    expect(dashboardSource).toContain('formatCurrency(receivableTotals.paid)');
+    expect(dashboardSource).toContain("clientOverviewAmount('pendingAmount')");
+    expect(dashboardSource).toContain("clientOverviewAmount('paidAmount')");
+    expect(dashboardSource).toContain('getReceivablesSummary({ clientId: selectedClientId })');
     expect(dashboardSource).toContain('clientNextDueSummary(selectedReferences)');
     expect(stylesSource).toContain('.client-summary-metrics');
     expect(stylesSource).toContain('.metric-value-primary');
@@ -127,6 +128,9 @@ describe('client overview presentation source', () => {
     expect(dashboardSource).toContain('selectedBillingDispatches = selectedDispatches.filter');
     expect(dashboardSource).toContain('summarizeClientBillingDispatches(selectedDispatches)');
     expect(dashboardSource).toContain('selectedBillingDispatches.map((dispatch)');
+    expect(dashboardSource).toContain('getPaymentIntentsSummary({ clientId: selectedClientId })');
+    expect(dashboardSource).toContain('clientPixSummaryError');
+    expect(dashboardSource).toContain('clientPixSummary.summary.total');
     expect(dashboardSource).toContain('selectedClient.recoveryCampaigns ?? []');
   });
 

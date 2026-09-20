@@ -35,6 +35,7 @@ import { CreateReceivablesPixDto } from './dto/create-receivables-pix.dto';
 import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
+import { PaymentIntentsSummaryDto } from './dto/payment-intents-summary.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
 import { PayReceivablesDto } from './dto/pay-receivables.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
@@ -554,6 +555,19 @@ export class FinanceService {
     });
 
     return intents.map((intent) => this.presentPaymentIntent(intent));
+  }
+
+  async paymentIntentsSummary(query: PaymentIntentsSummaryDto) {
+    const total = await this.prisma.paymentIntent.count({
+      where: {
+        OR: [
+          { receivable: { clientId: query.clientId } },
+          { paymentGroup: { clientId: query.clientId } },
+        ],
+      },
+    });
+
+    return { total };
   }
 
   async syncPaymentIntent(id: string, actorUserId: string) {

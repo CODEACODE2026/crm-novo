@@ -355,10 +355,15 @@ describe('ClientsService client detail payload', () => {
     const findUnique = vi.fn((args: Prisma.ClientFindUniqueArgs) => {
       const eventsInclude = args.include?.events as { take?: number } | undefined;
       const events = eventsInclude ? orderedEvents().slice(0, eventsInclude.take) : [];
-      const response =
-        args.include && 'statusHistory' in args.include
-          ? { ...client, events, statusHistory }
-          : { ...client, events };
+      const clientWithoutReceivables = { ...client };
+      delete (clientWithoutReceivables as { receivables?: unknown }).receivables;
+      const baseClient =
+        args.include && 'receivables' in args.include ? client : clientWithoutReceivables;
+      const response = {
+        ...baseClient,
+        events,
+        ...(args.include && 'statusHistory' in args.include ? { statusHistory } : {}),
+      };
 
       return Promise.resolve(response);
     });
@@ -393,6 +398,7 @@ describe('ClientsService client detail payload', () => {
       ],
     });
     expect('statusHistory' in detail).toBe(false);
+    expect('receivables' in detail).toBe(false);
     expect(page1.items).toHaveLength(10);
     expect(page2.items).toHaveLength(2);
     expect(page1.items[0]?.id).toBe('event-12');
@@ -410,6 +416,7 @@ describe('ClientsService client detail payload', () => {
       events: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 5 },
     });
     expect(findUniqueArgs?.include).not.toHaveProperty('statusHistory');
+    expect(findUniqueArgs?.include).not.toHaveProperty('receivables');
   });
 });
 

@@ -54,7 +54,7 @@ describe('phase E2A client finance lazy loading source', () => {
     expect(clientsSource).toContain('const baseFilters = {');
     expect(clientsSource).toContain('status: clientFinanceStatus');
     expect(clientsSource).toContain('getReceivablesSummary(baseFilters)');
-    expect(clientsSource).not.toContain('getReceivablesSummary({');
+    expect(clientFinanceSource).not.toContain('getReceivablesSummary({');
     expect(clientFinanceSource).toContain('pagination={clientFinancePagination}');
     expect(clientFinanceSource).toContain('onPageChange={setClientFinancePage}');
   });
@@ -72,11 +72,14 @@ describe('phase E2A client finance lazy loading source', () => {
     expect(clientsSource).toContain('clientFinanceStatus');
   });
 
-  it('keeps client detail payload compatibility for E2B', () => {
-    expect(clientsServiceSource).toContain('receivables: {');
-    expect(clientsServiceSource).toContain(
-      "include: { paymentIntents: { orderBy: { createdAt: 'desc' } } }",
+  it('keeps client detail payload free from embedded receivables after E2B', () => {
+    const getClientSource = clientsServiceSource.slice(
+      clientsServiceSource.indexOf('async get(id: string)'),
+      clientsServiceSource.indexOf('async listEvents'),
     );
+
+    expect(getClientSource).not.toContain('receivables: {');
+    expect(getClientSource).not.toContain('paymentIntents');
     expect(dashboardSource).toContain('listPaymentIntents(receivable.id)');
   });
 });

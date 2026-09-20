@@ -6,6 +6,7 @@ import {
   formatCurrency,
   formatDate,
   getFinancialSummary,
+  getPaymentIntentsSummary,
   getReferralSummary,
   getReceivablesSummary,
   listBillingDispatches,
@@ -243,6 +244,24 @@ describe('CRM UI formatters', () => {
     );
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('status=');
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('page=');
+  });
+
+  it('sends payment intent summary filters by client', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ total: 4 }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getPaymentIntentsSummary({ clientId: '550e8400-e29b-41d4-a716-446655440000' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/payment-intents/summary?clientId=550e8400-e29b-41d4-a716-446655440000',
+      ),
+      expect.any(Object),
+    );
   });
 
   it('sends referrals pagination and summary filters without status in summary', async () => {

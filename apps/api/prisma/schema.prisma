@@ -39,6 +39,7 @@ enum ClientEventType {
   BILLING_RESPONSE_UNRESOLVED
   BILLING_RESPONSE_AMBIGUOUS
   BILLING_REFERENCE_DEACTIVATED
+  RENEWAL_REVERTED
   RECOVERY_CAMPAIGN_STARTED
   RECOVERY_CAMPAIGN_CANCELED
   RECOVERY_CAMPAIGN_COMPLETED
@@ -673,6 +674,7 @@ model RenewalReversal {
   revertedFromBillingAnchorDay Int?
   revertedFromStatus        ClientStatus?
   reason                    String?
+  idempotencyKey            String
   createdByUserId           String?         @db.Uuid
   createdAt                 DateTime        @default(now())
   renewal                   Renewal         @relation(fields: [renewalId], references: [id], onDelete: Restrict)
@@ -683,6 +685,7 @@ model RenewalReversal {
   @@index([clientId])
   @@index([clientReferenceId])
   @@index([createdAt])
+  @@unique([clientReferenceId, idempotencyKey])
   @@map("renewal_reversals")
 }
 

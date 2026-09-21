@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Prisma } from '@prisma/client';
+import { ClientEventType, Prisma } from '@prisma/client';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { RenewalsService } from './renewals.service';
 
@@ -376,6 +376,24 @@ function billingDispatch(id: string, status: string) {
 }
 
 describe('RenewalsService', () => {
+  it('exposes the structural fields required for renewal reversal execution', () => {
+    const renewalReversalModel = Prisma.dmmf.datamodel.models.find(
+      (model) => model.name === 'RenewalReversal',
+    );
+    const renewalIdField = renewalReversalModel?.fields.find((field) => field.name === 'renewalId');
+    const idempotencyKeyField = renewalReversalModel?.fields.find(
+      (field) => field.name === 'idempotencyKey',
+    );
+
+    expect(ClientEventType.RENEWAL_REVERTED).toBe('RENEWAL_REVERTED');
+    expect(renewalIdField).toMatchObject({ isRequired: true, isUnique: true });
+    expect(idempotencyKeyField).toMatchObject({ isRequired: true, isUnique: false });
+    expect(renewalReversalModel?.uniqueFields).toContainEqual([
+      'clientReferenceId',
+      'idempotencyKey',
+    ]);
+  });
+
   it('reactivates a canceled client with explicit history and idempotent replay', async () => {
     const fake = createFakePrisma();
     const recoveryService = {

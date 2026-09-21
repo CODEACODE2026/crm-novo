@@ -1,4 +1,4 @@
-import { Body, Controller, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
@@ -36,6 +36,14 @@ export class ClientReferenceRenewalsController {
   @Post('preview')
   preview(@Param('clientReferenceId') clientReferenceId: string, @Body() dto: RenewalPreviewDto) {
     return this.renewalsService.previewReference(clientReferenceId, dto);
+  }
+
+  @Get(':renewalId/revert/preview')
+  previewRevert(
+    @Param('clientReferenceId') clientReferenceId: string,
+    @Param('renewalId') renewalId: string,
+  ) {
+    return this.renewalsService.previewRevert(clientReferenceId, renewalId);
   }
 
   @Post()

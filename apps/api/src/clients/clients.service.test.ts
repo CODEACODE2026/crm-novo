@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -213,6 +214,14 @@ function eventRecord({
     title,
     type: 'CLIENT_UPDATED' as const,
   };
+}
+
+function uniqueConstraintError(target: string[] | string) {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+    code: 'P2002',
+    clientVersion: 'test',
+    meta: { target },
+  });
 }
 
 function validateClientEventsQuery(payload: Record<string, unknown>) {
@@ -617,6 +626,178 @@ describe('ClientsService legacy client updates', () => {
       },
     });
   });
+
+  it('edits the same reference value with a safe due date change', async () => {
+    const fake = createClientUpdateService({
+      references: [
+        clientReference({
+          id: 'ref-1',
+          reference: 'bruno55',
+          dueDate: parseBusinessDate('2026-10-10'),
+        }),
+      ],
+    });
+
+    const result = await fake.service.updateReference(
+      'ref-1',
+      { reference: 'bruno55', dueDate: '2026-10-20' },
+      'user-id',
+    );
+
+    expect(result).toMatchObject({
+      id: 'ref-1',
+      reference: 'bruno55',
+      dueDate: '2026-10-20',
+    });
+    expect(fake.prisma.clientReference.findFirst).not.toHaveBeenCalled();
+    expect(fake.receivableCycleService.updatePendingCurrentCycleReceivable).toHaveBeenCalledWith(
+      'ref-1',
+      parseBusinessDate('2026-10-10'),
+      expect.objectContaining({ dueDate: parseBusinessDate('2026-10-20') }),
+      fake.prisma,
+    );
+  });
+
+  it('keeps reference, notes and billing notice edits independent from cycle reconciliation', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+
+    const result = await fake.service.updateReference(
+      'ref-1',
+      { reference: 'REF-002', notes: 'Nova observacao', billingNoticeDays: 7 },
+      'user-id',
+    );
+
+    expect(result).toMatchObject({
+      reference: 'REF-002',
+      notes: 'Nova observacao',
+      billingNoticeDays: 7,
+    });
+    expect(fake.receivableCycleService.updatePendingCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.prisma.messageDispatch.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a pending cycle when plan and recurring value change safely', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+
+    await fake.service.updateReference(
+      'ref-1',
+      { planId: 'plan-premium', recurringValue: 150 },
+      'user-id',
+    );
+
+    expect(fake.plansService.ensureActivePlan).toHaveBeenCalledWith('plan-premium');
+    expect(fake.receivableCycleService.updatePendingCurrentCycleReceivable).toHaveBeenCalledWith(
+      'ref-1',
+      parseBusinessDate('2026-10-10'),
+      expect.objectContaining({
+        amount: new Prisma.Decimal('150'),
+        planName: 'Mensal',
+      }),
+      fake.prisma,
+    );
+    expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalled();
+  });
+
+  it('preserves the real duplicate reference protection', async () => {
+    const fake = createClientUpdateService({
+      references: [
+        clientReference({ id: 'ref-1', reference: 'bruno55' }),
+        clientReference({ id: 'ref-2', reference: 'outra' }),
+      ],
+    });
+    fake.prisma.clientReference.update.mockRejectedValueOnce(uniqueConstraintError(['reference']));
+
+    await expect(
+      fake.service.updateReference('ref-2', { reference: 'bruno55' }, 'user-id'),
+    ).rejects.toThrow('Ja existe um cliente com esta referencia.');
+  });
+
+  it('maps receivable cycle unique conflicts to a specific financial message', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.receivableCycleService.updatePendingCurrentCycleReceivable.mockRejectedValueOnce(
+      uniqueConstraintError('receivables_dueDate_clientReferenceId_purpose_key'),
+    );
+
+    await expect(
+      fake.service.updateReference('ref-1', { dueDate: '2026-10-20' }, 'user-id'),
+    ).rejects.toThrow('Ja existe uma conta a receber para esta referencia neste vencimento.');
+  });
+
+  it('keeps paid receivables blocked during cycle adjustment', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.receivableCycleService.updatePendingCurrentCycleReceivable.mockRejectedValueOnce(
+      new ConflictException('Conta a receber paga nao pode ter vencimento reescrito.'),
+    );
+
+    await expect(
+      fake.service.updateReference('ref-1', { dueDate: '2026-10-20' }, 'user-id'),
+    ).rejects.toThrow('Conta a receber paga nao pode ter vencimento reescrito.');
+  });
+
+  it('keeps canceled receivables blocked during cycle adjustment', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.receivableCycleService.updatePendingCurrentCycleReceivable.mockRejectedValueOnce(
+      new ConflictException(
+        'Conta a receber cancelada ou historica impede ajuste automatico deste ciclo.',
+      ),
+    );
+
+    await expect(
+      fake.service.updateReference('ref-1', { dueDate: '2026-10-20' }, 'user-id'),
+    ).rejects.toThrow(
+      'Conta a receber cancelada ou historica impede ajuste automatico deste ciclo.',
+    );
+  });
+
+  it('blocks the renewal cancellation scenario atomically without recreating history', async () => {
+    const currentDueDate = parseBusinessDate('2028-05-16');
+    const previousDueDate = parseBusinessDate('2026-10-20');
+    const fake = createClientUpdateService({
+      references: [
+        clientReference({
+          id: 'ref-1',
+          reference: 'bruno55',
+          planId: 'renewed-plan',
+          recurringValue: new Prisma.Decimal('180.00'),
+          dueDate: currentDueDate,
+          billingAnchorDay: 16,
+        }),
+      ],
+    });
+    fake.receivableCycleService.updatePendingCurrentCycleReceivable.mockRejectedValueOnce(
+      new ConflictException(
+        'Conta a receber cancelada ou historica impede ajuste automatico deste ciclo.',
+      ),
+    );
+
+    await expect(
+      fake.service.updateReference(
+        'ref-1',
+        {
+          reference: 'bruno55',
+          planId: 'previous-plan',
+          recurringValue: 100,
+          dueDate: '2026-10-20',
+        },
+        'user-id',
+      ),
+    ).rejects.toThrow(
+      'Conta a receber cancelada ou historica impede ajuste automatico deste ciclo.',
+    );
+
+    expect(fake.references[0]).toMatchObject({
+      reference: 'bruno55',
+      planId: 'renewed-plan',
+      dueDate: currentDueDate,
+      billingAnchorDay: 16,
+    });
+    expect(fake.references[0]?.recurringValue.toString()).toBe('180');
+    expect(fake.references[0]?.dueDate).not.toEqual(previousDueDate);
+    expect(fake.receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.prisma.clientEvent.create).not.toHaveBeenCalled();
+    expect(fake.prisma.messageDispatch.updateMany).not.toHaveBeenCalled();
+  });
 });
 
 function createClientCreationService() {
@@ -826,12 +1007,27 @@ function createClientUpdateService({
           include,
         }: {
           where: { id: string };
-          data: Partial<ReturnType<typeof clientReference>>;
+          data: Record<string, unknown>;
           include?: { plan?: boolean };
         }) => {
           const reference = references.find((item) => item.id === where.id);
           if (!reference) throw new Error('Reference not found');
-          Object.assign(reference, data);
+          const normalizedData = { ...data };
+          const recurringValue = normalizedData.recurringValue;
+          if (
+            typeof recurringValue === 'number' ||
+            typeof recurringValue === 'string' ||
+            recurringValue instanceof Prisma.Decimal
+          ) {
+            normalizedData.recurringValue = new Prisma.Decimal(recurringValue);
+          }
+          const planConnectId = (normalizedData.plan as { connect?: { id?: unknown } } | undefined)
+            ?.connect?.id;
+          if (typeof planConnectId === 'string') {
+            normalizedData.planId = planConnectId;
+            delete normalizedData.plan;
+          }
+          Object.assign(reference, normalizedData);
           return Promise.resolve(include?.plan ? { ...reference, plan } : reference);
         },
       ),
@@ -847,7 +1043,18 @@ function createClientUpdateService({
     messageDispatch: {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
-    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
+    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const clientSnapshot = { ...client };
+      const referencesSnapshot = references.map((reference) => ({ ...reference }));
+
+      try {
+        return await callback(prisma);
+      } catch (error) {
+        Object.assign(client, clientSnapshot);
+        references.splice(0, references.length, ...referencesSnapshot);
+        throw error;
+      }
+    }),
   };
   const recoveryService = {
     handleClientStatusChange: vi.fn(),
@@ -857,15 +1064,24 @@ function createClientUpdateService({
     updatePendingCurrentCycleReceivable: vi.fn().mockResolvedValue({ id: 'receivable-id' }),
     ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'kept' }),
   };
+  const plansService = { ensureActivePlan: vi.fn().mockResolvedValue(undefined) };
   const service = new ClientsService(
     prisma as never,
-    { ensureActivePlan: vi.fn().mockResolvedValue(undefined) } as never,
+    plansService as never,
     recoveryService as never,
     { cancelPendingForClientBeforePayment: vi.fn() } as never,
     receivableCycleService as never,
   );
 
-  return { service, prisma, client, references, recoveryService, receivableCycleService };
+  return {
+    service,
+    prisma,
+    client,
+    references,
+    plansService,
+    recoveryService,
+    receivableCycleService,
+  };
 }
 
 function clientReference(overrides: Partial<ReturnType<typeof baseClientReference>> = {}) {

@@ -215,4 +215,46 @@ describe('ReceivableCycleService', () => {
     expect(existing.amount).toEqual(new Prisma.Decimal('75.00'));
     expect(existing.description).toBe('Renovacao - Plano Premium');
   });
+
+  it('blocks paid receivables when trying to rewrite the current cycle', async () => {
+    const existing = receivable({ status: 'PAGO' });
+    const fake = fakeService(reference({ receivables: [existing] }));
+
+    await expect(
+      fake.service.updatePendingCurrentCycleReceivable(
+        'reference-id',
+        parseBusinessDate('2026-10-10'),
+        {
+          dueDate: parseBusinessDate('2026-11-10'),
+          amount: new Prisma.Decimal('75.00'),
+          planName: 'Premium',
+        },
+      ),
+    ).rejects.toThrow('Conta a receber paga nao pode ter vencimento reescrito.');
+
+    expect(fake.prisma.receivable.update).not.toHaveBeenCalled();
+    expect(existing.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+  });
+
+  it('blocks canceled historical receivables when trying to rewrite the current cycle', async () => {
+    const existing = receivable({ status: 'CANCELADO' });
+    const fake = fakeService(reference({ receivables: [existing] }));
+
+    await expect(
+      fake.service.updatePendingCurrentCycleReceivable(
+        'reference-id',
+        parseBusinessDate('2026-10-10'),
+        {
+          dueDate: parseBusinessDate('2026-11-10'),
+          amount: new Prisma.Decimal('75.00'),
+          planName: 'Premium',
+        },
+      ),
+    ).rejects.toThrow(
+      'Conta a receber cancelada ou historica impede ajuste automatico deste ciclo.',
+    );
+
+    expect(fake.prisma.receivable.update).not.toHaveBeenCalled();
+    expect(existing.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+  });
 });

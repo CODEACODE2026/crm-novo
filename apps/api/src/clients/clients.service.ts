@@ -1346,19 +1346,47 @@ export class ClientsService {
 
   private handlePrismaError(error: unknown): never {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
+      const target = this.uniqueConstraintTarget(error);
 
-      if (target.includes('reference')) {
+      if (this.targetIncludes(target, 'reference')) {
         throw new ConflictException('Ja existe um cliente com esta referencia.');
       }
 
-      if (target.includes('phoneNormalized')) {
+      if (this.targetIncludes(target, 'phoneNormalized')) {
         throw new ConflictException('Ja existe um cliente cadastrado com este telefone.');
+      }
+
+      if (this.targetIncludesAll(target, ['clientReferenceId', 'purpose', 'dueDate'])) {
+        throw new ConflictException(
+          'Ja existe uma conta a receber para esta referencia neste vencimento.',
+        );
       }
 
       throw new ConflictException('Registro duplicado.');
     }
 
     throw error;
+  }
+
+  private uniqueConstraintTarget(error: Prisma.PrismaClientKnownRequestError) {
+    const target = error.meta?.target;
+
+    if (Array.isArray(target)) {
+      return target.map((field) => String(field));
+    }
+
+    if (typeof target === 'string') {
+      return [target];
+    }
+
+    return [];
+  }
+
+  private targetIncludes(target: string[], field: string) {
+    return target.some((item) => item === field || item.includes(field));
+  }
+
+  private targetIncludesAll(target: string[], fields: string[]) {
+    return fields.every((field) => this.targetIncludes(target, field));
   }
 }

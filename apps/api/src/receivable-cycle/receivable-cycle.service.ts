@@ -198,7 +198,9 @@ export class ReceivableCycleService {
     }
 
     if (receivable.status === 'CANCELADO') {
-      throw new ConflictException('Conta a receber cancelada nao pode ser reescrita.');
+      throw new ConflictException(
+        'Conta a receber cancelada ou historica impede ajuste automatico deste ciclo.',
+      );
     }
 
     return db.receivable.update({

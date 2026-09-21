@@ -3,6 +3,7 @@ import {
   ApiError,
   apiFetch,
   applyReferralReward,
+  confirmRenewalReversal,
   formatCurrency,
   formatDate,
   getBillingDispatchSummary,
@@ -19,6 +20,7 @@ import {
   listWhatsAppPendingContacts,
   payReceivable,
   payReceivables,
+  previewRenewalReversal,
   updateMessageTemplate,
 } from './crm-api';
 
@@ -102,6 +104,43 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/clients?page=2&pageSize=10&search=ana&status=ATIVO'),
       expect.any(Object),
     );
+  });
+
+  it('uses the backend renewal reversal preview and execution endpoints', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ reversible: true, blockers: [], warnings: [] }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ idempotentReplay: false }), { status: 200 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewRenewalReversal('reference-1', 'renewal-1');
+    await confirmRenewalReversal('reference-1', 'renewal-1', {
+      idempotencyKey: 'reversal-key-123',
+      reason: 'Ajuste operacional',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('/client-references/reference-1/renewals/renewal-1/revert/preview'),
+      expect.not.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/client-references/reference-1/renewals/renewal-1/revert'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const secondCall = fetchMock.mock.calls[1] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    expect(JSON.parse(secondCall?.[1]?.body as string)).toEqual({
+      idempotencyKey: 'reversal-key-123',
+      reason: 'Ajuste operacional',
+    });
   });
 
   it('sends finance pagination independently for receivables, entries and expenses', async () => {

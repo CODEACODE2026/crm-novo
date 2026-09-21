@@ -10,6 +10,10 @@ const clientMoreSource = dashboardSource.slice(
   dashboardSource.indexOf('className="client-tab-panel client-more-workspace"'),
   dashboardSource.indexOf("{detailTab === 'receivables' ? ("),
 );
+const renewalReversalModalSource = dashboardSource.slice(
+  dashboardSource.indexOf('function RenewalReversalModal'),
+  dashboardSource.indexOf('function renewalReversalImpactMessages'),
+);
 
 describe('client overview presentation source', () => {
   it('uses compact profile rows instead of the old large readonly field blocks', () => {
@@ -179,6 +183,57 @@ describe('client overview presentation source', () => {
     expect(clientMoreSource).toContain('step.delayDays');
     expect(clientMoreSource).toContain('step.scheduledFor');
     expect(clientMoreSource).toContain('step.sentAt');
+  });
+
+  it('adds renewal reversal as a contextual preview-first action', () => {
+    expect(dashboardSource).toContain(
+      'previewRenewalReversal(renewal.clientReferenceId, renewal.id)',
+    );
+    expect(dashboardSource).toContain('confirmRenewalReversal(');
+    expect(clientMoreSource).toContain('Desfazer renovação');
+    expect(clientMoreSource).toContain("renewal.status !== 'REVERTED'");
+    expect(clientMoreSource).toContain('Carregando prévia');
+    expect(clientMoreSource).toContain('Revertida');
+    expect(dashboardSource).toContain('function RenewalReversalModal');
+    expect(dashboardSource).toContain(
+      'Revise o estado que será restaurado e os impactos antes de confirmar.',
+    );
+    expect(dashboardSource).toContain('Impactos da reversão');
+    expect(dashboardSource).toContain('Esta renovação não pode ser desfeita.');
+    expect(dashboardSource).toContain('LEGACY_RENEWAL');
+    expect(dashboardSource).toContain('Renovação antiga sem dados suficientes');
+    expect(dashboardSource).toContain('RECEIVABLE_PAID');
+    expect(dashboardSource).toContain('A cobrança desta renovação já foi paga.');
+    expect(dashboardSource).toContain('PIX_ACTIVE');
+    expect(dashboardSource).toContain(
+      'Existe PIX aguardando pagamento. Cancele-o antes de desfazer.',
+    );
+    expect(dashboardSource).toContain('SENT_BILLING_WILL_BE_PRESERVED');
+    expect(dashboardSource).toContain(
+      'Existem cobranças que já foram enviadas e permanecerão no histórico.',
+    );
+    expect(dashboardSource).toContain('Motivo da reversão *');
+    expect(dashboardSource).toContain('trimmedReason.length >= 3');
+    expect(dashboardSource).toContain(
+      'const [idempotencyKey] = useState(() => crypto.randomUUID())',
+    );
+    expect(dashboardSource).toContain('const savingRef = useRef(false)');
+    expect(dashboardSource).toContain('if (!canConfirm || savingRef.current) return;');
+    expect(dashboardSource).toContain('savingRef.current = true;');
+    expect(dashboardSource).toContain('savingRef.current = false;');
+    expect(dashboardSource).toContain('disabled={saving || !canConfirm}');
+    expect(dashboardSource).toContain('await onConfirm({ reason: trimmedReason, idempotencyKey })');
+    expect(renewalReversalModalSource).toContain('maxLength={500}');
+    expect(renewalReversalModalSource).toContain('minLength={3}');
+    expect(renewalReversalModalSource).toContain('{trimmedReason.length}/500 caracteres');
+    expect(renewalReversalModalSource).not.toContain('<form');
+    expect(dashboardSource).toContain('mappedWarnings[warning.code] ?? warning.message');
+    expect(dashboardSource).toContain('mappedBlockers[blocker.code] ?? blocker.message');
+    expect(dashboardSource).toContain('idempotentReplay');
+    expect(dashboardSource).toContain('Renovação desfeita com sucesso.');
+    expect(dashboardSource).not.toContain('latestRenewal');
+    expect(stylesSource).toContain('.renewal-reversal-modal');
+    expect(stylesSource).toContain('.renewal-reversal-summary');
   });
 
   it('separates received and made referrals with read-only mini KPIs and compact lists', () => {

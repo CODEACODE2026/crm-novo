@@ -2965,6 +2965,25 @@ tbody tr:hover,
   gap: 4px;
 }
 
+.client-more-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.client-more-status-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+
 .client-more-list-item span,
 .client-recovery-card span,
 .client-referral-card span,
@@ -4231,6 +4250,113 @@ tbody tr:hover,
   width: min(100%, 720px);
 }
 
+.renewal-reversal-modal {
+  width: min(100%, 760px);
+}
+
+.renewal-reversal-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.renewal-reversal-panel,
+.renewal-reversal-impacts,
+.renewal-reversal-messages {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.renewal-reversal-panel.restore {
+  border-color: rgb(38 198 163 / 34%);
+  background: rgb(38 198 163 / 8%);
+}
+
+.renewal-reversal-panel h3,
+.renewal-reversal-impacts h3,
+.renewal-reversal-messages h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.renewal-restore-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.renewal-restore-list div {
+  display: grid;
+  gap: 3px;
+}
+
+.renewal-restore-list dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.renewal-restore-list dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.renewal-reversal-impacts,
+.renewal-reversal-messages,
+.renewal-reversal-reason {
+  margin-top: 12px;
+}
+
+.renewal-reversal-impacts ul,
+.renewal-reversal-messages ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.renewal-reversal-impacts li,
+.renewal-reversal-messages li {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.renewal-reversal-messages p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.renewal-reversal-messages.warning {
+  border-color: rgb(241 184 75 / 28%);
+  background: rgb(241 184 75 / 8%);
+}
+
+.renewal-reversal-messages.danger {
+  border-color: rgb(255 107 107 / 28%);
+  background: rgb(255 107 107 / 8%);
+}
+
+.renewal-reversal-reason textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+.renewal-reversal-reason small {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
 .finance-transaction-modal-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 16px 0 0;
@@ -4764,7 +4890,8 @@ tbody tr:hover,
   .client-kpi-grid,
   .client-detail-kpis,
   .client-tab-summary,
-  .compact-detail-list {
+  .compact-detail-list,
+  .renewal-reversal-summary {
     grid-template-columns: 1fr;
   }
 

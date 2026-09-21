@@ -114,6 +114,7 @@ import {
   cancelReceivable,
   cancelPaymentIntent,
   confirmMockPaymentIntent,
+  confirmRenewalReversal,
   confirmReferenceRenewal,
   createClient,
   createClientReference,
@@ -160,6 +161,7 @@ import {
   previewDeleteClient,
   previewDeleteClientReference,
   previewReferenceRenewal,
+  previewRenewalReversal,
   refreshWhatsAppStatus,
   reopenWhatsAppPendingContact,
   sendWhatsAppMessage,
@@ -236,7 +238,9 @@ import {
   type Plan,
   type ReportFilters,
   type ReportType,
+  type Renewal,
   type RenewalPreview,
+  type RenewalRevertPreview,
   type MessageDispatch,
   type MessageTemplate,
   type RecoveryCampaign,
@@ -333,6 +337,12 @@ type RenewalTarget = {
   reference: ClientReference;
 };
 
+type RenewalReversalTarget = {
+  client: Client;
+  renewal: Renewal;
+  preview: RenewalRevertPreview;
+};
+
 type DeletionDialogTarget =
   | {
       kind: 'client';
@@ -360,6 +370,12 @@ export default function DashboardPage() {
   const [planFormOpen, setPlanFormOpen] = useState(false);
   const [financeInitialTab, setFinanceInitialTab] = useState<FinanceTab>('summary');
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
+  const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
+    null,
+  );
+  const [renewalReversalPreviewLoadingId, setRenewalReversalPreviewLoadingId] = useState<
+    string | null
+  >(null);
   const [deletionTarget, setDeletionTarget] = useState<DeletionDialogTarget | null>(null);
   const [renewalNotice, setRenewalNotice] = useState('');
   const [search, setSearch] = useState('');
@@ -541,6 +557,52 @@ export default function DashboardPage() {
     );
   }
 
+  async function openRenewalReversal(client: Client, renewal: Renewal) {
+    if (!renewal.clientReferenceId) {
+      setRenewalNotice('Renovação sem referência vinculada para reversão.');
+      return;
+    }
+
+    setRenewalNotice('');
+    setRenewalReversalPreviewLoadingId(renewal.id);
+
+    try {
+      const preview = await previewRenewalReversal(renewal.clientReferenceId, renewal.id);
+      setRenewalReversalTarget({ client, renewal, preview });
+    } catch (err) {
+      setRenewalNotice(
+        err instanceof Error ? err.message : 'Não foi possível carregar a prévia da reversão.',
+      );
+    } finally {
+      setRenewalReversalPreviewLoadingId(null);
+    }
+  }
+
+  async function handleRenewalReversalConfirm(
+    target: RenewalReversalTarget,
+    payload: { reason: string; idempotencyKey: string },
+  ) {
+    if (!target.renewal.clientReferenceId) {
+      throw new Error('Renovação sem referência vinculada para reversão.');
+    }
+
+    const result = await confirmRenewalReversal(
+      target.renewal.clientReferenceId,
+      target.renewal.id,
+      payload,
+    );
+    await loadData();
+    const detailed = await getClient(target.client.id);
+    setSelectedClient(detailed);
+    setRenewalReversalTarget(null);
+    const successPrefix = result.idempotentReplay
+      ? 'Renovação desfeita com sucesso.'
+      : 'Renovação desfeita com sucesso.';
+    setRenewalNotice(
+      `${successPrefix} Referência restaurada para ${formatDate(result.reference.dueDate)}.`,
+    );
+  }
+
   if (loadingSession) {
     return (
       <main className="login-page">
@@ -608,6 +670,7 @@ export default function DashboardPage() {
             setClientFormOpen(true);
           }}
           onRenew={openRenewal}
+          onRevertRenewal={(client, renewal) => void openRenewalReversal(client, renewal)}
           onCreateReference={async (client, payload) => {
             await createClientReference(client.id, payload);
             const detailed = await getClient(client.id);
@@ -668,6 +731,7 @@ export default function DashboardPage() {
           }}
           status={status}
           renewalNotice={renewalNotice}
+          renewalReversalPreviewLoadingId={renewalReversalPreviewLoadingId}
         />
       ) : null}
       {view === 'finance' ? <FinanceView clients={clients} initialTab={financeInitialTab} /> : null}
@@ -725,6 +789,15 @@ export default function DashboardPage() {
           plans={plans.filter((plan) => plan.active || plan.id === renewalTarget.reference.planId)}
           onClose={() => setRenewalTarget(null)}
           onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
+        />
+      ) : null}
+      {renewalReversalTarget ? (
+        <RenewalReversalModal
+          target={renewalReversalTarget}
+          onClose={() => setRenewalReversalTarget(null)}
+          onConfirm={async (payload) =>
+            handleRenewalReversalConfirm(renewalReversalTarget, payload)
+          }
         />
       ) : null}
       {deletionTarget ? (
@@ -2725,6 +2798,7 @@ function ClientsView({
   onClearSelection,
   onCloseForm,
   onRenew,
+  onRevertRenewal,
   onCreateReference,
   onUpdateReference,
   onReferenceStatusChange,
@@ -2744,6 +2818,7 @@ function ClientsView({
   setStatus,
   status,
   renewalNotice,
+  renewalReversalPreviewLoadingId,
 }: {
   clientFormOpen: boolean;
   clients: Client[];
@@ -2756,6 +2831,7 @@ function ClientsView({
   onNew: () => void;
   onClearSelection: () => void;
   onRenew: (client: Client, reference?: ClientReference) => void;
+  onRevertRenewal: (client: Client, renewal: Renewal) => void;
   onCreateReference: (
     client: Client,
     payload: Omit<ClientPayload, 'name' | 'phone' | 'email'>,
@@ -2786,6 +2862,7 @@ function ClientsView({
   setStatus: (value: ClientStatus | '') => void;
   status: ClientStatus | '';
   renewalNotice: string;
+  renewalReversalPreviewLoadingId: string | null;
 }) {
   const sortedPlans = sortPlansByDuration(plans);
   const selectableClientPlans = sortPlansByDuration(
@@ -3930,27 +4007,59 @@ function ClientsView({
                     />
                     {(selectedClient.renewals ?? []).length ? (
                       <div className="client-more-list">
-                        {(selectedClient.renewals ?? []).map((renewal) => (
-                          <article className="client-more-list-item" key={renewal.id}>
-                            <div>
-                              <strong>{renewal.planName}</strong>
-                              <span>{formatDateTime(renewal.createdAt)}</span>
-                            </div>
-                            <dl>
+                        {(selectedClient.renewals ?? []).map((renewal) => {
+                          const canRequestReversal = renewal.status !== 'REVERTED';
+                          const loadingReversalPreview =
+                            renewalReversalPreviewLoadingId === renewal.id;
+
+                          return (
+                            <article className="client-more-list-item" key={renewal.id}>
                               <div>
-                                <dt>Valor</dt>
-                                <dd>{formatCurrency(renewal.amount)}</dd>
+                                <div>
+                                  <strong>{renewal.planName}</strong>
+                                  <span>{formatDateTime(renewal.createdAt)}</span>
+                                </div>
+                                <div className="client-more-item-actions">
+                                  {loadingReversalPreview ? (
+                                    <span className="client-more-status-pill">
+                                      Carregando prévia
+                                    </span>
+                                  ) : null}
+                                  {renewal.status === 'REVERTED' ? (
+                                    <span className="client-more-status-pill">Revertida</span>
+                                  ) : null}
+                                  {canRequestReversal ? (
+                                    <ActionMenu
+                                      items={[
+                                        {
+                                          disabled: loadingReversalPreview,
+                                          icon: RotateCcw,
+                                          label: loadingReversalPreview
+                                            ? 'Carregando prévia...'
+                                            : 'Desfazer renovação',
+                                          onSelect: () => onRevertRenewal(selectedClient, renewal),
+                                        },
+                                      ]}
+                                    />
+                                  ) : null}
+                                </div>
                               </div>
-                              <div>
-                                <dt>Vencimento</dt>
-                                <dd>
-                                  {formatDate(renewal.previousDueDate)} para{' '}
-                                  {formatDate(renewal.newDueDate)}
-                                </dd>
-                              </div>
-                            </dl>
-                          </article>
-                        ))}
+                              <dl>
+                                <div>
+                                  <dt>Valor</dt>
+                                  <dd>{formatCurrency(renewal.amount)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Vencimento</dt>
+                                  <dd>
+                                    {formatDate(renewal.previousDueDate)} para{' '}
+                                    {formatDate(renewal.newDueDate)}
+                                  </dd>
+                                </div>
+                              </dl>
+                            </article>
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="client-more-empty">
@@ -8983,6 +9092,262 @@ function RenewalModal({
       </section>
     </div>
   );
+}
+
+function RenewalReversalModal({
+  target,
+  onClose,
+  onConfirm,
+}: {
+  target: RenewalReversalTarget;
+  onClose: () => void;
+  onConfirm: (payload: { reason: string; idempotencyKey: string }) => Promise<void>;
+}) {
+  const { preview } = target;
+  const [reason, setReason] = useState('');
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [error, setError] = useState('');
+  const trimmedReason = reason.trim();
+  const canConfirm = preview.reversible && trimmedReason.length >= 3;
+  const impacts = renewalReversalImpactMessages(preview);
+  const warnings = renewalReversalWarningMessages(preview);
+  const blockers = renewalReversalBlockerMessages(preview);
+
+  async function handleConfirm() {
+    if (!canConfirm || savingRef.current) return;
+
+    savingRef.current = true;
+    setError('');
+    setSaving(true);
+
+    try {
+      await onConfirm({ reason: trimmedReason, idempotencyKey });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível desfazer a renovação.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal renewal-reversal-modal" aria-labelledby="renewal-reversal-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon warning" aria-hidden="true">
+            <RotateCcw size={17} />
+          </span>
+          <div>
+            <h2 id="renewal-reversal-title">Desfazer renovação</h2>
+            <p>Revise o estado que será restaurado e os impactos antes de confirmar.</p>
+          </div>
+          <IconButton icon={X} label="Fechar reversão" onClick={onClose} />
+        </header>
+
+        <div className="renewal-reversal-summary">
+          <section className="renewal-reversal-panel">
+            <h3>Estado atual</h3>
+            <dl className="detail-list">
+              <div>
+                <dt>Plano</dt>
+                <dd>{preview.current.planName}</dd>
+              </div>
+              <div>
+                <dt>Valor</dt>
+                <dd>{formatCurrency(preview.current.amount)}</dd>
+              </div>
+              <div>
+                <dt>Vencimento</dt>
+                <dd>{formatDate(preview.current.dueDate)}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{clientStatusLabel(preview.current.status)}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className="renewal-reversal-panel restore">
+            <h3>Restaurar para</h3>
+            <dl className="renewal-restore-list">
+              <div>
+                <dt>Plano</dt>
+                <dd>{preview.restore.planName ?? '—'}</dd>
+              </div>
+              <div>
+                <dt>Valor</dt>
+                <dd>{preview.restore.amount ? formatCurrency(preview.restore.amount) : '—'}</dd>
+              </div>
+              <div>
+                <dt>Vencimento</dt>
+                <dd>{preview.restore.dueDate ? formatDate(preview.restore.dueDate) : '—'}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{preview.restore.status ? clientStatusLabel(preview.restore.status) : '—'}</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+
+        <section className="renewal-reversal-impacts">
+          <h3>Impactos da reversão</h3>
+          <ul>
+            {impacts.map((impact) => (
+              <li key={impact}>{impact}</li>
+            ))}
+          </ul>
+        </section>
+
+        {preview.warnings.length ? (
+          <section className="renewal-reversal-messages warning">
+            <h3>Atenção</h3>
+            <ul>
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {!preview.reversible ? (
+          <section className="renewal-reversal-messages danger">
+            <h3>Reversão bloqueada</h3>
+            <p>Esta renovação não pode ser desfeita.</p>
+            <ul>
+              {blockers.map((blocker) => (
+                <li key={blocker}>{blocker}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {preview.reversible ? (
+          <label className="field renewal-reversal-reason">
+            <span>Motivo da reversão *</span>
+            <textarea
+              maxLength={500}
+              minLength={3}
+              placeholder="Descreva o motivo operacional."
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+            <small>{trimmedReason.length}/500 caracteres</small>
+          </label>
+        ) : null}
+
+        <div className="form-actions">
+          <span className="error-message">{error}</span>
+          <div className="button-row">
+            <Button icon={X} variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={saving || !canConfirm}
+              icon={RotateCcw}
+              loading={saving}
+              variant="danger"
+              onClick={() => void handleConfirm()}
+            >
+              Desfazer renovação
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function renewalReversalImpactMessages(preview: RenewalRevertPreview) {
+  const messages: string[] = [];
+
+  if (preview.receivable.action === 'CANCEL' && preview.receivable.dueDate) {
+    messages.push(`Cobrança de ${formatDate(preview.receivable.dueDate)} será cancelada.`);
+  } else if (preview.receivable.action === 'PRESERVE_CANCELED' && preview.receivable.dueDate) {
+    messages.push(`Cobrança de ${formatDate(preview.receivable.dueDate)} já está cancelada.`);
+  } else if (preview.receivable.action === 'BLOCK_PAID' && preview.receivable.dueDate) {
+    messages.push(`Cobrança de ${formatDate(preview.receivable.dueDate)} já foi paga.`);
+  }
+
+  if (preview.previousCycle.action === 'PRESERVE' && preview.previousCycle.dueDate) {
+    messages.push(
+      `Cobrança anterior de ${formatDate(preview.previousCycle.dueDate)} será preservada.`,
+    );
+  } else if (preview.previousCycle.status === 'INEXISTENTE' && preview.previousCycle.dueDate) {
+    messages.push(
+      `Não existe cobrança anterior para ${formatDate(preview.previousCycle.dueDate)}.`,
+    );
+  }
+
+  if (preview.billing.futureToCancel > 0) {
+    messages.push(`${preview.billing.futureToCancel} cobrança/agendamento futuro será cancelado.`);
+  } else {
+    messages.push('Nenhuma cobrança/agendamento futuro será cancelado.');
+  }
+
+  if (preview.billing.sentToPreserve > 0) {
+    messages.push('Existem cobranças que já foram enviadas e permanecerão no histórico.');
+  }
+
+  if (preview.pix.total === 0) {
+    messages.push('Nenhum PIX vinculado.');
+  } else if (preview.pix.paid > 0) {
+    messages.push('Existe PIX pago vinculado.');
+  } else if (preview.pix.active > 0) {
+    messages.push('Existe PIX ativo vinculado.');
+  } else {
+    messages.push('PIX finalizado será preservado como histórico.');
+  }
+
+  messages.push(
+    preview.recovery.active ? 'Recuperação ativa será cancelada.' : 'Nenhuma recuperação ativa.',
+  );
+
+  return messages;
+}
+
+function renewalReversalWarningMessages(preview: RenewalRevertPreview) {
+  const mappedWarnings: Record<string, string> = {
+    PREVIOUS_CYCLE_RECEIVABLE_MISSING: 'Não existe cobrança histórica para o vencimento anterior.',
+    PREVIOUS_DUE_DATE_PAST: 'O vencimento a restaurar já passou.',
+    SENT_BILLING_WILL_BE_PRESERVED:
+      'Existem cobranças que já foram enviadas e permanecerão no histórico.',
+  };
+
+  return preview.warnings.map((warning) => mappedWarnings[warning.code] ?? warning.message);
+}
+
+function renewalReversalBlockerMessages(preview: RenewalRevertPreview) {
+  const mappedBlockers: Record<string, string> = {
+    ALREADY_REVERTED: 'Esta renovação já foi desfeita.',
+    FINANCIAL_TRANSACTION_EXISTS: 'Existe movimentação financeira vinculada.',
+    LEGACY_RENEWAL: 'Renovação antiga sem dados suficientes para reversão automática.',
+    NOT_LATEST_RENEWAL: 'Apenas a renovação mais recente pode ser desfeita.',
+    PIX_ACTIVE: 'Existe PIX aguardando pagamento. Cancele-o antes de desfazer.',
+    PIX_PAID: 'Existe PIX pago vinculado.',
+    PREVIOUS_CYCLE_CANCELED: 'A cobrança anterior está cancelada.',
+    PREVIOUS_CYCLE_OVERDUE_RECEIVABLE_MISSING:
+      'O ciclo anterior está vencido e não possui cobrança para preservar.',
+    PREVIOUS_CYCLE_PAID: 'A cobrança anterior já foi paga.',
+    RECEIVABLE_NOT_FOUND: 'A renovação não possui cobrança vinculada.',
+    RECEIVABLE_PAID: 'A cobrança desta renovação já foi paga.',
+    REFERENCE_STATE_CHANGED: 'A referência foi alterada depois desta renovação.',
+  };
+
+  return preview.blockers.map((blocker) => mappedBlockers[blocker.code] ?? blocker.message);
+}
+
+function clientStatusLabel(status: ClientStatus) {
+  const labels: Record<ClientStatus, string> = {
+    ATIVO: 'Ativo',
+    CANCELADO: 'Cancelado',
+    INATIVO: 'Inativo',
+    PENDENTE_PAGAMENTO: 'Pendente de pagamento',
+  };
+
+  return labels[status] ?? status;
 }
 
 function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: FinanceTab }) {

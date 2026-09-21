@@ -156,6 +156,7 @@ export type PaymentIntentStatus =
 export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPAY' | 'DEPIX';
 export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
 export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
+export type RenewalStatus = 'ACTIVE' | 'REVERTED';
 
 export interface Renewal {
   id: string;
@@ -167,6 +168,7 @@ export interface Renewal {
   previousDueDate: string;
   newDueDate: string;
   amount: string;
+  status?: RenewalStatus;
   createdAt: string;
   receivable?: Receivable | null;
 }
@@ -959,6 +961,97 @@ export interface RenewalResult {
   newDueDate: string;
 }
 
+export interface RenewalRevertPreview {
+  reversible: boolean;
+  renewal: {
+    id: string;
+    status: RenewalStatus;
+    createdAt: string;
+  };
+  current: {
+    planId: string;
+    planName: string;
+    amount: string;
+    dueDate: string;
+    billingAnchorDay: number;
+    status: ClientStatus;
+  };
+  restore: {
+    planId: string | null;
+    planName: string | null;
+    amount: string | null;
+    dueDate: string | null;
+    billingAnchorDay: number | null;
+    status: ClientStatus | null;
+  };
+  receivable: {
+    id: string | null;
+    status: ReceivableStatus | null;
+    amount: string | null;
+    dueDate: string | null;
+    action: 'CANCEL' | 'PRESERVE_CANCELED' | 'BLOCK_PAID' | 'NONE';
+  };
+  pix: {
+    total: number;
+    active: number;
+    paid: number;
+    action: 'CANCEL_REQUIRED' | 'PRESERVE_HISTORY' | 'BLOCK_PAID' | 'NONE';
+  };
+  billing: {
+    futureToCancel: number;
+    sentToPreserve: number;
+  };
+  recovery: {
+    active: boolean;
+    action: 'CANCEL' | 'NONE';
+  };
+  previousCycle: {
+    dueDate: string | null;
+    receivableId: string | null;
+    status: ReceivableStatus | 'INEXISTENTE';
+    action: 'PRESERVE' | 'NONE' | 'BLOCK_PRESERVE_PAID' | 'BLOCK_PRESERVE_CANCELED';
+  };
+  blockers: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+}
+
+export interface RenewalReversalResult {
+  idempotentReplay: boolean;
+  renewal: {
+    id: string;
+    clientId: string;
+    clientReferenceId: string;
+    status: RenewalStatus;
+    newDueDate: string;
+    previousDueDate: string;
+  };
+  reference: {
+    id: string;
+    reference: string;
+    planId: string;
+    planName: string;
+    recurringValue: string;
+    dueDate: string;
+    billingAnchorDay: number;
+    status: ClientStatus;
+  };
+  reversal: {
+    id: string;
+    renewalId: string;
+    clientId: string;
+    clientReferenceId: string;
+    reason: string | null;
+    idempotencyKey: string;
+    createdByUserId: string | null;
+    createdAt: string;
+  };
+  impacts: {
+    receivable: { id: string; status: ReceivableStatus; canceled: boolean } | null;
+    billing: { futureCanceled: number };
+    recovery: { action: 'CANCEL' | 'NONE' };
+  };
+}
+
 const paymentNotesMaxLength = 2000;
 
 type PaymentPayloadInput = {
@@ -1218,6 +1311,26 @@ export function confirmReferenceRenewal(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function previewRenewalReversal(clientReferenceId: string, renewalId: string) {
+  return apiFetch<RenewalRevertPreview>(
+    `/client-references/${clientReferenceId}/renewals/${renewalId}/revert/preview`,
+  );
+}
+
+export function confirmRenewalReversal(
+  clientReferenceId: string,
+  renewalId: string,
+  payload: { reason: string; idempotencyKey: string },
+) {
+  return apiFetch<RenewalReversalResult>(
+    `/client-references/${clientReferenceId}/renewals/${renewalId}/revert`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function listFinancialCategories() {

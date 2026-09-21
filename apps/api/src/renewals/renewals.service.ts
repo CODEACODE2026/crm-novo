@@ -109,6 +109,7 @@ export class RenewalsService {
 
         const client = reference.client;
         const anchorDay = reference.billingAnchorDay ?? getBusinessDateDay(reference.dueDate);
+        const newStatus = 'ATIVO';
         const newDueDate = addCalendarMonthsPreservingAnchor(
           reference.dueDate,
           plan.durationMonths,
@@ -125,8 +126,15 @@ export class RenewalsService {
             clientId: client.id,
             clientReferenceId: reference.id,
             planId: plan.id,
+            previousPlanId: reference.planId,
+            previousPlanName: reference.plan.name,
+            previousAmount: reference.recurringValue,
             previousDueDate: reference.dueDate,
+            previousBillingAnchorDay: reference.billingAnchorDay,
+            previousStatus,
             newDueDate,
+            newBillingAnchorDay: anchorDay,
+            newStatus,
             amount: dto.amount,
             planName: plan.name,
             durationMonths: plan.durationMonths,
@@ -154,17 +162,17 @@ export class RenewalsService {
             billingAnchorDay: anchorDay,
             planId: plan.id,
             recurringValue: dto.amount,
-            status: 'ATIVO',
+            status: newStatus,
           },
         });
 
-        if (previousStatus !== 'ATIVO') {
+        if (previousStatus !== newStatus) {
           await tx.clientStatusHistory.create({
             data: {
               clientId: client.id,
               clientReferenceId: reference.id,
               previousStatus,
-              newStatus: 'ATIVO',
+              newStatus,
               reason: reactivationDescription,
               changedByUserId: actorUserId,
             },
@@ -172,8 +180,8 @@ export class RenewalsService {
 
           await this.recoveryService.handleClientReferenceStatusChange(
             tx,
-            { ...reference, status: 'ATIVO' },
-            'ATIVO',
+            { ...reference, status: newStatus },
+            newStatus,
             { actorUserId },
           );
         }
@@ -197,8 +205,14 @@ export class RenewalsService {
               clientReferenceId: reference.id,
               reference: reference.reference,
               planId: plan.id,
+              previousPlanId: reference.planId,
+              previousPlanName: reference.plan.name,
               previousDueDate: formatBusinessDate(reference.dueDate),
+              previousBillingAnchorDay: reference.billingAnchorDay,
+              previousStatus,
               newDueDate: formatBusinessDate(newDueDate),
+              newBillingAnchorDay: anchorDay,
+              newStatus,
               amount: dto.amount,
             },
             createdByUserId: actorUserId,
@@ -312,9 +326,17 @@ export class RenewalsService {
         planId: result.planId,
         planName: result.planName,
         durationMonths: result.durationMonths,
+        previousPlanId: result.previousPlanId,
+        previousPlanName: result.previousPlanName,
+        previousAmount: result.previousAmount?.toString() ?? null,
         previousDueDate: formatBusinessDate(result.previousDueDate),
+        previousBillingAnchorDay: result.previousBillingAnchorDay,
+        previousStatus: result.previousStatus,
         newDueDate: formatBusinessDate(result.newDueDate),
+        newBillingAnchorDay: result.newBillingAnchorDay,
+        newStatus: result.newStatus,
         amount: result.amount.toString(),
+        status: result.status,
         createdAt: result.createdAt,
       },
       receivable: {

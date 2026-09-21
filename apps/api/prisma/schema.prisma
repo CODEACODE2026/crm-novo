@@ -18,6 +18,11 @@ enum ClientStatus {
   CANCELADO
 }
 
+enum RenewalStatus {
+  ACTIVE
+  REVERTED
+}
+
 enum ClientEventType {
   CLIENT_CREATED
   CLIENT_UPDATED
@@ -207,6 +212,7 @@ model User {
   inactivatedReferences ClientReference[]      @relation("ClientReferenceInactivatedBy")
   canceledReferences    ClientReference[]      @relation("ClientReferenceCanceledBy")
   createdRenewals       Renewal[]              @relation("RenewalCreatedBy")
+  createdRenewalReversals RenewalReversal[]     @relation("RenewalReversalCreatedBy")
   createdTransactions   FinancialTransaction[] @relation("FinancialTransactionCreatedBy")
   createdReferrals      Referral[]             @relation("ReferralCreatedBy")
   createdPaymentGroups  PaymentGroup[]         @relation("PaymentGroupCreatedBy")
@@ -250,6 +256,7 @@ model Client {
   statusHistory           ClientStatusHistory[]
   events                  ClientEvent[]
   renewals                Renewal[]
+  renewalReversals        RenewalReversal[]
   receivables             Receivable[]
   financialTransactions   FinancialTransaction[]
   paymentGroups           PaymentGroup[]
@@ -292,6 +299,7 @@ model ClientReference {
   inactivatedBy         User?                  @relation("ClientReferenceInactivatedBy", fields: [inactivatedByUserId], references: [id], onDelete: SetNull)
   canceledBy            User?                  @relation("ClientReferenceCanceledBy", fields: [canceledByUserId], references: [id], onDelete: SetNull)
   renewals              Renewal[]
+  renewalReversals      RenewalReversal[]
   receivables           Receivable[]
   recoveryCampaigns     RecoveryCampaign[]
   messageDispatches     MessageDispatch[]
@@ -615,11 +623,19 @@ model Renewal {
   clientId          String          @db.Uuid
   clientReferenceId String          @db.Uuid
   planId            String          @db.Uuid
+  previousPlanId    String?         @db.Uuid
+  previousPlanName  String?
+  previousAmount    Decimal?        @db.Decimal(12, 2)
   previousDueDate   DateTime        @db.Date
+  previousBillingAnchorDay Int?
+  previousStatus    ClientStatus?
   newDueDate        DateTime        @db.Date
+  newBillingAnchorDay Int?
+  newStatus         ClientStatus?
   amount            Decimal         @db.Decimal(12, 2)
   planName          String
   durationMonths    Int
+  status            RenewalStatus   @default(ACTIVE)
   idempotencyKey    String?
   createdByUserId   String?         @db.Uuid
   createdAt         DateTime        @default(now())
@@ -628,6 +644,7 @@ model Renewal {
   plan              Plan            @relation(fields: [planId], references: [id], onDelete: Restrict)
   createdBy         User?           @relation("RenewalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   receivable        Receivable?
+  reversal          RenewalReversal?
 
   @@unique([clientId, idempotencyKey])
   @@unique([clientReferenceId, idempotencyKey])
@@ -636,6 +653,37 @@ model Renewal {
   @@index([planId])
   @@index([createdAt])
   @@map("renewals")
+}
+
+model RenewalReversal {
+  id                        String          @id @default(uuid()) @db.Uuid
+  renewalId                 String          @unique @db.Uuid
+  clientId                  String          @db.Uuid
+  clientReferenceId         String          @db.Uuid
+  previousPlanId            String?         @db.Uuid
+  previousPlanName          String?
+  previousAmount            Decimal?        @db.Decimal(12, 2)
+  previousDueDate           DateTime?       @db.Date
+  previousBillingAnchorDay  Int?
+  previousStatus            ClientStatus?
+  revertedFromPlanId        String?         @db.Uuid
+  revertedFromPlanName      String?
+  revertedFromAmount        Decimal?        @db.Decimal(12, 2)
+  revertedFromDueDate       DateTime?       @db.Date
+  revertedFromBillingAnchorDay Int?
+  revertedFromStatus        ClientStatus?
+  reason                    String?
+  createdByUserId           String?         @db.Uuid
+  createdAt                 DateTime        @default(now())
+  renewal                   Renewal         @relation(fields: [renewalId], references: [id], onDelete: Restrict)
+  client                    Client          @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientReference           ClientReference @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  createdBy                 User?           @relation("RenewalReversalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([clientReferenceId])
+  @@index([createdAt])
+  @@map("renewal_reversals")
 }
 
 model Receivable {

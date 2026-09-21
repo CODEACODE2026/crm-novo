@@ -3,7 +3,6 @@ import {
   type ClientStatus,
   type MessageDispatchStatus,
   type PaymentIntentStatus,
-  type PaymentProviderCode,
   type ReceivableStatus,
   Prisma,
 } from '@prisma/client';
@@ -17,6 +16,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RecoveryService } from '../recovery/recovery.service';
 import { CreateRenewalDto } from './dto/create-renewal.dto';
 import { RenewalPreviewDto } from './dto/renewal-preview.dto';
+import { RevertRenewalDto } from './dto/revert-renewal.dto';
 import {
   buildRenewalReceivableDescription,
   getReceivableDisplayStatus,
@@ -35,7 +35,7 @@ type RevertPreviewBlockerCode =
   | 'FINANCIAL_TRANSACTION_EXISTS'
   | 'LEGACY_RENEWAL'
   | 'NOT_LATEST_RENEWAL'
-  | 'PIX_CANNOT_BE_CANCELED'
+  | 'PIX_ACTIVE'
   | 'PIX_PAID'
   | 'RECEIVABLE_NOT_FOUND'
   | 'RECEIVABLE_PAID'
@@ -131,12 +131,14 @@ type RenewalRevertPreviewRecord = Prisma.RenewalGetPayload<{
   };
 }>;
 
+type RenewalReversalResult = Prisma.RenewalReversalGetPayload<{
+  include: {
+    renewal: { include: { receivable: true } };
+    clientReference: { include: { plan: true } };
+  };
+}>;
+
 const activePixStatuses: readonly PaymentIntentStatus[] = ['CREATED', 'WAITING_PAYMENT'];
-const safelyCancelablePixProviders: readonly PaymentProviderCode[] = [
-  'MOCK',
-  'FASTFLOW',
-  'FASTPAY',
-];
 const futureBillingStatuses: readonly MessageDispatchStatus[] = [
   'PENDING',
   'SCHEDULED',
@@ -193,7 +195,272 @@ export class RenewalsService {
   }
 
   async previewRevert(clientReferenceId: string, renewalId: string): Promise<RenewalRevertPreview> {
-    const renewal = await this.prisma.renewal.findUnique({
+    return this.loadRevertPreview(this.prisma, clientReferenceId, renewalId);
+  }
+
+  async revert(
+    clientReferenceId: string,
+    renewalId: string,
+    dto: RevertRenewalDto,
+    actorUserId: string,
+  ) {
+    const existing = await this.prisma.renewalReversal.findFirst({
+      where: {
+        OR: [{ renewalId }, { clientReferenceId, idempotencyKey: dto.idempotencyKey }],
+      },
+      include: {
+        renewal: { include: { receivable: true } },
+        clientReference: { include: { plan: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (existing) {
+      if (existing.renewalId !== renewalId || existing.clientReferenceId !== clientReferenceId) {
+        throw new ConflictException('Chave de idempotencia ja usada em outra reversao.');
+      }
+
+      return this.presentReversalResult(existing, true, {
+        billingCanceled: 0,
+        receivableCanceled: existing.renewal.receivable?.status === 'CANCELADO',
+        recoveryAction: 'NONE',
+      });
+    }
+
+    try {
+      const result = await this.prisma.$transaction(
+        async (tx) => {
+          const preview = await this.loadRevertPreview(tx, clientReferenceId, renewalId);
+
+          if (!preview.reversible) {
+            throw new ConflictException({
+              message: 'Renovacao nao elegivel para reversao.',
+              blockers: preview.blockers,
+              warnings: preview.warnings,
+            });
+          }
+
+          const renewal = await tx.renewal.findUniqueOrThrow({
+            where: { id: renewalId },
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: {
+                include: {
+                  paymentTransaction: true,
+                  paymentIntents: true,
+                  paymentGroupItems: {
+                    include: {
+                      paymentGroup: {
+                        include: {
+                          paymentIntents: true,
+                          financialTransactions: true,
+                        },
+                      },
+                    },
+                  },
+                  messageDispatches: true,
+                  messageDispatchItems: { include: { messageDispatch: true } },
+                  recoveryCampaigns: true,
+                },
+              },
+            },
+          });
+
+          if (!this.hasCompleteRevertSnapshot(renewal)) {
+            throw new ConflictException('Snapshot de reversao incompleto.');
+          }
+
+          const currentReference = renewal.clientReference;
+          const receivable = renewal.receivable;
+          const previousPlanId = renewal.previousPlanId;
+          const previousAmount = renewal.previousAmount;
+          const previousBillingAnchorDay = renewal.previousBillingAnchorDay;
+          const previousStatus = renewal.previousStatus;
+
+          if (
+            !receivable ||
+            previousPlanId == null ||
+            previousAmount == null ||
+            previousBillingAnchorDay == null ||
+            previousStatus == null
+          ) {
+            throw new ConflictException('Renovacao sem conta a receber ou snapshot completo.');
+          }
+
+          const reversal = await tx.renewalReversal.create({
+            data: {
+              renewalId: renewal.id,
+              clientId: renewal.clientId,
+              clientReferenceId: renewal.clientReferenceId,
+              previousPlanId: renewal.previousPlanId,
+              previousPlanName: renewal.previousPlanName,
+              previousAmount: renewal.previousAmount,
+              previousDueDate: renewal.previousDueDate,
+              previousBillingAnchorDay: renewal.previousBillingAnchorDay,
+              previousStatus: renewal.previousStatus,
+              revertedFromPlanId: currentReference.planId,
+              revertedFromPlanName: currentReference.plan.name,
+              revertedFromAmount: currentReference.recurringValue,
+              revertedFromDueDate: currentReference.dueDate,
+              revertedFromBillingAnchorDay: currentReference.billingAnchorDay,
+              revertedFromStatus: currentReference.status,
+              reason: dto.reason,
+              idempotencyKey: dto.idempotencyKey,
+              createdByUserId: actorUserId,
+            },
+          });
+
+          const receivableCanceled = receivable.status === 'PENDENTE';
+
+          if (receivableCanceled) {
+            await tx.receivable.update({
+              where: { id: receivable.id },
+              data: {
+                status: 'CANCELADO',
+                canceledAt: new Date(),
+                cancelReason: `Reversao da renovacao ${renewal.id}: ${dto.reason}`,
+              },
+            });
+          }
+
+          const billingUpdate = await tx.messageDispatch.updateMany({
+            where: {
+              origin: 'BILLING',
+              status: { in: [...futureBillingStatuses] },
+              OR: [
+                { receivableId: receivable.id },
+                { items: { some: { receivableId: receivable.id } } },
+              ],
+            },
+            data: {
+              status: 'CANCELED',
+              errorCode: 'RENEWAL_REVERTED',
+              errorMessage: 'Cobranca futura cancelada por reversao de renovacao.',
+              nextAttemptAt: null,
+            },
+          });
+
+          const recoveryAction: 'CANCEL' | 'NONE' = preview.recovery.active ? 'CANCEL' : 'NONE';
+
+          if (preview.recovery.active) {
+            await this.recoveryService.cancelActiveForReceivable(
+              tx,
+              receivable.id,
+              'RENEWAL_REVERTED',
+              'Campanha de recuperacao cancelada por reversao de renovacao.',
+            );
+          }
+
+          await tx.clientReference.update({
+            where: { id: clientReferenceId },
+            data: {
+              planId: previousPlanId,
+              recurringValue: previousAmount,
+              dueDate: renewal.previousDueDate,
+              billingAnchorDay: previousBillingAnchorDay,
+              status: previousStatus,
+            },
+          });
+
+          await tx.renewal.update({
+            where: { id: renewal.id },
+            data: { status: 'REVERTED' },
+          });
+
+          await tx.clientEvent.create({
+            data: {
+              clientId: renewal.clientId,
+              type: 'RENEWAL_REVERTED',
+              title: `Renovacao da referencia ${currentReference.reference} revertida.`,
+              description: `Motivo: ${dto.reason}`,
+              metadata: {
+                renewalId: renewal.id,
+                referenceId: renewal.clientReferenceId,
+                reference: currentReference.reference,
+                reason: dto.reason,
+                revertedFrom: {
+                  planId: currentReference.planId,
+                  planName: currentReference.plan.name,
+                  amount: currentReference.recurringValue.toString(),
+                  dueDate: formatBusinessDate(currentReference.dueDate),
+                  billingAnchorDay: currentReference.billingAnchorDay,
+                  status: currentReference.status,
+                },
+                restoredTo: {
+                  planId: renewal.previousPlanId,
+                  planName: renewal.previousPlanName,
+                  amount: renewal.previousAmount?.toString() ?? null,
+                  dueDate: formatBusinessDate(renewal.previousDueDate),
+                  billingAnchorDay: renewal.previousBillingAnchorDay,
+                  status: renewal.previousStatus,
+                },
+                receivable: {
+                  id: receivable.id,
+                  previousStatus: receivable.status,
+                  action: receivableCanceled ? 'CANCELED' : 'PRESERVED_CANCELED',
+                },
+                billingCanceled: billingUpdate.count,
+                recoveryAction,
+              },
+              createdByUserId: actorUserId,
+            },
+          });
+
+          const saved = await tx.renewalReversal.findUniqueOrThrow({
+            where: { id: reversal.id },
+            include: {
+              renewal: { include: { receivable: true } },
+              clientReference: { include: { plan: true } },
+            },
+          });
+
+          return {
+            reversal: saved,
+            impacts: {
+              billingCanceled: billingUpdate.count,
+              receivableCanceled,
+              recoveryAction,
+            },
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+
+      return this.presentReversalResult(result.reversal, false, result.impacts);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existingAfterConflict = await this.prisma.renewalReversal.findFirst({
+          where: {
+            OR: [{ renewalId }, { clientReferenceId, idempotencyKey: dto.idempotencyKey }],
+          },
+          include: {
+            renewal: { include: { receivable: true } },
+            clientReference: { include: { plan: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        if (existingAfterConflict) {
+          return this.presentReversalResult(existingAfterConflict, true, {
+            billingCanceled: 0,
+            receivableCanceled: existingAfterConflict.renewal.receivable?.status === 'CANCELADO',
+            recoveryAction: 'NONE',
+          });
+        }
+
+        throw new ConflictException('Reversao duplicada.');
+      }
+
+      throw error;
+    }
+  }
+
+  private async loadRevertPreview(
+    client: Prisma.TransactionClient | PrismaService,
+    clientReferenceId: string,
+    renewalId: string,
+  ): Promise<RenewalRevertPreview> {
+    const renewal = await client.renewal.findUnique({
       where: { id: renewalId },
       include: {
         clientReference: { include: { plan: true } },
@@ -224,11 +491,11 @@ export class RenewalsService {
     }
 
     const [latestRenewal, previousCycleReceivable] = await Promise.all([
-      this.prisma.renewal.findFirst({
+      client.renewal.findFirst({
         where: { clientReferenceId },
         orderBy: [{ createdAt: 'desc' }],
       }),
-      this.prisma.receivable.findUnique({
+      client.receivable.findUnique({
         where: {
           clientReferenceId_purpose_dueDate: {
             clientReferenceId,
@@ -479,9 +746,6 @@ export class RenewalsService {
     ).length;
     const activePix = paymentIntents.filter((intent) => activePixStatuses.includes(intent.status));
     const paidPix = paymentIntents.filter((intent) => intent.status === 'PAID');
-    const hasUnsafeActivePix = activePix.some(
-      (intent) => !safelyCancelablePixProviders.includes(intent.provider),
-    );
     const hasFinancialTransaction =
       Boolean(receivable?.paymentTransaction) ||
       Boolean(
@@ -551,10 +815,10 @@ export class RenewalsService {
       });
     }
 
-    if (hasUnsafeActivePix) {
+    if (activePix.length > 0) {
       blockers.push({
-        code: 'PIX_CANNOT_BE_CANCELED',
-        message: 'Existe PIX ativo sem cancelamento seguro suportado pelo provider.',
+        code: 'PIX_ACTIVE',
+        message: 'Existe PIX ativo vinculado a cobranca da renovacao.',
       });
     }
 
@@ -804,6 +1068,65 @@ export class RenewalsService {
         ),
       },
       newDueDate: formatBusinessDate(result.newDueDate),
+    };
+  }
+
+  private presentReversalResult(
+    result: RenewalReversalResult,
+    idempotentReplay: boolean,
+    impacts: {
+      billingCanceled: number;
+      receivableCanceled: boolean;
+      recoveryAction: 'CANCEL' | 'NONE';
+    },
+  ) {
+    const receivable = result.renewal.receivable;
+
+    return {
+      idempotentReplay,
+      renewal: {
+        id: result.renewal.id,
+        clientId: result.renewal.clientId,
+        clientReferenceId: result.renewal.clientReferenceId,
+        status: result.renewal.status,
+        newDueDate: formatBusinessDate(result.renewal.newDueDate),
+        previousDueDate: formatBusinessDate(result.renewal.previousDueDate),
+      },
+      reference: {
+        id: result.clientReference.id,
+        reference: result.clientReference.reference,
+        planId: result.clientReference.planId,
+        planName: result.clientReference.plan.name,
+        recurringValue: result.clientReference.recurringValue.toString(),
+        dueDate: formatBusinessDate(result.clientReference.dueDate),
+        billingAnchorDay: result.clientReference.billingAnchorDay,
+        status: result.clientReference.status,
+      },
+      reversal: {
+        id: result.id,
+        renewalId: result.renewalId,
+        clientId: result.clientId,
+        clientReferenceId: result.clientReferenceId,
+        reason: result.reason,
+        idempotencyKey: result.idempotencyKey,
+        createdByUserId: result.createdByUserId,
+        createdAt: result.createdAt,
+      },
+      impacts: {
+        receivable: receivable
+          ? {
+              id: receivable.id,
+              status: receivable.status,
+              canceled: impacts.receivableCanceled,
+            }
+          : null,
+        billing: {
+          futureCanceled: impacts.billingCanceled,
+        },
+        recovery: {
+          action: impacts.recoveryAction,
+        },
+      },
     };
   }
 

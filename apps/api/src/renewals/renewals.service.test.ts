@@ -15,6 +15,13 @@ type FakePrismaOptions = {
   };
 };
 
+type FakeBillingDispatch = {
+  id: string;
+  origin: string;
+  status: string;
+  [key: string]: unknown;
+};
+
 function createFakePrisma(options: FakePrismaOptions = {}) {
   const currentPlan = {
     id: '11111111-1111-4111-8111-111111111111',
@@ -303,11 +310,164 @@ function createPreviewFake(overrides: Record<string, unknown> = {}) {
     latestRenewal,
     previousCycleReceivable,
     mutations: [] as string[],
+    reversals: [] as Array<Record<string, unknown>>,
+    events: [] as Array<Record<string, unknown>>,
+    failOnRenewalUpdate: false,
     ...overrides,
   };
-  const mutation = (name: string) => () => {
+  const recordMutation = (name: string) => {
     state.mutations.push(name);
-    throw new Error(`Unexpected mutation: ${name}`);
+  };
+  const collectBillingDispatches = (): FakeBillingDispatch[] =>
+    [
+      ...state.renewal.receivable.messageDispatches,
+      ...state.renewal.receivable.messageDispatchItems.map((item) => item.messageDispatch),
+    ] as FakeBillingDispatch[];
+  const snapshot = () => ({
+    reference: { ...state.reference },
+    renewal: { ...state.renewal },
+    receivable: { ...state.renewal.receivable },
+    dispatches: collectBillingDispatches().map((dispatch) => ({
+      dispatch,
+      snapshot: { ...dispatch },
+    })),
+    reversalsLength: state.reversals.length,
+    eventsLength: state.events.length,
+    mutationsLength: state.mutations.length,
+  });
+  const restore = (saved: ReturnType<typeof snapshot>) => {
+    Object.assign(state.reference, saved.reference);
+    Object.assign(state.renewal, saved.renewal);
+    Object.assign(state.renewal.receivable, saved.receivable);
+    for (const item of saved.dispatches) {
+      Object.assign(item.dispatch, item.snapshot);
+    }
+    state.reversals.length = saved.reversalsLength;
+    state.events.length = saved.eventsLength;
+    state.mutations.length = saved.mutationsLength;
+  };
+  const tx = {
+    renewal: {
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(where.id === state.renewal.id ? state.renewal : null),
+      findUniqueOrThrow: ({ where }: { where: { id: string } }) => {
+        if (where.id !== state.renewal.id) {
+          throw new Error('Renewal not found');
+        }
+        return Promise.resolve(state.renewal);
+      },
+      findFirst: () => Promise.resolve(state.latestRenewal),
+      update: ({ data }: { data: Record<string, unknown> }) => {
+        recordMutation('renewal.update');
+        if (state.failOnRenewalUpdate) {
+          throw new Error('Forced renewal update failure');
+        }
+        Object.assign(state.renewal, data);
+        return Promise.resolve(state.renewal);
+      },
+    },
+    receivable: {
+      findUnique: () => Promise.resolve(state.previousCycleReceivable),
+      update: ({ data }: { data: Record<string, unknown> }) => {
+        recordMutation('receivable.update');
+        Object.assign(state.renewal.receivable, data);
+        return Promise.resolve(state.renewal.receivable);
+      },
+    },
+    clientReference: {
+      update: ({ data }: { data: Record<string, unknown> }) => {
+        recordMutation('clientReference.update');
+        Object.assign(state.reference, data);
+        return Promise.resolve(state.reference);
+      },
+    },
+    messageDispatch: {
+      updateMany: ({ data }: { data: Record<string, unknown> }) => {
+        recordMutation('messageDispatch.updateMany');
+        let count = 0;
+        for (const dispatch of collectBillingDispatches()) {
+          if (
+            dispatch.origin === 'BILLING' &&
+            ['PENDING', 'SCHEDULED', 'PROCESSING'].includes(dispatch.status)
+          ) {
+            Object.assign(dispatch, data);
+            count += 1;
+          }
+        }
+        return Promise.resolve({ count });
+      },
+    },
+    clientEvent: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        recordMutation('clientEvent.create');
+        state.events.push(data);
+        return Promise.resolve(data);
+      },
+    },
+    renewalReversal: {
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        recordMutation('renewalReversal.create');
+        if (
+          state.reversals.some(
+            (reversal) =>
+              reversal.renewalId === data.renewalId ||
+              (reversal.clientReferenceId === data.clientReferenceId &&
+                reversal.idempotencyKey === data.idempotencyKey),
+          )
+        ) {
+          throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+            code: 'P2002',
+            clientVersion: 'fake',
+          });
+        }
+        const reversal = {
+          id: `reversal-${state.reversals.length + 1}`,
+          createdAt: new Date(),
+          ...data,
+        };
+        state.reversals.push(reversal);
+        return Promise.resolve(reversal);
+      },
+      findFirst: ({
+        where,
+      }: {
+        where: {
+          OR: Array<{ renewalId?: string; clientReferenceId?: string; idempotencyKey?: string }>;
+        };
+      }) =>
+        Promise.resolve(
+          (() => {
+            const reversal = state.reversals.find((item) =>
+              where.OR.some(
+                (condition) =>
+                  (condition.renewalId && item.renewalId === condition.renewalId) ||
+                  (condition.clientReferenceId &&
+                    item.clientReferenceId === condition.clientReferenceId &&
+                    item.idempotencyKey === condition.idempotencyKey),
+              ),
+            );
+
+            return reversal
+              ? {
+                  ...reversal,
+                  renewal: state.renewal,
+                  clientReference: state.reference,
+                }
+              : null;
+          })(),
+        ),
+      findUniqueOrThrow: ({ where }: { where: { id: string } }) => {
+        const reversal = state.reversals.find((item) => item.id === where.id);
+        if (!reversal) {
+          throw new Error('Reversal not found');
+        }
+        return Promise.resolve({
+          ...reversal,
+          renewal: state.renewal,
+          clientReference: state.reference,
+        });
+      },
+    },
   };
 
   return {
@@ -317,31 +477,44 @@ function createPreviewFake(overrides: Record<string, unknown> = {}) {
         findUnique: ({ where }: { where: { id: string } }) =>
           Promise.resolve(where.id === state.renewal.id ? state.renewal : null),
         findFirst: () => Promise.resolve(state.latestRenewal),
-        create: mutation('renewal.create'),
-        update: mutation('renewal.update'),
+        create: () => {
+          recordMutation('renewal.create');
+          throw new Error('Unexpected renewal.create');
+        },
+        update: tx.renewal.update,
       },
       receivable: {
         findUnique: () => Promise.resolve(state.previousCycleReceivable),
-        create: mutation('receivable.create'),
-        update: mutation('receivable.update'),
+        create: () => {
+          recordMutation('receivable.create');
+          throw new Error('Unexpected receivable.create');
+        },
+        update: tx.receivable.update,
       },
       clientReference: {
-        update: mutation('clientReference.update'),
-      },
-      paymentIntent: {
-        update: mutation('paymentIntent.update'),
+        update: tx.clientReference.update,
       },
       messageDispatch: {
-        update: mutation('messageDispatch.update'),
-      },
-      recoveryCampaign: {
-        update: mutation('recoveryCampaign.update'),
+        updateMany: tx.messageDispatch.updateMany,
       },
       clientEvent: {
-        create: mutation('clientEvent.create'),
+        create: tx.clientEvent.create,
       },
       renewalReversal: {
-        create: mutation('renewalReversal.create'),
+        create: tx.renewalReversal.create,
+        findFirst: tx.renewalReversal.findFirst,
+        findUniqueOrThrow: tx.renewalReversal.findUniqueOrThrow,
+      },
+      $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
+        const saved = snapshot();
+        try {
+          return await callback(tx);
+        } catch (error) {
+          if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) {
+            restore(saved);
+          }
+          throw error;
+        }
       },
     },
   };
@@ -736,25 +909,24 @@ describe('RenewalsService', () => {
       active.renewal.id,
     );
 
-    expect(activeResult.reversible).toBe(true);
+    expect(activeResult.reversible).toBe(false);
     expect(activeResult.pix).toMatchObject({
       total: 1,
       active: 1,
       paid: 0,
       action: 'CANCEL_REQUIRED',
     });
+    expect(activeResult.blockers).toContainEqual(expect.objectContaining({ code: 'PIX_ACTIVE' }));
     expect(active.mutations).toEqual([]);
   });
 
-  it('blocks active PIX when provider cancellation is not known safe', async () => {
+  it('blocks active PIX regardless of provider in R3 v1', async () => {
     const fake = createPreviewFake();
     fake.renewal.receivable.paymentIntents.push(paymentIntent('CREATED', 'UNSUPPORTED'));
     const result = await previewService(fake).previewRevert(fake.reference.id, fake.renewal.id);
 
     expect(result.reversible).toBe(false);
-    expect(result.blockers).toContainEqual(
-      expect.objectContaining({ code: 'PIX_CANNOT_BE_CANCELED' }),
-    );
+    expect(result.blockers).toContainEqual(expect.objectContaining({ code: 'PIX_ACTIVE' }));
     expect(fake.mutations).toEqual([]);
   });
 
@@ -886,5 +1058,224 @@ describe('RenewalsService', () => {
       ]),
     );
     expect(fake.mutations).toEqual([]);
+  });
+
+  it('reverts the Pedro-equivalent renewal transactionally without deleting history', async () => {
+    const fake = createPreviewFake({
+      previousCycleReceivable: {
+        id: 'previous-pending',
+        status: 'PENDENTE',
+        dueDate: parseBusinessDate('2026-10-17'),
+      },
+    });
+    fake.renewal.receivable.messageDispatches.push(billingDispatch('future-1', 'SCHEDULED'));
+    const recoveryService = { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) };
+    const service = new RenewalsService(fake.prisma as never, recoveryService as never);
+
+    const result = await service.revert(
+      fake.reference.id,
+      fake.renewal.id,
+      { reason: 'Homologacao da reversao R3', idempotencyKey: 'revert-pedro-equivalent-1' },
+      userId,
+    );
+
+    expect(result.idempotentReplay).toBe(false);
+    expect(result.reference).toMatchObject({
+      dueDate: '2026-10-17',
+      planName: 'Mensal',
+      recurringValue: '30',
+      billingAnchorDay: 17,
+      status: 'ATIVO',
+    });
+    expect(fake.renewal.receivable).toMatchObject({
+      status: 'CANCELADO',
+      renewalId: fake.renewal.id,
+    });
+    expect(fake.previousCycleReceivable).toMatchObject({ status: 'PENDENTE' });
+    expect(fake.renewal.receivable.messageDispatches[0]).toMatchObject({ status: 'CANCELED' });
+    expect(fake.renewal).toMatchObject({ status: 'REVERTED' });
+    expect(fake.reversals).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'RENEWAL_REVERTED')).toHaveLength(1);
+    expect(result.impacts).toMatchObject({
+      receivable: { canceled: true, status: 'CANCELADO' },
+      billing: { futureCanceled: 1 },
+      recovery: { action: 'NONE' },
+    });
+  });
+
+  it('rolls back all reversal effects when a later mutation fails', async () => {
+    const fake = createPreviewFake({
+      previousCycleReceivable: {
+        id: 'previous-pending',
+        status: 'PENDENTE',
+        dueDate: parseBusinessDate('2026-10-17'),
+      },
+      failOnRenewalUpdate: true,
+    });
+    fake.renewal.receivable.messageDispatches.push(billingDispatch('future-1', 'SCHEDULED'));
+    const service = new RenewalsService(
+      fake.prisma as never,
+      { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    await expect(
+      service.revert(
+        fake.reference.id,
+        fake.renewal.id,
+        { reason: 'Forcar rollback', idempotencyKey: 'revert-rollback-1' },
+        userId,
+      ),
+    ).rejects.toThrow('Forced renewal update failure');
+
+    expect(fake.reversals).toHaveLength(0);
+    expect(fake.events).toHaveLength(0);
+    expect(fake.renewal.status).toBe('ACTIVE');
+    expect(fake.renewal.receivable.status).toBe('PENDENTE');
+    expect(fake.renewal.receivable.messageDispatches[0]!.status).toBe('SCHEDULED');
+    expect(fake.reference).toMatchObject({
+      dueDate: parseBusinessDate('2026-11-17'),
+      status: 'ATIVO',
+    });
+  });
+
+  it('returns an idempotent reversal response for repeated keys without repeated effects', async () => {
+    const fake = createPreviewFake({
+      previousCycleReceivable: {
+        id: 'previous-pending',
+        status: 'PENDENTE',
+        dueDate: parseBusinessDate('2026-10-17'),
+      },
+    });
+    const service = new RenewalsService(
+      fake.prisma as never,
+      { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+    const dto = { reason: 'Repetir com mesma chave', idempotencyKey: 'revert-idempotent-1' };
+
+    const first = await service.revert(fake.reference.id, fake.renewal.id, dto, userId);
+    const replay = await service.revert(fake.reference.id, fake.renewal.id, dto, userId);
+
+    expect(first.idempotentReplay).toBe(false);
+    expect(replay.idempotentReplay).toBe(true);
+    expect(fake.reversals).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'RENEWAL_REVERTED')).toHaveLength(1);
+  });
+
+  it('keeps only one set of effects for double simultaneous reversal requests', async () => {
+    const fake = createPreviewFake({
+      previousCycleReceivable: {
+        id: 'previous-pending',
+        status: 'PENDENTE',
+        dueDate: parseBusinessDate('2026-10-17'),
+      },
+    });
+    const service = new RenewalsService(
+      fake.prisma as never,
+      { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    const results = await Promise.allSettled([
+      service.revert(
+        fake.reference.id,
+        fake.renewal.id,
+        { reason: 'Chamada dupla A', idempotencyKey: 'revert-double-a' },
+        userId,
+      ),
+      service.revert(
+        fake.reference.id,
+        fake.renewal.id,
+        { reason: 'Chamada dupla B', idempotencyKey: 'revert-double-b' },
+        userId,
+      ),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    expect(fake.reversals).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'RENEWAL_REVERTED')).toHaveLength(1);
+    expect(fake.renewal.receivable.status).toBe('CANCELADO');
+  });
+
+  it('blocks execution when a previously valid preview became stale', async () => {
+    const fake = createPreviewFake({
+      previousCycleReceivable: {
+        id: 'previous-pending',
+        status: 'PENDENTE',
+        dueDate: parseBusinessDate('2026-10-17'),
+      },
+    });
+    const service = new RenewalsService(
+      fake.prisma as never,
+      { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    await expect(service.previewRevert(fake.reference.id, fake.renewal.id)).resolves.toMatchObject({
+      reversible: true,
+    });
+
+    fake.reference.dueDate = parseBusinessDate('2026-12-17');
+
+    await expect(
+      service.revert(
+        fake.reference.id,
+        fake.renewal.id,
+        { reason: 'Preview ficou stale', idempotencyKey: 'revert-stale-1' },
+        userId,
+      ),
+    ).rejects.toThrow('Renovacao nao elegivel para reversao.');
+    expect(fake.mutations).toEqual([]);
+  });
+
+  it('blocks reversal execution for active PIX, paid PIX, financial transaction and paid receivable', async () => {
+    const cases = [
+      [
+        'active PIX',
+        (fake: ReturnType<typeof createPreviewFake>) =>
+          fake.renewal.receivable.paymentIntents.push(paymentIntent('CREATED')),
+        'PIX_ACTIVE',
+      ],
+      [
+        'paid PIX',
+        (fake: ReturnType<typeof createPreviewFake>) =>
+          fake.renewal.receivable.paymentIntents.push(paymentIntent('PAID')),
+        'PIX_PAID',
+      ],
+      [
+        'financial transaction',
+        (fake: ReturnType<typeof createPreviewFake>) =>
+          Object.assign(fake.renewal.receivable, { paymentTransaction: { id: 'transaction-1' } }),
+        'FINANCIAL_TRANSACTION_EXISTS',
+      ],
+      [
+        'paid receivable',
+        (fake: ReturnType<typeof createPreviewFake>) => (fake.renewal.receivable.status = 'PAGO'),
+        'RECEIVABLE_PAID',
+      ],
+    ] as const;
+
+    for (const [, mutate, code] of cases) {
+      const fake = createPreviewFake({
+        previousCycleReceivable: {
+          id: 'previous-pending',
+          status: 'PENDENTE',
+          dueDate: parseBusinessDate('2026-10-17'),
+        },
+      });
+      mutate(fake);
+      const service = new RenewalsService(
+        fake.prisma as never,
+        { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) } as never,
+      );
+
+      await expect(
+        service.revert(
+          fake.reference.id,
+          fake.renewal.id,
+          { reason: 'Bloqueio esperado', idempotencyKey: `revert-block-${code}` },
+          userId,
+        ),
+      ).rejects.toThrow('Renovacao nao elegivel para reversao.');
+      expect(fake.reversals).toHaveLength(0);
+      expect(fake.events).toHaveLength(0);
+    }
   });
 });

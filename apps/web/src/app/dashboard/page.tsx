@@ -4741,7 +4741,10 @@ function ClientsView({
         ) : null}
         {clientFormOpen ? (
           <div className="modal-backdrop" role="presentation">
-            <section className="modal client-form-modal" aria-labelledby="client-form-title">
+            <section
+              className={`modal client-form-modal ${editingClient ? '' : 'client-create-modal'}`}
+              aria-labelledby="client-form-title"
+            >
               <header className="modal-header modal-header-with-icon">
                 <span className="modal-icon" aria-hidden="true">
                   {editingClient ? <Pencil size={15} /> : <UserPlus size={15} />}
@@ -4761,6 +4764,7 @@ function ClientsView({
               </header>
               <ClientForm
                 client={editingClient ?? undefined}
+                onCancel={onCloseForm}
                 plans={selectableClientPlans}
                 submitLabel={editingClient ? 'Salvar cliente' : 'Salvar cliente'}
                 onSubmit={async (payload) => {

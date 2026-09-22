@@ -16,6 +16,16 @@ const renewalReversalModalSource = dashboardSource.slice(
 );
 
 describe('client overview presentation source', () => {
+  it('scopes the compact wide modal treatment to new client creation', () => {
+    expect(dashboardSource).toContain('client-create-modal');
+    expect(dashboardSource).toContain('onCancel={onCloseForm}');
+    expect(stylesSource).toContain('.client-create-modal');
+    expect(stylesSource).toContain('width: min(960px, calc(100vw - 36px));');
+    expect(stylesSource).toContain('.client-create-modal .client-form-body');
+    expect(stylesSource).toContain('grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);');
+    expect(stylesSource).toContain('.client-create-modal .client-form-actions');
+  });
+
   it('uses compact profile rows instead of the old large readonly field blocks', () => {
     expect(dashboardSource).toContain('client-info-grid');
     expect(dashboardSource).toContain('client-info-item');

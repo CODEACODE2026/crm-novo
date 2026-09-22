@@ -4,6 +4,7 @@ import {
   apiFetch,
   applyReferralReward,
   confirmRenewalReversal,
+  createClient,
   deleteClient,
   formatCurrency,
   formatDate,
@@ -81,6 +82,35 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/clients/options?search=bruno'),
       expect.any(Object),
     );
+  });
+
+  it('posts the unchanged new-client payload contract', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: 'client-1' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const payload = {
+      name: 'Atualiza',
+      phone: '(44) 99999-9999',
+      email: 'contato@atualiza.test',
+      reference: 'ATUALIZA-001',
+      planId: 'plan-1',
+      recurringValue: 150,
+      dueDate: '2026-10-20',
+      billingNoticeDays: 3,
+      generateInitialReceivable: true,
+      notes: 'Observação',
+      referrerClientId: 'referrer-1',
+      referralRewardType: 'FREE_MONTH' as const,
+    };
+
+    await createClient(payload);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/clients'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toEqual(payload);
   });
 
   it('sends client list pagination parameters to the API', async () => {

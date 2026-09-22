@@ -4254,6 +4254,110 @@ tbody tr:hover,
   width: min(100%, 760px);
 }
 
+.deletion-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(100%, 620px);
+  max-height: min(720px, calc(100vh - 36px));
+  overflow: hidden;
+  padding: 0;
+}
+
+.deletion-modal .modal-header {
+  border-bottom: 1px solid var(--border);
+  padding: 18px;
+}
+
+.deletion-modal-body {
+  display: grid;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+.deletion-impact {
+  display: grid;
+  gap: 12px;
+}
+
+.deletion-impact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.deletion-impact-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.deletion-impact-card strong {
+  display: block;
+  color: var(--danger);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.deletion-impact-card span {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.deletion-count-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.deletion-count-groups section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.deletion-count-groups h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.deletion-count-groups dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.deletion-count-groups dl div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.deletion-count-groups dt,
+.deletion-count-groups dd {
+  margin: 0;
+  font-size: 13px;
+}
+
+.deletion-count-groups dt {
+  color: var(--muted);
+}
+
+.deletion-count-groups dd {
+  font-weight: 700;
+}
+
+.deletion-modal-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding: 14px 18px;
+}
+
 .renewal-reversal-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4977,6 +5081,18 @@ tbody tr:hover,
   .modal {
     width: 100%;
     max-height: calc(100vh - 20px);
+  }
+
+  .deletion-modal {
+    max-height: calc(100vh - 20px);
+  }
+
+  .deletion-impact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .deletion-modal-footer .ui-button {
+    flex: 1 1 100%;
   }
 
   .finance-transaction-modal-form {

@@ -517,6 +517,7 @@ export default function DashboardPage() {
       await deleteClientReference(target.reference.id, 'REMOVER');
       const detailed = await getClient(target.client.id);
       setSelectedClient(detailed);
+      setRenewalNotice('Referência removida com segurança.');
       setDeletionTarget(null);
       await loadData();
       return;
@@ -524,6 +525,7 @@ export default function DashboardPage() {
 
     await deleteClient(target.client.id, 'REMOVER');
     setSelectedClient(null);
+    setRenewalNotice('Cliente removido com segurança.');
     setDeletionTarget(null);
     await loadData();
   }
@@ -859,17 +861,39 @@ function DeletionConfirmationModal({
   const [confirmation, setConfirmation] = useState('');
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
+  const [showAllCounts, setShowAllCounts] = useState(false);
+  const workingRef = useRef(false);
   const isClient = target.kind === 'client';
   const title = isClient ? 'Remover cliente' : 'Remover referência';
   const targetLabel = isClient ? target.client.name : target.reference.reference;
   const counts = Object.entries(target.preview.counts).filter(([, value]) => value > 0);
+  const groupedCounts = removalCountGroups
+    .map((group) => ({
+      ...group,
+      items: group.keys
+        .map((key) => ({ key, label: removalCountLabel(key), value: target.preview.counts[key] }))
+        .filter(
+          (item): item is { key: string; label: string; value: number } => Number(item.value) > 0,
+        ),
+    }))
+    .filter((group) => group.items.length > 0);
+  const primaryCounts = counts.filter(([key]) => removalPrimaryCountKeys.includes(key)).slice(0, 6);
+  const secondaryCounts = counts.filter(
+    ([key]) => !primaryCounts.some(([primaryKey]) => primaryKey === key),
+  );
+  const canConfirm = confirmation === 'REMOVER';
 
   async function submit() {
-    if (confirmation !== 'REMOVER') {
+    if (!canConfirm) {
       setError('Digite REMOVER para confirmar.');
       return;
     }
 
+    if (workingRef.current) {
+      return;
+    }
+
+    workingRef.current = true;
     setWorking(true);
     setError('');
 
@@ -878,77 +902,160 @@ function DeletionConfirmationModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível remover.');
     } finally {
+      workingRef.current = false;
       setWorking(false);
     }
   }
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="modal" aria-labelledby="deletion-title">
+      <section className="modal deletion-modal" aria-labelledby="deletion-title">
         <header className="modal-header">
           <div>
             <span className="metric-label">AÇÃO DESTRUTIVA</span>
             <h2 id="deletion-title">{title}</h2>
+            <p>{targetLabel}</p>
           </div>
-          <IconButton icon={X} label="Fechar confirmação" onClick={onClose} />
+          <IconButton disabled={working} icon={X} label="Fechar confirmação" onClick={onClose} />
         </header>
-        {error ? <div className="notice danger">{error}</div> : null}
-        <div className="notice danger">
-          Esta ação removerá permanentemente {isClient ? 'o cliente' : 'a referência'} e os dados
-          vinculados listados abaixo. Esta ação não pode ser desfeita.
-        </div>
-        <dl className="detail-list">
-          <div>
-            <dt>Alvo</dt>
-            <dd>{targetLabel}</dd>
+        <div className="deletion-modal-body">
+          {error ? <div className="notice danger">{formatDeletionError(error)}</div> : null}
+          <div className="notice danger">
+            Esta ação removerá permanentemente {isClient ? 'o cliente' : 'a referência'} e os dados
+            vinculados. Ela não poderá ser desfeita.
           </div>
-          <div>
-            <dt>Confirmação</dt>
-            <dd>Digite REMOVER</dd>
-          </div>
-        </dl>
-        <div className="table-wrap compact-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Dado</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {counts.map(([key, value]) => (
-                <tr key={key}>
-                  <td>{removalCountLabel(key)}</td>
-                  <td>{value}</td>
-                </tr>
+          <section className="deletion-impact" aria-label="Resumo da remoção">
+            <div className="section-heading">
+              <span>Resumo da remoção</span>
+              <strong>
+                {target.preview.counts.total ?? counts.reduce((sum, [, value]) => sum + value, 0)}
+              </strong>
+            </div>
+            <div className="deletion-impact-grid">
+              {primaryCounts.map(([key, value]) => (
+                <article key={key} className="deletion-impact-card">
+                  <strong>{value}</strong>
+                  <span>{removalCountLabel(key)}</span>
+                </article>
               ))}
-            </tbody>
-          </table>
+            </div>
+            {secondaryCounts.length ? (
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => setShowAllCounts((current) => !current)}
+              >
+                {showAllCounts ? 'Ocultar dados afetados' : 'Ver todos os dados afetados'}
+              </button>
+            ) : null}
+            {showAllCounts ? (
+              <div className="deletion-count-groups">
+                {groupedCounts.map((group) => (
+                  <section key={group.title}>
+                    <h3>{group.title}</h3>
+                    <dl>
+                      {group.items.map((item) => (
+                        <div key={item.key}>
+                          <dt>{item.label}</dt>
+                          <dd>{item.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                ))}
+              </div>
+            ) : null}
+          </section>
+          <label className="field">
+            <span>Digite REMOVER para confirmar</span>
+            <input
+              autoFocus
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                }
+              }}
+            />
+          </label>
         </div>
-        <label className="field">
-          <span>Confirmação</span>
-          <input
-            autoFocus
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-          />
-        </label>
-        <div className="button-row">
+        <div className="button-row deletion-modal-footer">
           <Button disabled={working} icon={X} variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
           <Button
-            disabled={working || confirmation !== 'REMOVER'}
+            disabled={working || !canConfirm}
             icon={Trash2}
             variant="danger"
             onClick={() => void submit()}
           >
-            Remover definitivamente
+            {working ? 'Removendo...' : 'Remover definitivamente'}
           </Button>
         </div>
       </section>
     </div>
   );
+}
+
+const removalPrimaryCountKeys = [
+  'clients',
+  'clientReferences',
+  'receivables',
+  'paymentIntents',
+  'messageDispatches',
+  'clientEvents',
+];
+
+const removalCountGroups = [
+  {
+    title: 'Cliente',
+    keys: [
+      'clients',
+      'clientReferences',
+      'statusHistory',
+      'clientEvents',
+      'whatsappPendingContacts',
+      'whatsappInboundMessages',
+    ],
+  },
+  {
+    title: 'Financeiro',
+    keys: [
+      'receivables',
+      'financialTransactions',
+      'paymentIntents',
+      'paymentWebhookEvents',
+      'paymentGroups',
+      'paymentGroupItems',
+      'billingResponses',
+    ],
+  },
+  {
+    title: 'Cobrança',
+    keys: [
+      'messageDispatches',
+      'messageDispatchItems',
+      'recoveryCampaigns',
+      'recoveryCampaignSteps',
+    ],
+  },
+  {
+    title: 'Renovações',
+    keys: ['renewals', 'renewalReversals'],
+  },
+  {
+    title: 'Indicações',
+    keys: ['referrals', 'referralsReceived', 'referralsMade', 'referralsUpdated'],
+  },
+];
+
+function formatDeletionError(message: string) {
+  if (message === 'Internal server error') {
+    return 'Não foi possível remover o cliente porque ainda existem vínculos não tratados. Atualize a página e tente novamente.';
+  }
+
+  return message;
 }
 
 function OperationalDashboard({

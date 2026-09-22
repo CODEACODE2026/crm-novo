@@ -4,6 +4,7 @@ import {
   apiFetch,
   applyReferralReward,
   confirmRenewalReversal,
+  deleteClient,
   formatCurrency,
   formatDate,
   getBillingDispatchSummary,
@@ -141,6 +142,34 @@ describe('CRM UI formatters', () => {
       idempotencyKey: 'reversal-key-123',
       reason: 'Ajuste operacional',
     });
+  });
+
+  it('sends only the destructive confirmation DTO when deleting a client', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'client-1', removed: true, counts: {} }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const largePreviewKeptInMemory = {
+      target: { id: 'client-1', name: 'Atualiza', reference: 'ATUALIZA' },
+      counts: { receivables: 1000 },
+      receivables: Array.from({ length: 1000 }, (_, index) => ({
+        id: `receivable-${index}`,
+        description: 'x'.repeat(100),
+      })),
+    };
+
+    await deleteClient(largePreviewKeptInMemory.target.id, 'REMOVER');
+
+    const call = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit | undefined];
+    const requestUrl =
+      typeof call[0] === 'string' ? call[0] : call[0] instanceof URL ? call[0].href : call[0].url;
+    const body = call[1]?.body;
+
+    expect(requestUrl).toContain('/clients/client-1');
+    expect(JSON.parse(body as string)).toEqual({ confirmation: 'REMOVER' });
+    expect(new TextEncoder().encode(body as string).byteLength).toBeLessThan(100);
   });
 
   it('sends finance pagination independently for receivables, entries and expenses', async () => {

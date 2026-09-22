@@ -10,7 +10,11 @@ describe('display labels', () => {
   it('translates removal preview count keys to Brazilian Portuguese labels', () => {
     expect(removalCountLabel('clientReferences')).toBe('Referências do cliente');
     expect(removalCountLabel('receivables')).toBe('Contas a receber');
+    expect(removalCountLabel('paymentGroups')).toBe('Grupos de pagamento');
+    expect(removalCountLabel('paymentGroupItems')).toBe('Itens de grupos de pagamento');
     expect(removalCountLabel('messageDispatches')).toBe('Mensagens de cobrança');
+    expect(removalCountLabel('messageDispatchItems')).toBe('Itens de mensagens de cobrança');
+    expect(removalCountLabel('renewalReversals')).toBe('Reversões de renovação');
     expect(removalCountLabel('financialTransactions')).toBe('Transações financeiras');
     expect(removalCountLabel('statusHistory')).toBe('Histórico de status');
   });

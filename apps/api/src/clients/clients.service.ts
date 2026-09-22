@@ -641,7 +641,7 @@ export class ClientsService {
   async removeReference(id: string, dto: DeleteClientConfirmationDto) {
     this.ensureDeleteConfirmed(dto);
     await this.previewRemoveReference(id);
-    const counts = await this.deleteReferenceTree(id);
+    const counts = await this.runDestructiveRemoval(() => this.deleteReferenceTree(id));
 
     return { id, removed: true, counts };
   }
@@ -666,7 +666,7 @@ export class ClientsService {
   async remove(id: string, dto: DeleteClientConfirmationDto) {
     this.ensureDeleteConfirmed(dto);
     await this.previewRemove(id);
-    const counts = await this.deleteClientTree(id);
+    const counts = await this.runDestructiveRemoval(() => this.deleteClientTree(id));
 
     return { id, removed: true, counts };
   }
@@ -977,9 +977,12 @@ export class ClientsService {
     const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
     const [
       renewals,
+      renewalReversals,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
+      paymentGroupItems,
+      messageDispatchItems,
       campaigns,
       campaignSteps,
       dispatches,
@@ -989,10 +992,15 @@ export class ClientsService {
       referralsUpdated,
     ] = await this.prisma.$transaction([
       this.prisma.renewal.count({ where: { clientReferenceId } }),
+      this.prisma.renewalReversal.count({ where: { clientReferenceId } }),
       this.prisma.receivable.count({ where: { clientReferenceId } }),
       this.prisma.paymentIntent.count({ where: { receivableId: { in: receivableIds } } }),
       this.prisma.paymentWebhookEvent.count({
         where: { paymentIntentId: { in: paymentIntentIds } },
+      }),
+      this.prisma.paymentGroupItem.count({ where: { receivableId: { in: receivableIds } } }),
+      this.prisma.messageDispatchItem.count({
+        where: { OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }] },
       }),
       this.prisma.recoveryCampaign.count({ where: { clientReferenceId } }),
       this.prisma.recoveryCampaignStep.count({
@@ -1013,9 +1021,12 @@ export class ClientsService {
       total:
         1 +
         renewals +
+        renewalReversals +
         receivables +
         paymentIntents +
         paymentWebhookEvents +
+        paymentGroupItems +
+        messageDispatchItems +
         campaigns +
         campaignSteps +
         dispatches +
@@ -1025,9 +1036,12 @@ export class ClientsService {
         referralsUpdated,
       clientReferences: 1,
       renewals,
+      renewalReversals,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
+      paymentGroupItems,
+      messageDispatchItems,
       recoveryCampaigns: campaigns,
       recoveryCampaignSteps: campaignSteps,
       messageDispatches: dispatches,
@@ -1041,14 +1055,22 @@ export class ClientsService {
   private async countClientRemovalTargets(clientId: string) {
     const clientReferenceIds = await this.findReferenceIdsByClient(clientId);
     const receivableIds = await this.findReceivableIdsByClient(clientId);
-    const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+    const paymentGroupIds = await this.findPaymentGroupIdsByClient(clientId);
+    const paymentIntentIds = await this.findPaymentIntentIdsByReceivablesOrGroups(
+      receivableIds,
+      paymentGroupIds,
+    );
     const campaignIds = await this.findRecoveryCampaignIdsByClient(clientId);
     const [
       references,
       renewals,
+      renewalReversals,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
+      paymentGroups,
+      paymentGroupItems,
+      messageDispatchItems,
       campaigns,
       campaignSteps,
       dispatches,
@@ -1064,10 +1086,28 @@ export class ClientsService {
     ] = await this.prisma.$transaction([
       this.prisma.clientReference.count({ where: { clientId } }),
       this.prisma.renewal.count({ where: { clientId } }),
+      this.prisma.renewalReversal.count({ where: { clientId } }),
       this.prisma.receivable.count({ where: { clientId } }),
-      this.prisma.paymentIntent.count({ where: { receivableId: { in: receivableIds } } }),
+      this.prisma.paymentIntent.count({
+        where: {
+          OR: [
+            { receivableId: { in: receivableIds } },
+            { paymentGroupId: { in: paymentGroupIds } },
+          ],
+        },
+      }),
       this.prisma.paymentWebhookEvent.count({
         where: { paymentIntentId: { in: paymentIntentIds } },
+      }),
+      this.prisma.paymentGroup.count({ where: { clientId } }),
+      this.prisma.paymentGroupItem.count({ where: { receivableId: { in: receivableIds } } }),
+      this.prisma.messageDispatchItem.count({
+        where: {
+          OR: [
+            { clientReferenceId: { in: clientReferenceIds } },
+            { receivableId: { in: receivableIds } },
+          ],
+        },
       }),
       this.prisma.recoveryCampaign.count({ where: { clientId } }),
       this.prisma.recoveryCampaignStep.count({
@@ -1112,9 +1152,13 @@ export class ClientsService {
         1 +
         references +
         renewals +
+        renewalReversals +
         receivables +
         paymentIntents +
         paymentWebhookEvents +
+        paymentGroups +
+        paymentGroupItems +
+        messageDispatchItems +
         campaigns +
         campaignSteps +
         dispatches +
@@ -1130,9 +1174,13 @@ export class ClientsService {
       clients: 1,
       clientReferences: references,
       renewals,
+      renewalReversals,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
+      paymentGroups,
+      paymentGroupItems,
+      messageDispatchItems,
       recoveryCampaigns: campaigns,
       recoveryCampaignSteps: campaignSteps,
       messageDispatches: dispatches,
@@ -1152,24 +1200,32 @@ export class ClientsService {
     const counts = await this.countReferenceRemovalTargets(clientReferenceId);
     const receivableIds = await this.findReceivableIdsByReference(clientReferenceId);
     const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+    const renewalIds = await this.findRenewalIdsByReference(clientReferenceId);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.paymentWebhookEvent.deleteMany({
         where: { paymentIntentId: { in: paymentIntentIds } },
       });
       await tx.billingResponse.deleteMany({ where: { clientReferenceId } });
-      await tx.recoveryCampaign.deleteMany({ where: { clientReferenceId } });
+      await tx.messageDispatchItem.deleteMany({
+        where: { OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }] },
+      });
       await tx.messageDispatch.deleteMany({
         where: {
           OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }],
         },
       });
+      await tx.recoveryCampaign.deleteMany({ where: { clientReferenceId } });
       await tx.financialTransaction.deleteMany({
         where: {
           OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }],
         },
       });
+      await tx.paymentGroupItem.deleteMany({ where: { receivableId: { in: receivableIds } } });
       await tx.paymentIntent.deleteMany({ where: { receivableId: { in: receivableIds } } });
+      await tx.renewalReversal.deleteMany({
+        where: { OR: [{ clientReferenceId }, { renewalId: { in: renewalIds } }] },
+      });
       await tx.receivable.deleteMany({ where: { clientReferenceId } });
       await tx.renewal.deleteMany({ where: { clientReferenceId } });
       await tx.clientStatusHistory.deleteMany({ where: { clientReferenceId } });
@@ -1187,8 +1243,13 @@ export class ClientsService {
     const counts = await this.countClientRemovalTargets(clientId);
     const clientReferenceIds = await this.findReferenceIdsByClient(clientId);
     const receivableIds = await this.findReceivableIdsByClient(clientId);
-    const paymentIntentIds = await this.findPaymentIntentIdsByReceivables(receivableIds);
+    const paymentGroupIds = await this.findPaymentGroupIdsByClient(clientId);
+    const paymentIntentIds = await this.findPaymentIntentIdsByReceivablesOrGroups(
+      receivableIds,
+      paymentGroupIds,
+    );
     const campaignIds = await this.findRecoveryCampaignIdsByClient(clientId);
+    const renewalIds = await this.findRenewalIdsByClient(clientId);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.paymentWebhookEvent.deleteMany({
@@ -1204,7 +1265,14 @@ export class ClientsService {
       });
       await tx.whatsAppInboundMessage.deleteMany({ where: { clientId } });
       await tx.whatsAppPendingContact.deleteMany({ where: { clientId } });
-      await tx.recoveryCampaign.deleteMany({ where: { clientId } });
+      await tx.messageDispatchItem.deleteMany({
+        where: {
+          OR: [
+            { clientReferenceId: { in: clientReferenceIds } },
+            { receivableId: { in: receivableIds } },
+          ],
+        },
+      });
       await tx.messageDispatch.deleteMany({
         where: {
           OR: [
@@ -1215,16 +1283,30 @@ export class ClientsService {
           ],
         },
       });
+      await tx.recoveryCampaign.deleteMany({ where: { clientId } });
       await tx.financialTransaction.deleteMany({
         where: {
           OR: [
             { clientId },
             { clientReferenceId: { in: clientReferenceIds } },
             { receivableId: { in: receivableIds } },
+            { paymentGroupId: { in: paymentGroupIds } },
           ],
         },
       });
-      await tx.paymentIntent.deleteMany({ where: { receivableId: { in: receivableIds } } });
+      await tx.paymentGroupItem.deleteMany({ where: { receivableId: { in: receivableIds } } });
+      await tx.paymentIntent.deleteMany({
+        where: {
+          OR: [
+            { receivableId: { in: receivableIds } },
+            { paymentGroupId: { in: paymentGroupIds } },
+          ],
+        },
+      });
+      await tx.paymentGroup.deleteMany({ where: { clientId } });
+      await tx.renewalReversal.deleteMany({
+        where: { OR: [{ clientId }, { renewalId: { in: renewalIds } }] },
+      });
       await tx.receivable.deleteMany({ where: { clientId } });
       await tx.renewal.deleteMany({ where: { clientId } });
       await tx.clientStatusHistory.deleteMany({ where: { clientId } });
@@ -1276,6 +1358,51 @@ export class ClientsService {
     return intents.map((intent) => intent.id);
   }
 
+  private async findPaymentIntentIdsByReceivablesOrGroups(
+    receivableIds: string[],
+    paymentGroupIds: string[],
+  ) {
+    if (!receivableIds.length && !paymentGroupIds.length) {
+      return [];
+    }
+
+    const intents = await this.prisma.paymentIntent.findMany({
+      where: {
+        OR: [{ receivableId: { in: receivableIds } }, { paymentGroupId: { in: paymentGroupIds } }],
+      },
+      select: { id: true },
+    });
+
+    return intents.map((intent) => intent.id);
+  }
+
+  private async findPaymentGroupIdsByClient(clientId: string) {
+    const groups = await this.prisma.paymentGroup.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+
+    return groups.map((group) => group.id);
+  }
+
+  private async findRenewalIdsByClient(clientId: string) {
+    const renewals = await this.prisma.renewal.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+
+    return renewals.map((renewal) => renewal.id);
+  }
+
+  private async findRenewalIdsByReference(clientReferenceId: string) {
+    const renewals = await this.prisma.renewal.findMany({
+      where: { clientReferenceId },
+      select: { id: true },
+    });
+
+    return renewals.map((renewal) => renewal.id);
+  }
+
   private async findRecoveryCampaignIdsByClient(clientId: string) {
     const campaigns = await this.prisma.recoveryCampaign.findMany({
       where: { clientId },
@@ -1313,6 +1440,20 @@ export class ClientsService {
   private ensureDeleteConfirmed(dto: DeleteClientConfirmationDto) {
     if (dto.confirmation !== 'REMOVER') {
       throw new BadRequestException('Confirmacao invalida para remocao destrutiva.');
+    }
+  }
+
+  private async runDestructiveRemoval<T>(operation: () => Promise<T>) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw new ConflictException(
+          'Nao foi possivel remover porque ainda existem vinculos relacionados nao tratados.',
+        );
+      }
+
+      throw error;
     }
   }
 

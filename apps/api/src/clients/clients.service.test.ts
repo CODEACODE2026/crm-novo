@@ -800,6 +800,59 @@ describe('ClientsService legacy client updates', () => {
   });
 });
 
+describe('ClientsService destructive client removal', () => {
+  it('removes current dependent rows before restricted parents in one transaction', async () => {
+    const fake = createClientRemovalService();
+
+    await fake.service.remove('client-id', { confirmation: 'REMOVER' });
+
+    expect(fake.calls).toEqual([
+      'paymentWebhookEvent.deleteMany',
+      'billingResponse.deleteMany',
+      'referral.deleteMany',
+      'referral.updateMany',
+      'whatsAppInboundMessage.deleteMany',
+      'whatsAppPendingContact.deleteMany',
+      'messageDispatchItem.deleteMany',
+      'messageDispatch.deleteMany',
+      'recoveryCampaign.deleteMany',
+      'financialTransaction.deleteMany',
+      'paymentGroupItem.deleteMany',
+      'paymentIntent.deleteMany',
+      'paymentGroup.deleteMany',
+      'renewalReversal.deleteMany',
+      'receivable.deleteMany',
+      'renewal.deleteMany',
+      'clientStatusHistory.deleteMany',
+      'clientEvent.deleteMany',
+      'clientReference.deleteMany',
+      'client.delete',
+    ]);
+    expect(fake.prisma.paymentIntent.deleteMany).toHaveBeenCalledWith({
+      where: {
+        OR: [
+          { receivableId: { in: ['receivable-1'] } },
+          { paymentGroupId: { in: ['payment-group-1'] } },
+        ],
+      },
+    });
+    expect(fake.prisma.renewalReversal.deleteMany).toHaveBeenCalledWith({
+      where: { OR: [{ clientId: 'client-id' }, { renewalId: { in: ['renewal-1'] } }] },
+    });
+  });
+
+  it('rolls back the destructive transaction when any delete step fails', async () => {
+    const fake = createClientRemovalService({ failAt: 'receivable.deleteMany' });
+
+    await expect(fake.service.remove('client-id', { confirmation: 'REMOVER' })).rejects.toThrow(
+      'forced delete failure',
+    );
+
+    expect(fake.prisma.client.delete).not.toHaveBeenCalled();
+    expect(fake.transactionRolledBack).toBe(true);
+  });
+});
+
 function createClientCreationService() {
   const plan = {
     id: 'plan-id',
@@ -1102,5 +1155,132 @@ function baseClientReference() {
     notes: null,
     createdAt: new Date('2026-09-01T00:00:00.000Z'),
     updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+}
+
+function createClientRemovalService({ failAt }: { failAt?: string } = {}) {
+  const calls: string[] = [];
+  let transactionRolledBack = false;
+  const record = (name: string) =>
+    vi.fn(() => {
+      calls.push(name);
+      if (name === failAt) {
+        throw new Error('forced delete failure');
+      }
+
+      return Promise.resolve({ count: 1 });
+    });
+  const count = vi.fn().mockResolvedValue(1);
+  const prisma = {
+    client: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'client-id',
+        name: 'Atualiza',
+        reference: 'ATUALIZA',
+        plan: {},
+      }),
+      delete: record('client.delete'),
+    },
+    clientReference: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'reference-1' }]),
+      count,
+      deleteMany: record('clientReference.deleteMany'),
+    },
+    receivable: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'receivable-1' }]),
+      count,
+      deleteMany: record('receivable.deleteMany'),
+    },
+    paymentGroup: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'payment-group-1' }]),
+      count,
+      deleteMany: record('paymentGroup.deleteMany'),
+    },
+    paymentIntent: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'payment-intent-1' }]),
+      count,
+      deleteMany: record('paymentIntent.deleteMany'),
+    },
+    renewal: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'renewal-1' }]),
+      count,
+      deleteMany: record('renewal.deleteMany'),
+    },
+    renewalReversal: {
+      count,
+      deleteMany: record('renewalReversal.deleteMany'),
+    },
+    paymentWebhookEvent: {
+      count,
+      deleteMany: record('paymentWebhookEvent.deleteMany'),
+    },
+    paymentGroupItem: {
+      count,
+      deleteMany: record('paymentGroupItem.deleteMany'),
+    },
+    messageDispatchItem: {
+      count,
+      deleteMany: record('messageDispatchItem.deleteMany'),
+    },
+    recoveryCampaign: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'campaign-1' }]),
+      count,
+      deleteMany: record('recoveryCampaign.deleteMany'),
+    },
+    recoveryCampaignStep: { count },
+    messageDispatch: {
+      count,
+      deleteMany: record('messageDispatch.deleteMany'),
+    },
+    billingResponse: {
+      count,
+      deleteMany: record('billingResponse.deleteMany'),
+    },
+    financialTransaction: {
+      count,
+      deleteMany: record('financialTransaction.deleteMany'),
+    },
+    clientStatusHistory: {
+      count,
+      deleteMany: record('clientStatusHistory.deleteMany'),
+    },
+    clientEvent: {
+      count,
+      deleteMany: record('clientEvent.deleteMany'),
+    },
+    referral: {
+      count,
+      deleteMany: record('referral.deleteMany'),
+      updateMany: record('referral.updateMany'),
+    },
+    whatsAppPendingContact: {
+      count,
+      deleteMany: record('whatsAppPendingContact.deleteMany'),
+    },
+    whatsAppInboundMessage: {
+      count,
+      deleteMany: record('whatsAppInboundMessage.deleteMany'),
+    },
+    $transaction: vi.fn(async (input: unknown) => {
+      if (Array.isArray(input)) {
+        return Promise.all(input);
+      }
+
+      try {
+        return await (input as (tx: unknown) => Promise<unknown>)(prisma);
+      } catch (error) {
+        transactionRolledBack = true;
+        throw error;
+      }
+    }),
+  };
+
+  return {
+    service: new ClientsService(prisma as never, {} as never, {} as never, {} as never),
+    prisma,
+    calls,
+    get transactionRolledBack() {
+      return transactionRolledBack;
+    },
   };
 }

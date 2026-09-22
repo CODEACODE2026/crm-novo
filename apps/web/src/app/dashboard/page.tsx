@@ -9386,6 +9386,13 @@ function renewalReversalImpactMessages(preview: RenewalRevertPreview) {
     messages.push(
       `Cobrança anterior de ${formatDate(preview.previousCycle.dueDate)} será preservada.`,
     );
+  } else if (
+    preview.previousCycle.action === 'PRESERVE_CANCELED' &&
+    preview.previousCycle.dueDate
+  ) {
+    messages.push(
+      `Cobrança anterior de ${formatDate(preview.previousCycle.dueDate)} continuará cancelada.`,
+    );
   } else if (preview.previousCycle.status === 'INEXISTENTE' && preview.previousCycle.dueDate) {
     messages.push(
       `Não existe cobrança anterior para ${formatDate(preview.previousCycle.dueDate)}.`,
@@ -9421,6 +9428,8 @@ function renewalReversalImpactMessages(preview: RenewalRevertPreview) {
 
 function renewalReversalWarningMessages(preview: RenewalRevertPreview) {
   const mappedWarnings: Record<string, string> = {
+    PREVIOUS_CYCLE_CANCELED:
+      'Ciclo anterior com cobrança cancelada. A referência será restaurada, mas a cobrança anterior continuará cancelada e não será reativada.',
     PREVIOUS_CYCLE_RECEIVABLE_MISSING: 'Não existe cobrança histórica para o vencimento anterior.',
     PREVIOUS_DUE_DATE_PAST: 'O vencimento a restaurar já passou.',
     SENT_BILLING_WILL_BE_PRESERVED:
@@ -9438,7 +9447,10 @@ function renewalReversalBlockerMessages(preview: RenewalRevertPreview) {
     NOT_LATEST_RENEWAL: 'Apenas a renovação mais recente pode ser desfeita.',
     PIX_ACTIVE: 'Existe PIX aguardando pagamento. Cancele-o antes de desfazer.',
     PIX_PAID: 'Existe PIX pago vinculado.',
-    PREVIOUS_CYCLE_CANCELED: 'A cobrança anterior está cancelada.',
+    PREVIOUS_CYCLE_FINANCIAL_TRANSACTION_EXISTS:
+      'Existe movimentação financeira vinculada à cobrança anterior.',
+    PREVIOUS_CYCLE_PIX_ACTIVE: 'Existe PIX ativo vinculado à cobrança anterior.',
+    PREVIOUS_CYCLE_PIX_PAID: 'Existe PIX pago vinculado à cobrança anterior.',
     PREVIOUS_CYCLE_OVERDUE_RECEIVABLE_MISSING:
       'O ciclo anterior está vencido e não possui cobrança para preservar.',
     PREVIOUS_CYCLE_PAID: 'A cobrança anterior já foi paga.',

@@ -1009,7 +1009,7 @@ export interface RenewalRevertPreview {
     dueDate: string | null;
     receivableId: string | null;
     status: ReceivableStatus | 'INEXISTENTE';
-    action: 'PRESERVE' | 'NONE' | 'BLOCK_PRESERVE_PAID' | 'BLOCK_PRESERVE_CANCELED';
+    action: 'PRESERVE' | 'PRESERVE_CANCELED' | 'NONE' | 'BLOCK_PRESERVE_PAID';
   };
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;

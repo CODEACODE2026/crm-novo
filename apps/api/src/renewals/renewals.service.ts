@@ -41,11 +41,16 @@ type RevertPreviewBlockerCode =
   | 'RECEIVABLE_PAID'
   | 'REFERENCE_STATE_CHANGED'
   | 'PREVIOUS_CYCLE_PAID'
-  | 'PREVIOUS_CYCLE_CANCELED'
+  | 'PREVIOUS_CYCLE_FINANCIAL_TRANSACTION_EXISTS'
+  | 'PREVIOUS_CYCLE_PIX_ACTIVE'
+  | 'PREVIOUS_CYCLE_PIX_PAID'
   | 'PREVIOUS_CYCLE_OVERDUE_RECEIVABLE_MISSING';
 
 type RevertPreviewWarningCode =
-  'PREVIOUS_CYCLE_RECEIVABLE_MISSING' | 'PREVIOUS_DUE_DATE_PAST' | 'SENT_BILLING_WILL_BE_PRESERVED';
+  | 'PREVIOUS_CYCLE_CANCELED'
+  | 'PREVIOUS_CYCLE_RECEIVABLE_MISSING'
+  | 'PREVIOUS_DUE_DATE_PAST'
+  | 'SENT_BILLING_WILL_BE_PRESERVED';
 
 type RevertPreviewIssue<TCode extends string> = {
   code: TCode;
@@ -100,7 +105,7 @@ type RenewalRevertPreview = {
     dueDate: string | null;
     receivableId: string | null;
     status: ReceivableStatus | 'INEXISTENTE';
-    action: 'PRESERVE' | 'NONE' | 'BLOCK_PRESERVE_PAID' | 'BLOCK_PRESERVE_CANCELED';
+    action: 'PRESERVE' | 'PRESERVE_CANCELED' | 'NONE' | 'BLOCK_PRESERVE_PAID';
   };
   blockers: RevertPreviewIssue<RevertPreviewBlockerCode>[];
   warnings: RevertPreviewIssue<RevertPreviewWarningCode>[];
@@ -126,6 +131,23 @@ type RenewalRevertPreviewRecord = Prisma.RenewalGetPayload<{
         messageDispatches: true;
         messageDispatchItems: { include: { messageDispatch: true } };
         recoveryCampaigns: true;
+      };
+    };
+  };
+}>;
+
+type RevertPreviewReceivableFinancialRecord = Prisma.ReceivableGetPayload<{
+  include: {
+    paymentTransaction: true;
+    paymentIntents: true;
+    paymentGroupItems: {
+      include: {
+        paymentGroup: {
+          include: {
+            paymentIntents: true;
+            financialTransactions: true;
+          };
+        };
       };
     };
   };
@@ -503,6 +525,20 @@ export class RenewalsService {
             dueDate: renewal.previousDueDate,
           },
         },
+        include: {
+          paymentTransaction: true,
+          paymentIntents: true,
+          paymentGroupItems: {
+            include: {
+              paymentGroup: {
+                include: {
+                  paymentIntents: true,
+                  financialTransactions: true,
+                },
+              },
+            },
+          },
+        },
       }),
     ]);
 
@@ -725,11 +761,7 @@ export class RenewalsService {
   private buildRevertPreview(
     renewal: RenewalRevertPreviewRecord,
     latestRenewalId: string | null,
-    previousCycleReceivable: {
-      id: string;
-      status: ReceivableStatus;
-      dueDate: Date;
-    } | null,
+    previousCycleReceivable: RevertPreviewReceivableFinancialRecord | null,
   ): RenewalRevertPreview {
     const blockers: RevertPreviewIssue<RevertPreviewBlockerCode>[] = [];
     const warnings: RevertPreviewIssue<RevertPreviewWarningCode>[] = [];
@@ -737,6 +769,9 @@ export class RenewalsService {
     const receivable = renewal.receivable;
     const snapshotComplete = this.hasCompleteRevertSnapshot(renewal);
     const paymentIntents = receivable ? this.collectPaymentIntents(receivable) : [];
+    const previousCyclePaymentIntents = previousCycleReceivable
+      ? this.collectPaymentIntents(previousCycleReceivable)
+      : [];
     const billingDispatches = receivable ? this.collectBillingDispatches(receivable) : [];
     const futureToCancel = billingDispatches.filter((dispatch) =>
       futureBillingStatuses.includes(dispatch.status),
@@ -746,10 +781,23 @@ export class RenewalsService {
     ).length;
     const activePix = paymentIntents.filter((intent) => activePixStatuses.includes(intent.status));
     const paidPix = paymentIntents.filter((intent) => intent.status === 'PAID');
+    const previousCycleActivePix = previousCyclePaymentIntents.filter((intent) =>
+      activePixStatuses.includes(intent.status),
+    );
+    const previousCyclePaidPix = previousCyclePaymentIntents.filter(
+      (intent) => intent.status === 'PAID',
+    );
     const hasFinancialTransaction =
       Boolean(receivable?.paymentTransaction) ||
       Boolean(
         receivable?.paymentGroupItems.some(
+          (item) => item.paymentGroup.financialTransactions.length > 0,
+        ),
+      );
+    const previousCycleHasFinancialTransaction =
+      Boolean(previousCycleReceivable?.paymentTransaction) ||
+      Boolean(
+        previousCycleReceivable?.paymentGroupItems.some(
           (item) => item.paymentGroup.financialTransactions.length > 0,
         ),
       );
@@ -848,9 +896,31 @@ export class RenewalsService {
         message: 'O ciclo anterior ja possui cobranca paga e nao sera reutilizado automaticamente.',
       });
     } else if (previousCycleReceivable.status === 'CANCELADO') {
-      blockers.push({
+      warnings.push({
         code: 'PREVIOUS_CYCLE_CANCELED',
-        message: 'O ciclo anterior possui cobranca cancelada e nao sera reativado automaticamente.',
+        message:
+          'Ciclo anterior com cobranca cancelada. A referencia sera restaurada para este ciclo, mas a cobranca anterior continuara cancelada e nao sera reativada.',
+      });
+    }
+
+    if (previousCycleHasFinancialTransaction) {
+      blockers.push({
+        code: 'PREVIOUS_CYCLE_FINANCIAL_TRANSACTION_EXISTS',
+        message: 'Existe transacao financeira vinculada a cobranca anterior.',
+      });
+    }
+
+    if (previousCyclePaidPix.length > 0) {
+      blockers.push({
+        code: 'PREVIOUS_CYCLE_PIX_PAID',
+        message: 'Existe PIX pago vinculado a cobranca anterior.',
+      });
+    }
+
+    if (previousCycleActivePix.length > 0) {
+      blockers.push({
+        code: 'PREVIOUS_CYCLE_PIX_ACTIVE',
+        message: 'Existe PIX ativo vinculado a cobranca anterior.',
       });
     }
 
@@ -952,7 +1022,7 @@ export class RenewalsService {
     );
   }
 
-  private collectPaymentIntents(receivable: NonNullable<RenewalRevertPreviewRecord['receivable']>) {
+  private collectPaymentIntents(receivable: RevertPreviewReceivableFinancialRecord) {
     const intents = new Map<string, (typeof receivable.paymentIntents)[number]>();
 
     for (const intent of receivable.paymentIntents) {
@@ -999,7 +1069,7 @@ export class RenewalsService {
   private previousCycleAction(status: ReceivableStatus | null) {
     if (status === 'PENDENTE') return 'PRESERVE';
     if (status === 'PAGO') return 'BLOCK_PRESERVE_PAID';
-    if (status === 'CANCELADO') return 'BLOCK_PRESERVE_CANCELED';
+    if (status === 'CANCELADO') return 'PRESERVE_CANCELED';
     return 'NONE';
   }
 

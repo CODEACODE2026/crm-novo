@@ -303,6 +303,9 @@ function createPreviewFake(overrides: Record<string, unknown> = {}) {
     id: string;
     status: 'PENDENTE' | 'PAGO' | 'CANCELADO';
     dueDate: Date;
+    paymentTransaction: Record<string, unknown> | null;
+    paymentIntents: Array<Record<string, unknown>>;
+    paymentGroupItems: Array<Record<string, unknown>>;
   } | null;
   const state = {
     reference,
@@ -537,6 +540,21 @@ function paymentIntent(status: string, provider = 'MOCK') {
     provider,
     providerTransactionId: `tx-${status}-${provider}`,
     amount: new Prisma.Decimal('30.00'),
+  };
+}
+
+function previousReceivable(
+  status: 'PENDENTE' | 'PAGO' | 'CANCELADO',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: `previous-${status.toLowerCase()}`,
+    status,
+    dueDate: parseBusinessDate('2026-10-17'),
+    paymentTransaction: null,
+    paymentIntents: [] as Array<Record<string, unknown>>,
+    paymentGroupItems: [] as Array<Record<string, unknown>>,
+    ...overrides,
   };
 }
 
@@ -999,35 +1017,9 @@ describe('RenewalsService', () => {
 
   it.each([
     ['sem Receivable', null, 'INEXISTENTE', 'NONE', true],
-    [
-      'com PENDENTE',
-      {
-        id: 'previous-pending',
-        status: 'PENDENTE' as const,
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
-      'PENDENTE',
-      'PRESERVE',
-      true,
-    ],
-    [
-      'com PAGO',
-      { id: 'previous-paid', status: 'PAGO' as const, dueDate: parseBusinessDate('2026-10-17') },
-      'PAGO',
-      'BLOCK_PRESERVE_PAID',
-      false,
-    ],
-    [
-      'com CANCELADO',
-      {
-        id: 'previous-canceled',
-        status: 'CANCELADO' as const,
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
-      'CANCELADO',
-      'BLOCK_PRESERVE_CANCELED',
-      false,
-    ],
+    ['com PENDENTE', previousReceivable('PENDENTE'), 'PENDENTE', 'PRESERVE', true],
+    ['com PAGO', previousReceivable('PAGO'), 'PAGO', 'BLOCK_PRESERVE_PAID', false],
+    ['com CANCELADO', previousReceivable('CANCELADO'), 'CANCELADO', 'PRESERVE_CANCELED', true],
   ])(
     'classifies previous cycle %s',
     async (_, previousCycleReceivable, status, action, reversible) => {
@@ -1037,6 +1029,136 @@ describe('RenewalsService', () => {
 
       expect(result.reversible).toBe(reversible);
       expect(result.previousCycle).toMatchObject({ status, action });
+      if (status === 'CANCELADO') {
+        expect(result.warnings).toContainEqual(
+          expect.objectContaining({ code: 'PREVIOUS_CYCLE_CANCELED' }),
+        );
+        expect(result.blockers).not.toContainEqual(
+          expect.objectContaining({ code: 'PREVIOUS_CYCLE_CANCELED' }),
+        );
+      }
+      expect(fake.mutations).toEqual([]);
+    },
+  );
+
+  it('allows reverting to a clean canceled previous cycle without reactivating its receivable', async () => {
+    const previousCycleReceivable = previousReceivable('CANCELADO', {
+      id: 'previous-canceled-clean',
+      canceledAt: new Date('2026-09-20T10:00:00.000Z'),
+      cancelReason: 'Cancelamento operacional do ciclo B',
+    });
+    const fake = createPreviewFake({ previousCycleReceivable });
+    fake.renewal.receivable.messageDispatches.push(billingDispatch('future-c-1', 'SCHEDULED'));
+    const recoveryService = { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) };
+    const service = new RenewalsService(fake.prisma as never, recoveryService as never);
+    const previousReceivableId = previousCycleReceivable.id;
+
+    const preview = await service.previewRevert(fake.reference.id, fake.renewal.id);
+
+    expect(preview.reversible).toBe(true);
+    expect(preview.previousCycle).toMatchObject({
+      receivableId: previousReceivableId,
+      status: 'CANCELADO',
+      action: 'PRESERVE_CANCELED',
+    });
+    expect(preview.warnings).toContainEqual(
+      expect.objectContaining({ code: 'PREVIOUS_CYCLE_CANCELED' }),
+    );
+    expect(preview.blockers).not.toContainEqual(
+      expect.objectContaining({ code: 'PREVIOUS_CYCLE_CANCELED' }),
+    );
+
+    const result = await service.revert(
+      fake.reference.id,
+      fake.renewal.id,
+      { reason: 'Reverter C para B com B cancelado limpo', idempotencyKey: 'revert-clean-b-1' },
+      userId,
+    );
+
+    expect(result.reference).toMatchObject({
+      dueDate: '2026-10-17',
+      recurringValue: '30',
+      billingAnchorDay: 17,
+      status: 'ATIVO',
+    });
+    expect(fake.renewal).toMatchObject({ status: 'REVERTED' });
+    expect(fake.renewal.receivable).toMatchObject({ status: 'CANCELADO' });
+    expect(previousCycleReceivable).toMatchObject({
+      id: previousReceivableId,
+      status: 'CANCELADO',
+      cancelReason: 'Cancelamento operacional do ciclo B',
+    });
+    expect(fake.previousCycleReceivable).toBe(previousCycleReceivable);
+    expect(fake.mutations).not.toContain('receivable.create');
+    expect(fake.renewal.receivable.messageDispatches[0]).toMatchObject({ status: 'CANCELED' });
+    expect(recoveryService.cancelActiveForReceivable).not.toHaveBeenCalled();
+  });
+
+  it('blocks canceled previous cycle with financial transaction or payable PIX evidence', async () => {
+    const cases = [
+      [
+        'financial transaction',
+        previousReceivable('CANCELADO', { paymentTransaction: { id: 'transaction-b-1' } }),
+        'PREVIOUS_CYCLE_FINANCIAL_TRANSACTION_EXISTS',
+      ],
+      [
+        'paid PIX',
+        previousReceivable('CANCELADO', { paymentIntents: [paymentIntent('PAID')] }),
+        'PREVIOUS_CYCLE_PIX_PAID',
+      ],
+      [
+        'created PIX',
+        previousReceivable('CANCELADO', { paymentIntents: [paymentIntent('CREATED')] }),
+        'PREVIOUS_CYCLE_PIX_ACTIVE',
+      ],
+      [
+        'waiting PIX',
+        previousReceivable('CANCELADO', { paymentIntents: [paymentIntent('WAITING_PAYMENT')] }),
+        'PREVIOUS_CYCLE_PIX_ACTIVE',
+      ],
+      [
+        'group transaction',
+        previousReceivable('CANCELADO', {
+          paymentGroupItems: [
+            {
+              paymentGroup: {
+                paymentIntents: [],
+                financialTransactions: [{ id: 'group-transaction-b-1' }],
+              },
+            },
+          ],
+        }),
+        'PREVIOUS_CYCLE_FINANCIAL_TRANSACTION_EXISTS',
+      ],
+    ] as const;
+
+    for (const [, previousCycleReceivable, code] of cases) {
+      const fake = createPreviewFake({ previousCycleReceivable });
+
+      const result = await previewService(fake).previewRevert(fake.reference.id, fake.renewal.id);
+
+      expect(result.reversible).toBe(false);
+      expect(result.blockers).toContainEqual(expect.objectContaining({ code }));
+      expect(fake.mutations).toEqual([]);
+    }
+  });
+
+  it.each(['CANCELED', 'EXPIRED', 'FAILED'] as const)(
+    'allows canceled previous cycle with historical PIX %s',
+    async (status) => {
+      const fake = createPreviewFake({
+        previousCycleReceivable: previousReceivable('CANCELADO', {
+          paymentIntents: [paymentIntent(status)],
+        }),
+      });
+
+      const result = await previewService(fake).previewRevert(fake.reference.id, fake.renewal.id);
+
+      expect(result.reversible).toBe(true);
+      expect(result.warnings).toContainEqual(
+        expect.objectContaining({ code: 'PREVIOUS_CYCLE_CANCELED' }),
+      );
+      expect(result.blockers).toEqual([]);
       expect(fake.mutations).toEqual([]);
     },
   );
@@ -1062,11 +1184,7 @@ describe('RenewalsService', () => {
 
   it('reverts the Pedro-equivalent renewal transactionally without deleting history', async () => {
     const fake = createPreviewFake({
-      previousCycleReceivable: {
-        id: 'previous-pending',
-        status: 'PENDENTE',
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
+      previousCycleReceivable: previousReceivable('PENDENTE'),
     });
     fake.renewal.receivable.messageDispatches.push(billingDispatch('future-1', 'SCHEDULED'));
     const recoveryService = { cancelActiveForReceivable: vi.fn().mockResolvedValue(undefined) };
@@ -1105,11 +1223,7 @@ describe('RenewalsService', () => {
 
   it('rolls back all reversal effects when a later mutation fails', async () => {
     const fake = createPreviewFake({
-      previousCycleReceivable: {
-        id: 'previous-pending',
-        status: 'PENDENTE',
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
+      previousCycleReceivable: previousReceivable('PENDENTE'),
       failOnRenewalUpdate: true,
     });
     fake.renewal.receivable.messageDispatches.push(billingDispatch('future-1', 'SCHEDULED'));
@@ -1140,11 +1254,7 @@ describe('RenewalsService', () => {
 
   it('returns an idempotent reversal response for repeated keys without repeated effects', async () => {
     const fake = createPreviewFake({
-      previousCycleReceivable: {
-        id: 'previous-pending',
-        status: 'PENDENTE',
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
+      previousCycleReceivable: previousReceivable('PENDENTE'),
     });
     const service = new RenewalsService(
       fake.prisma as never,
@@ -1163,11 +1273,7 @@ describe('RenewalsService', () => {
 
   it('keeps only one set of effects for double simultaneous reversal requests', async () => {
     const fake = createPreviewFake({
-      previousCycleReceivable: {
-        id: 'previous-pending',
-        status: 'PENDENTE',
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
+      previousCycleReceivable: previousReceivable('PENDENTE'),
     });
     const service = new RenewalsService(
       fake.prisma as never,
@@ -1197,11 +1303,7 @@ describe('RenewalsService', () => {
 
   it('blocks execution when a previously valid preview became stale', async () => {
     const fake = createPreviewFake({
-      previousCycleReceivable: {
-        id: 'previous-pending',
-        status: 'PENDENTE',
-        dueDate: parseBusinessDate('2026-10-17'),
-      },
+      previousCycleReceivable: previousReceivable('PENDENTE'),
     });
     const service = new RenewalsService(
       fake.prisma as never,
@@ -1254,11 +1356,7 @@ describe('RenewalsService', () => {
 
     for (const [, mutate, code] of cases) {
       const fake = createPreviewFake({
-        previousCycleReceivable: {
-          id: 'previous-pending',
-          status: 'PENDENTE',
-          dueDate: parseBusinessDate('2026-10-17'),
-        },
+        previousCycleReceivable: previousReceivable('PENDENTE'),
       });
       mutate(fake);
       const service = new RenewalsService(

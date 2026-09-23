@@ -1260,30 +1260,7 @@ function OperationalDashboard({
                   Sem movimentações financeiras no período.
                 </div>
               ) : hasCashflowSeries ? (
-                <div className="cashflow-series-chart" role="list">
-                  {cashflowPoints.map((item) => (
-                    <div
-                      aria-label={`${formatPeriodLabel(item.period)}. Entradas ${formatCurrency(item.entries)}. Saídas ${formatCurrency(item.expenses)}.`}
-                      className="cashflow-series-point"
-                      data-tooltip={`${formatPeriodLabel(item.period)} | Entradas ${formatCurrency(item.entries)} | Saídas ${formatCurrency(item.expenses)}`}
-                      key={item.period}
-                      role="listitem"
-                      tabIndex={0}
-                    >
-                      <span>{formatPeriodLabel(item.period)}</span>
-                      <div className="cashflow-series-bars">
-                        <i
-                          className="bar-entry"
-                          style={{ height: `${chartPercent(item.entries, cashflowMax)}%` }}
-                        />
-                        <i
-                          className="bar-expense"
-                          style={{ height: `${chartPercent(item.expenses, cashflowMax)}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <CashflowTemporalChart maxValue={cashflowMax} points={cashflowPoints} />
               ) : singleCashflowPoint ? (
                 <div className="cashflow-comparison">
                   {[
@@ -1315,13 +1292,36 @@ function OperationalDashboard({
             </div>
             <div className="finance-side-metrics">
               {[
-                ['Entradas', summary?.finance.entries, ''],
-                ['Saídas', summary?.finance.expenses, ''],
-                ['Saldo', summary?.finance.balance, financeBalanceTone],
-                ['Valor renovado', summary?.renewals.amount, ''],
-              ].map(([label, value, tone]) => (
-                <div className={String(tone)} key={label}>
-                  <span>{label}</span>
+                {
+                  icon: DollarSign,
+                  label: 'Entradas',
+                  tone: 'is-positive',
+                  value: summary?.finance.entries,
+                },
+                {
+                  icon: Minus,
+                  label: 'Saídas',
+                  tone: 'is-negative',
+                  value: summary?.finance.expenses,
+                },
+                {
+                  icon: CreditCard,
+                  label: 'Saldo',
+                  tone: financeBalanceTone,
+                  value: summary?.finance.balance,
+                },
+                {
+                  icon: RefreshCw,
+                  label: 'Valor renovado',
+                  tone: 'is-renewed',
+                  value: summary?.renewals.amount,
+                },
+              ].map(({ icon: Icon, label, value, tone }) => (
+                <div className={tone} key={label}>
+                  <span>
+                    <Icon aria-hidden="true" size={14} />
+                    {label}
+                  </span>
                   <strong>{loading ? '-' : formatCurrency(String(value ?? '0'))}</strong>
                 </div>
               ))}
@@ -1370,12 +1370,18 @@ function OperationalDashboard({
                   onOpenOperationalView(item.action);
                 }}
               >
+                <CircleAlert aria-hidden="true" size={15} />
                 <span>{item.label}</span>
                 <strong>{item.count}</strong>
+                <ArrowRight aria-hidden="true" size={14} />
               </button>
             ))}
             {!summary?.pending.items.length ? (
-              <div className="empty-state compact-empty-state">Sem pendências operacionais.</div>
+              <div className="empty-state compact-empty-state dashboard-empty-state">
+                <CircleCheck aria-hidden="true" size={20} />
+                <strong>Sem pendências operacionais.</strong>
+                <span>Nenhuma ação operacional pendente.</span>
+              </div>
             ) : null}
           </div>
         </Card>
@@ -1400,6 +1406,110 @@ function OperationalDashboard({
         </Card>
       </div>
     </>
+  );
+}
+
+function CashflowTemporalChart({
+  maxValue,
+  points,
+}: {
+  maxValue: number;
+  points: DashboardSummaryPayload['charts']['cashflow'];
+}) {
+  const width = 720;
+  const height = 286;
+  const margin = { bottom: 48, left: 76, right: 18, top: 18 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const scaledMax = niceChartMax(maxValue);
+  const ticks = buildChartTicks(scaledMax, 4);
+  const groupWidth = plotWidth / Math.max(points.length, 1);
+  const barWidth = Math.min(22, Math.max(10, groupWidth * 0.24));
+  const barGap = Math.min(8, Math.max(5, groupWidth * 0.08));
+  const toY = (value: string | number) =>
+    margin.top + plotHeight - (Number(value) / scaledMax) * plotHeight;
+
+  return (
+    <div
+      className="cashflow-temporal-chart"
+      role="img"
+      aria-label="Gráfico temporal de entradas e saídas no período selecionado."
+    >
+      <div className="cashflow-chart-legend" aria-hidden="true">
+        <span className="is-entry">Entradas</span>
+        <span className="is-expense">Saídas</span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
+        {ticks.map((tick) => {
+          const y = toY(tick);
+
+          return (
+            <g className="cashflow-axis-tick" key={tick}>
+              <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} />
+              <text x={margin.left - 12} y={y + 4}>
+                {formatAxisCurrency(tick)}
+              </text>
+            </g>
+          );
+        })}
+        <line
+          className="cashflow-axis-line"
+          x1={margin.left}
+          x2={width - margin.right}
+          y1={margin.top + plotHeight}
+          y2={margin.top + plotHeight}
+        />
+        {points.map((point, index) => {
+          const groupStart = margin.left + index * groupWidth;
+          const center = groupStart + groupWidth / 2;
+          const entryHeight = margin.top + plotHeight - toY(point.entries);
+          const expenseHeight = margin.top + plotHeight - toY(point.expenses);
+          const entryX = center - barGap / 2 - barWidth;
+          const expenseX = center + barGap / 2;
+
+          return (
+            <g className="cashflow-chart-group" key={point.period}>
+              <rect
+                className="cashflow-svg-bar bar-entry"
+                height={entryHeight}
+                rx="4"
+                width={barWidth}
+                x={entryX}
+                y={toY(point.entries)}
+              />
+              <rect
+                className="cashflow-svg-bar bar-expense"
+                height={expenseHeight}
+                rx="4"
+                width={barWidth}
+                x={expenseX}
+                y={toY(point.expenses)}
+              />
+              <text className="cashflow-x-label" x={center} y={height - 18}>
+                {formatPeriodLabel(point.period)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="cashflow-chart-hotspots" aria-label="Detalhes do cashflow por período">
+        {points.map((point, index) => (
+          <button
+            aria-label={`${formatPeriodLabel(point.period)}. Entradas ${formatCurrency(point.entries)}. Saídas ${formatCurrency(point.expenses)}.`}
+            className="cashflow-chart-hotspot"
+            data-tooltip={`${formatPeriodLabel(point.period)} | Entradas ${formatCurrency(point.entries)} | Saídas ${formatCurrency(point.expenses)}`}
+            key={point.period}
+            style={
+              {
+                '--hotspot-left': `${((margin.left + index * groupWidth) / width) * 100}%`,
+                '--hotspot-width': `${(groupWidth / width) * 100}%`,
+              } as CSSProperties
+            }
+            type="button"
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1497,6 +1607,7 @@ function ClientStatusDonut({
           );
         })}
       </div>
+      <p className="donut-summary">{total} referências classificadas.</p>
     </div>
   );
 }
@@ -1531,7 +1642,13 @@ function CompactClientDueTable({
   onRenew: (id: string, clientReferenceId: string) => Promise<void>;
 }) {
   if (!items.length) {
-    return <div className="empty-state compact-empty-state">Nenhum cliente nesta lista.</div>;
+    return (
+      <div className="empty-state compact-empty-state dashboard-empty-state">
+        <CalendarClock aria-hidden="true" size={20} />
+        <strong>Nenhum cliente nesta lista.</strong>
+        <span>Não há vencimentos para hoje.</span>
+      </div>
+    );
   }
 
   return (
@@ -1581,7 +1698,13 @@ function OverdueReceivablesTable({
   onOpenFinance: () => void;
 }) {
   if (!items.length) {
-    return <div className="empty-state compact-empty-state">Nenhuma conta vencida.</div>;
+    return (
+      <div className="empty-state compact-empty-state dashboard-empty-state">
+        <Receipt aria-hidden="true" size={20} />
+        <strong>Nenhuma conta vencida.</strong>
+        <span>Não há cobranças em atraso no momento.</span>
+      </div>
+    );
   }
 
   return (
@@ -1672,6 +1795,32 @@ function maxChartValue(values: string[]) {
 
 function chartPercent(value: string, maxValue: number) {
   return Math.max(3, (Number(value) / maxValue) * 100);
+}
+
+function niceChartMax(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+
+  const exponent = Math.floor(Math.log10(value));
+  const magnitude = 10 ** exponent;
+  const normalized = value / magnitude;
+  const niceNormalized = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+
+  return niceNormalized * magnitude;
+}
+
+function buildChartTicks(maxValue: number, steps: number) {
+  return Array.from({ length: steps + 1 }, (_, index) => (maxValue / steps) * index).reverse();
+}
+
+function formatAxisCurrency(value: number) {
+  if (value >= 1000) {
+    return `R$ ${new Intl.NumberFormat('pt-BR', {
+      maximumFractionDigits: value >= 10000 ? 0 : 1,
+      minimumFractionDigits: 0,
+    }).format(value / 1000)} mil`;
+  }
+
+  return formatCurrency(String(value));
 }
 
 function formatPeriodLabel(period: string) {

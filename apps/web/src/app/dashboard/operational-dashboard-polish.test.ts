@@ -44,25 +44,33 @@ describe('operational dashboard polish source', () => {
   it('uses real cashflow series when available and compact comparison for one point', () => {
     expect(dashboardSource).toContain('const hasCashflowSeries = cashflowPoints.length > 1;');
     expect(dashboardSource).toContain('hasCashflowSeries ?');
-    expect(dashboardSource).toContain('cashflow-series-chart');
+    expect(dashboardSource).toContain('<CashflowTemporalChart');
+    expect(dashboardSource).toContain('function CashflowTemporalChart');
+    expect(dashboardSource).toContain('cashflow-temporal-chart');
+    expect(dashboardSource).toContain('cashflow-axis-tick');
+    expect(dashboardSource).toContain('cashflow-svg-bar');
+    expect(dashboardSource).toContain('cashflow-chart-legend');
     expect(dashboardSource).toContain(
-      'data-tooltip={`${formatPeriodLabel(item.period)} | Entradas',
+      'data-tooltip={`${formatPeriodLabel(point.period)} | Entradas',
     );
     expect(dashboardSource).toContain('cashflow-comparison');
     expect(dashboardSource).toContain('summary?.charts.cashflow');
     expect(dashboardSource).toContain('Sem movimentações financeiras no período.');
     expect(dashboardSource).not.toContain('fakeCashflow');
     expect(stylesSource).toContain('.dashboard-finance-body');
-    expect(stylesSource).toContain('.cashflow-series-bars');
+    expect(stylesSource).toContain('.cashflow-temporal-chart');
+    expect(stylesSource).toContain('.cashflow-svg-bar');
     expect(stylesSource).toContain('.cashflow-comparison-row');
   });
 
   it('renders financial summary with positive and negative balance tones', () => {
     expect(dashboardSource).toContain("financeBalance < 0 ? 'is-negative'");
     expect(dashboardSource).toContain("financeBalance > 0 ? 'is-positive'");
-    expect(dashboardSource).toContain("['Saldo', summary?.finance.balance, financeBalanceTone]");
+    expect(dashboardSource).toContain("label: 'Saldo'");
+    expect(dashboardSource).toContain('tone: financeBalanceTone');
     expect(stylesSource).toContain('.finance-side-metrics div.is-negative');
     expect(stylesSource).toContain('.finance-side-metrics div.is-positive');
+    expect(stylesSource).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
   });
 
   it('removes the recent activity panel from the operational dashboard only', () => {
@@ -79,10 +87,14 @@ describe('operational dashboard polish source', () => {
   });
 
   it('keeps compact empty states for due dates, overdue accounts and pending items', () => {
-    expect(dashboardSource).toContain('compact-empty-state">Nenhum cliente nesta lista.');
-    expect(dashboardSource).toContain('compact-empty-state">Nenhuma conta vencida.');
-    expect(dashboardSource).toContain('compact-empty-state">Sem pendências operacionais.');
+    expect(dashboardSource).toContain('Nenhum cliente nesta lista.');
+    expect(dashboardSource).toContain('Não há vencimentos para hoje.');
+    expect(dashboardSource).toContain('Nenhuma conta vencida.');
+    expect(dashboardSource).toContain('Não há cobranças em atraso no momento.');
+    expect(dashboardSource).toContain('Sem pendências operacionais.');
+    expect(dashboardSource).toContain('Nenhuma ação operacional pendente.');
     expect(stylesSource).toContain('.compact-empty-state');
+    expect(stylesSource).toContain('.dashboard-empty-state');
   });
 
   it('keeps responsive dashboard structure without horizontal overflow helpers', () => {
@@ -103,7 +115,11 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain('Total de referências por status');
     expect(dashboardSource).toContain('Sem referências classificadas.');
     expect(dashboardSource).toContain('Dados de status indisponíveis no contrato atual.');
+    expect(dashboardSource).toContain('referências classificadas.');
     expect(stylesSource).toContain('.donut-segment');
+    expect(stylesSource).toContain(
+      'grid-template-columns: minmax(160px, 0.55fr) minmax(130px, 0.45fr);',
+    );
     expect(stylesSource).toContain('animation: donut-segment-draw 700ms ease-out both;');
   });
 
@@ -111,7 +127,22 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('@keyframes cashflow-bar-rise');
     expect(stylesSource).toContain('@keyframes donut-segment-draw');
     expect(stylesSource).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(stylesSource).toContain('.cashflow-svg-bar,');
     expect(stylesSource).toContain('animation: none;');
     expect(stylesSource).not.toContain('infinite');
+  });
+
+  it('keeps the operational bottom row and removes legacy charts from rendering', () => {
+    const dashboardBlock = sourceBlock(
+      dashboardSource,
+      'function OperationalDashboard({',
+      'function CashflowTemporalChart({',
+    );
+
+    expect(dashboardBlock).toContain('title="Vencimentos de hoje"');
+    expect(dashboardBlock).toContain('title="Pendências operacionais"');
+    expect(dashboardBlock).toContain('title="Contas vencidas"');
+    expect(dashboardBlock).not.toContain('Recebido por período');
+    expect(dashboardBlock).not.toContain('title="Distribuição"');
   });
 });

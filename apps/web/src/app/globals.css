@@ -746,6 +746,7 @@ a {
 }
 
 .metric-card.compact {
+  align-content: space-between;
   min-height: 84px;
   padding: 12px;
 }
@@ -863,6 +864,15 @@ a {
 
 .dashboard-kpis {
   grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.dashboard-kpis .stat-card {
+  min-height: 98px;
+}
+
+.dashboard-kpis .stat-icon {
+  width: 32px;
+  height: 32px;
 }
 
 .finance-kpis {
@@ -1072,9 +1082,13 @@ a {
 
 .dashboard-primary-grid {
   display: grid;
-  align-items: start;
-  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+  align-items: stretch;
+  grid-template-columns: minmax(0, 2.05fr) minmax(320px, 0.95fr);
   gap: 12px;
+}
+
+.dashboard-primary-grid > .panel {
+  height: 100%;
 }
 
 .dashboard-secondary-grid,
@@ -1150,7 +1164,7 @@ a {
 
 .dashboard-finance-body {
   align-items: stretch;
-  grid-template-columns: minmax(0, 1.4fr) minmax(240px, 0.8fr);
+  grid-template-columns: 1fr;
   min-width: 0;
 }
 
@@ -1161,7 +1175,7 @@ a {
 }
 
 .dashboard-cashflow-visual {
-  min-height: 212px;
+  min-height: 318px;
   align-content: center;
 }
 
@@ -1190,11 +1204,11 @@ a {
 
 .finance-side-metrics div {
   display: grid;
-  gap: 3px;
+  gap: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
-  padding: 8px;
+  padding: 10px;
 }
 
 .finance-side-metrics span,
@@ -1203,12 +1217,21 @@ a {
   font-size: 11px;
 }
 
+.finance-side-metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .finance-side-metrics strong {
-  font-size: 14px;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.15;
 }
 
 .finance-side-metrics {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .finance-side-metrics div.is-negative {
@@ -1227,6 +1250,152 @@ a {
 
 .finance-side-metrics div.is-positive strong {
   color: var(--accent-strong);
+}
+
+.finance-side-metrics div.is-renewed {
+  border-color: rgb(104 169 255 / 34%);
+  background: rgb(104 169 255 / 8%);
+}
+
+.finance-side-metrics div.is-renewed strong,
+.finance-side-metrics div.is-renewed svg {
+  color: var(--info);
+}
+
+.cashflow-temporal-chart {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  min-height: 302px;
+  border: 1px solid rgb(255 255 255 / 6%);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgb(255 255 255 / 2%), transparent), var(--surface-soft);
+  padding: 10px 10px 6px;
+}
+
+.cashflow-temporal-chart svg {
+  width: 100%;
+  min-height: 250px;
+  overflow: visible;
+}
+
+.cashflow-chart-legend {
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cashflow-chart-legend span {
+  position: relative;
+  padding-left: 15px;
+}
+
+.cashflow-chart-legend span::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  content: '';
+  transform: translateY(-50%);
+}
+
+.cashflow-chart-legend .is-entry::before {
+  background: var(--accent-strong);
+}
+
+.cashflow-chart-legend .is-expense::before {
+  background: var(--danger);
+}
+
+.cashflow-axis-tick line {
+  stroke: rgb(255 255 255 / 8%);
+  stroke-width: 1;
+}
+
+.cashflow-axis-tick text,
+.cashflow-x-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.cashflow-axis-tick text {
+  text-anchor: end;
+}
+
+.cashflow-axis-line {
+  stroke: rgb(255 255 255 / 16%);
+  stroke-width: 1;
+}
+
+.cashflow-x-label {
+  text-anchor: middle;
+}
+
+.cashflow-svg-bar {
+  animation: cashflow-bar-rise 560ms ease-out both;
+  transform-box: fill-box;
+  transform-origin: bottom;
+}
+
+.cashflow-svg-bar.bar-entry {
+  fill: var(--accent-strong);
+}
+
+.cashflow-svg-bar.bar-expense {
+  fill: var(--danger);
+}
+
+.cashflow-chart-hotspots {
+  position: absolute;
+  inset: 38px 10px 28px;
+  pointer-events: none;
+}
+
+.cashflow-chart-hotspot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--hotspot-left);
+  width: var(--hotspot-width);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: default;
+  pointer-events: auto;
+}
+
+.cashflow-chart-hotspot::after {
+  position: absolute;
+  z-index: 6;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  width: max-content;
+  max-width: min(280px, 78vw);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--text);
+  content: attr(data-tooltip);
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0;
+  padding: 7px 8px;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.cashflow-chart-hotspot:hover::after,
+.cashflow-chart-hotspot:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .cashflow-comparison {
@@ -1359,15 +1528,22 @@ a {
 
 .client-status-donut {
   display: grid;
+  grid-template-columns: minmax(160px, 0.55fr) minmax(130px, 0.45fr);
+  align-items: center;
   gap: 14px;
-  justify-items: center;
+  justify-items: stretch;
   padding-top: 4px;
+}
+
+.client-status-donut.empty {
+  grid-template-columns: 1fr;
+  justify-items: center;
 }
 
 .donut-chart {
   position: relative;
   display: grid;
-  width: min(100%, 220px);
+  width: min(100%, 210px);
   margin: 0;
   place-items: center;
 }
@@ -1405,7 +1581,7 @@ a {
 .donut-chart figcaption strong,
 .donut-zero span {
   color: var(--text);
-  font-size: 28px;
+  font-size: 32px;
   line-height: 1;
 }
 
@@ -1425,14 +1601,16 @@ a {
 }
 
 .donut-legend div {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-soft);
-  padding: 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 7%);
+  padding: 8px 0;
+}
+
+.donut-legend div:last-child {
+  border-bottom: 0;
 }
 
 .donut-legend span {
@@ -1455,6 +1633,14 @@ a {
 
 .donut-legend strong {
   font-size: 13px;
+}
+
+.donut-summary {
+  grid-column: 1 / -1;
+  justify-self: center;
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .donut-legend .is-active span::before {
@@ -1662,9 +1848,11 @@ a {
   .cashflow-comparison-row::after,
   .bar-track i,
   .cashflow-series-bars i,
+  .cashflow-svg-bar,
   .donut-segment,
   .dashboard-chart-skeleton,
-  .dashboard-donut-skeleton {
+  .dashboard-donut-skeleton,
+  .cashflow-chart-hotspot::after {
     animation: none;
     transition: none;
   }
@@ -5336,7 +5524,7 @@ tbody tr:hover,
 
 .pending-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -5366,6 +5554,26 @@ tbody tr:hover,
   border-radius: 999px;
   background: rgb(38 198 163 / 14%);
   color: var(--accent-strong);
+}
+
+.dashboard-empty-state {
+  justify-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.dashboard-empty-state svg {
+  color: var(--accent-strong);
+}
+
+.dashboard-empty-state strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.dashboard-empty-state span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .reports-view {
@@ -5528,6 +5736,14 @@ tbody tr:hover,
 
   .dashboard-finance-body {
     grid-template-columns: 1fr;
+  }
+
+  .finance-side-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .client-status-donut {
+    grid-template-columns: minmax(160px, 0.5fr) minmax(130px, 0.5fr);
   }
 
   .payment-provider-grid {
@@ -5698,6 +5914,32 @@ tbody tr:hover,
   .compact-detail-list,
   .renewal-reversal-summary {
     grid-template-columns: 1fr;
+  }
+
+  .finance-side-metrics,
+  .client-status-donut {
+    grid-template-columns: 1fr;
+  }
+
+  .client-status-donut {
+    justify-items: center;
+  }
+
+  .donut-legend {
+    width: min(100%, 260px);
+  }
+
+  .dashboard-cashflow-visual,
+  .cashflow-temporal-chart {
+    min-height: 340px;
+  }
+
+  .cashflow-chart-legend {
+    justify-content: flex-start;
+  }
+
+  .cashflow-axis-tick text {
+    font-size: 10px;
   }
 
   .free-month-preview,

@@ -7,9 +7,19 @@ import {
   SavePaymentProviderCredentialDto,
   SavePaymentWebhookSecretDto,
 } from '../dto/save-payment-provider-credential.dto';
-import { FastDepixApiClient } from './fastdepix-api.client';
+import {
+  FastDepixApiClient,
+  type FastDepixWebhookRegistrationResponse,
+} from './fastdepix-api.client';
 
 const configurableProviders = ['FASTFLOW', 'FASTPAY'] satisfies PaymentProviderCode[];
+const supportedWebhookEvents = [
+  'transaction.created',
+  'transaction.approved',
+  'transaction.paid',
+  'transaction.expired',
+  'transaction.refunded',
+] as const;
 
 @Injectable()
 export class PaymentProviderCredentialsService {
@@ -138,11 +148,18 @@ export class PaymentProviderCredentialsService {
     const publicUrl = this.getPublicWebhookUrl(provider);
     const token = this.encryption.decrypt(credential.tokenEncrypted);
 
-    await this.apiClient.registerWebhook(token, publicUrl);
+    const registered = await this.apiClient.registerWebhook(token, {
+      url: publicUrl,
+      events: [...supportedWebhookEvents],
+    });
+    const secret = await this.resolveRegisteredWebhookSecret(token, publicUrl, registered);
 
     const updated = await this.prisma.paymentProviderCredential.update({
       where: { id: credential.id },
       data: {
+        webhookSecretEncrypted: this.encryption.encrypt(secret),
+        webhookSecretLastFour: secret.slice(-4),
+        webhookConfiguredAt: new Date(),
         webhookUrl: publicUrl,
         webhookRegisteredAt: new Date(),
       },
@@ -274,6 +291,47 @@ export class PaymentProviderCredentialsService {
     return url.toString();
   }
 
+  private async resolveRegisteredWebhookSecret(
+    token: string,
+    publicUrl: string,
+    registered: FastDepixWebhookRegistrationResponse,
+  ) {
+    const directSecret = registered.secret_key?.trim();
+
+    if (directSecret) {
+      return directSecret;
+    }
+
+    const webhooks = await this.apiClient.listWebhooks(token);
+    const matches = webhooks.filter((webhook) => webhook.url === publicUrl);
+
+    if (matches.length === 0) {
+      throw new BadRequestException('Webhook registrado, mas secret_key nao foi localizado.');
+    }
+
+    if (matches.length > 1) {
+      throw new BadRequestException(
+        'Mais de um webhook encontrado para a URL informada. Revise o cadastro no provider.',
+      );
+    }
+
+    const secret = matches[0]?.secret_key?.trim();
+
+    if (!secret) {
+      throw new BadRequestException('Webhook localizado sem secret_key retornado pelo provider.');
+    }
+
+    return secret;
+  }
+
+  private tryBuildPublicWebhookUrl(provider: PaymentProviderCode) {
+    try {
+      return this.getPublicWebhookUrl(provider);
+    } catch {
+      return null;
+    }
+  }
+
   private present(credential: PaymentProviderCredential) {
     const status = credential.active
       ? credential.lastValidationStatus === 'VALIDO'
@@ -293,7 +351,7 @@ export class PaymentProviderCredentialsService {
         ? `whsec_************${credential.webhookSecretLastFour}`
         : null,
       webhookConfiguredAt: credential.webhookConfiguredAt?.toISOString() ?? null,
-      webhookUrl: credential.webhookUrl,
+      webhookUrl: credential.webhookUrl ?? this.tryBuildPublicWebhookUrl(credential.provider),
       webhookRegisteredAt: credential.webhookRegisteredAt?.toISOString() ?? null,
       defaultForPix: credential.defaultForPix,
       validatedAt: credential.validatedAt?.toISOString() ?? null,

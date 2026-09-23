@@ -50,6 +50,20 @@ import { PaymentProviderCredentialsService } from './payments/payment-provider-c
 const pageSizeLimit = 100;
 const activePixStatuses = ['CREATED', 'WAITING_PAYMENT'] satisfies PaymentIntentStatus[];
 const pixExpirationMinutes = 30;
+const supportedTransactionWebhookEvents = new Set([
+  'transaction.created',
+  'transaction.approved',
+  'transaction.paid',
+  'transaction.expired',
+  'transaction.refunded',
+]);
+const ignoredPaymentWebhookEvents = [
+  'commission.calculated',
+  'withdrawal.created',
+  'withdrawal.tx_id_provided',
+  'withdrawal.status_changed',
+  'med.created',
+];
 
 type ReceivableWithRelations = Prisma.ReceivableGetPayload<{
   include: {
@@ -72,6 +86,11 @@ type TransactionWithRelations = Prisma.FinancialTransactionGetPayload<{
 
 type PaymentWebhookStatus = PaymentProviderStatus & {
   eventKey: string;
+};
+
+type IgnoredPaymentWebhook = {
+  ignored: true;
+  reason: string;
 };
 
 type GroupReceivable = Prisma.ReceivableGetPayload<{
@@ -661,10 +680,14 @@ export class FinanceService {
       throw new BadRequestException('Raw body obrigatorio para validar webhook.');
     }
 
-    const secret = await this.paymentCredentials.getWebhookSecret(provider);
+    const secret = await this.getConfiguredWebhookSecret(provider);
     this.verifyWebhookSignature(signature, rawBody, secret);
 
     const normalized = this.normalizeWebhookPayload(provider, payload);
+    if ('ignored' in normalized) {
+      return normalized;
+    }
+
     const intent = await this.prisma.paymentIntent.findFirst({
       where: {
         provider,
@@ -1908,15 +1931,46 @@ export class FinanceService {
   private normalizeWebhookPayload(
     provider: PaymentProviderCode,
     payload: unknown,
-  ): PaymentWebhookStatus {
+  ): PaymentWebhookStatus | IgnoredPaymentWebhook {
     const body = this.asRecord(payload) ?? {};
-    const data = this.asRecord(body.data) ?? body;
+    const eventName = this.stringFrom(body.event)?.trim().toLowerCase() ?? null;
+
+    if (eventName && !eventName.startsWith('transaction.')) {
+      if (
+        ignoredPaymentWebhookEvents.some(
+          (ignored) => eventName === ignored || eventName.startsWith('withdrawal.'),
+        )
+      ) {
+        return { ignored: true, reason: 'unsupported_payment_event' };
+      }
+
+      throw new BadRequestException('Evento de webhook de pagamento nao suportado.');
+    }
+
+    if (eventName && !supportedTransactionWebhookEvents.has(eventName)) {
+      return { ignored: true, reason: 'unsupported_transaction_event' };
+    }
+
+    const rootTransactionId = this.stringFrom(body.transaction_id ?? body.id);
+    const rootStatus = this.stringFrom(body.status)?.trim().toLowerCase() ?? null;
+    const nestedData = this.asRecord(body.data);
+    const data = rootTransactionId || rootStatus ? body : (nestedData ?? body);
     const transactionId = this.stringFrom(data.transaction_id ?? data.id);
     const externalStatus = this.stringFrom(data.status)?.trim().toLowerCase() ?? null;
+    const paymentProvider = this.stringFrom(data.payment_provider)?.trim().toLowerCase() ?? null;
 
     if (!transactionId || !externalStatus) {
       throw new BadRequestException('Webhook de pagamento sem transacao ou status.');
     }
+
+    if (paymentProvider && paymentProvider !== provider.toLowerCase()) {
+      throw new BadRequestException('Provider do webhook nao corresponde a rota informada.');
+    }
+
+    const eventKey =
+      eventName && supportedTransactionWebhookEvents.has(eventName)
+        ? eventName
+        : `transaction.${externalStatus}`;
 
     return {
       provider,
@@ -1925,11 +1979,23 @@ export class FinanceService {
       externalDepixId: this.stringFrom(data.depix_transaction_id),
       blockchainTxId: this.stringFrom(data.blockchain_tx_id),
       status: this.mapExternalPaymentStatus(externalStatus),
-      paidAt: externalStatus === 'paid' ? new Date() : null,
+      paidAt: externalStatus === 'paid' ? (this.dateFrom(data.paid_at) ?? new Date()) : null,
       failureCode: null,
       failureMessage: null,
-      eventKey: this.stringFrom(body.event) ?? `transaction.${externalStatus}`,
+      eventKey,
     };
+  }
+
+  private async getConfiguredWebhookSecret(provider: PaymentProviderCode) {
+    try {
+      return await this.paymentCredentials.getWebhookSecret(provider);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw new UnauthorizedException('Webhook de pagamento nao autorizado.');
+      }
+
+      throw error;
+    }
   }
 
   private mapExternalPaymentStatus(status: string): PaymentIntentStatus {
@@ -1954,6 +2020,15 @@ export class FinanceService {
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'bigint') return String(value);
     return null;
+  }
+
+  private dateFrom(value: unknown): Date | null {
+    const raw = this.stringFrom(value);
+
+    if (!raw) return null;
+
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   private ensureManualEditable(transaction: {

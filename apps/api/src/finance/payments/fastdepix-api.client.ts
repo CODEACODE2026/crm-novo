@@ -35,10 +35,13 @@ export type FastDepixTransactionResponse = {
 };
 
 export type FastDepixWebhookRegistrationResponse = {
-  id?: string;
+  id?: number | string;
   url?: string;
-  active?: boolean;
-  secret?: string;
+  events?: string[];
+  secret_key?: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type FastDepixEnvelope<T> = {
@@ -87,11 +90,15 @@ export class FastDepixApiClient {
     );
   }
 
-  registerWebhook(token: string, url: string) {
+  registerWebhook(token: string, payload: { url: string; events: string[] }) {
     return this.request<FastDepixWebhookRegistrationResponse>('/webhooks/register', token, {
       method: 'POST',
-      body: { url },
+      body: payload,
     });
+  }
+
+  listWebhooks(token: string) {
+    return this.request<FastDepixWebhookRegistrationResponse[]>('/webhooks', token);
   }
 
   private async request<T>(

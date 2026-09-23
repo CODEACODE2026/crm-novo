@@ -29,4 +29,52 @@ describe('FastDepixApiClient', () => {
     expect(String(init.body)).not.toContain('secret-token');
     vi.unstubAllGlobals();
   });
+
+  it('registers payment webhooks with the documented transaction events', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            id: 12,
+            url: 'https://crm.example.test/payment-webhooks/fastflow',
+            events: ['transaction.paid'],
+            secret_key: 'fake_webhook_secret_123',
+            is_active: true,
+          },
+        }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await client.registerWebhook('mock-token', {
+      url: 'https://crm.example.test/payment-webhooks/fastflow',
+      events: [
+        'transaction.created',
+        'transaction.approved',
+        'transaction.paid',
+        'transaction.expired',
+        'transaction.refunded',
+      ],
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://fastdepix.space/api/v1/webhooks/register');
+    expect(init.headers.Authorization).toBe('Bearer mock-token');
+    expect(JSON.parse(String(init.body))).toEqual({
+      url: 'https://crm.example.test/payment-webhooks/fastflow',
+      events: [
+        'transaction.created',
+        'transaction.approved',
+        'transaction.paid',
+        'transaction.expired',
+        'transaction.refunded',
+      ],
+    });
+    expect(String(init.body)).not.toContain('Bearer');
+    vi.unstubAllGlobals();
+  });
 });

@@ -200,7 +200,6 @@ import {
   reconcileRecovery,
   sendBillingNow,
   savePaymentProviderCredential,
-  savePaymentWebhookSecret,
   setDefaultPaymentProvider,
   testPaymentProviderCredential,
   updateMessageTemplate,
@@ -2864,12 +2863,6 @@ function SettingsView() {
                   `${paymentProviderLabel(provider)} configurado.`,
                 )
               }
-              onSaveWebhookSecret={(secret) =>
-                runAction(
-                  () => savePaymentWebhookSecret(provider, secret),
-                  `Webhook secret do ${paymentProviderLabel(provider)} configurado.`,
-                )
-              }
               onSetDefault={() =>
                 runAction(
                   () => setDefaultPaymentProvider(provider),
@@ -2903,7 +2896,6 @@ function PaymentProviderCard({
   onDeactivate,
   onRegisterWebhook,
   onSave,
-  onSaveWebhookSecret,
   onSetDefault,
   onTest,
 }: {
@@ -2917,22 +2909,21 @@ function PaymentProviderCard({
     name: string;
     token: string;
   }) => Promise<boolean>;
-  onSaveWebhookSecret: (secret: string) => Promise<boolean>;
   onSetDefault: () => Promise<boolean>;
   onTest: () => Promise<boolean>;
 }) {
   const [name, setName] = useState(credential.name ?? paymentProviderLabel(provider));
   const [token, setToken] = useState('');
-  const [webhookSecret, setWebhookSecret] = useState('');
   const [configOpen, setConfigOpen] = useState(false);
+  const [webhookOpen, setWebhookOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [registeringWebhook, setRegisteringWebhook] = useState(false);
   const [testing, setTesting] = useState(false);
   const actionRef = useRef(false);
 
   useEffect(() => {
     setName(credential.name ?? paymentProviderLabel(provider));
     setToken('');
-    setWebhookSecret('');
   }, [credential.name, provider]);
 
   const providerName = paymentProviderLabel(provider);
@@ -2940,18 +2931,20 @@ function PaymentProviderCard({
   const statusLabel = paymentProviderStatusLabel(credential.status);
   const webhookRegistered = Boolean(credential.webhookRegisteredAt);
   const canSaveCredential = token.trim().length >= 12;
-  const canSaveWebhookSecret = webhookSecret.trim().length >= 16;
-  const canSubmitConfig = configured
-    ? canSaveCredential || canSaveWebhookSecret
-    : canSaveCredential;
-  const actionDisabled = loading || saving || testing;
+  const canSubmitConfig = canSaveCredential;
+  const webhookUrl = credential.webhookUrl ?? `/payment-webhooks/${provider.toLowerCase()}`;
+  const actionDisabled = loading || saving || testing || registeringWebhook;
 
   function closeConfigModal() {
     if (saving) return;
     setConfigOpen(false);
     setToken('');
-    setWebhookSecret('');
     setName(credential.name ?? providerName);
+  }
+
+  function closeWebhookModal() {
+    if (registeringWebhook) return;
+    setWebhookOpen(false);
   }
 
   async function guardedAction(
@@ -2977,29 +2970,25 @@ function PaymentProviderCard({
     if (!canSubmitConfig) return;
 
     const saved = await guardedAction(async () => {
-      if (canSaveCredential) {
-        const credentialSaved = await onSave({ provider, name, token });
-        if (!credentialSaved) return false;
-      }
-
-      if (canSaveWebhookSecret) {
-        const secretSaved = await onSaveWebhookSecret(webhookSecret);
-        if (!secretSaved) return false;
-      }
-
-      return true;
+      return onSave({ provider, name, token });
     }, setSaving);
 
     if (!saved) return;
 
     setConfigOpen(false);
     setToken('');
-    setWebhookSecret('');
   }
 
   async function handleTestConnection() {
     if (!configured) return;
     await guardedAction(onTest, setTesting);
+  }
+
+  async function handleRegisterWebhook() {
+    if (!configured) return;
+    const registered = await guardedAction(onRegisterWebhook, setRegisteringWebhook);
+    if (!registered) return;
+    setWebhookOpen(false);
   }
 
   return (
@@ -3023,8 +3012,8 @@ function PaymentProviderCard({
               {
                 disabled: !configured || actionDisabled,
                 icon: ShieldCheck,
-                label: 'Gerenciar secret',
-                onSelect: () => setConfigOpen(true),
+                label: 'Ver webhook',
+                onSelect: () => setWebhookOpen(true),
               },
               {
                 disabled: !configured || Boolean(credential.defaultForPix) || actionDisabled,
@@ -3036,7 +3025,7 @@ function PaymentProviderCard({
                 disabled: !configured || actionDisabled,
                 icon: Workflow,
                 label: 'Configurar webhook',
-                onSelect: () => void onRegisterWebhook(),
+                onSelect: () => setWebhookOpen(true),
               },
               {
                 danger: true,
@@ -3145,18 +3134,6 @@ function PaymentProviderCard({
                   onChange={(event) => setToken(event.target.value)}
                 />
               </label>
-              <label className="field">
-                <span>Webhook secret</span>
-                <input
-                  autoComplete="off"
-                  placeholder={
-                    credential.webhookSecretConfigured ? 'Secret configurado' : 'secret_test_123'
-                  }
-                  type="password"
-                  value={webhookSecret}
-                  onChange={(event) => setWebhookSecret(event.target.value)}
-                />
-              </label>
             </div>
 
             <div className="form-actions">
@@ -3177,6 +3154,78 @@ function PaymentProviderCard({
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {webhookOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (event.key === 'Escape') closeWebhookModal();
+          }}
+        >
+          <section
+            className="modal payment-provider-config-modal"
+            aria-labelledby="payment-webhook-title"
+          >
+            <div className="modal-header">
+              <div>
+                <h2 id="payment-webhook-title">Webhook {providerName}</h2>
+                <p>
+                  O secret será obtido automaticamente após o registro e armazenado de forma
+                  criptografada.
+                </p>
+              </div>
+              <button
+                aria-label="Fechar"
+                className="icon-button"
+                disabled={registeringWebhook}
+                type="button"
+                onClick={closeWebhookModal}
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+
+            <dl className="detail-list integration-details">
+              <div>
+                <dt>Provider</dt>
+                <dd>{providerName}</dd>
+              </div>
+              <div>
+                <dt>URL</dt>
+                <dd>{webhookUrl}</dd>
+              </div>
+            </dl>
+
+            <div className="payment-provider-secret-summary">
+              <span>Eventos</span>
+              <strong>
+                transaction.created, transaction.approved, transaction.paid, transaction.expired,
+                transaction.refunded
+              </strong>
+            </div>
+
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                disabled={registeringWebhook}
+                type="button"
+                onClick={closeWebhookModal}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={registeringWebhook || !configured}
+                type="button"
+                onClick={() => void handleRegisterWebhook()}
+              >
+                {registeringWebhook ? 'Registrando...' : 'Confirmar registro'}
+              </button>
+            </div>
+          </section>
         </div>
       ) : null}
     </article>

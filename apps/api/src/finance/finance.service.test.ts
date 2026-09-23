@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { Prisma } from '@prisma/client';
@@ -2843,7 +2843,20 @@ describe('FinanceService', () => {
     const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
     fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
     fake.paymentIntents.at(0)!.providerTransactionId = 'tx-123';
-    const rawPayload = JSON.stringify({ transaction_id: 'tx-123', status: 'paid' });
+    const rawPayload = JSON.stringify({
+      transaction_id: 22116,
+      status: 'paid',
+      amount: 29.99,
+      net_amount: 28.99,
+      payment_provider: 'fastflow',
+      end_to_end_id: 'E0000020820260819035839016774525',
+      payer_name: 'Cliente Teste',
+      payer_phone: null,
+      created_at: '2026-08-19 00:58:19',
+      updated_at: '2026-08-19 00:59:01',
+      paid_at: '2026-08-19 00:59:01',
+    });
+    fake.paymentIntents.at(0)!.providerTransactionId = '22116';
 
     const result = await service.processPaymentWebhook(
       'FASTFLOW',
@@ -2856,6 +2869,11 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PAGO');
     expect(fake.transactions).toHaveLength(1);
     expect(fake.webhookEvents).toHaveLength(1);
+    expect(fake.webhookEvents.at(0)).toMatchObject({
+      eventKey: 'transaction.paid',
+      providerTransactionId: '22116',
+      status: 'paid',
+    });
   });
 
   it('uses the webhook paid instant as Sao Paulo business date for late FastFlow renewal', async () => {
@@ -2922,6 +2940,131 @@ describe('FinanceService', () => {
       ),
     ).rejects.toThrow('Assinatura do webhook de pagamento invalida.');
     expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+  });
+
+  it('validates signatures against the received raw body bytes, not a re-stringified payload', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-raw-body';
+    const parsedPayload = { transaction_id: 'tx-raw-body', status: 'paid' };
+    const compactRaw = JSON.stringify(parsedPayload);
+    const spacedRaw = JSON.stringify(parsedPayload, null, 2);
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(spacedRaw),
+        Buffer.from(compactRaw),
+        parsedPayload,
+      ),
+    ).rejects.toThrow('Assinatura do webhook de pagamento invalida.');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(compactRaw),
+      Buffer.from(compactRaw),
+      parsedPayload,
+    );
+
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookEvents).toHaveLength(1);
+  });
+
+  it('rejects invalid signatures with incompatible buffer sizes as a controlled error', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-short-signature';
+    const rawPayload = JSON.stringify({ transaction_id: 'tx-short-signature', status: 'paid' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        'sha256=abc',
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Assinatura do webhook de pagamento invalida.');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      'missing signature',
+      undefined,
+      Buffer.from(JSON.stringify({ transaction_id: 'tx-123', status: 'paid' })),
+    ],
+    [
+      'missing raw body',
+      createWebhookSignature(JSON.stringify({ transaction_id: 'tx-123', status: 'paid' })),
+      undefined,
+    ],
+  ])(
+    'rejects payment webhooks with %s before financial effects',
+    async (_label, signature, rawBody) => {
+      const fake = createFinancePrisma();
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        fake.credentials as never,
+        fake.config as never,
+      );
+      await service.createReceivablePix(fake.receivable.id, actorUserId);
+      fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+      fake.paymentIntents.at(0)!.providerTransactionId = 'tx-123';
+
+      await expect(
+        service.processPaymentWebhook('FASTFLOW', signature, rawBody, {
+          transaction_id: 'tx-123',
+          status: 'paid',
+        }),
+      ).rejects.toThrow();
+      expect(fake.transactions).toHaveLength(0);
+      expect(fake.webhookEvents).toHaveLength(0);
+    },
+  );
+
+  it('rejects payment webhooks when the configured secret is absent', async () => {
+    const fake = createFinancePrisma();
+    fake.credentials.getWebhookSecret.mockRejectedValueOnce(new NotFoundException('missing'));
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-123';
+    const rawPayload = JSON.stringify({ transaction_id: 'tx-123', status: 'paid' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Webhook de pagamento nao autorizado.');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
   });
 
   it('keeps repeated paid webhooks idempotent', async () => {
@@ -2952,6 +3095,281 @@ describe('FinanceService', () => {
 
     expect(fake.transactions).toHaveLength(1);
     expect(fake.webhookEvents).toHaveLength(1);
+  });
+
+  it('keeps approved and paid webhooks as distinct idempotent transaction states', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-approved-paid';
+
+    const approvedPayload = JSON.stringify({
+      transaction_id: 'tx-approved-paid',
+      status: 'approved',
+      payment_provider: 'fastflow',
+    });
+    const paidPayload = JSON.stringify({
+      transaction_id: 'tx-approved-paid',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(approvedPayload),
+      Buffer.from(approvedPayload),
+      JSON.parse(approvedPayload),
+    );
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(paidPayload),
+      Buffer.from(paidPayload),
+      JSON.parse(paidPayload),
+    );
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(paidPayload),
+      Buffer.from(paidPayload),
+      JSON.parse(paidPayload),
+    );
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(1);
+    expect(fake.webhookEvents.map((event) => event.eventKey)).toEqual([
+      'transaction.approved',
+      'transaction.paid',
+    ]);
+  });
+
+  it('rejects provider mismatch from a signed transaction payload', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-provider-mismatch';
+    const rawPayload = JSON.stringify({
+      transaction_id: 'tx-provider-mismatch',
+      status: 'paid',
+      payment_provider: 'fastpay',
+    });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Provider do webhook nao corresponde a rota informada.');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+  });
+
+  it('accepts legacy nested transaction payloads without making them the primary contract', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTPAY';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'legacy-tx';
+    const rawPayload = JSON.stringify({
+      event: 'transaction.paid',
+      data: { transaction_id: 'legacy-tx', status: 'paid' },
+    });
+
+    await service.processPaymentWebhook(
+      'FASTPAY',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('keeps root transaction fields authoritative when legacy data is also present', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-root-wins';
+    const rawPayload = JSON.stringify({
+      event: 'transaction.paid',
+      transaction_id: 'tx-root-wins',
+      status: 'paid',
+      payment_provider: 'fastflow',
+      data: { transaction_id: 'tx-legacy-wrong', status: 'expired' },
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+
+    expect(fake.paymentIntents.at(0)).toMatchObject({ status: 'PAID', externalStatus: 'paid' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it.each([
+    ['commission.calculated', 'commission-1'],
+    ['withdrawal.status_changed', 'withdrawal-1'],
+    ['med.created', 'med-1'],
+  ])(
+    'ignores signed non-transaction payment event %s without financial effects',
+    async (event, id) => {
+      const fake = createFinancePrisma();
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        fake.credentials as never,
+        fake.config as never,
+      );
+      const rawPayload = JSON.stringify({ event, id });
+
+      const result = await service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      );
+
+      expect(result).toEqual({ ignored: true, reason: 'unsupported_payment_event' });
+      expect(fake.receivable.status).toBe('PENDENTE');
+      expect(fake.transactions).toHaveLength(0);
+      expect(fake.webhookEvents).toHaveLength(0);
+    },
+  );
+
+  it('rejects signed unknown events safely without financial effects', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    const rawPayload = JSON.stringify({ event: 'account.updated', id: 'event-unknown' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Evento de webhook de pagamento nao suportado.');
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+  });
+
+  it.each([
+    ['pending', 'WAITING_PAYMENT'],
+    ['approved', 'WAITING_PAYMENT'],
+    ['expired', 'EXPIRED'],
+    ['refunded', 'REFUNDED'],
+  ])('processes flat %s webhook without receivable write-off', async (externalStatus, status) => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = `tx-${externalStatus}`;
+    const rawPayload = JSON.stringify({
+      transaction_id: `tx-${externalStatus}`,
+      status: externalStatus,
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+
+    expect(fake.paymentIntents.at(0)).toMatchObject({ status, externalStatus });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('preserves receivable and financial history when a paid webhook is later refunded', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = 'tx-paid-refunded';
+    const paidPayload = JSON.stringify({
+      transaction_id: 'tx-paid-refunded',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+    const refundedPayload = JSON.stringify({
+      transaction_id: 'tx-paid-refunded',
+      status: 'refunded',
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(paidPayload),
+      Buffer.from(paidPayload),
+      JSON.parse(paidPayload),
+    );
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(refundedPayload),
+      Buffer.from(refundedPayload),
+      JSON.parse(refundedPayload),
+    );
+
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      status: 'REFUNDED',
+      externalStatus: 'refunded',
+    });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PIX_PAYMENT_STATUS_UPDATED')).toHaveLength(
+      1,
+    );
   });
 
   it('does not write off approved or refunded statuses from provider callbacks', async () => {

@@ -28,7 +28,6 @@ describe('payment integrations workspace polish', () => {
     expect(paymentCardSource).toContain('Webhook');
     expect(paymentCardSource).toContain('Última validação');
     expect(paymentCardSource).toContain('Provider padrão');
-    expect(paymentCardSource).not.toContain('<dt>URL</dt>');
     expect(paymentCardSource).not.toContain('<dt>Status tecnico</dt>');
     expect(stylesSource).toContain('.payment-provider-grid');
     expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
@@ -43,9 +42,6 @@ describe('payment integrations workspace polish', () => {
       "credential.webhookSecretConfigured ? 'Configurado' : 'Não configurado'",
     );
     expect(paymentCardSource).toContain("placeholder={configured ? 'Chave configurada'");
-    expect(paymentCardSource).toContain(
-      "credential.webhookSecretConfigured ? 'Secret configurado' : 'secret_test_123'",
-    );
     expect(paymentCardSource).not.toContain('tokenEncrypted');
     expect(paymentCardSource).not.toContain('webhookSecretEncrypted');
   });
@@ -55,20 +51,18 @@ describe('payment integrations workspace polish', () => {
     expect(paymentCardSource).toContain('Configurar {providerName}');
     expect(paymentCardSource).toContain('Nome da integração');
     expect(paymentCardSource).toContain('Chave API');
-    expect(paymentCardSource).toContain('Webhook secret');
+    expect(paymentCardSource).not.toContain('value={webhookSecret}');
     expect(paymentCardSource).toContain('Cancelar');
     expect(paymentCardSource).toContain('Salvar configuração');
     expect(stylesSource).toContain('.payment-provider-config-modal');
+    expect(paymentCardSource).toContain('O secret será obtido automaticamente após o registro');
+    expect(paymentCardSource).toContain('transaction.created');
+    expect(paymentCardSource).toContain('transaction.refunded');
   });
 
   it('does not submit empty existing credentials and guards double submit/test', () => {
     expect(paymentCardSource).toContain('const canSaveCredential = token.trim().length >= 12;');
-    expect(paymentCardSource).toContain(
-      'const canSaveWebhookSecret = webhookSecret.trim().length >= 16;',
-    );
-    expect(paymentCardSource).toContain('const canSubmitConfig = configured');
-    expect(paymentCardSource).toContain('? canSaveCredential || canSaveWebhookSecret');
-    expect(paymentCardSource).toContain(': canSaveCredential;');
+    expect(paymentCardSource).toContain('const canSubmitConfig = canSaveCredential;');
     expect(paymentCardSource).toContain('if (actionRef.current) return false;');
     expect(paymentCardSource).toContain('await guardedAction(async () =>');
     expect(paymentCardSource).toContain('if (!saved) return;');
@@ -80,7 +74,7 @@ describe('payment integrations workspace polish', () => {
   it('keeps action semantics in the global ActionMenu', () => {
     expect(paymentCardSource).toContain('<ActionMenu');
     expect(paymentCardSource).toContain("label: configured ? 'Editar configuração' : 'Configurar'");
-    expect(paymentCardSource).toContain("label: 'Gerenciar secret'");
+    expect(paymentCardSource).toContain("label: 'Ver webhook'");
     expect(paymentCardSource).toContain("label: 'Definir como padrão'");
     expect(paymentCardSource).toContain("label: 'Configurar webhook'");
     expect(paymentCardSource).toContain("label: 'Desativar'");

@@ -417,6 +417,7 @@ export interface DashboardSummary {
       activeRecoveryCampaigns: number;
       failedRecoveryDispatches: number;
       pendingWaitlistContacts: number;
+      qualifiedReferralsAwaitingReward: number;
     };
     items: Array<{
       label: string;

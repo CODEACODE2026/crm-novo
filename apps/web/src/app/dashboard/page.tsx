@@ -1088,19 +1088,27 @@ function OperationalDashboard({
   const [customEnd, setCustomEnd] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const dashboardRequestRef = useRef(0);
 
   const loadDashboard = useCallback(async () => {
+    const requestId = dashboardRequestRef.current + 1;
+    dashboardRequestRef.current = requestId;
     setLoading(true);
     setError('');
+    setSummary(null);
 
     try {
       const filters = buildDashboardPeriod(periodMode, customStart, customEnd);
       const nextSummary = await getDashboardSummary(filters);
+      if (dashboardRequestRef.current !== requestId) return;
       setSummary(nextSummary);
     } catch (err) {
+      if (dashboardRequestRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : 'Não foi possível carregar o dashboard.');
     } finally {
-      setLoading(false);
+      if (dashboardRequestRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [customEnd, customStart, periodMode]);
 
@@ -1111,6 +1119,13 @@ function OperationalDashboard({
   const cashflowMax = maxChartValue(
     summary?.charts.cashflow.flatMap((item) => [item.entries, item.expenses]) ?? [],
   );
+  const cashflowPoints = summary?.charts.cashflow ?? [];
+  const singleCashflowPoint = cashflowPoints[0];
+  const hasCashflowSeries = cashflowPoints.length > 1;
+  const recentActivity = summary?.lists.recentActivity.slice(0, 6) ?? [];
+  const financeBalance = Number(summary?.finance.balance ?? 0);
+  const financeBalanceTone =
+    financeBalance < 0 ? 'is-negative' : financeBalance > 0 ? 'is-positive' : 'is-neutral';
   const receivedMax = maxChartValue(summary?.charts.received.map((item) => item.amount) ?? []);
   const clientMax = Math.max(...(summary?.charts.clients.map((item) => item.value) ?? [1]), 1);
 
@@ -1229,35 +1244,56 @@ function OperationalDashboard({
       <div className="dashboard-primary-grid">
         <Card className="chart-panel dashboard-finance-panel">
           <SectionHeader eyebrow="Financeiro" title="Visão financeira" />
-          <div className="finance-split">
-            <div className="bar-chart">
-              {(summary?.charts.cashflow ?? []).map((item) => (
-                <div className="bar-group" key={item.period}>
-                  <span>{formatPeriodLabel(item.period)}</span>
-                  <div className="bar-track">
-                    <i
-                      className="bar-entry"
-                      style={{ width: `${chartPercent(item.entries, cashflowMax)}%` }}
-                    />
-                    <i
-                      className="bar-expense"
-                      style={{ width: `${chartPercent(item.expenses, cashflowMax)}%` }}
-                    />
-                  </div>
+          <div className="dashboard-finance-body">
+            <div className="dashboard-cashflow-visual">
+              {hasCashflowSeries ? (
+                <div className="bar-chart">
+                  {cashflowPoints.map((item) => (
+                    <div className="bar-group" key={item.period}>
+                      <span>{formatPeriodLabel(item.period)}</span>
+                      <div className="bar-track">
+                        <i
+                          className="bar-entry"
+                          style={{ width: `${chartPercent(item.entries, cashflowMax)}%` }}
+                        />
+                        <i
+                          className="bar-expense"
+                          style={{ width: `${chartPercent(item.expenses, cashflowMax)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {!summary?.charts.cashflow.length ? (
-                <div className="empty-state">Sem dados.</div>
-              ) : null}
+              ) : singleCashflowPoint ? (
+                <div className="cashflow-comparison">
+                  {[
+                    ['Entradas', singleCashflowPoint.entries, 'bar-entry'],
+                    ['Saídas', singleCashflowPoint.expenses, 'bar-expense'],
+                  ].map(([label, value, className]) => (
+                    <div className="cashflow-comparison-row" key={label}>
+                      <span>{label}</span>
+                      <div className="bar-track">
+                        <i
+                          className={String(className)}
+                          style={{ width: `${chartPercent(String(value), cashflowMax)}%` }}
+                        />
+                      </div>
+                      <strong>{formatCurrency(String(value))}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state compact-empty-state">Sem dados.</div>
+              )}
             </div>
             <div className="finance-side-metrics">
               {[
-                ['Entradas', summary?.finance.entries],
-                ['Saídas', summary?.finance.expenses],
-                ['Saldo', summary?.finance.balance],
-                ['Valor renovado', summary?.renewals.amount],
-              ].map(([label, value]) => (
-                <div key={label}>
+                ['Entradas', summary?.finance.entries, ''],
+                ['Saídas', summary?.finance.expenses, ''],
+                ['Saldo', summary?.finance.balance, financeBalanceTone],
+                ['Valor renovado', summary?.renewals.amount, ''],
+              ].map(([label, value, tone]) => (
+                <div className={String(tone)} key={label}>
                   <span>{label}</span>
                   <strong>{loading ? '-' : formatCurrency(String(value ?? '0'))}</strong>
                 </div>
@@ -1269,14 +1305,14 @@ function OperationalDashboard({
         <Card className="activity-panel">
           <SectionHeader eyebrow="Timeline" title="Atividade recente" />
           <div className="activity-list">
-            {(summary?.lists.recentActivity ?? []).map((event) => (
+            {recentActivity.map((event) => (
               <button
                 className="activity-item"
                 key={event.id}
                 type="button"
                 onClick={() => void onOpenClient(event.client.id)}
               >
-                <Activity aria-hidden="true" size={16} />
+                <ClientEventIcon type={event.type} />
                 <span>
                   <strong>{event.title}</strong>
                   <small>
@@ -1287,7 +1323,7 @@ function OperationalDashboard({
               </button>
             ))}
             {!summary?.lists.recentActivity.length ? (
-              <div className="empty-state">Sem atividade recente.</div>
+              <div className="empty-state compact-empty-state">Sem atividade recente.</div>
             ) : null}
           </div>
         </Card>
@@ -1325,7 +1361,7 @@ function OperationalDashboard({
               </button>
             ))}
             {!summary?.pending.items.length ? (
-              <div className="empty-state">Sem pendências operacionais.</div>
+              <div className="empty-state compact-empty-state">Sem pendências operacionais.</div>
             ) : null}
           </div>
         </Card>
@@ -1420,7 +1456,7 @@ function CompactClientDueTable({
   onRenew: (id: string, clientReferenceId: string) => Promise<void>;
 }) {
   if (!items.length) {
-    return <div className="empty-state">Nenhum cliente nesta lista.</div>;
+    return <div className="empty-state compact-empty-state">Nenhum cliente nesta lista.</div>;
   }
 
   return (
@@ -1470,7 +1506,7 @@ function OverdueReceivablesTable({
   onOpenFinance: () => void;
 }) {
   if (!items.length) {
-    return <div className="empty-state">Nenhuma conta vencida.</div>;
+    return <div className="empty-state compact-empty-state">Nenhuma conta vencida.</div>;
   }
 
   return (
@@ -2820,7 +2856,7 @@ function paymentProviderStatusLabel(status: PaymentProviderCredentialStatus['sta
   return 'NAO CONFIGURADO';
 }
 
-function ClientEventIcon({ type }: { type: NonNullable<Client['events']>[number]['type'] }) {
+function ClientEventIcon({ type }: { type: string }) {
   if (type === 'PAYMENT_REGISTERED') return <CircleCheck size={14} />;
   if (type === 'WHATSAPP_MESSAGE_SENT') return <MessageCircle size={14} />;
   if (type === 'CLIENT_RENEWED') return <RefreshCw size={14} />;

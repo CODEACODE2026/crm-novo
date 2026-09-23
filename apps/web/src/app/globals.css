@@ -861,6 +861,10 @@ a {
   margin-bottom: 12px;
 }
 
+.dashboard-kpis {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .finance-kpis {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
@@ -1069,7 +1073,7 @@ a {
 .dashboard-primary-grid {
   display: grid;
   align-items: start;
-  grid-template-columns: minmax(0, 1.85fr) minmax(300px, 0.85fr);
+  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
   gap: 12px;
 }
 
@@ -1081,17 +1085,21 @@ a {
 }
 
 .dashboard-secondary-grid {
-  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.8fr) minmax(0, 1fr);
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.9fr) minmax(0, 1.05fr);
 }
 
 .dashboard-tertiary-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.dashboard-secondary-grid > .card {
+  height: 100%;
+  min-width: 0;
+}
+
 .activity-panel .activity-list {
-  max-height: 420px;
-  overflow-y: auto;
-  padding-right: 2px;
+  padding-right: 0;
 }
 
 .operational-grid {
@@ -1118,15 +1126,28 @@ a {
   gap: 10px;
 }
 
+.dashboard-finance-body,
 .finance-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 170px;
   gap: 14px;
 }
 
+.dashboard-finance-body {
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1.4fr) minmax(240px, 0.8fr);
+  min-width: 0;
+}
+
+.dashboard-cashflow-visual,
 .finance-side-metrics {
   display: grid;
   gap: 8px;
+}
+
+.dashboard-cashflow-visual {
+  min-height: 168px;
+  align-content: center;
 }
 
 .finance-side-metrics div {
@@ -1146,6 +1167,51 @@ a {
 
 .finance-side-metrics strong {
   font-size: 14px;
+}
+
+.finance-side-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.finance-side-metrics div.is-negative {
+  border-color: rgb(255 107 107 / 38%);
+  background: rgb(255 107 107 / 8%);
+}
+
+.finance-side-metrics div.is-negative strong {
+  color: var(--danger);
+}
+
+.finance-side-metrics div.is-positive {
+  border-color: rgb(38 198 163 / 38%);
+  background: rgb(38 198 163 / 9%);
+}
+
+.finance-side-metrics div.is-positive strong {
+  color: var(--accent-strong);
+}
+
+.cashflow-comparison {
+  display: grid;
+  gap: 14px;
+}
+
+.cashflow-comparison-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 92px;
+  align-items: center;
+  gap: 10px;
+}
+
+.cashflow-comparison-row span,
+.cashflow-comparison-row strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cashflow-comparison-row strong {
+  color: var(--text);
+  text-align: right;
 }
 
 .bar-group,
@@ -1242,6 +1308,11 @@ a {
   text-align: left;
 }
 
+.activity-item svg {
+  margin-top: 2px;
+  color: var(--accent-strong);
+}
+
 .activity-item:hover {
   border-color: rgb(38 198 163 / 28%);
   background: rgb(38 198 163 / 6%);
@@ -1259,6 +1330,29 @@ a {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.activity-item strong,
+.activity-item em {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+}
+
+.activity-item strong {
+  -webkit-line-clamp: 1;
+}
+
+.activity-item em {
+  -webkit-line-clamp: 2;
+}
+
+.compact-empty-state {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 14px;
+  text-align: center;
 }
 
 .whatsapp-grid {
@@ -5117,6 +5211,10 @@ tbody tr:hover,
     grid-template-columns: 1fr;
   }
 
+  .dashboard-finance-body {
+    grid-template-columns: 1fr;
+  }
+
   .payment-provider-grid {
     grid-template-columns: 1fr;
   }
@@ -5207,6 +5305,15 @@ tbody tr:hover,
 }
 
 @media (max-width: 620px) {
+  html,
+  body,
+  .app-shell,
+  .main-area,
+  .content {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
   .topbar,
   .content {
     padding-inline: 18px;
@@ -5224,6 +5331,16 @@ tbody tr:hover,
     justify-content: flex-start;
   }
 
+  .quick-actions {
+    width: 100%;
+  }
+
+  .quick-actions .primary-button,
+  .quick-actions .secondary-button {
+    flex: 1 1 145px;
+    min-width: 0;
+  }
+
   .finance-period-bar {
     width: 100%;
     justify-content: space-between;
@@ -5238,6 +5355,7 @@ tbody tr:hover,
   }
 
   .metric-grid,
+  .dashboard-kpis,
   .referrals-kpis,
   .plans-kpis,
   .plans-grid,

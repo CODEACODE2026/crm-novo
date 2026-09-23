@@ -44,10 +44,16 @@ describe('operational dashboard polish source', () => {
   it('uses real cashflow series when available and compact comparison for one point', () => {
     expect(dashboardSource).toContain('const hasCashflowSeries = cashflowPoints.length > 1;');
     expect(dashboardSource).toContain('hasCashflowSeries ?');
+    expect(dashboardSource).toContain('cashflow-series-chart');
+    expect(dashboardSource).toContain(
+      'data-tooltip={`${formatPeriodLabel(item.period)} | Entradas',
+    );
     expect(dashboardSource).toContain('cashflow-comparison');
     expect(dashboardSource).toContain('summary?.charts.cashflow');
+    expect(dashboardSource).toContain('Sem movimentações financeiras no período.');
     expect(dashboardSource).not.toContain('fakeCashflow');
     expect(stylesSource).toContain('.dashboard-finance-body');
+    expect(stylesSource).toContain('.cashflow-series-bars');
     expect(stylesSource).toContain('.cashflow-comparison-row');
   });
 
@@ -59,25 +65,20 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('.finance-side-metrics div.is-positive');
   });
 
-  it('shows recent activity without an internal scroll panel', () => {
-    const activityStyles = sourceBlock(
-      stylesSource,
-      '.activity-panel .activity-list',
-      '.operational-grid',
+  it('removes the recent activity panel from the operational dashboard only', () => {
+    const dashboardBlock = sourceBlock(
+      dashboardSource,
+      'function OperationalDashboard({',
+      'function ClientStatusDonut({',
     );
 
-    expect(dashboardSource).toContain(
-      'const recentActivity = summary?.lists.recentActivity.slice(0, 6)',
-    );
-    expect(dashboardSource).toContain('<ClientEventIcon type={event.type} />');
-    expect(dashboardSource).toContain('Sem atividade recente.');
-    expect(activityStyles).toContain('.activity-panel .activity-list');
-    expect(activityStyles).not.toContain('max-height: 420px;');
-    expect(activityStyles).not.toContain('overflow-y: auto;');
+    expect(dashboardBlock).not.toContain('Atividade recente');
+    expect(dashboardBlock).not.toContain('summary?.lists.recentActivity');
+    expect(dashboardBlock).not.toContain('<ClientEventIcon type={event.type} />');
+    expect(dashboardSource).toContain('function ClientEventIcon({ type }: { type: string })');
   });
 
-  it('keeps compact empty states for activity, due dates, overdue accounts and pending items', () => {
-    expect(dashboardSource).toContain('compact-empty-state">Sem atividade recente.');
+  it('keeps compact empty states for due dates, overdue accounts and pending items', () => {
     expect(dashboardSource).toContain('compact-empty-state">Nenhum cliente nesta lista.');
     expect(dashboardSource).toContain('compact-empty-state">Nenhuma conta vencida.');
     expect(dashboardSource).toContain('compact-empty-state">Sem pendências operacionais.');
@@ -91,5 +92,26 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('.dashboard-secondary-grid');
     expect(stylesSource).toContain('.dashboard-finance-body,');
     expect(stylesSource).toContain('grid-template-columns: 1fr;');
+  });
+
+  it('renders the status donut only from real reference status counts', () => {
+    expect(dashboardSource).toContain('summary?.clients.distribution');
+    expect(dashboardSource).toContain('function ClientStatusDonut');
+    expect(dashboardSource).toContain("label: 'Ativas'");
+    expect(dashboardSource).toContain("label: 'Inativas'");
+    expect(dashboardSource).toContain("label: 'Canceladas'");
+    expect(dashboardSource).toContain('Total de referências por status');
+    expect(dashboardSource).toContain('Sem referências classificadas.');
+    expect(dashboardSource).toContain('Dados de status indisponíveis no contrato atual.');
+    expect(stylesSource).toContain('.donut-segment');
+    expect(stylesSource).toContain('animation: donut-segment-draw 700ms ease-out both;');
+  });
+
+  it('adds one-shot microanimations with reduced motion support', () => {
+    expect(stylesSource).toContain('@keyframes cashflow-bar-rise');
+    expect(stylesSource).toContain('@keyframes donut-segment-draw');
+    expect(stylesSource).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(stylesSource).toContain('animation: none;');
+    expect(stylesSource).not.toContain('infinite');
   });
 });

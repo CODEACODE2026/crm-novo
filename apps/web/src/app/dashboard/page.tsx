@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -1122,12 +1123,17 @@ function OperationalDashboard({
   const cashflowPoints = summary?.charts.cashflow ?? [];
   const singleCashflowPoint = cashflowPoints[0];
   const hasCashflowSeries = cashflowPoints.length > 1;
-  const recentActivity = summary?.lists.recentActivity.slice(0, 6) ?? [];
+  const hasCashflowData = cashflowPoints.some(
+    (item) => Number(item.entries) !== 0 || Number(item.expenses) !== 0,
+  );
   const financeBalance = Number(summary?.finance.balance ?? 0);
   const financeBalanceTone =
     financeBalance < 0 ? 'is-negative' : financeBalance > 0 ? 'is-positive' : 'is-neutral';
-  const receivedMax = maxChartValue(summary?.charts.received.map((item) => item.amount) ?? []);
-  const clientMax = Math.max(...(summary?.charts.clients.map((item) => item.value) ?? [1]), 1);
+  const clientStatusDistribution = summary?.clients.distribution ?? [];
+  const hasClientStatusDistribution =
+    clientStatusDistribution.some((item) => item.status === 'ATIVO') &&
+    clientStatusDistribution.some((item) => item.status === 'INATIVO') &&
+    clientStatusDistribution.some((item) => item.status === 'CANCELADO');
 
   return (
     <>
@@ -1243,22 +1249,36 @@ function OperationalDashboard({
 
       <div className="dashboard-primary-grid">
         <Card className="chart-panel dashboard-finance-panel">
-          <SectionHeader eyebrow="Financeiro" title="Visão financeira" />
+          <SectionHeader eyebrow="Financeiro" title="Desempenho financeiro" />
+          <p className="dashboard-panel-subtitle">Entradas e saídas no período selecionado.</p>
           <div className="dashboard-finance-body">
             <div className="dashboard-cashflow-visual">
-              {hasCashflowSeries ? (
-                <div className="bar-chart">
+              {loading ? (
+                <div className="dashboard-chart-skeleton" aria-label="Carregando gráfico" />
+              ) : !hasCashflowData ? (
+                <div className="empty-state compact-empty-state">
+                  Sem movimentações financeiras no período.
+                </div>
+              ) : hasCashflowSeries ? (
+                <div className="cashflow-series-chart" role="list">
                   {cashflowPoints.map((item) => (
-                    <div className="bar-group" key={item.period}>
+                    <div
+                      aria-label={`${formatPeriodLabel(item.period)}. Entradas ${formatCurrency(item.entries)}. Saídas ${formatCurrency(item.expenses)}.`}
+                      className="cashflow-series-point"
+                      data-tooltip={`${formatPeriodLabel(item.period)} | Entradas ${formatCurrency(item.entries)} | Saídas ${formatCurrency(item.expenses)}`}
+                      key={item.period}
+                      role="listitem"
+                      tabIndex={0}
+                    >
                       <span>{formatPeriodLabel(item.period)}</span>
-                      <div className="bar-track">
+                      <div className="cashflow-series-bars">
                         <i
                           className="bar-entry"
-                          style={{ width: `${chartPercent(item.entries, cashflowMax)}%` }}
+                          style={{ height: `${chartPercent(item.entries, cashflowMax)}%` }}
                         />
                         <i
                           className="bar-expense"
-                          style={{ width: `${chartPercent(item.expenses, cashflowMax)}%` }}
+                          style={{ height: `${chartPercent(item.expenses, cashflowMax)}%` }}
                         />
                       </div>
                     </div>
@@ -1270,7 +1290,12 @@ function OperationalDashboard({
                     ['Entradas', singleCashflowPoint.entries, 'bar-entry'],
                     ['Saídas', singleCashflowPoint.expenses, 'bar-expense'],
                   ].map(([label, value, className]) => (
-                    <div className="cashflow-comparison-row" key={label}>
+                    <div
+                      className="cashflow-comparison-row"
+                      data-tooltip={`${label}: ${formatCurrency(String(value))}`}
+                      key={label}
+                      tabIndex={0}
+                    >
                       <span>{label}</span>
                       <div className="bar-track">
                         <i
@@ -1283,7 +1308,9 @@ function OperationalDashboard({
                   ))}
                 </div>
               ) : (
-                <div className="empty-state compact-empty-state">Sem dados.</div>
+                <div className="empty-state compact-empty-state">
+                  Sem movimentações financeiras no período.
+                </div>
               )}
             </div>
             <div className="finance-side-metrics">
@@ -1302,30 +1329,17 @@ function OperationalDashboard({
           </div>
         </Card>
 
-        <Card className="activity-panel">
-          <SectionHeader eyebrow="Timeline" title="Atividade recente" />
-          <div className="activity-list">
-            {recentActivity.map((event) => (
-              <button
-                className="activity-item"
-                key={event.id}
-                type="button"
-                onClick={() => void onOpenClient(event.client.id)}
-              >
-                <ClientEventIcon type={event.type} />
-                <span>
-                  <strong>{event.title}</strong>
-                  <small>
-                    {event.client.name} | {new Date(event.createdAt).toLocaleString('pt-BR')}
-                  </small>
-                  {event.description ? <em>{event.description}</em> : null}
-                </span>
-              </button>
-            ))}
-            {!summary?.lists.recentActivity.length ? (
-              <div className="empty-state compact-empty-state">Sem atividade recente.</div>
-            ) : null}
-          </div>
+        <Card className="chart-panel dashboard-status-panel">
+          <SectionHeader eyebrow="Referências" title="Referências por status" />
+          {loading ? (
+            <div className="dashboard-donut-skeleton" aria-label="Carregando status" />
+          ) : hasClientStatusDistribution ? (
+            <ClientStatusDonut distribution={clientStatusDistribution} />
+          ) : (
+            <div className="empty-state compact-empty-state">
+              Dados de status indisponíveis no contrato atual.
+            </div>
+          )}
         </Card>
       </div>
 
@@ -1385,44 +1399,105 @@ function OperationalDashboard({
           />
         </Card>
       </div>
-
-      <div className="dashboard-tertiary-grid">
-        <Card>
-          <SectionHeader eyebrow="Recebimentos" title="Recebido por período" />
-          <div className="single-bar-chart">
-            {(summary?.charts.received ?? []).map((item) => (
-              <div className="bar-group" key={item.period}>
-                <span>{formatPeriodLabel(item.period)}</span>
-                <div className="bar-track">
-                  <i
-                    className="bar-received"
-                    style={{ width: `${chartPercent(item.amount, receivedMax)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-            {!summary?.charts.received.length ? (
-              <div className="empty-state">Sem dados.</div>
-            ) : null}
-          </div>
-        </Card>
-
-        <Card>
-          <SectionHeader eyebrow="Clientes" title="Distribuição" />
-          <div className="client-distribution">
-            {(summary?.charts.clients ?? []).map((item) => (
-              <div className="distribution-row" key={item.label}>
-                <span>{item.label}</span>
-                <div className="bar-track">
-                  <i style={{ width: `${(item.value / clientMax) * 100}%` }} />
-                </div>
-                <strong>{item.value}</strong>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
     </>
+  );
+}
+
+function ClientStatusDonut({
+  distribution,
+}: {
+  distribution: DashboardSummaryPayload['clients']['distribution'];
+}) {
+  const items = [
+    {
+      color: 'var(--accent-strong)',
+      label: 'Ativas',
+      status: 'ATIVO' as ClientStatus,
+      tone: 'is-active',
+    },
+    {
+      color: 'var(--warning)',
+      label: 'Inativas',
+      status: 'INATIVO' as ClientStatus,
+      tone: 'is-inactive',
+    },
+    {
+      color: 'var(--danger)',
+      label: 'Canceladas',
+      status: 'CANCELADO' as ClientStatus,
+      tone: 'is-canceled',
+    },
+  ].map((item) => ({
+    ...item,
+    value: distribution.find((entry) => entry.status === item.status)?.total ?? 0,
+  }));
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  const radius = 43;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+
+  if (total === 0) {
+    return (
+      <div className="client-status-donut empty">
+        <div className="donut-zero" aria-label="Total de referências por status: 0">
+          <span>0</span>
+          <small>referências</small>
+        </div>
+        <div className="empty-state compact-empty-state">Sem referências classificadas.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="client-status-donut">
+      <figure className="donut-chart" aria-label={`Total de referências por status: ${total}`}>
+        <svg viewBox="0 0 120 120" role="img">
+          <circle className="donut-track" cx="60" cy="60" r={radius} />
+          {items.map((item) => {
+            const length = (item.value / total) * circumference;
+            const dashOffset = -offset;
+            offset += length;
+
+            return (
+              <circle
+                className={`donut-segment ${item.tone}`}
+                cx="60"
+                cy="60"
+                key={item.status}
+                r={radius}
+                style={
+                  {
+                    '--dash-length': length,
+                    '--dash-offset': dashOffset,
+                    stroke: item.color,
+                    strokeDasharray: `${length} ${circumference - length}`,
+                    strokeDashoffset: dashOffset,
+                  } as CSSProperties
+                }
+              />
+            );
+          })}
+        </svg>
+        <figcaption>
+          <strong>{total}</strong>
+          <span>referências</span>
+        </figcaption>
+      </figure>
+      <div className="donut-legend">
+        {items.map((item) => {
+          const percent = total > 0 ? Math.round((item.value / total) * 100) : 0;
+
+          return (
+            <div className={item.tone} key={item.status}>
+              <span>{item.label}</span>
+              <strong>
+                {item.value} {percent}%
+              </strong>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

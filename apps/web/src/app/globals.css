@@ -1109,12 +1109,27 @@ a {
 
 .chart-panel {
   margin-top: 0;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.chart-panel:hover {
+  border-color: rgb(38 198 163 / 26%);
 }
 
 .chart-panel h2,
 .panel-header h2,
 .activity-list + h2 {
   margin: 0;
+}
+
+.dashboard-panel-subtitle {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .bar-chart,
@@ -1146,8 +1161,31 @@ a {
 }
 
 .dashboard-cashflow-visual {
-  min-height: 168px;
+  min-height: 212px;
   align-content: center;
+}
+
+.dashboard-chart-skeleton,
+.dashboard-donut-skeleton {
+  min-height: 168px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(90deg, transparent, rgb(255 255 255 / 5%), transparent),
+    linear-gradient(180deg, rgb(255 255 255 / 4%), transparent), var(--surface-soft);
+  background-size:
+    180px 100%,
+    100% 100%,
+    100% 100%;
+}
+
+.dashboard-chart-skeleton {
+  animation: dashboard-skeleton 850ms ease-out;
+}
+
+.dashboard-donut-skeleton {
+  min-height: 264px;
+  animation: dashboard-skeleton 850ms ease-out;
 }
 
 .finance-side-metrics div {
@@ -1197,10 +1235,14 @@ a {
 }
 
 .cashflow-comparison-row {
+  position: relative;
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr) 92px;
   align-items: center;
   gap: 10px;
+  border-radius: var(--radius-sm);
+  padding: 5px;
+  transition: background-color 160ms ease;
 }
 
 .cashflow-comparison-row span,
@@ -1212,6 +1254,219 @@ a {
 .cashflow-comparison-row strong {
   color: var(--text);
   text-align: right;
+}
+
+.cashflow-comparison-row:hover,
+.cashflow-comparison-row:focus-visible {
+  background: rgb(255 255 255 / 3.5%);
+}
+
+.cashflow-series-chart {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(36px, 1fr);
+  align-items: end;
+  gap: 8px;
+  min-height: 202px;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 8px 2px 0;
+}
+
+.cashflow-series-point {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(132px, 1fr) auto;
+  gap: 8px;
+  min-width: 36px;
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  outline: none;
+  transition: background-color 160ms ease;
+}
+
+.cashflow-series-point:hover,
+.cashflow-series-point:focus-visible {
+  background: rgb(255 255 255 / 3.5%);
+}
+
+.cashflow-series-point::after,
+.cashflow-comparison-row::after {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  width: max-content;
+  max-width: min(260px, 78vw);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--text);
+  content: attr(data-tooltip);
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0;
+  padding: 7px 8px;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.cashflow-series-point:hover::after,
+.cashflow-series-point:focus-visible::after,
+.cashflow-comparison-row:hover::after,
+.cashflow-comparison-row:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.cashflow-series-bars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(8px, 16px));
+  align-items: end;
+  justify-content: center;
+  gap: 5px;
+  height: 132px;
+}
+
+.cashflow-series-bars i {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 999px 999px 4px 4px;
+  animation: cashflow-bar-rise 520ms ease-out both;
+  transform-origin: bottom;
+}
+
+.cashflow-series-bars .bar-entry {
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+}
+
+.cashflow-series-bars .bar-expense {
+  background: linear-gradient(180deg, #ff9a9a, var(--danger));
+}
+
+.cashflow-series-point > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-status-donut {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  padding-top: 4px;
+}
+
+.donut-chart {
+  position: relative;
+  display: grid;
+  width: min(100%, 220px);
+  margin: 0;
+  place-items: center;
+}
+
+.donut-chart svg {
+  width: 100%;
+  max-width: 220px;
+  transform: rotate(-90deg);
+}
+
+.donut-track,
+.donut-segment {
+  fill: none;
+  stroke-width: 15;
+}
+
+.donut-track {
+  stroke: rgb(255 255 255 / 8%);
+}
+
+.donut-segment {
+  animation: donut-segment-draw 700ms ease-out both;
+  stroke-linecap: round;
+}
+
+.donut-chart figcaption,
+.donut-zero {
+  position: absolute;
+  display: grid;
+  justify-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.donut-chart figcaption strong,
+.donut-zero span {
+  color: var(--text);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.donut-zero {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  border: 15px solid rgb(255 255 255 / 8%);
+  border-radius: 999px;
+  place-content: center;
+}
+
+.donut-legend {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.donut-legend div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.donut-legend span {
+  position: relative;
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 16px;
+}
+
+.donut-legend span::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  content: '';
+  transform: translateY(-50%);
+}
+
+.donut-legend strong {
+  font-size: 13px;
+}
+
+.donut-legend .is-active span::before {
+  background: var(--accent-strong);
+}
+
+.donut-legend .is-inactive span::before {
+  background: var(--warning);
+}
+
+.donut-legend .is-canceled span::before {
+  background: var(--danger);
 }
 
 .bar-group,
@@ -1244,6 +1499,8 @@ a {
   height: 7px;
   border-radius: 999px;
   background: var(--accent);
+  animation: dashboard-bar-fill 520ms ease-out both;
+  transform-origin: left;
 }
 
 .bar-track .bar-expense {
@@ -1353,6 +1610,64 @@ a {
   background: var(--surface-soft);
   padding: 14px;
   text-align: center;
+}
+
+@keyframes dashboard-bar-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes cashflow-bar-rise {
+  from {
+    opacity: 0.55;
+    transform: scaleY(0);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes donut-segment-draw {
+  from {
+    stroke-dasharray: 0 270.2;
+  }
+
+  to {
+    stroke-dasharray: var(--dash-length) 270.2;
+  }
+}
+
+@keyframes dashboard-skeleton {
+  from {
+    opacity: 0.45;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-panel,
+  .cashflow-comparison-row,
+  .cashflow-series-point,
+  .cashflow-series-point::after,
+  .cashflow-comparison-row::after,
+  .bar-track i,
+  .cashflow-series-bars i,
+  .donut-segment,
+  .dashboard-chart-skeleton,
+  .dashboard-donut-skeleton {
+    animation: none;
+    transition: none;
+  }
 }
 
 .whatsapp-grid {

@@ -10565,6 +10565,7 @@ function FinancialCategoriesView({
     payload: Partial<{ name: string; type: FinancialTransactionType; active: boolean }>,
   ) => Promise<void>;
 }) {
+  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [name, setName] = useState('');
   const [type, setType] = useState<FinancialTransactionType>('ENTRADA');
   const [search, setSearch] = useState('');
@@ -10588,6 +10589,37 @@ function FinancialCategoriesView({
     ? 'Ajuste a busca ou filtros para encontrar outra categoria.'
     : 'Crie a primeira categoria para classificar entradas e saídas.';
 
+  function resetCreateModal() {
+    setName('');
+    setType('ENTRADA');
+    setError('');
+    setWorking(false);
+    submittingRef.current = false;
+  }
+
+  function openCreateModal() {
+    resetCreateModal();
+    setCreateModalOpen(true);
+  }
+
+  function closeCreateModal() {
+    setCreateModalOpen(false);
+    resetCreateModal();
+  }
+
+  useEffect(() => {
+    if (!createModalOpen) return undefined;
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !submittingRef.current) {
+        closeCreateModal();
+      }
+    }
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [createModalOpen]);
+
   async function submitCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
@@ -10607,7 +10639,7 @@ function FinancialCategoriesView({
 
     try {
       await onCreate(payload);
-      setName('');
+      closeCreateModal();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível salvar a categoria.');
     } finally {
@@ -10628,44 +10660,15 @@ function FinancialCategoriesView({
 
   return (
     <Card className="finance-panel">
-      <SectionHeader eyebrow="Categorias" title="Classificação financeira" />
-      <form
-        className="finance-category-quick-form"
-        onSubmit={(event) => void submitCategory(event)}
-      >
-        <label className="field">
-          <span>Nome da categoria</span>
-          <input
-            aria-describedby="financial-category-error"
-            placeholder="Ex.: Marketing"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Tipo</span>
-          <select
-            value={type}
-            onChange={(event) => setType(event.target.value as FinancialTransactionType)}
-          >
-            <option value="ENTRADA">Entrada</option>
-            <option value="SAIDA">Saída</option>
-          </select>
-        </label>
-        <Button disabled={!canSubmit} icon={Plus} loading={working} type="submit" variant="primary">
-          Adicionar
-        </Button>
-      </form>
-      {error ? (
-        <div className="notice danger" id="financial-category-error" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {!error && nameTooLong ? (
-        <div className="notice danger" id="financial-category-error" role="alert">
-          Nome da categoria muito longo.
-        </div>
-      ) : null}
+      <SectionHeader
+        action={
+          <Button icon={Plus} size="sm" variant="primary" onClick={openCreateModal}>
+            Nova categoria
+          </Button>
+        }
+        eyebrow="Categorias"
+        title="Classificação financeira"
+      />
 
       <div className="metric-grid finance-category-summary">
         <StatCard icon={Layers} label="Total" tone="info" value={categorySummary.total} />
@@ -10771,6 +10774,91 @@ function FinancialCategoriesView({
           </div>
         ) : null}
       </div>
+
+      {createModalOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            aria-labelledby="financial-category-modal-title"
+            className="modal finance-category-modal"
+          >
+            <header className="modal-header modal-header-with-icon">
+              <span className="modal-icon info" aria-hidden="true">
+                <Layers size={16} />
+              </span>
+              <div>
+                <h2 id="financial-category-modal-title">Nova categoria</h2>
+                <p>Cadastre uma classificação para suas movimentações financeiras.</p>
+              </div>
+              <IconButton
+                disabled={working}
+                icon={X}
+                label="Fechar nova categoria"
+                onClick={closeCreateModal}
+              />
+            </header>
+
+            <form
+              className="finance-category-modal-form"
+              onSubmit={(event) => void submitCategory(event)}
+            >
+              <label className="field">
+                <span>Nome da categoria</span>
+                <input
+                  aria-describedby="financial-category-error"
+                  autoFocus
+                  placeholder="Ex.: Marketing"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Tipo</span>
+                <select
+                  value={type}
+                  onChange={(event) => setType(event.target.value as FinancialTransactionType)}
+                >
+                  <option value="ENTRADA">Entrada</option>
+                  <option value="SAIDA">Saída</option>
+                </select>
+              </label>
+
+              {error ? (
+                <div className="notice danger" id="financial-category-error" role="alert">
+                  {error}
+                </div>
+              ) : null}
+              {!error && nameTooLong ? (
+                <div className="notice danger" id="financial-category-error" role="alert">
+                  Nome da categoria muito longo.
+                </div>
+              ) : null}
+
+              <div className="form-actions">
+                <span />
+                <div className="button-row">
+                  <Button
+                    disabled={working}
+                    icon={X}
+                    variant="secondary"
+                    onClick={closeCreateModal}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    disabled={!canSubmit}
+                    icon={Plus}
+                    loading={working}
+                    type="submit"
+                    variant="primary"
+                  >
+                    Criar categoria
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </Card>
   );
 }

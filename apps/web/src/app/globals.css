@@ -973,26 +973,6 @@ a {
   margin-bottom: 0;
 }
 
-.finance-category-quick-form {
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) 170px auto;
-  align-items: end;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-soft);
-  padding: 12px;
-}
-
-.finance-category-quick-form .field {
-  gap: 6px;
-}
-
-.finance-category-quick-form input,
-.finance-category-quick-form select {
-  min-height: 38px;
-}
-
 .finance-category-summary {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0;
@@ -1026,6 +1006,15 @@ a {
 
 .finance-category-empty-state span {
   color: var(--muted);
+}
+
+.finance-category-modal {
+  width: min(100%, 500px);
+}
+
+.finance-category-modal-form {
+  display: grid;
+  gap: 12px;
 }
 
 .finance-table-wrap {
@@ -5113,7 +5102,6 @@ tbody tr:hover,
   .finance-toolbar,
   .finance-category-summary,
   .finance-category-toolbar,
-  .finance-category-quick-form,
   .finance-transaction-form,
   .finance-category-form,
   .dashboard-grid,
@@ -5169,7 +5157,6 @@ tbody tr:hover,
   .billing-toolbar,
   .recovery-toolbar,
   .finance-category-toolbar,
-  .finance-category-quick-form,
   .compact-form {
     grid-template-columns: 1fr 1fr;
   }
@@ -5262,7 +5249,6 @@ tbody tr:hover,
   .recovery-toolbar,
   .finance-category-summary,
   .finance-category-toolbar,
-  .finance-category-quick-form,
   .compact-form,
   .automation-config-grid,
   .automation-summary-grid,

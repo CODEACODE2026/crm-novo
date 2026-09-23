@@ -6,6 +6,7 @@ import {
   buildFinancialCategoryCreatePayload,
   filterFinancialCategories,
   financialCategoryNameMaxLength,
+  financialCategoryNameMinLength,
   getFinancialCategoryFormState,
   summarizeFinancialCategories,
 } from '../../lib/financial-categories';
@@ -25,29 +26,44 @@ describe('finance categories polish source', () => {
     { active: false, id: 'expense-2', name: 'Servidor', type: 'SAIDA' as const },
   ];
 
-  it('renders a compact quick-create form with guarded submit', () => {
+  it('renders a compact modal create flow with guarded submit', () => {
+    expect(financialCategoryNameMinLength).toBe(2);
     expect(financialCategoryNameMaxLength).toBe(120);
-    expect(categoriesSource).toContain('className="finance-category-quick-form"');
+    expect(categoriesSource).not.toContain('className="finance-category-quick-form"');
+    expect(categoriesSource).toContain('Nova categoria');
+    expect(categoriesSource).toContain(
+      'Cadastre uma classificação para suas movimentações financeiras.',
+    );
+    expect(categoriesSource).toContain('className="modal finance-category-modal"');
+    expect(categoriesSource).toContain('className="finance-category-modal-form"');
     expect(categoriesSource).toContain('Nome da categoria');
     expect(categoriesSource).toContain('placeholder="Ex.: Marketing"');
+    expect(categoriesSource).toContain('autoFocus');
     expect(categoriesSource).toContain('type="submit"');
     expect(categoriesSource).toContain('disabled={!canSubmit}');
     expect(categoriesSource).toContain('const submittingRef = useRef(false);');
     expect(categoriesSource).toContain('if (submittingRef.current) return;');
     expect(categoriesSource).toContain('buildFinancialCategoryCreatePayload({ name, type })');
     expect(categoriesSource).toContain('await onCreate(payload);');
-    expect(categoriesSource).toContain("setName('');");
-    expect(categoriesSource).not.toContain("setType('ENTRADA');");
-    expect(stylesSource).toContain('.finance-category-quick-form');
+    expect(categoriesSource).toContain('closeCreateModal();');
+    expect(categoriesSource).toContain("setType('ENTRADA');");
+    expect(categoriesSource).toContain('Cancelar');
+    expect(categoriesSource).toContain('Criar categoria');
+    expect(stylesSource).toContain('.finance-category-modal');
   });
 
   it('validates empty, whitespace, long and valid names before creating a payload', () => {
     expect(getFinancialCategoryFormState('').canSubmit).toBe(false);
     expect(getFinancialCategoryFormState('   ').canSubmit).toBe(false);
+    expect(getFinancialCategoryFormState('A').canSubmit).toBe(false);
+    expect(getFinancialCategoryFormState('AB').canSubmit).toBe(true);
     expect(getFinancialCategoryFormState('Marketing').canSubmit).toBe(true);
     expect(getFinancialCategoryFormState('Marketing', true).canSubmit).toBe(false);
     expect(getFinancialCategoryFormState('x'.repeat(121)).nameTooLong).toBe(true);
     expect(() => buildFinancialCategoryCreatePayload({ name: '', type: 'ENTRADA' })).toThrow(
+      'Informe o nome da categoria.',
+    );
+    expect(() => buildFinancialCategoryCreatePayload({ name: 'A', type: 'ENTRADA' })).toThrow(
       'Informe o nome da categoria.',
     );
     expect(() =>
@@ -101,6 +117,9 @@ describe('finance categories polish source', () => {
     expect(categoriesSource).toContain('disabled={!canSubmit}');
     expect(categoriesSource).toContain('setError(err instanceof Error ? err.message');
     expect(categoriesSource).toContain('Nome da categoria muito longo.');
+    expect(categoriesSource).toContain("event.key === 'Escape'");
+    expect(categoriesSource).toContain('closeCreateModal');
+    expect(categoriesSource).toContain('resetCreateModal');
   });
 
   it('adds real local summary cards from the loaded full category collection', () => {

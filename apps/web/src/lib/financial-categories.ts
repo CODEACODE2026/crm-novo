@@ -1,6 +1,7 @@
 import type { FinancialCategory, FinancialTransactionType } from './crm-api';
 
 export const financialCategoryNameMaxLength = 120;
+export const financialCategoryNameMinLength = 2;
 
 export type FinancialCategoryStatusFilter = 'active' | 'inactive' | '';
 
@@ -13,7 +14,7 @@ export function getFinancialCategoryFormState(name: string, working = false) {
   const nameTooLong = trimmedName.length > financialCategoryNameMaxLength;
 
   return {
-    canSubmit: Boolean(trimmedName) && !nameTooLong && !working,
+    canSubmit: trimmedName.length >= financialCategoryNameMinLength && !nameTooLong && !working,
     nameTooLong,
     trimmedName,
   };

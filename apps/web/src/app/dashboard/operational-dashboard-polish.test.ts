@@ -41,9 +41,9 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain("onClick={() => onOpenFinance('receivables')}");
   });
 
-  it('uses real cashflow series when available and compact comparison for one point', () => {
-    expect(dashboardSource).toContain('const hasCashflowSeries = cashflowPoints.length > 1;');
-    expect(dashboardSource).toContain('hasCashflowSeries ?');
+  it('uses empty state for zero cashflow points and the temporal chart for 1, 2 or 6 points', () => {
+    expect(dashboardSource).toContain('const hasCashflowData = cashflowPoints.length > 0;');
+    expect(dashboardSource).not.toContain('cashflowPoints.length > 1');
     expect(dashboardSource).toContain('<CashflowTemporalChart');
     expect(dashboardSource).toContain('function CashflowTemporalChart');
     expect(dashboardSource).toContain('cashflow-temporal-chart');
@@ -53,14 +53,15 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain(
       'data-tooltip={`${formatPeriodLabel(point.period)} | Entradas',
     );
-    expect(dashboardSource).toContain('cashflow-comparison');
+    expect(dashboardSource).not.toContain('cashflow-comparison');
+    expect(dashboardSource).not.toContain('cashflow-comparison-row');
     expect(dashboardSource).toContain('summary?.charts.cashflow');
     expect(dashboardSource).toContain('Sem movimentações financeiras no período.');
     expect(dashboardSource).not.toContain('fakeCashflow');
     expect(stylesSource).toContain('.dashboard-finance-body');
     expect(stylesSource).toContain('.cashflow-temporal-chart');
     expect(stylesSource).toContain('.cashflow-svg-bar');
-    expect(stylesSource).toContain('.cashflow-comparison-row');
+    expect(stylesSource).not.toContain('.cashflow-comparison-row');
   });
 
   it('renders financial summary with positive and negative balance tones', () => {
@@ -87,6 +88,8 @@ describe('operational dashboard polish source', () => {
   });
 
   it('keeps compact empty states for due dates, overdue accounts and pending items', () => {
+    expect(dashboardSource).toContain('<CalendarClock aria-hidden="true" size={20} />');
+    expect(dashboardSource).toContain('<Receipt aria-hidden="true" size={20} />');
     expect(dashboardSource).toContain('Nenhum cliente nesta lista.');
     expect(dashboardSource).toContain('Não há vencimentos para hoje.');
     expect(dashboardSource).toContain('Nenhuma conta vencida.');
@@ -95,6 +98,7 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain('Nenhuma ação operacional pendente.');
     expect(stylesSource).toContain('.compact-empty-state');
     expect(stylesSource).toContain('.dashboard-empty-state');
+    expect(stylesSource).toContain('.dashboard-empty-state {\n  display: grid;');
   });
 
   it('keeps responsive dashboard structure without horizontal overflow helpers', () => {

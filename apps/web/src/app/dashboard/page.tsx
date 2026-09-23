@@ -1121,11 +1121,7 @@ function OperationalDashboard({
     summary?.charts.cashflow.flatMap((item) => [item.entries, item.expenses]) ?? [],
   );
   const cashflowPoints = summary?.charts.cashflow ?? [];
-  const singleCashflowPoint = cashflowPoints[0];
-  const hasCashflowSeries = cashflowPoints.length > 1;
-  const hasCashflowData = cashflowPoints.some(
-    (item) => Number(item.entries) !== 0 || Number(item.expenses) !== 0,
-  );
+  const hasCashflowData = cashflowPoints.length > 0;
   const financeBalance = Number(summary?.finance.balance ?? 0);
   const financeBalanceTone =
     financeBalance < 0 ? 'is-negative' : financeBalance > 0 ? 'is-positive' : 'is-neutral';
@@ -1259,35 +1255,8 @@ function OperationalDashboard({
                 <div className="empty-state compact-empty-state">
                   Sem movimentações financeiras no período.
                 </div>
-              ) : hasCashflowSeries ? (
-                <CashflowTemporalChart maxValue={cashflowMax} points={cashflowPoints} />
-              ) : singleCashflowPoint ? (
-                <div className="cashflow-comparison">
-                  {[
-                    ['Entradas', singleCashflowPoint.entries, 'bar-entry'],
-                    ['Saídas', singleCashflowPoint.expenses, 'bar-expense'],
-                  ].map(([label, value, className]) => (
-                    <div
-                      className="cashflow-comparison-row"
-                      data-tooltip={`${label}: ${formatCurrency(String(value))}`}
-                      key={label}
-                      tabIndex={0}
-                    >
-                      <span>{label}</span>
-                      <div className="bar-track">
-                        <i
-                          className={String(className)}
-                          style={{ width: `${chartPercent(String(value), cashflowMax)}%` }}
-                        />
-                      </div>
-                      <strong>{formatCurrency(String(value))}</strong>
-                    </div>
-                  ))}
-                </div>
               ) : (
-                <div className="empty-state compact-empty-state">
-                  Sem movimentações financeiras no período.
-                </div>
+                <CashflowTemporalChart maxValue={cashflowMax} points={cashflowPoints} />
               )}
             </div>
             <div className="finance-side-metrics">
@@ -1791,10 +1760,6 @@ function shiftFinancePeriod(period: FinancePeriod, months: number) {
 
 function maxChartValue(values: string[]) {
   return Math.max(...values.map((value) => Number(value)), 1);
-}
-
-function chartPercent(value: string, maxValue: number) {
-  return Math.max(3, (Number(value) / maxValue) * 100);
 }
 
 function niceChartMax(value: number) {

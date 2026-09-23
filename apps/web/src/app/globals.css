@@ -1398,38 +1398,6 @@ a {
   transform: translate(-50%, 0);
 }
 
-.cashflow-comparison {
-  display: grid;
-  gap: 14px;
-}
-
-.cashflow-comparison-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 92px;
-  align-items: center;
-  gap: 10px;
-  border-radius: var(--radius-sm);
-  padding: 5px;
-  transition: background-color 160ms ease;
-}
-
-.cashflow-comparison-row span,
-.cashflow-comparison-row strong {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.cashflow-comparison-row strong {
-  color: var(--text);
-  text-align: right;
-}
-
-.cashflow-comparison-row:hover,
-.cashflow-comparison-row:focus-visible {
-  background: rgb(255 255 255 / 3.5%);
-}
-
 .cashflow-series-chart {
   display: grid;
   grid-auto-flow: column;
@@ -1459,8 +1427,7 @@ a {
   background: rgb(255 255 255 / 3.5%);
 }
 
-.cashflow-series-point::after,
-.cashflow-comparison-row::after {
+.cashflow-series-point::after {
   position: absolute;
   z-index: 5;
   bottom: calc(100% + 8px);
@@ -1484,9 +1451,7 @@ a {
 }
 
 .cashflow-series-point:hover::after,
-.cashflow-series-point:focus-visible::after,
-.cashflow-comparison-row:hover::after,
-.cashflow-comparison-row:focus-visible::after {
+.cashflow-series-point:focus-visible::after {
   opacity: 1;
   transform: translate(-50%, 0);
 }
@@ -1842,10 +1807,8 @@ a {
 
 @media (prefers-reduced-motion: reduce) {
   .chart-panel,
-  .cashflow-comparison-row,
   .cashflow-series-point,
   .cashflow-series-point::after,
-  .cashflow-comparison-row::after,
   .bar-track i,
   .cashflow-series-bars i,
   .cashflow-svg-bar,
@@ -5557,9 +5520,11 @@ tbody tr:hover,
 }
 
 .dashboard-empty-state {
+  display: grid;
   justify-items: center;
   gap: 5px;
   color: var(--muted);
+  line-height: 1.35;
 }
 
 .dashboard-empty-state svg {

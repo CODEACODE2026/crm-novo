@@ -2775,8 +2775,13 @@ function SettingsView() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const loadingRef = useRef(false);
+  const actionRef = useRef(false);
 
   const loadCredentials = useCallback(async () => {
+    if (loadingRef.current) return;
+
+    loadingRef.current = true;
     setLoading(true);
     setError('');
 
@@ -2786,6 +2791,7 @@ function SettingsView() {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar integrações.');
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   }, []);
 
@@ -2794,6 +2800,9 @@ function SettingsView() {
   }, [loadCredentials]);
 
   async function runAction(action: () => Promise<unknown>, success: string) {
+    if (actionRef.current) return false;
+
+    actionRef.current = true;
     setNotice('');
     setError('');
 
@@ -2801,8 +2810,12 @@ function SettingsView() {
       await action();
       await loadCredentials();
       setNotice(success);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível salvar integração.');
+      return false;
+    } finally {
+      actionRef.current = false;
     }
   }
 
@@ -2897,20 +2910,24 @@ function PaymentProviderCard({
   credential: PaymentProviderCredentialStatus;
   loading: boolean;
   provider: ConfigurablePaymentProvider;
-  onDeactivate: () => Promise<void>;
-  onRegisterWebhook: () => Promise<void>;
+  onDeactivate: () => Promise<boolean>;
+  onRegisterWebhook: () => Promise<boolean>;
   onSave: (payload: {
     provider: ConfigurablePaymentProvider;
     name: string;
     token: string;
-  }) => Promise<void>;
-  onSaveWebhookSecret: (secret: string) => Promise<void>;
-  onSetDefault: () => Promise<void>;
-  onTest: () => Promise<void>;
+  }) => Promise<boolean>;
+  onSaveWebhookSecret: (secret: string) => Promise<boolean>;
+  onSetDefault: () => Promise<boolean>;
+  onTest: () => Promise<boolean>;
 }) {
   const [name, setName] = useState(credential.name ?? paymentProviderLabel(provider));
   const [token, setToken] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
+  const [configOpen, setConfigOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const actionRef = useRef(false);
 
   useEffect(() => {
     setName(credential.name ?? paymentProviderLabel(provider));
@@ -2918,118 +2935,250 @@ function PaymentProviderCard({
     setWebhookSecret('');
   }, [credential.name, provider]);
 
+  const providerName = paymentProviderLabel(provider);
+  const configured = credential.configured;
+  const statusLabel = paymentProviderStatusLabel(credential.status);
+  const webhookRegistered = Boolean(credential.webhookRegisteredAt);
+  const canSaveCredential = token.trim().length >= 12;
+  const canSaveWebhookSecret = webhookSecret.trim().length >= 16;
+  const canSubmitConfig = configured
+    ? canSaveCredential || canSaveWebhookSecret
+    : canSaveCredential;
+  const actionDisabled = loading || saving || testing;
+
+  function closeConfigModal() {
+    if (saving) return;
+    setConfigOpen(false);
+    setToken('');
+    setWebhookSecret('');
+    setName(credential.name ?? providerName);
+  }
+
+  async function guardedAction(
+    action: () => Promise<boolean>,
+    setWorking: (value: boolean) => void,
+  ) {
+    if (actionRef.current) return false;
+
+    actionRef.current = true;
+    setWorking(true);
+
+    try {
+      return await action();
+    } finally {
+      setWorking(false);
+      actionRef.current = false;
+    }
+  }
+
+  async function handleConfigSubmit(event: FormEvent) {
+    event.preventDefault();
+
+    if (!canSubmitConfig) return;
+
+    const saved = await guardedAction(async () => {
+      if (canSaveCredential) {
+        const credentialSaved = await onSave({ provider, name, token });
+        if (!credentialSaved) return false;
+      }
+
+      if (canSaveWebhookSecret) {
+        const secretSaved = await onSaveWebhookSecret(webhookSecret);
+        if (!secretSaved) return false;
+      }
+
+      return true;
+    }, setSaving);
+
+    if (!saved) return;
+
+    setConfigOpen(false);
+    setToken('');
+    setWebhookSecret('');
+  }
+
+  async function handleTestConnection() {
+    if (!configured) return;
+    await guardedAction(onTest, setTesting);
+  }
+
   return (
     <article className="payment-provider-card">
-      <header>
-        <div>
-          <h3>{paymentProviderLabel(provider)}</h3>
-          <span className={`integration-status ${credential.status.toLowerCase()}`}>
-            {paymentProviderStatusLabel(credential.status)}
-          </span>
+      <header className="payment-provider-card-header">
+        <div className="payment-provider-title">
+          <h3>{providerName}</h3>
+          <p>{paymentProviderDescription(provider)}</p>
         </div>
-        {credential.tokenMask ? <code>{credential.tokenMask}</code> : null}
-        {credential.defaultForPix ? <span className="pill">Padrao PIX</span> : null}
+        <div className="payment-provider-card-actions">
+          <span className={`integration-status ${credential.status.toLowerCase()}`}>
+            {statusLabel}
+          </span>
+          <ActionMenu
+            items={[
+              {
+                icon: Pencil,
+                label: configured ? 'Editar configuração' : 'Configurar',
+                onSelect: () => setConfigOpen(true),
+              },
+              {
+                disabled: !configured || actionDisabled,
+                icon: ShieldCheck,
+                label: 'Gerenciar secret',
+                onSelect: () => setConfigOpen(true),
+              },
+              {
+                disabled: !configured || Boolean(credential.defaultForPix) || actionDisabled,
+                icon: CircleCheck,
+                label: 'Definir como padrão',
+                onSelect: () => void onSetDefault(),
+              },
+              {
+                disabled: !configured || actionDisabled,
+                icon: Workflow,
+                label: 'Configurar webhook',
+                onSelect: () => void onRegisterWebhook(),
+              },
+              {
+                danger: true,
+                disabled: !configured || actionDisabled,
+                icon: Power,
+                label: 'Desativar',
+                onSelect: () => void onDeactivate(),
+              },
+            ]}
+          />
+        </div>
       </header>
-
-      <label className="field">
-        <span>Nome da integração</span>
-        <input value={name} onChange={(event) => setName(event.target.value)} />
-      </label>
-      <label className="field">
-        <span>Chave API</span>
-        <input
-          autoComplete="off"
-          placeholder={credential.configured ? 'Chave salva não exibida' : 'fdpx_...'}
-          type="password"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-        />
-      </label>
-      <label className="field">
-        <span>Webhook secret</span>
-        <input
-          autoComplete="off"
-          placeholder={
-            credential.webhookSecretConfigured
-              ? (credential.webhookSecretMask ?? 'Secret configurado')
-              : 'sha256 secret'
-          }
-          type="password"
-          value={webhookSecret}
-          onChange={(event) => setWebhookSecret(event.target.value)}
-        />
-      </label>
 
       <dl className="detail-list integration-details">
         <div>
-          <dt>Validado em</dt>
-          <dd>{credential.validatedAt ? formatDateTime(credential.validatedAt) : '-'}</dd>
-        </div>
-        <div>
-          <dt>Status tecnico</dt>
-          <dd>{credential.lastValidationStatus ?? '-'}</dd>
+          <dt>Conexão</dt>
+          <dd>{configured ? 'Configurada' : 'Não configurada'}</dd>
         </div>
         <div>
           <dt>Webhook</dt>
-          <dd>{credential.webhookRegisteredAt ? 'Registrado' : 'Não registrado'}</dd>
+          <dd>{webhookRegistered ? 'Registrado' : 'Não registrado'}</dd>
         </div>
-        <div>
-          <dt>URL</dt>
-          <dd>{credential.webhookUrl ?? '-'}</dd>
-        </div>
+        {credential.validatedAt ? (
+          <div>
+            <dt>Última validação</dt>
+            <dd>{formatDateTime(credential.validatedAt)}</dd>
+          </div>
+        ) : null}
+        {credential.defaultForPix ? (
+          <div>
+            <dt>Provider padrão</dt>
+            <dd>Padrao PIX</dd>
+          </div>
+        ) : null}
       </dl>
 
-      <div className="button-row">
+      <div className="payment-provider-secret-summary">
+        <span>Chave API</span>
+        <strong>{credential.tokenMask ?? 'Não configurada'}</strong>
+      </div>
+      <div className="payment-provider-secret-summary">
+        <span>Webhook secret</span>
+        <strong>{credential.webhookSecretConfigured ? 'Configurado' : 'Não configurado'}</strong>
+      </div>
+
+      <div className="button-row payment-provider-primary-actions">
         <button
-          className="primary-button"
-          disabled={loading || token.trim().length < 12}
+          className={configured ? 'secondary-button' : 'primary-button'}
+          disabled={actionDisabled}
           type="button"
-          onClick={() => void onSave({ provider, name, token })}
+          onClick={() => setConfigOpen(true)}
         >
           <ShieldCheck aria-hidden="true" size={16} />
-          {credential.configured ? 'Substituir chave' : 'Salvar'}
+          {configured ? 'Editar configuração' : 'Configurar'}
         </button>
         <button
           className="secondary-button"
-          disabled={loading || !credential.configured || webhookSecret.trim().length < 16}
+          disabled={actionDisabled || !configured}
           type="button"
-          onClick={() => void onSaveWebhookSecret(webhookSecret)}
+          onClick={() => void handleTestConnection()}
         >
-          Secret
-        </button>
-        <button
-          className="secondary-button"
-          disabled={loading || !credential.configured}
-          type="button"
-          onClick={() => void onTest()}
-        >
-          Testár conexao
-        </button>
-        <button
-          className="secondary-button"
-          disabled={loading || !credential.configured || Boolean(credential.defaultForPix)}
-          type="button"
-          onClick={() => void onSetDefault()}
-        >
-          Padrao
-        </button>
-        <button
-          className="secondary-button"
-          disabled={loading || !credential.configured}
-          type="button"
-          onClick={() => void onRegisterWebhook()}
-        >
-          Webhook
-        </button>
-        <button
-          className="danger-button"
-          disabled={loading || !credential.configured}
-          type="button"
-          onClick={() => void onDeactivate()}
-        >
-          Desativar
+          {testing ? 'Testando...' : 'Testar conexão'}
         </button>
       </div>
+
+      {configOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (event.key === 'Escape') closeConfigModal();
+          }}
+        >
+          <form
+            className="modal payment-provider-config-modal"
+            onSubmit={(event) => void handleConfigSubmit(event)}
+          >
+            <div className="modal-header">
+              <div>
+                <h2>Configurar {providerName}</h2>
+                <p>{paymentProviderDescription(provider)}</p>
+              </div>
+              <button
+                aria-label="Fechar"
+                className="icon-button"
+                disabled={saving}
+                type="button"
+                onClick={closeConfigModal}
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+
+            <div className="payment-provider-config-body">
+              <label className="field">
+                <span>Nome da integração</span>
+                <input value={name} onChange={(event) => setName(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Chave API</span>
+                <input
+                  autoComplete="off"
+                  placeholder={configured ? 'Chave configurada' : 'fdpx_test_123'}
+                  type="password"
+                  value={token}
+                  onChange={(event) => setToken(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Webhook secret</span>
+                <input
+                  autoComplete="off"
+                  placeholder={
+                    credential.webhookSecretConfigured ? 'Secret configurado' : 'secret_test_123'
+                  }
+                  type="password"
+                  value={webhookSecret}
+                  onChange={(event) => setWebhookSecret(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                disabled={saving}
+                type="button"
+                onClick={closeConfigModal}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={saving || !canSubmitConfig}
+                type="submit"
+              >
+                {saving ? 'Salvando...' : 'Salvar configuração'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -3038,11 +3187,15 @@ function paymentProviderLabel(provider: ConfigurablePaymentProvider) {
   return provider === 'FASTFLOW' ? 'FastFlow' : 'FastPay';
 }
 
+function paymentProviderDescription(provider: ConfigurablePaymentProvider) {
+  return provider === 'FASTFLOW' ? 'Pagamentos via PIX FastFlow' : 'Pagamentos via PIX FastPay';
+}
+
 function paymentProviderStatusLabel(status: PaymentProviderCredentialStatus['status']) {
-  if (status === 'VALIDO') return 'VALIDO';
-  if (status === 'CONFIGURADO') return 'CONFIGURADO';
-  if (status === 'ERRO') return 'ERRO';
-  return 'NAO CONFIGURADO';
+  if (status === 'VALIDO') return 'Configurado';
+  if (status === 'CONFIGURADO') return 'Configurado';
+  if (status === 'ERRO') return 'Erro';
+  return 'Não configurado';
 }
 
 function ClientEventIcon({ type }: { type: string }) {

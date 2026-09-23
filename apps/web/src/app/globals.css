@@ -5426,10 +5426,12 @@ tbody tr:hover,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  align-items: stretch;
 }
 
 .payment-provider-card {
   display: grid;
+  align-content: start;
   gap: 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5437,17 +5439,33 @@ tbody tr:hover,
   padding: 16px;
 }
 
-.payment-provider-card header {
+.payment-provider-card-header {
   display: flex;
-  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
+.payment-provider-title {
+  display: grid;
+  gap: 4px;
+}
+
 .payment-provider-card h3 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 18px;
+}
+
+.payment-provider-title p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.payment-provider-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .payment-provider-card code {
@@ -5473,6 +5491,41 @@ tbody tr:hover,
 .integration-status.erro {
   border-color: rgb(255 107 107 / 45%);
   color: var(--danger);
+}
+
+.payment-provider-secret-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.payment-provider-secret-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.payment-provider-secret-summary strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.payment-provider-primary-actions {
+  margin-top: auto;
+}
+
+.payment-provider-config-modal {
+  width: min(100%, 560px);
+}
+
+.payment-provider-config-body {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
 }
 
 .integration-details {

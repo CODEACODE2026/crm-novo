@@ -120,10 +120,13 @@ export class FinanceService {
   }
 
   async createCategory(dto: CreateFinancialCategoryDto) {
+    const name = this.normalizeCategoryName(dto.name);
+    await this.ensureCategoryNameAvailable(name, dto.type);
+
     try {
       return await this.prisma.financialCategory.create({
         data: {
-          name: dto.name.trim(),
+          name,
           type: dto.type,
           active: dto.active ?? true,
         },
@@ -135,6 +138,8 @@ export class FinanceService {
 
   async updateCategory(id: string, dto: UpdateFinancialCategoryDto) {
     const existing = await this.getCategory(id);
+    const name = dto.name !== undefined ? this.normalizeCategoryName(dto.name) : undefined;
+    const type = dto.type ?? existing.type;
 
     if (dto.type !== undefined && dto.type !== existing.type) {
       const linkedTransactions = await this.prisma.financialTransaction.count({
@@ -148,11 +153,15 @@ export class FinanceService {
       }
     }
 
+    if (name !== undefined || dto.type !== undefined) {
+      await this.ensureCategoryNameAvailable(name ?? existing.name, type, id);
+    }
+
     try {
       return await this.prisma.financialCategory.update({
         where: { id },
         data: {
-          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+          ...(name !== undefined ? { name } : {}),
           ...(dto.type !== undefined ? { type: dto.type } : {}),
           ...(dto.active !== undefined ? { active: dto.active } : {}),
         },
@@ -2205,9 +2214,37 @@ export class FinanceService {
     return trimmed ? trimmed : null;
   }
 
+  private normalizeCategoryName(name: string) {
+    const normalized = name.trim();
+
+    if (!normalized) {
+      throw new BadRequestException('Informe o nome da categoria.');
+    }
+
+    return normalized;
+  }
+
+  private async ensureCategoryNameAvailable(
+    name: string,
+    type: FinancialTransactionType,
+    ignoreId?: string,
+  ) {
+    const existing = await this.prisma.financialCategory.findFirst({
+      where: {
+        name: { equals: name, mode: 'insensitive' },
+        type,
+        ...(ignoreId ? { NOT: { id: ignoreId } } : {}),
+      },
+    });
+
+    if (existing) {
+      throw new ConflictException('Ja existe uma categoria com este nome.');
+    }
+  }
+
   private handleCategoryError(error: unknown): never {
     if (this.isUniqueConstraint(error)) {
-      throw new ConflictException('Ja existe uma categoria financeira com este nome e tipo.');
+      throw new ConflictException('Ja existe uma categoria com este nome.');
     }
 
     throw error;

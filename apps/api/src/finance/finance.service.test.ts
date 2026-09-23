@@ -1,11 +1,50 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { createHmac } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { parseBusinessDate } from '../clients/utils/business-date';
+import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
 import { FinanceService } from './finance.service';
 
 const actorUserId = '22222222-2222-4222-8222-222222222222';
+
+type TestCategory = {
+  active: boolean;
+  id: string;
+  name: string;
+  type: 'ENTRADA' | 'SAIDA';
+};
+
+function categoryMatchesWhere(
+  category: TestCategory,
+  where: {
+    active?: boolean;
+    id?: string;
+    name?: string | { equals: string; mode?: 'insensitive' };
+    NOT?: { id?: string };
+    type?: string;
+  },
+) {
+  const nameMatches =
+    where.name === undefined
+      ? true
+      : typeof where.name === 'string'
+        ? category.name === where.name
+        : where.name.mode === 'insensitive'
+          ? category.name.toLocaleLowerCase('pt-BR') ===
+            where.name.equals.toLocaleLowerCase('pt-BR')
+          : category.name === where.name.equals;
+
+  return (
+    (where.id === undefined || category.id === where.id) &&
+    nameMatches &&
+    (where.type === undefined || category.type === where.type) &&
+    (where.active === undefined || category.active === where.active) &&
+    (where.NOT?.id === undefined || category.id !== where.NOT.id)
+  );
+}
 
 function createFinancePrisma() {
   const entryCategory = {
@@ -124,17 +163,84 @@ function createFinancePrisma() {
       findFirst: ({
         where,
       }: {
-        where: { id?: string; name?: string; type?: string; active?: boolean };
+        where: {
+          id?: string;
+          name?: string | { equals: string; mode?: 'insensitive' };
+          type?: string;
+          active?: boolean;
+          NOT?: { id?: string };
+        };
       }) =>
         Promise.resolve(
-          categories.find(
-            (category) =>
-              (where.id === undefined || category.id === where.id) &&
-              (where.name === undefined || category.name === where.name) &&
-              (where.type === undefined || category.type === where.type) &&
-              (where.active === undefined || category.active === where.active),
-          ) ?? null,
+          categories.find((category) => categoryMatchesWhere(category, where)) ?? null,
         ),
+      findMany: () =>
+        Promise.resolve(
+          [...categories].sort((left, right) => {
+            if (left.type !== right.type) return left.type.localeCompare(right.type);
+            if (left.active !== right.active) return left.active ? -1 : 1;
+            return left.name.localeCompare(right.name);
+          }),
+        ),
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(categories.find((category) => category.id === where.id) ?? null),
+      create: ({
+        data,
+      }: {
+        data: { active: boolean; name: string; type: 'ENTRADA' | 'SAIDA' };
+      }) => {
+        const duplicate = categories.some(
+          (category) => category.name === data.name && category.type === data.type,
+        );
+
+        if (duplicate) {
+          throw new Prisma.PrismaClientKnownRequestError('Duplicate category', {
+            clientVersion: 'test',
+            code: 'P2002',
+          });
+        }
+
+        const category = {
+          id: `category-${categories.length + 1}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+        };
+        categories.push(category);
+        return Promise.resolve(category);
+      },
+      update: ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Partial<{ active: boolean; name: string; type: 'ENTRADA' | 'SAIDA' }>;
+      }) => {
+        const category = categories.find((item) => item.id === where.id);
+        if (!category) throw new Error('Category not found');
+
+        const nextName = data.name ?? category.name;
+        const nextType = data.type ?? category.type;
+        const duplicate = categories.some(
+          (item) => item.id !== category.id && item.name === nextName && item.type === nextType,
+        );
+
+        if (duplicate) {
+          throw new Prisma.PrismaClientKnownRequestError('Duplicate category', {
+            clientVersion: 'test',
+            code: 'P2002',
+          });
+        }
+
+        Object.assign(category, data, { updatedAt: new Date() });
+        return Promise.resolve(category);
+      },
+      delete: ({ where }: { where: { id: string } }) => {
+        const index = categories.findIndex((category) => category.id === where.id);
+        if (index === -1) throw new Error('Category not found');
+        const [category] = categories.splice(index, 1);
+        return Promise.resolve(category);
+      },
     },
     financialTransaction: {
       create: ({ data }: { data: Record<string, unknown> }) => {
@@ -935,6 +1041,120 @@ function createGroupedFinancePrisma() {
 }
 
 describe('FinanceService', () => {
+  it('rejects empty or whitespace-only financial category names', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    for (const name of ['', ' ', '  ', '\t', '\n']) {
+      await expect(service.createCategory({ name, type: 'ENTRADA' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    }
+  });
+
+  it('trims financial category names before persisting', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(
+      service.createCategory({ name: ' Marketing ', type: 'SAIDA' }),
+    ).resolves.toMatchObject({
+      name: 'Marketing',
+      type: 'SAIDA',
+    });
+  });
+
+  it('keeps max length validation for financial category names', () => {
+    const dto = plainToInstance(CreateFinancialCategoryDto, {
+      name: 'x'.repeat(121),
+      type: 'ENTRADA',
+    });
+
+    const errors = validateSync(dto);
+
+    expect(errors.some((error) => error.property === 'name')).toBe(true);
+    expect(JSON.stringify(errors)).toContain('Nome da categoria muito longo.');
+  });
+
+  it('rejects normalized duplicate category names inside the same type', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    await service.createCategory({ name: 'Compra', type: 'SAIDA' });
+
+    await expect(service.createCategory({ name: ' compra ', type: 'SAIDA' })).rejects.toThrow(
+      'Ja existe uma categoria com este nome.',
+    );
+  });
+
+  it('rejects normalized duplicate names when the existing category is inactive', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    const category = await service.createCategory({ name: 'Marketing', type: 'ENTRADA' });
+    await service.updateCategory(category.id, { active: false });
+
+    await expect(service.createCategory({ name: ' marketing ', type: 'ENTRADA' })).rejects.toThrow(
+      'Ja existe uma categoria com este nome.',
+    );
+  });
+
+  it('allows the same normalized category name for entry and expense types', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(
+      service.createCategory({ name: 'Marketing', type: 'ENTRADA' }),
+    ).resolves.toMatchObject({
+      name: 'Marketing',
+      type: 'ENTRADA',
+    });
+    await expect(
+      service.createCategory({ name: ' marketing ', type: 'SAIDA' }),
+    ).resolves.toMatchObject({
+      name: 'marketing',
+      type: 'SAIDA',
+    });
+  });
+
+  it('rejects normalized duplicate category names on update inside the same type', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    await service.createCategory({ name: 'Marketing', type: 'ENTRADA' });
+    const commercial = await service.createCategory({ name: 'Comercial', type: 'ENTRADA' });
+
+    await expect(service.updateCategory(commercial.id, { name: ' marketing ' })).rejects.toThrow(
+      'Ja existe uma categoria com este nome.',
+    );
+  });
+
+  it('allows updating a category with its own normalized name', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
+
+    const category = await service.createCategory({ name: 'Marketing', type: 'ENTRADA' });
+
+    await expect(
+      service.updateCategory(category.id, { name: ' Marketing ' }),
+    ).resolves.toMatchObject({
+      id: category.id,
+      name: 'Marketing',
+      type: 'ENTRADA',
+    });
+  });
+
+  it('keeps enum validation for invalid financial category types', () => {
+    const dto = plainToInstance(CreateFinancialCategoryDto, {
+      name: 'Marketing',
+      type: 'INVALIDO',
+    });
+
+    const errors = validateSync(dto);
+
+    expect(errors.some((error) => error.property === 'type')).toBe(true);
+  });
+
   it('summarizes all payment intents for a client without double counting grouped PIX', async () => {
     const clientA = '550e8400-e29b-41d4-a716-446655440000';
     const clientB = '550e8400-e29b-41d4-a716-446655440001';

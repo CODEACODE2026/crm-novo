@@ -277,6 +277,14 @@ import {
   removalCountLabel,
   reportSummaryLabel,
 } from '../../lib/display-labels';
+import {
+  buildFinancialCategoryCreatePayload,
+  filterFinancialCategories,
+  financialCategoryTypeLabel,
+  getFinancialCategoryFormState,
+  summarizeFinancialCategories,
+  type FinancialCategoryStatusFilter,
+} from '../../lib/financial-categories';
 import { sortPlansByDuration } from '../../lib/plan-utils';
 
 type View =
@@ -10559,20 +10567,80 @@ function FinancialCategoriesView({
 }) {
   const [name, setName] = useState('');
   const [type, setType] = useState<FinancialTransactionType>('ENTRADA');
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<FinancialTransactionType | ''>('');
+  const [statusFilter, setStatusFilter] = useState<FinancialCategoryStatusFilter>('');
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState('');
+  const submittingRef = useRef(false);
+  const { canSubmit, nameTooLong } = getFinancialCategoryFormState(name, working);
+  const filteredCategories = filterFinancialCategories(categories, {
+    search,
+    status: statusFilter,
+    type: typeFilter,
+  });
+  const categorySummary = summarizeFinancialCategories(categories);
+  const hasFilters = Boolean(search.trim() || typeFilter || statusFilter);
+  const emptyTitle = categories.length
+    ? 'Nenhuma categoria encontrada.'
+    : 'Nenhuma categoria cadastrada.';
+  const emptyDescription = categories.length
+    ? 'Ajuste a busca ou filtros para encontrar outra categoria.'
+    : 'Crie a primeira categoria para classificar entradas e saídas.';
 
-  async function submitCategory() {
-    await onCreate({ name, type, active: true });
-    setName('');
-    setType('ENTRADA');
+  async function submitCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+
+    if (submittingRef.current) return;
+
+    let payload: ReturnType<typeof buildFinancialCategoryCreatePayload>;
+    try {
+      payload = buildFinancialCategoryCreatePayload({ name, type });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar a categoria.');
+      return;
+    }
+
+    submittingRef.current = true;
+    setWorking(true);
+
+    try {
+      await onCreate(payload);
+      setName('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar a categoria.');
+    } finally {
+      submittingRef.current = false;
+      setWorking(false);
+    }
+  }
+
+  async function runCategoryAction(action: () => Promise<void>) {
+    setError('');
+
+    try {
+      await action();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível atualizar a categoria.');
+    }
   }
 
   return (
     <Card className="finance-panel">
       <SectionHeader eyebrow="Categorias" title="Classificação financeira" />
-      <div className="compact-form finance-category-form">
+      <form
+        className="finance-category-quick-form"
+        onSubmit={(event) => void submitCategory(event)}
+      >
         <label className="field">
-          <span>Nome</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} />
+          <span>Nome da categoria</span>
+          <input
+            aria-describedby="financial-category-error"
+            placeholder="Ex.: Marketing"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
         </label>
         <label className="field">
           <span>Tipo</span>
@@ -10581,15 +10649,65 @@ function FinancialCategoriesView({
             onChange={(event) => setType(event.target.value as FinancialTransactionType)}
           >
             <option value="ENTRADA">Entrada</option>
-            <option value="SAIDA">Saida</option>
+            <option value="SAIDA">Saída</option>
           </select>
         </label>
-        <Button icon={Plus} variant="primary" onClick={() => void submitCategory()}>
-          Categoria
+        <Button disabled={!canSubmit} icon={Plus} loading={working} type="submit" variant="primary">
+          Adicionar
         </Button>
+      </form>
+      {error ? (
+        <div className="notice danger" id="financial-category-error" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {!error && nameTooLong ? (
+        <div className="notice danger" id="financial-category-error" role="alert">
+          Nome da categoria muito longo.
+        </div>
+      ) : null}
+
+      <div className="metric-grid finance-category-summary">
+        <StatCard icon={Layers} label="Total" tone="info" value={categorySummary.total} />
+        <StatCard
+          icon={ArrowRight}
+          label="Entradas"
+          tone="success"
+          value={categorySummary.entries}
+        />
+        <StatCard icon={ArrowLeft} label="Saídas" tone="warning" value={categorySummary.expenses} />
+        <StatCard icon={Power} label="Inativas" tone="danger" value={categorySummary.inactive} />
       </div>
-      <div className="table-wrap finance-table-wrap">
-        <table className="finance-global-table">
+
+      <div className="toolbar finance-category-toolbar">
+        <div className="search-row">
+          <Search aria-hidden="true" size={18} />
+          <input
+            placeholder="Buscar categoria..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+        <select
+          value={typeFilter}
+          onChange={(event) => setTypeFilter(event.target.value as FinancialTransactionType | '')}
+        >
+          <option value="">Todos os tipos</option>
+          <option value="ENTRADA">Entrada</option>
+          <option value="SAIDA">Saída</option>
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value as FinancialCategoryStatusFilter)}
+        >
+          <option value="">Todos os status</option>
+          <option value="active">Ativas</option>
+          <option value="inactive">Inativas</option>
+        </select>
+      </div>
+
+      <div className="table-wrap finance-table-wrap finance-category-table-wrap">
+        <table className="finance-global-table finance-category-table">
           <thead>
             <tr>
               <th>Nome</th>
@@ -10599,16 +10717,18 @@ function FinancialCategoriesView({
             </tr>
           </thead>
           <tbody>
-            {categories.map((category) => (
+            {filteredCategories.map((category) => (
               <tr key={category.id}>
-                <td>{category.name}</td>
+                <td>
+                  <strong className="category-name">{category.name}</strong>
+                </td>
                 <td className="finance-status-column">
                   <span
                     className={`finance-status-pill ${
                       category.type === 'ENTRADA' ? 'tone-success' : 'tone-warning'
                     }`}
                   >
-                    {category.type}
+                    {financialCategoryTypeLabel(category.type)}
                   </span>
                 </td>
                 <td className="finance-status-column">
@@ -10621,31 +10741,34 @@ function FinancialCategoriesView({
                   </span>
                 </td>
                 <td className="finance-actions-column">
-                  <div className="button-row">
-                    <Button
-                      icon={Power}
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void onUpdate(category.id, { active: !category.active })}
-                    >
-                      {category.active ? 'Inativar' : 'Ativar'}
-                    </Button>
-                    <Button
-                      icon={Trash2}
-                      size="sm"
-                      variant="danger"
-                      onClick={() => void onDelete(category.id)}
-                    >
-                      Remover
-                    </Button>
-                  </div>
+                  <ActionMenu
+                    items={[
+                      {
+                        icon: Power,
+                        label: category.active ? 'Inativar' : 'Ativar',
+                        onSelect: () =>
+                          void runCategoryAction(() =>
+                            onUpdate(category.id, { active: !category.active }),
+                          ),
+                      },
+                      {
+                        danger: true,
+                        icon: Trash2,
+                        label: 'Remover',
+                        onSelect: () => void runCategoryAction(() => onDelete(category.id)),
+                      },
+                    ]}
+                  />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!categories.length ? (
-          <div className="empty-state">Nenhuma categoria encontrada.</div>
+        {!filteredCategories.length ? (
+          <div className="empty-state finance-category-empty-state">
+            <strong>{hasFilters ? 'Nenhuma categoria encontrada.' : emptyTitle}</strong>
+            <span>{emptyDescription}</span>
+          </div>
         ) : null}
       </div>
     </Card>

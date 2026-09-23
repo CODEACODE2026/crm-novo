@@ -11315,6 +11315,7 @@ function PixReceivableModal({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const actionRef = useRef(false);
 
   const loadIntents = useCallback(async () => {
     setLoading(true);
@@ -11340,6 +11341,9 @@ function PixReceivableModal({
   }, [loadIntents]);
 
   async function runAction(action: () => Promise<PaymentIntent>, success: string) {
+    if (actionRef.current) return;
+
+    actionRef.current = true;
     setBusy(true);
     setError('');
     setNotice('');
@@ -11354,6 +11358,7 @@ function PixReceivableModal({
       setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
     } finally {
       setBusy(false);
+      actionRef.current = false;
     }
   }
 
@@ -11538,6 +11543,7 @@ function PixReceivablesModal({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const actionRef = useRef(false);
   const total = receivables.reduce((sum, receivable) => sum + Number(receivable.amount), 0);
   const canCancel =
     activeIntent && !['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
@@ -11545,6 +11551,9 @@ function PixReceivablesModal({
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
 
   async function runAction(action: () => Promise<PaymentIntent>, success: string) {
+    if (actionRef.current) return;
+
+    actionRef.current = true;
     setBusy(true);
     setError('');
     setNotice('');
@@ -11558,6 +11567,7 @@ function PixReceivablesModal({
       setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
     } finally {
       setBusy(false);
+      actionRef.current = false;
     }
   }
 

@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { AsyncLocalStorage } from 'async_hooks';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { Prisma } from '@prisma/client';
@@ -9,6 +10,25 @@ import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto'
 import { FinanceService } from './finance.service';
 
 const actorUserId = '22222222-2222-4222-8222-222222222222';
+
+function createAdvisoryLockSimulator() {
+  const tails = new Map<string, Promise<void>>();
+
+  return async (key: string, releaseLocks: Array<() => void>) => {
+    const previous = tails.get(key) ?? Promise.resolve();
+    let releaseCurrent: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+
+    tails.set(
+      key,
+      previous.then(() => current),
+    );
+    await previous;
+    releaseLocks.push(releaseCurrent);
+  };
+}
 
 type TestCategory = {
   active: boolean;
@@ -137,6 +157,12 @@ function createFinancePrisma() {
   const events: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
   const webhookEvents: Array<Record<string, unknown>> = [];
+  const acquireAdvisoryLock = createAdvisoryLockSimulator();
+  const lockContext = new AsyncLocalStorage<Array<() => void>>();
+  const executeRawUnsafe = vi.fn(async (_query: string, ...values: unknown[]) => {
+    await acquireAdvisoryLock(String(values[0]), lockContext.getStore() ?? []);
+    return 0;
+  });
   const provider = {
     createPix: vi.fn(() => {
       const providerTransactionId = `mock-provider-${paymentIntents.length + 1}`;
@@ -159,6 +185,7 @@ function createFinancePrisma() {
   };
 
   const tx = {
+    $executeRawUnsafe: executeRawUnsafe,
     financialCategory: {
       findFirst: ({
         where,
@@ -335,16 +362,26 @@ function createFinancePrisma() {
       findFirst: ({
         where,
       }: {
-        where: { receivableId?: string; provider?: string; providerTransactionId?: string };
+        where: {
+          OR?: Array<{ receivableId?: { in: string[] } }>;
+          provider?: string;
+          providerTransactionId?: string;
+          receivableId?: string;
+          status?: { in: string[] };
+        };
       }) =>
         Promise.resolve(
-          paymentIntents.find(
-            (intent) =>
+          paymentIntents.find((intent) => {
+            const ids = where.OR?.[0]?.receivableId?.in;
+            return (
+              (ids === undefined || ids.includes(String(intent.receivableId))) &&
+              (where.status === undefined || where.status.in.includes(String(intent.status))) &&
               (where.receivableId === undefined || intent.receivableId === where.receivableId) &&
               (where.provider === undefined || intent.provider === where.provider) &&
               (where.providerTransactionId === undefined ||
-                intent.providerTransactionId === where.providerTransactionId),
-          ) ?? null,
+                intent.providerTransactionId === where.providerTransactionId)
+            );
+          }) ?? null,
         ),
       findMany: ({ where }: { where: { receivableId: string } }) =>
         Promise.resolve(
@@ -470,7 +507,16 @@ function createFinancePrisma() {
       receivable: tx.receivable,
       paymentIntent: tx.paymentIntent,
       paymentWebhookEvent: tx.paymentWebhookEvent,
-      $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => callback(tx),
+      $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
+        const releaseLocks: Array<() => void> = [];
+        return lockContext.run(releaseLocks, async () => {
+          try {
+            return await callback(tx);
+          } finally {
+            releaseLocks.reverse().forEach((release) => release());
+          }
+        });
+      },
     },
     provider,
     credentials: { getWebhookSecret: vi.fn().mockResolvedValue('webhook-secret') },
@@ -651,7 +697,8 @@ function createReferralQualificationDouble(
   return { referral, referrals };
 }
 
-function createGroupedFinancePrisma() {
+function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {}) {
+  const rollbackOnError = options.rollbackOnError ?? true;
   const entryCategory = {
     id: '11111111-1111-4111-8111-111111111111',
     name: 'Renovação',
@@ -756,6 +803,12 @@ function createGroupedFinancePrisma() {
   const events: Array<Record<string, unknown>> = [];
   const paymentGroups: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
+  const acquireAdvisoryLock = createAdvisoryLockSimulator();
+  const lockContext = new AsyncLocalStorage<Array<() => void>>();
+  const executeRawUnsafe = vi.fn(async (_query: string, ...values: unknown[]) => {
+    await acquireAdvisoryLock(String(values[0]), lockContext.getStore() ?? []);
+    return 0;
+  });
   let failTransactionAt = 0;
 
   const decorateReceivable = (receivable: (typeof receivables)[number]) => {
@@ -768,10 +821,12 @@ function createGroupedFinancePrisma() {
       clientReference: reference,
       paymentTransaction:
         transactions.find((transaction) => transaction.receivableId === receivable.id) ?? null,
+      paymentIntents: paymentIntents.filter((intent) => intent.receivableId === receivable.id),
     };
   };
 
   const tx = {
+    $executeRawUnsafe: executeRawUnsafe,
     financialCategory: {
       findFirst: () => Promise.resolve(entryCategory),
     },
@@ -956,6 +1011,7 @@ function createGroupedFinancePrisma() {
   const prisma = {
     ...tx,
     $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
+      const releaseLocks: Array<() => void> = [];
       const snapshots = {
         receivables: receivables.map((receivable) => ({ ...receivable })),
         references: references.map((reference) => ({ ...reference })),
@@ -969,17 +1025,27 @@ function createGroupedFinancePrisma() {
         })),
         paymentIntents: paymentIntents.map((intent) => ({ ...intent })),
       };
-      try {
-        return await callback(tx);
-      } catch (error) {
-        receivables.splice(0, receivables.length, ...(snapshots.receivables as typeof receivables));
-        references.splice(0, references.length, ...(snapshots.references as typeof references));
-        transactions.splice(0, transactions.length, ...snapshots.transactions);
-        events.splice(0, events.length, ...snapshots.events);
-        paymentGroups.splice(0, paymentGroups.length, ...snapshots.paymentGroups);
-        paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
-        throw error;
-      }
+      return lockContext.run(releaseLocks, async () => {
+        try {
+          return await callback(tx);
+        } catch (error) {
+          if (rollbackOnError) {
+            receivables.splice(
+              0,
+              receivables.length,
+              ...(snapshots.receivables as typeof receivables),
+            );
+            references.splice(0, references.length, ...(snapshots.references as typeof references));
+            transactions.splice(0, transactions.length, ...snapshots.transactions);
+            events.splice(0, events.length, ...snapshots.events);
+            paymentGroups.splice(0, paymentGroups.length, ...snapshots.paymentGroups);
+            paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
+          }
+          throw error;
+        } finally {
+          releaseLocks.reverse().forEach((release) => release());
+        }
+      });
     },
   };
   const provider = {
@@ -1558,10 +1624,77 @@ describe('FinanceService', () => {
       expect.objectContaining({ amount: new Prisma.Decimal('120.00') }),
     );
     expect(fake.transactions).toHaveLength(3);
+    expect(fake.prisma.$executeRawUnsafe).toHaveBeenCalledTimes(3);
+    expect(fake.prisma.$executeRawUnsafe).toHaveBeenNthCalledWith(
+      1,
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      `pix:receivable:${fake.receivables[0]!.id}`,
+    );
     expect(fake.paymentIntents[0]!.status).toBe('PAID');
     expect(fake.paymentGroups[0]!.status).toBe('PAID');
     expect(fake.cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(3);
     expect(fake.recovery.cancelActiveForReceivable).toHaveBeenCalledTimes(3);
+  });
+
+  it('serializes concurrent grouped PIX creation for the same receivables', async () => {
+    const fake = createGroupedFinancePrisma({ rollbackOnError: false });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+
+    const results = await Promise.allSettled([
+      service.createReceivablesPix({ receivableIds: ids }, actorUserId),
+      service.createReceivablesPix({ receivableIds: [...ids].reverse() }, actorUserId),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentGroups).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(1);
+  });
+
+  it('locks grouped receivables in sorted order', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const shuffled = [fake.receivables[2]!.id, fake.receivables[0]!.id, fake.receivables[1]!.id];
+
+    await service.createReceivablesPix({ receivableIds: shuffled }, actorUserId);
+
+    expect(fake.prisma.$executeRawUnsafe.mock.calls.map((call) => call[1])).toEqual(
+      [...shuffled].sort().map((id) => `pix:receivable:${id}`),
+    );
+  });
+
+  it('serializes individual and grouped PIX creation for the same receivable', async () => {
+    const fake = createGroupedFinancePrisma({ rollbackOnError: false });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+
+    const results = await Promise.allSettled([
+      service.createReceivablePix(ids[0]!, actorUserId),
+      service.createReceivablesPix({ receivableIds: ids }, actorUserId),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentGroups.length).toBeLessThanOrEqual(1);
   });
 
   it('keeps concurrent grouped paid sync to one effective write-off', async () => {
@@ -2656,6 +2789,10 @@ describe('FinanceService', () => {
     expect(intent.pixCopyPaste).toContain('MOCK-PIX');
     expect(fake.paymentIntents).toHaveLength(1);
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.tx.$executeRawUnsafe).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      `pix:receivable:${fake.receivable.id}`,
+    );
   });
 
   it('does not silently create another active PIX for the same receivable', async () => {
@@ -2669,6 +2806,25 @@ describe('FinanceService', () => {
 
     const first = await service.createReceivablePix(fake.receivable.id, actorUserId);
     const second = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    expect(second.id).toBe(first.id);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes concurrent PIX creation for the same receivable', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const [first, second] = await Promise.all([
+      service.createReceivablePix(fake.receivable.id, actorUserId),
+      service.createReceivablePix(fake.receivable.id, actorUserId),
+    ]);
 
     expect(second.id).toBe(first.id);
     expect(fake.paymentIntents).toHaveLength(1);
@@ -2694,6 +2850,24 @@ describe('FinanceService', () => {
       'EXPIRED',
       'WAITING_PAYMENT',
     ]);
+  });
+
+  it('rejects mock confirmation for real payment providers', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+
+    await expect(service.confirmMockPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      'Confirmacao mock permitida apenas para provider MOCK.',
+    );
+    expect(fake.provider.markPixPaid).not.toHaveBeenCalled();
+    expect(fake.transactions).toHaveLength(0);
   });
 
   it('confirms mock paid through provider sync and creates one financial write-off with timeline', async () => {

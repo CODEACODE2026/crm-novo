@@ -288,6 +288,8 @@ export class FinanceService {
   async createReceivablePix(id: string, actorUserId: string) {
     try {
       const intent = await this.prisma.$transaction(async (tx) => {
+        await this.acquirePixCreationLocks(tx, [id]);
+
         const receivable = await tx.receivable.findUnique({
           where: { id },
           include: {
@@ -310,7 +312,7 @@ export class FinanceService {
           throw new ConflictException('Apenas contas pendentes podem gerar PIX.');
         }
 
-        const activeIntent = receivable.paymentIntents[0];
+        const activeIntent = await this.findActivePixForReceivables(tx, [receivable.id]);
 
         if (activeIntent) {
           return activeIntent;
@@ -387,6 +389,8 @@ export class FinanceService {
 
     try {
       const intent = await this.prisma.$transaction(async (tx) => {
+        await this.acquirePixCreationLocks(tx, receivableIds);
+
         const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
         await this.ensureNoActivePixForReceivables(tx, receivableIds);
 
@@ -626,6 +630,10 @@ export class FinanceService {
 
     if (!intent.providerTransactionId) {
       throw new ConflictException('Intencao de pagamento sem transacao do provider.');
+    }
+
+    if (intent.provider !== 'MOCK') {
+      throw new ConflictException('Confirmacao mock permitida apenas para provider MOCK.');
     }
 
     if (!this.paymentProvider.markPixPaid) {
@@ -2113,11 +2121,36 @@ export class FinanceService {
     return ordered;
   }
 
+  private async acquirePixCreationLocks(tx: Prisma.TransactionClient, receivableIds: string[]) {
+    const executable = tx as Prisma.TransactionClient & {
+      $executeRawUnsafe?: (query: string, ...values: unknown[]) => Promise<unknown>;
+    };
+
+    if (!executable.$executeRawUnsafe) {
+      return;
+    }
+
+    for (const receivableId of [...new Set(receivableIds)].sort()) {
+      await executable.$executeRawUnsafe(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        `pix:receivable:${receivableId}`,
+      );
+    }
+  }
+
   private async ensureNoActivePixForReceivables(
     tx: Prisma.TransactionClient,
     receivableIds: string[],
   ) {
-    const activeIntent = await tx.paymentIntent.findFirst({
+    const activeIntent = await this.findActivePixForReceivables(tx, receivableIds);
+
+    if (activeIntent) {
+      throw new ConflictException('Ja existe um PIX ativo para uma das contas selecionadas.');
+    }
+  }
+
+  private findActivePixForReceivables(tx: Prisma.TransactionClient, receivableIds: string[]) {
+    return tx.paymentIntent.findFirst({
       where: {
         status: { in: [...activePixStatuses] },
         OR: [
@@ -2126,10 +2159,6 @@ export class FinanceService {
         ],
       },
     });
-
-    if (activeIntent) {
-      throw new ConflictException('Ja existe um PIX ativo para uma das contas selecionadas.');
-    }
   }
 
   private sumReceivables(receivables: Pick<GroupReceivable, 'amount'>[]) {

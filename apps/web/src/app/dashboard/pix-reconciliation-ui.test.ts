@@ -27,6 +27,16 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('Nenhum novo PIX será');
   });
 
+  it('keeps the transaction ID display controlled by operator input only', () => {
+    expect(pixModalSource).toContain('value={reconcileTransactionId}');
+    expect(pixModalSource).toContain('setReconcileTransactionId(event.target.value);');
+    expect(pixModalSource).toContain('providerTransactionId: reconcileTransactionId.trim()');
+    expect(pixModalSource).toContain('placeholder="Ex.: 12345"');
+    expect(pixModalSource).not.toContain('placeholder="75148"');
+    expect(pixModalSource).not.toContain('Provider mockado em homologação');
+    expect(pixModalSource).toContain('Reconciliação manual de PIX existente');
+  });
+
   it('uses the backend preview contract as the confirm authority', () => {
     expect(pixModalSource).toContain('const canConfirmReconciliation =');
     expect(pixModalSource).toContain('Boolean(reconcilePreview?.adoptable)');

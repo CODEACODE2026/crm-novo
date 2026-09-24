@@ -11618,7 +11618,7 @@ function PixReceivableModal({
           <section className="pix-panel">
             <div className="pix-status-row">
               <strong>Reconciliação técnica</strong>
-              <span>Provider mockado em homologação</span>
+              <span>Reconciliação manual de PIX existente</span>
             </div>
             <div className="notice warning">
               Esta ação vinculará ao CRM um PIX que já existe no provedor. Nenhum novo PIX será
@@ -11648,7 +11648,7 @@ function PixReceivableModal({
                     setReconcilePreview(null);
                     setError('');
                   }}
-                  placeholder="75148"
+                  placeholder="Ex.: 12345"
                 />
               </label>
             </div>

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PaymentProviderCode, Prisma } from '@prisma/client';
 import { FastDepixApiClient, type FastDepixTransactionResponse } from './fastdepix-api.client';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
@@ -131,14 +131,20 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
 
 @Injectable()
 export class FastFlowPaymentProvider extends BaseFastDepixPaymentProvider {
-  constructor(apiClient: FastDepixApiClient, credentials: PaymentProviderCredentialsService) {
+  constructor(
+    @Inject(FastDepixApiClient) apiClient: FastDepixApiClient,
+    @Inject(PaymentProviderCredentialsService) credentials: PaymentProviderCredentialsService,
+  ) {
     super(apiClient, credentials, 'FASTFLOW');
   }
 }
 
 @Injectable()
 export class FastPayPaymentProvider extends BaseFastDepixPaymentProvider {
-  constructor(apiClient: FastDepixApiClient, credentials: PaymentProviderCredentialsService) {
+  constructor(
+    @Inject(FastDepixApiClient) apiClient: FastDepixApiClient,
+    @Inject(PaymentProviderCredentialsService) credentials: PaymentProviderCredentialsService,
+  ) {
     super(apiClient, credentials, 'FASTPAY');
   }
 }

@@ -3148,6 +3148,12 @@ describe('FinanceService', () => {
         hasPixCopyPaste: true,
         hasQrCodeData: true,
       },
+      impact: [
+        'Criar PaymentIntent local',
+        'Manter Receivable PENDENTE',
+        'Nao criar PIX novo',
+        'Nao criar FinancialTransaction',
+      ],
     });
     expect(fake.paymentIntents).toHaveLength(0);
     expect(fake.transactions).toHaveLength(0);
@@ -3284,6 +3290,21 @@ describe('FinanceService', () => {
     });
 
     expect(preview).toMatchObject({ adoptable: true, external: { status } });
+    if (status === 'PAID') {
+      expect(preview.impact).toEqual([
+        'Criar PaymentIntent local',
+        'Processar pagamento pela regra financeira existente',
+        'Baixar Receivable',
+        'Criar uma FinancialTransaction se ainda nao existir',
+      ]);
+    } else {
+      expect(preview.impact).toEqual([
+        'Criar PaymentIntent historico EXPIRED',
+        'Manter Receivable PENDENTE',
+        'Nao criar PIX novo',
+        'Nao criar FinancialTransaction',
+      ]);
+    }
     expect(fake.paymentIntents).toHaveLength(0);
     expect(fake.transactions).toHaveLength(0);
     expect(fake.events).toHaveLength(0);

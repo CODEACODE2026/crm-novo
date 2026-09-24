@@ -11322,11 +11322,10 @@ function PixReceivableModal({
   const [reconcileProvider, setReconcileProvider] =
     useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
   const [reconcileTransactionId, setReconcileTransactionId] = useState('');
-  const [reconcileReason, setReconcileReason] = useState(
-    'Reconciliação de PIX criado no provider após falha de persistência local.',
-  );
+  const [reconcileReason, setReconcileReason] = useState('');
   const [reconcilePreview, setReconcilePreview] = useState<PixReconciliationPreview | null>(null);
   const actionRef = useRef(false);
+  const previewActionRef = useRef(false);
 
   const loadIntents = useCallback(async () => {
     setLoading(true);
@@ -11380,11 +11379,14 @@ function PixReceivableModal({
   }
 
   async function runReconciliationPreview() {
+    if (previewActionRef.current) return;
+
     if (!reconcileTransactionId.trim()) {
       setError('Informe o transaction ID do provider.');
       return;
     }
 
+    previewActionRef.current = true;
     setBusy(true);
     setError('');
     setNotice('');
@@ -11400,18 +11402,27 @@ function PixReceivableModal({
       setError(err instanceof Error ? err.message : 'Não foi possível pré-visualizar.');
     } finally {
       setBusy(false);
+      previewActionRef.current = false;
     }
   }
 
   async function runReconciliationConfirm() {
-    if (!reconcilePreview?.adoptable || actionRef.current) return;
+    const providerTransactionId = reconcileTransactionId.trim();
+    if (
+      !reconcilePreview?.adoptable ||
+      reconcilePreview.provider !== reconcileProvider ||
+      reconcilePreview.providerTransactionId !== providerTransactionId ||
+      actionRef.current
+    ) {
+      return;
+    }
 
     await runAction(
       () =>
         reconcileReceivablePix(receivable.id, {
           provider: reconcileProvider,
-          providerTransactionId: reconcileTransactionId.trim(),
-          idempotencyKey: `pix-reconcile:${receivable.id}:${reconcileProvider}:${reconcileTransactionId.trim()}`,
+          providerTransactionId,
+          idempotencyKey: `pix-reconcile:${receivable.id}:${reconcileProvider}:${providerTransactionId}`,
           ...(reconcileReason.trim() ? { reason: reconcileReason.trim() } : {}),
         }),
       'PIX reconciliado.',
@@ -11426,6 +11437,21 @@ function PixReceivableModal({
     activeIntent && !['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
   const canRenderQrImage =
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
+  const canConfirmReconciliation =
+    Boolean(reconcilePreview?.adoptable) &&
+    reconcilePreview?.provider === reconcileProvider &&
+    reconcilePreview.providerTransactionId === reconcileTransactionId.trim();
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !busy) {
+        onClose();
+      }
+    }
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [busy, onClose]);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -11606,6 +11632,7 @@ function PixReceivableModal({
                   onChange={(event) => {
                     setReconcileProvider(event.target.value as typeof reconcileProvider);
                     setReconcilePreview(null);
+                    setError('');
                   }}
                 >
                   <option value="FASTFLOW">FastFlow</option>
@@ -11619,6 +11646,7 @@ function PixReceivableModal({
                   onChange={(event) => {
                     setReconcileTransactionId(event.target.value);
                     setReconcilePreview(null);
+                    setError('');
                   }}
                   placeholder="75148"
                 />
@@ -11644,7 +11672,7 @@ function PixReceivableModal({
               </button>
               <button
                 className="primary-button"
-                disabled={busy || !reconcilePreview?.adoptable}
+                disabled={busy || !canConfirmReconciliation}
                 type="button"
                 onClick={() => void runReconciliationConfirm()}
               >
@@ -11654,6 +11682,14 @@ function PixReceivableModal({
             </div>
             {reconcilePreview ? (
               <>
+                <div className={`notice ${reconcilePreview.adoptable ? 'success' : 'danger'}`}>
+                  {reconcilePreview.adoptable
+                    ? 'Pode reconciliar.'
+                    : 'Reconciliação bloqueada pelo backend.'}
+                </div>
+                {reconcilePreview.external?.status === 'PAID' ? (
+                  <div className="notice warning">PIX já está pago no provider.</div>
+                ) : null}
                 <dl className="detail-list">
                   <div>
                     <dt>Cliente</dt>

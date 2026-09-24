@@ -37,7 +37,7 @@ PIX0.4 usa somente campos ja disponiveis nesse contrato tipado. Nao ha token, se
 - Preview valida primeiro o estado local e nao grava nada.
 - Confirmacao sempre reconsulta o provider antes de gravar; preview nao e autoridade final.
 - Valor do provider deve bater exatamente com `Receivable.amount` usando `Prisma.Decimal`.
-- `WAITING_PAYMENT`: cria `PaymentIntent`, mantem `Receivable` pendente e nao cria `FinancialTransaction`.
+- `WAITING_PAYMENT`: cria `PaymentIntent`, mantem `Receivable` pendente, nao cria novo PIX e nao cria `FinancialTransaction`.
 - `PAID`: cria/adota a intent e reaproveita `applyProviderStatus` para baixa financeira existente.
 - `EXPIRED`: cria historico local `EXPIRED`, mantem `Receivable` pendente e permite novo PIX pelo fluxo normal.
 - `CANCELED`, `REFUNDED` e `FAILED`: podem ser adotados como historico sem baixa.

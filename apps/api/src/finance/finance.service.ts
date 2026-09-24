@@ -2236,9 +2236,19 @@ export class FinanceService {
       ];
     }
     if (transaction.status === 'EXPIRED') {
-      return ['Criar PaymentIntent historico EXPIRED', 'Manter Receivable PENDENTE'];
+      return [
+        'Criar PaymentIntent historico EXPIRED',
+        'Manter Receivable PENDENTE',
+        'Nao criar PIX novo',
+        'Nao criar FinancialTransaction',
+      ];
     }
-    return ['Criar PaymentIntent local', 'Manter Receivable PENDENTE'];
+    return [
+      'Criar PaymentIntent local',
+      'Manter Receivable PENDENTE',
+      'Nao criar PIX novo',
+      'Nao criar FinancialTransaction',
+    ];
   }
 
   private normalizeExternalTransactionId(value: string) {

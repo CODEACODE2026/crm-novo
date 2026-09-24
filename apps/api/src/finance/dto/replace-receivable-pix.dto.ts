@@ -20,3 +20,24 @@ export class ReplaceReceivablePixDto extends ReplaceReceivablePixPreviewDto {
   @MaxLength(120)
   idempotencyKey?: string;
 }
+
+export class RecoverReceivablePixReplacementPreviewDto extends ReplaceReceivablePixPreviewDto {
+  @IsString()
+  @MaxLength(120)
+  providerTransactionId!: string;
+}
+
+export class RecoverReceivablePixReplacementDto extends RecoverReceivablePixReplacementPreviewDto {
+  @IsUUID()
+  expectedCurrentIntentId!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  idempotencyKey?: string;
+}

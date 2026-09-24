@@ -198,6 +198,8 @@ import {
   previewMessageTemplate,
   previewCurrentCycleReceivable,
   previewReceivablePixReplacement,
+  previewReceivablePixReplacementRecovery,
+  recoverReceivablePixReplacement,
   reconcileBilling,
   reconcileBillingReceivables,
   reconcileRecovery,
@@ -236,6 +238,7 @@ import {
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
   type PixReconciliationPreview,
+  type PixReplacementRecoveryPreview,
   type PixReplacementPreview,
   type Receivable,
   type ReceivableDisplayStatus,
@@ -11383,16 +11386,25 @@ function PixReceivableModal({
   const [error, setError] = useState('');
   const [showReconciliation, setShowReconciliation] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
+  const [showReplacementRecovery, setShowReplacementRecovery] = useState(false);
   const [reconcileProvider, setReconcileProvider] =
     useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
   const [reconcileTransactionId, setReconcileTransactionId] = useState('');
   const [reconcileReason, setReconcileReason] = useState('');
   const [reconcilePreview, setReconcilePreview] = useState<PixReconciliationPreview | null>(null);
+  const [recoveryProvider, setRecoveryProvider] =
+    useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
+  const [recoveryTransactionId, setRecoveryTransactionId] = useState('');
+  const [recoveryReason, setRecoveryReason] = useState('');
+  const [recoveryPreview, setRecoveryPreview] = useState<PixReplacementRecoveryPreview | null>(
+    null,
+  );
   const [replaceReason, setReplaceReason] = useState('');
   const [replacementPreview, setReplacementPreview] = useState<PixReplacementPreview | null>(null);
   const actionRef = useRef(false);
   const previewActionRef = useRef(false);
   const replacePreviewActionRef = useRef(false);
+  const recoveryPreviewActionRef = useRef(false);
 
   const loadIntents = useCallback(
     async (fallbackIntent?: PaymentIntent) => {
@@ -11512,6 +11524,63 @@ function PixReceivableModal({
     setReconcilePreview(null);
   }
 
+  async function runReplacementRecoveryPreview() {
+    if (!activeIntent || recoveryPreviewActionRef.current) return;
+
+    const providerTransactionId = recoveryTransactionId.trim();
+    if (!providerTransactionId) {
+      setError('Informe o transaction ID do provider.');
+      return;
+    }
+
+    recoveryPreviewActionRef.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setRecoveryPreview(null);
+
+    try {
+      const preview = await previewReceivablePixReplacementRecovery(receivable.id, {
+        provider: recoveryProvider,
+        providerTransactionId,
+      });
+      setRecoveryPreview(preview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível pré-visualizar.');
+    } finally {
+      setBusy(false);
+      recoveryPreviewActionRef.current = false;
+    }
+  }
+
+  async function runReplacementRecoveryConfirm() {
+    const providerTransactionId = recoveryTransactionId.trim();
+    if (
+      !activeIntent ||
+      !recoveryPreview?.recoverable ||
+      recoveryPreview.provider !== recoveryProvider ||
+      recoveryPreview.providerTransactionId !== providerTransactionId ||
+      recoveryPreview.expectedCurrentIntentId !== activeIntent.id ||
+      actionRef.current
+    ) {
+      return;
+    }
+
+    await runAction(
+      () =>
+        recoverReceivablePixReplacement(receivable.id, {
+          provider: recoveryProvider,
+          providerTransactionId,
+          expectedCurrentIntentId: activeIntent.id,
+          idempotencyKey: `pix-replace-recovery:${receivable.id}:${activeIntent.id}:${recoveryProvider}:${providerTransactionId}`,
+          ...(recoveryReason.trim() ? { reason: recoveryReason.trim() } : {}),
+        }),
+      'PIX de substituição recuperado.',
+    );
+    setShowReplacementRecovery(false);
+    setRecoveryPreview(null);
+  }
+
   async function runReplacementPreview() {
     if (!activeIntent || replacePreviewActionRef.current) return;
 
@@ -11573,6 +11642,11 @@ function PixReceivableModal({
   const canConfirmReplacement =
     Boolean(replacementPreview?.replaceable) &&
     replacementPreview?.currentIntent?.id === activeIntent?.id;
+  const canConfirmReplacementRecovery =
+    Boolean(recoveryPreview?.recoverable) &&
+    recoveryPreview?.provider === recoveryProvider &&
+    recoveryPreview.providerTransactionId === recoveryTransactionId.trim() &&
+    recoveryPreview.expectedCurrentIntentId === activeIntent?.id;
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -11740,7 +11814,19 @@ function PixReceivableModal({
                   onSelect: () => {
                     setShowReplacement((value) => !value);
                     setShowReconciliation(false);
+                    setShowReplacementRecovery(false);
                     setReplacementPreview(null);
+                  },
+                },
+                {
+                  disabled: busy || !canReplacePix,
+                  icon: Search,
+                  label: 'Recuperar PIX de substituição',
+                  onSelect: () => {
+                    setShowReplacementRecovery((value) => !value);
+                    setShowReplacement(false);
+                    setShowReconciliation(false);
+                    setRecoveryPreview(null);
                   },
                 },
               ]}
@@ -11846,6 +11932,97 @@ function PixReceivableModal({
                 {replacementPreview.blockers.length ? (
                   <div className="mini-list">
                     {replacementPreview.blockers.map((blocker) => (
+                      <article key={blocker.code}>
+                        <strong>{blocker.code}</strong>
+                        <p>{blocker.message}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </section>
+        ) : null}
+
+        {showReplacementRecovery && activeIntent ? (
+          <section className="pix-panel">
+            <div className="pix-status-row">
+              <strong>Recuperar PIX de substituição</strong>
+              <span>{paymentProviderDisplay(activeIntent.provider)}</span>
+            </div>
+            <div className="notice warning">
+              Esta ação recupera um PIX que já foi criado no provedor durante uma substituição que
+              não foi concluída localmente. Nenhum novo PIX será criado.
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>Provider</span>
+                <select
+                  value={recoveryProvider}
+                  onChange={(event) => {
+                    setRecoveryProvider(event.target.value as typeof recoveryProvider);
+                    setRecoveryPreview(null);
+                    setError('');
+                  }}
+                >
+                  <option value="FASTFLOW">FastFlow</option>
+                  <option value="FASTPAY">FastPay</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Transaction ID externo</span>
+                <input
+                  value={recoveryTransactionId}
+                  onChange={(event) => {
+                    setRecoveryTransactionId(event.target.value);
+                    setRecoveryPreview(null);
+                    setError('');
+                  }}
+                  placeholder="Ex.: 75739"
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span>Motivo</span>
+              <textarea
+                rows={3}
+                value={recoveryReason}
+                onChange={(event) => setRecoveryReason(event.target.value)}
+              />
+            </label>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={busy}
+                type="button"
+                onClick={() => void runReplacementRecoveryPreview()}
+              >
+                <Search aria-hidden="true" size={16} />
+                Buscar
+              </button>
+              <button
+                className="primary-button"
+                disabled={busy || !canConfirmReplacementRecovery}
+                type="button"
+                onClick={() => void runReplacementRecoveryConfirm()}
+              >
+                <ShieldCheck aria-hidden="true" size={16} />
+                Confirmar recuperação
+              </button>
+            </div>
+            {recoveryPreview ? (
+              <>
+                <div className="mini-list">
+                  {recoveryPreview.impact.map((item) => (
+                    <article key={item}>
+                      <strong>Impacto</strong>
+                      <p>{item}</p>
+                    </article>
+                  ))}
+                </div>
+                {recoveryPreview.blockers.length ? (
+                  <div className="mini-list">
+                    {recoveryPreview.blockers.map((blocker) => (
                       <article key={blocker.code}>
                         <strong>{blocker.code}</strong>
                         <p>{blocker.message}</p>

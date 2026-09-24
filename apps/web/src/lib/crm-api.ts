@@ -286,6 +286,19 @@ export interface PixReplacementPreview {
   blockers: Array<{ code: string; message: string }>;
 }
 
+export interface PixReplacementRecoveryPreview {
+  recoverable: boolean;
+  provider: PaymentProviderCode;
+  providerTransactionId: string;
+  receivable: PixReconciliationPreview['receivable'];
+  currentIntent: PaymentIntent | null;
+  expectedCurrentIntentId: string | null;
+  external: PixReconciliationPreview['external'];
+  impact: string[];
+  blockers: Array<{ code: string; message: string }>;
+  warning: string;
+}
+
 export interface PaymentGroupPaymentResult {
   id: string;
   clientId: string;
@@ -1638,6 +1651,35 @@ export function replaceReceivablePix(
   },
 ) {
   return apiFetch<PaymentIntent>(`/receivables/${id}/pix/replace`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewReceivablePixReplacementRecovery(
+  id: string,
+  payload: { provider: PaymentProviderCode; providerTransactionId: string },
+) {
+  const params = new URLSearchParams();
+  params.set('provider', payload.provider);
+  params.set('providerTransactionId', payload.providerTransactionId);
+
+  return apiFetch<PixReplacementRecoveryPreview>(
+    `/receivables/${id}/pix/replace-recovery-preview?${params}`,
+  );
+}
+
+export function recoverReceivablePixReplacement(
+  id: string,
+  payload: {
+    provider: PaymentProviderCode;
+    providerTransactionId: string;
+    expectedCurrentIntentId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  },
+) {
+  return apiFetch<PaymentIntent>(`/receivables/${id}/pix/replace-recovery`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

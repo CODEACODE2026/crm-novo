@@ -69,6 +69,25 @@ Antes de producao, reformular criacao de PIX para tolerar `provider success + lo
 
 O hardening PIX0.5.1 serializa a decisao de substituicao por `Receivable`, mas ainda mantem a chamada HTTP ao provider dentro do escopo transacional para evitar multiplicar PIX externos no desenho atual. Em uma etapa futura, evoluir para reserva local/outbox ou idempotencia externa formal, reduzindo a duracao da transaction sem perder a garantia de uma unica tentativa operacional ativa.
 
+## PIX0.5.2 - Recuperacao explicita de replace orfao
+
+Quando uma substituicao cria o PIX no provider mas nao conclui a persistencia local, a recuperacao deve usar fluxo proprio, nao a reconciliacao normal PIX0.4. A reconciliacao normal continua bloqueada se ja existe `PaymentIntent` ativo na `Receivable`.
+
+Decisoes:
+
+- Preview de recuperacao e read-only e consulta o provider pela abstraction/registry.
+- Confirmacao reconsulta o provider; preview nao e autoridade final.
+- O POST recebe `expectedCurrentIntentId` e, dentro do advisory lock da `Receivable`, bloqueia com conflito se o current intent mudou antes de qualquer escrita.
+- O current intent A precisa estar `WAITING_PAYMENT`, sem `paymentGroupId`, e no mesmo provider informado.
+- A transacao externa B precisa existir no provider, ter o ID exato solicitado, valor igual ao da `Receivable` e status conhecido.
+- `WAITING_PAYMENT`: A vira `SUPERSEDED`; B vira novo `PaymentIntent` local `WAITING_PAYMENT`; `Receivable` permanece `PENDENTE`; nenhuma `FinancialTransaction` e criada.
+- `PAID`: A vira `SUPERSEDED`; B e adotado e liquidado pela rotina central existente de settlement.
+- `EXPIRED`, `CANCELED`, `FAILED` e `REFUNDED`: bloqueados nesta fase para nao trocar uma tentativa operacional por uma transacao externa inutilizavel.
+- Status externo desconhecido bloqueia.
+- Duplicidade por `provider + providerTransactionId` nao cria novo registro; retry controlado retorna o registro local da mesma `Receivable`, e duplicidade em outra `Receivable` vira conflito.
+- Recuperacao nao chama `createPix` nem `cancelPix`.
+- PIX agrupado e `Receivable` paga/cancelada seguem bloqueados.
+
 ## PIX0.5 - Substituicao segura de PIX
 
 O status local `SUPERSEDED` representa uma tentativa de PIX que deixou de ser a tentativa

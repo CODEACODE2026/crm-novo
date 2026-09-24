@@ -24,8 +24,10 @@ import {
   payReceivable,
   payReceivables,
   previewReceivablePixReplacement,
+  previewReceivablePixReplacementRecovery,
   previewRenewalReversal,
   registerPaymentWebhook,
+  recoverReceivablePixReplacement,
   replaceReceivablePix,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
@@ -543,6 +545,49 @@ describe('CRM UI formatters', () => {
       expectedCurrentIntentId: 'intent-1',
       reason: 'QR expirado',
       idempotencyKey: 'pix-replace:receivable-1:intent-1',
+    });
+  });
+
+  it('uses explicit endpoints for PIX replacement recovery preview and confirmation', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewReceivablePixReplacementRecovery('receivable-1', {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+    });
+    await recoverReceivablePixReplacement('receivable-1', {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+      expectedCurrentIntentId: 'intent-75148',
+      reason: 'Replace órfão',
+      idempotencyKey: 'pix-replace-recovery:receivable-1:intent-75148:FASTFLOW:75739',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        '/receivables/receivable-1/pix/replace-recovery-preview?provider=FASTFLOW&providerTransactionId=75739',
+      ),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/receivables/receivable-1/pix/replace-recovery'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const confirmCall = fetchMock.mock.calls[1] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    const confirmBody = confirmCall?.[1]?.body;
+    expect(typeof confirmBody).toBe('string');
+    expect(JSON.parse(confirmBody as string)).toEqual({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+      expectedCurrentIntentId: 'intent-75148',
+      reason: 'Replace órfão',
+      idempotencyKey: 'pix-replace-recovery:receivable-1:intent-75148:FASTFLOW:75739',
     });
   });
 

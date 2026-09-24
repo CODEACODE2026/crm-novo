@@ -46,6 +46,22 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('disabled={busy || !canConfirmReplacement}');
   });
 
+  it('keeps replacement recovery clearly separated from generating a new PIX', () => {
+    expect(pixModalSource).toContain("label: 'Recuperar PIX de substituição'");
+    expect(pixModalSource).toContain(
+      'const [showReplacementRecovery, setShowReplacementRecovery] = useState(false);',
+    );
+    expect(pixModalSource).toContain('const [recoveryPreview, setRecoveryPreview] =');
+    expect(pixModalSource).toContain('PixReplacementRecoveryPreview | null');
+    expect(pixModalSource).toContain('previewReceivablePixReplacementRecovery(receivable.id');
+    expect(pixModalSource).toContain('recoverReceivablePixReplacement(receivable.id');
+    expect(pixModalSource).toContain(
+      'Esta ação recupera um PIX que já foi criado no provedor durante uma substituição que',
+    );
+    expect(pixModalSource).toContain('Nenhum novo PIX será criado.');
+    expect(pixModalSource).toContain('disabled={busy || !canConfirmReplacementRecovery}');
+  });
+
   it('labels superseded PIX attempts as historical replacements', () => {
     expect(dashboardSource).toContain("SUPERSEDED: 'Substituído'");
     expect(pixModalSource).toContain("!['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED']");

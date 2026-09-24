@@ -43,6 +43,8 @@ import {
   ReconcileReceivablePixPreviewDto,
 } from './dto/reconcile-receivable-pix.dto';
 import {
+  RecoverReceivablePixReplacementDto,
+  RecoverReceivablePixReplacementPreviewDto,
   ReplaceReceivablePixDto,
   ReplaceReceivablePixPreviewDto,
 } from './dto/replace-receivable-pix.dto';
@@ -510,6 +512,158 @@ export class FinanceService {
 
       throw error;
     }
+  }
+
+  async previewReceivablePixReplacementRecovery(
+    id: string,
+    dto: RecoverReceivablePixReplacementPreviewDto,
+  ) {
+    const providerTransactionId = this.normalizeExternalTransactionId(dto.providerTransactionId);
+    const inspection = await this.inspectReceivableForPixReplacement(this.prisma, id, dto.provider);
+
+    if (inspection.blockers.length > 0 || !inspection.currentIntent) {
+      return this.presentPixReplacementRecoveryPreview({
+        inspection,
+        provider: dto.provider,
+        providerTransactionId,
+        transaction: null,
+        blockers: inspection.blockers,
+      });
+    }
+
+    const existing = await this.prisma.paymentIntent.findFirst({
+      where: { provider: dto.provider, providerTransactionId },
+    });
+    const transaction = existing
+      ? null
+      : await this.fetchProviderTransaction(dto.provider, providerTransactionId);
+    const blockers = this.validateProviderTransactionForReplacementRecovery(
+      inspection.receivable,
+      inspection.currentIntent,
+      dto.provider,
+      providerTransactionId,
+      transaction,
+      Boolean(existing),
+    );
+
+    return this.presentPixReplacementRecoveryPreview({
+      inspection,
+      provider: dto.provider,
+      providerTransactionId,
+      transaction,
+      blockers,
+    });
+  }
+
+  async recoverReceivablePixReplacement(
+    id: string,
+    dto: RecoverReceivablePixReplacementDto,
+    actorUserId: string,
+  ) {
+    const providerTransactionId = this.normalizeExternalTransactionId(dto.providerTransactionId);
+    const recovery = await this.prisma.$transaction(async (tx) => {
+      await this.acquirePixCreationLocks(tx, [id]);
+
+      const existing = await tx.paymentIntent.findFirst({
+        where: { provider: dto.provider, providerTransactionId },
+      });
+
+      if (existing) {
+        if (existing.receivableId !== id) {
+          throw new ConflictException('Ja existe intencao local para esta transacao do provider.');
+        }
+
+        return { intent: existing, providerTransaction: null };
+      }
+
+      const inspection = await this.inspectReceivableForPixReplacement(tx, id, dto.provider);
+
+      if (!inspection.currentIntent) {
+        throw new ConflictException('Nenhum PIX elegivel para recuperacao de substituicao.');
+      }
+
+      if (inspection.currentIntent.id !== dto.expectedCurrentIntentId) {
+        throw new ConflictException('PIX atual mudou. Gere uma nova previa antes de recuperar.');
+      }
+
+      this.throwPixReplacementBlockers(inspection.blockers);
+
+      const providerTransaction = await this.fetchProviderTransaction(
+        dto.provider,
+        providerTransactionId,
+      );
+      const recoveryBlockers = this.validateProviderTransactionForReplacementRecovery(
+        inspection.receivable,
+        inspection.currentIntent,
+        dto.provider,
+        providerTransactionId,
+        providerTransaction,
+        false,
+      );
+      this.throwPixReplacementBlockers(recoveryBlockers);
+
+      await tx.paymentIntent.update({
+        where: { id: inspection.currentIntent.id },
+        data: { status: 'SUPERSEDED' },
+      });
+
+      const created = await tx.paymentIntent.create({
+        data: {
+          receivableId: id,
+          provider: dto.provider,
+          providerTransactionId,
+          externalStatus: providerTransaction.externalStatus,
+          externalDepixId: providerTransaction.externalDepixId,
+          blockchainTxId: providerTransaction.blockchainTxId,
+          status:
+            providerTransaction.status === 'PAID' ? 'WAITING_PAYMENT' : providerTransaction.status,
+          amount: inspection.receivable.amount,
+          pixCopyPaste: providerTransaction.pixCopyPaste,
+          qrCodeData: providerTransaction.qrCodeData,
+          expiresAt: providerTransaction.expiresAt,
+          lastSyncAt: new Date(),
+          paidAt: null,
+          failureCode: providerTransaction.failureCode,
+          failureMessage: providerTransaction.failureMessage,
+        },
+      });
+
+      await tx.clientEvent.create({
+        data: {
+          clientId: inspection.receivable.clientId,
+          type: 'PIX_PAYMENT_INTENT_CREATED',
+          title: 'PIX de substituicao recuperado.',
+          description:
+            dto.reason?.trim() ||
+            'Operador recuperou PIX criado no provider durante substituicao que falhou localmente.',
+          metadata: {
+            receivableId: id,
+            previousPaymentIntentId: inspection.currentIntent.id,
+            previousProvider: inspection.currentIntent.provider,
+            previousProviderTransactionId: inspection.currentIntent.providerTransactionId,
+            paymentIntentId: created.id,
+            provider: created.provider,
+            providerTransactionId: created.providerTransactionId,
+            replacement: true,
+            replacementRecovery: true,
+            idempotencyKey: dto.idempotencyKey ?? null,
+          },
+          createdByUserId: actorUserId,
+        },
+      });
+
+      return { intent: created, providerTransaction };
+    });
+
+    if (recovery.providerTransaction?.status === 'PAID' && recovery.intent.status !== 'PAID') {
+      return this.applyProviderStatus(
+        recovery.intent.id,
+        recovery.providerTransaction,
+        actorUserId,
+      );
+    }
+
+    return this.presentPaymentIntent(recovery.intent);
   }
 
   async createReceivablesPix(dto: CreateReceivablesPixDto, actorUserId: string) {
@@ -2402,6 +2556,116 @@ export class FinanceService {
     if (blockers.length === 0) return;
 
     throw new ConflictException(blockers.map((blocker) => blocker.message).join(' '));
+  }
+
+  private validateProviderTransactionForReplacementRecovery(
+    receivable: Pick<ReceivableWithRelations, 'amount'>,
+    currentIntent: Prisma.PaymentIntentGetPayload<object>,
+    provider: PaymentProviderCode,
+    providerTransactionId: string,
+    transaction: PaymentProviderTransaction | null,
+    alreadyExists: boolean,
+  ) {
+    const blockers: PixReplacementBlocker[] = [];
+
+    if (alreadyExists) {
+      blockers.push({
+        code: 'ALREADY_RECOVERED',
+        message: 'Ja existe intencao local para esta transacao do provider.',
+      });
+      return blockers;
+    }
+
+    if (!transaction) {
+      blockers.push({
+        code: 'PROVIDER_TRANSACTION_NOT_FOUND',
+        message: 'Provider nao retornou a transacao informada.',
+      });
+      return blockers;
+    }
+
+    if (currentIntent.providerTransactionId === providerTransactionId) {
+      blockers.push({
+        code: 'SAME_TRANSACTION',
+        message: 'A transacao informada ja e o PIX atual da conta.',
+      });
+    }
+
+    blockers.push(
+      ...this.validateProviderTransactionForReconciliation(
+        receivable,
+        provider,
+        providerTransactionId,
+        transaction,
+      ),
+    );
+
+    if (['EXPIRED', 'CANCELED', 'FAILED', 'REFUNDED'].includes(transaction.status)) {
+      blockers.push({
+        code: 'TERMINAL_STATUS_NOT_RECOVERABLE',
+        message: 'Transacao externa terminal nao sera recuperada como substituicao operacional.',
+      });
+    }
+
+    return blockers;
+  }
+
+  private presentPixReplacementRecoveryPreview(input: {
+    inspection: Awaited<ReturnType<FinanceService['inspectReceivableForPixReplacement']>>;
+    provider: PaymentProviderCode;
+    providerTransactionId: string;
+    transaction: PaymentProviderTransaction | null;
+    blockers: PixReplacementBlocker[];
+  }) {
+    const { inspection, transaction } = input;
+
+    return {
+      recoverable: input.blockers.length === 0,
+      provider: input.provider,
+      providerTransactionId: input.providerTransactionId,
+      receivable: {
+        id: inspection.receivable.id,
+        clientId: inspection.receivable.clientId,
+        clientName: inspection.receivable.client.name,
+        status: inspection.receivable.status,
+        amount: this.formatDecimal(inspection.receivable.amount),
+        paidAt: inspection.receivable.paidAt?.toISOString() ?? null,
+      },
+      currentIntent: inspection.currentIntent
+        ? this.presentPaymentIntent(inspection.currentIntent)
+        : null,
+      expectedCurrentIntentId: inspection.currentIntent?.id ?? null,
+      external: transaction
+        ? {
+            provider: transaction.provider,
+            providerTransactionId: transaction.providerTransactionId,
+            status: transaction.status,
+            externalStatus: transaction.externalStatus,
+            amount: this.formatDecimal(transaction.amount),
+            expiresAt: transaction.expiresAt?.toISOString() ?? null,
+            paidAt: transaction.paidAt?.toISOString() ?? null,
+            hasPixCopyPaste: Boolean(transaction.pixCopyPaste),
+            hasQrCodeData: Boolean(transaction.qrCodeData),
+            externalDepixId: transaction.externalDepixId,
+            blockchainTxId: transaction.blockchainTxId,
+          }
+        : null,
+      impact:
+        input.blockers.length === 0 && transaction
+          ? [
+              'Marcar o PIX atual como SUPERSEDED',
+              'Criar PaymentIntent local para a transacao externa existente',
+              transaction.status === 'PAID'
+                ? 'Processar pagamento pela regra financeira existente'
+                : 'Manter Receivable PENDENTE',
+              'Nao criar PIX novo',
+              'Nao cancelar PIX no provider',
+            ]
+          : ['Nenhuma alteracao sera aplicada enquanto houver bloqueios.'],
+      blockers: input.blockers,
+      warning:
+        'Esta acao recupera um PIX que ja foi criado no provedor durante uma substituicao que nao foi concluida localmente. Nenhum novo PIX sera criado.',
+    };
   }
 
   private async fetchProviderTransaction(

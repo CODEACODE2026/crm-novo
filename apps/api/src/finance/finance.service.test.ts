@@ -589,6 +589,36 @@ function reconciliationTransaction(
   };
 }
 
+async function createFastFlowWaitingPix(
+  service: FinanceService,
+  fake: ReturnType<typeof createFinancePrisma>,
+) {
+  fake.receivable.id = '0699aa7a-23d0-4463-9501-daf92c930bea';
+  fake.receivable.amount = new Prisma.Decimal('30.00');
+  const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+  Object.assign(fake.paymentIntents[0]!, {
+    provider: 'FASTFLOW',
+    providerTransactionId: '75148',
+    externalStatus: 'pending',
+    amount: new Prisma.Decimal('30.00'),
+    pixCopyPaste: 'old-pix-copy-paste',
+    qrCodeData: 'old-qr-code-data',
+    expiresAt: new Date('2026-09-24T01:00:00.000Z'),
+  });
+  fake.provider.createPix.mockClear();
+
+  return { ...intent, provider: 'FASTFLOW' as const, providerTransactionId: '75148' };
+}
+
+function createFinanceService(fake: ReturnType<typeof createFinancePrisma>) {
+  return new FinanceService(
+    fake.prisma as never,
+    fake.provider,
+    fake.credentials as never,
+    fake.config as never,
+  );
+}
+
 type SummaryReceivable = {
   amount: Prisma.Decimal;
   client: { name: string };
@@ -3609,6 +3639,712 @@ describe('FinanceService', () => {
       fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
     ).toHaveLength(1);
     expect(replacement.status).toBe('WAITING_PAYMENT');
+  });
+
+  it('blocks normal PIX reconciliation while the original replacement intent is active', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    await createFastFlowWaitingPix(service, fake);
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+    });
+
+    expect(preview.adoptable).toBe(false);
+    expect(preview.blockers).toContainEqual(
+      expect.objectContaining({ code: 'ACTIVE_INTENT_EXISTS' }),
+    );
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(1);
+  });
+
+  it('previews replacement recovery for the 75148 to 75739 case without writes', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+
+    const preview = await service.previewReceivablePixReplacementRecovery(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+    });
+
+    expect(preview).toMatchObject({
+      recoverable: true,
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+      expectedCurrentIntentId: current.id,
+      currentIntent: { id: current.id, providerTransactionId: '75148' },
+      external: { providerTransactionId: '75739', status: 'WAITING_PAYMENT', amount: '30.00' },
+      blockers: [],
+    });
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it('keeps replacement recovery preview strictly read-only with explicit write counters', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+    let paymentIntentCreates = 0;
+    let paymentIntentUpdates = 0;
+    let receivableUpdates = 0;
+    let transactionCreates = 0;
+    let clientEventCreates = 0;
+    const originalPaymentIntentCreate = fake.prisma.paymentIntent.create;
+    const originalPaymentIntentUpdate = fake.prisma.paymentIntent.update;
+    const originalReceivableUpdate = fake.prisma.receivable.update;
+    const originalTransactionCreate = fake.prisma.financialTransaction.create;
+    const originalClientEventCreate = fake.tx.clientEvent.create;
+    fake.prisma.paymentIntent.create = (args) => {
+      paymentIntentCreates += 1;
+      return originalPaymentIntentCreate(args);
+    };
+    fake.prisma.paymentIntent.update = (args) => {
+      paymentIntentUpdates += 1;
+      return originalPaymentIntentUpdate(args);
+    };
+    fake.prisma.receivable.update = (args) => {
+      receivableUpdates += 1;
+      return originalReceivableUpdate(args);
+    };
+    fake.prisma.financialTransaction.create = (args) => {
+      transactionCreates += 1;
+      return originalTransactionCreate(args);
+    };
+    fake.tx.clientEvent.create = (args) => {
+      clientEventCreates += 1;
+      return originalClientEventCreate(args);
+    };
+
+    const preview = await service.previewReceivablePixReplacementRecovery(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 75739 as never,
+    });
+
+    expect(preview.recoverable).toBe(true);
+    expect(preview.providerTransactionId).toBe('75739');
+    expect(paymentIntentCreates).toBe(0);
+    expect(paymentIntentUpdates).toBe(0);
+    expect(receivableUpdates).toBe(0);
+    expect(transactionCreates).toBe(0);
+    expect(clientEventCreates).toBe(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it('recovers the 75148 to 75739 waiting-payment replacement without creating or canceling PIX', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    const currentStored = { ...fake.paymentIntents[0] };
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+
+    const recovered = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+
+    expect(recovered).toMatchObject({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+      status: 'WAITING_PAYMENT',
+      amount: '30.00',
+    });
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(fake.paymentIntents[0]).toMatchObject({
+      id: currentStored.id,
+      provider: currentStored.provider,
+      providerTransactionId: currentStored.providerTransactionId,
+      pixCopyPaste: currentStored.pixCopyPaste,
+      qrCodeData: currentStored.qrCodeData,
+      externalStatus: currentStored.externalStatus,
+      amount: currentStored.amount,
+      status: 'SUPERSEDED',
+    });
+    expect(fake.paymentIntents[1]).toMatchObject({
+      receivableId: fake.receivable.id,
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+    });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it('recovers a paid replacement through existing settlement', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({
+        providerTransactionId: '75739',
+        externalStatus: 'paid',
+        status: 'PAID',
+        paidAt: new Date('2026-09-24T01:00:00.000Z'),
+      }),
+    );
+
+    const recovered = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+
+    expect(recovered.status).toBe('PAID');
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(fake.paymentIntents[0]).toMatchObject({ id: current.id, status: 'SUPERSEDED' });
+    expect(fake.paymentIntents[1]).toMatchObject({
+      providerTransactionId: '75739',
+      status: 'PAID',
+    });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it.each(['EXPIRED', 'CANCELED', 'FAILED', 'REFUNDED'] as const)(
+    'blocks replacement recovery for terminal provider status %s',
+    async (status) => {
+      const fake = createFinancePrisma();
+      const service = createFinanceService(fake);
+      const current = await createFastFlowWaitingPix(service, fake);
+      fake.provider.getPixTransaction.mockResolvedValue(
+        reconciliationTransaction({
+          providerTransactionId: '75739',
+          externalStatus: status.toLowerCase(),
+          status,
+          pixCopyPaste: null,
+          qrCodeData: null,
+        }),
+      );
+
+      const preview = await service.previewReceivablePixReplacementRecovery(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+      });
+
+      expect(preview.recoverable).toBe(false);
+      expect(preview.expectedCurrentIntentId).toBe(current.id);
+      expect(preview.blockers).toContainEqual(
+        expect.objectContaining({ code: 'TERMINAL_STATUS_NOT_RECOVERABLE' }),
+      );
+      await expect(
+        service.recoverReceivablePixReplacement(
+          fake.receivable.id,
+          {
+            provider: 'FASTFLOW',
+            providerTransactionId: '75739',
+            expectedCurrentIntentId: current.id,
+          },
+          actorUserId,
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(fake.paymentIntents).toHaveLength(1);
+      expect(fake.paymentIntents[0]!.status).toBe('WAITING_PAYMENT');
+      expect(fake.transactions).toHaveLength(0);
+      expect(fake.provider.createPix).not.toHaveBeenCalled();
+      expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      'unknown status',
+      reconciliationTransaction({ providerTransactionId: '75739', externalStatus: 'mystery' }),
+    ],
+    [
+      'amount mismatch',
+      reconciliationTransaction({
+        providerTransactionId: '75739',
+        amount: new Prisma.Decimal('31.00'),
+      }),
+    ],
+    ['id mismatch', reconciliationTransaction({ providerTransactionId: '99999' })],
+  ])('blocks replacement recovery on %s', async (_label, transaction) => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(transaction);
+
+    await expect(
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]!.status).toBe('WAITING_PAYMENT');
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it.each(['29.99', '30.01'])(
+    'blocks replacement recovery when B amount is %s for a 30.00 receivable',
+    async (amount) => {
+      const fake = createFinancePrisma();
+      const service = createFinanceService(fake);
+      const current = await createFastFlowWaitingPix(service, fake);
+      fake.provider.getPixTransaction.mockResolvedValue(
+        reconciliationTransaction({
+          providerTransactionId: '75739',
+          amount: new Prisma.Decimal(amount),
+        }),
+      );
+
+      const preview = await service.previewReceivablePixReplacementRecovery(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+      });
+
+      expect(preview.recoverable).toBe(false);
+      expect(preview.blockers).toContainEqual(expect.objectContaining({ code: 'AMOUNT_MISMATCH' }));
+      await expect(
+        service.recoverReceivablePixReplacement(
+          fake.receivable.id,
+          {
+            provider: 'FASTFLOW',
+            providerTransactionId: '75739',
+            expectedCurrentIntentId: current.id,
+          },
+          actorUserId,
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(fake.paymentIntents).toHaveLength(1);
+      expect(fake.paymentIntents[0]!.status).toBe('WAITING_PAYMENT');
+      expect(fake.receivable.status).toBe('PENDENTE');
+      expect(fake.transactions).toHaveLength(0);
+    },
+  );
+
+  it('handles duplicate replacement recovery without creating a second local B intent', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+
+    const first = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+    const second = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.providerTransactionId === '75739'),
+    ).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it('blocks replacement recovery when B already belongs to another receivable', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.paymentIntents.push({
+      id: 'intent-other-receivable',
+      receivableId: 'other-receivable-id',
+      paymentGroupId: null,
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'other-pix-copy-paste',
+      qrCodeData: 'other-qr-code-data',
+      expiresAt: new Date('2026-09-24T01:00:00.000Z'),
+      paidAt: null,
+      lastSyncAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: new Date('2026-09-24T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-24T00:00:00.000Z'),
+    });
+
+    await expect(
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('Ja existe intencao local para esta transacao do provider.');
+    expect(fake.paymentIntents[0]).toMatchObject({ id: current.id, status: 'WAITING_PAYMENT' });
+    expect(
+      fake.paymentIntents.filter((intent) => intent.providerTransactionId === '75739'),
+    ).toHaveLength(1);
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('blocks replacement recovery before writes when the expected current intent changed', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTFLOW',
+      providerTransactionId: '88888',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+      pixCopyPaste: 'pix-88888',
+      qrCodeData: 'qr-88888',
+      expiresAt: new Date('2026-09-24T02:00:00.000Z'),
+    } as never);
+    await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+
+    await expect(
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('PIX atual mudou');
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+    expect(
+      fake.paymentIntents.filter((intent) => intent.providerTransactionId === '75739'),
+    ).toHaveLength(0);
+  });
+
+  it('serializes double replacement recovery to one B intent', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+
+    await Promise.all([
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ]);
+
+    expect(
+      fake.paymentIntents.filter((intent) => intent.providerTransactionId === '75739'),
+    ).toHaveLength(1);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(1);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it('keeps replacement recovery and normal replacement from both winning operational state', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+
+    await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('PIX atual mudou');
+    expect(
+      fake.paymentIntents.filter((intent) => intent.providerTransactionId === '75739'),
+    ).toHaveLength(1);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
+  it('keeps replacement recovery and reconciliation from duplicating B', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+
+    const recovered = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+    const reconciled = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75739' },
+      actorUserId,
+    );
+
+    expect(reconciled.id).toBe(recovered.id);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.providerTransactionId === '75739'),
+    ).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('syncs recovered waiting-payment B to paid through existing settlement', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+    fake.provider.getPixStatus.mockResolvedValue(
+      reconciliationTransaction({
+        providerTransactionId: '75739',
+        externalStatus: 'paid',
+        status: 'PAID',
+        paidAt: new Date('2026-09-24T01:00:00.000Z'),
+      }),
+    );
+    const recovered = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+
+    await service.syncPaymentIntent(recovered.id, actorUserId);
+    await service.syncPaymentIntent(recovered.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ id: current.id, status: 'SUPERSEDED' });
+    expect(fake.paymentIntents[1]).toMatchObject({ id: recovered.id, status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('processes webhook after recovered waiting-payment B and keeps sync replay idempotent', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+    fake.provider.getPixStatus.mockResolvedValue(
+      reconciliationTransaction({
+        providerTransactionId: '75739',
+        externalStatus: 'paid',
+        status: 'PAID',
+        paidAt: new Date('2026-09-24T01:00:00.000Z'),
+      }),
+    );
+    const recovered = await service.recoverReceivablePixReplacement(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+        expectedCurrentIntentId: current.id,
+      },
+      actorUserId,
+    );
+    const rawPayload = JSON.stringify({
+      event: 'transaction.paid',
+      id: '75739',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+    await service.syncPaymentIntent(recovered.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ id: current.id, status: 'SUPERSEDED' });
+    expect(fake.paymentIntents[1]).toMatchObject({ id: recovered.id, status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookEvents).toHaveLength(1);
+  });
+
+  it('rolls back replacement recovery local writes when creating B fails', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '75739' }),
+    );
+    const originalCreate = fake.prisma.paymentIntent.create;
+    fake.prisma.paymentIntent.create = (args) => {
+      if (args.data.providerTransactionId === '75739') {
+        throw new Error('forced recovery persistence failure');
+      }
+      return originalCreate(args);
+    };
+
+    await expect(
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('forced recovery persistence failure');
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]).toMatchObject({ id: current.id, status: 'WAITING_PAYMENT' });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+  });
+
+  it('blocks replacement recovery for grouped PIX and paid or canceled receivables', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    await createFastFlowWaitingPix(service, fake);
+    fake.paymentIntents[0]!.paymentGroupId = 'group-1';
+
+    const grouped = await service.previewReceivablePixReplacementRecovery(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75739',
+    });
+
+    expect(grouped.recoverable).toBe(false);
+    expect(grouped.blockers).toContainEqual(
+      expect.objectContaining({ code: 'GROUPED_PIX_NOT_SUPPORTED' }),
+    );
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+
+    for (const status of ['PAGO', 'CANCELADO'] as const) {
+      fake.receivable.status = status;
+      const preview = await service.previewReceivablePixReplacementRecovery(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75739',
+      });
+      expect(preview.recoverable).toBe(false);
+    }
+  });
+
+  it.each([
+    ['400', new BadRequestException('provider 400')],
+    ['401', new BadGatewayException('provider 401')],
+    ['403', new BadGatewayException('provider 403')],
+    ['409', new ConflictException('provider 409')],
+    ['429', new BadGatewayException('provider 429')],
+    ['500', new BadGatewayException('provider 500')],
+    ['timeout', new Error('provider timeout')],
+  ])('keeps replacement recovery write-free on provider error %s', async (_label, error) => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const current = await createFastFlowWaitingPix(service, fake);
+    fake.provider.getPixTransaction.mockRejectedValue(error);
+
+    await expect(
+      service.recoverReceivablePixReplacement(
+        fake.receivable.id,
+        {
+          provider: 'FASTFLOW',
+          providerTransactionId: '75739',
+          expectedCurrentIntentId: current.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow();
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]!.status).toBe('WAITING_PAYMENT');
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
   });
 
   it('keeps a superseded PIX superseded when sync still returns waiting payment', async () => {

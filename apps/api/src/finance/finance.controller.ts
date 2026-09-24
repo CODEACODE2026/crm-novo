@@ -30,6 +30,8 @@ import {
   ReconcileReceivablePixPreviewDto,
 } from './dto/reconcile-receivable-pix.dto';
 import {
+  RecoverReceivablePixReplacementDto,
+  RecoverReceivablePixReplacementPreviewDto,
   ReplaceReceivablePixDto,
   ReplaceReceivablePixPreviewDto,
 } from './dto/replace-receivable-pix.dto';
@@ -127,6 +129,23 @@ export class FinanceController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.financeService.replaceReceivablePix(id, dto, request.user.id);
+  }
+
+  @Get('receivables/:id/pix/replace-recovery-preview')
+  previewReceivablePixReplacementRecovery(
+    @Param('id') id: string,
+    @Query() query: RecoverReceivablePixReplacementPreviewDto,
+  ) {
+    return this.financeService.previewReceivablePixReplacementRecovery(id, query);
+  }
+
+  @Post('receivables/:id/pix/replace-recovery')
+  recoverReceivablePixReplacement(
+    @Param('id') id: string,
+    @Body() dto: RecoverReceivablePixReplacementDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.financeService.recoverReceivablePixReplacement(id, dto, request.user.id);
   }
 
   @Get('receivables/:id/pix/reconcile-preview')

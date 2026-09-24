@@ -509,9 +509,27 @@ function createFinancePrisma() {
       paymentWebhookEvent: tx.paymentWebhookEvent,
       $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
         const releaseLocks: Array<() => void> = [];
+        const snapshots = {
+          client: { ...client },
+          clientReference: { ...clientReference },
+          receivable: { ...receivable },
+          transactions: transactions.map((transaction) => ({ ...transaction })),
+          events: events.map((event) => ({ ...event })),
+          paymentIntents: paymentIntents.map((intent) => ({ ...intent })),
+          webhookEvents: webhookEvents.map((event) => ({ ...event })),
+        };
         return lockContext.run(releaseLocks, async () => {
           try {
             return await callback(tx);
+          } catch (error) {
+            Object.assign(client, snapshots.client);
+            Object.assign(clientReference, snapshots.clientReference);
+            Object.assign(receivable, snapshots.receivable);
+            transactions.splice(0, transactions.length, ...snapshots.transactions);
+            events.splice(0, events.length, ...snapshots.events);
+            paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
+            webhookEvents.splice(0, webhookEvents.length, ...snapshots.webhookEvents);
+            throw error;
           } finally {
             releaseLocks.reverse().forEach((release) => release());
           }
@@ -1634,6 +1652,45 @@ describe('FinanceService', () => {
     expect(fake.paymentGroups[0]!.status).toBe('PAID');
     expect(fake.cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(3);
     expect(fake.recovery.cancelActiveForReceivable).toHaveBeenCalledTimes(3);
+  });
+
+  it('persists a grouped PIX when the provider result has a normalized numeric transaction ID', async () => {
+    const fake = createGroupedFinancePrisma();
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75149',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('80.00'),
+      pixCopyPaste: 'pix-copy-paste-grouped',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+    } as never);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.createReceivablesPix(
+      { receivableIds: [fake.receivables[0]!.id, fake.receivables[2]!.id] },
+      actorUserId,
+    );
+
+    expect(intent).toMatchObject({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75149',
+      status: 'WAITING_PAYMENT',
+      amount: '80.00',
+    });
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      paymentGroupId: fake.paymentGroups.at(0)!.id,
+      providerTransactionId: '75149',
+    });
+    expect(typeof fake.paymentIntents.at(0)!.providerTransactionId).toBe('string');
   });
 
   it('serializes concurrent grouped PIX creation for the same receivables', async () => {
@@ -2795,6 +2852,80 @@ describe('FinanceService', () => {
     );
   });
 
+  it('persists an individual PIX when the provider returns a string transaction ID', async () => {
+    const fake = createFinancePrisma();
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: 'qr-code-data',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    } as never);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    expect(intent).toMatchObject({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      status: 'WAITING_PAYMENT',
+      amount: '30.00',
+    });
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      providerTransactionId: '75148',
+      status: 'WAITING_PAYMENT',
+    });
+  });
+
+  it('rolls back local writes when PaymentIntent.create fails after provider success', async () => {
+    const fake = createFinancePrisma();
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: 'qr-code-data',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    } as never);
+    fake.tx.paymentIntent.create = vi.fn(() => {
+      throw new Prisma.PrismaClientValidationError(
+        'Argument providerTransactionId: Expected String or Null, provided Int.',
+        { clientVersion: 'test' },
+      );
+    });
+    fake.prisma.paymentIntent.create = fake.tx.paymentIntent.create;
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(service.createReceivablePix(fake.receivable.id, actorUserId)).rejects.toThrow(
+      'Expected String or Null',
+    );
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.events).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+  });
+
   it('does not silently create another active PIX for the same receivable', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(
@@ -2908,6 +3039,36 @@ describe('FinanceService', () => {
           event.metadata.paymentIntentId === intent.id,
       ),
     ).toHaveLength(1);
+  });
+
+  it('syncs a payment intent using the string provider transaction ID contract', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = '75148';
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await expect(service.syncPaymentIntent(intent.id, actorUserId)).resolves.toMatchObject({
+      providerTransactionId: '75148',
+      status: 'WAITING_PAYMENT',
+    });
+    expect(fake.provider.getPixStatus).toHaveBeenCalledWith('75148', 'FASTFLOW');
   });
 
   it('keeps repeated paid sync idempotent', async () => {
@@ -3269,6 +3430,50 @@ describe('FinanceService', () => {
 
     expect(fake.transactions).toHaveLength(1);
     expect(fake.webhookEvents).toHaveLength(1);
+  });
+
+  it('keeps numeric and string webhook transaction IDs idempotent for the same FastFlow event', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = '75148';
+    const numericPayload = JSON.stringify({
+      transaction_id: 75148,
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+    const stringPayload = JSON.stringify({
+      transaction_id: '75148',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(numericPayload),
+      Buffer.from(numericPayload),
+      JSON.parse(numericPayload),
+    );
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(stringPayload),
+      Buffer.from(stringPayload),
+      JSON.parse(stringPayload),
+    );
+
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookEvents).toHaveLength(1);
+    expect(fake.webhookEvents.at(0)).toMatchObject({
+      providerTransactionId: '75148',
+      status: 'paid',
+      eventKey: 'transaction.paid',
+    });
   });
 
   it('keeps approved and paid webhooks as distinct idempotent transaction states', async () => {

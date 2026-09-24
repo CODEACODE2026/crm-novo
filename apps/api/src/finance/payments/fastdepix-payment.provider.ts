@@ -30,10 +30,10 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
       payer_phone: input.payerPhone,
       ...(input.notificationUrl ? { notification_url: input.notificationUrl } : {}),
     });
-    const providerTransactionId = response.id ?? null;
+    const providerTransactionId = this.normalizeProviderTransactionId(response.id);
     const pixCopyPaste = response.qr_code_text;
 
-    if (!providerTransactionId || !pixCopyPaste) {
+    if (!pixCopyPaste) {
       throw new BadRequestException('Resposta da API de pagamentos sem dados PIX obrigatorios.');
     }
 
@@ -111,6 +111,19 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
     if (normalized === 'failed' || normalized === 'error') return 'FAILED';
 
     return 'WAITING_PAYMENT';
+  }
+
+  private normalizeProviderTransactionId(value: unknown) {
+    if (typeof value === 'number' || typeof value === 'bigint') {
+      return String(value);
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.trim();
+      if (normalized) return normalized;
+    }
+
+    throw new BadRequestException('Resposta da API de pagamentos sem transacao obrigatoria.');
   }
 
   private parseExpiration(response: FastDepixTransactionResponse, fallback: Date) {

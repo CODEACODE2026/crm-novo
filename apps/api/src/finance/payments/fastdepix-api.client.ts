@@ -22,7 +22,7 @@ export type FastDepixAuthMe = {
 };
 
 export type FastDepixTransactionResponse = {
-  id?: string;
+  id?: number | string;
   amount?: number | string;
   depix_transaction_id?: string;
   blockchain_tx_id?: string | null;

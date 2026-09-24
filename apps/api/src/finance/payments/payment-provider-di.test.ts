@@ -282,6 +282,98 @@ describe('Payment provider DI pipeline', () => {
     });
   });
 
+  it('normalizes numeric FastFlow transaction IDs to the internal string contract', async () => {
+    apiClient.createTransaction.mockResolvedValueOnce({
+      id: 75148,
+      status: 'pending',
+      amount: '30.00',
+      depix_transaction_id: 'depix-1',
+      blockchain_tx_id: null,
+      qr_code: 'qr-code-data',
+      qr_code_text: 'pix-copy-paste',
+      qr_code_expires_at: '2026-09-24T00:30:00.000Z',
+    });
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastFlowPaymentProvider);
+
+    const result = await provider.createPix({
+      ...pixInput(),
+      amount: new Prisma.Decimal('30.00'),
+    });
+
+    expect(result.providerTransactionId).toBe('75148');
+    expect(typeof result.providerTransactionId).toBe('string');
+  });
+
+  it('keeps string FastFlow transaction IDs unchanged', async () => {
+    apiClient.createTransaction.mockResolvedValueOnce({
+      id: '75148',
+      status: 'pending',
+      amount: '30.00',
+      depix_transaction_id: 'depix-1',
+      blockchain_tx_id: null,
+      qr_code: 'qr-code-data',
+      qr_code_text: 'pix-copy-paste',
+      qr_code_expires_at: '2026-09-24T00:30:00.000Z',
+    });
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastFlowPaymentProvider);
+
+    await expect(provider.createPix(pixInput())).resolves.toMatchObject({
+      providerTransactionId: '75148',
+    });
+  });
+
+  it('keeps alphanumeric FastFlow transaction IDs as opaque strings', async () => {
+    apiClient.createTransaction.mockResolvedValueOnce({
+      id: 'abc-123',
+      status: 'pending',
+      amount: '30.00',
+      depix_transaction_id: 'depix-1',
+      blockchain_tx_id: null,
+      qr_code: 'qr-code-data',
+      qr_code_text: 'pix-copy-paste',
+      qr_code_expires_at: '2026-09-24T00:30:00.000Z',
+    });
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastFlowPaymentProvider);
+
+    await expect(provider.createPix(pixInput())).resolves.toMatchObject({
+      providerTransactionId: 'abc-123',
+    });
+  });
+
+  it.each([undefined, null, '', ' '])(
+    'rejects missing FastFlow transaction ID %s without creating a local intent',
+    async (id) => {
+      apiClient.createTransaction.mockResolvedValueOnce({
+        id,
+        status: 'pending',
+        amount: '30.00',
+        depix_transaction_id: 'depix-1',
+        blockchain_tx_id: null,
+        qr_code: 'qr-code-data',
+        qr_code_text: 'pix-copy-paste',
+        qr_code_expires_at: '2026-09-24T00:30:00.000Z',
+      });
+      app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+        logger: false,
+      });
+      const service = app.get(FinanceService);
+
+      await expect(service.createReceivablePix('receivable-1', 'user-1')).rejects.toThrow(
+        'Resposta da API de pagamentos sem transacao obrigatoria.',
+      );
+      expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('resolves FastPayPaymentProvider via Nest and creates PIX without undefined deps', async () => {
     configuredProvider = 'FASTPAY';
     app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
@@ -373,6 +465,40 @@ describe('Payment provider DI pipeline', () => {
       }),
     );
     expect(apiClient.createTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs FinanceService.createReceivablePix through FastFlow with a numeric provider transaction ID', async () => {
+    apiClient.createTransaction.mockResolvedValueOnce({
+      id: 75148,
+      status: 'pending',
+      amount: '30.00',
+      depix_transaction_id: 'depix-1',
+      blockchain_tx_id: null,
+      qr_code: 'qr-code-data',
+      qr_code_text: 'pix-copy-paste',
+      qr_code_expires_at: '2026-09-24T00:30:00.000Z',
+    });
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const service = app.get(FinanceService);
+
+    await expect(service.createReceivablePix('receivable-1', 'user-1')).resolves.toMatchObject({
+      id: 'payment-intent-1',
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      status: 'WAITING_PAYMENT',
+      amount: '30.00',
+    });
+    expect(prisma.paymentIntent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          providerTransactionId: '75148',
+          amount: new Prisma.Decimal('30.00'),
+          status: 'WAITING_PAYMENT',
+        }),
+      }),
+    );
   });
 
   it('runs FinanceService.createReceivablePix through the FastPay pipeline with mocked HTTP', async () => {

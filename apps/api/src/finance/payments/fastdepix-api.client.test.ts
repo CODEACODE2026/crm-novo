@@ -133,4 +133,80 @@ describe('FastDepixApiClient', () => {
     });
     expect(String(init.body)).not.toContain('Bearer');
   });
+
+  it('uses DELETE /transactions/:id to cancel a provider transaction', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 75148, status: 'cancelled' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await expect(client.cancelTransaction('secret-token', '75148')).resolves.toMatchObject({
+      id: 75148,
+      status: 'cancelled',
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://fastdepix.space/api/v1/transactions/75148');
+    expect(init.method).toBe('DELETE');
+    expect(init.headers.Authorization).toBe('Bearer secret-token');
+    expect(url).not.toContain('secret-token');
+    expect(String(init.body)).not.toContain('secret-token');
+  });
+
+  it.each([
+    [400, 400, 'Transação já expirada.'],
+    [401, 502, 'Credencial do provider invalida ou nao autorizada.'],
+    [403, 502, 'Credencial do provider invalida ou nao autorizada.'],
+    [404, 404, 'Transacao de pagamento nao encontrada no provider.'],
+    [409, 409, 'Provider de pagamentos recusou a operacao no status atual.'],
+    [429, 429, 'Limite da API de pagamentos atingido. Tente novamente em instantes.'],
+    [500, 502, 'Provider de pagamentos retornou erro temporario.'],
+  ])(
+    'translates provider HTTP %s to CRM HTTP %s without exposing provider auth as CRM auth',
+    async (providerStatus, expectedStatus, expectedMessage) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: providerStatus,
+          json: () => Promise.resolve({ message: 'Transação já expirada.' }),
+        }),
+      );
+      const client = new FastDepixApiClient({
+        get: (key: string) =>
+          key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+      } as never);
+
+      await expect(client.cancelTransaction('secret-token', '75148')).rejects.toMatchObject({
+        message: expectedMessage,
+        status: expectedStatus,
+      });
+    },
+  );
+
+  it('translates provider timeout to service unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      }),
+    );
+    const client = new FastDepixApiClient({
+      get: (key: string) => {
+        if (key === 'FASTDEPIX_BASE_URL') return 'https://fastdepix.space/api/v1/';
+        if (key === 'PAYMENT_PROVIDER_HTTP_TIMEOUT_MS') return '10';
+        return undefined;
+      },
+    } as never);
+
+    await expect(client.cancelTransaction('secret-token', '75148')).rejects.toMatchObject({
+      message: 'Tempo limite da API de pagamentos excedido.',
+      status: 503,
+    });
+  });
 });

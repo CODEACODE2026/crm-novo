@@ -3,6 +3,7 @@ import {
   ApiError,
   apiFetch,
   applyReferralReward,
+  cancelPaymentIntent,
   confirmRenewalReversal,
   createClient,
   deleteClient,
@@ -23,7 +24,10 @@ import {
   payReceivable,
   payReceivables,
   previewRenewalReversal,
+  registerPaymentWebhook,
   resetUnauthorizedRedirectForTests,
+  savePaymentProviderCredential,
+  testPaymentProviderCredential,
   updateMessageTemplate,
 } from './crm-api';
 
@@ -85,6 +89,104 @@ describe('CRM UI formatters', () => {
       status: 401,
     } satisfies Partial<ApiError>);
     expect(assign).toHaveBeenCalledWith('/login');
+  });
+
+  it('keeps the session when cancel PIX returns a translated provider integration error', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ message: 'Credencial do provider invalida ou nao autorizada.' }),
+          {
+            status: 502,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(cancelPaymentIntent('intent-1')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Credencial do provider invalida ou nao autorizada.',
+      status: 502,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('keeps the session when saving a provider credential returns a provider auth error', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ message: 'Credencial do provider invalida ou nao autorizada.' }),
+          {
+            status: 502,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(
+      savePaymentProviderCredential({
+        provider: 'FASTFLOW',
+        name: 'FastFlow principal',
+        token: 'fdpx_test_token_A7F2',
+      }),
+    ).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Credencial do provider invalida ou nao autorizada.',
+      status: 502,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('keeps the session when testing a provider credential returns a provider auth error', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ message: 'Credencial do provider invalida ou nao autorizada.' }),
+          {
+            status: 502,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(testPaymentProviderCredential('FASTFLOW')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Credencial do provider invalida ou nao autorizada.',
+      status: 502,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('keeps the session when webhook registration returns a provider auth error', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ message: 'Credencial do provider invalida ou nao autorizada.' }),
+          {
+            status: 502,
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(registerPaymentWebhook('FASTFLOW')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Credencial do provider invalida ou nao autorizada.',
+      status: 502,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('redirects to login once when parallel API requests return 401', async () => {

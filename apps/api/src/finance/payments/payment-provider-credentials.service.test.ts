@@ -3,7 +3,6 @@ import {
   BadGatewayException,
   Module,
   ServiceUnavailableException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -203,7 +202,7 @@ describe('PaymentProviderCredentialsService', () => {
   it('does not persist credentials when the provider rejects the token', async () => {
     const fake = createService('fastflow');
     fake.apiClient.authMe.mockRejectedValueOnce(
-      new UnauthorizedException('Chave API de pagamentos invalida ou nao autorizada.'),
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
     );
 
     await expect(
@@ -212,7 +211,7 @@ describe('PaymentProviderCredentialsService', () => {
         name: 'FastFlow invalido',
         token: 'fdpx_test_token_A7F2',
       }),
-    ).rejects.toThrow(UnauthorizedException);
+    ).rejects.toThrow(BadGatewayException);
 
     expect(fake.prisma.paymentProviderCredential.create).not.toHaveBeenCalled();
     expect(fake.records).toHaveLength(0);
@@ -294,7 +293,7 @@ describe('PaymentProviderCredentialsService', () => {
         name: 'FastFlow invalido',
         token: 'fdpx_test_token_A7F2',
       }),
-    ).rejects.toThrow(UnauthorizedException);
+    ).rejects.toThrow(BadGatewayException);
 
     expect(nestCredentialDeps.prisma.paymentProviderCredential.create).not.toHaveBeenCalled();
     expect(nestCredentialDeps.records).toHaveLength(0);
@@ -346,6 +345,42 @@ describe('PaymentProviderCredentialsService', () => {
 
     expect(nestCredentialDeps.prisma.paymentProviderCredential.create).not.toHaveBeenCalled();
     expect(nestCredentialDeps.records).toHaveLength(0);
+  });
+
+  it('keeps the credential record and reports provider auth failure when testing connection', async () => {
+    const fake = createService('fastflow');
+    await fake.service.save({
+      provider: 'FASTFLOW',
+      name: 'FastFlow principal',
+      token: 'fdpx_test_token_A7F2',
+    });
+    fake.apiClient.authMe.mockRejectedValueOnce(
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+    );
+
+    await expect(fake.service.test('FASTFLOW')).rejects.toThrow(BadGatewayException);
+
+    expect(fake.records).toHaveLength(1);
+    expect(fake.prisma.paymentProviderCredential.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps webhook state unchanged when provider rejects webhook registration credentials', async () => {
+    const fake = createService('fastflow');
+    await fake.service.save({
+      provider: 'FASTFLOW',
+      name: 'FastFlow principal',
+      token: 'fdpx_test_token_A7F2',
+    });
+    fake.apiClient.registerWebhook.mockRejectedValueOnce(
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+    );
+
+    await expect(fake.service.registerWebhook('FASTFLOW')).rejects.toThrow(BadGatewayException);
+
+    expect(fake.prisma.paymentProviderCredential.update).not.toHaveBeenCalled();
+    expect(fake.records[0]).not.toHaveProperty('webhookSecretEncrypted');
+    expect(fake.records[0]).not.toHaveProperty('webhookUrl');
+    expect(fake.records[0]).not.toHaveProperty('webhookRegisteredAt');
   });
 
   it('registers webhook with transaction events and stores returned secret encrypted', async () => {

@@ -85,9 +85,32 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain(
       "setError(err instanceof Error ? err.message : 'Não foi possível pré-visualizar.')",
     );
+    expect(pixModalSource).toContain(
+      "setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.')",
+    );
     expect(pixModalSource).toContain("if (event.key === 'Escape' && !busy)");
     expect(pixModalSource).toContain('onClick={onClose}');
     expect(pixModalSource).toContain('disabled={busy}');
+  });
+
+  it('guards cancel PIX against double click and keeps errors inside the modal', () => {
+    expect(pixModalSource).toContain('const actionRef = useRef(false);');
+    expect(pixModalSource).toContain('if (actionRef.current) return;');
+    expect(pixModalSource).toContain('actionRef.current = true;');
+    expect(pixModalSource).toContain('actionRef.current = false;');
+    expect(pixModalSource).toContain('() => cancelPaymentIntent(activeIntent.id)');
+    expect(pixModalSource).toContain('disabled={busy}');
+    expect(pixModalSource).not.toContain("window.location.assign('/login')");
+  });
+
+  it('updates cancel success from the returned intent without auto-creating another PIX', () => {
+    expect(pixModalSource).toContain('setActiveIntent(intent);');
+    expect(pixModalSource).toContain('await loadIntents(intent);');
+    expect(pixModalSource).toContain("'PIX cancelado no provider.'");
+    expect(pixModalSource).toContain("!['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED']");
+    expect(pixModalSource).toContain('disabled={busy || !canCreateNew}');
+    expect(pixModalSource).toContain('() => createReceivablePix(receivable.id)');
+    expect(pixModalSource).not.toContain('await createReceivablePix(receivable.id)');
   });
 
   it('keeps the modal constrained for mobile and desktop surfaces', () => {

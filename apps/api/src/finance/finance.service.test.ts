@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { AsyncLocalStorage } from 'async_hooks';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
@@ -182,6 +187,7 @@ function createFinancePrisma() {
     }),
     getPixStatus: vi.fn(),
     getPixTransaction: vi.fn(),
+    cancelPix: vi.fn(),
     markPixPaid: vi.fn(),
   };
 
@@ -1117,6 +1123,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     ),
     getPixStatus: vi.fn(),
     getPixTransaction: vi.fn(),
+    cancelPix: vi.fn(),
     markPixPaid: vi.fn(),
   };
   const recovery = {
@@ -2961,6 +2968,27 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PENDENTE');
   });
 
+  it('preserves local state when provider rejects PIX creation credentials', async () => {
+    const fake = createFinancePrisma();
+    fake.provider.createPix.mockRejectedValueOnce(
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(service.createReceivablePix(fake.receivable.id, actorUserId)).rejects.toThrow(
+      BadGatewayException,
+    );
+
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
   it('does not silently create another active PIX for the same receivable', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(
@@ -3104,6 +3132,150 @@ describe('FinanceService', () => {
       status: 'WAITING_PAYMENT',
     });
     expect(fake.provider.getPixStatus).toHaveBeenCalledWith('75148', 'FASTFLOW');
+  });
+
+  it('preserves an existing PIX when provider rejects sync credentials', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = '75148';
+    fake.provider.getPixStatus.mockRejectedValueOnce(
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+    );
+
+    await expect(service.syncPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      BadGatewayException,
+    );
+
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      status: 'WAITING_PAYMENT',
+      externalStatus: 'pending',
+    });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('cancels a pending PIX after provider confirmation without paying the receivable', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = '75148';
+    fake.provider.cancelPix.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'cancelled',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'CANCELED',
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    const canceled = await service.cancelPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.provider.cancelPix).toHaveBeenCalledWith('75148', 'FASTFLOW');
+    expect(canceled).toMatchObject({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      status: 'CANCELED',
+    });
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      status: 'CANCELED',
+      externalStatus: 'cancelled',
+    });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.receivable.paidAt).toBeNull();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('preserves local PIX state when provider rejects cancellation', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = '75148';
+    fake.provider.cancelPix.mockRejectedValue(new BadRequestException('Transação já expirada.'));
+
+    await expect(service.cancelPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      'Transação já expirada.',
+    );
+
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      status: 'WAITING_PAYMENT',
+      externalStatus: 'pending',
+    });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.receivable.paidAt).toBeNull();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('preserves local state when reconciliation preview provider credentials are rejected', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockRejectedValueOnce(
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.previewReceivablePixReconciliation(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+      }),
+    ).rejects.toThrow(BadGatewayException);
+
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('preserves local state when reconciliation confirm provider credentials are rejected', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockRejectedValueOnce(
+      new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      ),
+    ).rejects.toThrow(BadGatewayException);
+
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
   });
 
   it('previews an orphan external PIX without local writes', async () => {

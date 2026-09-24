@@ -1,10 +1,10 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
-  UnauthorizedException,
   HttpException,
   HttpStatus,
   Inject,
@@ -141,7 +141,6 @@ export class FastDepixApiClient {
     } catch (error) {
       if (
         error instanceof BadRequestException ||
-        error instanceof UnauthorizedException ||
         error instanceof NotFoundException ||
         error instanceof HttpException ||
         error instanceof BadGatewayException
@@ -175,11 +174,15 @@ export class FastDepixApiClient {
     const message = this.safeErrorMessage(status, payload);
 
     if (status === 401 || status === 403) {
-      return new UnauthorizedException('Chave API de pagamentos invalida ou nao autorizada.');
+      return new BadGatewayException('Credencial do provider invalida ou nao autorizada.');
     }
 
     if (status === 404) {
       return new NotFoundException('Transacao de pagamento nao encontrada no provider.');
+    }
+
+    if (status === 409) {
+      return new ConflictException('Provider de pagamentos recusou a operacao no status atual.');
     }
 
     if (status === 429) {

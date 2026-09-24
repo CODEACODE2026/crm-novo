@@ -23,6 +23,7 @@ import {
   payReceivable,
   payReceivables,
   previewRenewalReversal,
+  resetUnauthorizedRedirectForTests,
   updateMessageTemplate,
 } from './crm-api';
 
@@ -37,6 +38,7 @@ function latestJsonBody(fetchMock: ReturnType<typeof vi.fn>) {
 
 describe('CRM UI formatters', () => {
   afterEach(() => {
+    resetUnauthorizedRedirectForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -70,6 +72,47 @@ describe('CRM UI formatters', () => {
       message: 'Não foi possível concluir a operação.',
       status: 500,
     } satisfies Partial<ApiError>);
+  });
+
+  it('redirects to login when the API returns 401', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    vi.stubGlobal('window', { location: { assign } });
+
+    await expect(apiFetch('/auth/me')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Não autenticado.',
+      status: 401,
+    } satisfies Partial<ApiError>);
+    expect(assign).toHaveBeenCalledWith('/login');
+  });
+
+  it('redirects to login once when parallel API requests return 401', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    vi.stubGlobal('window', { location: { assign } });
+
+    await Promise.all([
+      expect(apiFetch('/dashboard')).rejects.toMatchObject({ status: 401 }),
+      expect(apiFetch('/clients')).rejects.toMatchObject({ status: 401 }),
+      expect(apiFetch('/finance')).rejects.toMatchObject({ status: 401 }),
+    ]);
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith('/login');
+  });
+
+  it('does not redirect again when a 401 happens on the login page', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    vi.stubGlobal('window', { location: { assign, pathname: '/login' } });
+
+    await expect(apiFetch('/auth/me')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Não autenticado.',
+      status: 401,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('fetches lightweight client options with trimmed search', async () => {

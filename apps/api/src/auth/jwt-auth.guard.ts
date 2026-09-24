@@ -20,7 +20,7 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException();
     }
 
-    const user = await this.authService.validateToken(token);
+    const user = await this.validateToken(token);
 
     if (!user) {
       throw new UnauthorizedException();
@@ -28,5 +28,24 @@ export class JwtAuthGuard implements CanActivate {
 
     request.user = user;
     return true;
+  }
+
+  private async validateToken(token: string) {
+    try {
+      return await this.authService.validateToken(token);
+    } catch (error) {
+      if (this.isJwtValidationError(error)) {
+        throw new UnauthorizedException();
+      }
+
+      throw error;
+    }
+  }
+
+  private isJwtValidationError(error: unknown) {
+    return (
+      error instanceof Error &&
+      ['TokenExpiredError', 'JsonWebTokenError', 'NotBeforeError'].includes(error.name)
+    );
   }
 }

@@ -10,6 +10,21 @@ export class ApiError extends Error {
   }
 }
 
+let unauthorizedRedirectInFlight = false;
+
+export function resetUnauthorizedRedirectForTests() {
+  unauthorizedRedirectInFlight = false;
+}
+
+function redirectToLoginOnce() {
+  if (unauthorizedRedirectInFlight || window.location.pathname === '/login') {
+    return;
+  }
+
+  unauthorizedRedirectInFlight = true;
+  window.location.assign('/login');
+}
+
 export type ClientStatus = 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO';
 
 export interface Plan {
@@ -1082,7 +1097,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (response.status === 401) {
-    window.location.assign('/login');
+    redirectToLoginOnce();
     throw new ApiError('Não autenticado.', response.status);
   }
 

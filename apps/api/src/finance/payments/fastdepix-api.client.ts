@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
   HttpException,
   HttpStatus,
+  Inject,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -52,7 +53,7 @@ type FastDepixEnvelope<T> = {
 
 @Injectable()
 export class FastDepixApiClient {
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   authMe(token: string) {
     return this.request<FastDepixAuthMe>('/auth/me', token);

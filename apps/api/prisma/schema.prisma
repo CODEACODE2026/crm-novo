@@ -93,6 +93,7 @@ enum PaymentProviderCode {
 enum PaymentIntentStatus {
   CREATED
   WAITING_PAYMENT
+  SUPERSEDED
   PAID
   EXPIRED
   CANCELED

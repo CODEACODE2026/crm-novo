@@ -440,13 +440,14 @@ function createFinancePrisma() {
       findFirst: ({
         where,
       }: {
-        where: { type?: string; metadata?: { path: string[]; equals: string } };
+        where: { clientId?: string; type?: string; metadata?: { path: string[]; equals: string } };
       }) =>
         Promise.resolve(
           events.find((event) => {
             const metadataKey = where.metadata?.path[0];
 
             return (
+              (where.clientId === undefined || event.clientId === where.clientId) &&
               (where.type === undefined || event.type === where.type) &&
               typeof event.metadata === 'object' &&
               event.metadata !== null &&
@@ -3044,6 +3045,614 @@ describe('FinanceService', () => {
       'EXPIRED',
       'WAITING_PAYMENT',
     ]);
+  });
+
+  it('previews PIX replacement without provider calls or writes', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const current = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    const preview = await service.previewReceivablePixReplacement(fake.receivable.id, {
+      provider: current.provider,
+    });
+
+    expect(preview).toMatchObject({
+      replaceable: true,
+      provider: current.provider,
+      currentIntent: { id: current.id, status: 'WAITING_PAYMENT' },
+      blockers: [],
+    });
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('creates a new PIX attempt and marks the previous local intent as superseded', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const previousStored = { ...fake.paymentIntents[0] };
+    fake.provider.createPix.mockClear();
+
+    const next = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: previous.provider,
+        expectedCurrentIntentId: previous.id,
+        reason: 'QR expirado',
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}`,
+      },
+      actorUserId,
+    );
+
+    expect(next.id).not.toBe(previous.id);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.provider.cancelPix).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(fake.paymentIntents[0]).toMatchObject({
+      id: previousStored.id,
+      status: 'SUPERSEDED',
+      providerTransactionId: previousStored.providerTransactionId,
+      pixCopyPaste: previousStored.pixCopyPaste,
+      qrCodeData: previousStored.qrCodeData,
+      externalStatus: previousStored.externalStatus,
+      amount: previousStored.amount,
+    });
+    expect(fake.paymentIntents[1]).toMatchObject({
+      receivableId: fake.receivable.id,
+      provider: previous.provider,
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+    });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.receivable.paidAt).toBeNull();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('settles a superseded old PIX when the provider later reports it paid', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: oldIntent.provider,
+      providerTransactionId: oldIntent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-10T12:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ id: oldIntent.id, status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('does not create a second financial transaction when both replaced PIX attempts are paid', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const newIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+
+    fake.provider.getPixStatus.mockImplementation((providerTransactionId: string) =>
+      Promise.resolve({
+        provider: oldIntent.provider,
+        providerTransactionId,
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID' as const,
+        paidAt: new Date('2026-10-10T12:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      }),
+    );
+
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+    await service.syncPaymentIntent(newIntent.id, actorUserId);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.paymentIntents.map((intent) => intent.status)).toEqual(['PAID', 'PAID']);
+  });
+
+  it('does not create a second financial transaction when the new PIX is paid before the old one', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const newIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+
+    fake.provider.getPixStatus.mockImplementation((providerTransactionId: string) =>
+      Promise.resolve({
+        provider: oldIntent.provider,
+        providerTransactionId,
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID' as const,
+        paidAt: new Date('2026-10-10T12:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      }),
+    );
+
+    await service.syncPaymentIntent(newIntent.id, actorUserId);
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.paymentIntents.map((intent) => intent.status)).toEqual(['PAID', 'PAID']);
+  });
+
+  it('keeps the previous PIX intact when replacement provider creation fails', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const previousStored = { ...fake.paymentIntents[0] };
+    fake.provider.createPix.mockRejectedValueOnce(new Error('provider unavailable'));
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: previous.provider,
+          expectedCurrentIntentId: previous.id,
+          idempotencyKey: `pix-replace:${previous.id}`,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('provider unavailable');
+
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]).toMatchObject(previousStored);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('rolls back local replacement state when persistence fails after provider success', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.prisma.paymentIntent.create = vi.fn(() => {
+      throw new Error('forced local persistence failure');
+    });
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: previous.provider,
+          expectedCurrentIntentId: previous.id,
+          idempotencyKey: `pix-replace:${previous.id}`,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('forced local persistence failure');
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(2);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]).toMatchObject({ id: previous.id, status: 'WAITING_PAYMENT' });
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('keeps double-click replacement idempotent with the same key', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+    const idempotencyKey = `pix-replace:${fake.receivable.id}:${previous.id}`;
+
+    const [first, second] = await Promise.all([
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        { provider: previous.provider, expectedCurrentIntentId: previous.id, idempotencyKey },
+        actorUserId,
+      ),
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        { provider: previous.provider, expectedCurrentIntentId: previous.id, idempotencyKey },
+        actorUserId,
+      ),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+  });
+
+  it('blocks a second replacement with a different key before creating another provider PIX', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: previous.provider,
+          expectedCurrentIntentId: previous.id,
+          idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}:a`,
+        },
+        actorUserId,
+      ),
+    ).resolves.toMatchObject({ status: 'WAITING_PAYMENT' });
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: previous.provider,
+          expectedCurrentIntentId: previous.id,
+          idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}:b`,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('PIX atual mudou');
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentIntents.filter((intent) => intent.status === 'SUPERSEDED')).toHaveLength(1);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+  });
+
+  it('blocks repeated replacement without idempotency before creating another provider PIX', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        { provider: previous.provider, expectedCurrentIntentId: previous.id },
+        actorUserId,
+      ),
+    ).resolves.toMatchObject({ status: 'WAITING_PAYMENT' });
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        { provider: previous.provider, expectedCurrentIntentId: previous.id },
+        actorUserId,
+      ),
+    ).rejects.toThrow('PIX atual mudou');
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentIntents.filter((intent) => intent.status === 'SUPERSEDED')).toHaveLength(1);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(1);
+  });
+
+  it('blocks a third replacement attempt before creating another provider PIX', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    await expect(
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: previous.provider,
+          expectedCurrentIntentId: previous.id,
+          idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}:a`,
+        },
+        actorUserId,
+      ),
+    ).resolves.toMatchObject({ status: 'WAITING_PAYMENT' });
+
+    await Promise.all([
+      expect(
+        service.replaceReceivablePix(
+          fake.receivable.id,
+          {
+            provider: previous.provider,
+            expectedCurrentIntentId: previous.id,
+            idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}:b`,
+          },
+          actorUserId,
+        ),
+      ).rejects.toThrow('PIX atual mudou'),
+      expect(
+        service.replaceReceivablePix(
+          fake.receivable.id,
+          {
+            provider: previous.provider,
+            expectedCurrentIntentId: previous.id,
+            idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}:c`,
+          },
+          actorUserId,
+        ),
+      ).rejects.toThrow('PIX atual mudou'),
+    ]);
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+  });
+
+  it('allows a later legitimate replacement when the expected current intent advances', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const first = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    const second = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: first.provider,
+        expectedCurrentIntentId: first.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${first.id}`,
+      },
+      actorUserId,
+    );
+    const secondPreview = await service.previewReceivablePixReplacement(fake.receivable.id, {
+      provider: second.provider,
+    });
+    const third = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: second.provider,
+        expectedCurrentIntentId: second.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${second.id}`,
+      },
+      actorUserId,
+    );
+
+    expect(secondPreview).toMatchObject({
+      replaceable: true,
+      currentIntent: { id: second.id, status: 'WAITING_PAYMENT' },
+    });
+    expect(third.id).not.toBe(second.id);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(2);
+    expect(fake.paymentIntents.map((intent) => intent.status)).toEqual([
+      'SUPERSEDED',
+      'SUPERSEDED',
+      'WAITING_PAYMENT',
+    ]);
+    expect(
+      fake.paymentIntents.filter(
+        (intent) => intent.status === 'CREATED' || intent.status === 'WAITING_PAYMENT',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('keeps one financial transaction when multiple attempts in a replacement chain are paid', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const first = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const second = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: first.provider,
+        expectedCurrentIntentId: first.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${first.id}`,
+      },
+      actorUserId,
+    );
+    const third = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: second.provider,
+        expectedCurrentIntentId: second.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${second.id}`,
+      },
+      actorUserId,
+    );
+
+    fake.provider.getPixStatus.mockImplementation((providerTransactionId: string) =>
+      Promise.resolve({
+        provider: first.provider,
+        providerTransactionId,
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID' as const,
+        paidAt: new Date('2026-10-10T12:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      }),
+    );
+
+    await service.syncPaymentIntent(first.id, actorUserId);
+    await service.syncPaymentIntent(second.id, actorUserId);
+    await service.syncPaymentIntent(third.id, actorUserId);
+
+    expect(fake.paymentIntents.map((intent) => intent.status)).toEqual(['PAID', 'PAID', 'PAID']);
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('serializes normal create and replacement for the same receivable', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    const [replacement] = await Promise.all([
+      service.replaceReceivablePix(
+        fake.receivable.id,
+        {
+          provider: previous.provider,
+          expectedCurrentIntentId: previous.id,
+          idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}`,
+        },
+        actorUserId,
+      ),
+      service.createReceivablePix(fake.receivable.id, actorUserId),
+    ]);
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(1);
+    expect(replacement.status).toBe('WAITING_PAYMENT');
+  });
+
+  it('keeps a superseded PIX superseded when sync still returns waiting payment', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: oldIntent.provider,
+      providerTransactionId: oldIntent.providerTransactionId,
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({
+      id: oldIntent.id,
+      status: 'SUPERSEDED',
+      externalStatus: 'pending',
+    });
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
   });
 
   it('rejects mock confirmation for real payment providers', async () => {

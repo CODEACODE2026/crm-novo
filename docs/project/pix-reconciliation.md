@@ -64,3 +64,29 @@ Nao executar nesta fase.
 ## Debito PIX0.5
 
 Antes de producao, reformular criacao de PIX para tolerar `provider success + local failure`, timeout ambiguo, recovery/reconciliation automatica e idempotency no provider quando disponivel.
+
+## Debito PIX0.6
+
+O hardening PIX0.5.1 serializa a decisao de substituicao por `Receivable`, mas ainda mantem a chamada HTTP ao provider dentro do escopo transacional para evitar multiplicar PIX externos no desenho atual. Em uma etapa futura, evoluir para reserva local/outbox ou idempotencia externa formal, reduzindo a duracao da transaction sem perder a garantia de uma unica tentativa operacional ativa.
+
+## PIX0.5 - Substituicao segura de PIX
+
+O status local `SUPERSEDED` representa uma tentativa de PIX que deixou de ser a tentativa
+operacional atual do CRM porque o operador gerou uma nova tentativa. Ele nao significa
+`CANCELED`, `EXPIRED`, `FAILED` ou `REFUNDED`.
+
+Decisoes:
+
+- `status` e o estado operacional local do CRM.
+- `externalStatus` preserva o ultimo estado conhecido informado pelo provider.
+- `status = SUPERSEDED` com `externalStatus = WAITING_PAYMENT` ou equivalente e valido.
+- A substituicao nao chama cancelamento externo e nao implica cancelamento no provider.
+- O cancelamento externo nao foi confirmado/suportado no ambiente testado; isso nao afirma uma limitacao absoluta da FastFlow.
+- Dois PIX externos podem coexistir para a mesma `Receivable` quando o operador confirma conscientemente a substituicao.
+- A confirmacao de substituicao envia `expectedCurrentIntentId` obtido no preview; dentro do lock, se o current intent mudou, o POST retorna conflito antes de chamar o provider.
+- Um novo replace operacional futuro deve iniciar novo preview para o current intent vigente, permitindo cadeias legitimas A -> B -> C sem confundir com double-click concorrente baseado em A.
+- O PIX antigo continua podendo ser sincronizado ou liquidado por webhook; se virar `PAID`, o settlement local continua valido.
+- `FinancialTransaction.receivableId` unico e as checagens de settlement preservam idempotencia local e evitam receita duplicada.
+- PIX agrupado (`paymentGroupId != null`) fica bloqueado nesta fase.
+- Se `provider.createPix` concluir e a persistencia local falhar, pode surgir novo PIX orfao; a reconciliacao PIX0.4 permanece como mecanismo de recuperacao.
+- Eventos de auditoria nao devem registrar copia-e-cola, QR payload, token ou secret.

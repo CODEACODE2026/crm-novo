@@ -23,8 +23,10 @@ import {
   listWhatsAppPendingContacts,
   payReceivable,
   payReceivables,
+  previewReceivablePixReplacement,
   previewRenewalReversal,
   registerPaymentWebhook,
+  replaceReceivablePix,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
   testPaymentProviderCredential,
@@ -506,6 +508,42 @@ describe('CRM UI formatters', () => {
       ),
       expect.any(Object),
     );
+  });
+
+  it('uses explicit endpoints for PIX replacement preview and confirmation', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewReceivablePixReplacement('receivable-1', { provider: 'FASTFLOW' });
+    await replaceReceivablePix('receivable-1', {
+      provider: 'FASTFLOW',
+      expectedCurrentIntentId: 'intent-1',
+      reason: 'QR expirado',
+      idempotencyKey: 'pix-replace:receivable-1:intent-1',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('/receivables/receivable-1/pix/replace-preview?provider=FASTFLOW'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/receivables/receivable-1/pix/replace'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const confirmCall = fetchMock.mock.calls[1] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    const confirmBody = confirmCall?.[1]?.body;
+    expect(typeof confirmBody).toBe('string');
+    expect(JSON.parse(confirmBody as string)).toEqual({
+      provider: 'FASTFLOW',
+      expectedCurrentIntentId: 'intent-1',
+      reason: 'QR expirado',
+      idempotencyKey: 'pix-replace:receivable-1:intent-1',
+    });
   });
 
   it('sends referrals pagination and summary filters without status in summary', async () => {

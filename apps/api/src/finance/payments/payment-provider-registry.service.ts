@@ -22,6 +22,10 @@ export class PaymentProviderRegistryService implements PaymentProvider {
   ) {}
 
   async createPix(input: CreatePixInput): Promise<PaymentProviderPix> {
+    if (input.provider) {
+      return this.byCode(input.provider).createPix(input);
+    }
+
     const provider = await this.chooseProviderForPix();
     return provider.createPix(input);
   }

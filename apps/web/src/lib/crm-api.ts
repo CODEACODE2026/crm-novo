@@ -167,7 +167,14 @@ export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
 export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
 export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL';
 export type PaymentIntentStatus =
-  'CREATED' | 'WAITING_PAYMENT' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED' | 'REFUNDED';
+  | 'CREATED'
+  | 'WAITING_PAYMENT'
+  | 'SUPERSEDED'
+  | 'PAID'
+  | 'EXPIRED'
+  | 'CANCELED'
+  | 'FAILED'
+  | 'REFUNDED';
 export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPAY' | 'DEPIX';
 export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
 export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
@@ -260,6 +267,23 @@ export interface PixReconciliationPreview {
   impact: string[];
   blockers: Array<{ code: string; message: string }>;
   warning: string;
+}
+
+export interface PixReplacementPreview {
+  replaceable: boolean;
+  provider: PaymentProviderCode;
+  receivable: {
+    id: string;
+    clientId: string;
+    clientName: string;
+    status: ReceivableStatus;
+    amount: string;
+    paidAt: string | null;
+  };
+  currentIntent: PaymentIntent | null;
+  warning: string;
+  impact: string[];
+  blockers: Array<{ code: string; message: string }>;
 }
 
 export interface PaymentGroupPaymentResult {
@@ -1592,6 +1616,31 @@ export function payReceivables(payload: {
 
 export function createReceivablePix(id: string) {
   return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, { method: 'POST' });
+}
+
+export function previewReceivablePixReplacement(
+  id: string,
+  payload: { provider: PaymentProviderCode },
+) {
+  const params = new URLSearchParams();
+  params.set('provider', payload.provider);
+
+  return apiFetch<PixReplacementPreview>(`/receivables/${id}/pix/replace-preview?${params}`);
+}
+
+export function replaceReceivablePix(
+  id: string,
+  payload: {
+    provider: PaymentProviderCode;
+    expectedCurrentIntentId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  },
+) {
+  return apiFetch<PaymentIntent>(`/receivables/${id}/pix/replace`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function previewReceivablePixReconciliation(

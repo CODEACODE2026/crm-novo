@@ -36,6 +36,7 @@ export type PaymentProviderTransaction = PaymentProviderStatus & {
 
 export type CreatePixInput = {
   receivableId: string;
+  provider?: PaymentProviderCode;
   amount: Prisma.Decimal;
   description: string;
   expiresAt: Date;

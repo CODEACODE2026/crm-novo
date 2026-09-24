@@ -42,6 +42,10 @@ import {
   ReconcileReceivablePixDto,
   ReconcileReceivablePixPreviewDto,
 } from './dto/reconcile-receivable-pix.dto';
+import {
+  ReplaceReceivablePixDto,
+  ReplaceReceivablePixPreviewDto,
+} from './dto/replace-receivable-pix.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
 import { UpdateManualTransactionDto } from './dto/update-manual-transaction.dto';
 import {
@@ -53,7 +57,7 @@ import {
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 
 const pageSizeLimit = 100;
-const activePixStatuses = ['CREATED', 'WAITING_PAYMENT'] satisfies PaymentIntentStatus[];
+const activePixStatuses: PaymentIntentStatus[] = ['CREATED', 'WAITING_PAYMENT'];
 const pixExpirationMinutes = 30;
 const supportedTransactionWebhookEvents = new Set([
   'transaction.created',
@@ -99,6 +103,11 @@ type IgnoredPaymentWebhook = {
 };
 
 type PixReconciliationBlocker = {
+  code: string;
+  message: string;
+};
+
+type PixReplacementBlocker = {
   code: string;
   message: string;
 };
@@ -343,7 +352,9 @@ export class FinanceService {
           data: {
             receivableId: receivable.id,
             provider: providerPix.provider,
-            providerTransactionId: providerPix.providerTransactionId,
+            providerTransactionId: this.normalizeCreatedProviderTransactionId(
+              providerPix.providerTransactionId,
+            ),
             externalStatus: providerPix.externalStatus,
             externalDepixId: providerPix.externalDepixId,
             blockchainTxId: providerPix.blockchainTxId,
@@ -387,6 +398,113 @@ export class FinanceService {
           return this.presentPaymentIntent(activeIntent);
         }
 
+        throw new ConflictException('Ja existe um PIX ativo para esta conta a receber.');
+      }
+
+      throw error;
+    }
+  }
+
+  async previewReceivablePixReplacement(id: string, dto: ReplaceReceivablePixPreviewDto) {
+    const inspection = await this.inspectReceivableForPixReplacement(this.prisma, id, dto.provider);
+    return this.presentPixReplacementPreview(inspection, dto.provider);
+  }
+
+  async replaceReceivablePix(id: string, dto: ReplaceReceivablePixDto, actorUserId: string) {
+    try {
+      const intent = await this.prisma.$transaction(async (tx) => {
+        await this.acquirePixCreationLocks(tx, [id]);
+
+        const inspection = await this.inspectReceivableForPixReplacement(tx, id, dto.provider);
+
+        if (!inspection.currentIntent) {
+          throw new ConflictException('Nenhum PIX elegivel para substituicao.');
+        }
+
+        const { receivable, currentIntent } = inspection;
+        if (dto.idempotencyKey) {
+          const existingPaymentIntentId = await this.findPaymentIntentIdByPixCreationEvent(
+            tx,
+            receivable.clientId,
+            'idempotencyKey',
+            dto.idempotencyKey,
+          );
+          if (existingPaymentIntentId) {
+            return tx.paymentIntent.findUniqueOrThrow({ where: { id: existingPaymentIntentId } });
+          }
+        }
+
+        if (currentIntent.id !== dto.expectedCurrentIntentId) {
+          throw new ConflictException('PIX atual mudou. Gere uma nova previa antes de substituir.');
+        }
+
+        this.throwPixReplacementBlockers(inspection.blockers);
+
+        const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const providerPix = await this.paymentProvider.createPix({
+          provider: dto.provider,
+          receivableId: receivable.id,
+          amount: receivable.amount,
+          description: receivable.description,
+          expiresAt,
+          clientName: receivable.client.name,
+          payerPhone: receivable.client.phoneNormalized,
+          notificationUrl: this.getPaymentNotificationUrl(),
+        });
+
+        await tx.paymentIntent.update({
+          where: { id: currentIntent.id },
+          data: { status: 'SUPERSEDED' },
+        });
+
+        const created = await tx.paymentIntent.create({
+          data: {
+            receivableId: receivable.id,
+            provider: providerPix.provider,
+            providerTransactionId: this.normalizeCreatedProviderTransactionId(
+              providerPix.providerTransactionId,
+            ),
+            externalStatus: providerPix.externalStatus,
+            externalDepixId: providerPix.externalDepixId,
+            blockchainTxId: providerPix.blockchainTxId,
+            status: providerPix.status,
+            amount: providerPix.amount,
+            pixCopyPaste: providerPix.pixCopyPaste,
+            qrCodeData: providerPix.qrCodeData,
+            expiresAt: providerPix.expiresAt,
+            lastSyncAt: new Date(),
+          },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: receivable.clientId,
+            type: 'PIX_PAYMENT_INTENT_CREATED',
+            title: 'Novo PIX gerado para substituir tentativa anterior.',
+            description:
+              dto.reason?.trim() ||
+              'Operador gerou nova tentativa de PIX sem cancelar a transacao anterior no provider.',
+            metadata: {
+              receivableId: receivable.id,
+              previousPaymentIntentId: currentIntent.id,
+              previousProvider: currentIntent.provider,
+              previousProviderTransactionId: currentIntent.providerTransactionId,
+              paymentIntentId: created.id,
+              provider: created.provider,
+              providerTransactionId: created.providerTransactionId,
+              replacement: true,
+              idempotencyKey: dto.idempotencyKey ?? null,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return created;
+      });
+
+      return this.presentPaymentIntent(intent);
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
         throw new ConflictException('Ja existe um PIX ativo para esta conta a receber.');
       }
 
@@ -438,7 +556,9 @@ export class FinanceService {
           data: {
             paymentGroupId: paymentGroup.id,
             provider: providerPix.provider,
-            providerTransactionId: providerPix.providerTransactionId,
+            providerTransactionId: this.normalizeCreatedProviderTransactionId(
+              providerPix.providerTransactionId,
+            ),
             externalStatus: providerPix.externalStatus,
             externalDepixId: providerPix.externalDepixId,
             blockchainTxId: providerPix.blockchainTxId,
@@ -1062,10 +1182,14 @@ export class FinanceService {
       }
 
       if (providerStatus.status !== 'PAID') {
+        const nextStatus =
+          current.status === 'SUPERSEDED' && activePixStatuses.includes(providerStatus.status)
+            ? 'SUPERSEDED'
+            : providerStatus.status;
         const updated = await tx.paymentIntent.update({
           where: { id },
           data: {
-            status: providerStatus.status,
+            status: nextStatus,
             externalStatus: providerStatus.externalStatus,
             externalDepixId: providerStatus.externalDepixId,
             blockchainTxId: providerStatus.blockchainTxId,
@@ -2107,9 +2231,7 @@ export class FinanceService {
       });
     }
 
-    const activeIntent = await this.findActivePixForReceivables(tx as Prisma.TransactionClient, [
-      receivableId,
-    ]);
+    const activeIntent = await this.findActivePixForReceivables(tx, [receivableId]);
 
     if (activeIntent) {
       blockers.push({
@@ -2119,6 +2241,167 @@ export class FinanceService {
     }
 
     return { receivable, blockers };
+  }
+
+  private async inspectReceivableForPixReplacement(
+    tx: Pick<Prisma.TransactionClient, 'receivable' | 'paymentIntent'>,
+    receivableId: string,
+    provider: PaymentProviderCode,
+  ) {
+    const blockers: PixReplacementBlocker[] = [];
+    const receivable = await tx.receivable.findUnique({
+      where: { id: receivableId },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        renewal: true,
+        paymentTransaction: true,
+        paymentIntents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
+      },
+    });
+
+    if (!receivable) {
+      throw new NotFoundException('Conta a receber nao encontrada.');
+    }
+
+    if (receivable.status === 'PAGO') {
+      blockers.push({
+        code: 'RECEIVABLE_ALREADY_PAID',
+        message: 'Conta a receber ja esta paga.',
+      });
+    }
+
+    if (receivable.status === 'CANCELADO') {
+      blockers.push({
+        code: 'RECEIVABLE_CANCELED',
+        message: 'Conta a receber cancelada nao pode gerar novo PIX.',
+      });
+    }
+
+    const currentIntent = this.findCurrentReceivablePixIntent(receivable.paymentIntents);
+
+    if (!currentIntent) {
+      blockers.push({
+        code: 'NO_WAITING_PAYMENT_INTENT',
+        message: 'Nao existe PIX aguardando pagamento elegivel para substituicao.',
+      });
+    } else {
+      if (currentIntent.paymentGroupId) {
+        blockers.push({
+          code: 'GROUPED_PIX_NOT_SUPPORTED',
+          message: 'PIX agrupado nao pode ser substituido individualmente nesta fase.',
+        });
+      }
+
+      if (currentIntent.status !== 'WAITING_PAYMENT') {
+        blockers.push({
+          code: 'INTENT_STATUS_NOT_SUPPORTED',
+          message: 'Apenas PIX com status WAITING_PAYMENT pode ser substituido nesta fase.',
+        });
+      }
+
+      if (currentIntent.provider !== provider) {
+        blockers.push({
+          code: 'PROVIDER_MISMATCH',
+          message: 'Provider informado nao corresponde ao PIX atual.',
+        });
+      }
+    }
+
+    const activeIntent = await this.findActivePixForReceivables(tx, [receivableId]);
+
+    if (activeIntent?.paymentGroupId) {
+      blockers.push({
+        code: 'GROUPED_PIX_NOT_SUPPORTED',
+        message: 'Ja existe PIX agrupado ativo para esta conta.',
+      });
+    }
+
+    if (activeIntent && currentIntent && activeIntent.id !== currentIntent.id) {
+      blockers.push({
+        code: 'ACTIVE_INTENT_CONFLICT',
+        message: 'Existe outro PIX ativo para esta conta.',
+      });
+    }
+
+    return { receivable, currentIntent, blockers };
+  }
+
+  private async findPaymentIntentIdByPixCreationEvent(
+    tx: Pick<Prisma.TransactionClient, 'clientEvent'>,
+    clientId: string,
+    metadataKey: 'idempotencyKey' | 'paymentIntentId',
+    metadataValue: string,
+  ) {
+    const event = await tx.clientEvent.findFirst({
+      where: {
+        clientId,
+        type: 'PIX_PAYMENT_INTENT_CREATED',
+        metadata: { path: [metadataKey], equals: metadataValue },
+      },
+    });
+    const metadata =
+      typeof event?.metadata === 'object' && event.metadata !== null
+        ? (event.metadata as Record<string, unknown>)
+        : null;
+
+    return typeof metadata?.paymentIntentId === 'string' ? metadata.paymentIntentId : null;
+  }
+
+  private findCurrentReceivablePixIntent(intents: Array<Prisma.PaymentIntentGetPayload<object>>) {
+    return (
+      [...intents]
+        .filter(
+          (intent) =>
+            intent.receivableId &&
+            !intent.paymentGroupId &&
+            activePixStatuses.includes(intent.status),
+        )
+        .sort((left, right) => {
+          const createdDiff = right.createdAt.getTime() - left.createdAt.getTime();
+          return createdDiff || right.id.localeCompare(left.id);
+        })[0] ?? null
+    );
+  }
+
+  private presentPixReplacementPreview(
+    inspection: Awaited<ReturnType<FinanceService['inspectReceivableForPixReplacement']>>,
+    provider: PaymentProviderCode,
+  ) {
+    const { receivable, currentIntent, blockers } = inspection;
+
+    return {
+      replaceable: blockers.length === 0,
+      provider,
+      receivable: {
+        id: receivable.id,
+        clientId: receivable.clientId,
+        clientName: receivable.client.name,
+        status: receivable.status,
+        amount: receivable.amount.toFixed(2),
+        paidAt: receivable.paidAt ? formatBusinessDate(receivable.paidAt) : null,
+      },
+      currentIntent: currentIntent ? this.presentPaymentIntent(currentIntent) : null,
+      warning:
+        'Um novo PIX sera criado para esta cobranca. O PIX atual continuara registrado no historico e podera continuar existindo no provedor.',
+      impact:
+        blockers.length === 0
+          ? [
+              'Criar uma nova tentativa de PIX',
+              'Marcar somente o status local da tentativa anterior como SUPERSEDED',
+              'Preservar externalStatus e dados historicos do PIX anterior',
+              'Nao criar FinancialTransaction',
+              'Nao baixar a conta a receber',
+            ]
+          : ['Nenhuma alteracao sera aplicada enquanto houver bloqueios.'],
+      blockers,
+    };
+  }
+
+  private throwPixReplacementBlockers(blockers: PixReplacementBlocker[]) {
+    if (blockers.length === 0) return;
+
+    throw new ConflictException(blockers.map((blocker) => blocker.message).join(' '));
   }
 
   private async fetchProviderTransaction(
@@ -2256,6 +2539,16 @@ export class FinanceService {
 
     if (!normalized) {
       throw new BadRequestException('Transaction ID do provider e obrigatorio.');
+    }
+
+    return normalized;
+  }
+
+  private normalizeCreatedProviderTransactionId(value: unknown) {
+    const normalized = this.stringFrom(value)?.trim();
+
+    if (!normalized) {
+      throw new ConflictException('Provider retornou PIX sem transaction ID valido.');
     }
 
     return normalized;
@@ -2496,7 +2789,10 @@ export class FinanceService {
     }
   }
 
-  private findActivePixForReceivables(tx: Prisma.TransactionClient, receivableIds: string[]) {
+  private findActivePixForReceivables(
+    tx: Pick<Prisma.TransactionClient, 'paymentIntent'>,
+    receivableIds: string[],
+  ) {
     return tx.paymentIntent.findFirst({
       where: {
         status: { in: [...activePixStatuses] },

@@ -197,9 +197,11 @@ import {
   listReferrals,
   previewMessageTemplate,
   previewCurrentCycleReceivable,
+  previewReceivablePixReplacement,
   reconcileBilling,
   reconcileBillingReceivables,
   reconcileRecovery,
+  replaceReceivablePix,
   sendBillingNow,
   savePaymentProviderCredential,
   setDefaultPaymentProvider,
@@ -234,6 +236,7 @@ import {
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
   type PixReconciliationPreview,
+  type PixReplacementPreview,
   type Receivable,
   type ReceivableDisplayStatus,
   type ReceivablesSummary,
@@ -9345,6 +9348,7 @@ function paymentIntentStatusLabel(status: PaymentIntentStatus) {
   const labels: Record<PaymentIntentStatus, string> = {
     CREATED: 'Criado',
     WAITING_PAYMENT: 'Aguardando',
+    SUPERSEDED: 'Substituído',
     PAID: 'Pago',
     EXPIRED: 'Expirado',
     CANCELED: 'Cancelado',
@@ -11378,13 +11382,17 @@ function PixReceivableModal({
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [showReconciliation, setShowReconciliation] = useState(false);
+  const [showReplacement, setShowReplacement] = useState(false);
   const [reconcileProvider, setReconcileProvider] =
     useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
   const [reconcileTransactionId, setReconcileTransactionId] = useState('');
   const [reconcileReason, setReconcileReason] = useState('');
   const [reconcilePreview, setReconcilePreview] = useState<PixReconciliationPreview | null>(null);
+  const [replaceReason, setReplaceReason] = useState('');
+  const [replacementPreview, setReplacementPreview] = useState<PixReplacementPreview | null>(null);
   const actionRef = useRef(false);
   const previewActionRef = useRef(false);
+  const replacePreviewActionRef = useRef(false);
 
   const loadIntents = useCallback(
     async (fallbackIntent?: PaymentIntent) => {
@@ -11504,16 +11512,67 @@ function PixReceivableModal({
     setReconcilePreview(null);
   }
 
+  async function runReplacementPreview() {
+    if (!activeIntent || replacePreviewActionRef.current) return;
+
+    replacePreviewActionRef.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setReplacementPreview(null);
+
+    try {
+      const preview = await previewReceivablePixReplacement(receivable.id, {
+        provider: activeIntent.provider,
+      });
+      setReplacementPreview(preview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível pré-visualizar.');
+    } finally {
+      setBusy(false);
+      replacePreviewActionRef.current = false;
+    }
+  }
+
+  async function runReplacementConfirm() {
+    if (
+      !activeIntent ||
+      !replacementPreview?.replaceable ||
+      replacementPreview.currentIntent?.id !== activeIntent.id ||
+      actionRef.current
+    ) {
+      return;
+    }
+
+    await runAction(
+      () =>
+        replaceReceivablePix(receivable.id, {
+          provider: activeIntent.provider,
+          expectedCurrentIntentId: activeIntent.id,
+          idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}`,
+          ...(replaceReason.trim() ? { reason: replaceReason.trim() } : {}),
+        }),
+      'Novo PIX gerado.',
+    );
+    setShowReplacement(false);
+    setReplacementPreview(null);
+  }
+
   const canCreateNew =
     !activeIntent || !['CREATED', 'WAITING_PAYMENT'].includes(activeIntent.status);
+  const canReplacePix = activeIntent?.status === 'WAITING_PAYMENT' && !activeIntent.paymentGroupId;
   const canCancel =
-    activeIntent && !['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
+    activeIntent &&
+    !['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
   const canRenderQrImage =
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
   const canConfirmReconciliation =
     Boolean(reconcilePreview?.adoptable) &&
     reconcilePreview?.provider === reconcileProvider &&
     reconcilePreview.providerTransactionId === reconcileTransactionId.trim();
+  const canConfirmReplacement =
+    Boolean(replacementPreview?.replaceable) &&
+    replacementPreview?.currentIntent?.id === activeIntent?.id;
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -11674,6 +11733,16 @@ function PixReceivableModal({
                   label: 'Reconciliar PIX externo',
                   onSelect: () => setShowReconciliation((value) => !value),
                 },
+                {
+                  disabled: busy || !canReplacePix,
+                  icon: RefreshCcw,
+                  label: 'Gerar novo PIX',
+                  onSelect: () => {
+                    setShowReplacement((value) => !value);
+                    setShowReconciliation(false);
+                    setReplacementPreview(null);
+                  },
+                },
               ]}
             />
             <button
@@ -11689,6 +11758,105 @@ function PixReceivableModal({
             </button>
           </div>
         </div>
+
+        {showReplacement && activeIntent ? (
+          <section className="pix-panel">
+            <div className="pix-status-row">
+              <strong>Gerar novo PIX</strong>
+              <span>{paymentProviderDisplay(activeIntent.provider)}</span>
+            </div>
+            <p>
+              Um novo PIX será criado para esta cobrança. O PIX atual continuará registrado no
+              histórico e poderá continuar existindo no provedor.
+            </p>
+            <div className="notice warning">
+              Use esta opção somente quando o PIX atual não puder mais ser utilizado.
+            </div>
+            <dl className="detail-list">
+              <div>
+                <dt>Cliente</dt>
+                <dd>{receivable.client?.name ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>Valor</dt>
+                <dd>{formatCurrency(receivable.amount)}</dd>
+              </div>
+              <div>
+                <dt>Provider</dt>
+                <dd>{paymentProviderDisplay(activeIntent.provider)}</dd>
+              </div>
+              <div>
+                <dt>Transaction ID atual</dt>
+                <dd>{activeIntent.providerTransactionId ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>Status atual</dt>
+                <dd>{paymentIntentStatusLabel(activeIntent.status)}</dd>
+              </div>
+              <div>
+                <dt>Expiração atual</dt>
+                <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
+              </div>
+            </dl>
+            <label className="field">
+              <span>Motivo</span>
+              <select
+                value={replaceReason}
+                onChange={(event) => {
+                  setReplaceReason(event.target.value);
+                  setReplacementPreview(null);
+                }}
+              >
+                <option value="">Selecione um motivo</option>
+                <option value="QR expirado">QR expirado</option>
+                <option value="Cliente não consegue pagar">Cliente não consegue pagar</option>
+                <option value="Nova tentativa solicitada">Nova tentativa solicitada</option>
+                <option value="Outro">Outro</option>
+              </select>
+            </label>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={busy}
+                type="button"
+                onClick={() => void runReplacementPreview()}
+              >
+                Pré-visualizar
+              </button>
+              <button
+                className="primary-button"
+                disabled={busy || !canConfirmReplacement}
+                type="button"
+                onClick={() => void runReplacementConfirm()}
+              >
+                <QrCode aria-hidden="true" size={16} />
+                Confirmar novo PIX
+              </button>
+            </div>
+            {replacementPreview ? (
+              <>
+                <div className="mini-list">
+                  {replacementPreview.impact.map((item) => (
+                    <article key={item}>
+                      <strong>Impacto</strong>
+                      <p>{item}</p>
+                    </article>
+                  ))}
+                </div>
+                {replacementPreview.blockers.length ? (
+                  <div className="mini-list">
+                    {replacementPreview.blockers.map((blocker) => (
+                      <article key={blocker.code}>
+                        <strong>{blocker.code}</strong>
+                        <p>{blocker.message}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </section>
+        ) : null}
 
         {showReconciliation ? (
           <section className="pix-panel">
@@ -11846,7 +12014,8 @@ function PixReceivablesModal({
   const actionRef = useRef(false);
   const total = receivables.reduce((sum, receivable) => sum + Number(receivable.amount), 0);
   const canCancel =
-    activeIntent && !['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
+    activeIntent &&
+    !['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
   const canRenderQrImage =
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
 

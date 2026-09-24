@@ -30,6 +30,10 @@ import {
   ReconcileReceivablePixPreviewDto,
 } from './dto/reconcile-receivable-pix.dto';
 import {
+  ReplaceReceivablePixDto,
+  ReplaceReceivablePixPreviewDto,
+} from './dto/replace-receivable-pix.dto';
+import {
   SavePaymentProviderCredentialDto,
   SavePaymentWebhookSecretDto,
 } from './dto/save-payment-provider-credential.dto';
@@ -106,6 +110,23 @@ export class FinanceController {
   @Post('receivables/:id/pix')
   createReceivablePix(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
     return this.financeService.createReceivablePix(id, request.user.id);
+  }
+
+  @Get('receivables/:id/pix/replace-preview')
+  previewReceivablePixReplacement(
+    @Param('id') id: string,
+    @Query() query: ReplaceReceivablePixPreviewDto,
+  ) {
+    return this.financeService.previewReceivablePixReplacement(id, query);
+  }
+
+  @Post('receivables/:id/pix/replace')
+  replaceReceivablePix(
+    @Param('id') id: string,
+    @Body() dto: ReplaceReceivablePixDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.financeService.replaceReceivablePix(id, dto, request.user.id);
   }
 
   @Get('receivables/:id/pix/reconcile-preview')

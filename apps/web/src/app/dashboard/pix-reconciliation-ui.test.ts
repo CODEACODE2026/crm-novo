@@ -27,6 +27,32 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('Nenhum novo PIX será');
   });
 
+  it('keeps PIX replacement behind the action menu with preview and explicit confirmation', () => {
+    expect(pixModalSource).toContain("label: 'Gerar novo PIX'");
+    expect(pixModalSource).toContain(
+      'const [showReplacement, setShowReplacement] = useState(false);',
+    );
+    expect(pixModalSource).toContain(
+      'const [replacementPreview, setReplacementPreview] = useState<PixReplacementPreview | null>(null);',
+    );
+    expect(pixModalSource).toContain('previewReceivablePixReplacement(receivable.id');
+    expect(pixModalSource).toContain('replaceReceivablePix(receivable.id');
+    expect(pixModalSource).toContain('expectedCurrentIntentId: activeIntent.id');
+    expect(pixModalSource).toContain('Um novo PIX será criado para esta cobrança.');
+    expect(pixModalSource).toContain(
+      'Use esta opção somente quando o PIX atual não puder mais ser utilizado.',
+    );
+    expect(pixModalSource).toContain('replacementPreview.blockers.map');
+    expect(pixModalSource).toContain('disabled={busy || !canConfirmReplacement}');
+  });
+
+  it('labels superseded PIX attempts as historical replacements', () => {
+    expect(dashboardSource).toContain("SUPERSEDED: 'Substituído'");
+    expect(pixModalSource).toContain("!['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED']");
+    expect(pixModalSource).not.toContain("SUPERSEDED: 'Cancelado'");
+    expect(pixModalSource).not.toContain("SUPERSEDED: 'Expirado'");
+  });
+
   it('keeps the transaction ID display controlled by operator input only', () => {
     expect(pixModalSource).toContain('value={reconcileTransactionId}');
     expect(pixModalSource).toContain('setReconcileTransactionId(event.target.value);');
@@ -107,7 +133,7 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('setActiveIntent(intent);');
     expect(pixModalSource).toContain('await loadIntents(intent);');
     expect(pixModalSource).toContain("'PIX cancelado no provider.'");
-    expect(pixModalSource).toContain("!['PAID', 'CANCELED', 'EXPIRED', 'REFUNDED']");
+    expect(pixModalSource).toContain("!['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED']");
     expect(pixModalSource).toContain('disabled={busy || !canCreateNew}');
     expect(pixModalSource).toContain('() => createReceivablePix(receivable.id)');
     expect(pixModalSource).not.toContain('await createReceivablePix(receivable.id)');

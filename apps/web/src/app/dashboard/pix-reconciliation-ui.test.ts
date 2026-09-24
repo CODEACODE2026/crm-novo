@@ -58,6 +58,29 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('if (actionRef.current) return;');
   });
 
+  it('keeps synced PIX visible while authoritative data reloads', () => {
+    expect(pixModalSource).toContain('async (fallbackIntent?: PaymentIntent)');
+    expect(dashboardSource).toContain('function mergePaymentIntentsWithFallback(');
+    expect(dashboardSource).toContain('sameIntentIndex === -1');
+    expect(dashboardSource).toContain('[fallbackIntent, ...intents]');
+    expect(dashboardSource).toContain('paymentIntentFreshness(sameIntent)');
+    expect(dashboardSource).toContain('paymentIntentFreshness(fallbackIntent)');
+    expect(pixModalSource).toContain('mergePaymentIntentsWithFallback(');
+    expect(pixModalSource).toContain(
+      'visibleIntents.find((intent) => intent.id === fallbackIntent.id)',
+    );
+    expect(pixModalSource).toContain('visibleIntents.find(isActivePixIntent)');
+    expect(pixModalSource).toContain('await loadIntents(intent);');
+    expect(pixModalSource).toContain('(intent) => pixSyncNotice(intent)');
+  });
+
+  it('separates provider status from temporal PIX expiration in the UI', () => {
+    expect(dashboardSource).toContain('function isPixTemporallyExpired(intent: PaymentIntent)');
+    expect(dashboardSource).toContain("intent.status === 'WAITING_PAYMENT'");
+    expect(pixModalSource).toContain('isPixTemporallyExpired(activeIntent)');
+    expect(pixModalSource).toContain('Prazo informado para este PIX expirou.');
+  });
+
   it('keeps provider errors in the modal and handles close paths without submitting', () => {
     expect(pixModalSource).toContain(
       "setError(err instanceof Error ? err.message : 'Não foi possível pré-visualizar.')",

@@ -9355,6 +9355,65 @@ function paymentIntentStatusLabel(status: PaymentIntentStatus) {
   return labels[status];
 }
 
+function isActivePixIntent(intent: PaymentIntent) {
+  return ['CREATED', 'WAITING_PAYMENT'].includes(intent.status);
+}
+
+function paymentIntentFreshness(intent: PaymentIntent) {
+  return Math.max(
+    Date.parse(intent.updatedAt) || 0,
+    intent.lastSyncAt ? Date.parse(intent.lastSyncAt) || 0 : 0,
+  );
+}
+
+function mergePaymentIntentsWithFallback(
+  intents: PaymentIntent[],
+  fallbackIntent: PaymentIntent | undefined,
+  receivableId: string,
+) {
+  if (!fallbackIntent || fallbackIntent.receivableId !== receivableId) return intents;
+
+  const sameIntentIndex = intents.findIndex((intent) => intent.id === fallbackIntent.id);
+
+  if (sameIntentIndex === -1) return [fallbackIntent, ...intents];
+
+  const sameIntent = intents[sameIntentIndex]!;
+
+  if (paymentIntentFreshness(sameIntent) >= paymentIntentFreshness(fallbackIntent)) {
+    return intents;
+  }
+
+  return intents.map((intent, index) => (index === sameIntentIndex ? fallbackIntent : intent));
+}
+
+function pixSyncNotice(intent: PaymentIntent, grouped = false) {
+  if (intent.status === 'PAID') {
+    return grouped ? 'Pagamento PIX agrupado confirmado.' : 'Pagamento confirmado.';
+  }
+  if (intent.status === 'EXPIRED') return grouped ? 'PIX agrupado expirado.' : 'PIX expirado.';
+  if (intent.status === 'CANCELED') {
+    return grouped ? 'PIX agrupado cancelado.' : 'PIX cancelado.';
+  }
+  if (intent.status === 'FAILED') {
+    return grouped ? 'PIX agrupado falhou no provider.' : 'PIX falhou no provider.';
+  }
+  if (intent.status === 'WAITING_PAYMENT') {
+    return grouped
+      ? 'PIX agrupado sincronizado. O provedor ainda informa pagamento pendente.'
+      : 'PIX sincronizado. O provedor ainda informa pagamento pendente.';
+  }
+
+  return grouped ? 'Status do PIX agrupado sincronizado.' : 'Status do PIX sincronizado.';
+}
+
+function isPixTemporallyExpired(intent: PaymentIntent) {
+  return (
+    intent.status === 'WAITING_PAYMENT' &&
+    Boolean(intent.expiresAt) &&
+    Date.parse(intent.expiresAt!) <= Date.now()
+  );
+}
+
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('pt-BR');
 }
@@ -11327,30 +11386,43 @@ function PixReceivableModal({
   const actionRef = useRef(false);
   const previewActionRef = useRef(false);
 
-  const loadIntents = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const loadIntents = useCallback(
+    async (fallbackIntent?: PaymentIntent) => {
+      setLoading(true);
+      setError('');
 
-    try {
-      const nextIntents = await listPaymentIntents(receivable.id);
-      setIntents(nextIntents);
-      setActiveIntent(
-        nextIntents.find((intent) => ['CREATED', 'WAITING_PAYMENT'].includes(intent.status)) ??
-          nextIntents[0] ??
-          null,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível carregar o PIX.');
-    } finally {
-      setLoading(false);
-    }
-  }, [receivable.id]);
+      try {
+        const nextIntents = await listPaymentIntents(receivable.id);
+        const visibleIntents = mergePaymentIntentsWithFallback(
+          nextIntents,
+          fallbackIntent,
+          receivable.id,
+        );
+        const fallbackFromList = fallbackIntent
+          ? visibleIntents.find((intent) => intent.id === fallbackIntent.id)
+          : null;
+
+        setIntents(visibleIntents);
+        setActiveIntent(
+          fallbackFromList ?? visibleIntents.find(isActivePixIntent) ?? visibleIntents[0] ?? null,
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Não foi possível carregar o PIX.');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [receivable.id],
+  );
 
   useEffect(() => {
     void loadIntents();
   }, [loadIntents]);
 
-  async function runAction(action: () => Promise<PaymentIntent>, success: string) {
+  async function runAction(
+    action: () => Promise<PaymentIntent>,
+    success: string | ((intent: PaymentIntent) => string),
+  ) {
     if (actionRef.current) return;
 
     actionRef.current = true;
@@ -11360,10 +11432,11 @@ function PixReceivableModal({
 
     try {
       const intent = await action();
+      const successMessage = typeof success === 'function' ? success(intent) : success;
       setActiveIntent(intent);
-      await loadIntents();
-      setNotice(success);
-      await onChanged(success);
+      await loadIntents(intent);
+      setNotice(successMessage);
+      await onChanged(successMessage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
     } finally {
@@ -11530,7 +11603,7 @@ function PixReceivableModal({
                 onClick={() =>
                   void runAction(
                     () => syncPaymentIntent(activeIntent.id),
-                    'Status do PIX sincronizado.',
+                    (intent) => pixSyncNotice(intent),
                   )
                 }
               >
@@ -11569,6 +11642,9 @@ function PixReceivableModal({
                 </button>
               ) : null}
             </div>
+            {isPixTemporallyExpired(activeIntent) ? (
+              <div className="notice warning">Prazo informado para este PIX expirou.</div>
+            ) : null}
           </div>
         ) : null}
 
@@ -11774,7 +11850,10 @@ function PixReceivablesModal({
   const canRenderQrImage =
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
 
-  async function runAction(action: () => Promise<PaymentIntent>, success: string) {
+  async function runAction(
+    action: () => Promise<PaymentIntent>,
+    success: string | ((intent: PaymentIntent) => string),
+  ) {
     if (actionRef.current) return;
 
     actionRef.current = true;
@@ -11784,9 +11863,10 @@ function PixReceivablesModal({
 
     try {
       const intent = await action();
+      const successMessage = typeof success === 'function' ? success(intent) : success;
       setActiveIntent(intent);
-      setNotice(success);
-      await onChanged(success);
+      setNotice(successMessage);
+      await onChanged(successMessage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
     } finally {
@@ -11884,7 +11964,7 @@ function PixReceivablesModal({
                 onClick={() =>
                   void runAction(
                     () => syncPaymentIntent(activeIntent.id),
-                    'Status do PIX agrupado sincronizado.',
+                    (intent) => pixSyncNotice(intent, true),
                   )
                 }
               >
@@ -11923,6 +12003,9 @@ function PixReceivablesModal({
                 </button>
               ) : null}
             </div>
+            {isPixTemporallyExpired(activeIntent) ? (
+              <div className="notice warning">Prazo informado para este PIX expirou.</div>
+            ) : null}
           </div>
         ) : null}
 

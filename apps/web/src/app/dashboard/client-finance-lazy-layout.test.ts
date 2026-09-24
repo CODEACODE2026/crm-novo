@@ -17,6 +17,13 @@ const clientFinanceSource = clientsSource.slice(
   clientsSource.indexOf("{detailTab === 'receivables' ? ("),
   clientsSource.indexOf("{detailTab === 'messages' ? ("),
 );
+const clientResetEffectSource = clientsSource.slice(
+  clientsSource.indexOf('setReferenceStatusModal(null);'),
+  clientsSource.indexOf(
+    'if (!selectedClientId) return;',
+    clientsSource.indexOf('setReferenceStatusModal(null);'),
+  ),
+);
 
 describe('phase E2A client finance lazy loading source', () => {
   it('loads client finance only when the Financeiro tab is opened', () => {
@@ -70,6 +77,14 @@ describe('phase E2A client finance lazy loading source', () => {
     expect(clientsSource).toContain('clientFinancePage');
     expect(clientsSource).toContain('clientFinanceReferenceId');
     expect(clientsSource).toContain('clientFinanceStatus');
+  });
+
+  it('does not close the PIX modal when the same selected client is refreshed after sync', () => {
+    expect(clientResetEffectSource).toContain('setPixReceivable(null);');
+    expect(clientResetEffectSource).toContain('setClientFinanceItems([]);');
+    expect(clientResetEffectSource).toContain('}, [selectedClientId]);');
+    expect(clientResetEffectSource).not.toContain('}, [selectedClient]);');
+    expect(clientsSource).toContain('onFinancialMutation(selectedClient.id)');
   });
 
   it('keeps client detail payload free from embedded receivables after E2B', () => {

@@ -3714,7 +3714,7 @@ function ClientsView({
     setTimelinePage(1);
     setTimelineLoading(false);
     setTimelineError('');
-  }, [selectedClient]);
+  }, [selectedClientId]);
 
   useEffect(() => {
     if (!selectedClientId) return;

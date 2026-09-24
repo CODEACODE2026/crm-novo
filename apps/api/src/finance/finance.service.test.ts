@@ -181,6 +181,7 @@ function createFinancePrisma() {
       });
     }),
     getPixStatus: vi.fn(),
+    getPixTransaction: vi.fn(),
     markPixPaid: vi.fn(),
   };
 
@@ -546,6 +547,39 @@ function createFinancePrisma() {
 
 function createWebhookSignature(payload: string, secret = 'webhook-secret') {
   return `sha256=${createHmac('sha256', secret).update(Buffer.from(payload)).digest('hex')}`;
+}
+
+function reconciliationTransaction(
+  overrides: Partial<{
+    provider: 'FASTFLOW' | 'FASTPAY' | 'MOCK';
+    providerTransactionId: string;
+    externalStatus: string | null;
+    status: 'WAITING_PAYMENT' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED' | 'REFUNDED';
+    amount: Prisma.Decimal;
+    pixCopyPaste: string | null;
+    qrCodeData: string | null;
+    expiresAt: Date | null;
+    paidAt: Date | null;
+  }> = {},
+) {
+  return {
+    provider: overrides.provider ?? ('FASTFLOW' as const),
+    providerTransactionId: overrides.providerTransactionId ?? '75148',
+    externalStatus: overrides.externalStatus ?? 'pending',
+    externalDepixId: null,
+    blockchainTxId: null,
+    status: overrides.status ?? ('WAITING_PAYMENT' as const),
+    amount: overrides.amount ?? new Prisma.Decimal('30.00'),
+    pixCopyPaste: overrides.pixCopyPaste === undefined ? 'pix-copy-paste' : overrides.pixCopyPaste,
+    qrCodeData: overrides.qrCodeData === undefined ? 'qr-code-data' : overrides.qrCodeData,
+    expiresAt:
+      overrides.expiresAt === undefined
+        ? new Date('2026-09-24T01:00:00.000Z')
+        : overrides.expiresAt,
+    paidAt: overrides.paidAt ?? null,
+    failureCode: null,
+    failureMessage: null,
+  };
 }
 
 type SummaryReceivable = {
@@ -1082,6 +1116,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
       }),
     ),
     getPixStatus: vi.fn(),
+    getPixTransaction: vi.fn(),
     markPixPaid: vi.fn(),
   };
   const recovery = {
@@ -3069,6 +3104,703 @@ describe('FinanceService', () => {
       status: 'WAITING_PAYMENT',
     });
     expect(fake.provider.getPixStatus).toHaveBeenCalledWith('75148', 'FASTFLOW');
+  });
+
+  it('previews an orphan external PIX without local writes', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.id = '0699aa7a-23d0-4463-9501-daf92c930bea';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: 'depix-75148',
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: 'qr-code-data',
+      expiresAt: new Date('2026-09-24T01:00:00.000Z'),
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 75148 as never,
+    });
+
+    expect(preview).toMatchObject({
+      adoptable: true,
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      external: {
+        providerTransactionId: '75148',
+        status: 'WAITING_PAYMENT',
+        amount: '30.00',
+        hasPixCopyPaste: true,
+        hasQrCodeData: true,
+      },
+    });
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
+  it('blocks PIX reconciliation preview on amount mismatch', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('31.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: null,
+      expiresAt: null,
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+    });
+
+    expect(preview.adoptable).toBe(false);
+    expect(preview.blockers).toContainEqual(expect.objectContaining({ code: 'AMOUNT_MISMATCH' }));
+    expect(fake.paymentIntents).toHaveLength(0);
+  });
+
+  it.each([
+    ['29.99', 'AMOUNT_MISMATCH'],
+    ['30.01', 'AMOUNT_MISMATCH'],
+  ])('blocks PIX reconciliation preview when provider amount is %s', async (amount, code) => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ amount: new Prisma.Decimal(amount) }),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+    });
+
+    expect(preview.adoptable).toBe(false);
+    expect(preview.blockers).toContainEqual(expect.objectContaining({ code }));
+    expect(fake.paymentIntents).toHaveLength(0);
+  });
+
+  it('blocks PIX reconciliation preview on provider transaction ID mismatch', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ providerTransactionId: '99999' }),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+    });
+
+    expect(preview.adoptable).toBe(false);
+    expect(preview.blockers).toContainEqual(
+      expect.objectContaining({ code: 'TRANSACTION_ID_MISMATCH' }),
+    );
+    expect(fake.paymentIntents).toHaveLength(0);
+  });
+
+  it('rejects empty PIX reconciliation transaction IDs', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.previewReceivablePixReconciliation(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '   ',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['paid', 'PAID' as const],
+    ['expired', 'EXPIRED' as const],
+  ])('previews reconciliable %s provider status without writes', async (externalStatus, status) => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({
+        externalStatus,
+        status,
+        paidAt: status === 'PAID' ? new Date('2026-09-24T01:00:00.000Z') : null,
+      }),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+    });
+
+    expect(preview).toMatchObject({ adoptable: true, external: { status } });
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.events).toHaveLength(0);
+  });
+
+  it('confirms pending orphan PIX adoption without writing off the receivable', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.id = '0699aa7a-23d0-4463-9501-daf92c930bea';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: 'qr-code-data',
+      expiresAt: new Date('2026-09-24T01:00:00.000Z'),
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+        reason: 'Reconciliação de PIX criado no provider após falha de persistência local.',
+      },
+      actorUserId,
+    );
+
+    expect(intent).toMatchObject({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      status: 'WAITING_PAYMENT',
+      amount: '30.00',
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: 'qr-code-data',
+    });
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    ['EXPIRED' as const, 'expired'],
+    ['CANCELED' as const, 'canceled'],
+    ['REFUNDED' as const, 'refunded'],
+    ['FAILED' as const, 'failed'],
+  ])(
+    'confirms %s orphan PIX as historical intent without financial write-off',
+    async (status, externalStatus) => {
+      const fake = createFinancePrisma();
+      fake.receivable.amount = new Prisma.Decimal('30.00');
+      fake.provider.getPixTransaction.mockResolvedValue(
+        reconciliationTransaction({ status, externalStatus, pixCopyPaste: null, qrCodeData: null }),
+      );
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+      );
+
+      const intent = await service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      );
+
+      expect(intent.status).toBe(status);
+      expect(fake.paymentIntents).toHaveLength(1);
+      expect(fake.receivable.status).toBe('PENDENTE');
+      expect(fake.transactions).toHaveLength(0);
+      expect(fake.provider.createPix).not.toHaveBeenCalled();
+    },
+  );
+
+  it('blocks unknown provider status without local writes', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(
+      reconciliationTransaction({ externalStatus: 'mystery', status: 'WAITING_PAYMENT' }),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each(['PAGO', 'CANCELADO'] as const)(
+    'blocks PIX reconciliation when receivable is %s',
+    async (status) => {
+      const fake = createFinancePrisma();
+      fake.receivable.status = status;
+      fake.receivable.amount = new Prisma.Decimal('30.00');
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+      );
+
+      const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+      });
+
+      expect(preview.adoptable).toBe(false);
+      expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+      expect(fake.paymentIntents).toHaveLength(0);
+    },
+  );
+
+  it('returns an existing same-transaction intent idempotently on confirm', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.paymentIntents.push({
+      id: 'intent-existing',
+      receivableId: fake.receivable.id,
+      paymentGroupId: null,
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: 'qr-code-data',
+      expiresAt: new Date('2026-09-24T01:00:00.000Z'),
+      paidAt: null,
+      lastSyncAt: new Date('2026-09-24T00:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+      createdAt: new Date('2026-09-24T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-24T00:00:00.000Z'),
+    });
+    fake.provider.getPixTransaction.mockResolvedValue(reconciliationTransaction());
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75148' },
+      actorUserId,
+    );
+
+    expect(intent.id).toBe('intent-existing');
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('blocks reconciliation when another active intent exists for the receivable', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.paymentIntents.push({
+      id: 'intent-active',
+      receivableId: fake.receivable.id,
+      paymentGroupId: null,
+      provider: 'FASTFLOW',
+      providerTransactionId: '11111',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-active',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-24T01:00:00.000Z'),
+      paidAt: null,
+      lastSyncAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const preview = await service.previewReceivablePixReconciliation(fake.receivable.id, {
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+    });
+
+    expect(preview.adoptable).toBe(false);
+    expect(preview.blockers).toContainEqual(
+      expect.objectContaining({ code: 'ACTIVE_INTENT_EXISTS' }),
+    );
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+  });
+
+  it('confirms paid orphan PIX through existing settlement idempotently', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: '75148',
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'pix-copy-paste',
+      qrCodeData: null,
+      expiresAt: null,
+      paidAt: new Date('2026-09-24T01:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75148' },
+      actorUserId,
+    );
+    await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75148' },
+      actorUserId,
+    );
+
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]).toMatchObject({
+      status: 'PAID',
+      providerTransactionId: '75148',
+    });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('blocks confirm when provider changes from preview pending to mismatched paid amount', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction
+      .mockResolvedValueOnce({
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+        externalStatus: 'pending',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'WAITING_PAYMENT',
+        amount: new Prisma.Decimal('30.00'),
+        pixCopyPaste: 'pix-copy-paste',
+        qrCodeData: null,
+        expiresAt: null,
+        paidAt: null,
+        failureCode: null,
+        failureMessage: null,
+      })
+      .mockResolvedValueOnce({
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID',
+        amount: new Prisma.Decimal('31.00'),
+        pixCopyPaste: 'pix-copy-paste',
+        qrCodeData: null,
+        expiresAt: null,
+        paidAt: new Date('2026-09-24T01:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      });
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.previewReceivablePixReconciliation(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+      }),
+    ).resolves.toMatchObject({ adoptable: true });
+
+    await expect(
+      service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('reconsults provider on confirm and settles when preview pending becomes paid', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction
+      .mockResolvedValueOnce(reconciliationTransaction())
+      .mockResolvedValueOnce(
+        reconciliationTransaction({
+          externalStatus: 'paid',
+          status: 'PAID',
+          paidAt: new Date('2026-09-24T01:00:00.000Z'),
+        }),
+      );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.previewReceivablePixReconciliation(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+      }),
+    ).resolves.toMatchObject({ adoptable: true, external: { status: 'WAITING_PAYMENT' } });
+
+    const paid = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75148' },
+      actorUserId,
+    );
+
+    expect(paid.status).toBe('PAID');
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it.each([
+    ['not found', new NotFoundException('Transacao de pagamento nao encontrada no provider.')],
+    ['timeout', new Error('Tempo limite da API de pagamentos excedido.')],
+  ])('keeps confirm write-free when provider returns %s', async (_label, error) => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockRejectedValue(error);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      ),
+    ).rejects.toThrow();
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.events).toHaveLength(0);
+  });
+
+  it('keeps preview write-free when provider times out', async () => {
+    const fake = createFinancePrisma();
+    fake.provider.getPixTransaction.mockRejectedValue(new Error('provider timeout'));
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.previewReceivablePixReconciliation(fake.receivable.id, {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+      }),
+    ).rejects.toThrow('provider timeout');
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('keeps double pending reconciliation confirm to one PaymentIntent', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(reconciliationTransaction());
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await Promise.all([
+      service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      ),
+      service.reconcileReceivablePix(
+        fake.receivable.id,
+        { provider: 'FASTFLOW', providerTransactionId: '75148' },
+        actorUserId,
+      ),
+    ]);
+
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
+  it('syncs a reconciled pending PIX to paid through existing settlement', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(reconciliationTransaction());
+    fake.provider.getPixStatus.mockResolvedValue(
+      reconciliationTransaction({
+        externalStatus: 'paid',
+        status: 'PAID',
+        paidAt: new Date('2026-09-24T01:00:00.000Z'),
+      }),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75148' },
+      actorUserId,
+    );
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]!.status).toBe('PAID');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('processes webhook after pending reconciliation and keeps sync replay idempotent', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.provider.getPixTransaction.mockResolvedValue(reconciliationTransaction());
+    fake.provider.getPixStatus.mockResolvedValue(
+      reconciliationTransaction({
+        externalStatus: 'paid',
+        status: 'PAID',
+        paidAt: new Date('2026-09-24T01:00:00.000Z'),
+      }),
+    );
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+
+    const intent = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      { provider: 'FASTFLOW', providerTransactionId: '75148' },
+      actorUserId,
+    );
+    const rawPayload = JSON.stringify({
+      event: 'transaction.paid',
+      id: '75148',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]!.status).toBe('PAID');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
   });
 
   it('keeps repeated paid sync idempotent', async () => {

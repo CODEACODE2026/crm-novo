@@ -232,6 +232,36 @@ export interface PaymentIntent {
   updatedAt: string;
 }
 
+export interface PixReconciliationPreview {
+  adoptable: boolean;
+  provider: PaymentProviderCode;
+  providerTransactionId: string;
+  receivable: {
+    id: string;
+    clientId: string;
+    clientName: string;
+    status: ReceivableStatus;
+    amount: string;
+    paidAt: string | null;
+  };
+  external: {
+    provider: PaymentProviderCode;
+    providerTransactionId: string;
+    status: PaymentIntentStatus;
+    externalStatus: string | null;
+    amount: string;
+    expiresAt: string | null;
+    paidAt: string | null;
+    hasPixCopyPaste: boolean;
+    hasQrCodeData: boolean;
+    externalDepixId: string | null;
+    blockchainTxId: string | null;
+  } | null;
+  impact: string[];
+  blockers: Array<{ code: string; message: string }>;
+  warning: string;
+}
+
 export interface PaymentGroupPaymentResult {
   id: string;
   clientId: string;
@@ -1562,6 +1592,34 @@ export function payReceivables(payload: {
 
 export function createReceivablePix(id: string) {
   return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, { method: 'POST' });
+}
+
+export function previewReceivablePixReconciliation(
+  id: string,
+  payload: { provider: PaymentProviderCode; providerTransactionId: string },
+) {
+  const params = new URLSearchParams();
+  params.set('provider', payload.provider);
+  params.set('providerTransactionId', payload.providerTransactionId);
+
+  return apiFetch<PixReconciliationPreview>(
+    `/receivables/${id}/pix/reconcile-preview?${params.toString()}`,
+  );
+}
+
+export function reconcileReceivablePix(
+  id: string,
+  payload: {
+    provider: PaymentProviderCode;
+    providerTransactionId: string;
+    reason?: string;
+    idempotencyKey?: string;
+  },
+) {
+  return apiFetch<PaymentIntent>(`/receivables/${id}/pix/reconcile`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createReceivablesPix(receivableIds: string[]) {

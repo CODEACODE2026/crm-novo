@@ -32,6 +32,7 @@ export type FastDepixTransactionResponse = {
   qr_code_text?: string;
   qr_code_expires_at?: string;
   created_at?: string;
+  paid_at?: string;
   payer_phone?: string;
 };
 

@@ -163,7 +163,9 @@ import {
   previewDeleteClientReference,
   previewReferenceRenewal,
   previewRenewalReversal,
+  previewReceivablePixReconciliation,
   refreshWhatsAppStatus,
+  reconcileReceivablePix,
   reopenWhatsAppPendingContact,
   sendWhatsAppMessage,
   updateClient,
@@ -231,6 +233,7 @@ import {
   type PaymentIntentStatus,
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
+  type PixReconciliationPreview,
   type Receivable,
   type ReceivableDisplayStatus,
   type ReceivablesSummary,
@@ -11315,6 +11318,14 @@ function PixReceivableModal({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [showReconciliation, setShowReconciliation] = useState(false);
+  const [reconcileProvider, setReconcileProvider] =
+    useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
+  const [reconcileTransactionId, setReconcileTransactionId] = useState('');
+  const [reconcileReason, setReconcileReason] = useState(
+    'Reconciliação de PIX criado no provider após falha de persistência local.',
+  );
+  const [reconcilePreview, setReconcilePreview] = useState<PixReconciliationPreview | null>(null);
   const actionRef = useRef(false);
 
   const loadIntents = useCallback(async () => {
@@ -11368,6 +11379,47 @@ function PixReceivableModal({
     setNotice('PIX copiado.');
   }
 
+  async function runReconciliationPreview() {
+    if (!reconcileTransactionId.trim()) {
+      setError('Informe o transaction ID do provider.');
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setReconcilePreview(null);
+
+    try {
+      const preview = await previewReceivablePixReconciliation(receivable.id, {
+        provider: reconcileProvider,
+        providerTransactionId: reconcileTransactionId.trim(),
+      });
+      setReconcilePreview(preview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível pré-visualizar.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runReconciliationConfirm() {
+    if (!reconcilePreview?.adoptable || actionRef.current) return;
+
+    await runAction(
+      () =>
+        reconcileReceivablePix(receivable.id, {
+          provider: reconcileProvider,
+          providerTransactionId: reconcileTransactionId.trim(),
+          idempotencyKey: `pix-reconcile:${receivable.id}:${reconcileProvider}:${reconcileTransactionId.trim()}`,
+          ...(reconcileReason.trim() ? { reason: reconcileReason.trim() } : {}),
+        }),
+      'PIX reconciliado.',
+    );
+    setShowReconciliation(false);
+    setReconcilePreview(null);
+  }
+
   const canCreateNew =
     !activeIntent || !['CREATED', 'WAITING_PAYMENT'].includes(activeIntent.status);
   const canCancel =
@@ -11386,7 +11438,7 @@ function PixReceivableModal({
             <h2 id="pix-title">PIX</h2>
             <p>Gerar, copiar e sincronizar pagamento desta conta.</p>
           </div>
-          <IconButton icon={X} label="Fechar PIX" onClick={onClose} />
+          <IconButton disabled={busy} icon={X} label="Fechar PIX" onClick={onClose} />
         </header>
 
         <dl className="detail-list">
@@ -11509,9 +11561,19 @@ function PixReceivableModal({
         <div className="form-actions">
           <span>{canCreateNew ? '' : 'Já existe um PIX ativo para esta conta.'}</span>
           <div className="button-row">
-            <button className="secondary-button" type="button" onClick={onClose}>
+            <button className="secondary-button" disabled={busy} type="button" onClick={onClose}>
               Fechar
             </button>
+            <ActionMenu
+              items={[
+                {
+                  disabled: busy,
+                  icon: Settings,
+                  label: 'Reconciliar PIX externo',
+                  onSelect: () => setShowReconciliation((value) => !value),
+                },
+              ]}
+            />
             <button
               className="primary-button"
               disabled={busy || !canCreateNew}
@@ -11525,6 +11587,132 @@ function PixReceivableModal({
             </button>
           </div>
         </div>
+
+        {showReconciliation ? (
+          <section className="pix-panel">
+            <div className="pix-status-row">
+              <strong>Reconciliação técnica</strong>
+              <span>Provider mockado em homologação</span>
+            </div>
+            <div className="notice warning">
+              Esta ação vinculará ao CRM um PIX que já existe no provedor. Nenhum novo PIX será
+              criado.
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>Provider</span>
+                <select
+                  value={reconcileProvider}
+                  onChange={(event) => {
+                    setReconcileProvider(event.target.value as typeof reconcileProvider);
+                    setReconcilePreview(null);
+                  }}
+                >
+                  <option value="FASTFLOW">FastFlow</option>
+                  <option value="FASTPAY">FastPay</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Transaction ID</span>
+                <input
+                  value={reconcileTransactionId}
+                  onChange={(event) => {
+                    setReconcileTransactionId(event.target.value);
+                    setReconcilePreview(null);
+                  }}
+                  placeholder="75148"
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span>Motivo</span>
+              <textarea
+                rows={3}
+                value={reconcileReason}
+                onChange={(event) => setReconcileReason(event.target.value)}
+              />
+            </label>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={busy}
+                type="button"
+                onClick={() => void runReconciliationPreview()}
+              >
+                <Search aria-hidden="true" size={16} />
+                Buscar
+              </button>
+              <button
+                className="primary-button"
+                disabled={busy || !reconcilePreview?.adoptable}
+                type="button"
+                onClick={() => void runReconciliationConfirm()}
+              >
+                <ShieldCheck aria-hidden="true" size={16} />
+                Confirmar adoção
+              </button>
+            </div>
+            {reconcilePreview ? (
+              <>
+                <dl className="detail-list">
+                  <div>
+                    <dt>Cliente</dt>
+                    <dd>{reconcilePreview.receivable.clientName}</dd>
+                  </div>
+                  <div>
+                    <dt>Receivable</dt>
+                    <dd>{reconcilePreview.receivable.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Valor local</dt>
+                    <dd>{formatCurrency(reconcilePreview.receivable.amount)}</dd>
+                  </div>
+                  <div>
+                    <dt>Provider</dt>
+                    <dd>{reconcilePreview.provider}</dd>
+                  </div>
+                  <div>
+                    <dt>Transaction ID</dt>
+                    <dd>{reconcilePreview.providerTransactionId}</dd>
+                  </div>
+                  <div>
+                    <dt>Status externo</dt>
+                    <dd>{reconcilePreview.external?.status ?? '-'}</dd>
+                  </div>
+                  <div>
+                    <dt>Valor externo</dt>
+                    <dd>
+                      {reconcilePreview.external
+                        ? formatCurrency(reconcilePreview.external.amount)
+                        : '-'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Expiração</dt>
+                    <dd>
+                      {reconcilePreview.external?.expiresAt
+                        ? formatDateTime(reconcilePreview.external.expiresAt)
+                        : '-'}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="mini-list">
+                  {reconcilePreview.impact.map((item) => (
+                    <article key={item}>
+                      <strong>{item}</strong>
+                    </article>
+                  ))}
+                  {reconcilePreview.blockers.map((blocker) => (
+                    <article key={blocker.code}>
+                      <strong>{blocker.code}</strong>
+                      <p>{blocker.message}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </section>
+        ) : null}
       </section>
     </div>
   );

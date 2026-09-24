@@ -7,6 +7,7 @@ import type {
   PaymentProvider,
   PaymentProviderPix,
   PaymentProviderStatus,
+  PaymentProviderTransaction,
 } from './payment-provider';
 
 abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
@@ -47,11 +48,27 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
       amount: new Prisma.Decimal(response.amount ?? input.amount),
       pixCopyPaste,
       qrCodeData: response.qr_code ?? null,
-      expiresAt: this.parseExpiration(response, input.expiresAt),
+      expiresAt: this.parseExpiration(response, input.expiresAt) ?? input.expiresAt,
     };
   }
 
   async getPixStatus(providerTransactionId: string): Promise<PaymentProviderStatus> {
+    const transaction = await this.getPixTransaction(providerTransactionId);
+
+    return {
+      provider: transaction.provider,
+      providerTransactionId: transaction.providerTransactionId,
+      externalStatus: transaction.externalStatus,
+      externalDepixId: transaction.externalDepixId,
+      blockchainTxId: transaction.blockchainTxId,
+      status: transaction.status,
+      paidAt: transaction.paidAt,
+      failureCode: transaction.failureCode,
+      failureMessage: transaction.failureMessage,
+    };
+  }
+
+  async getPixTransaction(providerTransactionId: string): Promise<PaymentProviderTransaction> {
     const token = await this.credentials.getActiveToken(this.providerCode);
 
     if (!token) {
@@ -59,15 +76,22 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
     }
 
     const response = await this.apiClient.getTransaction(token, providerTransactionId);
+    const normalizedStatus = this.normalizeStatus(response.status);
 
     return {
       provider: this.providerCode,
-      providerTransactionId,
+      providerTransactionId: this.normalizeProviderTransactionId(
+        response.id ?? providerTransactionId,
+      ),
       externalStatus: response.status ?? null,
       externalDepixId: response.depix_transaction_id ?? null,
       blockchainTxId: response.blockchain_tx_id ?? null,
-      status: this.normalizeStatus(response.status),
-      paidAt: this.normalizeStatus(response.status) === 'PAID' ? new Date() : null,
+      status: normalizedStatus,
+      amount: new Prisma.Decimal(response.amount ?? 0),
+      pixCopyPaste: response.qr_code_text ?? null,
+      qrCodeData: response.qr_code ?? null,
+      expiresAt: this.parseExpiration(response, null),
+      paidAt: normalizedStatus === 'PAID' ? (this.parseDate(response.paid_at) ?? new Date()) : null,
       failureCode: null,
       failureMessage: null,
     };
@@ -126,13 +150,19 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
     throw new BadRequestException('Resposta da API de pagamentos sem transacao obrigatoria.');
   }
 
-  private parseExpiration(response: FastDepixTransactionResponse, fallback: Date) {
+  private parseExpiration(response: FastDepixTransactionResponse, fallback: Date | null) {
     const value = response.qr_code_expires_at;
 
     if (!value) return fallback;
 
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+  }
+
+  private parseDate(value: string | undefined) {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   private ensureWithinProviderLimit(amount: Prisma.Decimal) {

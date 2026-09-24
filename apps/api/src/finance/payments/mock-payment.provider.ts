@@ -5,6 +5,7 @@ import type {
   PaymentProvider,
   PaymentProviderPix,
   PaymentProviderStatus,
+  PaymentProviderTransaction,
 } from './payment-provider';
 
 type MockState = {
@@ -46,13 +47,33 @@ export class MockPaymentProvider implements PaymentProvider {
   }
 
   getPixStatus(providerTransactionId: string): Promise<PaymentProviderStatus> {
+    return this.getPixTransaction(providerTransactionId).then((transaction) => ({
+      provider: transaction.provider,
+      providerTransactionId: transaction.providerTransactionId,
+      externalStatus: transaction.externalStatus,
+      externalDepixId: transaction.externalDepixId,
+      blockchainTxId: transaction.blockchainTxId,
+      status: transaction.status,
+      paidAt: transaction.paidAt,
+      failureCode: transaction.failureCode,
+      failureMessage: transaction.failureMessage,
+    }));
+  }
+
+  getPixTransaction(providerTransactionId: string): Promise<PaymentProviderTransaction> {
     const state = this.getState(providerTransactionId);
 
     if (state.status === 'WAITING_PAYMENT' && state.expiresAt.getTime() <= Date.now()) {
       state.status = 'EXPIRED';
     }
 
-    return Promise.resolve(this.present(providerTransactionId, state));
+    return Promise.resolve({
+      ...this.present(providerTransactionId, state),
+      amount: state.amount,
+      pixCopyPaste: `MOCK-PIX|${providerTransactionId}|${state.amount.toFixed(2)}`,
+      qrCodeData: `mock://pix/${providerTransactionId}`,
+      expiresAt: state.expiresAt,
+    });
   }
 
   expirePix(providerTransactionId: string): Promise<PaymentProviderStatus> {

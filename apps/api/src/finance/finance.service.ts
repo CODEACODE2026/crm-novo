@@ -38,12 +38,17 @@ import { ListReceivablesDto } from './dto/list-receivables.dto';
 import { PaymentIntentsSummaryDto } from './dto/payment-intents-summary.dto';
 import { PayReceivableDto } from './dto/pay-receivable.dto';
 import { PayReceivablesDto } from './dto/pay-receivables.dto';
+import {
+  ReconcileReceivablePixDto,
+  ReconcileReceivablePixPreviewDto,
+} from './dto/reconcile-receivable-pix.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
 import { UpdateManualTransactionDto } from './dto/update-manual-transaction.dto';
 import {
   PAYMENT_PROVIDER,
   type PaymentProvider,
   type PaymentProviderStatus,
+  type PaymentProviderTransaction,
 } from './payments/payment-provider';
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 
@@ -91,6 +96,11 @@ type PaymentWebhookStatus = PaymentProviderStatus & {
 type IgnoredPaymentWebhook = {
   ignored: true;
   reason: string;
+};
+
+type PixReconciliationBlocker = {
+  code: string;
+  message: string;
 };
 
 type GroupReceivable = Prisma.ReceivableGetPayload<{
@@ -587,6 +597,133 @@ export class FinanceService {
     });
 
     return intents.map((intent) => this.presentPaymentIntent(intent));
+  }
+
+  async previewReceivablePixReconciliation(
+    receivableId: string,
+    dto: ReconcileReceivablePixPreviewDto,
+  ) {
+    const providerTransactionId = this.normalizeExternalTransactionId(dto.providerTransactionId);
+    const local = await this.inspectReceivableForPixReconciliation(
+      this.prisma,
+      receivableId,
+      dto.provider,
+      providerTransactionId,
+    );
+
+    if (local.blockers.length > 0) {
+      return this.presentPixReconciliationPreview({
+        receivable: local.receivable,
+        provider: dto.provider,
+        providerTransactionId,
+        transaction: null,
+        blockers: local.blockers,
+      });
+    }
+
+    const transaction = await this.fetchProviderTransaction(dto.provider, providerTransactionId);
+    const blockers = this.validateProviderTransactionForReconciliation(
+      local.receivable,
+      dto.provider,
+      providerTransactionId,
+      transaction,
+    );
+
+    return this.presentPixReconciliationPreview({
+      receivable: local.receivable,
+      provider: dto.provider,
+      providerTransactionId,
+      transaction,
+      blockers,
+    });
+  }
+
+  async reconcileReceivablePix(
+    receivableId: string,
+    dto: ReconcileReceivablePixDto,
+    actorUserId: string,
+  ) {
+    const providerTransactionId = this.normalizeExternalTransactionId(dto.providerTransactionId);
+    const providerTransaction = await this.fetchProviderTransaction(
+      dto.provider,
+      providerTransactionId,
+    );
+    const intent = await this.prisma.$transaction(async (tx) => {
+      await this.acquirePixCreationLocks(tx, [receivableId]);
+
+      const existing = await tx.paymentIntent.findFirst({
+        where: { provider: dto.provider, providerTransactionId },
+      });
+
+      if (existing) {
+        return existing;
+      }
+
+      const local = await this.inspectReceivableForPixReconciliation(
+        tx,
+        receivableId,
+        dto.provider,
+        providerTransactionId,
+      );
+      this.throwPixReconciliationBlockers(local.blockers);
+
+      const blockers = this.validateProviderTransactionForReconciliation(
+        local.receivable,
+        dto.provider,
+        providerTransactionId,
+        providerTransaction,
+      );
+      this.throwPixReconciliationBlockers(blockers);
+
+      const created = await tx.paymentIntent.create({
+        data: {
+          receivableId,
+          provider: dto.provider,
+          providerTransactionId,
+          externalStatus: providerTransaction.externalStatus,
+          externalDepixId: providerTransaction.externalDepixId,
+          blockchainTxId: providerTransaction.blockchainTxId,
+          status:
+            providerTransaction.status === 'PAID' ? 'WAITING_PAYMENT' : providerTransaction.status,
+          amount: local.receivable.amount,
+          pixCopyPaste: providerTransaction.pixCopyPaste,
+          qrCodeData: providerTransaction.qrCodeData,
+          expiresAt: providerTransaction.expiresAt,
+          lastSyncAt: new Date(),
+          paidAt: null,
+          failureCode: providerTransaction.failureCode,
+          failureMessage: providerTransaction.failureMessage,
+        },
+      });
+
+      await tx.clientEvent.create({
+        data: {
+          clientId: local.receivable.clientId,
+          type: 'PIX_PAYMENT_INTENT_CREATED',
+          title: 'PIX reconciliado.',
+          description:
+            dto.reason?.trim() ||
+            'Reconciliação de PIX criado no provider apos falha de persistencia local.',
+          metadata: {
+            receivableId,
+            paymentIntentId: created.id,
+            provider: dto.provider,
+            providerTransactionId,
+            reconciliation: true,
+            idempotencyKey: dto.idempotencyKey ?? null,
+          },
+          createdByUserId: actorUserId,
+        },
+      });
+
+      return created;
+    });
+
+    if (providerTransaction.status === 'PAID' && intent.status !== 'PAID') {
+      return this.applyProviderStatus(intent.id, providerTransaction, actorUserId);
+    }
+
+    return this.presentPaymentIntent(intent);
   }
 
   async paymentIntentsSummary(query: PaymentIntentsSummaryDto) {
@@ -1921,6 +2058,206 @@ export class FinanceService {
     if (provider !== 'FASTFLOW' && provider !== 'FASTPAY') {
       throw new BadRequestException('Provider de webhook de pagamento nao suportado.');
     }
+  }
+
+  private async inspectReceivableForPixReconciliation(
+    tx: Pick<Prisma.TransactionClient, 'receivable' | 'paymentIntent'>,
+    receivableId: string,
+    provider: PaymentProviderCode,
+    providerTransactionId: string,
+  ) {
+    const blockers: PixReconciliationBlocker[] = [];
+    const receivable = await tx.receivable.findUnique({
+      where: { id: receivableId },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        renewal: true,
+        paymentTransaction: true,
+        paymentIntents: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    if (!receivable) {
+      throw new NotFoundException('Conta a receber nao encontrada.');
+    }
+
+    if (receivable.status === 'PAGO') {
+      blockers.push({
+        code: 'RECEIVABLE_ALREADY_PAID',
+        message: 'Conta a receber ja esta paga.',
+      });
+    }
+
+    if (receivable.status === 'CANCELADO') {
+      blockers.push({
+        code: 'RECEIVABLE_CANCELED',
+        message: 'Conta a receber cancelada nao pode receber reconciliacao PIX.',
+      });
+    }
+
+    const sameTransaction = await tx.paymentIntent.findFirst({
+      where: { provider, providerTransactionId },
+    });
+
+    if (sameTransaction) {
+      blockers.push({
+        code: 'ALREADY_RECONCILED',
+        message: 'Ja existe intencao local para esta transacao do provider.',
+      });
+    }
+
+    const activeIntent = await this.findActivePixForReceivables(tx as Prisma.TransactionClient, [
+      receivableId,
+    ]);
+
+    if (activeIntent) {
+      blockers.push({
+        code: 'ACTIVE_INTENT_EXISTS',
+        message: 'Ja existe PIX ativo para esta conta a receber.',
+      });
+    }
+
+    return { receivable, blockers };
+  }
+
+  private async fetchProviderTransaction(
+    provider: PaymentProviderCode,
+    providerTransactionId: string,
+  ) {
+    if (!this.paymentProvider.getPixTransaction) {
+      throw new ConflictException('Provider atual nao suporta consulta completa de transacao PIX.');
+    }
+
+    return this.paymentProvider.getPixTransaction(providerTransactionId, provider);
+  }
+
+  private validateProviderTransactionForReconciliation(
+    receivable: Pick<ReceivableWithRelations, 'amount'>,
+    provider: PaymentProviderCode,
+    providerTransactionId: string,
+    transaction: PaymentProviderTransaction,
+  ) {
+    const blockers: PixReconciliationBlocker[] = [];
+
+    if (transaction.provider !== provider) {
+      blockers.push({
+        code: 'PROVIDER_MISMATCH',
+        message: 'Provider retornado nao corresponde ao provider solicitado.',
+      });
+    }
+
+    if (transaction.providerTransactionId !== providerTransactionId) {
+      blockers.push({
+        code: 'TRANSACTION_ID_MISMATCH',
+        message: 'ID retornado pelo provider nao corresponde ao ID solicitado.',
+      });
+    }
+
+    if (!transaction.amount.equals(receivable.amount)) {
+      blockers.push({
+        code: 'AMOUNT_MISMATCH',
+        message: 'Valor retornado pelo provider nao corresponde ao valor da conta a receber.',
+      });
+    }
+
+    if (!this.isKnownExternalPaymentStatus(transaction.externalStatus, transaction.status)) {
+      blockers.push({
+        code: 'UNKNOWN_PROVIDER_STATUS',
+        message: 'Status externo desconhecido. Reconciliacao bloqueada.',
+      });
+    }
+
+    if (transaction.status === 'WAITING_PAYMENT' && !transaction.pixCopyPaste) {
+      blockers.push({
+        code: 'MISSING_PIX_PAYLOAD',
+        message: 'Provider nao retornou copia-e-cola PIX para uma transacao pendente.',
+      });
+    }
+
+    return blockers;
+  }
+
+  private throwPixReconciliationBlockers(blockers: PixReconciliationBlocker[]) {
+    if (blockers.length > 0) {
+      throw new ConflictException(blockers[0]!.message);
+    }
+  }
+
+  private presentPixReconciliationPreview(input: {
+    receivable: ReceivableWithRelations;
+    provider: PaymentProviderCode;
+    providerTransactionId: string;
+    transaction: PaymentProviderTransaction | null;
+    blockers: PixReconciliationBlocker[];
+  }) {
+    return {
+      adoptable: input.blockers.length === 0,
+      provider: input.provider,
+      providerTransactionId: input.providerTransactionId,
+      receivable: {
+        id: input.receivable.id,
+        clientId: input.receivable.clientId,
+        clientName: input.receivable.client.name,
+        status: input.receivable.status,
+        amount: this.formatDecimal(input.receivable.amount),
+        paidAt: input.receivable.paidAt?.toISOString() ?? null,
+      },
+      external: input.transaction
+        ? {
+            provider: input.transaction.provider,
+            providerTransactionId: input.transaction.providerTransactionId,
+            status: input.transaction.status,
+            externalStatus: input.transaction.externalStatus,
+            amount: this.formatDecimal(input.transaction.amount),
+            expiresAt: input.transaction.expiresAt?.toISOString() ?? null,
+            paidAt: input.transaction.paidAt?.toISOString() ?? null,
+            hasPixCopyPaste: Boolean(input.transaction.pixCopyPaste),
+            hasQrCodeData: Boolean(input.transaction.qrCodeData),
+            externalDepixId: input.transaction.externalDepixId,
+            blockchainTxId: input.transaction.blockchainTxId,
+          }
+        : null,
+      impact: this.describePixReconciliationImpact(input.transaction),
+      blockers: input.blockers,
+      warning:
+        'Esta acao vinculara ao CRM um PIX que ja existe no provedor. Nenhum novo PIX sera criado.',
+    };
+  }
+
+  private describePixReconciliationImpact(transaction: PaymentProviderTransaction | null) {
+    if (!transaction) return [];
+    if (transaction.status === 'PAID') {
+      return [
+        'Criar PaymentIntent local',
+        'Processar pagamento pela regra financeira existente',
+        'Baixar Receivable',
+        'Criar uma FinancialTransaction se ainda nao existir',
+      ];
+    }
+    if (transaction.status === 'EXPIRED') {
+      return ['Criar PaymentIntent historico EXPIRED', 'Manter Receivable PENDENTE'];
+    }
+    return ['Criar PaymentIntent local', 'Manter Receivable PENDENTE'];
+  }
+
+  private normalizeExternalTransactionId(value: string) {
+    const normalized = this.stringFrom(value)?.trim();
+
+    if (!normalized) {
+      throw new BadRequestException('Transaction ID do provider e obrigatorio.');
+    }
+
+    return normalized;
+  }
+
+  private isKnownExternalPaymentStatus(externalStatus: string | null, status: PaymentIntentStatus) {
+    if (status === 'PAID' || status === 'EXPIRED' || status === 'CANCELED') return true;
+    if (status === 'REFUNDED' || status === 'FAILED') return true;
+    if (status !== 'WAITING_PAYMENT') return false;
+
+    const normalized = externalStatus?.trim().toLowerCase();
+    return normalized === 'pending' || normalized === 'approved' || normalized === 'under_review';
   }
 
   private verifyWebhookSignature(signature: string | undefined, rawBody: Buffer, secret: string) {

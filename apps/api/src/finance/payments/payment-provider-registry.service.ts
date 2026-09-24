@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PaymentProviderCode } from '@prisma/client';
+import { PaymentProviderCode, Prisma } from '@prisma/client';
 import { FastFlowPaymentProvider, FastPayPaymentProvider } from './fastdepix-payment.provider';
 import { MockPaymentProvider } from './mock-payment.provider';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
@@ -8,6 +8,7 @@ import type {
   PaymentProvider,
   PaymentProviderPix,
   PaymentProviderStatus,
+  PaymentProviderTransaction,
 } from './payment-provider';
 
 @Injectable()
@@ -30,6 +31,22 @@ export class PaymentProviderRegistryService implements PaymentProvider {
     provider: PaymentProviderCode = 'MOCK',
   ): Promise<PaymentProviderStatus> {
     return this.byCode(provider).getPixStatus(providerTransactionId);
+  }
+
+  getPixTransaction(
+    providerTransactionId: string,
+    provider: PaymentProviderCode = 'MOCK',
+  ): Promise<PaymentProviderTransaction> {
+    const selected = this.byCode(provider);
+    return selected.getPixTransaction
+      ? selected.getPixTransaction(providerTransactionId)
+      : selected.getPixStatus(providerTransactionId).then((status) => ({
+          ...status,
+          amount: new Prisma.Decimal(0),
+          pixCopyPaste: null,
+          qrCodeData: null,
+          expiresAt: null,
+        }));
   }
 
   expirePix(providerTransactionId: string): Promise<PaymentProviderStatus> {

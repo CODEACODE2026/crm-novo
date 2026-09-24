@@ -27,6 +27,13 @@ export type PaymentProviderStatus = {
   failureMessage: string | null;
 };
 
+export type PaymentProviderTransaction = PaymentProviderStatus & {
+  amount: Prisma.Decimal;
+  pixCopyPaste: string | null;
+  qrCodeData: string | null;
+  expiresAt: Date | null;
+};
+
 export type CreatePixInput = {
   receivableId: string;
   amount: Prisma.Decimal;
@@ -43,6 +50,10 @@ export interface PaymentProvider {
     providerTransactionId: string,
     provider?: PaymentProviderCode,
   ): Promise<PaymentProviderStatus>;
+  getPixTransaction?(
+    providerTransactionId: string,
+    provider?: PaymentProviderCode,
+  ): Promise<PaymentProviderTransaction>;
   cancelPix?(
     providerTransactionId: string,
     provider?: PaymentProviderCode,

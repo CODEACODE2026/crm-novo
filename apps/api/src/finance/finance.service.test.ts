@@ -80,6 +80,14 @@ function createFinancePrisma() {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+  const activationCategory = {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    name: 'Ativação',
+    type: 'ENTRADA' as const,
+    active: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
   const expenseCategory = {
     id: '33333333-3333-4333-8333-333333333333',
     name: 'Servidor',
@@ -157,7 +165,7 @@ function createFinancePrisma() {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const categories = [entryCategory, expenseCategory];
+  const categories = [entryCategory, activationCategory, expenseCategory];
   const transactions: Array<Record<string, unknown>> = [];
   const events: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
@@ -490,6 +498,7 @@ function createFinancePrisma() {
 
   return {
     entryCategory,
+    activationCategory,
     expenseCategory,
     client,
     clientReference,
@@ -796,6 +805,14 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+  const activationCategory = {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    name: 'Ativação',
+    type: 'ENTRADA' as const,
+    active: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
   const client = {
     id: '44444444-4444-4444-8444-444444444444',
     name: 'Cliente Agrupado',
@@ -917,7 +934,20 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
   const tx = {
     $executeRawUnsafe: executeRawUnsafe,
     financialCategory: {
-      findFirst: () => Promise.resolve(entryCategory),
+      findFirst: ({
+        where,
+      }: {
+        where: {
+          active?: boolean;
+          name?: string | { equals: string; mode?: 'insensitive' };
+          type?: string;
+        };
+      }) =>
+        Promise.resolve(
+          [entryCategory, activationCategory].find((category) =>
+            categoryMatchesWhere(category, where),
+          ) ?? null,
+        ),
     },
     receivable: {
       findMany: ({ where }: { where: { id: { in: string[] } } }) =>
@@ -4436,6 +4466,7 @@ describe('FinanceService', () => {
     expect(fake.transactions[0]).toMatchObject({
       origin: 'RECEIVABLE_PAYMENT',
       receivableId: fake.receivable.id,
+      categoryId: fake.entryCategory.id,
     });
     expect(
       fake.events.filter(
@@ -5373,6 +5404,241 @@ describe('FinanceService', () => {
           event.metadata.paymentIntentId === intent.id,
       ),
     ).toHaveLength(1);
+  });
+
+  it('settles paid initial activation PIX with activation category on retry and replay', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    const { referrals } = createReferralQualificationDouble();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      referrals as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-24T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-09-24'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.transactions[0]).toMatchObject({
+      type: 'ENTRADA',
+      origin: 'RECEIVABLE_PAYMENT',
+      categoryId: fake.activationCategory.id,
+      clientId: fake.client.id,
+      receivableId: fake.receivable.id,
+      description: 'Recebimento PIX: Cobranca inicial de ativacao - Mensal',
+      amount: new Prisma.Decimal('30.00'),
+      transactionDate: parseBusinessDate('2026-09-24'),
+    });
+  });
+
+  it.each(['Ativação', 'ATIVAÇÃO', 'ativação'])(
+    'settles initial activation PIX with case-insensitive category name %s',
+    async (categoryName) => {
+      const fake = createFinancePrisma();
+      fake.activationCategory.name = categoryName;
+      fake.receivable.purpose = 'INITIAL_ACTIVATION';
+      fake.receivable.renewalId = null;
+      fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
+      fake.receivable.amount = new Prisma.Decimal('30.00');
+      const { referrals } = createReferralQualificationDouble();
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+        referrals as never,
+      );
+      const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+      fake.provider.getPixStatus.mockResolvedValue({
+        provider: 'MOCK',
+        providerTransactionId: intent.providerTransactionId,
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID',
+        paidAt: new Date('2026-09-24T15:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      });
+
+      await service.syncPaymentIntent(intent.id, actorUserId);
+
+      expect(fake.receivable.status).toBe('PAGO');
+      expect(fake.transactions).toHaveLength(1);
+      expect(fake.transactions[0]).toMatchObject({ categoryId: fake.activationCategory.id });
+    },
+  );
+
+  it('settles paid initial activation PIX from webhook with activation category', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    const { referrals } = createReferralQualificationDouble();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      referrals as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
+    fake.paymentIntents.at(0)!.providerTransactionId = '75148';
+    const rawPayload = JSON.stringify({
+      transaction_id: '75148',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+
+    const result = await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+
+    expect(result).toMatchObject({ id: intent.id, status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.transactions[0]).toMatchObject({ categoryId: fake.activationCategory.id });
+  });
+
+  it('settles a superseded paid initial activation PIX with one activation transaction', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    const { referrals } = createReferralQualificationDouble();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      referrals as never,
+    );
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: oldIntent.provider,
+      providerTransactionId: oldIntent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-24T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ id: oldIntent.id, status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.transactions[0]).toMatchObject({ categoryId: fake.activationCategory.id });
+  });
+
+  it('keeps paid initial activation PIX local state atomic when activation category is missing', async () => {
+    const fake = createFinancePrisma();
+    fake.activationCategory.name = 'Serviço avulso';
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-24T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await expect(service.syncPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      'Categoria Ativação ativa nao encontrada.',
+    );
+
+    expect(fake.paymentIntents[0]).toMatchObject({ status: 'WAITING_PAYMENT', paidAt: null });
+    expect(fake.receivable).toMatchObject({ status: 'PENDENTE', paidAt: null });
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('does not settle paid initial activation PIX with inactive activation category', async () => {
+    const fake = createFinancePrisma();
+    fake.activationCategory.active = false;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'MOCK',
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-09-24T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await expect(service.syncPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      'Categoria Ativação ativa nao encontrada.',
+    );
+
+    expect(fake.paymentIntents[0]).toMatchObject({ status: 'WAITING_PAYMENT', paidAt: null });
+    expect(fake.receivable).toMatchObject({ status: 'PENDENTE', paidAt: null });
+    expect(fake.transactions).toHaveLength(0);
   });
 
   it('activates once from paid PIX replay and keeps the cycle based on the initial due date', async () => {

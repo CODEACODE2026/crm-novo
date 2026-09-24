@@ -15,6 +15,7 @@ import {
   PaymentProviderCode,
   PaymentIntentStatus,
   Prisma,
+  ReceivablePurpose,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
@@ -762,9 +763,6 @@ export class FinanceService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
-      const category = dto.categoryId
-        ? await this.ensureActiveCategory(tx, dto.categoryId, 'ENTRADA')
-        : await this.ensureRenewalCategory(tx);
       const totalAmount = this.sumReceivables(receivables);
 
       const paymentGroup = await tx.paymentGroup.create({
@@ -786,6 +784,9 @@ export class FinanceService {
       const transactions = [];
 
       for (const receivable of receivables) {
+        const category = dto.categoryId
+          ? await this.ensureActiveCategory(tx, dto.categoryId, 'ENTRADA')
+          : await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
         const createdTransaction = await tx.financialTransaction.create({
           data: {
             type: 'ENTRADA',
@@ -1171,7 +1172,7 @@ export class FinanceService {
 
         const category = dto.categoryId
           ? await this.ensureActiveCategory(tx, dto.categoryId, 'ENTRADA')
-          : await this.ensureRenewalCategory(tx);
+          : await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
         const description = `Recebimento: ${receivable.description}`;
 
         const createdTransaction = await tx.financialTransaction.create({
@@ -1464,7 +1465,7 @@ export class FinanceService {
       }
 
       if (!receivable.paymentTransaction) {
-        const category = await this.ensureRenewalCategory(tx);
+        const category = await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
         const createdTransaction = await tx.financialTransaction.create({
           data: {
             type: 'ENTRADA',
@@ -1856,16 +1857,37 @@ export class FinanceService {
     return where;
   }
 
+  private async ensureReceivablePaymentCategory(
+    tx: Prisma.TransactionClient | PrismaService,
+    purpose: ReceivablePurpose,
+  ) {
+    const categoryName = purpose === 'INITIAL_ACTIVATION' ? 'Ativação' : 'Renovação';
+    const category = await this.findActiveEntryCategoryByName(tx, categoryName);
+
+    if (!category) {
+      throw new NotFoundException(`Categoria ${categoryName} ativa nao encontrada.`);
+    }
+
+    return category;
+  }
+
   private async ensureRenewalCategory(tx: Prisma.TransactionClient | PrismaService) {
-    const category = await tx.financialCategory.findFirst({
-      where: { name: 'Renovação', type: 'ENTRADA', active: true },
-    });
+    const category = await this.findActiveEntryCategoryByName(tx, 'Renovação');
 
     if (!category) {
       throw new NotFoundException('Categoria Renovação ativa nao encontrada.');
     }
 
     return category;
+  }
+
+  private async findActiveEntryCategoryByName(
+    tx: Prisma.TransactionClient | PrismaService,
+    name: string,
+  ) {
+    return tx.financialCategory.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' }, type: 'ENTRADA', active: true },
+    });
   }
 
   private async ensureActiveCategory(
@@ -2025,11 +2047,11 @@ export class FinanceService {
       data: { status: 'PAID', paidAt: paidBusinessDate },
     });
 
-    const category = await this.ensureRenewalCategory(tx);
     const receivableIds = group.items.map((item) => item.receivableId);
 
     for (const item of group.items) {
       const { receivable } = item;
+      const category = await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
       const createdTransaction = await tx.financialTransaction.create({
         data: {
           type: 'ENTRADA',

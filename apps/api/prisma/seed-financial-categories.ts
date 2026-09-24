@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 const categories = [
+  { name: 'Ativação', type: 'ENTRADA' },
   { name: 'Renovação', type: 'ENTRADA' },
   { name: 'Serviço avulso', type: 'ENTRADA' },
   { name: 'Outros', type: 'ENTRADA' },
@@ -18,16 +19,16 @@ const categories = [
 
 async function main() {
   for (const category of categories) {
-    await prisma.financialCategory.upsert({
+    const existing = await prisma.financialCategory.findFirst({
       where: {
-        name_type: {
-          name: category.name,
-          type: category.type,
-        },
+        name: { equals: category.name, mode: 'insensitive' },
+        type: category.type,
       },
-      update: { active: true },
-      create: category,
     });
+
+    if (existing) continue;
+
+    await prisma.financialCategory.create({ data: category });
   }
 
   console.info(

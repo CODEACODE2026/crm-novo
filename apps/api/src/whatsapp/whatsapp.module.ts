@@ -11,12 +11,16 @@ import { KiragoWebhookNormalizer } from './kirago/kirago-webhook-normalizer';
 import { KiragoWhatsAppProvider } from './kirago/kirago-whatsapp.provider';
 import { WHATSAPP_PROVIDER } from './provider/whatsapp-provider';
 import { TokenEncryptionService } from './security/token-encryption.service';
-import { WhatsAppController, WhatsAppWebhookController } from './whatsapp.controller';
+import {
+  PaymentIntentWhatsAppController,
+  WhatsAppController,
+  WhatsAppWebhookController,
+} from './whatsapp.controller';
 import { WhatsAppService } from './whatsapp.service';
 
 @Module({
   imports: [AuthModule, PrismaModule, PlansModule, FinanceModule, ReferralsModule],
-  controllers: [WhatsAppController, WhatsAppWebhookController],
+  controllers: [WhatsAppController, PaymentIntentWhatsAppController, WhatsAppWebhookController],
   providers: [
     KiragoAdminClient,
     KiragoHttpClient,

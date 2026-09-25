@@ -8,6 +8,7 @@ import { KiragoProviderError } from './kirago-provider.error';
 import type {
   ProvisionConnectionInput,
   RemoteConnectionLookupInput,
+  SendButtonsInput,
   SendTextInput,
   WhatsAppProvider,
 } from '../provider/whatsapp-provider';
@@ -128,6 +129,19 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       Phone: input.phone,
       Body: input.body,
       Id: this.kiragoMessageId(input.requestId),
+    });
+
+    return {
+      providerMessageId: response.data?.Id ?? null,
+    };
+  }
+
+  async sendButtons(instanceToken: string, input: SendButtonsInput) {
+    const response = await this.instanceClient.sendButtons(instanceToken, {
+      phone: input.phone,
+      title: input.title,
+      body: input.body,
+      buttons: input.buttons,
     });
 
     return {

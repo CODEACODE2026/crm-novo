@@ -41,6 +41,7 @@ import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dt
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
@@ -54,6 +55,17 @@ type InitialActivationResult = {
   message?: string | null;
   reusedApproval?: boolean;
 };
+
+type PixPaymentIntentForWhatsApp = Prisma.PaymentIntentGetPayload<{
+  include: {
+    receivable: {
+      include: {
+        client: true;
+        clientReference: true;
+      };
+    };
+  };
+}>;
 
 @Injectable()
 export class WhatsAppService {
@@ -335,6 +347,127 @@ export class WhatsAppService {
       });
 
       return this.presentDispatch(updated);
+    }
+  }
+
+  async sendPixPaymentIntent(paymentIntentId: string, actorUserId: string) {
+    const connection = await this.requireConnection();
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp nao esta operacional.');
+    }
+
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id: paymentIntentId },
+      include: {
+        receivable: {
+          include: {
+            client: true,
+            clientReference: true,
+          },
+        },
+      },
+    });
+
+    this.validatePixIntentForWhatsApp(intent);
+
+    const receivable = intent.receivable;
+    const client = receivable.client;
+    const currentIntent = await this.prisma.paymentIntent.findFirst({
+      where: {
+        receivableId: receivable.id,
+        paymentGroupId: null,
+        status: 'WAITING_PAYMENT',
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+
+    if (currentIntent?.id !== intent.id) {
+      throw new ConflictException('Somente o PIX atual aguardando pagamento pode ser enviado.');
+    }
+
+    const phone = normalizeBrazilPhone(client.phoneNormalized);
+    const template = buildPixWhatsAppTemplate({
+      clientName: client.name,
+      amount: intent.amount,
+      pixCopyPaste: intent.pixCopyPaste ?? '',
+    });
+    const requestId = randomUUID();
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    const { dispatch, created } = await this.createPendingDispatch({
+      clientId: client.id,
+      clientReferenceId: receivable.clientReferenceId,
+      connectionId: connection.id,
+      receivableId: receivable.id,
+      phone,
+      body: template.body,
+      requestId,
+      origin: 'MANUAL',
+    });
+
+    if (!created || dispatch.status === 'SENT') {
+      return this.presentPixSendResult(dispatch, true);
+    }
+
+    try {
+      const result = await this.mapProviderError(() =>
+        this.provider.sendButtons(instanceToken, {
+          phone,
+          title: template.title,
+          body: template.body,
+          buttons: [template.button],
+        }),
+      );
+
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const sent = await tx.messageDispatch.update({
+          where: { id: dispatch.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: result.providerMessageId,
+            sentAt: new Date(),
+            errorCode: null,
+            errorMessage: null,
+          },
+          include: { client: true, whatsAppConnection: true },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: client.id,
+            type: 'WHATSAPP_MESSAGE_SENT',
+            title: 'PIX enviado pelo WhatsApp.',
+            description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
+            metadata: {
+              messageDispatchId: sent.id,
+              receivableId: receivable.id,
+              paymentIntentId: intent.id,
+              provider: intent.provider,
+              providerTransactionId: intent.providerTransactionId,
+              phoneMasked: this.maskPhone(phone),
+              amount: intent.amount.toString(),
+              channel: 'WHATSAPP',
+              origin: 'MANUAL_PIX',
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return sent;
+      });
+
+      return this.presentPixSendResult(updated, true);
+    } catch (error) {
+      const updated = await this.prisma.messageDispatch.update({
+        where: { id: dispatch.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: this.sanitizePixSendError(error),
+        },
+        include: { client: true, whatsAppConnection: true },
+      });
+
+      return this.presentPixSendResult(updated, false);
     }
   }
 
@@ -1050,6 +1183,36 @@ export class WhatsAppService {
     }
   }
 
+  private validatePixIntentForWhatsApp(
+    intent: PixPaymentIntentForWhatsApp | null,
+  ): asserts intent is PixPaymentIntentForWhatsApp & {
+    receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
+  } {
+    if (!intent) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada.');
+    }
+
+    if (!intent.receivable || intent.paymentGroupId) {
+      throw new ConflictException('PIX sem conta a receber individual vinculada.');
+    }
+
+    if (intent.status !== 'WAITING_PAYMENT') {
+      throw new ConflictException('Somente PIX aguardando pagamento pode ser enviado.');
+    }
+
+    if (intent.receivable.status !== 'PENDENTE') {
+      throw new ConflictException('Somente contas pendentes podem receber envio de PIX.');
+    }
+
+    if (!intent.pixCopyPaste) {
+      throw new ConflictException('PIX sem copia e cola disponivel.');
+    }
+
+    if (!intent.receivable.client?.phoneNormalized) {
+      throw new BadRequestException('Cliente sem WhatsApp cadastrado.');
+    }
+  }
+
   private async findPrimaryConnection() {
     const active = await this.prisma.whatsAppConnection.findFirst({
       where: { status: { not: 'ERROR' } },
@@ -1192,6 +1355,12 @@ export class WhatsAppService {
       throw new ServiceUnavailableException(error.message);
     }
 
+    if (error.code === 'KIRAGO_RATE_LIMITED') {
+      throw new ServiceUnavailableException(
+        'Limite temporario de envios do WhatsApp atingido. Aguarde antes de tentar novamente.',
+      );
+    }
+
     if (error.code === 'KIRAGO_ADMIN_AUTH_FAILED' || error.code === 'KIRAGO_INSTANCE_AUTH_FAILED') {
       throw new ServiceUnavailableException('Falha de autenticacao com provider WhatsApp.');
     }
@@ -1271,6 +1440,23 @@ export class WhatsAppService {
             provider: dispatch.whatsAppConnection.provider,
           }
         : null,
+    };
+  }
+
+  private presentPixSendResult(
+    dispatch: MessageDispatch & {
+      client?: { id: string; name: string; reference: string } | null;
+      whatsAppConnection?: { id: string; name: string; provider: string } | null;
+    },
+    success: boolean,
+  ) {
+    return {
+      success,
+      messageDispatchId: dispatch.id,
+      sentAt: dispatch.sentAt?.toISOString() ?? null,
+      destinationMasked: this.maskPhone(dispatch.phone),
+      providerMessageId: dispatch.providerMessageId,
+      errorMessage: dispatch.errorMessage,
     };
   }
 
@@ -1401,6 +1587,24 @@ export class WhatsAppService {
     }
 
     return 'Falha ao enviar mensagem WhatsApp.';
+  }
+
+  private sanitizePixSendError(error: unknown) {
+    if (error instanceof ServiceUnavailableException) {
+      const message = error.message;
+      if (message.toLowerCase().includes('tempo limite')) {
+        return 'Nao foi possivel confirmar o envio. Verifique antes de tentar novamente.';
+      }
+      return message.slice(0, 240);
+    }
+
+    return this.sanitizeError(error);
+  }
+
+  private maskPhone(phone: string) {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length <= 4) return '****';
+    return `${digits.slice(0, 4)}*****${digits.slice(-4)}`;
   }
 
   private toPrismaMessageType(type: NormalizedMessageType): WhatsAppInboundMessageType {

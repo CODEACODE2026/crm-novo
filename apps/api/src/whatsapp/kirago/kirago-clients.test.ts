@@ -80,6 +80,46 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('sends PIX buttons with the instance bearer token, not the admin token', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.sendButtons('instance-token', {
+      phone: '5544999999999',
+      title: 'Pagamento via PIX',
+      body: 'Mensagem',
+      buttons: [
+        {
+          name: 'cta_copy',
+          buttonParamsJson: {
+            display_text: 'Copiar Chave PIX',
+            copy_code: 'PIX-CODE',
+          },
+        },
+      ],
+    });
+
+    expect(request).toHaveBeenCalledWith('/chat/send/buttons', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer instance-token' },
+      body: {
+        phone: '5544999999999',
+        title: 'Pagamento via PIX',
+        body: 'Mensagem',
+        buttons: [
+          {
+            name: 'cta_copy',
+            buttonParamsJson: {
+              display_text: 'Copiar Chave PIX',
+              copy_code: 'PIX-CODE',
+            },
+          },
+        ],
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('checks instance status through Kirago session status endpoint', async () => {
     const request = vi.fn().mockResolvedValue({
       success: true,

@@ -112,6 +112,17 @@ export class WhatsAppController {
   }
 }
 
+@UseGuards(JwtAuthGuard)
+@Controller('payment-intents')
+export class PaymentIntentWhatsAppController {
+  constructor(@Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService) {}
+
+  @Post(':id/send-whatsapp')
+  sendPixWhatsApp(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.whatsAppService.sendPixPaymentIntent(id, request.user.id);
+  }
+}
+
 @Controller('whatsapp/webhook')
 export class WhatsAppWebhookController {
   constructor(@Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService) {}

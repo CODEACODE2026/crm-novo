@@ -239,6 +239,15 @@ export interface PaymentIntent {
   updatedAt: string;
 }
 
+export interface PixWhatsAppSendResult {
+  success: boolean;
+  messageDispatchId: string;
+  sentAt: string | null;
+  destinationMasked: string;
+  providerMessageId: string | null;
+  errorMessage: string | null;
+}
+
 export interface PixReconciliationPreview {
   adoptable: boolean;
   provider: PaymentProviderCode;
@@ -1742,6 +1751,12 @@ export function confirmMockPaymentIntent(id: string) {
 
 export function cancelPaymentIntent(id: string) {
   return apiFetch<PaymentIntent>(`/payment-intents/${id}/cancel`, { method: 'POST' });
+}
+
+export function sendPaymentIntentWhatsApp(id: string) {
+  return apiFetch<PixWhatsAppSendResult>(`/payment-intents/${id}/send-whatsapp`, {
+    method: 'POST',
+  });
 }
 
 export function listPaymentProviderCredentials() {

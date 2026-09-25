@@ -205,6 +205,7 @@ import {
   reconcileRecovery,
   replaceReceivablePix,
   sendBillingNow,
+  sendPaymentIntentWhatsApp,
   savePaymentProviderCredential,
   setDefaultPaymentProvider,
   testPaymentProviderCredential,
@@ -238,6 +239,7 @@ import {
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
   type PixReconciliationPreview,
+  type PixWhatsAppSendResult,
   type PixReplacementRecoveryPreview,
   type PixReplacementPreview,
   type Receivable,
@@ -790,7 +792,7 @@ export default function DashboardPage() {
       {view === 'billing' ? <BillingView /> : null}
       {view === 'automations' ? <AutomationsView /> : null}
       {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
-      {view === 'settings' ? <SettingsView /> : null}
+      {view === 'settings' ? <SettingsView onOpenWhatsApp={() => setView('whatsapp')} /> : null}
       {view === 'waitlist' ? (
         <WaitlistView
           plans={plans}
@@ -2778,8 +2780,9 @@ function reportSummaryValue(value: unknown) {
   return '-';
 }
 
-function SettingsView() {
+function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
+  const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -2794,7 +2797,12 @@ function SettingsView() {
     setError('');
 
     try {
-      setCredentials(await listPaymentProviderCredentials());
+      const [nextCredentials, nextWhatsAppConnection] = await Promise.all([
+        listPaymentProviderCredentials(),
+        getWhatsAppConnection(),
+      ]);
+      setCredentials(nextCredentials);
+      setWhatsAppConnection(nextWhatsAppConnection);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar integrações.');
     } finally {
@@ -2892,6 +2900,101 @@ function SettingsView() {
               }
             />
           ))}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="panel-header">
+          <h2>WhatsApp</h2>
+        </div>
+        <div className="payment-provider-grid">
+          <article className="payment-provider-card whatsapp-integration-card">
+            <header className="payment-provider-card-header">
+              <div className="payment-provider-title">
+                <h3>Kirago</h3>
+                <p>Envio de mensagens via WhatsApp</p>
+              </div>
+              <div className="payment-provider-card-actions">
+                <span
+                  className={`integration-status ${
+                    whatsAppConnection ? 'configurado' : 'nao_configurado'
+                  }`}
+                >
+                  {whatsAppConnection ? 'Configurado' : 'Não configurado'}
+                </span>
+                <ActionMenu
+                  items={[
+                    {
+                      icon: whatsAppConnection ? Pencil : ShieldCheck,
+                      label: whatsAppConnection ? 'Editar conexão' : 'Configurar conexão',
+                      onSelect: onOpenWhatsApp,
+                    },
+                    {
+                      disabled: !whatsAppConnection || loading,
+                      icon: ShieldCheck,
+                      label: 'Testar conexão',
+                      onSelect: () =>
+                        void runAction(
+                          () => refreshWhatsAppStatus(),
+                          'Status da conexão Kirago atualizado.',
+                        ),
+                    },
+                  ]}
+                />
+              </div>
+            </header>
+
+            <dl className="detail-list integration-details">
+              <div>
+                <dt>Status</dt>
+                <dd>{whatsAppConnection ? 'Configurado' : 'Não configurado'}</dd>
+              </div>
+              <div>
+                <dt>Conexão</dt>
+                <dd>
+                  {whatsAppConnection?.status === 'CONNECTED' ? 'Configurada' : 'Não configurada'}
+                </dd>
+              </div>
+              <div>
+                <dt>URL</dt>
+                <dd>Definida no ambiente da API</dd>
+              </div>
+              <div>
+                <dt>Token da instância</dt>
+                <dd>{whatsAppConnection ? '••••••••••••' : 'Criado ao configurar a conexão'}</dd>
+              </div>
+              {whatsAppConnection?.lastStatusAt ? (
+                <div>
+                  <dt>Última validação</dt>
+                  <dd>{formatDateTime(whatsAppConnection.lastStatusAt)}</dd>
+                </div>
+              ) : null}
+            </dl>
+
+            <div className="button-row payment-provider-primary-actions">
+              <button
+                className={whatsAppConnection ? 'secondary-button' : 'primary-button'}
+                type="button"
+                onClick={onOpenWhatsApp}
+              >
+                <MessageCircle aria-hidden="true" size={16} />
+                {whatsAppConnection ? 'Editar conexão' : 'Configurar conexão'}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!whatsAppConnection || loading}
+                type="button"
+                onClick={() =>
+                  void runAction(
+                    () => refreshWhatsAppStatus(),
+                    'Status da conexão Kirago atualizado.',
+                  )
+                }
+              >
+                Testar conexão
+              </button>
+            </div>
+          </article>
         </div>
       </div>
     </section>
@@ -11466,6 +11569,9 @@ function PixReceivableModal({
   const [showReconciliation, setShowReconciliation] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
   const [showReplacementRecovery, setShowReplacementRecovery] = useState(false);
+  const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
+  const [whatsAppConfirmOpen, setWhatsAppConfirmOpen] = useState(false);
+  const [whatsAppSending, setWhatsAppSending] = useState(false);
   const [reconcileProvider, setReconcileProvider] =
     useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
   const [reconcileTransactionId, setReconcileTransactionId] = useState('');
@@ -11492,6 +11598,7 @@ function PixReceivableModal({
 
       try {
         const nextIntents = await listPaymentIntents(receivable.id);
+        const nextWhatsAppConnection = await getWhatsAppConnection().catch(() => null);
         const visibleIntents = sortPaymentIntentsForDisplay(
           mergePaymentIntentsWithFallback(nextIntents, fallbackIntent, receivable.id),
         );
@@ -11507,6 +11614,7 @@ function PixReceivableModal({
                 visibleIntents.find(isSelectablePixIntent) ??
                 null),
         );
+        setWhatsAppConnection(nextWhatsAppConnection);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Não foi possível carregar o PIX.');
       } finally {
@@ -11559,6 +11667,33 @@ function PixReceivableModal({
       setNotice('PIX copiado.');
     } catch {
       setError('Não foi possível copiar o PIX. Copie o código manualmente.');
+    }
+  }
+
+  async function sendPixWhatsApp() {
+    if (!activeIntent || whatsAppSending || actionRef.current) return;
+
+    actionRef.current = true;
+    setWhatsAppSending(true);
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const result: PixWhatsAppSendResult = await sendPaymentIntentWhatsApp(activeIntent.id);
+      if (!result.success) {
+        throw new Error(result.errorMessage ?? 'Não foi possível enviar o PIX pelo WhatsApp.');
+      }
+
+      setWhatsAppConfirmOpen(false);
+      setNotice('PIX enviado pelo WhatsApp.');
+      await loadIntents(activeIntent);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível enviar o PIX pelo WhatsApp.');
+    } finally {
+      setBusy(false);
+      setWhatsAppSending(false);
+      actionRef.current = false;
     }
   }
 
@@ -11748,6 +11883,14 @@ function PixReceivableModal({
   const ActiveStatusIcon = activeStatusIcon;
   const isWaitingPix = activeStatus === 'WAITING_PAYMENT';
   const isPaidPix = activeStatus === 'PAID' || receivable.status === 'PAGO';
+  const canSendPixWhatsApp = Boolean(
+    isWaitingPix && receivable.status === 'PENDENTE' && activeIntent?.pixCopyPaste,
+  );
+  const whatsAppUnavailableReason = !whatsAppConnection
+    ? 'Configure a integração Kirago em Configurações > Integrações.'
+    : whatsAppConnection.status !== 'CONNECTED'
+      ? 'Conexão Kirago não está operacional.'
+      : '';
   const shouldShowPixData = isWaitingPix || showPixData;
   const historicalIntents = intents.filter((intent) => intent.id !== activeIntent?.id);
   const orderedHistoryIntents = [activeIntent, ...historicalIntents].filter(
@@ -11943,6 +12086,16 @@ function PixReceivableModal({
                   <RefreshCcw aria-hidden="true" size={16} />
                   {busy ? 'Sincronizando...' : 'Sincronizar'}
                 </button>
+                <button
+                  className="primary-button pix-whatsapp-send-button"
+                  disabled={busy || !canSendPixWhatsApp || Boolean(whatsAppUnavailableReason)}
+                  title={whatsAppUnavailableReason || undefined}
+                  type="button"
+                  onClick={() => setWhatsAppConfirmOpen(true)}
+                >
+                  <MessageCircle aria-hidden="true" size={16} />
+                  Enviar no WhatsApp
+                </button>
                 {activeIntent.provider === 'MOCK' ? (
                   <button
                     className="primary-button"
@@ -11960,6 +12113,9 @@ function PixReceivableModal({
                   </button>
                 ) : null}
               </div>
+            ) : null}
+            {isWaitingPix && whatsAppUnavailableReason ? (
+              <div className="notice warning">{whatsAppUnavailableReason}</div>
             ) : null}
 
             {!isWaitingPix ? (
@@ -12017,6 +12173,65 @@ function PixReceivableModal({
               <div className="notice warning">Prazo informado para este PIX expirou.</div>
             ) : null}
           </div>
+        ) : null}
+
+        {whatsAppConfirmOpen && activeIntent ? (
+          <section className="pix-panel pix-whatsapp-confirm-panel">
+            <div className="pix-status-row">
+              <strong>Enviar PIX pelo WhatsApp</strong>
+              <span>{paymentIntentDisplayTransactionId(activeIntent)}</span>
+            </div>
+            <dl className="detail-list compact-detail-list">
+              <div>
+                <dt>Cliente</dt>
+                <dd>{receivable.client?.name ?? '-'}</dd>
+              </div>
+              <div>
+                <dt>WhatsApp</dt>
+                <dd>
+                  {whatsAppConnection?.phone
+                    ? normalizeWhatsAppDisplayPhone(whatsAppConnection.phone)
+                    : 'Telefone cadastrado no cliente'}
+                </dd>
+              </div>
+              <div>
+                <dt>Valor</dt>
+                <dd>{formatCurrency(activeIntent.amount ?? receivable.amount)}</dd>
+              </div>
+              <div>
+                <dt>Transação</dt>
+                <dd>{paymentIntentDisplayTransactionId(activeIntent)}</dd>
+              </div>
+            </dl>
+            <div className="preview-box">
+              <span>Mensagem</span>
+              <strong>
+                Pagamento via PIX | {formatCurrency(activeIntent.amount ?? receivable.amount)} |
+                botão Copiar Chave PIX
+              </strong>
+            </div>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={whatsAppSending}
+                type="button"
+                onClick={() => setWhatsAppConfirmOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  whatsAppSending || !canSendPixWhatsApp || Boolean(whatsAppUnavailableReason)
+                }
+                type="button"
+                onClick={() => void sendPixWhatsApp()}
+              >
+                <Send aria-hidden="true" size={16} />
+                {whatsAppSending ? 'Enviando...' : 'Enviar PIX'}
+              </button>
+            </div>
+          </section>
         ) : null}
 
         {intents.length ? (

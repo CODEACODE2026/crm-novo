@@ -51,7 +51,9 @@ export class KiragoHttpClient {
             ? options.authFailureCode
             : response.status === 404
               ? 'KIRAGO_RESOURCE_NOT_FOUND'
-              : 'WHATSAPP_PROVIDER_ERROR';
+              : response.status === 429
+                ? 'KIRAGO_RATE_LIMITED'
+                : 'WHATSAPP_PROVIDER_ERROR';
         const safeBody = this.safeResponseBody(responseText);
         throw new KiragoProviderError(
           code,

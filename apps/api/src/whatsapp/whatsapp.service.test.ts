@@ -188,11 +188,76 @@ function serviceFactory({
     },
     messageDispatch: {
       create: vi.fn().mockResolvedValue(dispatch()),
-      update: vi
-        .fn()
-        .mockResolvedValue(dispatch({ status: 'FAILED', errorMessage: 'Falha segura' })),
+      update: vi.fn(
+        (args: {
+          data?: {
+            errorMessage?: string | null;
+            providerMessageId?: string | null;
+            sentAt?: Date | null;
+            status?: string;
+          };
+        }) =>
+          Promise.resolve(
+            dispatch({
+              status: args.data?.status ?? 'FAILED',
+              errorMessage: args.data?.errorMessage ?? 'Falha segura',
+              providerMessageId: args.data?.providerMessageId ?? null,
+              sentAt: args.data?.sentAt ?? null,
+            }),
+          ),
+      ),
       findMany: vi.fn().mockResolvedValue([]),
       findUniqueOrThrow: vi.fn(),
+    },
+    paymentIntent: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'payment-intent-id',
+        receivableId: 'receivable-id',
+        paymentGroupId: null,
+        provider: 'FASTFLOW',
+        providerTransactionId: 'provider-transaction-id',
+        externalStatus: 'WAITING_PAYMENT',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'WAITING_PAYMENT',
+        amount: new Prisma.Decimal(30),
+        pixCopyPaste: 'PIX-COPY-PASTE-CURRENT',
+        qrCodeData: 'data:image/png;base64,abc',
+        expiresAt: new Date('2026-09-12T00:00:00.000Z'),
+        paidAt: null,
+        lastSyncAt: now,
+        failureCode: null,
+        failureMessage: null,
+        createdAt: now,
+        updatedAt: now,
+        receivable: {
+          id: 'receivable-id',
+          clientId: client().id,
+          clientReferenceId: clientReference().id,
+          purpose: 'INITIAL_ACTIVATION',
+          renewalId: null,
+          description: 'Cobranca inicial de ativacao - Mensal',
+          amount: new Prisma.Decimal(30),
+          dueDate: now,
+          status: 'PENDENTE',
+          paidAt: null,
+          canceledAt: null,
+          cancelReason: null,
+          createdAt: now,
+          updatedAt: now,
+          client: client(),
+          clientReference: clientReference(),
+        },
+      }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'payment-intent-id',
+        receivableId: 'receivable-id',
+        paymentGroupId: null,
+        provider: 'FASTFLOW',
+        providerTransactionId: 'provider-transaction-id',
+        status: 'WAITING_PAYMENT',
+        createdAt: now,
+      }),
     },
     billingResponse: {
       create: vi.fn(),
@@ -200,6 +265,9 @@ function serviceFactory({
       upsert: vi.fn(),
       findFirst: vi.fn(),
       findUnique: vi.fn(),
+    },
+    financialTransaction: {
+      create: vi.fn(),
     },
     whatsAppInboundMessage: {
       create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
@@ -246,12 +314,14 @@ function serviceFactory({
           update: txReceivableUpdate,
         },
         messageDispatch: {
-          update: vi.fn().mockResolvedValue(
-            dispatch({
-              status: 'SENT',
-              providerMessageId: 'provider-id',
-              sentAt: now,
-            }),
+          update: vi.fn((args: { data?: { providerMessageId?: string | null } }) =>
+            Promise.resolve(
+              dispatch({
+                status: 'SENT',
+                providerMessageId: args.data?.providerMessageId ?? 'provider-id',
+                sentAt: now,
+              }),
+            ),
           ),
         },
         clientEvent: {
@@ -284,6 +354,7 @@ function serviceFactory({
     }),
     configureWebhook: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' }),
+    sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     health: vi.fn().mockResolvedValue({ online: true }),
     ...providerOverrides,
   };
@@ -608,6 +679,161 @@ describe('WhatsAppService', () => {
 
     expect(result.status).toBe('PENDING');
     expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('sends the current WAITING_PAYMENT PIX through Kirago buttons without changing finance state', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+
+    const result = await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+    const sendButtonsPayload = (provider.sendButtons as MockWithCalls).mock.calls[0]?.[1] as {
+      body: string;
+    };
+
+    expect(provider.sendButtons).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      title: 'Pagamento via PIX',
+      body: sendButtonsPayload.body,
+      buttons: [
+        {
+          name: 'cta_copy',
+          buttonParamsJson: {
+            display_text: 'Copiar Chave PIX',
+            copy_code: 'PIX-COPY-PASTE-CURRENT',
+          },
+        },
+      ],
+    });
+    expect(sendButtonsPayload.body).toMatch(/Valor: R\$\s*30,00/);
+    expect(result).toMatchObject({
+      success: true,
+      messageDispatchId: dispatch().id,
+      destinationMasked: '5544*****9999',
+      providerMessageId: 'provider-button-id',
+    });
+    expect(prisma.paymentIntent.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'payment-intent-id' } }),
+    );
+    expect(prisma.paymentIntent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          receivableId: 'receivable-id',
+          paymentGroupId: null,
+          status: 'WAITING_PAYMENT',
+        },
+      }),
+    );
+    expect(JSON.stringify((prisma.$transaction as MockWithCalls).mock.calls)).not.toContain(
+      'PIX-COPY-PASTE-CURRENT',
+    );
+  });
+
+  it('records a controlled failed dispatch when Kirago rate-limits PIX send without changing finance state', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      providerOverrides: {
+        sendButtons: vi
+          .fn()
+          .mockRejectedValue(
+            new KiragoProviderError('KIRAGO_RATE_LIMITED', 'Kirago HTTP 429', 429),
+          ),
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(provider.sendButtons).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      success: false,
+      messageDispatchId: dispatch().id,
+      errorMessage:
+        'Limite temporario de envios do WhatsApp atingido. Aguarde antes de tentar novamente.',
+    });
+    expect(prisma.paymentIntent.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'payment-intent-id' } }),
+    );
+    expect(prisma.paymentIntent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          receivableId: 'receivable-id',
+          paymentGroupId: null,
+          status: 'WAITING_PAYMENT',
+        },
+      }),
+    );
+    const failedUpdate = (prisma.messageDispatch.update as MockWithCalls).mock.calls[0]?.[0] as
+      { data?: { errorMessage?: string; status?: string } } | undefined;
+    expect(failedUpdate?.data).toMatchObject({
+      status: 'FAILED',
+      errorMessage:
+        'Limite temporario de envios do WhatsApp atingido. Aguarde antes de tentar novamente.',
+    });
+    expect(prisma.financialTransaction.create).not.toHaveBeenCalled();
+    expect(JSON.stringify((prisma.$transaction as MockWithCalls).mock.calls)).not.toContain(
+      'paymentIntent',
+    );
+  });
+
+  it('blocks manual PIX WhatsApp send when the intent is not the current waiting PIX', async () => {
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'old-payment-intent-id',
+            receivableId: 'receivable-id',
+            paymentGroupId: null,
+            provider: 'FASTFLOW',
+            providerTransactionId: 'old-provider-transaction-id',
+            externalStatus: 'WAITING_PAYMENT',
+            externalDepixId: null,
+            blockchainTxId: null,
+            status: 'WAITING_PAYMENT',
+            amount: new Prisma.Decimal(30),
+            pixCopyPaste: 'OLD-PIX-CODE',
+            qrCodeData: null,
+            expiresAt: null,
+            paidAt: null,
+            lastSyncAt: now,
+            failureCode: null,
+            failureMessage: null,
+            createdAt: now,
+            updatedAt: now,
+            receivable: {
+              id: 'receivable-id',
+              clientId: client().id,
+              clientReferenceId: clientReference().id,
+              purpose: 'INITIAL_ACTIVATION',
+              renewalId: null,
+              description: 'Cobranca inicial de ativacao - Mensal',
+              amount: new Prisma.Decimal(30),
+              dueDate: now,
+              status: 'PENDENTE',
+              paidAt: null,
+              canceledAt: null,
+              cancelReason: null,
+              createdAt: now,
+              updatedAt: now,
+              client: client(),
+              clientReference: clientReference(),
+            },
+          }),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'current-payment-intent-id',
+            receivableId: 'receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    await expect(service.sendPixPaymentIntent('old-payment-intent-id', 'user-id')).rejects.toThrow(
+      ConflictException,
+    );
+    expect(provider.sendButtons).not.toHaveBeenCalled();
   });
 
   it('creates a pending contact from an unknown incoming webhook', async () => {

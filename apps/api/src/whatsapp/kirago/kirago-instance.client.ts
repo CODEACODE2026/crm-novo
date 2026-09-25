@@ -43,6 +43,12 @@ export type KiragoSendTextData = {
   Timestamp?: string;
 };
 
+export type KiragoSendButtonsData = {
+  Details?: string;
+  Id?: string;
+  Timestamp?: string;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -111,6 +117,28 @@ export class KiragoInstanceClient {
     });
   }
 
+  sendButtons(
+    instanceToken: string,
+    payload: {
+      phone: string;
+      title: string;
+      body: string;
+      buttons: Array<{
+        name: string;
+        buttonParamsJson: Record<string, unknown>;
+      }>;
+    },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoSendButtonsData>>('/chat/send/buttons', {
+      method: 'POST',
+      headers: {
+        Authorization: this.instanceBearer(instanceToken),
+      },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
   checkPhone(instanceToken: string, phone: string) {
     return this.http.request<KiragoEnvelope<unknown>>('/user/check', {
       method: 'POST',
@@ -118,5 +146,11 @@ export class KiragoInstanceClient {
       body: { Phone: phone },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
+  }
+
+  private instanceBearer(instanceToken: string) {
+    return instanceToken.toLowerCase().startsWith('bearer ')
+      ? instanceToken
+      : `Bearer ${instanceToken}`;
   }
 }

@@ -35,6 +35,20 @@ export type SendTextResult = {
   providerMessageId: string | null;
 };
 
+export type SendButtonsInput = {
+  phone: string;
+  title: string;
+  body: string;
+  buttons: Array<{
+    name: string;
+    buttonParamsJson: Record<string, unknown>;
+  }>;
+};
+
+export type SendButtonsResult = {
+  providerMessageId: string | null;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -46,6 +60,7 @@ export interface WhatsAppProvider {
   getWebhook(instanceToken: string): Promise<unknown>;
   configureWebhook(instanceToken: string, webhookUrl: string, events: string[]): Promise<void>;
   sendText(instanceToken: string, input: SendTextInput): Promise<SendTextResult>;
+  sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

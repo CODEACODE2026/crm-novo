@@ -862,6 +862,12 @@ export interface WhatsAppProviderHealth {
   version?: string | null;
 }
 
+export interface HealthStatus {
+  ok: boolean;
+  service: string;
+  timestamp: string;
+}
+
 export type WhatsAppPendingContactStatus = 'PENDENTE' | 'APROVADO' | 'IGNORADO';
 export type WhatsAppInboundMessageType =
   | 'text'
@@ -1183,6 +1189,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return (await parseJsonResponse<T>(response)) as T;
+}
+
+export function getHealthStatus() {
+  return apiFetch<HealthStatus>('/health');
 }
 
 async function parseJsonResponse<T>(response: Response): Promise<T | undefined> {

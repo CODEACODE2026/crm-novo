@@ -187,6 +187,7 @@ import {
   getBillingDispatchSummary,
   getBillingSummary,
   generateCurrentCycleReceivable,
+  getHealthStatus,
   getRecoverySummary,
   getRecoveryAutomationSettings,
   getReferral,
@@ -231,6 +232,7 @@ import {
   type FinancialTransactionOrigin,
   type FinancialTransactionPayload,
   type FinancialTransactionType,
+  type HealthStatus,
   type PaginatedClients,
   type PaginatedClientEvents,
   type PaymentIntent,
@@ -792,7 +794,13 @@ export default function DashboardPage() {
       {view === 'billing' ? <BillingView /> : null}
       {view === 'automations' ? <AutomationsView /> : null}
       {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
-      {view === 'settings' ? <SettingsView onOpenWhatsApp={() => setView('whatsapp')} /> : null}
+      {view === 'settings' ? (
+        <SettingsView
+          onOpenAutomations={() => setView('automations')}
+          onOpenFinance={() => setView('finance')}
+          onOpenWhatsApp={() => setView('whatsapp')}
+        />
+      ) : null}
       {view === 'waitlist' ? (
         <WaitlistView
           plans={plans}
@@ -2780,11 +2788,69 @@ function reportSummaryValue(value: unknown) {
   return '-';
 }
 
-function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
+type SettingsSection = 'overview' | 'finance' | 'payments' | 'whatsapp' | 'billing' | 'system';
+
+const settingsSections = [
+  {
+    description: 'Resumo das áreas administrativas do CRM.',
+    icon: LayoutDashboard,
+    id: 'overview',
+    label: 'Visão geral',
+  },
+  {
+    description: 'Categorias e parâmetros financeiros.',
+    icon: CreditCard,
+    id: 'finance',
+    label: 'Financeiro',
+  },
+  {
+    description: 'Provedores usados para gerar e receber PIX.',
+    icon: QrCode,
+    id: 'payments',
+    label: 'Pagamentos',
+  },
+  {
+    description: 'Resumo da integração operacional com a Kirago.',
+    icon: MessageCircle,
+    id: 'whatsapp',
+    label: 'WhatsApp',
+  },
+  {
+    description: 'Regras de cobrança, recuperação e mensagens automáticas.',
+    icon: Workflow,
+    id: 'billing',
+    label: 'Cobrança e automações',
+  },
+  {
+    description: 'Saúde da API e diagnósticos seguros.',
+    icon: ShieldCheck,
+    id: 'system',
+    label: 'Sistema',
+  },
+] satisfies Array<{
+  description: string;
+  icon: LucideIcon;
+  id: SettingsSection;
+  label: string;
+}>;
+
+function SettingsView({
+  onOpenAutomations,
+  onOpenFinance,
+  onOpenWhatsApp,
+}: {
+  onOpenAutomations: () => void;
+  onOpenFinance: () => void;
+  onOpenWhatsApp: () => void;
+}) {
+  const [activeSection, setActiveSection] = useState<SettingsSection>('overview');
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
+  const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [healthLoading, setHealthLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [healthError, setHealthError] = useState('');
   const loadingRef = useRef(false);
   const actionRef = useRef(false);
 
@@ -2808,6 +2874,25 @@ function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
   useEffect(() => {
     void loadCredentials();
   }, [loadCredentials]);
+
+  const loadHealth = useCallback(async () => {
+    setHealthLoading(true);
+    setHealthError('');
+
+    try {
+      setHealthStatus(await getHealthStatus());
+    } catch (err) {
+      setHealthError(err instanceof Error ? err.message : 'Não foi possível carregar status.');
+    } finally {
+      setHealthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === 'system' && !healthStatus && !healthLoading) {
+      void loadHealth();
+    }
+  }, [activeSection, healthLoading, healthStatus, loadHealth]);
 
   async function runAction(action: () => Promise<unknown>, success: string) {
     if (actionRef.current) return false;
@@ -2835,90 +2920,367 @@ function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
       configured: false,
       status: 'NAO_CONFIGURADO' as const,
     };
+  const configuredProviders = credentials.filter((credential) => credential.configured).length;
+  const defaultProvider = credentials.find((credential) => credential.defaultForPix);
+  const activeSectionMeta =
+    settingsSections.find((section) => section.id === activeSection) ?? settingsSections[0]!;
+
+  function openSection(section: SettingsSection) {
+    setActiveSection(section);
+    setNotice('');
+    setError('');
+  }
 
   return (
-    <section className="workspace-main">
+    <section className="workspace-main settings-v2">
       {error ? <div className="notice danger">{error}</div> : null}
       {notice ? <div className="notice success">{notice}</div> : null}
 
-      <div className="tabs">
-        <button className="active" type="button">
-          Integrações
-        </button>
+      <PageHeader title="Configurações" subtitle="Gerencie preferências e integrações do CRM" />
+
+      <div className="settings-v2-mobile-nav">
+        <label className="field">
+          <span>Seção</span>
+          <select
+            aria-label="Navegação interna de configurações"
+            value={activeSection}
+            onChange={(event) => openSection(event.target.value as SettingsSection)}
+          >
+            {settingsSections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <div className="settings-section">
-        <div className="panel-header">
-          <h2>Pagamentos</h2>
-          <button className="secondary-button" type="button" onClick={() => void loadCredentials()}>
-            <RefreshCcw aria-hidden="true" size={16} />
-            Atualizar
-          </button>
-        </div>
-        <div className="payment-provider-grid">
-          {(['FASTFLOW', 'FASTPAY'] satisfies ConfigurablePaymentProvider[]).map((provider) => (
-            <PaymentProviderCard
-              credential={byProvider(provider)}
-              key={provider}
-              loading={loading}
-              provider={provider}
-              onDeactivate={() =>
-                runAction(
-                  () => deactivatePaymentProviderCredential(provider),
-                  `${paymentProviderLabel(provider)} desativado.`,
-                )
-              }
-              onSave={(payload) =>
-                runAction(
-                  () => savePaymentProviderCredential(payload),
-                  `${paymentProviderLabel(provider)} configurado.`,
-                )
-              }
-              onSetDefault={() =>
-                runAction(
-                  () => setDefaultPaymentProvider(provider),
-                  `${paymentProviderLabel(provider)} definido como padrao.`,
-                )
-              }
-              onTest={() =>
-                runAction(
-                  () => testPaymentProviderCredential(provider),
-                  `${paymentProviderLabel(provider)} validado.`,
-                )
-              }
-              onRegisterWebhook={() =>
-                runAction(
-                  () => registerPaymentWebhook(provider),
-                  `Webhook do ${paymentProviderLabel(provider)} registrado.`,
-                )
-              }
+      <div className="settings-v2-layout">
+        <nav className="settings-v2-nav" aria-label="Navegação interna de configurações">
+          {settingsSections.map((section) => {
+            const Icon = section.icon;
+            return (
+              <button
+                aria-current={activeSection === section.id ? 'page' : undefined}
+                className={activeSection === section.id ? 'active' : ''}
+                key={section.id}
+                type="button"
+                onClick={() => openSection(section.id)}
+              >
+                <Icon aria-hidden="true" size={17} />
+                <span>{section.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="settings-v2-content">
+          <header className="settings-v2-section-header">
+            <div>
+              <span className="metric-label">Configurações</span>
+              <h2>{activeSectionMeta.label}</h2>
+              <p>{activeSectionMeta.description}</p>
+            </div>
+          </header>
+
+          {activeSection === 'overview' ? (
+            <SettingsOverview
+              configuredProviders={configuredProviders}
+              defaultProvider={defaultProvider?.provider}
+              onOpenAutomations={() => openSection('billing')}
+              onOpenFinance={() => openSection('finance')}
+              onOpenPayments={() => openSection('payments')}
+              onOpenSystem={() => openSection('system')}
+              onOpenWhatsApp={() => openSection('whatsapp')}
             />
-          ))}
+          ) : null}
+
+          {activeSection === 'finance' ? (
+            <SettingsPlaceholderPanel
+              actionLabel="Abrir Financeiro"
+              description="As categorias financeiras serão centralizadas aqui na próxima etapa."
+              icon={CreditCard}
+              title="Financeiro"
+              onAction={onOpenFinance}
+            />
+          ) : null}
+
+          {activeSection === 'payments' ? (
+            <SettingsPaymentsPanel
+              byProvider={byProvider}
+              loading={loading}
+              onRefresh={loadCredentials}
+              runAction={runAction}
+            />
+          ) : null}
+
+          {activeSection === 'whatsapp' ? (
+            <SettingsPlaceholderPanel
+              actionLabel="Abrir WhatsApp"
+              description="A integração e a conexão Kirago são gerenciadas na central WhatsApp."
+              icon={MessageCircle}
+              title="WhatsApp"
+              onAction={onOpenWhatsApp}
+            />
+          ) : null}
+
+          {activeSection === 'billing' ? (
+            <SettingsPlaceholderPanel
+              actionLabel="Abrir Automações"
+              description="Gerencie regras de cobrança, recuperação e mensagens automáticas."
+              icon={Workflow}
+              title="Cobrança e automações"
+              onAction={onOpenAutomations}
+            />
+          ) : null}
+
+          {activeSection === 'system' ? (
+            <SettingsSystemPanel
+              healthError={healthError}
+              healthLoading={healthLoading}
+              healthStatus={healthStatus}
+              onRefresh={loadHealth}
+            />
+          ) : null}
         </div>
       </div>
+    </section>
+  );
+}
 
-      <div className="settings-section">
-        <div className="panel-header">
-          <h2>WhatsApp</h2>
-        </div>
-        <div className="payment-provider-grid">
-          <article className="payment-provider-card whatsapp-integration-card">
-            <header className="payment-provider-card-header">
-              <div className="payment-provider-title">
-                <h3>WhatsApp</h3>
-                <p>Integração gerenciada na área WhatsApp.</p>
+function SettingsOverview({
+  configuredProviders,
+  defaultProvider,
+  onOpenAutomations,
+  onOpenFinance,
+  onOpenPayments,
+  onOpenSystem,
+  onOpenWhatsApp,
+}: {
+  configuredProviders: number;
+  defaultProvider: PaymentProviderCode | undefined;
+  onOpenAutomations: () => void;
+  onOpenFinance: () => void;
+  onOpenPayments: () => void;
+  onOpenSystem: () => void;
+  onOpenWhatsApp: () => void;
+}) {
+  const cards = [
+    {
+      action: onOpenFinance,
+      description: 'Categorias e parâmetros financeiros.',
+      icon: CreditCard,
+      status: 'CRUD permanece em Financeiro nesta etapa',
+      title: 'Financeiro',
+    },
+    {
+      action: onOpenPayments,
+      description: 'FastFlow, FastPay, credenciais, padrão PIX e webhooks.',
+      icon: QrCode,
+      status: defaultProvider
+        ? `${configuredProviders} provider(s) configurado(s) | padrão ${paymentProviderDisplay(defaultProvider)}`
+        : `${configuredProviders} provider(s) configurado(s)`,
+      title: 'Pagamentos',
+    },
+    {
+      action: onOpenWhatsApp,
+      description: 'Resumo e acesso para a central operacional WhatsApp.',
+      icon: MessageCircle,
+      status: 'Operação preservada na área WhatsApp',
+      title: 'WhatsApp',
+    },
+    {
+      action: onOpenAutomations,
+      description: 'Regras de cobrança, recuperação e mensagens automáticas.',
+      icon: Workflow,
+      status: 'Administração será tratada em etapa posterior',
+      title: 'Cobrança e automações',
+    },
+    {
+      action: onOpenSystem,
+      description: 'Saúde da API e diagnósticos seguros.',
+      icon: ShieldCheck,
+      status: 'Somente leitura',
+      title: 'Sistema',
+    },
+  ] satisfies Array<{
+    action: () => void;
+    description: string;
+    icon: LucideIcon;
+    status: string;
+    title: string;
+  }>;
+
+  return (
+    <div className="settings-v2-home-grid">
+      {cards.map((card) => {
+        const Icon = card.icon;
+        return (
+          <article className="settings-v2-home-card" key={card.title}>
+            <header>
+              <span className="settings-v2-card-icon" aria-hidden="true">
+                <Icon size={18} />
+              </span>
+              <div>
+                <h3>{card.title}</h3>
+                <p>{card.description}</p>
               </div>
             </header>
-
-            <div className="button-row payment-provider-primary-actions">
-              <button className="primary-button" type="button" onClick={onOpenWhatsApp}>
-                <MessageCircle aria-hidden="true" size={16} />
-                Abrir WhatsApp
-              </button>
-            </div>
+            <span className="settings-v2-card-status">{card.status}</span>
+            <Button icon={ArrowRight} size="sm" variant="secondary" onClick={card.action}>
+              Abrir
+            </Button>
           </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettingsPaymentsPanel({
+  byProvider,
+  loading,
+  onRefresh,
+  runAction,
+}: {
+  byProvider: (provider: ConfigurablePaymentProvider) => PaymentProviderCredentialStatus;
+  loading: boolean;
+  onRefresh: () => Promise<void>;
+  runAction: (action: () => Promise<unknown>, success: string) => Promise<boolean>;
+}) {
+  return (
+    <div className="settings-v2-panel">
+      <div className="panel-header">
+        <div>
+          <h2>Pagamentos</h2>
+          <p>Configure os provedores utilizados para gerar e receber PIX.</p>
         </div>
+        <Button
+          icon={RefreshCcw}
+          loading={loading}
+          size="sm"
+          variant="secondary"
+          onClick={() => void onRefresh()}
+        >
+          Atualizar
+        </Button>
       </div>
+      <div className="payment-provider-grid">
+        {(['FASTFLOW', 'FASTPAY'] satisfies ConfigurablePaymentProvider[]).map((provider) => (
+          <PaymentProviderCard
+            credential={byProvider(provider)}
+            key={provider}
+            loading={loading}
+            provider={provider}
+            onDeactivate={() =>
+              runAction(
+                () => deactivatePaymentProviderCredential(provider),
+                `${paymentProviderLabel(provider)} desativado.`,
+              )
+            }
+            onSave={(payload) =>
+              runAction(
+                () => savePaymentProviderCredential(payload),
+                `${paymentProviderLabel(provider)} configurado.`,
+              )
+            }
+            onSetDefault={() =>
+              runAction(
+                () => setDefaultPaymentProvider(provider),
+                `${paymentProviderLabel(provider)} definido como padrao.`,
+              )
+            }
+            onTest={() =>
+              runAction(
+                () => testPaymentProviderCredential(provider),
+                `${paymentProviderLabel(provider)} validado.`,
+              )
+            }
+            onRegisterWebhook={() =>
+              runAction(
+                () => registerPaymentWebhook(provider),
+                `Webhook do ${paymentProviderLabel(provider)} registrado.`,
+              )
+            }
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPlaceholderPanel({
+  actionLabel,
+  description,
+  icon: Icon,
+  title,
+  onAction,
+}: {
+  actionLabel: string;
+  description: string;
+  icon: LucideIcon;
+  title: string;
+  onAction: () => void;
+}) {
+  return (
+    <section className="settings-v2-placeholder-panel">
+      <span className="settings-v2-card-icon" aria-hidden="true">
+        <Icon size={20} />
+      </span>
+      <div>
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+      <Button icon={ArrowRight} variant="primary" onClick={onAction}>
+        {actionLabel}
+      </Button>
+    </section>
+  );
+}
+
+function SettingsSystemPanel({
+  healthError,
+  healthLoading,
+  healthStatus,
+  onRefresh,
+}: {
+  healthError: string;
+  healthLoading: boolean;
+  healthStatus: HealthStatus | null;
+  onRefresh: () => Promise<void>;
+}) {
+  return (
+    <section className="settings-v2-panel">
+      <div className="panel-header">
+        <div>
+          <h2>Sistema</h2>
+          <p>Status seguro da API, sem expor secrets ou infraestrutura sensível.</p>
+        </div>
+        <Button
+          icon={RefreshCcw}
+          loading={healthLoading}
+          size="sm"
+          variant="secondary"
+          onClick={() => void onRefresh()}
+        >
+          Atualizar
+        </Button>
+      </div>
+      {healthError ? <div className="notice danger">{healthError}</div> : null}
+      <dl className="detail-list settings-v2-system-details">
+        <div>
+          <dt>API</dt>
+          <dd>{healthLoading ? 'Verificando...' : healthStatus?.ok ? 'Online' : 'Indisponível'}</dd>
+        </div>
+        <div>
+          <dt>Serviço</dt>
+          <dd>{healthStatus?.service ?? '-'}</dd>
+        </div>
+        <div>
+          <dt>Última verificação</dt>
+          <dd>{healthStatus?.timestamp ? formatDateTime(healthStatus.timestamp) : '-'}</dd>
+        </div>
+      </dl>
     </section>
   );
 }

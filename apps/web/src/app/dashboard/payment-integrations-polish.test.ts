@@ -76,9 +76,9 @@ describe('payment integrations workspace polish', () => {
   });
 
   it('keeps WhatsApp administration out of Settings and links to the WhatsApp area', () => {
-    expect(settingsViewSource).toContain('<h3>WhatsApp</h3>');
-    expect(settingsViewSource).toContain('Integração gerenciada na área WhatsApp.');
-    expect(settingsViewSource).toContain('Abrir WhatsApp');
+    expect(settingsViewSource).toContain("activeSection === 'whatsapp'");
+    expect(settingsViewSource).toContain('A integração e a conexão Kirago são gerenciadas');
+    expect(settingsViewSource).toContain('actionLabel="Abrir WhatsApp"');
     expect(settingsViewSource).not.toContain('Token da instância');
     expect(settingsViewSource).not.toContain('Definida no ambiente da API');
     expect(settingsViewSource).not.toContain('Editar conexão');

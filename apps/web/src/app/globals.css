@@ -5708,6 +5708,164 @@ tbody tr:hover,
   gap: 16px;
 }
 
+.settings-v2 {
+  gap: 18px;
+}
+
+.settings-v2-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.settings-v2-nav {
+  position: sticky;
+  top: 88px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px;
+}
+
+.settings-v2-nav button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  min-height: 40px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.settings-v2-nav button:hover,
+.settings-v2-nav button:focus-visible {
+  border-color: rgb(38 198 163 / 24%);
+  background: rgb(38 198 163 / 7%);
+  color: var(--text);
+  outline: none;
+}
+
+.settings-v2-nav button.active,
+.settings-v2-nav button[aria-current='page'] {
+  border-color: rgb(38 198 163 / 36%);
+  background: rgb(38 198 163 / 12%);
+  color: var(--accent-strong);
+}
+
+.settings-v2-content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.settings-v2-section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 16px;
+}
+
+.settings-v2-section-header h2 {
+  margin: 3px 0 4px;
+}
+
+.settings-v2-section-header p,
+.settings-v2-placeholder-panel p,
+.settings-v2-home-card p,
+.settings-v2-panel .panel-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-v2-home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settings-v2-home-card,
+.settings-v2-placeholder-panel,
+.settings-v2-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.settings-v2-home-card {
+  display: grid;
+  gap: 14px;
+  min-height: 178px;
+  padding: 16px;
+}
+
+.settings-v2-home-card header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.settings-v2-home-card h3,
+.settings-v2-placeholder-panel h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.settings-v2-card-icon {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgb(38 198 163 / 24%);
+  border-radius: 8px;
+  background: rgb(38 198 163 / 9%);
+  color: var(--accent-strong);
+}
+
+.settings-v2-card-status {
+  align-self: end;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-v2-placeholder-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 18px;
+}
+
+.settings-v2-panel {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.settings-v2-system-details {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.settings-v2-mobile-nav {
+  display: none;
+}
+
 .payment-provider-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6025,6 +6183,7 @@ tbody tr:hover,
   .finance-category-toolbar,
   .finance-transaction-form,
   .finance-category-form,
+  .settings-v2-layout,
   .dashboard-grid,
   .dashboard-primary-grid,
   .dashboard-secondary-grid,
@@ -6052,6 +6211,10 @@ tbody tr:hover,
 
   .payment-provider-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-v2-nav {
+    position: static;
   }
 
   .compact-table article {
@@ -6250,6 +6413,9 @@ tbody tr:hover,
   .referral-detail-grid,
   .referral-progress,
   .client-referral-summary,
+  .settings-v2-home-grid,
+  .settings-v2-placeholder-panel,
+  .settings-v2-system-details,
   .client-more-list-item > div,
   .client-recovery-card header,
   .client-referral-card,
@@ -6275,6 +6441,27 @@ tbody tr:hover,
 
   .tabs button {
     flex: 0 0 auto;
+  }
+
+  .settings-v2-mobile-nav {
+    display: block;
+  }
+
+  .settings-v2-nav {
+    display: none;
+  }
+
+  .settings-v2-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-v2-section-header,
+  .settings-v2-placeholder-panel {
+    align-items: flex-start;
+  }
+
+  .settings-v2-placeholder-panel {
+    grid-template-columns: 1fr;
   }
 
   .waitlist-stepper {

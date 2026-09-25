@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Ellipsis, type LucideIcon } from 'lucide-react';
+import { ChevronDown, Ellipsis, type LucideIcon } from 'lucide-react';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md';
@@ -86,6 +86,7 @@ export interface ActionMenuItem {
   icon?: LucideIcon;
   label: string;
   onSelect: () => void;
+  section?: string;
 }
 
 const actionMenuOpenEvent = 'crm-action-menu-open';
@@ -188,9 +189,11 @@ function getActionMenuLayer(trigger: HTMLElement | null): ActionMenuLayer {
 export function ActionMenu({
   items,
   label = 'Mais ações',
+  trigger = 'icon',
 }: {
   items: ActionMenuItem[];
   label?: string;
+  trigger?: 'icon' | 'text';
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -282,24 +285,29 @@ export function ActionMenu({
                 : undefined
             }
           >
-            {items.map((item) => {
+            {items.map((item, index) => {
               const Icon = item.icon;
+              const previousItem = items[index - 1];
+              const showSection = item.section && item.section !== previousItem?.section;
+
               return (
-                <button
-                  className={`action-menu-item ${item.danger ? 'danger' : ''}`.trim()}
-                  disabled={item.disabled}
-                  key={item.label}
-                  role="menuitem"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setOpen(false);
-                    item.onSelect();
-                  }}
-                >
-                  {Icon ? <Icon aria-hidden="true" size={14} /> : null}
-                  <span>{item.label}</span>
-                </button>
+                <React.Fragment key={item.label}>
+                  {showSection ? <div className="action-menu-section">{item.section}</div> : null}
+                  <button
+                    className={`action-menu-item ${item.danger ? 'danger' : ''}`.trim()}
+                    disabled={item.disabled}
+                    role="menuitem"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setOpen(false);
+                      item.onSelect();
+                    }}
+                  >
+                    {Icon ? <Icon aria-hidden="true" size={14} /> : null}
+                    <span>{item.label}</span>
+                  </button>
+                </React.Fragment>
               );
             })}
           </div>,
@@ -309,25 +317,50 @@ export function ActionMenu({
 
   return (
     <div className="action-menu">
-      <IconButton
-        aria-expanded={open}
-        aria-haspopup="menu"
-        icon={Ellipsis}
-        label={label}
-        ref={triggerRef}
-        onClick={(event) => {
-          event.stopPropagation();
-          setOpen((value) => {
-            const nextOpen = !value;
-            if (nextOpen) {
-              window.dispatchEvent(new CustomEvent(actionMenuOpenEvent, { detail: id }));
-              updatePosition();
-              window.setTimeout(updatePosition, 0);
-            }
-            return nextOpen;
-          });
-        }}
-      />
+      {trigger === 'text' ? (
+        <button
+          aria-expanded={open}
+          aria-haspopup="menu"
+          className="action-menu-trigger"
+          ref={triggerRef}
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setOpen((value) => {
+              const nextOpen = !value;
+              if (nextOpen) {
+                window.dispatchEvent(new CustomEvent(actionMenuOpenEvent, { detail: id }));
+                updatePosition();
+                window.setTimeout(updatePosition, 0);
+              }
+              return nextOpen;
+            });
+          }}
+        >
+          <span>{label}</span>
+          <ChevronDown aria-hidden="true" size={14} />
+        </button>
+      ) : (
+        <IconButton
+          aria-expanded={open}
+          aria-haspopup="menu"
+          icon={Ellipsis}
+          label={label}
+          ref={triggerRef}
+          onClick={(event) => {
+            event.stopPropagation();
+            setOpen((value) => {
+              const nextOpen = !value;
+              if (nextOpen) {
+                window.dispatchEvent(new CustomEvent(actionMenuOpenEvent, { detail: id }));
+                updatePosition();
+                window.setTimeout(updatePosition, 0);
+              }
+              return nextOpen;
+            });
+          }}
+        />
+      )}
       {panel}
     </div>
   );

@@ -9350,20 +9350,78 @@ function paymentProviderDisplay(provider: PaymentProviderCode) {
 function paymentIntentStatusLabel(status: PaymentIntentStatus) {
   const labels: Record<PaymentIntentStatus, string> = {
     CREATED: 'Criado',
-    WAITING_PAYMENT: 'Aguardando',
+    WAITING_PAYMENT: 'Aguardando pagamento',
     SUPERSEDED: 'Substituído',
     PAID: 'Pago',
     EXPIRED: 'Expirado',
     CANCELED: 'Cancelado',
-    FAILED: 'Falha',
+    FAILED: 'Falhou',
     REFUNDED: 'Estornado',
   };
 
   return labels[status];
 }
 
+function paymentIntentStatusIcon(status: PaymentIntentStatus): LucideIcon {
+  const icons: Record<PaymentIntentStatus, LucideIcon> = {
+    CREATED: Clock,
+    WAITING_PAYMENT: Clock,
+    SUPERSEDED: RotateCcw,
+    PAID: CircleCheck,
+    EXPIRED: Timer,
+    CANCELED: XCircle,
+    FAILED: CircleAlert,
+    REFUNDED: RotateCcw,
+  };
+
+  return icons[status];
+}
+
+function paymentIntentStatusTone(status: PaymentIntentStatus) {
+  if (status === 'PAID') return 'success';
+  if (status === 'WAITING_PAYMENT' || status === 'CREATED') return 'warning';
+  if (status === 'FAILED' || status === 'EXPIRED') return 'danger';
+  if (status === 'SUPERSEDED' || status === 'CANCELED' || status === 'REFUNDED') return 'muted';
+
+  return 'info';
+}
+
+function paymentIntentStatusSummary(status: PaymentIntentStatus) {
+  const summaries: Record<PaymentIntentStatus, string> = {
+    CREATED: 'PIX criado. Aguarde o processamento antes de orientar o cliente.',
+    WAITING_PAYMENT: 'PIX disponível para pagamento.',
+    SUPERSEDED: 'Esta tentativa foi substituída por outro PIX.',
+    PAID: 'Recebimento processado com sucesso.',
+    EXPIRED: 'O prazo informado para este PIX expirou.',
+    CANCELED: 'Esta tentativa foi cancelada.',
+    FAILED: 'O provider retornou falha para esta tentativa.',
+    REFUNDED: 'Pagamento estornado no provider.',
+  };
+
+  return summaries[status];
+}
+
+function paymentIntentDisplayTransactionId(intent: PaymentIntent) {
+  return intent.providerTransactionId ? `#${intent.providerTransactionId}` : '-';
+}
+
+function paymentIntentShortDate(value: string | null | undefined) {
+  if (!value) return '-';
+
+  return new Date(value).toLocaleString('pt-BR', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: '2-digit',
+  });
+}
+
 function isActivePixIntent(intent: PaymentIntent) {
   return ['CREATED', 'WAITING_PAYMENT'].includes(intent.status);
+}
+
+function isSelectablePixIntent(intent: PaymentIntent) {
+  return intent.status !== 'SUPERSEDED';
 }
 
 function paymentIntentFreshness(intent: PaymentIntent) {
@@ -9391,6 +9449,23 @@ function mergePaymentIntentsWithFallback(
   }
 
   return intents.map((intent, index) => (index === sameIntentIndex ? fallbackIntent : intent));
+}
+
+function paymentIntentTimelineTime(intent: PaymentIntent) {
+  return Math.max(
+    intent.paidAt ? Date.parse(intent.paidAt) || 0 : 0,
+    intent.updatedAt ? Date.parse(intent.updatedAt) || 0 : 0,
+    intent.createdAt ? Date.parse(intent.createdAt) || 0 : 0,
+  );
+}
+
+function sortPaymentIntentsForDisplay(intents: PaymentIntent[]) {
+  return [...intents].sort((left, right) => {
+    const timeDiff = paymentIntentTimelineTime(right) - paymentIntentTimelineTime(left);
+    if (timeDiff !== 0) return timeDiff;
+
+    return right.id.localeCompare(left.id);
+  });
 }
 
 function pixSyncNotice(intent: PaymentIntent, grouped = false) {
@@ -11384,6 +11459,9 @@ function PixReceivableModal({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [showPixData, setShowPixData] = useState(false);
+  const [showHistory, setShowHistory] = useState(true);
+  const [expandedHistoryIntentId, setExpandedHistoryIntentId] = useState<string | null>(null);
   const [showReconciliation, setShowReconciliation] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
   const [showReplacementRecovery, setShowReplacementRecovery] = useState(false);
@@ -11413,10 +11491,8 @@ function PixReceivableModal({
 
       try {
         const nextIntents = await listPaymentIntents(receivable.id);
-        const visibleIntents = mergePaymentIntentsWithFallback(
-          nextIntents,
-          fallbackIntent,
-          receivable.id,
+        const visibleIntents = sortPaymentIntentsForDisplay(
+          mergePaymentIntentsWithFallback(nextIntents, fallbackIntent, receivable.id),
         );
         const fallbackFromList = fallbackIntent
           ? visibleIntents.find((intent) => intent.id === fallbackIntent.id)
@@ -11424,7 +11500,11 @@ function PixReceivableModal({
 
         setIntents(visibleIntents);
         setActiveIntent(
-          fallbackFromList ?? visibleIntents.find(isActivePixIntent) ?? visibleIntents[0] ?? null,
+          fallbackFromList && isSelectablePixIntent(fallbackFromList)
+            ? fallbackFromList
+            : (visibleIntents.find(isActivePixIntent) ??
+                visibleIntents.find(isSelectablePixIntent) ??
+                null),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Não foi possível carregar o PIX.');
@@ -11438,6 +11518,11 @@ function PixReceivableModal({
   useEffect(() => {
     void loadIntents();
   }, [loadIntents]);
+
+  useEffect(() => {
+    setShowPixData(activeIntent?.status === 'WAITING_PAYMENT');
+    setExpandedHistoryIntentId(null);
+  }, [activeIntent?.id, activeIntent?.status]);
 
   async function runAction(
     action: () => Promise<PaymentIntent>,
@@ -11467,8 +11552,12 @@ function PixReceivableModal({
 
   async function copyPix() {
     if (!activeIntent?.pixCopyPaste) return;
-    await navigator.clipboard.writeText(activeIntent.pixCopyPaste);
-    setNotice('PIX copiado.');
+    try {
+      await navigator.clipboard.writeText(activeIntent.pixCopyPaste);
+      setNotice('PIX copiado.');
+    } catch {
+      setError('Não foi possível copiar o PIX. Copie o código manualmente.');
+    }
   }
 
   async function runReconciliationPreview() {
@@ -11628,9 +11717,14 @@ function PixReceivableModal({
   }
 
   const canCreateNew =
-    !activeIntent || !['CREATED', 'WAITING_PAYMENT'].includes(activeIntent.status);
-  const canReplacePix = activeIntent?.status === 'WAITING_PAYMENT' && !activeIntent.paymentGroupId;
+    receivable.status !== 'PAGO' &&
+    (!activeIntent || !['CREATED', 'WAITING_PAYMENT'].includes(activeIntent.status));
+  const canReplacePix =
+    receivable.status !== 'PAGO' &&
+    activeIntent?.status === 'WAITING_PAYMENT' &&
+    !activeIntent.paymentGroupId;
   const canCancel =
+    receivable.status !== 'PAGO' &&
     activeIntent &&
     !['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
   const canRenderQrImage =
@@ -11647,6 +11741,75 @@ function PixReceivableModal({
     recoveryPreview?.provider === recoveryProvider &&
     recoveryPreview.providerTransactionId === recoveryTransactionId.trim() &&
     recoveryPreview.expectedCurrentIntentId === activeIntent?.id;
+  const activeStatus = activeIntent?.status ?? null;
+  const activeStatusIcon = activeStatus ? paymentIntentStatusIcon(activeStatus) : Info;
+  const ActiveStatusIcon = activeStatusIcon;
+  const isWaitingPix = activeStatus === 'WAITING_PAYMENT';
+  const isPaidPix = activeStatus === 'PAID' || receivable.status === 'PAGO';
+  const shouldShowPixData = isWaitingPix || showPixData;
+  const historicalIntents = intents.filter((intent) => intent.id !== activeIntent?.id);
+  const contextualActionItems = activeIntent
+    ? [
+        ...(canReplacePix
+          ? [
+              {
+                disabled: busy,
+                icon: RefreshCcw,
+                label: 'Gerar novo PIX',
+                onSelect: () => {
+                  setShowReplacement((value) => !value);
+                  setShowReconciliation(false);
+                  setShowReplacementRecovery(false);
+                  setReplacementPreview(null);
+                },
+              },
+            ]
+          : []),
+        ...(canCancel
+          ? [
+              {
+                danger: true,
+                disabled: busy,
+                icon: XCircle,
+                label: 'Cancelar PIX',
+                onSelect: () =>
+                  void runAction(
+                    () => cancelPaymentIntent(activeIntent.id),
+                    'PIX cancelado no provider.',
+                  ),
+              },
+            ]
+          : []),
+        ...(canReplacePix
+          ? [
+              {
+                disabled: busy,
+                icon: Settings,
+                label: 'Reconciliar PIX externo',
+                section: 'Ferramentas técnicas',
+                onSelect: () => {
+                  setShowReconciliation((value) => !value);
+                  setShowReplacement(false);
+                  setShowReplacementRecovery(false);
+                  setReconcilePreview(null);
+                },
+              },
+              {
+                disabled: busy,
+                icon: Search,
+                label: 'Recuperar PIX de substituição',
+                section: 'Ferramentas técnicas',
+                onSelect: () => {
+                  setShowReplacementRecovery((value) => !value);
+                  setShowReplacement(false);
+                  setShowReconciliation(false);
+                  setRecoveryPreview(null);
+                },
+              },
+            ]
+          : []),
+      ]
+    : [];
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -11668,12 +11831,12 @@ function PixReceivableModal({
           </span>
           <div>
             <h2 id="pix-title">PIX</h2>
-            <p>Gerar, copiar e sincronizar pagamento desta conta.</p>
+            <p>Gerar, acompanhar e receber pagamentos</p>
           </div>
           <IconButton disabled={busy} icon={X} label="Fechar PIX" onClick={onClose} />
         </header>
 
-        <dl className="detail-list">
+        <dl className="detail-list pix-summary-list">
           <div>
             <dt>Cliente</dt>
             <dd>{receivable.client?.name ?? '-'}</dd>
@@ -11698,159 +11861,282 @@ function PixReceivableModal({
         {loading ? <div className="empty-state">Carregando PIX...</div> : null}
 
         {activeIntent ? (
-          <div className="pix-panel">
-            <div className="pix-status-row">
-              <strong>{activeIntent.status}</strong>
-              <span>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</span>
-            </div>
-            <label className="field">
-              <span>PIX copia e cola</span>
-              <textarea readOnly rows={4} value={activeIntent.pixCopyPaste ?? ''} />
-            </label>
-            {activeIntent.qrCodeData ? (
-              <div className="pix-qr" aria-label="QR Code PIX">
-                {canRenderQrImage ? (
-                  <img alt="QR Code PIX" src={activeIntent.qrCodeData} />
-                ) : (
-                  <>
-                    <QrCode aria-hidden="true" size={92} />
-                    <span>{activeIntent.qrCodeData}</span>
-                  </>
-                )}
+          <div className={`pix-panel pix-panel-${paymentIntentStatusTone(activeIntent.status)}`}>
+            <div className="pix-current-summary">
+              <span
+                className={`pix-status-badge tone-${paymentIntentStatusTone(activeIntent.status)}`}
+              >
+                <ActiveStatusIcon aria-hidden="true" size={15} />
+                {paymentIntentStatusLabel(activeIntent.status)}
+              </span>
+              <strong>
+                {isPaidPix ? 'Pagamento confirmado' : paymentIntentStatusLabel(activeIntent.status)}
+              </strong>
+              <p>{paymentIntentStatusSummary(activeIntent.status)}</p>
+              <div className="pix-amount-row">
+                <span>Valor</span>
+                <strong>{formatCurrency(activeIntent.amount ?? receivable.amount)}</strong>
               </div>
-            ) : null}
-            <div className="button-row">
-              <button
-                className="secondary-button"
-                disabled={!activeIntent.pixCopyPaste}
-                type="button"
-                onClick={() => void copyPix()}
-              >
-                <Copy aria-hidden="true" size={16} />
-                Copiar
-              </button>
-              <button
-                className="secondary-button"
-                disabled={busy}
-                type="button"
-                onClick={() =>
-                  void runAction(
-                    () => syncPaymentIntent(activeIntent.id),
-                    (intent) => pixSyncNotice(intent),
-                  )
-                }
-              >
-                <RefreshCcw aria-hidden="true" size={16} />
-                Sincronizar
-              </button>
-              {activeIntent.provider === 'MOCK' ? (
-                <button
-                  className="primary-button"
-                  disabled={busy || activeIntent.status === 'PAID'}
-                  type="button"
-                  onClick={() =>
-                    void runAction(
-                      () => confirmMockPaymentIntent(activeIntent.id),
-                      'Pagamento PIX mock confirmado.',
-                    )
-                  }
-                >
-                  <ShieldCheck aria-hidden="true" size={16} />
-                  Confirmar mock
-                </button>
+              <dl className="detail-list compact-detail-list pix-current-details">
+                <div>
+                  <dt>Provider</dt>
+                  <dd>{paymentProviderDisplay(activeIntent.provider)}</dd>
+                </div>
+                <div>
+                  <dt>Transação</dt>
+                  <dd>{paymentIntentDisplayTransactionId(activeIntent)}</dd>
+                </div>
+                <div>
+                  <dt>{activeIntent.status === 'PAID' ? 'Pago em' : 'Criado em'}</dt>
+                  <dd>
+                    {activeIntent.status === 'PAID' && activeIntent.paidAt
+                      ? formatDateTime(activeIntent.paidAt)
+                      : formatDateTime(activeIntent.createdAt)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{isWaitingPix ? 'Válido até' : 'Expiração'}</dt>
+                  <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
+                </div>
+              </dl>
+              {activeIntent.status === 'FAILED' &&
+              (activeIntent.failureMessage || activeIntent.failureCode) ? (
+                <div className="notice danger">
+                  {activeIntent.failureMessage ?? `Falha informada: ${activeIntent.failureCode}`}
+                </div>
               ) : null}
-              {canCancel ? (
+            </div>
+
+            {isWaitingPix ? (
+              <div className="pix-waiting-actions">
                 <button
-                  className="danger-button"
+                  className="secondary-button"
+                  disabled={!activeIntent.pixCopyPaste}
+                  type="button"
+                  onClick={() => void copyPix()}
+                >
+                  <Copy aria-hidden="true" size={16} />
+                  {notice === 'PIX copiado.' ? 'Copiado' : 'Copiar'}
+                </button>
+                <button
+                  className="secondary-button"
                   disabled={busy}
                   type="button"
                   onClick={() =>
                     void runAction(
-                      () => cancelPaymentIntent(activeIntent.id),
-                      'PIX cancelado no provider.',
+                      () => syncPaymentIntent(activeIntent.id),
+                      (intent) => pixSyncNotice(intent),
                     )
                   }
                 >
-                  Cancelar
+                  <RefreshCcw aria-hidden="true" size={16} />
+                  {busy ? 'Sincronizando...' : 'Sincronizar'}
                 </button>
-              ) : null}
-            </div>
+                {activeIntent.provider === 'MOCK' ? (
+                  <button
+                    className="primary-button"
+                    disabled={busy || activeIntent.status === 'PAID'}
+                    type="button"
+                    onClick={() =>
+                      void runAction(
+                        () => confirmMockPaymentIntent(activeIntent.id),
+                        'Pagamento PIX mock confirmado.',
+                      )
+                    }
+                  >
+                    <ShieldCheck aria-hidden="true" size={16} />
+                    Confirmar mock
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!isWaitingPix ? (
+              <button
+                className="secondary-button pix-disclosure-button"
+                type="button"
+                aria-expanded={showPixData}
+                aria-controls="pix-data-panel"
+                onClick={() => setShowPixData((value) => !value)}
+              >
+                <Eye aria-hidden="true" size={16} />
+                {showPixData ? 'Ocultar dados do PIX' : 'Ver dados do PIX'}
+              </button>
+            ) : null}
+
+            {shouldShowPixData ? (
+              <div className="pix-data-panel" id="pix-data-panel">
+                <label className="field pix-copy-field">
+                  <span>PIX copia e cola</span>
+                  <div className="pix-copy-row">
+                    <input readOnly value={activeIntent.pixCopyPaste ?? ''} />
+                    <button
+                      className="secondary-button compact"
+                      disabled={!activeIntent.pixCopyPaste}
+                      type="button"
+                      onClick={() => void copyPix()}
+                    >
+                      <Copy aria-hidden="true" size={16} />
+                      {notice === 'PIX copiado.' ? 'Copiado' : 'Copiar'}
+                    </button>
+                  </div>
+                </label>
+                {activeIntent.qrCodeData ? (
+                  <div className="pix-qr" aria-label="QR Code PIX">
+                    {canRenderQrImage ? (
+                      <img alt="QR Code PIX" src={activeIntent.qrCodeData} />
+                    ) : (
+                      <>
+                        <QrCode aria-hidden="true" size={92} />
+                        <span>{activeIntent.qrCodeData}</span>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {isPixTemporallyExpired(activeIntent) ? (
               <div className="notice warning">Prazo informado para este PIX expirou.</div>
             ) : null}
           </div>
         ) : null}
 
-        {intents.length > 1 ? (
-          <div className="mini-list">
-            {intents.slice(1).map((intent) => (
-              <article key={intent.id}>
-                <strong>{intent.status}</strong>
-                <span>{intent.createdAt ? formatDateTime(intent.createdAt) : '-'}</span>
-                <p>{formatCurrency(intent.amount)}</p>
-              </article>
-            ))}
-          </div>
+        {intents.length ? (
+          <section className="pix-history-section">
+            <button
+              className="pix-history-toggle"
+              type="button"
+              aria-controls="pix-history-list"
+              aria-expanded={showHistory}
+              onClick={() => setShowHistory((value) => !value)}
+            >
+              <span>Tentativas ({intents.length})</span>
+              <span>{showHistory ? 'Ocultar histórico' : 'Ver histórico'}</span>
+            </button>
+            {showHistory ? (
+              <div className="pix-history-list" id="pix-history-list">
+                {[activeIntent, ...historicalIntents].filter(Boolean).map((intent) => {
+                  const safeIntent = intent as PaymentIntent;
+                  const StatusIcon = paymentIntentStatusIcon(safeIntent.status);
+                  const expanded = expandedHistoryIntentId === safeIntent.id;
+
+                  return (
+                    <article className="pix-history-item" key={safeIntent.id}>
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        aria-controls={`pix-history-detail-${safeIntent.id}`}
+                        onClick={() =>
+                          setExpandedHistoryIntentId((current) =>
+                            current === safeIntent.id ? null : safeIntent.id,
+                          )
+                        }
+                      >
+                        <StatusIcon aria-hidden="true" size={15} />
+                        <span>
+                          <strong>{paymentIntentDisplayTransactionId(safeIntent)}</strong>
+                          {safeIntent.id === activeIntent?.id ? ' Atual' : ''}
+                        </span>
+                        <span>{paymentIntentStatusLabel(safeIntent.status)}</span>
+                        <span>
+                          {paymentIntentShortDate(safeIntent.paidAt ?? safeIntent.createdAt)}
+                        </span>
+                        <span>{formatCurrency(safeIntent.amount)}</span>
+                      </button>
+                      {expanded ? (
+                        <div
+                          className="pix-history-detail"
+                          id={`pix-history-detail-${safeIntent.id}`}
+                        >
+                          <dl className="detail-list compact-detail-list">
+                            <div>
+                              <dt>Provider</dt>
+                              <dd>{paymentProviderDisplay(safeIntent.provider)}</dd>
+                            </div>
+                            <div>
+                              <dt>Transação</dt>
+                              <dd>{safeIntent.providerTransactionId ?? '-'}</dd>
+                            </div>
+                            <div>
+                              <dt>Status</dt>
+                              <dd>{paymentIntentStatusLabel(safeIntent.status)}</dd>
+                            </div>
+                            <div>
+                              <dt>Status técnico</dt>
+                              <dd>{safeIntent.status}</dd>
+                            </div>
+                            <div>
+                              <dt>Status externo</dt>
+                              <dd>{safeIntent.externalStatus ?? '-'}</dd>
+                            </div>
+                            <div>
+                              <dt>Criado em</dt>
+                              <dd>{formatDateTime(safeIntent.createdAt)}</dd>
+                            </div>
+                            <div>
+                              <dt>Expira em</dt>
+                              <dd>
+                                {safeIntent.expiresAt ? formatDateTime(safeIntent.expiresAt) : '-'}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>Pago em</dt>
+                              <dd>{safeIntent.paidAt ? formatDateTime(safeIntent.paidAt) : '-'}</dd>
+                            </div>
+                          </dl>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
         ) : null}
 
         <div className="form-actions">
-          <span>{canCreateNew ? '' : 'Já existe um PIX ativo para esta conta.'}</span>
+          <span>
+            {receivable.status === 'PAGO'
+              ? 'Pagamento concluído. Ações operacionais encerradas.'
+              : canCreateNew
+                ? ''
+                : 'Já existe um PIX ativo para esta conta.'}
+          </span>
           <div className="button-row">
             <button className="secondary-button" disabled={busy} type="button" onClick={onClose}>
               Fechar
             </button>
-            <ActionMenu
-              items={[
-                {
-                  disabled: busy,
-                  icon: Settings,
-                  label: 'Reconciliar PIX externo',
-                  onSelect: () => setShowReconciliation((value) => !value),
-                },
-                {
-                  disabled: busy || !canReplacePix,
-                  icon: RefreshCcw,
-                  label: 'Gerar novo PIX',
-                  onSelect: () => {
-                    setShowReplacement((value) => !value);
-                    setShowReconciliation(false);
-                    setShowReplacementRecovery(false);
-                    setReplacementPreview(null);
-                  },
-                },
-                {
-                  disabled: busy || !canReplacePix,
-                  icon: Search,
-                  label: 'Recuperar PIX de substituição',
-                  onSelect: () => {
-                    setShowReplacementRecovery((value) => !value);
-                    setShowReplacement(false);
-                    setShowReconciliation(false);
-                    setRecoveryPreview(null);
-                  },
-                },
-              ]}
-            />
-            <button
-              className="primary-button"
-              disabled={busy || !canCreateNew}
-              type="button"
-              onClick={() =>
-                void runAction(() => createReceivablePix(receivable.id), 'PIX gerado.')
-              }
-            >
-              <QrCode aria-hidden="true" size={16} />
-              Gerar PIX
-            </button>
+            {contextualActionItems.length ? (
+              <ActionMenu items={contextualActionItems} trigger="text" />
+            ) : null}
+            {canCreateNew ? (
+              <button
+                className="primary-button"
+                disabled={busy}
+                type="button"
+                onClick={() =>
+                  void runAction(() => createReceivablePix(receivable.id), 'PIX gerado.')
+                }
+              >
+                <QrCode aria-hidden="true" size={16} />
+                Gerar PIX
+              </button>
+            ) : null}
           </div>
         </div>
 
         {showReplacement && activeIntent ? (
-          <section className="pix-panel">
+          <section className="pix-panel pix-tool-panel">
             <div className="pix-status-row">
               <strong>Gerar novo PIX</strong>
               <span>{paymentProviderDisplay(activeIntent.provider)}</span>
             </div>
+            <ol className="pix-step-list" aria-label="Etapas para gerar novo PIX">
+              <li>Configurar</li>
+              <li className={replacementPreview ? 'complete' : ''}>Pré-visualizar</li>
+              <li>Confirmar</li>
+            </ol>
             <p>
               Um novo PIX será criado para esta cobrança. O PIX atual continuará registrado no
               histórico e poderá continuar existindo no provedor.
@@ -11945,11 +12231,17 @@ function PixReceivableModal({
         ) : null}
 
         {showReplacementRecovery && activeIntent ? (
-          <section className="pix-panel">
+          <section className="pix-panel pix-tool-panel">
             <div className="pix-status-row">
               <strong>Recuperar PIX de substituição</strong>
               <span>{paymentProviderDisplay(activeIntent.provider)}</span>
             </div>
+            <ol className="pix-step-list" aria-label="Etapas para recuperar PIX de substituição">
+              <li>Provider + Transaction ID</li>
+              <li className={recoveryPreview ? 'complete' : ''}>Buscar</li>
+              <li className={recoveryPreview ? 'complete' : ''}>Preview</li>
+              <li>Confirmar recuperação</li>
+            </ol>
             <div className="notice warning">
               Esta ação recupera um PIX que já foi criado no provedor durante uma substituição que
               não foi concluída localmente. Nenhum novo PIX será criado.
@@ -12036,11 +12328,17 @@ function PixReceivableModal({
         ) : null}
 
         {showReconciliation ? (
-          <section className="pix-panel">
+          <section className="pix-panel pix-tool-panel">
             <div className="pix-status-row">
               <strong>Reconciliação técnica</strong>
               <span>Reconciliação manual de PIX existente</span>
             </div>
+            <ol className="pix-step-list" aria-label="Etapas para reconciliar PIX externo">
+              <li>Provider + Transaction ID</li>
+              <li className={reconcilePreview ? 'complete' : ''}>Buscar</li>
+              <li className={reconcilePreview ? 'complete' : ''}>Preview</li>
+              <li>Confirmar adoção</li>
+            </ol>
             <div className="notice warning">
               Esta ação vinculará ao CRM um PIX que já existe no provedor. Nenhum novo PIX será
               criado.

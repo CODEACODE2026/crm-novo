@@ -103,15 +103,19 @@ describe('PIX reconciliation UI contract', () => {
   it('keeps synced PIX visible while authoritative data reloads', () => {
     expect(pixModalSource).toContain('async (fallbackIntent?: PaymentIntent)');
     expect(dashboardSource).toContain('function mergePaymentIntentsWithFallback(');
+    expect(dashboardSource).toContain('function sortPaymentIntentsForDisplay');
+    expect(dashboardSource).toContain('function isSelectablePixIntent');
     expect(dashboardSource).toContain('sameIntentIndex === -1');
     expect(dashboardSource).toContain('[fallbackIntent, ...intents]');
     expect(dashboardSource).toContain('paymentIntentFreshness(sameIntent)');
     expect(dashboardSource).toContain('paymentIntentFreshness(fallbackIntent)');
-    expect(pixModalSource).toContain('mergePaymentIntentsWithFallback(');
+    expect(pixModalSource).toContain('sortPaymentIntentsForDisplay(');
+    expect(pixModalSource).toContain('mergePaymentIntentsWithFallback(nextIntents, fallbackIntent');
     expect(pixModalSource).toContain(
       'visibleIntents.find((intent) => intent.id === fallbackIntent.id)',
     );
     expect(pixModalSource).toContain('visibleIntents.find(isActivePixIntent)');
+    expect(pixModalSource).toContain('visibleIntents.find(isSelectablePixIntent)');
     expect(pixModalSource).toContain('await loadIntents(intent);');
     expect(pixModalSource).toContain('(intent) => pixSyncNotice(intent)');
   });
@@ -150,16 +154,128 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('await loadIntents(intent);');
     expect(pixModalSource).toContain("'PIX cancelado no provider.'");
     expect(pixModalSource).toContain("!['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED']");
-    expect(pixModalSource).toContain('disabled={busy || !canCreateNew}');
+    expect(pixModalSource).toContain("receivable.status !== 'PAGO'");
+    expect(pixModalSource).toContain('{canCreateNew ? (');
     expect(pixModalSource).toContain('() => createReceivablePix(receivable.id)');
     expect(pixModalSource).not.toContain('await createReceivablePix(receivable.id)');
   });
 
+  it('maps technical PIX statuses to friendly labels and visual tones', () => {
+    expect(dashboardSource).toContain("WAITING_PAYMENT: 'Aguardando pagamento'");
+    expect(dashboardSource).toContain("PAID: 'Pago'");
+    expect(dashboardSource).toContain("SUPERSEDED: 'Substituído'");
+    expect(dashboardSource).toContain("EXPIRED: 'Expirado'");
+    expect(dashboardSource).toContain("CANCELED: 'Cancelado'");
+    expect(dashboardSource).toContain("FAILED: 'Falhou'");
+    expect(pixModalSource).toContain('activeIntent.failureMessage ??');
+    expect(pixModalSource).toContain('Falha informada: ${activeIntent.failureCode}');
+    expect(dashboardSource).toContain('function paymentIntentStatusIcon');
+    expect(dashboardSource).toContain('function paymentIntentStatusTone');
+    expect(stylesSource).toContain('.pix-status-badge.tone-success');
+    expect(stylesSource).toContain('.pix-status-badge.tone-warning');
+    expect(stylesSource).toContain('.pix-status-badge.tone-danger');
+    expect(stylesSource).toContain('.pix-status-badge.tone-muted');
+  });
+
+  it('keeps WAITING_PAYMENT QR and copy actions prominent', () => {
+    expect(pixModalSource).toContain("const isWaitingPix = activeStatus === 'WAITING_PAYMENT';");
+    expect(pixModalSource).toContain('const shouldShowPixData = isWaitingPix || showPixData;');
+    expect(pixModalSource).toContain('className="pix-waiting-actions"');
+    expect(pixModalSource).toContain('PIX copia e cola');
+    expect(pixModalSource).toContain('aria-label="QR Code PIX"');
+    expect(pixModalSource).toContain('(intent) => pixSyncNotice(intent)');
+    expect(pixModalSource).toContain("notice === 'PIX copiado.' ? 'Copiado' : 'Copiar'");
+    expect(pixModalSource).toContain(
+      "setError('Não foi possível copiar o PIX. Copie o código manualmente.')",
+    );
+  });
+
+  it('keeps PAID focused on confirmation and hides creation/recovery actions', () => {
+    expect(pixModalSource).toContain(
+      "const isPaidPix = activeStatus === 'PAID' || receivable.status === 'PAGO';",
+    );
+    expect(pixModalSource).toContain('Pagamento confirmado');
+    expect(dashboardSource).toContain('Recebimento processado com sucesso.');
+    expect(pixModalSource).toContain('Ver dados do PIX');
+    expect(pixModalSource).toContain("receivable.status !== 'PAGO' &&");
+    expect(pixModalSource).toContain('Pagamento concluído. Ações operacionais encerradas.');
+    expect(pixModalSource).toContain('{contextualActionItems.length ? (');
+  });
+
+  it('documents the homologated paid activation fixture with two superseded attempts', () => {
+    const fixture = {
+      receivable: {
+        amount: '30.00',
+        description: 'Cobrança inicial de ativação - Mensal',
+        status: 'PAGO',
+      },
+      intents: [
+        { amount: '30.00', id: 'A', status: 'SUPERSEDED' },
+        { amount: '30.00', id: 'B', status: 'SUPERSEDED' },
+        { amount: '30.00', id: 'C', status: 'PAID' },
+      ],
+    };
+
+    expect(fixture.receivable).toMatchObject({
+      amount: '30.00',
+      description: 'Cobrança inicial de ativação - Mensal',
+      status: 'PAGO',
+    });
+    expect(fixture.intents).toEqual([
+      { amount: '30.00', id: 'A', status: 'SUPERSEDED' },
+      { amount: '30.00', id: 'B', status: 'SUPERSEDED' },
+      { amount: '30.00', id: 'C', status: 'PAID' },
+    ]);
+    expect(dashboardSource).toContain("SUPERSEDED: 'Substituído'");
+    expect(dashboardSource).toContain("PAID: 'Pago'");
+    expect(pixModalSource).toContain('Pagamento confirmado');
+    expect(pixModalSource).toContain('Tentativas ({intents.length})');
+    expect(pixModalSource).toContain("{safeIntent.id === activeIntent?.id ? ' Atual' : ''}");
+  });
+
+  it('renders compact expandable history without duplicating the current intent as a large card', () => {
+    expect(pixModalSource).toContain('Tentativas ({intents.length})');
+    expect(pixModalSource).toContain('const historicalIntents = intents.filter');
+    expect(pixModalSource).toContain('[activeIntent, ...historicalIntents].filter(Boolean).map');
+    expect(pixModalSource).toContain('expandedHistoryIntentId');
+    expect(pixModalSource).toContain('paymentIntentDisplayTransactionId(safeIntent)');
+    expect(pixModalSource).toContain('Status técnico');
+    expect(pixModalSource).toContain('aria-controls="pix-history-list"');
+    expect(pixModalSource).toContain('aria-controls={`pix-history-detail-${safeIntent.id}`}');
+    expect(pixModalSource).toContain('id={`pix-history-detail-${safeIntent.id}`}');
+    expect(stylesSource).toContain('.pix-history-list');
+    expect(stylesSource).toContain('.pix-history-item > button');
+  });
+
+  it('keeps contextual actions and technical tools separated in Mais ações', () => {
+    expect(pixModalSource).toContain('const contextualActionItems = activeIntent');
+    expect(pixModalSource).toContain("section: 'Ferramentas técnicas'");
+    expect(pixModalSource).toContain('trigger="text"');
+    expect(stylesSource).toContain('.action-menu-trigger');
+    expect(stylesSource).toContain('.action-menu-section');
+    expect(pixModalSource).toContain('setShowReplacement(false);');
+    expect(pixModalSource).toContain('setShowReconciliation(false);');
+    expect(pixModalSource).toContain('setShowReplacementRecovery(false);');
+  });
+
+  it('shows replacement, recovery, and reconciliation as step panels', () => {
+    expect(pixModalSource).toContain('aria-label="Etapas para gerar novo PIX"');
+    expect(pixModalSource).toContain('Configurar');
+    expect(pixModalSource).toContain('Pré-visualizar');
+    expect(pixModalSource).toContain('aria-label="Etapas para recuperar PIX de substituição"');
+    expect(pixModalSource).toContain('Nenhum novo PIX será criado.');
+    expect(pixModalSource).toContain('aria-label="Etapas para reconciliar PIX externo"');
+    expect(pixModalSource).toContain('Reconciliação manual de PIX existente');
+  });
+
   it('keeps the modal constrained for mobile and desktop surfaces', () => {
-    expect(stylesSource).toContain('width: min(100%, 680px);');
+    expect(stylesSource).toContain('width: min(100%, 760px);');
     expect(stylesSource).toContain('max-height: min(820px, calc(100vh - 36px));');
     expect(stylesSource).toContain('@media (max-width: 620px)');
     expect(stylesSource).toContain('max-height: calc(100vh - 20px);');
+    expect(stylesSource).toContain('.pix-data-panel,');
+    expect(stylesSource).toContain('.pix-copy-row');
+    expect(stylesSource).toContain('.pix-history-item > button');
     expect(stylesSource).toContain('.button-row {');
     expect(stylesSource).toContain('flex-wrap: wrap;');
   });

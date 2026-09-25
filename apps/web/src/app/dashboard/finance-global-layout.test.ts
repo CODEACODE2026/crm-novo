@@ -82,7 +82,7 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('modal finance-transaction-modal');
     expect(dashboardSource).toContain('Registre uma nova movimentação de entrada.');
     expect(dashboardSource).toContain('Registre uma nova movimentação de saída.');
-    expect(dashboardSource).toContain('Gerar, copiar e sincronizar pagamento desta conta.');
+    expect(dashboardSource).toContain('Gerar, acompanhar e receber pagamentos');
     expect(dashboardSource).toContain('Gerar um único PIX para as contas selecionadas.');
     expect(dashboardSource).toContain('Registrar pagamento desta conta a receber.');
     expect(dashboardSource).toContain('Registrar pagamento agrupado das contas selecionadas.');

@@ -45,6 +45,15 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsSource).not.toContain('className="compact-form"');
   });
 
+  it('shows the Financeiro home card as a real configured area when categories are loaded', () => {
+    expect(settingsViewSource).toContain(
+      'activeCategories={categories.filter((category) => category.active).length}',
+    );
+    expect(settingsSource).toContain('activeCategories: number;');
+    expect(settingsSource).toContain('categoria${activeCategories === 1');
+    expect(settingsSource).toContain('ativa${');
+  });
+
   it('keeps Settings home copy product-facing instead of implementation-facing', () => {
     expect(settingsSource).not.toContain('CRUD permanece em Financeiro nesta etapa');
     expect(settingsSource).not.toContain('Operação preservada na área WhatsApp');
@@ -98,15 +107,24 @@ describe('Settings V2 SET1 shell contracts', () => {
 
   it('keeps SET1 sections as navigation summaries without moving operational CRUDs', () => {
     expect(settingsViewSource).toContain("activeSection === 'finance'");
-    expect(settingsViewSource).toContain('As categorias financeiras serão centralizadas aqui');
-    expect(settingsViewSource).toContain('actionLabel="Abrir Financeiro"');
     expect(settingsViewSource).toContain("activeSection === 'whatsapp'");
     expect(settingsViewSource).toContain('actionLabel="Abrir WhatsApp"');
     expect(settingsViewSource).toContain("activeSection === 'billing'");
     expect(settingsViewSource).toContain('actionLabel="Abrir Automações"');
-    expect(settingsViewSource).not.toContain('createFinancialCategory(');
     expect(settingsViewSource).not.toContain('connectWhatsApp(');
     expect(settingsViewSource).not.toContain('updateBillingAutomationSettings(');
+  });
+
+  it('centralizes financial category administration in Settings > Financeiro', () => {
+    expect(settingsViewSource).toContain('const [categories, setCategories]');
+    expect(settingsViewSource).toContain('setCategories(await listFinancialCategories())');
+    expect(settingsSource).toContain('function SettingsFinancePanel');
+    expect(settingsSource).toContain('<FinancialCategoriesView');
+    expect(settingsViewSource).toContain('await createFinancialCategory(payload);');
+    expect(settingsViewSource).toContain('await updateFinancialCategory(id, payload);');
+    expect(settingsViewSource).toContain('await deleteFinancialCategory(id);');
+    expect(settingsSource).toContain('Abrir Financeiro operacional');
+    expect(settingsViewSource).not.toContain('As categorias financeiras serão centralizadas aqui');
   });
 
   it('renders Sistema as a read-only health panel without exposing secrets', () => {

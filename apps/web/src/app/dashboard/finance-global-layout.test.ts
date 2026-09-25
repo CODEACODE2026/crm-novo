@@ -6,6 +6,10 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
+const financeViewSource = dashboardSource.slice(
+  dashboardSource.indexOf('function FinanceView'),
+  dashboardSource.indexOf('function TransactionSection'),
+);
 
 describe('global finance presentation source', () => {
   it('keeps the Financeiro page header and actions bound to existing tabs', () => {
@@ -15,6 +19,15 @@ describe('global finance presentation source', () => {
     );
     expect(dashboardSource).toContain("onClick={() => openTransactionModal('ENTRADA')}");
     expect(dashboardSource).toContain("onClick={() => openTransactionModal('SAIDA')}");
+  });
+
+  it('keeps Financeiro focused on operational tabs after category administration moves to Settings', () => {
+    expect(financeViewSource).toContain("setTab('summary')");
+    expect(financeViewSource).toContain("setTab('receivables')");
+    expect(financeViewSource).toContain("setTab('entries')");
+    expect(financeViewSource).toContain("setTab('expenses')");
+    expect(financeViewSource).not.toContain("setTab('categories')");
+    expect(financeViewSource).not.toContain("tab === 'categories'");
   });
 
   it('renders the operational KPI row from existing summary fields only', () => {

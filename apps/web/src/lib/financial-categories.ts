@@ -66,6 +66,7 @@ export function filterFinancialCategories(
 
 export function summarizeFinancialCategories(categories: FinancialCategory[]) {
   return {
+    active: categories.filter((category) => category.active).length,
     entries: categories.filter((category) => category.type === 'ENTRADA').length,
     expenses: categories.filter((category) => category.type === 'SAIDA').length,
     inactive: categories.filter((category) => !category.active).length,

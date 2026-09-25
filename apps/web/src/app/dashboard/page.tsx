@@ -312,7 +312,7 @@ type View =
   | 'automations'
   | 'reports'
   | 'settings';
-type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses' | 'categories';
+type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses';
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -2844,9 +2844,11 @@ function SettingsView({
   onOpenWhatsApp: () => void;
 }) {
   const [activeSection, setActiveSection] = useState<SettingsSection>('overview');
+  const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -2874,6 +2876,23 @@ function SettingsView({
   useEffect(() => {
     void loadCredentials();
   }, [loadCredentials]);
+
+  const loadCategories = useCallback(async () => {
+    setCategoriesLoading(true);
+    setError('');
+
+    try {
+      setCategories(await listFinancialCategories());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível carregar categorias.');
+    } finally {
+      setCategoriesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCategories();
+  }, [loadCategories]);
 
   const loadHealth = useCallback(async () => {
     setHealthLoading(true);
@@ -2985,6 +3004,7 @@ function SettingsView({
 
           {activeSection === 'overview' ? (
             <SettingsOverview
+              activeCategories={categories.filter((category) => category.active).length}
               configuredProviders={configuredProviders}
               defaultProvider={defaultProvider?.provider}
               onOpenAutomations={() => openSection('billing')}
@@ -2996,12 +3016,26 @@ function SettingsView({
           ) : null}
 
           {activeSection === 'finance' ? (
-            <SettingsPlaceholderPanel
-              actionLabel="Abrir Financeiro"
-              description="As categorias financeiras serão centralizadas aqui na próxima etapa."
-              icon={CreditCard}
-              title="Financeiro"
-              onAction={onOpenFinance}
+            <SettingsFinancePanel
+              categories={categories}
+              loading={categoriesLoading}
+              onCreate={async (payload) => {
+                await createFinancialCategory(payload);
+                await loadCategories();
+                setNotice('Categoria criada.');
+              }}
+              onDelete={async (id) => {
+                await deleteFinancialCategory(id);
+                await loadCategories();
+                setNotice('Categoria removida ou inativada.');
+              }}
+              onOpenFinance={onOpenFinance}
+              onRefresh={loadCategories}
+              onUpdate={async (id, payload) => {
+                await updateFinancialCategory(id, payload);
+                await loadCategories();
+                setNotice('Categoria atualizada.');
+              }}
             />
           ) : null}
 
@@ -3049,6 +3083,7 @@ function SettingsView({
 }
 
 function SettingsOverview({
+  activeCategories,
   configuredProviders,
   defaultProvider,
   onOpenAutomations,
@@ -3057,6 +3092,7 @@ function SettingsOverview({
   onOpenSystem,
   onOpenWhatsApp,
 }: {
+  activeCategories: number;
   configuredProviders: number;
   defaultProvider: PaymentProviderCode | undefined;
   onOpenAutomations: () => void;
@@ -3070,7 +3106,12 @@ function SettingsOverview({
       action: onOpenFinance,
       description: 'Categorias e parâmetros financeiros.',
       icon: CreditCard,
-      status: null,
+      status:
+        activeCategories > 0
+          ? `${activeCategories} categoria${activeCategories === 1 ? '' : 's'} ativa${
+              activeCategories === 1 ? '' : 's'
+            }`
+          : null,
       title: 'Financeiro',
     },
     {
@@ -3217,6 +3258,56 @@ function SettingsPaymentsPanel({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function SettingsFinancePanel({
+  categories,
+  loading,
+  onCreate,
+  onDelete,
+  onOpenFinance,
+  onRefresh,
+  onUpdate,
+}: {
+  categories: FinancialCategory[];
+  loading: boolean;
+  onCreate: (payload: {
+    name: string;
+    type: FinancialTransactionType;
+    active?: boolean;
+  }) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  onOpenFinance: () => void;
+  onRefresh: () => Promise<void>;
+  onUpdate: (
+    id: string,
+    payload: Partial<{ name: string; type: FinancialTransactionType; active: boolean }>,
+  ) => Promise<void>;
+}) {
+  return (
+    <div className="settings-v2-panel settings-v2-finance-panel">
+      <div className="settings-v2-toolbar">
+        <Button
+          icon={RefreshCcw}
+          loading={loading}
+          size="sm"
+          variant="secondary"
+          onClick={() => void onRefresh()}
+        >
+          Atualizar
+        </Button>
+        <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenFinance}>
+          Abrir Financeiro operacional
+        </Button>
+      </div>
+      <FinancialCategoriesView
+        categories={categories}
+        onCreate={onCreate}
+        onDelete={onDelete}
+        onUpdate={onUpdate}
+      />
     </div>
   );
 }
@@ -10847,13 +10938,6 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
         >
           Saídas
         </button>
-        <button
-          className={tab === 'categories' ? 'active' : ''}
-          type="button"
-          onClick={() => setTab('categories')}
-        >
-          Categorias
-        </button>
       </div>
 
       {tab === 'summary' && summary ? (
@@ -11074,24 +11158,6 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
           pagination={expensesPagination}
           onPageChange={setExpensesPage}
           onUpdateRequest={(transaction) => openTransactionModal('SAIDA', transaction)}
-        />
-      ) : null}
-
-      {tab === 'categories' ? (
-        <FinancialCategoriesView
-          categories={categories}
-          onCreate={async (payload) => {
-            await createFinancialCategory(payload);
-            await reloadWithNotice('Categoria criada.');
-          }}
-          onDelete={async (id) => {
-            await deleteFinancialCategory(id);
-            await reloadWithNotice('Categoria removida ou inativada.');
-          }}
-          onUpdate={async (id, payload) => {
-            await updateFinancialCategory(id, payload);
-            await reloadWithNotice('Categoria atualizada.');
-          }}
         />
       ) : null}
 
@@ -11536,8 +11602,12 @@ function FinancialCategoriesView({
   ) => Promise<void>;
 }) {
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<FinancialCategory | null>(null);
   const [name, setName] = useState('');
   const [type, setType] = useState<FinancialTransactionType>('ENTRADA');
+  const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState<FinancialTransactionType>('ENTRADA');
+  const [editActive, setEditActive] = useState(true);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<FinancialTransactionType | ''>('');
   const [statusFilter, setStatusFilter] = useState<FinancialCategoryStatusFilter>('');
@@ -11545,6 +11615,10 @@ function FinancialCategoriesView({
   const [error, setError] = useState('');
   const submittingRef = useRef(false);
   const { canSubmit, nameTooLong } = getFinancialCategoryFormState(name, working);
+  const { canSubmit: canSubmitEdit, nameTooLong: editNameTooLong } = getFinancialCategoryFormState(
+    editName,
+    working,
+  );
   const filteredCategories = filterFinancialCategories(categories, {
     search,
     status: statusFilter,
@@ -11577,18 +11651,37 @@ function FinancialCategoriesView({
     resetCreateModal();
   }
 
+  function openEditModal(category: FinancialCategory) {
+    setError('');
+    setEditName(category.name);
+    setEditType(category.type);
+    setEditActive(category.active);
+    setEditingCategory(category);
+  }
+
+  function closeEditModal() {
+    setEditingCategory(null);
+    setEditName('');
+    setEditType('ENTRADA');
+    setEditActive(true);
+    setError('');
+    setWorking(false);
+    submittingRef.current = false;
+  }
+
   useEffect(() => {
-    if (!createModalOpen) return undefined;
+    if (!createModalOpen && !editingCategory) return undefined;
 
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === 'Escape' && !submittingRef.current) {
-        closeCreateModal();
+        if (createModalOpen) closeCreateModal();
+        if (editingCategory) closeEditModal();
       }
     }
 
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [createModalOpen]);
+  }, [createModalOpen, editingCategory]);
 
   async function submitCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -11618,6 +11711,38 @@ function FinancialCategoriesView({
     }
   }
 
+  async function submitEditCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+
+    if (!editingCategory || submittingRef.current) return;
+
+    const formState = getFinancialCategoryFormState(editName);
+    if (!formState.canSubmit) {
+      setError(
+        formState.nameTooLong ? 'Nome da categoria muito longo.' : 'Informe o nome da categoria.',
+      );
+      return;
+    }
+
+    submittingRef.current = true;
+    setWorking(true);
+
+    try {
+      await onUpdate(editingCategory.id, {
+        active: editActive,
+        name: formState.trimmedName,
+        type: editType,
+      });
+      closeEditModal();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível atualizar a categoria.');
+    } finally {
+      submittingRef.current = false;
+      setWorking(false);
+    }
+  }
+
   async function runCategoryAction(action: () => Promise<void>) {
     setError('');
 
@@ -11641,7 +11766,12 @@ function FinancialCategoriesView({
       />
 
       <div className="metric-grid finance-category-summary">
-        <StatCard icon={Layers} label="Total" tone="info" value={categorySummary.total} />
+        <StatCard
+          icon={Layers}
+          label="Categorias ativas"
+          tone="info"
+          value={categorySummary.active}
+        />
         <StatCard
           icon={ArrowRight}
           label="Entradas"
@@ -11692,10 +11822,10 @@ function FinancialCategoriesView({
           <tbody>
             {filteredCategories.map((category) => (
               <tr key={category.id}>
-                <td>
+                <td data-label="Nome">
                   <strong className="category-name">{category.name}</strong>
                 </td>
-                <td className="finance-status-column">
+                <td className="finance-status-column" data-label="Tipo">
                   <span
                     className={`finance-status-pill ${
                       category.type === 'ENTRADA' ? 'tone-success' : 'tone-warning'
@@ -11704,7 +11834,7 @@ function FinancialCategoriesView({
                     {financialCategoryTypeLabel(category.type)}
                   </span>
                 </td>
-                <td className="finance-status-column">
+                <td className="finance-status-column" data-label="Status">
                   <span
                     className={`finance-status-pill ${
                       category.active ? 'tone-success' : 'tone-danger'
@@ -11713,22 +11843,47 @@ function FinancialCategoriesView({
                     {category.active ? 'Ativa' : 'Inativa'}
                   </span>
                 </td>
-                <td className="finance-actions-column">
+                <td className="finance-actions-column" data-label="Ações">
                   <ActionMenu
                     items={[
                       {
+                        icon: Pencil,
+                        label: 'Editar',
+                        onSelect: () => openEditModal(category),
+                      },
+                      {
                         icon: Power,
                         label: category.active ? 'Inativar' : 'Ativar',
-                        onSelect: () =>
+                        onSelect: () => {
+                          if (
+                            category.active &&
+                            !window.confirm(
+                              `Inativar a categoria "${category.name}"? Ela deixará de aparecer para novas movimentações.`,
+                            )
+                          ) {
+                            return;
+                          }
+
                           void runCategoryAction(() =>
                             onUpdate(category.id, { active: !category.active }),
-                          ),
+                          );
+                        },
                       },
                       {
                         danger: true,
                         icon: Trash2,
                         label: 'Remover',
-                        onSelect: () => void runCategoryAction(() => onDelete(category.id)),
+                        onSelect: () => {
+                          if (
+                            !window.confirm(
+                              `Remover a categoria "${category.name}"? Se ela estiver em uso, será inativada.`,
+                            )
+                          ) {
+                            return;
+                          }
+
+                          void runCategoryAction(() => onDelete(category.id));
+                        },
                       },
                     ]}
                   />
@@ -11822,6 +11977,100 @@ function FinancialCategoriesView({
                     variant="primary"
                   >
                     Criar categoria
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {editingCategory ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            aria-labelledby="financial-category-edit-modal-title"
+            className="modal finance-category-modal"
+          >
+            <header className="modal-header modal-header-with-icon">
+              <span className="modal-icon info" aria-hidden="true">
+                <Layers size={16} />
+              </span>
+              <div>
+                <h2 id="financial-category-edit-modal-title">Editar categoria</h2>
+                <p>Ajuste a classificação usada nas movimentações financeiras.</p>
+              </div>
+              <IconButton
+                disabled={working}
+                icon={X}
+                label="Fechar edição de categoria"
+                onClick={closeEditModal}
+              />
+            </header>
+
+            <form
+              className="finance-category-modal-form"
+              onSubmit={(event) => void submitEditCategory(event)}
+            >
+              <label className="field">
+                <span>Nome da categoria</span>
+                <input
+                  aria-describedby="financial-category-edit-error"
+                  autoFocus
+                  value={editName}
+                  onChange={(event) => setEditName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Tipo</span>
+                <select
+                  value={editType}
+                  onChange={(event) => setEditType(event.target.value as FinancialTransactionType)}
+                >
+                  <option value="ENTRADA">Entrada</option>
+                  <option value="SAIDA">Saída</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Status</span>
+                <select
+                  value={editActive ? 'active' : 'inactive'}
+                  onChange={(event) => setEditActive(event.target.value === 'active')}
+                >
+                  <option value="active">Ativa</option>
+                  <option value="inactive">Inativa</option>
+                </select>
+              </label>
+
+              {error ? (
+                <div className="notice danger" id="financial-category-edit-error" role="alert">
+                  {error}
+                </div>
+              ) : null}
+              {!error && editNameTooLong ? (
+                <div className="notice danger" id="financial-category-edit-error" role="alert">
+                  Nome da categoria muito longo.
+                </div>
+              ) : null}
+
+              <div className="notice info">
+                Categorias utilizadas por processos automáticos podem impactar baixas e
+                recebimentos.
+              </div>
+
+              <div className="form-actions">
+                <span />
+                <div className="button-row">
+                  <Button disabled={working} icon={X} variant="secondary" onClick={closeEditModal}>
+                    Cancelar
+                  </Button>
+                  <Button
+                    disabled={!canSubmitEdit}
+                    icon={Save}
+                    loading={working}
+                    type="submit"
+                    variant="primary"
+                  >
+                    Salvar categoria
                   </Button>
                 </div>
               </div>

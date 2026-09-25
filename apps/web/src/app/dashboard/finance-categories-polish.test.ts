@@ -104,6 +104,7 @@ describe('finance categories polish source', () => {
 
     expect(filtered).toHaveLength(1);
     expect(summarizeFinancialCategories(categories)).toEqual({
+      active: 2,
       entries: 1,
       expenses: 2,
       inactive: 1,
@@ -124,7 +125,7 @@ describe('finance categories polish source', () => {
 
   it('adds real local summary cards from the loaded full category collection', () => {
     expect(categoriesSource).toContain('summarizeFinancialCategories(categories)');
-    expect(categoriesSource).toContain('label="Total"');
+    expect(categoriesSource).toContain('label="Categorias ativas"');
     expect(categoriesSource).toContain('label="Entradas"');
     expect(categoriesSource).toContain('label="Saídas"');
     expect(categoriesSource).toContain('label="Inativas"');
@@ -150,10 +151,38 @@ describe('finance categories polish source', () => {
     expect(categoriesSource).toContain('Ativa');
     expect(categoriesSource).toContain('Inativa');
     expect(categoriesSource).toContain('<ActionMenu');
+    expect(categoriesSource).toContain("label: 'Editar'");
     expect(categoriesSource).toContain("label: category.active ? 'Inativar' : 'Ativar'");
     expect(categoriesSource).toContain("label: 'Remover'");
     expect(categoriesSource).toContain('onUpdate(category.id, { active: !category.active })');
     expect(categoriesSource).toContain('onDelete(category.id)');
+  });
+
+  it('keeps edit and destructive category actions explicit and accessible', () => {
+    expect(categoriesSource).toContain('const [editingCategory, setEditingCategory]');
+    expect(categoriesSource).toContain('function openEditModal(category: FinancialCategory)');
+    expect(categoriesSource).toContain('Editar categoria');
+    expect(categoriesSource).toContain('Nome da categoria');
+    expect(categoriesSource).toContain('<span>Tipo</span>');
+    expect(categoriesSource).toContain('<span>Status</span>');
+    expect(categoriesSource).toContain('await onUpdate(editingCategory.id');
+    expect(categoriesSource).toContain('Salvar categoria');
+    expect(categoriesSource).toContain('window.confirm');
+    expect(categoriesSource).toContain('será inativada');
+    expect(categoriesSource).toContain(
+      'Categorias utilizadas por processos automáticos podem impactar baixas e',
+    );
+  });
+
+  it('adapts category rows on mobile without a wide horizontal table', () => {
+    expect(categoriesSource).toContain('data-label="Nome"');
+    expect(categoriesSource).toContain('data-label="Tipo"');
+    expect(categoriesSource).toContain('data-label="Status"');
+    expect(categoriesSource).toContain('data-label="Ações"');
+    expect(stylesSource).toContain('.finance-category-table thead');
+    expect(stylesSource).toContain('content: attr(data-label);');
+    expect(stylesSource).toContain('.finance-category-table-wrap');
+    expect(stylesSource).toContain('overflow-x: visible;');
   });
 
   it('distinguishes empty data from filtered empty results', () => {

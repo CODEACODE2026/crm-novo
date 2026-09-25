@@ -6499,6 +6499,53 @@ tbody tr:hover,
     grid-template-columns: 1fr;
   }
 
+  .finance-category-table-wrap {
+    overflow-x: visible;
+  }
+
+  .finance-category-table {
+    min-width: 0;
+  }
+
+  .finance-category-table thead {
+    display: none;
+  }
+
+  .finance-category-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .finance-category-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .finance-category-table td {
+    align-items: center;
+    border-bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0;
+    text-align: right;
+  }
+
+  .finance-category-table td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 12px;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .finance-category-table .finance-actions-column {
+    justify-content: space-between;
+  }
+
   .waitlist-stepper {
     display: flex;
     overflow-x: auto;

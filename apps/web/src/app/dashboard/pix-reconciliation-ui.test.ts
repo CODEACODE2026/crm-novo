@@ -193,13 +193,47 @@ describe('PIX reconciliation UI contract', () => {
   it('keeps WhatsApp send visible for waiting PIX and points missing configuration to WhatsApp', () => {
     expect(pixModalSource).toContain('sendPaymentIntentWhatsApp(activeIntent.id)');
     expect(pixModalSource).toContain('Enviar no WhatsApp');
-    expect(pixModalSource).toContain('setWhatsAppConfirmOpen(true)');
+    expect(pixModalSource).toContain('onClick={() => void sendPixWhatsApp()}');
+    expect(pixModalSource).toContain("{whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}");
+    expect(pixModalSource).toContain('if (!activeIntent || whatsAppSending || actionRef.current)');
+    expect(pixModalSource).toContain('actionRef.current = true;');
+    expect(pixModalSource).toContain("setNotice('PIX enviado pelo WhatsApp.');");
+    expect(pixModalSource).toContain('await loadIntents(activeIntent);');
     expect(pixModalSource).toContain('Configure a conexão em WhatsApp.');
-    expect(pixModalSource).toContain(
-      '{formatCurrency(activeIntent.amount ?? receivable.amount)} • Copiar Chave PIX',
-    );
+    expect(pixModalSource).not.toContain('whatsAppConfirmOpen');
+    expect(pixModalSource).not.toContain('Enviar PIX pelo WhatsApp');
+    expect(pixModalSource).not.toContain("{whatsAppSending ? 'Enviando...' : 'Enviar PIX'}");
     expect(pixModalSource).not.toContain('Pagamento via PIX |');
     expect(pixModalSource).not.toContain('Configurações > Integrações');
+  });
+
+  it('keeps WhatsApp send contextual to WAITING_PAYMENT only', () => {
+    const waitingActionsSource = pixModalSource.slice(
+      pixModalSource.indexOf('{isWaitingPix ? ('),
+      pixModalSource.indexOf('{isPixTemporallyExpired(activeIntent)'),
+    );
+
+    expect(pixModalSource).toContain("const isWaitingPix = activeStatus === 'WAITING_PAYMENT';");
+    expect(waitingActionsSource).toContain('Enviar no WhatsApp');
+    expect(['PAID', 'SUPERSEDED', 'CANCELED', 'FAILED', 'EXPIRED']).not.toContain(
+      'WAITING_PAYMENT',
+    );
+    expect(waitingActionsSource).not.toContain("activeStatus === 'PAID'");
+    expect(waitingActionsSource).not.toContain("activeStatus === 'SUPERSEDED'");
+    expect(waitingActionsSource).not.toContain("activeStatus === 'CANCELED'");
+    expect(waitingActionsSource).not.toContain("activeStatus === 'FAILED'");
+    expect(waitingActionsSource).not.toContain("activeStatus === 'EXPIRED'");
+  });
+
+  it('keeps only the PIX copy-field copy CTA in WAITING_PAYMENT', () => {
+    expect(pixModalSource).toContain('PIX copia e cola');
+    expect(pixModalSource).toContain('className="pix-copy-row"');
+    expect(pixModalSource).toContain("notice === 'PIX copiado.' ? 'Copiado' : 'Copiar'");
+    expect(pixModalSource).not.toContain(
+      'disabled={!activeIntent.pixCopyPaste}\n                  type="button"\n                  onClick={() => void copyPix()}',
+    );
+    expect(pixModalSource).toContain('className="pix-waiting-actions"');
+    expect(pixModalSource).toContain('(intent) => pixSyncNotice(intent)');
   });
 
   it('keeps PAID focused on confirmation and hides creation/recovery actions', () => {

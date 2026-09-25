@@ -31,6 +31,7 @@ import {
   replaceReceivablePix,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
+  sendPaymentIntentWhatsApp,
   testPaymentProviderCredential,
   updateMessageTemplate,
 } from './crm-api';
@@ -166,6 +167,90 @@ describe('CRM UI formatters', () => {
       name: 'ApiError',
       message: 'Credencial do provider invalida ou nao autorizada.',
       status: 502,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('posts the PIX WhatsApp send action directly to the payment intent endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, destinationMasked: '5544*****9999' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sendPaymentIntentWhatsApp('intent-1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/payment-intents/intent-1/send-whatsapp'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('keeps the session when PIX WhatsApp send returns a provider auth boundary error', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ message: 'Falha de autenticacao com provider WhatsApp.' }), {
+          status: 503,
+        }),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(sendPaymentIntentWhatsApp('intent-1')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Falha de autenticacao com provider WhatsApp.',
+      status: 503,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the PIX WhatsApp timeout guidance without retrying or logging out', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            message: 'Nao foi possivel confirmar o envio. Verifique antes de tentar novamente.',
+          }),
+          { status: 503 },
+        ),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(sendPaymentIntentWhatsApp('intent-1')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: 'Nao foi possivel confirmar o envio. Verifique antes de tentar novamente.',
+      status: 503,
+    } satisfies Partial<ApiError>);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the PIX WhatsApp 429 guidance without retrying or logging out', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            message:
+              'Limite temporario de envios do WhatsApp atingido. Aguarde antes de tentar novamente.',
+          }),
+          { status: 503 },
+        ),
+      ),
+    );
+    vi.stubGlobal('window', { location: { assign, pathname: '/dashboard' } });
+
+    await expect(sendPaymentIntentWhatsApp('intent-1')).rejects.toMatchObject({
+      name: 'ApiError',
+      message:
+        'Limite temporario de envios do WhatsApp atingido. Aguarde antes de tentar novamente.',
+      status: 503,
     } satisfies Partial<ApiError>);
     expect(assign).not.toHaveBeenCalled();
   });

@@ -11492,7 +11492,6 @@ function PixReceivableModal({
   const [showReplacement, setShowReplacement] = useState(false);
   const [showReplacementRecovery, setShowReplacementRecovery] = useState(false);
   const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
-  const [whatsAppConfirmOpen, setWhatsAppConfirmOpen] = useState(false);
   const [whatsAppSending, setWhatsAppSending] = useState(false);
   const [reconcileProvider, setReconcileProvider] =
     useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
@@ -11607,7 +11606,6 @@ function PixReceivableModal({
         throw new Error(result.errorMessage ?? 'Não foi possível enviar o PIX pelo WhatsApp.');
       }
 
-      setWhatsAppConfirmOpen(false);
       setNotice('PIX enviado pelo WhatsApp.');
       await loadIntents(activeIntent);
     } catch (err) {
@@ -11983,59 +11981,6 @@ function PixReceivableModal({
               ) : null}
             </div>
 
-            {isWaitingPix ? (
-              <div className="pix-waiting-actions">
-                <button
-                  className="secondary-button"
-                  disabled={!activeIntent.pixCopyPaste}
-                  type="button"
-                  onClick={() => void copyPix()}
-                >
-                  <Copy aria-hidden="true" size={16} />
-                  {notice === 'PIX copiado.' ? 'Copiado' : 'Copiar'}
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={busy}
-                  type="button"
-                  onClick={() =>
-                    void runAction(
-                      () => syncPaymentIntent(activeIntent.id),
-                      (intent) => pixSyncNotice(intent),
-                    )
-                  }
-                >
-                  <RefreshCcw aria-hidden="true" size={16} />
-                  {busy ? 'Sincronizando...' : 'Sincronizar'}
-                </button>
-                <button
-                  className="primary-button pix-whatsapp-send-button"
-                  disabled={busy || !canSendPixWhatsApp || Boolean(whatsAppUnavailableReason)}
-                  title={whatsAppUnavailableReason || undefined}
-                  type="button"
-                  onClick={() => setWhatsAppConfirmOpen(true)}
-                >
-                  <MessageCircle aria-hidden="true" size={16} />
-                  Enviar no WhatsApp
-                </button>
-                {activeIntent.provider === 'MOCK' ? (
-                  <button
-                    className="primary-button"
-                    disabled={busy || activeIntent.status === 'PAID'}
-                    type="button"
-                    onClick={() =>
-                      void runAction(
-                        () => confirmMockPaymentIntent(activeIntent.id),
-                        'Pagamento PIX mock confirmado.',
-                      )
-                    }
-                  >
-                    <ShieldCheck aria-hidden="true" size={16} />
-                    Confirmar mock
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
             {isWaitingPix && whatsAppUnavailableReason ? (
               <div className="notice warning">{whatsAppUnavailableReason}</div>
             ) : null}
@@ -12091,68 +12036,60 @@ function PixReceivableModal({
               </div>
             ) : null}
 
+            {isWaitingPix ? (
+              <div className="pix-waiting-actions">
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  type="button"
+                  onClick={() =>
+                    void runAction(
+                      () => syncPaymentIntent(activeIntent.id),
+                      (intent) => pixSyncNotice(intent),
+                    )
+                  }
+                >
+                  <RefreshCcw aria-hidden="true" size={16} />
+                  {busy ? 'Sincronizando...' : 'Sincronizar'}
+                </button>
+                <button
+                  className="primary-button pix-whatsapp-send-button"
+                  disabled={
+                    busy ||
+                    whatsAppSending ||
+                    !canSendPixWhatsApp ||
+                    Boolean(whatsAppUnavailableReason)
+                  }
+                  title={whatsAppUnavailableReason || undefined}
+                  type="button"
+                  onClick={() => void sendPixWhatsApp()}
+                >
+                  <MessageCircle aria-hidden="true" size={16} />
+                  {whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}
+                </button>
+                {activeIntent.provider === 'MOCK' ? (
+                  <button
+                    className="primary-button"
+                    disabled={busy || activeIntent.status === 'PAID'}
+                    type="button"
+                    onClick={() =>
+                      void runAction(
+                        () => confirmMockPaymentIntent(activeIntent.id),
+                        'Pagamento PIX mock confirmado.',
+                      )
+                    }
+                  >
+                    <ShieldCheck aria-hidden="true" size={16} />
+                    Confirmar mock
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
             {isPixTemporallyExpired(activeIntent) ? (
               <div className="notice warning">Prazo informado para este PIX expirou.</div>
             ) : null}
           </div>
-        ) : null}
-
-        {whatsAppConfirmOpen && activeIntent ? (
-          <section className="pix-panel pix-whatsapp-confirm-panel">
-            <div className="pix-status-row">
-              <strong>Enviar PIX pelo WhatsApp</strong>
-              <span>{paymentIntentDisplayTransactionId(activeIntent)}</span>
-            </div>
-            <dl className="detail-list compact-detail-list">
-              <div>
-                <dt>Cliente</dt>
-                <dd>{receivable.client?.name ?? '-'}</dd>
-              </div>
-              <div>
-                <dt>WhatsApp</dt>
-                <dd>
-                  {whatsAppConnection?.phone
-                    ? normalizeWhatsAppDisplayPhone(whatsAppConnection.phone)
-                    : 'Telefone cadastrado no cliente'}
-                </dd>
-              </div>
-              <div>
-                <dt>Valor</dt>
-                <dd>{formatCurrency(activeIntent.amount ?? receivable.amount)}</dd>
-              </div>
-              <div>
-                <dt>Transação</dt>
-                <dd>{paymentIntentDisplayTransactionId(activeIntent)}</dd>
-              </div>
-            </dl>
-            <div className="preview-box">
-              <span>Mensagem</span>
-              <strong>
-                {formatCurrency(activeIntent.amount ?? receivable.amount)} • Copiar Chave PIX
-              </strong>
-            </div>
-            <div className="button-row">
-              <button
-                className="secondary-button"
-                disabled={whatsAppSending}
-                type="button"
-                onClick={() => setWhatsAppConfirmOpen(false)}
-              >
-                Cancelar
-              </button>
-              <button
-                className="primary-button"
-                disabled={
-                  whatsAppSending || !canSendPixWhatsApp || Boolean(whatsAppUnavailableReason)
-                }
-                type="button"
-                onClick={() => void sendPixWhatsApp()}
-              >
-                <Send aria-hidden="true" size={16} />
-                {whatsAppSending ? 'Enviando...' : 'Enviar PIX'}
-              </button>
-            </div>
-          </section>
         ) : null}
 
         {intents.length ? (

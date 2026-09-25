@@ -190,6 +190,14 @@ describe('PIX reconciliation UI contract', () => {
     );
   });
 
+  it('keeps WhatsApp send visible for waiting PIX and points missing configuration to WhatsApp', () => {
+    expect(pixModalSource).toContain('sendPaymentIntentWhatsApp(activeIntent.id)');
+    expect(pixModalSource).toContain('Enviar no WhatsApp');
+    expect(pixModalSource).toContain('setWhatsAppConfirmOpen(true)');
+    expect(pixModalSource).toContain('Configure a conexão em WhatsApp.');
+    expect(pixModalSource).not.toContain('Configurações > Integrações');
+  });
+
   it('keeps PAID focused on confirmation and hides creation/recovery actions', () => {
     expect(pixModalSource).toContain(
       "const isPaidPix = activeStatus === 'PAID' || receivable.status === 'PAGO';",

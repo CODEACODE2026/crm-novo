@@ -10,6 +10,10 @@ const settingsSource = dashboardSource.slice(
   dashboardSource.indexOf('function SettingsView'),
   dashboardSource.indexOf('function ClientEventIcon'),
 );
+const settingsViewSource = dashboardSource.slice(
+  dashboardSource.indexOf('function SettingsView'),
+  dashboardSource.indexOf('function PaymentProviderCard'),
+);
 const paymentCardSource = dashboardSource.slice(
   dashboardSource.indexOf('function PaymentProviderCard'),
   dashboardSource.indexOf('function paymentProviderLabel'),
@@ -69,6 +73,18 @@ describe('payment integrations workspace polish', () => {
     expect(paymentCardSource).toContain('await guardedAction(onTest, setTesting);');
     expect(settingsSource).toContain('const loadingRef = useRef(false);');
     expect(settingsSource).toContain('const actionRef = useRef(false);');
+  });
+
+  it('keeps WhatsApp administration out of Settings and links to the WhatsApp area', () => {
+    expect(settingsViewSource).toContain('<h3>WhatsApp</h3>');
+    expect(settingsViewSource).toContain('Integração gerenciada na área WhatsApp.');
+    expect(settingsViewSource).toContain('Abrir WhatsApp');
+    expect(settingsViewSource).not.toContain('Token da instância');
+    expect(settingsViewSource).not.toContain('Definida no ambiente da API');
+    expect(settingsViewSource).not.toContain('Editar conexão');
+    expect(settingsViewSource).not.toContain('Configurar conexão');
+    expect(settingsViewSource).not.toContain('refreshWhatsAppStatus');
+    expect(settingsViewSource).not.toContain('getWhatsAppConnection');
   });
 
   it('keeps action semantics in the global ActionMenu', () => {

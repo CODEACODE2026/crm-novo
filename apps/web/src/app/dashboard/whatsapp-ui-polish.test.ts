@@ -76,6 +76,15 @@ describe('WhatsApp UI polish presentation source', () => {
     expect(stylesSource).not.toContain('.technical-actions-menu');
   });
 
+  it('remains the official place to administer the Kirago connection', () => {
+    expect(whatsappViewSource).toContain('Conectar WhatsApp');
+    expect(whatsappViewSource).toContain('Atualizar conexão');
+    expect(whatsappViewSource).toContain('Desconectar');
+    expect(whatsappViewSource).toContain('Webhook WhatsApp');
+    expect(whatsappViewSource).toContain('Diagnóstico WhatsApp');
+    expect(whatsappViewSource).toContain('Últimos envios');
+  });
+
   it('renders recent dispatch cards with friendly labels, badges, and clamped message previews', () => {
     expect(whatsappViewSource).toContain('messages.map((message) =>');
     expect(whatsappViewSource).toContain("message.client?.name ?? 'Cliente não vinculado'");

@@ -2782,7 +2782,6 @@ function reportSummaryValue(value: unknown) {
 
 function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
-  const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -2797,12 +2796,7 @@ function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
     setError('');
 
     try {
-      const [nextCredentials, nextWhatsAppConnection] = await Promise.all([
-        listPaymentProviderCredentials(),
-        getWhatsAppConnection(),
-      ]);
-      setCredentials(nextCredentials);
-      setWhatsAppConnection(nextWhatsAppConnection);
+      setCredentials(await listPaymentProviderCredentials());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar integrações.');
     } finally {
@@ -2911,87 +2905,15 @@ function SettingsView({ onOpenWhatsApp }: { onOpenWhatsApp: () => void }) {
           <article className="payment-provider-card whatsapp-integration-card">
             <header className="payment-provider-card-header">
               <div className="payment-provider-title">
-                <h3>Kirago</h3>
-                <p>Envio de mensagens via WhatsApp</p>
-              </div>
-              <div className="payment-provider-card-actions">
-                <span
-                  className={`integration-status ${
-                    whatsAppConnection ? 'configurado' : 'nao_configurado'
-                  }`}
-                >
-                  {whatsAppConnection ? 'Configurado' : 'Não configurado'}
-                </span>
-                <ActionMenu
-                  items={[
-                    {
-                      icon: whatsAppConnection ? Pencil : ShieldCheck,
-                      label: whatsAppConnection ? 'Editar conexão' : 'Configurar conexão',
-                      onSelect: onOpenWhatsApp,
-                    },
-                    {
-                      disabled: !whatsAppConnection || loading,
-                      icon: ShieldCheck,
-                      label: 'Testar conexão',
-                      onSelect: () =>
-                        void runAction(
-                          () => refreshWhatsAppStatus(),
-                          'Status da conexão Kirago atualizado.',
-                        ),
-                    },
-                  ]}
-                />
+                <h3>WhatsApp</h3>
+                <p>Integração gerenciada na área WhatsApp.</p>
               </div>
             </header>
 
-            <dl className="detail-list integration-details">
-              <div>
-                <dt>Status</dt>
-                <dd>{whatsAppConnection ? 'Configurado' : 'Não configurado'}</dd>
-              </div>
-              <div>
-                <dt>Conexão</dt>
-                <dd>
-                  {whatsAppConnection?.status === 'CONNECTED' ? 'Configurada' : 'Não configurada'}
-                </dd>
-              </div>
-              <div>
-                <dt>URL</dt>
-                <dd>Definida no ambiente da API</dd>
-              </div>
-              <div>
-                <dt>Token da instância</dt>
-                <dd>{whatsAppConnection ? '••••••••••••' : 'Criado ao configurar a conexão'}</dd>
-              </div>
-              {whatsAppConnection?.lastStatusAt ? (
-                <div>
-                  <dt>Última validação</dt>
-                  <dd>{formatDateTime(whatsAppConnection.lastStatusAt)}</dd>
-                </div>
-              ) : null}
-            </dl>
-
             <div className="button-row payment-provider-primary-actions">
-              <button
-                className={whatsAppConnection ? 'secondary-button' : 'primary-button'}
-                type="button"
-                onClick={onOpenWhatsApp}
-              >
+              <button className="primary-button" type="button" onClick={onOpenWhatsApp}>
                 <MessageCircle aria-hidden="true" size={16} />
-                {whatsAppConnection ? 'Editar conexão' : 'Configurar conexão'}
-              </button>
-              <button
-                className="secondary-button"
-                disabled={!whatsAppConnection || loading}
-                type="button"
-                onClick={() =>
-                  void runAction(
-                    () => refreshWhatsAppStatus(),
-                    'Status da conexão Kirago atualizado.',
-                  )
-                }
-              >
-                Testar conexão
+                Abrir WhatsApp
               </button>
             </div>
           </article>
@@ -11887,7 +11809,7 @@ function PixReceivableModal({
     isWaitingPix && receivable.status === 'PENDENTE' && activeIntent?.pixCopyPaste,
   );
   const whatsAppUnavailableReason = !whatsAppConnection
-    ? 'Configure a integração Kirago em Configurações > Integrações.'
+    ? 'Configure a conexão em WhatsApp.'
     : whatsAppConnection.status !== 'CONNECTED'
       ? 'Conexão Kirago não está operacional.'
       : '';

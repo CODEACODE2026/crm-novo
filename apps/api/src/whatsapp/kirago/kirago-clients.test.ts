@@ -86,7 +86,7 @@ describe('Kirago clients', () => {
 
     await client.sendButtons('instance-token', {
       phone: '5544999999999',
-      title: 'Pagamento via PIX',
+      title: 'PIX',
       body: 'Mensagem',
       buttons: [
         {
@@ -104,7 +104,7 @@ describe('Kirago clients', () => {
       headers: { Authorization: 'Bearer instance-token' },
       body: {
         phone: '5544999999999',
-        title: 'Pagamento via PIX',
+        title: 'PIX',
         body: 'Mensagem',
         buttons: [
           {

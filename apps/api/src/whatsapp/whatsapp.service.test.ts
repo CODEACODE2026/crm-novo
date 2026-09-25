@@ -693,7 +693,7 @@ describe('WhatsAppService', () => {
 
     expect(provider.sendButtons).toHaveBeenCalledWith('instance-token', {
       phone: '5544999999999',
-      title: 'Pagamento via PIX',
+      title: 'PIX',
       body: sendButtonsPayload.body,
       buttons: [
         {
@@ -706,6 +706,19 @@ describe('WhatsAppService', () => {
       ],
     });
     expect(sendButtonsPayload.body).toMatch(/Valor: R\$\s*30,00/);
+    expect(sendButtonsPayload.body).toContain(
+      'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
+    );
+    expect(sendButtonsPayload.body).toContain('Caso a chave esteja expirada, solicite uma nova.');
+    expect(sendButtonsPayload.body).not.toContain('Cliente Teste');
+    expect(sendButtonsPayload.body).not.toContain('Pagamento via PIX');
+    expect(sendButtonsPayload.body).not.toContain('Gatebridge');
+    expect(sendButtonsPayload.body).not.toContain('FastFlow');
+    expect(sendButtonsPayload.body).not.toContain('FastPay');
+    expect(sendButtonsPayload.body).not.toContain('24 horas');
+    expect(sendButtonsPayload.body).not.toContain('2 horas');
+    expect(sendButtonsPayload.body).not.toContain('parceiro responsavel');
+    expect(sendButtonsPayload.body).not.toContain('nome do recebedor');
     expect(result).toMatchObject({
       success: true,
       messageDispatchId: dispatch().id,

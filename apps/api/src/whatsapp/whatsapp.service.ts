@@ -388,7 +388,6 @@ export class WhatsAppService {
 
     const phone = normalizeBrazilPhone(client.phoneNormalized);
     const template = buildPixWhatsAppTemplate({
-      clientName: client.name,
       amount: intent.amount,
       pixCopyPaste: intent.pixCopyPaste ?? '',
     });

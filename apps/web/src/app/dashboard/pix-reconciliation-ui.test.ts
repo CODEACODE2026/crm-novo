@@ -195,6 +195,10 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('Enviar no WhatsApp');
     expect(pixModalSource).toContain('setWhatsAppConfirmOpen(true)');
     expect(pixModalSource).toContain('Configure a conexão em WhatsApp.');
+    expect(pixModalSource).toContain(
+      '{formatCurrency(activeIntent.amount ?? receivable.amount)} • Copiar Chave PIX',
+    );
+    expect(pixModalSource).not.toContain('Pagamento via PIX |');
     expect(pixModalSource).not.toContain('Configurações > Integrações');
   });
 

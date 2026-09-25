@@ -12128,8 +12128,7 @@ function PixReceivableModal({
             <div className="preview-box">
               <span>Mensagem</span>
               <strong>
-                Pagamento via PIX | {formatCurrency(activeIntent.amount ?? receivable.amount)} |
-                botão Copiar Chave PIX
+                {formatCurrency(activeIntent.amount ?? receivable.amount)} • Copiar Chave PIX
               </strong>
             </div>
             <div className="button-row">

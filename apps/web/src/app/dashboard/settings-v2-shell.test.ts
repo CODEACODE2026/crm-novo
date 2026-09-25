@@ -18,10 +18,19 @@ const settingsPaymentsSource = dashboardSource.slice(
   dashboardSource.indexOf('function SettingsPaymentsPanel'),
   dashboardSource.indexOf('function SettingsPlaceholderPanel'),
 );
+const settingsBillingSource = dashboardSource.slice(
+  dashboardSource.indexOf('function SettingsBillingAutomationPanel'),
+  dashboardSource.indexOf('function SettingsPlaceholderPanel'),
+);
+const automationsSource = dashboardSource.slice(
+  dashboardSource.indexOf('function AutomationsView'),
+  dashboardSource.indexOf('function RecoveryCampaignDetailModal'),
+);
 
 describe('Settings V2 SET1 shell contracts', () => {
   it('opens Settings on Visão geral and declares only SET1 internal sections', () => {
-    expect(settingsViewSource).toContain("useState<SettingsSection>('overview')");
+    expect(dashboardSource).toContain("useState<SettingsSection>('overview')");
+    expect(settingsViewSource).toContain('useState<SettingsSection>(initialSection)');
     expect(settingsSource).toContain("id: 'overview'");
     expect(settingsSource).toContain("label: 'Visão geral'");
     expect(settingsSource).toContain("label: 'Financeiro'");
@@ -110,9 +119,68 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsViewSource).toContain("activeSection === 'whatsapp'");
     expect(settingsViewSource).toContain('actionLabel="Abrir WhatsApp"');
     expect(settingsViewSource).toContain("activeSection === 'billing'");
-    expect(settingsViewSource).toContain('actionLabel="Abrir Automações"');
     expect(settingsViewSource).not.toContain('connectWhatsApp(');
-    expect(settingsViewSource).not.toContain('updateBillingAutomationSettings(');
+  });
+
+  it('centralizes BillingAutomationSettings in Configurações > Cobrança e automações', () => {
+    expect(settingsViewSource).toContain('const [billingSettings, setBillingSettings]');
+    expect(settingsViewSource).toContain(
+      'applyBillingSettings(await getBillingAutomationSettings())',
+    );
+    expect(settingsViewSource).toContain("activeSection === 'billing' && !billingSettings");
+    expect(settingsViewSource).toContain('await updateBillingAutomationSettings({');
+    expect(settingsViewSource).toContain('enabled: billingEnabled');
+    expect(settingsViewSource).toContain('sendTime: billingSendTime');
+    expect(settingsViewSource).toContain('sendIntervalSeconds: parsedBillingInterval');
+    expect(settingsViewSource).toContain('timezone: billingSettings.timezone');
+    expect(settingsViewSource).not.toContain('reconcileBilling()');
+    expect(settingsBillingSource).toContain('function SettingsBillingAutomationPanel');
+    expect(settingsBillingSource).toContain('Cobrança automática');
+    expect(settingsBillingSource).toContain('Ativar cobrança automática');
+    expect(settingsBillingSource).toContain('Horário de envio');
+    expect(settingsBillingSource).toContain('Intervalo entre mensagens');
+    expect(settingsBillingSource).toContain(
+      'Tempo de espera entre mensagens programadas para o mesmo lote',
+    );
+    expect(settingsBillingSource).toContain('min={3}');
+    expect(settingsBillingSource).toContain('max={300}');
+    expect(settingsBillingSource).toContain('Fuso horário');
+    expect(settingsBillingSource).toContain("settings?.timezone ?? 'Indisponível'");
+    expect(settingsBillingSource).toContain("value={settings ? sendTime : ''}");
+    expect(settingsBillingSource).toContain("value={settings ? sendIntervalSeconds : ''}");
+    expect(settingsBillingSource).toContain('Salvar configurações');
+    expect(settingsBillingSource).toContain(
+      'Os envios dependem de uma conexão WhatsApp operacional.',
+    );
+    expect(settingsBillingSource).not.toContain('Recuperação por inadimplência');
+    expect(settingsBillingSource).not.toContain('Templates');
+  });
+
+  it('saves billing settings only from the CTA and protects double submit', () => {
+    expect(settingsViewSource).toContain('const billingSaveRef = useRef(false);');
+    expect(settingsViewSource).toContain('if (!billingSettings || billingSaveRef.current');
+    expect(settingsViewSource).toContain('billingSaveRef.current = true;');
+    expect(settingsViewSource).toContain('billingSaveRef.current = false;');
+    expect(settingsViewSource).toContain("setNotice('Configurações salvas.')");
+    expect(settingsBillingSource).toContain(
+      'disabled={!dirty || !intervalValid || !sendTime || !settings}',
+    );
+    expect(settingsBillingSource).toContain('onClick={() => void onSave()}');
+    expect(settingsBillingSource).not.toContain('onBlur');
+  });
+
+  it('keeps recovery, templates, and operation in Automations while linking to Settings', () => {
+    expect(automationsSource).toContain('Configurar automação');
+    expect(automationsSource).toContain('onOpenBillingSettings');
+    expect(automationsSource).toContain('automation-billing-operation-grid');
+    expect(automationsSource).not.toContain('saveBillingSettings');
+    expect(automationsSource).not.toContain('updateBillingAutomationSettings');
+    expect(automationsSource).toContain('title="Mensagens da automação"');
+    expect(automationsSource).toContain('title="Recuperação por inadimplência"');
+    expect(automationsSource).toContain(
+      'void saveRecoverySettings({ sendTime: recoverySendTime })',
+    );
+    expect(automationsSource).toContain('title="Campanhas de recuperação"');
   });
 
   it('centralizes financial category administration in Settings > Financeiro', () => {

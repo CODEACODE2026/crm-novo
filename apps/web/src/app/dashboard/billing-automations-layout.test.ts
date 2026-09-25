@@ -59,19 +59,26 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain("if (status === 'IGNORED') return 'muted'");
   });
 
-  it('renders automation billing settings, throttle values, timezone, and next dispatches', () => {
+  it('keeps billing automation operational while linking configuration to Settings', () => {
     expect(dashboardSource).toContain('Cobrança automática');
     expect(dashboardSource).toContain(
-      'Configurações gerais da rotina de envio de lembretes de cobrança.',
+      'Acompanhe a operação da rotina de envio de lembretes de cobrança.',
     );
-    expect(dashboardSource).toContain('Ativar automação');
-    expect(dashboardSource).toContain('Desativar automação');
-    expect(dashboardSource).toContain('sendIntervalSeconds');
-    expect(dashboardSource).toContain('America/Sao_Paulo');
-    expect(dashboardSource).toContain('1 comunicação por execução');
+    expect(dashboardSource).toContain('Configurar automação');
+    expect(dashboardSource).toContain('automation-billing-operation-grid');
+    expect(dashboardSource).toContain('Envios agendados');
+    expect(dashboardSource).toContain('Enviadas hoje');
+    expect(dashboardSource).toContain('Falhas hoje');
+    expect(dashboardSource).toContain('1 comunicação');
+    expect(dashboardSource).toContain('por execução automática');
+    expect(dashboardSource).toContain('Os envios dependem de uma conexão WhatsApp operacional.');
     expect(dashboardSource).toContain('Próximos envios');
     expect(dashboardSource).toContain('automation-schedule-table');
     expect(dashboardSource).toContain('setSelectedAutomationDispatch(dispatch)');
+    expect(dashboardSource).not.toContain('void saveBillingSettings({ sendTime })');
+    expect(dashboardSource).not.toContain(
+      'void saveBillingSettings({ sendIntervalSeconds: parsed })',
+    );
   });
 
   it('splits automations into local tabs and renders only the active panel', () => {
@@ -100,7 +107,7 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('recovery-campaign-table');
     expect(dashboardSource).toContain('shortUuid(receivableId)');
     expect(dashboardSource).toContain('title={receivableId ?? undefined}');
-    expect(stylesSource).toContain('.automation-config-grid');
+    expect(stylesSource).toContain('.automation-billing-operation-grid');
     expect(stylesSource).toContain('.technical-id');
   });
 

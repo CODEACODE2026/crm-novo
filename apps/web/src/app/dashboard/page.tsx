@@ -389,6 +389,7 @@ export default function DashboardPage() {
   const [clientFormOpen, setClientFormOpen] = useState(false);
   const [planFormOpen, setPlanFormOpen] = useState(false);
   const [financeInitialTab, setFinanceInitialTab] = useState<FinanceTab>('summary');
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('overview');
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
   const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
     null,
@@ -642,7 +643,12 @@ export default function DashboardPage() {
       subtitle={viewSubtitle(view)}
       title={viewTitle(view)}
       userName={user?.name}
-      onNavigate={setView}
+      onNavigate={(nextView) => {
+        if (nextView === 'settings') {
+          setSettingsInitialSection('overview');
+        }
+        setView(nextView);
+      }}
       onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
     >
       {error ? <div className="notice danger">{error}</div> : null}
@@ -792,11 +798,18 @@ export default function DashboardPage() {
       ) : null}
       {view === 'whatsapp' ? <WhatsAppView /> : null}
       {view === 'billing' ? <BillingView /> : null}
-      {view === 'automations' ? <AutomationsView /> : null}
+      {view === 'automations' ? (
+        <AutomationsView
+          onOpenBillingSettings={() => {
+            setSettingsInitialSection('billing');
+            setView('settings');
+          }}
+        />
+      ) : null}
       {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
       {view === 'settings' ? (
         <SettingsView
-          onOpenAutomations={() => setView('automations')}
+          initialSection={settingsInitialSection}
           onOpenFinance={() => setView('finance')}
           onOpenWhatsApp={() => setView('whatsapp')}
         />
@@ -2835,26 +2848,38 @@ const settingsSections = [
 }>;
 
 function SettingsView({
-  onOpenAutomations,
+  initialSection,
   onOpenFinance,
   onOpenWhatsApp,
 }: {
-  onOpenAutomations: () => void;
+  initialSection: SettingsSection;
   onOpenFinance: () => void;
   onOpenWhatsApp: () => void;
 }) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>('overview');
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
+  const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
+  const [billingEnabled, setBillingEnabled] = useState(false);
+  const [billingSendTime, setBillingSendTime] = useState('09:00');
+  const [billingSendIntervalSeconds, setBillingSendIntervalSeconds] = useState('8');
   const [loading, setLoading] = useState(false);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingSaving, setBillingSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [healthError, setHealthError] = useState('');
+  const [billingError, setBillingError] = useState('');
   const loadingRef = useRef(false);
   const actionRef = useRef(false);
+  const billingSaveRef = useRef(false);
+
+  useEffect(() => {
+    setActiveSection(initialSection);
+  }, [initialSection]);
 
   const loadCredentials = useCallback(async () => {
     if (loadingRef.current) return;
@@ -2894,6 +2919,34 @@ function SettingsView({
     void loadCategories();
   }, [loadCategories]);
 
+  const applyBillingSettings = useCallback((settings: BillingAutomationSettings) => {
+    setBillingSettings(settings);
+    setBillingEnabled(settings.enabled);
+    setBillingSendTime(settings.sendTime);
+    setBillingSendIntervalSeconds(String(settings.sendIntervalSeconds));
+  }, []);
+
+  const loadBillingSettings = useCallback(async () => {
+    setBillingLoading(true);
+    setBillingError('');
+
+    try {
+      applyBillingSettings(await getBillingAutomationSettings());
+    } catch (err) {
+      setBillingError(
+        err instanceof Error ? err.message : 'Não foi possível carregar cobrança automática.',
+      );
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [applyBillingSettings]);
+
+  useEffect(() => {
+    if (activeSection === 'billing' && !billingSettings && !billingLoading) {
+      void loadBillingSettings();
+    }
+  }, [activeSection, billingLoading, billingSettings, loadBillingSettings]);
+
   const loadHealth = useCallback(async () => {
     setHealthLoading(true);
     setHealthError('');
@@ -2930,6 +2983,47 @@ function SettingsView({
       return false;
     } finally {
       actionRef.current = false;
+    }
+  }
+
+  const parsedBillingInterval = Number(billingSendIntervalSeconds);
+  const billingIntervalValid =
+    Number.isInteger(parsedBillingInterval) &&
+    parsedBillingInterval >= 3 &&
+    parsedBillingInterval <= 300;
+  const billingDirty = Boolean(
+    billingSettings &&
+    (billingEnabled !== billingSettings.enabled ||
+      billingSendTime !== billingSettings.sendTime ||
+      parsedBillingInterval !== billingSettings.sendIntervalSeconds),
+  );
+
+  async function saveBillingAutomationSettings() {
+    if (!billingSettings || billingSaveRef.current || !billingIntervalValid || !billingSendTime) {
+      return;
+    }
+
+    billingSaveRef.current = true;
+    setBillingSaving(true);
+    setBillingError('');
+    setNotice('');
+
+    try {
+      const next = await updateBillingAutomationSettings({
+        enabled: billingEnabled,
+        sendTime: billingSendTime,
+        sendIntervalSeconds: parsedBillingInterval,
+        timezone: billingSettings.timezone,
+      });
+      applyBillingSettings(next);
+      setNotice('Configurações salvas.');
+    } catch (err) {
+      setBillingError(
+        err instanceof Error ? err.message : 'Não foi possível salvar cobrança automática.',
+      );
+    } finally {
+      setBillingSaving(false);
+      billingSaveRef.current = false;
     }
   }
 
@@ -3059,12 +3153,21 @@ function SettingsView({
           ) : null}
 
           {activeSection === 'billing' ? (
-            <SettingsPlaceholderPanel
-              actionLabel="Abrir Automações"
-              description="Gerencie regras de cobrança, recuperação e mensagens automáticas."
-              icon={Workflow}
-              title="Cobrança e automações"
-              onAction={onOpenAutomations}
+            <SettingsBillingAutomationPanel
+              dirty={billingDirty}
+              enabled={billingEnabled}
+              error={billingError}
+              intervalValid={billingIntervalValid}
+              loading={billingLoading}
+              saving={billingSaving}
+              sendIntervalSeconds={billingSendIntervalSeconds}
+              sendTime={billingSendTime}
+              settings={billingSettings}
+              onEnabledChange={setBillingEnabled}
+              onRefresh={loadBillingSettings}
+              onSave={saveBillingAutomationSettings}
+              onSendIntervalSecondsChange={setBillingSendIntervalSeconds}
+              onSendTimeChange={setBillingSendTime}
             />
           ) : null}
 
@@ -3308,6 +3411,138 @@ function SettingsFinancePanel({
         onDelete={onDelete}
         onUpdate={onUpdate}
       />
+    </div>
+  );
+}
+
+function SettingsBillingAutomationPanel({
+  dirty,
+  enabled,
+  error,
+  intervalValid,
+  loading,
+  saving,
+  sendIntervalSeconds,
+  sendTime,
+  settings,
+  onEnabledChange,
+  onRefresh,
+  onSave,
+  onSendIntervalSecondsChange,
+  onSendTimeChange,
+}: {
+  dirty: boolean;
+  enabled: boolean;
+  error: string;
+  intervalValid: boolean;
+  loading: boolean;
+  saving: boolean;
+  sendIntervalSeconds: string;
+  sendTime: string;
+  settings: BillingAutomationSettings | null;
+  onEnabledChange: (value: boolean) => void;
+  onRefresh: () => Promise<void>;
+  onSave: () => Promise<void>;
+  onSendIntervalSecondsChange: (value: string) => void;
+  onSendTimeChange: (value: string) => void;
+}) {
+  return (
+    <div className="settings-v2-panel settings-billing-panel">
+      {error ? <div className="notice danger">{error}</div> : null}
+      <div className="settings-v2-toolbar">
+        <Button
+          icon={RefreshCcw}
+          loading={loading}
+          size="sm"
+          variant="secondary"
+          onClick={() => void onRefresh()}
+        >
+          Atualizar
+        </Button>
+      </div>
+
+      <section className="settings-billing-section" aria-labelledby="settings-billing-title">
+        <header className="settings-billing-header">
+          <div>
+            <span className="metric-label">Cobrança e automações</span>
+            <h3 id="settings-billing-title">Cobrança automática</h3>
+            <p>Configure quando e como as cobranças automáticas serão processadas.</p>
+          </div>
+          <span className={`finance-status-pill tone-${enabled ? 'success' : 'muted'}`}>
+            {!settings ? 'Indisponível' : enabled ? 'Ativada' : 'Desativada'}
+          </span>
+        </header>
+
+        <label className="toggle-field settings-billing-toggle">
+          <input
+            checked={enabled}
+            disabled={loading || saving || !settings}
+            type="checkbox"
+            onChange={(event) => onEnabledChange(event.target.checked)}
+          />
+          <span>
+            Ativar cobrança automática
+            <small>Quando ativada, o CRM agenda cobranças elegíveis automaticamente.</small>
+          </span>
+        </label>
+
+        <div className="settings-billing-form-grid">
+          <label className="field">
+            <span>Horário de envio</span>
+            <input
+              disabled={loading || saving || !settings}
+              required
+              type="time"
+              value={settings ? sendTime : ''}
+              onChange={(event) => onSendTimeChange(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Intervalo entre mensagens</span>
+            <input
+              aria-describedby="billing-send-interval-help"
+              disabled={loading || saving || !settings}
+              max={300}
+              min={3}
+              required
+              step={1}
+              type="number"
+              value={settings ? sendIntervalSeconds : ''}
+              onChange={(event) => onSendIntervalSecondsChange(event.target.value)}
+            />
+            <small id="billing-send-interval-help">
+              Tempo de espera entre mensagens programadas para o mesmo lote, em segundos.
+            </small>
+            {!intervalValid ? (
+              <small className="error-message">Use um valor entre 3 e 300.</small>
+            ) : null}
+          </label>
+
+          <div className="field settings-billing-readonly-field">
+            <span>Fuso horário</span>
+            <strong>{settings?.timezone ?? 'Indisponível'}</strong>
+            <small>Usado para calcular horário e dia das cobranças.</small>
+          </div>
+        </div>
+
+        <div className="settings-billing-note">
+          <Info aria-hidden="true" size={16} />
+          <span>Os envios dependem de uma conexão WhatsApp operacional.</span>
+        </div>
+
+        <footer className="settings-billing-actions">
+          <Button
+            disabled={!dirty || !intervalValid || !sendTime || !settings}
+            icon={CircleCheck}
+            loading={saving}
+            variant="primary"
+            onClick={() => void onSave()}
+          >
+            Salvar configurações
+          </Button>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -6690,12 +6925,10 @@ function RecoveryAutomationPreviewModal({
   );
 }
 
-function AutomationsView() {
+function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () => void }) {
   const [automationTab, setAutomationTab] = useState<AutomationTab>('billing');
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
-  const [sendTime, setSendTime] = useState('09:00');
-  const [sendIntervalSeconds, setSendIntervalSeconds] = useState('8');
   const [recoverySettings, setRecoverySettings] = useState<RecoveryAutomationSettings | null>(null);
   const [recoverySendTime, setRecoverySendTime] = useState('09:00');
   const [recoverySendIntervalSeconds, setRecoverySendIntervalSeconds] = useState('8');
@@ -6759,8 +6992,6 @@ function AutomationsView() {
       ]);
       setBillingSummary(nextBilling);
       setBillingSettings(nextBillingSettings);
-      setSendTime(nextBillingSettings.sendTime);
-      setSendIntervalSeconds(String(nextBillingSettings.sendIntervalSeconds));
       setRecoverySettings(nextRecoverySettings);
       setRecoverySendTime(nextRecoverySettings.sendTime);
       setRecoverySendIntervalSeconds(String(nextRecoverySettings.sendIntervalSeconds));
@@ -6883,30 +7114,6 @@ function AutomationsView() {
       setRecoveryTemplatePreview(result.renderedContent);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível gerar preview.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  async function saveBillingSettings(
-    payload: Partial<
-      Pick<BillingAutomationSettings, 'enabled' | 'sendTime' | 'sendIntervalSeconds'>
-    >,
-  ) {
-    setWorking('billing-settings');
-    setError('');
-
-    try {
-      const next = await updateBillingAutomationSettings({
-        ...payload,
-        timezone: 'America/Sao_Paulo',
-      });
-      setBillingSettings(next);
-      setSendTime(next.sendTime);
-      setSendIntervalSeconds(String(next.sendIntervalSeconds));
-      await loadAutomations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível salvar cobrança automática.');
     } finally {
       setWorking('');
     }
@@ -7073,18 +7280,17 @@ function AutomationsView() {
               <AutomationSectionHeading
                 action={
                   <Button
-                    disabled={!billingSettings || working === 'billing-settings'}
-                    icon={Power}
+                    icon={Settings}
                     size="sm"
-                    variant={billingSettings?.enabled ? 'secondary' : 'primary'}
-                    onClick={() => void saveBillingSettings({ enabled: !billingSettings?.enabled })}
+                    variant="secondary"
+                    onClick={onOpenBillingSettings}
                   >
-                    {billingSettings?.enabled ? 'Desativar automação' : 'Ativar automação'}
+                    Configurar automação
                   </Button>
                 }
                 icon={Send}
                 title="Cobrança automática"
-                description="Configurações gerais da rotina de envio de lembretes de cobrança."
+                description="Acompanhe a operação da rotina de envio de lembretes de cobrança."
               />
               <span
                 className={`finance-status-pill tone-${
@@ -7093,69 +7299,27 @@ function AutomationsView() {
               >
                 {billingSettings?.enabled ? 'Ativada' : 'Desativada'}
               </span>
-              <div className="automation-config-grid">
-                <article className="automation-config-card">
-                  <AutomationConfigIcon icon={Clock} />
-                  <div>
-                    <span>Horário de envio</span>
-                    <strong>{billingSettings?.sendTime ?? '09:00'}</strong>
-                  </div>
-                  <input
-                    aria-label="Horário de envio"
-                    required
-                    type="time"
-                    value={sendTime}
-                    onChange={(event) => setSendTime(event.target.value)}
-                    onBlur={() => {
-                      if (sendTime && sendTime !== billingSettings?.sendTime) {
-                        void saveBillingSettings({ sendTime });
-                      }
-                    }}
-                  />
+              <div className="automation-billing-operation-grid">
+                <article>
+                  <strong>{billingSummary?.scheduled ?? 0}</strong>
+                  <span>Envios agendados</span>
                 </article>
-                <article className="automation-config-card">
-                  <AutomationConfigIcon icon={Timer} />
-                  <div>
-                    <span>Intervalo entre mensagens</span>
-                    <strong>{billingSettings?.sendIntervalSeconds ?? 8} segundos</strong>
-                  </div>
-                  <input
-                    aria-label="Intervalo entre mensagens"
-                    min={3}
-                    max={300}
-                    required
-                    step={1}
-                    type="number"
-                    value={sendIntervalSeconds}
-                    onChange={(event) => setSendIntervalSeconds(event.target.value)}
-                    onBlur={() => {
-                      const parsed = Number(sendIntervalSeconds);
-
-                      if (
-                        Number.isInteger(parsed) &&
-                        parsed >= 3 &&
-                        parsed <= 300 &&
-                        parsed !== billingSettings?.sendIntervalSeconds
-                      ) {
-                        void saveBillingSettings({ sendIntervalSeconds: parsed });
-                      }
-                    }}
-                  />
+                <article>
+                  <strong>{billingSummary?.sentToday ?? 0}</strong>
+                  <span>Enviadas hoje</span>
                 </article>
-                <article className="automation-config-card readonly">
-                  <AutomationConfigIcon icon={Globe2} />
-                  <div>
-                    <span>Timezone</span>
-                    <strong>America/Sao_Paulo</strong>
-                  </div>
+                <article>
+                  <strong>{billingSummary?.failedToday ?? 0}</strong>
+                  <span>Falhas hoje</span>
                 </article>
-                <article className="automation-config-card readonly">
-                  <AutomationConfigIcon icon={Settings} />
-                  <div>
-                    <span>Processamento</span>
-                    <strong>1 comunicação por execução</strong>
-                  </div>
+                <article>
+                  <strong>1 comunicação</strong>
+                  <span>por execução automática</span>
                 </article>
+              </div>
+              <div className="settings-billing-note">
+                <Info aria-hidden="true" size={16} />
+                <span>Os envios dependem de uma conexão WhatsApp operacional.</span>
               </div>
             </section>
 

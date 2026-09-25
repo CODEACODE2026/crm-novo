@@ -31,7 +31,8 @@ describe('payment integrations workspace polish', () => {
     expect(paymentCardSource).toContain('Conexão');
     expect(paymentCardSource).toContain('Webhook');
     expect(paymentCardSource).toContain('Última validação');
-    expect(paymentCardSource).toContain('Provider padrão');
+    expect(paymentCardSource).toContain('Provedor padrão');
+    expect(paymentCardSource).not.toContain('Provider padrão');
     expect(paymentCardSource).not.toContain('<dt>Status tecnico</dt>');
     expect(stylesSource).toContain('.payment-provider-grid');
     expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');

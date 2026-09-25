@@ -45,6 +45,28 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsSource).not.toContain('className="compact-form"');
   });
 
+  it('keeps Settings home copy product-facing instead of implementation-facing', () => {
+    expect(settingsSource).not.toContain('CRUD permanece em Financeiro nesta etapa');
+    expect(settingsSource).not.toContain('Operação preservada na área WhatsApp');
+    expect(settingsSource).not.toContain('Administração será tratada em etapa posterior');
+    expect(settingsSource).not.toContain("status: 'Somente leitura'");
+    expect(settingsSource).toContain('Provedores PIX, credenciais e webhooks.');
+    expect(settingsSource).toContain('Integração e comunicação pelo WhatsApp.');
+    expect(settingsSource).toContain('Regras, mensagens e automações de cobrança.');
+    expect(settingsSource).toContain('Status e informações técnicas do sistema.');
+  });
+
+  it('uses Portuguese payment provider summaries and compact card actions', () => {
+    expect(settingsSource).toContain('function paymentProviderSummary');
+    expect(settingsSource).toContain("'1 provedor configurado'");
+    expect(settingsSource).toContain('provedores configurados');
+    expect(settingsSource).toContain('Padrão: ${paymentProviderDisplay(defaultProvider)}');
+    expect(settingsSource).not.toContain('provider(s)');
+    expect(settingsSource).toContain('className="settings-v2-card-link"');
+    expect(stylesSource).toContain('.settings-v2-card-link');
+    expect(stylesSource).toContain('min-height: 148px;');
+  });
+
   it('uses state-driven internal navigation and mobile select navigation', () => {
     expect(settingsViewSource).toContain('function openSection(section: SettingsSection)');
     expect(settingsViewSource).toContain('aria-current={activeSection === section.id');
@@ -62,6 +84,9 @@ describe('Settings V2 SET1 shell contracts', () => {
   it('keeps payments functional inside Configurações > Pagamentos', () => {
     expect(settingsViewSource).toContain("activeSection === 'payments'");
     expect(settingsSource).toContain('function SettingsPaymentsPanel');
+    expect(settingsPaymentsSource).toContain('settings-v2-toolbar');
+    expect(settingsPaymentsSource).not.toContain('<h2>Pagamentos</h2>');
+    expect(settingsPaymentsSource).not.toContain('Configure os provedores utilizados');
     expect(settingsPaymentsSource).toContain("(['FASTFLOW', 'FASTPAY']");
     expect(settingsPaymentsSource).toContain('PaymentProviderCard');
     expect(settingsPaymentsSource).toContain('savePaymentProviderCredential(payload)');

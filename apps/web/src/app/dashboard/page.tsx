@@ -3070,44 +3070,42 @@ function SettingsOverview({
       action: onOpenFinance,
       description: 'Categorias e parâmetros financeiros.',
       icon: CreditCard,
-      status: 'CRUD permanece em Financeiro nesta etapa',
+      status: null,
       title: 'Financeiro',
     },
     {
       action: onOpenPayments,
-      description: 'FastFlow, FastPay, credenciais, padrão PIX e webhooks.',
+      description: 'Provedores PIX, credenciais e webhooks.',
       icon: QrCode,
-      status: defaultProvider
-        ? `${configuredProviders} provider(s) configurado(s) | padrão ${paymentProviderDisplay(defaultProvider)}`
-        : `${configuredProviders} provider(s) configurado(s)`,
+      status: paymentProviderSummary(configuredProviders, defaultProvider),
       title: 'Pagamentos',
     },
     {
       action: onOpenWhatsApp,
-      description: 'Resumo e acesso para a central operacional WhatsApp.',
+      description: 'Integração e comunicação pelo WhatsApp.',
       icon: MessageCircle,
-      status: 'Operação preservada na área WhatsApp',
+      status: null,
       title: 'WhatsApp',
     },
     {
       action: onOpenAutomations,
-      description: 'Regras de cobrança, recuperação e mensagens automáticas.',
+      description: 'Regras, mensagens e automações de cobrança.',
       icon: Workflow,
-      status: 'Administração será tratada em etapa posterior',
+      status: null,
       title: 'Cobrança e automações',
     },
     {
       action: onOpenSystem,
-      description: 'Saúde da API e diagnósticos seguros.',
+      description: 'Status e informações técnicas do sistema.',
       icon: ShieldCheck,
-      status: 'Somente leitura',
+      status: null,
       title: 'Sistema',
     },
   ] satisfies Array<{
     action: () => void;
     description: string;
     icon: LucideIcon;
-    status: string;
+    status: string | null;
     title: string;
   }>;
 
@@ -3126,15 +3124,33 @@ function SettingsOverview({
                 <p>{card.description}</p>
               </div>
             </header>
-            <span className="settings-v2-card-status">{card.status}</span>
-            <Button icon={ArrowRight} size="sm" variant="secondary" onClick={card.action}>
-              Abrir
-            </Button>
+            <footer>
+              {card.status ? <span className="settings-v2-card-status">{card.status}</span> : null}
+              <button className="settings-v2-card-link" type="button" onClick={card.action}>
+                Abrir <ArrowRight aria-hidden="true" size={14} />
+              </button>
+            </footer>
           </article>
         );
       })}
     </div>
   );
+}
+
+function paymentProviderSummary(
+  configuredProviders: number,
+  defaultProvider: PaymentProviderCode | undefined,
+) {
+  if (configuredProviders <= 0) return null;
+
+  const providerLabel =
+    configuredProviders === 1
+      ? '1 provedor configurado'
+      : `${configuredProviders} provedores configurados`;
+
+  return defaultProvider
+    ? `${providerLabel} • Padrão: ${paymentProviderDisplay(defaultProvider)}`
+    : providerLabel;
 }
 
 function SettingsPaymentsPanel({
@@ -3150,11 +3166,7 @@ function SettingsPaymentsPanel({
 }) {
   return (
     <div className="settings-v2-panel">
-      <div className="panel-header">
-        <div>
-          <h2>Pagamentos</h2>
-          <p>Configure os provedores utilizados para gerar e receber PIX.</p>
-        </div>
+      <div className="settings-v2-toolbar">
         <Button
           icon={RefreshCcw}
           loading={loading}
@@ -3452,8 +3464,8 @@ function PaymentProviderCard({
         ) : null}
         {credential.defaultForPix ? (
           <div>
-            <dt>Provider padrão</dt>
-            <dd>Padrao PIX</dd>
+            <dt>Provedor padrão</dt>
+            <dd>Sim</dd>
           </div>
         ) : null}
       </dl>

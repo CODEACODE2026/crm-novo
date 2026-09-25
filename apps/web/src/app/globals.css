@@ -5807,8 +5807,8 @@ tbody tr:hover,
 
 .settings-v2-home-card {
   display: grid;
-  gap: 14px;
-  min-height: 178px;
+  gap: 12px;
+  min-height: 148px;
   padding: 16px;
 }
 
@@ -5837,10 +5837,40 @@ tbody tr:hover,
 }
 
 .settings-v2-card-status {
-  align-self: end;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.settings-v2-home-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+}
+
+.settings-v2-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  margin-left: auto;
+  padding: 4px 0;
+}
+
+.settings-v2-card-link:hover,
+.settings-v2-card-link:focus-visible {
+  color: var(--text);
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .settings-v2-placeholder-panel {
@@ -5855,6 +5885,11 @@ tbody tr:hover,
   display: grid;
   gap: 16px;
   padding: 16px;
+}
+
+.settings-v2-toolbar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .settings-v2-system-details {

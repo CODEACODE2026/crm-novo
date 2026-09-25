@@ -763,6 +763,37 @@ describe('RecoveryService', () => {
     vi.useRealTimers();
   });
 
+  it('keeps automatic recovery processing blocked when settings are disabled', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { dispatches, provider, service } = createService({ settings: { enabled: false } });
+    await service.reconcile();
+
+    const result = await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, {
+      automatic: true,
+    });
+
+    expect(result).toEqual({
+      processed: 0,
+      results: [],
+      skipped: 'RECOVERY_AUTOMATION_DISABLED',
+    });
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(dispatches.every((dispatch) => dispatch.status === 'SCHEDULED')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('allows manual recovery processing even when settings are disabled', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { provider, service } = createService({ settings: { enabled: false } });
+    await service.reconcile();
+
+    const result = await service.processDue(new Date('2026-09-20T12:00:00.000Z'));
+
+    expect(result.processed).toBe(2);
+    expect(provider.sendText).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it('recalculates only future steps when offsets and send time change', async () => {
     vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
     const { dispatches, service, steps } = createService({ settings: { enabled: true } });

@@ -2864,18 +2864,34 @@ function SettingsView({
   const [billingEnabled, setBillingEnabled] = useState(false);
   const [billingSendTime, setBillingSendTime] = useState('09:00');
   const [billingSendIntervalSeconds, setBillingSendIntervalSeconds] = useState('8');
+  const [recoverySettings, setRecoverySettings] = useState<RecoveryAutomationSettings | null>(null);
+  const [recoveryEnabled, setRecoveryEnabled] = useState(false);
+  const [recoverySendTime, setRecoverySendTime] = useState('09:00');
+  const [recoverySendIntervalSeconds, setRecoverySendIntervalSeconds] = useState('8');
+  const [recoveryDay3Enabled, setRecoveryDay3Enabled] = useState(true);
+  const [recoveryDay3OffsetDays, setRecoveryDay3OffsetDays] = useState('3');
+  const [recoveryDay10Enabled, setRecoveryDay10Enabled] = useState(true);
+  const [recoveryDay10OffsetDays, setRecoveryDay10OffsetDays] = useState('7');
+  const [recoveryDay15Enabled, setRecoveryDay15Enabled] = useState(true);
+  const [recoveryDay15OffsetDays, setRecoveryDay15OffsetDays] = useState('15');
+  const [recoveryDay30Enabled, setRecoveryDay30Enabled] = useState(true);
+  const [recoveryDay30OffsetDays, setRecoveryDay30OffsetDays] = useState('30');
   const [loading, setLoading] = useState(false);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingSaving, setBillingSaving] = useState(false);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoverySaving, setRecoverySaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [healthError, setHealthError] = useState('');
   const [billingError, setBillingError] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
   const loadingRef = useRef(false);
   const actionRef = useRef(false);
   const billingSaveRef = useRef(false);
+  const recoverySaveRef = useRef(false);
 
   useEffect(() => {
     setActiveSection(initialSection);
@@ -2926,6 +2942,21 @@ function SettingsView({
     setBillingSendIntervalSeconds(String(settings.sendIntervalSeconds));
   }, []);
 
+  const applyRecoverySettings = useCallback((settings: RecoveryAutomationSettings) => {
+    setRecoverySettings(settings);
+    setRecoveryEnabled(settings.enabled);
+    setRecoverySendTime(settings.sendTime);
+    setRecoverySendIntervalSeconds(String(settings.sendIntervalSeconds));
+    setRecoveryDay3Enabled(settings.day3Enabled);
+    setRecoveryDay3OffsetDays(String(settings.day3OffsetDays));
+    setRecoveryDay10Enabled(settings.day10Enabled);
+    setRecoveryDay10OffsetDays(String(settings.day10OffsetDays));
+    setRecoveryDay15Enabled(settings.day15Enabled);
+    setRecoveryDay15OffsetDays(String(settings.day15OffsetDays));
+    setRecoveryDay30Enabled(settings.day30Enabled);
+    setRecoveryDay30OffsetDays(String(settings.day30OffsetDays));
+  }, []);
+
   const loadBillingSettings = useCallback(async () => {
     setBillingLoading(true);
     setBillingError('');
@@ -2941,11 +2972,39 @@ function SettingsView({
     }
   }, [applyBillingSettings]);
 
+  const loadRecoverySettings = useCallback(async () => {
+    setRecoveryLoading(true);
+    setRecoveryError('');
+
+    try {
+      applyRecoverySettings(await getRecoveryAutomationSettings());
+    } catch (err) {
+      setRecoveryError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível carregar recuperação de inadimplência.',
+      );
+    } finally {
+      setRecoveryLoading(false);
+    }
+  }, [applyRecoverySettings]);
+
   useEffect(() => {
     if (activeSection === 'billing' && !billingSettings && !billingLoading) {
       void loadBillingSettings();
     }
-  }, [activeSection, billingLoading, billingSettings, loadBillingSettings]);
+    if (activeSection === 'billing' && !recoverySettings && !recoveryLoading) {
+      void loadRecoverySettings();
+    }
+  }, [
+    activeSection,
+    billingLoading,
+    billingSettings,
+    loadBillingSettings,
+    loadRecoverySettings,
+    recoveryLoading,
+    recoverySettings,
+  ]);
 
   const loadHealth = useCallback(async () => {
     setHealthLoading(true);
@@ -2997,6 +3056,39 @@ function SettingsView({
       billingSendTime !== billingSettings.sendTime ||
       parsedBillingInterval !== billingSettings.sendIntervalSeconds),
   );
+  const parsedRecoveryInterval = Number(recoverySendIntervalSeconds);
+  const parsedRecoveryDay3Offset = Number(recoveryDay3OffsetDays);
+  const parsedRecoveryDay10Offset = Number(recoveryDay10OffsetDays);
+  const parsedRecoveryDay15Offset = Number(recoveryDay15OffsetDays);
+  const parsedRecoveryDay30Offset = Number(recoveryDay30OffsetDays);
+  const recoveryIntervalValid =
+    Number.isInteger(parsedRecoveryInterval) &&
+    parsedRecoveryInterval >= 3 &&
+    parsedRecoveryInterval <= 300;
+  const recoveryOffsets = [
+    parsedRecoveryDay3Offset,
+    parsedRecoveryDay10Offset,
+    parsedRecoveryDay15Offset,
+    parsedRecoveryDay30Offset,
+  ];
+  const recoveryOffsetsValid =
+    recoveryOffsets.every((offset) => Number.isInteger(offset) && offset >= 1 && offset <= 365) &&
+    new Set(recoveryOffsets).size === recoveryOffsets.length &&
+    recoveryOffsets.every((offset, index) => index === 0 || offset > recoveryOffsets[index - 1]!);
+  const recoveryDirty = Boolean(
+    recoverySettings &&
+    (recoveryEnabled !== recoverySettings.enabled ||
+      recoverySendTime !== recoverySettings.sendTime ||
+      parsedRecoveryInterval !== recoverySettings.sendIntervalSeconds ||
+      recoveryDay3Enabled !== recoverySettings.day3Enabled ||
+      parsedRecoveryDay3Offset !== recoverySettings.day3OffsetDays ||
+      recoveryDay10Enabled !== recoverySettings.day10Enabled ||
+      parsedRecoveryDay10Offset !== recoverySettings.day10OffsetDays ||
+      recoveryDay15Enabled !== recoverySettings.day15Enabled ||
+      parsedRecoveryDay15Offset !== recoverySettings.day15OffsetDays ||
+      recoveryDay30Enabled !== recoverySettings.day30Enabled ||
+      parsedRecoveryDay30Offset !== recoverySettings.day30OffsetDays),
+  );
 
   async function saveBillingAutomationSettings() {
     if (!billingSettings || billingSaveRef.current || !billingIntervalValid || !billingSendTime) {
@@ -3024,6 +3116,51 @@ function SettingsView({
     } finally {
       setBillingSaving(false);
       billingSaveRef.current = false;
+    }
+  }
+
+  async function saveRecoveryAutomationSettings() {
+    if (
+      !recoverySettings ||
+      recoverySaveRef.current ||
+      !recoveryIntervalValid ||
+      !recoveryOffsetsValid ||
+      !recoverySendTime
+    ) {
+      return;
+    }
+
+    recoverySaveRef.current = true;
+    setRecoverySaving(true);
+    setRecoveryError('');
+    setNotice('');
+
+    try {
+      const next = await updateRecoveryAutomationSettings({
+        enabled: recoveryEnabled,
+        sendTime: recoverySendTime,
+        sendIntervalSeconds: parsedRecoveryInterval,
+        timezone: recoverySettings.timezone,
+        day3Enabled: recoveryDay3Enabled,
+        day3OffsetDays: parsedRecoveryDay3Offset,
+        day10Enabled: recoveryDay10Enabled,
+        day10OffsetDays: parsedRecoveryDay10Offset,
+        day15Enabled: recoveryDay15Enabled,
+        day15OffsetDays: parsedRecoveryDay15Offset,
+        day30Enabled: recoveryDay30Enabled,
+        day30OffsetDays: parsedRecoveryDay30Offset,
+      });
+      applyRecoverySettings(next);
+      setNotice('Configurações de recuperação salvas.');
+    } catch (err) {
+      setRecoveryError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível salvar recuperação de inadimplência.',
+      );
+    } finally {
+      setRecoverySaving(false);
+      recoverySaveRef.current = false;
     }
   }
 
@@ -3168,6 +3305,37 @@ function SettingsView({
               onSave={saveBillingAutomationSettings}
               onSendIntervalSecondsChange={setBillingSendIntervalSeconds}
               onSendTimeChange={setBillingSendTime}
+              recoveryDay10Enabled={recoveryDay10Enabled}
+              recoveryDay10OffsetDays={recoveryDay10OffsetDays}
+              recoveryDay15Enabled={recoveryDay15Enabled}
+              recoveryDay15OffsetDays={recoveryDay15OffsetDays}
+              recoveryDay30Enabled={recoveryDay30Enabled}
+              recoveryDay30OffsetDays={recoveryDay30OffsetDays}
+              recoveryDay3Enabled={recoveryDay3Enabled}
+              recoveryDay3OffsetDays={recoveryDay3OffsetDays}
+              recoveryDirty={recoveryDirty}
+              recoveryEnabled={recoveryEnabled}
+              recoveryError={recoveryError}
+              recoveryIntervalValid={recoveryIntervalValid}
+              recoveryLoading={recoveryLoading}
+              recoveryOffsetsValid={recoveryOffsetsValid}
+              recoverySaving={recoverySaving}
+              recoverySendIntervalSeconds={recoverySendIntervalSeconds}
+              recoverySendTime={recoverySendTime}
+              recoverySettings={recoverySettings}
+              onRecoveryDay10EnabledChange={setRecoveryDay10Enabled}
+              onRecoveryDay10OffsetDaysChange={setRecoveryDay10OffsetDays}
+              onRecoveryDay15EnabledChange={setRecoveryDay15Enabled}
+              onRecoveryDay15OffsetDaysChange={setRecoveryDay15OffsetDays}
+              onRecoveryDay30EnabledChange={setRecoveryDay30Enabled}
+              onRecoveryDay30OffsetDaysChange={setRecoveryDay30OffsetDays}
+              onRecoveryDay3EnabledChange={setRecoveryDay3Enabled}
+              onRecoveryDay3OffsetDaysChange={setRecoveryDay3OffsetDays}
+              onRecoveryEnabledChange={setRecoveryEnabled}
+              onRecoveryRefresh={loadRecoverySettings}
+              onRecoverySave={saveRecoveryAutomationSettings}
+              onRecoverySendIntervalSecondsChange={setRecoverySendIntervalSeconds}
+              onRecoverySendTimeChange={setRecoverySendTime}
             />
           ) : null}
 
@@ -3430,6 +3598,37 @@ function SettingsBillingAutomationPanel({
   onSave,
   onSendIntervalSecondsChange,
   onSendTimeChange,
+  recoveryDay10Enabled,
+  recoveryDay10OffsetDays,
+  recoveryDay15Enabled,
+  recoveryDay15OffsetDays,
+  recoveryDay30Enabled,
+  recoveryDay30OffsetDays,
+  recoveryDay3Enabled,
+  recoveryDay3OffsetDays,
+  recoveryDirty,
+  recoveryEnabled,
+  recoveryError,
+  recoveryIntervalValid,
+  recoveryLoading,
+  recoveryOffsetsValid,
+  recoverySaving,
+  recoverySendIntervalSeconds,
+  recoverySendTime,
+  recoverySettings,
+  onRecoveryDay10EnabledChange,
+  onRecoveryDay10OffsetDaysChange,
+  onRecoveryDay15EnabledChange,
+  onRecoveryDay15OffsetDaysChange,
+  onRecoveryDay30EnabledChange,
+  onRecoveryDay30OffsetDaysChange,
+  onRecoveryDay3EnabledChange,
+  onRecoveryDay3OffsetDaysChange,
+  onRecoveryEnabledChange,
+  onRecoveryRefresh,
+  onRecoverySave,
+  onRecoverySendIntervalSecondsChange,
+  onRecoverySendTimeChange,
 }: {
   dirty: boolean;
   enabled: boolean;
@@ -3445,7 +3644,69 @@ function SettingsBillingAutomationPanel({
   onSave: () => Promise<void>;
   onSendIntervalSecondsChange: (value: string) => void;
   onSendTimeChange: (value: string) => void;
+  recoveryDay10Enabled: boolean;
+  recoveryDay10OffsetDays: string;
+  recoveryDay15Enabled: boolean;
+  recoveryDay15OffsetDays: string;
+  recoveryDay30Enabled: boolean;
+  recoveryDay30OffsetDays: string;
+  recoveryDay3Enabled: boolean;
+  recoveryDay3OffsetDays: string;
+  recoveryDirty: boolean;
+  recoveryEnabled: boolean;
+  recoveryError: string;
+  recoveryIntervalValid: boolean;
+  recoveryLoading: boolean;
+  recoveryOffsetsValid: boolean;
+  recoverySaving: boolean;
+  recoverySendIntervalSeconds: string;
+  recoverySendTime: string;
+  recoverySettings: RecoveryAutomationSettings | null;
+  onRecoveryDay10EnabledChange: (value: boolean) => void;
+  onRecoveryDay10OffsetDaysChange: (value: string) => void;
+  onRecoveryDay15EnabledChange: (value: boolean) => void;
+  onRecoveryDay15OffsetDaysChange: (value: string) => void;
+  onRecoveryDay30EnabledChange: (value: boolean) => void;
+  onRecoveryDay30OffsetDaysChange: (value: string) => void;
+  onRecoveryDay3EnabledChange: (value: boolean) => void;
+  onRecoveryDay3OffsetDaysChange: (value: string) => void;
+  onRecoveryEnabledChange: (value: boolean) => void;
+  onRecoveryRefresh: () => Promise<void>;
+  onRecoverySave: () => Promise<void>;
+  onRecoverySendIntervalSecondsChange: (value: string) => void;
+  onRecoverySendTimeChange: (value: string) => void;
 }) {
+  const recoverySteps = [
+    {
+      enabled: recoveryDay3Enabled,
+      label: 'D+3',
+      offsetDays: recoveryDay3OffsetDays,
+      onEnabledChange: onRecoveryDay3EnabledChange,
+      onOffsetDaysChange: onRecoveryDay3OffsetDaysChange,
+    },
+    {
+      enabled: recoveryDay10Enabled,
+      label: 'D+10',
+      offsetDays: recoveryDay10OffsetDays,
+      onEnabledChange: onRecoveryDay10EnabledChange,
+      onOffsetDaysChange: onRecoveryDay10OffsetDaysChange,
+    },
+    {
+      enabled: recoveryDay15Enabled,
+      label: 'D+15',
+      offsetDays: recoveryDay15OffsetDays,
+      onEnabledChange: onRecoveryDay15EnabledChange,
+      onOffsetDaysChange: onRecoveryDay15OffsetDaysChange,
+    },
+    {
+      enabled: recoveryDay30Enabled,
+      label: 'D+30',
+      offsetDays: recoveryDay30OffsetDays,
+      onEnabledChange: onRecoveryDay30EnabledChange,
+      onOffsetDaysChange: onRecoveryDay30OffsetDaysChange,
+    },
+  ];
+
   return (
     <div className="settings-v2-panel settings-billing-panel">
       {error ? <div className="notice danger">{error}</div> : null}
@@ -3540,6 +3801,163 @@ function SettingsBillingAutomationPanel({
             onClick={() => void onSave()}
           >
             Salvar configurações
+          </Button>
+        </footer>
+      </section>
+
+      <section className="settings-billing-section" aria-labelledby="settings-recovery-title">
+        {recoveryError ? (
+          <div className="notice danger" role="alert">
+            {recoveryError}
+          </div>
+        ) : null}
+        <header className="settings-billing-header">
+          <div>
+            <h3 id="settings-recovery-title">Recuperação de inadimplência</h3>
+            <p>Configure quando o CRM deve entrar em contato com clientes inadimplentes.</p>
+          </div>
+          <span className={`finance-status-pill tone-${recoveryEnabled ? 'success' : 'muted'}`}>
+            {!recoverySettings
+              ? 'Indisponível'
+              : recoveryEnabled
+                ? 'Envios automáticos ativos'
+                : 'Envios automáticos pausados'}
+          </span>
+        </header>
+
+        <label className="toggle-field settings-billing-toggle">
+          <input
+            checked={recoveryEnabled}
+            disabled={recoveryLoading || recoverySaving || !recoverySettings}
+            type="checkbox"
+            onChange={(event) => onRecoveryEnabledChange(event.target.checked)}
+          />
+          <span>
+            Ativar envios automáticos de recuperação
+            <small>
+              Quando desativado, o CRM não envia mensagens de recuperação automaticamente. Campanhas
+              e agendamentos podem continuar sendo preparados para uma futura reativação.
+            </small>
+          </span>
+        </label>
+
+        <div className="settings-billing-form-grid">
+          <label className="field">
+            <span>Horário de envio</span>
+            <input
+              disabled={recoveryLoading || recoverySaving || !recoverySettings}
+              required
+              type="time"
+              value={recoverySettings ? recoverySendTime : ''}
+              onChange={(event) => onRecoverySendTimeChange(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Intervalo entre mensagens</span>
+            <input
+              aria-describedby="recovery-send-interval-help"
+              disabled={recoveryLoading || recoverySaving || !recoverySettings}
+              max={300}
+              min={3}
+              required
+              step={1}
+              type="number"
+              value={recoverySettings ? recoverySendIntervalSeconds : ''}
+              onChange={(event) => onRecoverySendIntervalSecondsChange(event.target.value)}
+            />
+            <small id="recovery-send-interval-help">
+              X segundos entre mensagens programadas no mesmo dia/lote.
+            </small>
+            {!recoveryIntervalValid ? (
+              <small className="error-message">Use um valor entre 3 e 300.</small>
+            ) : null}
+          </label>
+
+          <div className="field settings-billing-readonly-field">
+            <span>Fuso horário</span>
+            <strong>{recoverySettings?.timezone ?? 'Indisponível'}</strong>
+            <small>Usado para calcular o dia e o horário de cada contato.</small>
+          </div>
+        </div>
+
+        <div className="settings-recovery-steps" aria-label="Etapas de recuperação">
+          {recoverySteps.map((step) => {
+            const helpId = `settings-recovery-${step.label.replace('+', '')}-offset-help`;
+
+            return (
+              <article key={step.label} className="settings-recovery-step">
+                <label className="toggle-field">
+                  <input
+                    checked={step.enabled}
+                    disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                    type="checkbox"
+                    onChange={(event) => step.onEnabledChange(event.target.checked)}
+                  />
+                  <span>
+                    Etapa {step.label}
+                    <small>O nome identifica o estágio; o envio usa o número de dias abaixo.</small>
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span>Disparar após</span>
+                  <input
+                    aria-describedby={helpId}
+                    disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                    max={365}
+                    min={1}
+                    required
+                    step={1}
+                    type="number"
+                    value={recoverySettings ? step.offsetDays : ''}
+                    onChange={(event) => step.onOffsetDaysChange(event.target.value)}
+                  />
+                  <small id={helpId}>{step.offsetDays || '?'} dias do vencimento.</small>
+                </label>
+              </article>
+            );
+          })}
+        </div>
+
+        {!recoveryOffsetsValid ? (
+          <small className="error-message">
+            Use offsets únicos, crescentes e entre 1 e 365 dias.
+          </small>
+        ) : null}
+
+        <div className="settings-billing-note">
+          <Info aria-hidden="true" size={16} />
+          <span>
+            O nome da etapa identifica o estágio da recuperação. O dia efetivo do envio é definido
+            pelo número de dias após o vencimento.
+          </span>
+        </div>
+
+        <footer className="settings-billing-actions">
+          <Button
+            icon={RefreshCcw}
+            loading={recoveryLoading}
+            size="sm"
+            variant="secondary"
+            onClick={() => void onRecoveryRefresh()}
+          >
+            Atualizar recuperação
+          </Button>
+          <Button
+            disabled={
+              !recoveryDirty ||
+              !recoveryIntervalValid ||
+              !recoveryOffsetsValid ||
+              !recoverySendTime ||
+              !recoverySettings
+            }
+            icon={CircleCheck}
+            loading={recoverySaving}
+            variant="primary"
+            onClick={() => void onRecoverySave()}
+          >
+            Salvar recuperação
           </Button>
         </footer>
       </section>
@@ -6930,9 +7348,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
   const [recoverySettings, setRecoverySettings] = useState<RecoveryAutomationSettings | null>(null);
-  const [recoverySendTime, setRecoverySendTime] = useState('09:00');
-  const [recoverySendIntervalSeconds, setRecoverySendIntervalSeconds] = useState('8');
-  const [recoveryOffsets, setRecoveryOffsets] = useState(['3', '7', '15', '30']);
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
@@ -6950,7 +7365,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
   const [recoveryTemplatePreview, setRecoveryTemplatePreview] = useState('');
   const [previewingRecoveryTemplate, setPreviewingRecoveryTemplate] =
     useState<RecoveryTemplateCard | null>(null);
-  const [editingRecoverySteps, setEditingRecoverySteps] = useState(false);
   const [selectedAutomationDispatch, setSelectedAutomationDispatch] =
     useState<MessageDispatch | null>(null);
   const [selectedCampaign, setSelectedCampaign] = useState<RecoveryCampaign | null>(null);
@@ -6993,9 +7407,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
       setBillingSummary(nextBilling);
       setBillingSettings(nextBillingSettings);
       setRecoverySettings(nextRecoverySettings);
-      setRecoverySendTime(nextRecoverySettings.sendTime);
-      setRecoverySendIntervalSeconds(String(nextRecoverySettings.sendIntervalSeconds));
-      setRecoveryOffsets(nextRecoverySettings.steps.map((step) => String(step.offsetDays)));
       setRecoverySummary(nextRecovery);
       setCampaigns(nextCampaigns.items);
       setTemplates(nextTemplates);
@@ -7117,48 +7528,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
     } finally {
       setWorking('');
     }
-  }
-
-  async function saveRecoverySettings(payload: Partial<RecoveryAutomationSettings>) {
-    setWorking('recovery-settings');
-    setError('');
-
-    try {
-      const next = await updateRecoveryAutomationSettings({
-        ...payload,
-        timezone: 'America/Sao_Paulo',
-      });
-      setRecoverySettings(next);
-      setRecoverySendTime(next.sendTime);
-      setRecoverySendIntervalSeconds(String(next.sendIntervalSeconds));
-      setRecoveryOffsets(next.steps.map((step) => String(step.offsetDays)));
-      await loadAutomations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível salvar recuperação.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  function recoveryPayloadFromOffsets(offsets: string[]) {
-    const parsed = offsets.map((offset) => Number(offset));
-
-    if (
-      parsed.some((offset) => !Number.isInteger(offset) || offset <= 0) ||
-      new Set(parsed).size !== parsed.length ||
-      parsed.some((offset, index) => index > 0 && offset <= parsed[index - 1]!)
-    ) {
-      throw new Error(
-        'Etapas de recuperação devem ter dias maiores que zero, sem duplicidade e em ordem crescente.',
-      );
-    }
-
-    return {
-      day3OffsetDays: parsed[0]!,
-      day10OffsetDays: parsed[1]!,
-      day15OffsetDays: parsed[2]!,
-      day30OffsetDays: parsed[3]!,
-    };
   }
 
   async function runBillingReceivablesReconcile() {
@@ -7452,15 +7821,12 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
               <AutomationSectionHeading
                 action={
                   <Button
-                    disabled={!recoverySettings || working === 'recovery-settings'}
-                    icon={Power}
+                    icon={Settings}
                     size="sm"
-                    variant={recoverySettings?.enabled ? 'secondary' : 'primary'}
-                    onClick={() =>
-                      void saveRecoverySettings({ enabled: !recoverySettings?.enabled })
-                    }
+                    variant="secondary"
+                    onClick={onOpenBillingSettings}
                   >
-                    {recoverySettings?.enabled ? 'Desativar recuperação' : 'Ativar recuperação'}
+                    Configurar recuperação
                   </Button>
                 }
                 icon={Activity}
@@ -7472,7 +7838,9 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                   recoverySettings?.enabled ? 'success' : 'muted'
                 }`}
               >
-                {recoverySettings?.enabled ? 'Ativada' : 'Desativada'}
+                {recoverySettings?.enabled
+                  ? 'Envios automáticos ativos'
+                  : 'Envios automáticos pausados'}
               </span>
               <div className="automation-config-grid">
                 <article className="automation-config-card">
@@ -7481,18 +7849,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                     <span>Horário de recuperação</span>
                     <strong>{recoverySettings?.sendTime ?? '09:00'}</strong>
                   </div>
-                  <input
-                    aria-label="Horário de recuperação"
-                    required
-                    type="time"
-                    value={recoverySendTime}
-                    onChange={(event) => setRecoverySendTime(event.target.value)}
-                    onBlur={() => {
-                      if (recoverySendTime && recoverySendTime !== recoverySettings?.sendTime) {
-                        void saveRecoverySettings({ sendTime: recoverySendTime });
-                      }
-                    }}
-                  />
                 </article>
                 <article className="automation-config-card">
                   <AutomationConfigIcon icon={Timer} />
@@ -7500,28 +7856,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                     <span>Intervalo entre mensagens</span>
                     <strong>{recoverySettings?.sendIntervalSeconds ?? 8} segundos</strong>
                   </div>
-                  <input
-                    aria-label="Intervalo entre mensagens da recuperação"
-                    min={3}
-                    max={300}
-                    required
-                    step={1}
-                    type="number"
-                    value={recoverySendIntervalSeconds}
-                    onChange={(event) => setRecoverySendIntervalSeconds(event.target.value)}
-                    onBlur={() => {
-                      const parsed = Number(recoverySendIntervalSeconds);
-
-                      if (
-                        Number.isInteger(parsed) &&
-                        parsed >= 3 &&
-                        parsed <= 300 &&
-                        parsed !== recoverySettings?.sendIntervalSeconds
-                      ) {
-                        void saveRecoverySettings({ sendIntervalSeconds: parsed });
-                      }
-                    }}
-                  />
                 </article>
                 <article className="automation-config-card readonly">
                   <AutomationConfigIcon icon={Globe2} />
@@ -7540,9 +7874,9 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                     icon={Settings}
                     size="sm"
                     variant="secondary"
-                    onClick={() => setEditingRecoverySteps((value) => !value)}
+                    onClick={onOpenBillingSettings}
                   >
-                    Configurar etapas
+                    Configurar em Settings
                   </Button>
                 }
                 icon={Layers}
@@ -7550,65 +7884,13 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                 description="Configuração dos lembretes por tempo de atraso."
               />
               <div className="recovery-steps-timeline">
-                {(recoverySettings?.steps ?? []).map((step, index) => (
+                {(recoverySettings?.steps ?? []).map((step) => (
                   <article className={step.enabled ? 'enabled' : 'disabled'} key={step.stepNumber}>
                     <div className="recovery-step-marker">D+{step.offsetDays}</div>
                     <div className="recovery-step-body">
                       <strong>Etapa {step.stepNumber}</strong>
                       <span>{messageTemplateTypeLabel(step.templateType)}</span>
-                      {editingRecoverySteps ? (
-                        <>
-                          <label className="field compact-field">
-                            <span>Offset</span>
-                            <input
-                              min={1}
-                              required
-                              step={1}
-                              type="number"
-                              value={recoveryOffsets[index] ?? String(step.offsetDays)}
-                              onChange={(event) => {
-                                const next = [...recoveryOffsets];
-                                next[index] = event.target.value;
-                                setRecoveryOffsets(next);
-                              }}
-                              onBlur={() => {
-                                try {
-                                  void saveRecoverySettings(
-                                    recoveryPayloadFromOffsets(recoveryOffsets),
-                                  );
-                                } catch (err) {
-                                  setError(
-                                    err instanceof Error
-                                      ? err.message
-                                      : 'Etapas de recuperação inválidas.',
-                                  );
-                                }
-                              }}
-                            />
-                          </label>
-                          <label className="toggle-field compact-toggle">
-                            <input
-                              checked={step.enabled}
-                              type="checkbox"
-                              onChange={(event) => {
-                                const keys = [
-                                  'day3Enabled',
-                                  'day10Enabled',
-                                  'day15Enabled',
-                                  'day30Enabled',
-                                ] as const;
-                                const key = keys[index];
-                                if (key) {
-                                  void saveRecoverySettings({ [key]: event.target.checked });
-                                }
-                              }}
-                            />
-                            <span>{step.enabled ? 'Ativa' : 'Inativa'}</span>
-                          </label>
-                        </>
-                      ) : (
-                        <small>{step.enabled ? 'Ativa' : 'Inativa'}</small>
-                      )}
+                      <small>{step.enabled ? 'Ativa' : 'Inativa'}</small>
                     </div>
                   </article>
                 ))}

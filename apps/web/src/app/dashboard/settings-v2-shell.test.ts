@@ -152,8 +152,80 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain(
       'Os envios dependem de uma conexão WhatsApp operacional.',
     );
-    expect(settingsBillingSource).not.toContain('Recuperação por inadimplência');
     expect(settingsBillingSource).not.toContain('Templates');
+  });
+
+  it('centralizes RecoveryAutomationSettings below billing with an independent save', () => {
+    expect(settingsViewSource).toContain('const [recoverySettings, setRecoverySettings]');
+    expect(settingsViewSource).toContain(
+      "const [recoveryDay10OffsetDays, setRecoveryDay10OffsetDays] = useState('7')",
+    );
+    expect(settingsViewSource).toContain('const recoverySaveRef = useRef(false);');
+    expect(settingsViewSource).toContain(
+      'applyRecoverySettings(await getRecoveryAutomationSettings())',
+    );
+    expect(settingsViewSource).toContain("activeSection === 'billing' && !recoverySettings");
+    expect(settingsViewSource).toContain(
+      "err.message\n          : 'Não foi possível carregar recuperação de inadimplência.'",
+    );
+    expect(settingsViewSource).toContain('async function saveRecoveryAutomationSettings()');
+    expect(settingsViewSource).toContain('!recoverySettings ||');
+    expect(settingsViewSource).toContain('recoverySaveRef.current ||');
+    expect(settingsViewSource).toContain('recoverySaveRef.current = true;');
+    expect(settingsViewSource).toContain('recoverySaveRef.current = false;');
+    expect(settingsViewSource).toContain('const next = await updateRecoveryAutomationSettings({');
+    expect(settingsViewSource).toContain('enabled: recoveryEnabled');
+    expect(settingsViewSource).toContain('sendTime: recoverySendTime');
+    expect(settingsViewSource).toContain('sendIntervalSeconds: parsedRecoveryInterval');
+    expect(settingsViewSource).toContain('timezone: recoverySettings.timezone');
+    expect(settingsViewSource).toContain('day3Enabled: recoveryDay3Enabled');
+    expect(settingsViewSource).toContain('day3OffsetDays: parsedRecoveryDay3Offset');
+    expect(settingsViewSource).toContain('day10Enabled: recoveryDay10Enabled');
+    expect(settingsViewSource).toContain('day10OffsetDays: parsedRecoveryDay10Offset');
+    expect(settingsViewSource).toContain('day15Enabled: recoveryDay15Enabled');
+    expect(settingsViewSource).toContain('day15OffsetDays: parsedRecoveryDay15Offset');
+    expect(settingsViewSource).toContain('day30Enabled: recoveryDay30Enabled');
+    expect(settingsViewSource).toContain('day30OffsetDays: parsedRecoveryDay30Offset');
+    expect(settingsViewSource).toContain('applyRecoverySettings(next);');
+    expect(settingsViewSource).toContain("setNotice('Configurações de recuperação salvas.')");
+    expect(settingsViewSource).toContain(
+      "err.message\n          : 'Não foi possível salvar recuperação de inadimplência.'",
+    );
+    expect(settingsBillingSource).toContain('Recuperação de inadimplência');
+    expect(settingsBillingSource).toContain(
+      'Configure quando o CRM deve entrar em contato com clientes inadimplentes.',
+    );
+    expect(settingsBillingSource).toContain('Envios automáticos ativos');
+    expect(settingsBillingSource).toContain('Envios automáticos pausados');
+    expect(settingsBillingSource).toContain('Ativar envios automáticos de recuperação');
+    expect(settingsBillingSource).not.toContain('Ativar recuperação automática');
+    expect(settingsBillingSource).toContain(
+      'Quando desativado, o CRM não envia mensagens de recuperação automaticamente.',
+    );
+    expect(settingsBillingSource).toContain('Campanhas');
+    expect(settingsBillingSource).toContain(
+      'e agendamentos podem continuar sendo preparados para uma futura reativação.',
+    );
+    expect(settingsBillingSource).toContain('Intervalo entre mensagens');
+    expect(settingsBillingSource).toContain('X segundos entre mensagens');
+    expect(settingsBillingSource).toContain("label: 'D+10'");
+    expect(settingsBillingSource).toContain('offsetDays: recoveryDay10OffsetDays');
+    expect(settingsBillingSource).toContain('Etapa {step.label}');
+    expect(settingsBillingSource).toContain('Disparar após');
+    expect(settingsBillingSource).toContain("{step.offsetDays || '?'} dias do vencimento.");
+    expect(settingsBillingSource).toContain(
+      'O nome da etapa identifica o estágio da recuperação. O dia efetivo do envio é',
+    );
+    expect(settingsBillingSource).toContain('Salvar recuperação');
+    expect(settingsBillingSource).toContain('onClick={() => void onRecoverySave()}');
+    expect(settingsBillingSource).toContain('disabled={');
+    expect(settingsBillingSource).toContain('!recoveryDirty ||');
+    expect(settingsBillingSource).toContain('!recoveryIntervalValid ||');
+    expect(settingsBillingSource).toContain('!recoveryOffsetsValid ||');
+    expect(settingsBillingSource).toContain('!recoverySendTime ||');
+    expect(settingsBillingSource).toContain('!recoverySettings');
+    expect(settingsBillingSource).not.toContain('Mensagens de recuperação');
+    expect(settingsBillingSource).not.toContain('RecoveryAutomationPreviewModal');
   });
 
   it('saves billing settings only from the CTA and protects double submit', () => {
@@ -175,11 +247,11 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(automationsSource).toContain('automation-billing-operation-grid');
     expect(automationsSource).not.toContain('saveBillingSettings');
     expect(automationsSource).not.toContain('updateBillingAutomationSettings');
+    expect(automationsSource).not.toContain('updateRecoveryAutomationSettings');
     expect(automationsSource).toContain('title="Mensagens da automação"');
     expect(automationsSource).toContain('title="Recuperação por inadimplência"');
-    expect(automationsSource).toContain(
-      'void saveRecoverySettings({ sendTime: recoverySendTime })',
-    );
+    expect(automationsSource).toContain('Configurar recuperação');
+    expect(automationsSource).toContain('Configurar em Settings');
     expect(automationsSource).toContain('title="Campanhas de recuperação"');
   });
 

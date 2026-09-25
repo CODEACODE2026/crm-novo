@@ -5930,6 +5930,7 @@ tbody tr:hover,
 
 .settings-billing-panel {
   align-content: start;
+  gap: 20px;
 }
 
 .settings-billing-section {
@@ -6021,7 +6022,37 @@ tbody tr:hover,
 
 .settings-billing-actions {
   display: flex;
+  gap: 10px;
   justify-content: flex-end;
+}
+
+.settings-recovery-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-recovery-step {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.settings-recovery-step .toggle-field {
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.settings-recovery-step small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .payment-provider-grid {
@@ -6530,6 +6561,7 @@ tbody tr:hover,
   .automation-summary-grid,
   .automation-message-grid,
   .recovery-steps-timeline,
+  .settings-recovery-steps,
   .settings-billing-form-grid,
   .form-grid,
   .initial-billing-summary,

@@ -137,10 +137,9 @@ describe('billing and automations UI 2.0 presentation source', () => {
   it('renders recovery settings, offsets, campaign rows, and campaign detail steps', () => {
     expect(dashboardSource).toContain('Recuperação por inadimplência');
     expect(dashboardSource).toContain('Acompanhamento automático de contas vencidas.');
-    expect(dashboardSource).toContain('Ativar recuperação');
-    expect(dashboardSource).toContain('Desativar recuperação');
+    expect(dashboardSource).toContain('Configurar recuperação');
     expect(dashboardSource).toContain('Etapas de comunicação');
-    expect(dashboardSource).toContain('Configurar etapas');
+    expect(dashboardSource).toContain('Configurar em Settings');
     expect(dashboardSource).toContain('recovery-steps-timeline');
     expect(dashboardSource).toContain('D+{step.offsetDays}');
     expect(dashboardSource).toContain('Mensagens de recuperação');

@@ -5412,13 +5412,19 @@ describe('FinanceService', () => {
     fake.receivable.renewalId = null;
     fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
     fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.receivable.dueDate = parseBusinessDate('2026-09-23');
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-23');
+    fake.clientReference.billingAnchorDay = 23;
     const { referrals } = createReferralQualificationDouble();
+    const { cycle, nextReceivables } = createCycleRecorder(fake);
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       {} as never,
       fake.config as never,
       referrals as never,
+      cycle as never,
     );
     const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
     fake.provider.getPixStatus.mockResolvedValue({
@@ -5449,6 +5455,31 @@ describe('FinanceService', () => {
       description: 'Recebimento PIX: Cobranca inicial de ativacao - Mensal',
       amount: new Prisma.Decimal('30.00'),
       transactionDate: parseBusinessDate('2026-09-24'),
+    });
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledTimes(1);
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: fake.receivable.id },
+          { items: { some: { receivableId: fake.receivable.id } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'RECEIVABLE_PAID',
+        errorMessage: 'Cobranca futura cancelada porque a conta a receber foi paga.',
+        nextAttemptAt: null,
+      },
+    });
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    expect(nextReceivables).toHaveLength(1);
+    expect(nextReceivables[0]).toMatchObject({
+      clientReferenceId: fake.clientReference.id,
+      purpose: 'RENEWAL',
+      status: 'PENDENTE',
+      dueDate: parseBusinessDate('2026-10-23'),
     });
   });
 
@@ -5496,13 +5527,19 @@ describe('FinanceService', () => {
     fake.receivable.renewalId = null;
     fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
     fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.receivable.dueDate = parseBusinessDate('2026-09-23');
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-23');
+    fake.clientReference.billingAnchorDay = 23;
     const { referrals } = createReferralQualificationDouble();
+    const { cycle } = createCycleRecorder(fake);
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       fake.credentials as never,
       fake.config as never,
       referrals as never,
+      cycle as never,
     );
     const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
     fake.paymentIntents.at(0)!.provider = 'FASTFLOW';
@@ -5524,6 +5561,23 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PAGO');
     expect(fake.transactions).toHaveLength(1);
     expect(fake.transactions[0]).toMatchObject({ categoryId: fake.activationCategory.id });
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: fake.receivable.id },
+          { items: { some: { receivableId: fake.receivable.id } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'RECEIVABLE_PAID',
+        errorMessage: 'Cobranca futura cancelada porque a conta a receber foi paga.',
+        nextAttemptAt: null,
+      },
+    });
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
   });
 
   it('settles a superseded paid initial activation PIX with one activation transaction', async () => {
@@ -5532,13 +5586,19 @@ describe('FinanceService', () => {
     fake.receivable.renewalId = null;
     fake.receivable.description = 'Cobranca inicial de ativacao - Mensal';
     fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.receivable.dueDate = parseBusinessDate('2026-09-23');
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-23');
+    fake.clientReference.billingAnchorDay = 23;
     const { referrals } = createReferralQualificationDouble();
+    const { cycle } = createCycleRecorder(fake);
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
       {} as never,
       fake.config as never,
       referrals as never,
+      cycle as never,
     );
     const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
     await service.replaceReceivablePix(
@@ -5569,6 +5629,24 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PAGO');
     expect(fake.transactions).toHaveLength(1);
     expect(fake.transactions[0]).toMatchObject({ categoryId: fake.activationCategory.id });
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledTimes(1);
+    expect(fake.tx.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [
+          { receivableId: fake.receivable.id },
+          { items: { some: { receivableId: fake.receivable.id } } },
+        ],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'RECEIVABLE_PAID',
+        errorMessage: 'Cobranca futura cancelada porque a conta a receber foi paga.',
+        nextAttemptAt: null,
+      },
+    });
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
   });
 
   it('keeps paid initial activation PIX local state atomic when activation category is missing', async () => {

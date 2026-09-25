@@ -810,6 +810,7 @@ export default function DashboardPage() {
       {view === 'settings' ? (
         <SettingsView
           initialSection={settingsInitialSection}
+          onOpenAutomations={() => setView('automations')}
           onOpenFinance={() => setView('finance')}
           onOpenWhatsApp={() => setView('whatsapp')}
         />
@@ -2849,10 +2850,12 @@ const settingsSections = [
 
 function SettingsView({
   initialSection,
+  onOpenAutomations,
   onOpenFinance,
   onOpenWhatsApp,
 }: {
   initialSection: SettingsSection;
+  onOpenAutomations: () => void;
   onOpenFinance: () => void;
   onOpenWhatsApp: () => void;
 }) {
@@ -3323,6 +3326,7 @@ function SettingsView({
               recoverySendIntervalSeconds={recoverySendIntervalSeconds}
               recoverySendTime={recoverySendTime}
               recoverySettings={recoverySettings}
+              onOpenAutomations={onOpenAutomations}
               onRecoveryDay10EnabledChange={setRecoveryDay10Enabled}
               onRecoveryDay10OffsetDaysChange={setRecoveryDay10OffsetDays}
               onRecoveryDay15EnabledChange={setRecoveryDay15Enabled}
@@ -3616,6 +3620,7 @@ function SettingsBillingAutomationPanel({
   recoverySendIntervalSeconds,
   recoverySendTime,
   recoverySettings,
+  onOpenAutomations,
   onRecoveryDay10EnabledChange,
   onRecoveryDay10OffsetDaysChange,
   onRecoveryDay15EnabledChange,
@@ -3662,6 +3667,7 @@ function SettingsBillingAutomationPanel({
   recoverySendIntervalSeconds: string;
   recoverySendTime: string;
   recoverySettings: RecoveryAutomationSettings | null;
+  onOpenAutomations: () => void;
   onRecoveryDay10EnabledChange: (value: boolean) => void;
   onRecoveryDay10OffsetDaysChange: (value: string) => void;
   onRecoveryDay15EnabledChange: (value: boolean) => void;
@@ -3676,6 +3682,7 @@ function SettingsBillingAutomationPanel({
   onRecoverySendIntervalSecondsChange: (value: string) => void;
   onRecoverySendTimeChange: (value: string) => void;
 }) {
+  const [activeBillingTab, setActiveBillingTab] = useState<'rules' | 'templates'>('rules');
   const recoverySteps = [
     {
       enabled: recoveryDay3Enabled,
@@ -3709,258 +3716,316 @@ function SettingsBillingAutomationPanel({
 
   return (
     <div className="settings-v2-panel settings-billing-panel">
-      {error ? <div className="notice danger">{error}</div> : null}
-      <div className="settings-v2-toolbar">
-        <Button
-          icon={RefreshCcw}
-          loading={loading}
-          size="sm"
-          variant="secondary"
-          onClick={() => void onRefresh()}
+      <div className="settings-billing-subnav" role="tablist" aria-label="Cobrança e automações">
+        <button
+          aria-selected={activeBillingTab === 'rules'}
+          className={activeBillingTab === 'rules' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setActiveBillingTab('rules')}
         >
-          Atualizar
-        </Button>
+          Regras
+        </button>
+        <button
+          aria-selected={activeBillingTab === 'templates'}
+          className={activeBillingTab === 'templates' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setActiveBillingTab('templates')}
+        >
+          Templates
+        </button>
       </div>
 
-      <section className="settings-billing-section" aria-labelledby="settings-billing-title">
-        <header className="settings-billing-header">
-          <div>
-            <span className="metric-label">Cobrança e automações</span>
-            <h3 id="settings-billing-title">Cobrança automática</h3>
-            <p>Configure quando e como as cobranças automáticas serão processadas.</p>
+      {activeBillingTab === 'rules' ? (
+        <>
+          {error ? <div className="notice danger">{error}</div> : null}
+          <div className="settings-v2-toolbar">
+            <Button
+              icon={RefreshCcw}
+              loading={loading}
+              size="sm"
+              variant="secondary"
+              onClick={() => void onRefresh()}
+            >
+              Atualizar
+            </Button>
           </div>
-          <span className={`finance-status-pill tone-${enabled ? 'success' : 'muted'}`}>
-            {!settings ? 'Indisponível' : enabled ? 'Ativada' : 'Desativada'}
-          </span>
-        </header>
 
-        <label className="toggle-field settings-billing-toggle">
-          <input
-            checked={enabled}
-            disabled={loading || saving || !settings}
-            type="checkbox"
-            onChange={(event) => onEnabledChange(event.target.checked)}
-          />
-          <span>
-            Ativar cobrança automática
-            <small>Quando ativada, o CRM agenda cobranças elegíveis automaticamente.</small>
-          </span>
-        </label>
+          <section className="settings-billing-section" aria-labelledby="settings-billing-title">
+            <header className="settings-billing-header">
+              <div>
+                <span className="metric-label">Cobrança e automações</span>
+                <h3 id="settings-billing-title">Cobrança automática</h3>
+                <p>Configure quando e como as cobranças automáticas serão processadas.</p>
+              </div>
+              <span className={`finance-status-pill tone-${enabled ? 'success' : 'muted'}`}>
+                {!settings ? 'Indisponível' : enabled ? 'Ativada' : 'Desativada'}
+              </span>
+            </header>
 
-        <div className="settings-billing-form-grid">
-          <label className="field">
-            <span>Horário de envio</span>
-            <input
-              disabled={loading || saving || !settings}
-              required
-              type="time"
-              value={settings ? sendTime : ''}
-              onChange={(event) => onSendTimeChange(event.target.value)}
-            />
-          </label>
+            <label className="toggle-field settings-billing-toggle">
+              <input
+                checked={enabled}
+                disabled={loading || saving || !settings}
+                type="checkbox"
+                onChange={(event) => onEnabledChange(event.target.checked)}
+              />
+              <span>
+                Ativar cobrança automática
+                <small>Quando ativada, o CRM agenda cobranças elegíveis automaticamente.</small>
+              </span>
+            </label>
 
-          <label className="field">
-            <span>Intervalo entre mensagens</span>
-            <input
-              aria-describedby="billing-send-interval-help"
-              disabled={loading || saving || !settings}
-              max={300}
-              min={3}
-              required
-              step={1}
-              type="number"
-              value={settings ? sendIntervalSeconds : ''}
-              onChange={(event) => onSendIntervalSecondsChange(event.target.value)}
-            />
-            <small id="billing-send-interval-help">
-              Tempo de espera entre mensagens programadas para o mesmo lote, em segundos.
-            </small>
-            {!intervalValid ? (
-              <small className="error-message">Use um valor entre 3 e 300.</small>
+            <div className="settings-billing-form-grid">
+              <label className="field">
+                <span>Horário de envio</span>
+                <input
+                  disabled={loading || saving || !settings}
+                  required
+                  type="time"
+                  value={settings ? sendTime : ''}
+                  onChange={(event) => onSendTimeChange(event.target.value)}
+                />
+              </label>
+
+              <label className="field">
+                <span>Intervalo entre mensagens</span>
+                <input
+                  aria-describedby="billing-send-interval-help"
+                  disabled={loading || saving || !settings}
+                  max={300}
+                  min={3}
+                  required
+                  step={1}
+                  type="number"
+                  value={settings ? sendIntervalSeconds : ''}
+                  onChange={(event) => onSendIntervalSecondsChange(event.target.value)}
+                />
+                <small id="billing-send-interval-help">
+                  Tempo de espera entre mensagens programadas para o mesmo lote, em segundos.
+                </small>
+                {!intervalValid ? (
+                  <small className="error-message">Use um valor entre 3 e 300.</small>
+                ) : null}
+              </label>
+
+              <div className="field settings-billing-readonly-field">
+                <span>Fuso horário</span>
+                <strong>{settings?.timezone ?? 'Indisponível'}</strong>
+                <small>Usado para calcular horário e dia das cobranças.</small>
+              </div>
+            </div>
+
+            <div className="settings-billing-note">
+              <Info aria-hidden="true" size={16} />
+              <span>Os envios dependem de uma conexão WhatsApp operacional.</span>
+            </div>
+
+            <footer className="settings-billing-actions">
+              <Button
+                disabled={!dirty || !intervalValid || !sendTime || !settings}
+                icon={CircleCheck}
+                loading={saving}
+                variant="primary"
+                onClick={() => void onSave()}
+              >
+                Salvar configurações
+              </Button>
+            </footer>
+          </section>
+
+          <section className="settings-billing-section" aria-labelledby="settings-recovery-title">
+            {recoveryError ? (
+              <div className="notice danger" role="alert">
+                {recoveryError}
+              </div>
             ) : null}
-          </label>
+            <header className="settings-billing-header">
+              <div>
+                <h3 id="settings-recovery-title">Recuperação de inadimplência</h3>
+                <p>Configure quando o CRM deve entrar em contato com clientes inadimplentes.</p>
+              </div>
+              <span className={`finance-status-pill tone-${recoveryEnabled ? 'success' : 'muted'}`}>
+                {!recoverySettings
+                  ? 'Indisponível'
+                  : recoveryEnabled
+                    ? 'Envios automáticos ativos'
+                    : 'Envios automáticos pausados'}
+              </span>
+            </header>
 
-          <div className="field settings-billing-readonly-field">
-            <span>Fuso horário</span>
-            <strong>{settings?.timezone ?? 'Indisponível'}</strong>
-            <small>Usado para calcular horário e dia das cobranças.</small>
-          </div>
-        </div>
+            <label className="toggle-field settings-billing-toggle">
+              <input
+                checked={recoveryEnabled}
+                disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                type="checkbox"
+                onChange={(event) => onRecoveryEnabledChange(event.target.checked)}
+              />
+              <span>
+                Ativar envios automáticos de recuperação
+                <small>
+                  Quando desativado, o CRM não envia mensagens de recuperação automaticamente.
+                  Campanhas e agendamentos podem continuar sendo preparados para uma futura
+                  reativação.
+                </small>
+              </span>
+            </label>
 
-        <div className="settings-billing-note">
-          <Info aria-hidden="true" size={16} />
-          <span>Os envios dependem de uma conexão WhatsApp operacional.</span>
-        </div>
+            <div className="settings-billing-form-grid">
+              <label className="field">
+                <span>Horário de envio</span>
+                <input
+                  disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                  required
+                  type="time"
+                  value={recoverySettings ? recoverySendTime : ''}
+                  onChange={(event) => onRecoverySendTimeChange(event.target.value)}
+                />
+              </label>
 
-        <footer className="settings-billing-actions">
-          <Button
-            disabled={!dirty || !intervalValid || !sendTime || !settings}
-            icon={CircleCheck}
-            loading={saving}
-            variant="primary"
-            onClick={() => void onSave()}
-          >
-            Salvar configurações
-          </Button>
-        </footer>
-      </section>
+              <label className="field">
+                <span>Intervalo entre mensagens</span>
+                <input
+                  aria-describedby="recovery-send-interval-help"
+                  disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                  max={300}
+                  min={3}
+                  required
+                  step={1}
+                  type="number"
+                  value={recoverySettings ? recoverySendIntervalSeconds : ''}
+                  onChange={(event) => onRecoverySendIntervalSecondsChange(event.target.value)}
+                />
+                <small id="recovery-send-interval-help">
+                  Intervalo entre mensagens programadas no mesmo lote, em segundos.
+                </small>
+                {!recoveryIntervalValid ? (
+                  <small className="error-message">Use um valor entre 3 e 300.</small>
+                ) : null}
+              </label>
 
-      <section className="settings-billing-section" aria-labelledby="settings-recovery-title">
-        {recoveryError ? (
-          <div className="notice danger" role="alert">
-            {recoveryError}
-          </div>
-        ) : null}
-        <header className="settings-billing-header">
-          <div>
-            <h3 id="settings-recovery-title">Recuperação de inadimplência</h3>
-            <p>Configure quando o CRM deve entrar em contato com clientes inadimplentes.</p>
-          </div>
-          <span className={`finance-status-pill tone-${recoveryEnabled ? 'success' : 'muted'}`}>
-            {!recoverySettings
-              ? 'Indisponível'
-              : recoveryEnabled
-                ? 'Envios automáticos ativos'
-                : 'Envios automáticos pausados'}
-          </span>
-        </header>
+              <div className="field settings-billing-readonly-field">
+                <span>Fuso horário</span>
+                <strong>{recoverySettings?.timezone ?? 'Indisponível'}</strong>
+                <small>Usado para calcular o dia e o horário de cada contato.</small>
+              </div>
+            </div>
 
-        <label className="toggle-field settings-billing-toggle">
-          <input
-            checked={recoveryEnabled}
-            disabled={recoveryLoading || recoverySaving || !recoverySettings}
-            type="checkbox"
-            onChange={(event) => onRecoveryEnabledChange(event.target.checked)}
-          />
-          <span>
-            Ativar envios automáticos de recuperação
-            <small>
-              Quando desativado, o CRM não envia mensagens de recuperação automaticamente. Campanhas
-              e agendamentos podem continuar sendo preparados para uma futura reativação.
-            </small>
-          </span>
-        </label>
+            <div className="settings-recovery-steps" aria-label="Etapas de recuperação">
+              {recoverySteps.map((step) => {
+                const helpId = `settings-recovery-${step.label.replace('+', '')}-offset-help`;
 
-        <div className="settings-billing-form-grid">
-          <label className="field">
-            <span>Horário de envio</span>
-            <input
-              disabled={recoveryLoading || recoverySaving || !recoverySettings}
-              required
-              type="time"
-              value={recoverySettings ? recoverySendTime : ''}
-              onChange={(event) => onRecoverySendTimeChange(event.target.value)}
-            />
-          </label>
+                return (
+                  <article key={step.label} className="settings-recovery-step">
+                    <label className="toggle-field">
+                      <input
+                        checked={step.enabled}
+                        disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                        type="checkbox"
+                        onChange={(event) => step.onEnabledChange(event.target.checked)}
+                      />
+                      <span>Etapa {step.label}</span>
+                    </label>
 
-          <label className="field">
-            <span>Intervalo entre mensagens</span>
-            <input
-              aria-describedby="recovery-send-interval-help"
-              disabled={recoveryLoading || recoverySaving || !recoverySettings}
-              max={300}
-              min={3}
-              required
-              step={1}
-              type="number"
-              value={recoverySettings ? recoverySendIntervalSeconds : ''}
-              onChange={(event) => onRecoverySendIntervalSecondsChange(event.target.value)}
-            />
-            <small id="recovery-send-interval-help">
-              X segundos entre mensagens programadas no mesmo dia/lote.
-            </small>
-            {!recoveryIntervalValid ? (
-              <small className="error-message">Use um valor entre 3 e 300.</small>
+                    <label className="field">
+                      <span>Disparar após</span>
+                      <input
+                        aria-describedby={helpId}
+                        disabled={recoveryLoading || recoverySaving || !recoverySettings}
+                        max={365}
+                        min={1}
+                        required
+                        step={1}
+                        type="number"
+                        value={recoverySettings ? step.offsetDays : ''}
+                        onChange={(event) => step.onOffsetDaysChange(event.target.value)}
+                      />
+                      <small id={helpId}>{step.offsetDays || '?'} dias do vencimento.</small>
+                    </label>
+                  </article>
+                );
+              })}
+            </div>
+
+            {!recoveryOffsetsValid ? (
+              <small className="error-message">
+                Use offsets únicos, crescentes e entre 1 e 365 dias.
+              </small>
             ) : null}
-          </label>
 
-          <div className="field settings-billing-readonly-field">
-            <span>Fuso horário</span>
-            <strong>{recoverySettings?.timezone ?? 'Indisponível'}</strong>
-            <small>Usado para calcular o dia e o horário de cada contato.</small>
+            <div className="settings-billing-note">
+              <Info aria-hidden="true" size={16} />
+              <span>
+                O nome da etapa identifica o estágio da recuperação. O dia efetivo do envio é
+                definido pelo número de dias após o vencimento.
+              </span>
+            </div>
+
+            <footer className="settings-billing-actions">
+              <Button
+                icon={RefreshCcw}
+                loading={recoveryLoading}
+                size="sm"
+                variant="secondary"
+                onClick={() => void onRecoveryRefresh()}
+              >
+                Atualizar recuperação
+              </Button>
+              <Button
+                disabled={
+                  !recoveryDirty ||
+                  !recoveryIntervalValid ||
+                  !recoveryOffsetsValid ||
+                  !recoverySendTime ||
+                  !recoverySettings
+                }
+                icon={CircleCheck}
+                loading={recoverySaving}
+                variant="primary"
+                onClick={() => void onRecoverySave()}
+              >
+                Salvar recuperação
+              </Button>
+            </footer>
+          </section>
+        </>
+      ) : null}
+
+      {activeBillingTab === 'templates' ? (
+        <section
+          className="settings-billing-section settings-template-placeholder"
+          aria-labelledby="settings-templates-title"
+        >
+          <header className="settings-billing-header">
+            <div>
+              <span className="metric-label">Templates de mensagens</span>
+              <h3 id="settings-templates-title">Templates de mensagens</h3>
+              <p>
+                Gerencie os textos utilizados nas cobranças e recuperações automáticas. A
+                administração será centralizada nesta área.
+              </p>
+            </div>
+            <span className="settings-v2-card-icon" aria-hidden="true">
+              <MessageSquareText size={18} />
+            </span>
+          </header>
+
+          <div className="settings-billing-note">
+            <Info aria-hidden="true" size={16} />
+            <span>
+              A fonte oficial dos templates continua disponível em Automações enquanto esta área é
+              preparada.
+            </span>
           </div>
-        </div>
 
-        <div className="settings-recovery-steps" aria-label="Etapas de recuperação">
-          {recoverySteps.map((step) => {
-            const helpId = `settings-recovery-${step.label.replace('+', '')}-offset-help`;
-
-            return (
-              <article key={step.label} className="settings-recovery-step">
-                <label className="toggle-field">
-                  <input
-                    checked={step.enabled}
-                    disabled={recoveryLoading || recoverySaving || !recoverySettings}
-                    type="checkbox"
-                    onChange={(event) => step.onEnabledChange(event.target.checked)}
-                  />
-                  <span>
-                    Etapa {step.label}
-                    <small>O nome identifica o estágio; o envio usa o número de dias abaixo.</small>
-                  </span>
-                </label>
-
-                <label className="field">
-                  <span>Disparar após</span>
-                  <input
-                    aria-describedby={helpId}
-                    disabled={recoveryLoading || recoverySaving || !recoverySettings}
-                    max={365}
-                    min={1}
-                    required
-                    step={1}
-                    type="number"
-                    value={recoverySettings ? step.offsetDays : ''}
-                    onChange={(event) => step.onOffsetDaysChange(event.target.value)}
-                  />
-                  <small id={helpId}>{step.offsetDays || '?'} dias do vencimento.</small>
-                </label>
-              </article>
-            );
-          })}
-        </div>
-
-        {!recoveryOffsetsValid ? (
-          <small className="error-message">
-            Use offsets únicos, crescentes e entre 1 e 365 dias.
-          </small>
-        ) : null}
-
-        <div className="settings-billing-note">
-          <Info aria-hidden="true" size={16} />
-          <span>
-            O nome da etapa identifica o estágio da recuperação. O dia efetivo do envio é definido
-            pelo número de dias após o vencimento.
-          </span>
-        </div>
-
-        <footer className="settings-billing-actions">
-          <Button
-            icon={RefreshCcw}
-            loading={recoveryLoading}
-            size="sm"
-            variant="secondary"
-            onClick={() => void onRecoveryRefresh()}
-          >
-            Atualizar recuperação
-          </Button>
-          <Button
-            disabled={
-              !recoveryDirty ||
-              !recoveryIntervalValid ||
-              !recoveryOffsetsValid ||
-              !recoverySendTime ||
-              !recoverySettings
-            }
-            icon={CircleCheck}
-            loading={recoverySaving}
-            variant="primary"
-            onClick={() => void onRecoverySave()}
-          >
-            Salvar recuperação
-          </Button>
-        </footer>
-      </section>
+          <footer className="settings-billing-actions">
+            <Button icon={ArrowRight} variant="secondary" onClick={onOpenAutomations}>
+              Abrir templates em Automações
+            </Button>
+          </footer>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -152,7 +152,9 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain(
       'Os envios dependem de uma conexão WhatsApp operacional.',
     );
-    expect(settingsBillingSource).not.toContain('Templates');
+    expect(settingsBillingSource).toContain("useState<'rules' | 'templates'>('rules')");
+    expect(settingsBillingSource).toContain('Regras');
+    expect(settingsBillingSource).toContain('Templates');
   });
 
   it('centralizes RecoveryAutomationSettings below billing with an independent save', () => {
@@ -203,14 +205,19 @@ describe('Settings V2 SET1 shell contracts', () => {
       'Quando desativado, o CRM não envia mensagens de recuperação automaticamente.',
     );
     expect(settingsBillingSource).toContain('Campanhas');
-    expect(settingsBillingSource).toContain(
-      'e agendamentos podem continuar sendo preparados para uma futura reativação.',
-    );
+    expect(settingsBillingSource).toContain('agendamentos podem continuar sendo preparados');
+    expect(settingsBillingSource).toContain('reativação.');
     expect(settingsBillingSource).toContain('Intervalo entre mensagens');
-    expect(settingsBillingSource).toContain('X segundos entre mensagens');
+    expect(settingsBillingSource).toContain(
+      'Intervalo entre mensagens programadas no mesmo lote, em segundos.',
+    );
+    expect(settingsBillingSource).not.toContain('X segundos entre mensagens');
     expect(settingsBillingSource).toContain("label: 'D+10'");
     expect(settingsBillingSource).toContain('offsetDays: recoveryDay10OffsetDays');
     expect(settingsBillingSource).toContain('Etapa {step.label}');
+    expect(settingsBillingSource).not.toContain(
+      'O nome identifica o estágio; o envio usa o número de dias abaixo.',
+    );
     expect(settingsBillingSource).toContain('Disparar após');
     expect(settingsBillingSource).toContain("{step.offsetDays || '?'} dias do vencimento.");
     expect(settingsBillingSource).toContain(
@@ -226,6 +233,26 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain('!recoverySettings');
     expect(settingsBillingSource).not.toContain('Mensagens de recuperação');
     expect(settingsBillingSource).not.toContain('RecoveryAutomationPreviewModal');
+  });
+
+  it('adds a local billing subnavigation with a safe templates placeholder', () => {
+    expect(dashboardSource).toContain("onOpenAutomations={() => setView('automations')}");
+    expect(settingsViewSource).toContain('onOpenAutomations={onOpenAutomations}');
+    expect(settingsBillingSource).toContain('className="settings-billing-subnav"');
+    expect(settingsBillingSource).toContain("setActiveBillingTab('rules')");
+    expect(settingsBillingSource).toContain("setActiveBillingTab('templates')");
+    expect(settingsBillingSource).toContain('activeBillingTab ===');
+    expect(settingsBillingSource).toContain('Templates de mensagens');
+    expect(settingsBillingSource).toContain(
+      'Gerencie os textos utilizados nas cobranças e recuperações automáticas.',
+    );
+    expect(settingsBillingSource).toContain('administração será centralizada nesta área.');
+    expect(settingsBillingSource).toContain('Abrir templates em Automações');
+    expect(settingsBillingSource).not.toContain('SET4C.2');
+    expect(settingsBillingSource).not.toContain('updateMessageTemplate');
+    expect(settingsBillingSource).not.toContain('previewMessageTemplate');
+    expect(stylesSource).toContain('.settings-billing-subnav');
+    expect(stylesSource).toContain('.settings-template-placeholder');
   });
 
   it('saves billing settings only from the CTA and protects double submit', () => {

@@ -5933,6 +5933,43 @@ tbody tr:hover,
   gap: 20px;
 }
 
+.settings-billing-subnav {
+  display: inline-flex;
+  width: fit-content;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 4px;
+}
+
+.settings-billing-subnav button {
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 7px 13px;
+}
+
+.settings-billing-subnav button:hover,
+.settings-billing-subnav button:focus-visible {
+  border-color: rgb(38 198 163 / 24%);
+  color: var(--text);
+  outline: none;
+}
+
+.settings-billing-subnav button.active,
+.settings-billing-subnav button[aria-selected='true'] {
+  border-color: rgb(38 198 163 / 34%);
+  background: rgb(38 198 163 / 11%);
+  color: var(--accent-strong);
+}
+
 .settings-billing-section {
   display: grid;
   gap: 16px;
@@ -6053,6 +6090,11 @@ tbody tr:hover,
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.settings-template-placeholder {
+  min-height: 220px;
+  align-content: start;
 }
 
 .payment-provider-grid {
@@ -6663,6 +6705,15 @@ tbody tr:hover,
   .settings-billing-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .settings-billing-subnav {
+    display: flex;
+    width: 100%;
+  }
+
+  .settings-billing-subnav button {
+    flex: 1;
   }
 
   .finance-category-table-wrap {

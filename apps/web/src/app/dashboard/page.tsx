@@ -11461,6 +11461,7 @@ function PixReceivableModal({
   const [error, setError] = useState('');
   const [showPixData, setShowPixData] = useState(false);
   const [showHistory, setShowHistory] = useState(true);
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const [expandedHistoryIntentId, setExpandedHistoryIntentId] = useState<string | null>(null);
   const [showReconciliation, setShowReconciliation] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
@@ -11521,6 +11522,7 @@ function PixReceivableModal({
 
   useEffect(() => {
     setShowPixData(activeIntent?.status === 'WAITING_PAYMENT');
+    setShowAllHistory(false);
     setExpandedHistoryIntentId(null);
   }, [activeIntent?.id, activeIntent?.status]);
 
@@ -11748,6 +11750,13 @@ function PixReceivableModal({
   const isPaidPix = activeStatus === 'PAID' || receivable.status === 'PAGO';
   const shouldShowPixData = isWaitingPix || showPixData;
   const historicalIntents = intents.filter((intent) => intent.id !== activeIntent?.id);
+  const orderedHistoryIntents = [activeIntent, ...historicalIntents].filter(
+    Boolean,
+  ) as PaymentIntent[];
+  const visibleHistoryIntents = showAllHistory
+    ? orderedHistoryIntents
+    : orderedHistoryIntents.slice(0, 3);
+  const hasHiddenHistoryIntents = orderedHistoryIntents.length > 3;
   const contextualActionItems = activeIntent
     ? [
         ...(canReplacePix
@@ -11894,10 +11903,12 @@ function PixReceivableModal({
                       : formatDateTime(activeIntent.createdAt)}
                   </dd>
                 </div>
-                <div>
-                  <dt>{isWaitingPix ? 'Válido até' : 'Expiração'}</dt>
-                  <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
-                </div>
+                {!isPaidPix ? (
+                  <div>
+                    <dt>{isWaitingPix ? 'Válido até' : 'Expiração'}</dt>
+                    <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
+                  </div>
+                ) : null}
               </dl>
               {activeIntent.status === 'FAILED' &&
               (activeIntent.failureMessage || activeIntent.failureCode) ? (
@@ -11993,6 +12004,12 @@ function PixReceivableModal({
                     )}
                   </div>
                 ) : null}
+                <dl className="detail-list compact-detail-list pix-data-details">
+                  <div>
+                    <dt>Expiração</dt>
+                    <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
+                  </div>
+                </dl>
               </div>
             ) : null}
 
@@ -12016,73 +12033,65 @@ function PixReceivableModal({
             </button>
             {showHistory ? (
               <div className="pix-history-list" id="pix-history-list">
-                {[activeIntent, ...historicalIntents].filter(Boolean).map((intent) => {
-                  const safeIntent = intent as PaymentIntent;
-                  const StatusIcon = paymentIntentStatusIcon(safeIntent.status);
-                  const expanded = expandedHistoryIntentId === safeIntent.id;
+                {visibleHistoryIntents.map((intent) => {
+                  const StatusIcon = paymentIntentStatusIcon(intent.status);
+                  const expanded = expandedHistoryIntentId === intent.id;
 
                   return (
-                    <article className="pix-history-item" key={safeIntent.id}>
+                    <article className="pix-history-item" key={intent.id}>
                       <button
                         type="button"
                         aria-expanded={expanded}
-                        aria-controls={`pix-history-detail-${safeIntent.id}`}
+                        aria-controls={`pix-history-detail-${intent.id}`}
                         onClick={() =>
                           setExpandedHistoryIntentId((current) =>
-                            current === safeIntent.id ? null : safeIntent.id,
+                            current === intent.id ? null : intent.id,
                           )
                         }
                       >
                         <StatusIcon aria-hidden="true" size={15} />
                         <span>
-                          <strong>{paymentIntentDisplayTransactionId(safeIntent)}</strong>
-                          {safeIntent.id === activeIntent?.id ? ' Atual' : ''}
+                          <strong>{paymentIntentDisplayTransactionId(intent)}</strong>
+                          {intent.id === activeIntent?.id ? ' Atual' : ''}
                         </span>
-                        <span>{paymentIntentStatusLabel(safeIntent.status)}</span>
-                        <span>
-                          {paymentIntentShortDate(safeIntent.paidAt ?? safeIntent.createdAt)}
-                        </span>
-                        <span>{formatCurrency(safeIntent.amount)}</span>
+                        <span>{paymentIntentStatusLabel(intent.status)}</span>
+                        <span>{paymentIntentShortDate(intent.paidAt ?? intent.createdAt)}</span>
+                        <span>{formatCurrency(intent.amount)}</span>
                       </button>
                       {expanded ? (
-                        <div
-                          className="pix-history-detail"
-                          id={`pix-history-detail-${safeIntent.id}`}
-                        >
+                        <div className="pix-history-detail" id={`pix-history-detail-${intent.id}`}>
                           <dl className="detail-list compact-detail-list">
                             <div>
                               <dt>Provider</dt>
-                              <dd>{paymentProviderDisplay(safeIntent.provider)}</dd>
+                              <dd>{paymentProviderDisplay(intent.provider)}</dd>
                             </div>
                             <div>
                               <dt>Transação</dt>
-                              <dd>{safeIntent.providerTransactionId ?? '-'}</dd>
+                              <dd>{intent.providerTransactionId ?? '-'}</dd>
                             </div>
                             <div>
                               <dt>Status</dt>
-                              <dd>{paymentIntentStatusLabel(safeIntent.status)}</dd>
+                              <dd>{paymentIntentStatusLabel(intent.status)}</dd>
                             </div>
                             <div>
                               <dt>Status técnico</dt>
-                              <dd>{safeIntent.status}</dd>
+                              <dd>{intent.status}</dd>
                             </div>
                             <div>
                               <dt>Status externo</dt>
-                              <dd>{safeIntent.externalStatus ?? '-'}</dd>
+                              <dd>{intent.externalStatus ?? '-'}</dd>
                             </div>
                             <div>
                               <dt>Criado em</dt>
-                              <dd>{formatDateTime(safeIntent.createdAt)}</dd>
+                              <dd>{formatDateTime(intent.createdAt)}</dd>
                             </div>
                             <div>
                               <dt>Expira em</dt>
-                              <dd>
-                                {safeIntent.expiresAt ? formatDateTime(safeIntent.expiresAt) : '-'}
-                              </dd>
+                              <dd>{intent.expiresAt ? formatDateTime(intent.expiresAt) : '-'}</dd>
                             </div>
                             <div>
                               <dt>Pago em</dt>
-                              <dd>{safeIntent.paidAt ? formatDateTime(safeIntent.paidAt) : '-'}</dd>
+                              <dd>{intent.paidAt ? formatDateTime(intent.paidAt) : '-'}</dd>
                             </div>
                           </dl>
                         </div>
@@ -12090,6 +12099,19 @@ function PixReceivableModal({
                     </article>
                   );
                 })}
+                {hasHiddenHistoryIntents ? (
+                  <button
+                    className="pix-history-limit-toggle"
+                    type="button"
+                    aria-controls="pix-history-list"
+                    aria-expanded={showAllHistory}
+                    onClick={() => setShowAllHistory((value) => !value)}
+                  >
+                    {showAllHistory
+                      ? 'Mostrar menos'
+                      : `Ver todas (${orderedHistoryIntents.length})`}
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </section>

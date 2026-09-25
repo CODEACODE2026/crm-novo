@@ -5515,6 +5515,11 @@ tbody tr:hover,
   align-items: start;
 }
 
+.pix-data-details {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .pix-copy-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -5595,12 +5600,12 @@ tbody tr:hover,
 
 .pix-history-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .pix-history-item {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .pix-history-item > button {
@@ -5610,9 +5615,9 @@ tbody tr:hover,
       auto
     );
   align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  padding: 8px 10px;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 9px;
   text-align: left;
 }
 
@@ -5627,6 +5632,24 @@ tbody tr:hover,
 
 .pix-history-item > button strong {
   color: var(--text);
+}
+
+.pix-history-limit-toggle {
+  width: fit-content;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+}
+
+.pix-history-limit-toggle:hover {
+  border-color: rgb(38 198 163 / 28%);
+  background: rgb(38 198 163 / 8%);
 }
 
 .pix-history-detail {
@@ -6316,6 +6339,7 @@ tbody tr:hover,
   .pix-waiting-actions .secondary-button,
   .pix-waiting-actions .primary-button,
   .pix-disclosure-button,
+  .pix-history-limit-toggle,
   .action-menu-trigger {
     width: 100%;
   }

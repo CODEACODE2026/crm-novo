@@ -197,6 +197,17 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('Pagamento confirmado');
     expect(dashboardSource).toContain('Recebimento processado com sucesso.');
     expect(pixModalSource).toContain('Ver dados do PIX');
+    expect(pixModalSource).toContain("activeIntent.status === 'PAID' && activeIntent.paidAt");
+    expect(pixModalSource).toContain('formatDateTime(activeIntent.paidAt)');
+    expect(pixModalSource).not.toContain('activeIntent.paidAt ?? activeIntent.expiresAt');
+    expect(pixModalSource).not.toContain('activeIntent.paidAt ?? activeIntent.updatedAt');
+    expect(pixModalSource).not.toContain('activeIntent.paidAt ?? activeIntent.lastSyncAt');
+    expect(pixModalSource).toContain('{!isPaidPix ? (');
+    expect(pixModalSource).toContain("<dt>{isWaitingPix ? 'Válido até' : 'Expiração'}</dt>");
+    expect(pixModalSource).toContain(
+      'className="detail-list compact-detail-list pix-data-details"',
+    );
+    expect(pixModalSource).toContain('<dt>Expiração</dt>');
     expect(pixModalSource).toContain("receivable.status !== 'PAGO' &&");
     expect(pixModalSource).toContain('Pagamento concluído. Ações operacionais encerradas.');
     expect(pixModalSource).toContain('{contextualActionItems.length ? (');
@@ -210,9 +221,9 @@ describe('PIX reconciliation UI contract', () => {
         status: 'PAGO',
       },
       intents: [
-        { amount: '30.00', id: 'A', status: 'SUPERSEDED' },
-        { amount: '30.00', id: 'B', status: 'SUPERSEDED' },
-        { amount: '30.00', id: 'C', status: 'PAID' },
+        { amount: '30.00', current: true, providerTransactionId: '75975', status: 'PAID' },
+        { amount: '30.00', providerTransactionId: '75739', status: 'SUPERSEDED' },
+        { amount: '30.00', providerTransactionId: '75148', status: 'SUPERSEDED' },
       ],
     };
 
@@ -222,29 +233,58 @@ describe('PIX reconciliation UI contract', () => {
       status: 'PAGO',
     });
     expect(fixture.intents).toEqual([
-      { amount: '30.00', id: 'A', status: 'SUPERSEDED' },
-      { amount: '30.00', id: 'B', status: 'SUPERSEDED' },
-      { amount: '30.00', id: 'C', status: 'PAID' },
+      { amount: '30.00', current: true, providerTransactionId: '75975', status: 'PAID' },
+      { amount: '30.00', providerTransactionId: '75739', status: 'SUPERSEDED' },
+      { amount: '30.00', providerTransactionId: '75148', status: 'SUPERSEDED' },
     ]);
     expect(dashboardSource).toContain("SUPERSEDED: 'Substituído'");
     expect(dashboardSource).toContain("PAID: 'Pago'");
     expect(pixModalSource).toContain('Pagamento confirmado');
     expect(pixModalSource).toContain('Tentativas ({intents.length})');
-    expect(pixModalSource).toContain("{safeIntent.id === activeIntent?.id ? ' Atual' : ''}");
+    expect(pixModalSource).toContain("{intent.id === activeIntent?.id ? ' Atual' : ''}");
+    expect(pixModalSource).toContain('orderedHistoryIntents.length > 3');
+    expect(pixModalSource).toContain('orderedHistoryIntents.slice(0, 3)');
   });
 
   it('renders compact expandable history without duplicating the current intent as a large card', () => {
     expect(pixModalSource).toContain('Tentativas ({intents.length})');
     expect(pixModalSource).toContain('const historicalIntents = intents.filter');
-    expect(pixModalSource).toContain('[activeIntent, ...historicalIntents].filter(Boolean).map');
+    expect(pixModalSource).toContain(
+      'const orderedHistoryIntents = [activeIntent, ...historicalIntents].filter',
+    );
+    expect(pixModalSource).toContain('const visibleHistoryIntents = showAllHistory');
+    expect(pixModalSource).toContain('visibleHistoryIntents.map');
     expect(pixModalSource).toContain('expandedHistoryIntentId');
-    expect(pixModalSource).toContain('paymentIntentDisplayTransactionId(safeIntent)');
+    expect(pixModalSource).toContain('paymentIntentDisplayTransactionId(intent)');
     expect(pixModalSource).toContain('Status técnico');
     expect(pixModalSource).toContain('aria-controls="pix-history-list"');
-    expect(pixModalSource).toContain('aria-controls={`pix-history-detail-${safeIntent.id}`}');
-    expect(pixModalSource).toContain('id={`pix-history-detail-${safeIntent.id}`}');
+    expect(pixModalSource).toContain('aria-controls={`pix-history-detail-${intent.id}`}');
+    expect(pixModalSource).toContain('id={`pix-history-detail-${intent.id}`}');
     expect(stylesSource).toContain('.pix-history-list');
     expect(stylesSource).toContain('.pix-history-item > button');
+    expect(stylesSource).toContain('min-height: 36px;');
+    expect(stylesSource).toContain('.pix-history-limit-toggle');
+  });
+
+  it('limits PIX history to three rows before local expansion and can collapse again', () => {
+    const fixture = {
+      intents: Array.from({ length: 6 }, (_, index) => ({
+        id: `intent-${index + 1}`,
+        status: index === 0 ? 'PAID' : 'SUPERSEDED',
+      })),
+    };
+
+    expect(fixture.intents).toHaveLength(6);
+    expect(fixture.intents.slice(0, 3)).toHaveLength(3);
+    expect(pixModalSource).toContain(
+      'const [showAllHistory, setShowAllHistory] = useState(false);',
+    );
+    expect(pixModalSource).toContain('orderedHistoryIntents.slice(0, 3)');
+    expect(pixModalSource).toContain('Ver todas (${orderedHistoryIntents.length})');
+    expect(pixModalSource).toContain('Mostrar menos');
+    expect(pixModalSource).toContain('setShowAllHistory((value) => !value)');
+    expect(pixModalSource).toContain('aria-expanded={showAllHistory}');
+    expect(pixModalSource).toContain('aria-controls="pix-history-list"');
   });
 
   it('keeps contextual actions and technical tools separated in Mais ações', () => {

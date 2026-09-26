@@ -1290,18 +1290,23 @@ export class BillingService {
       where: {
         origin: 'BILLING',
         idempotencyKey: group.idempotencyKey,
-        status: 'SCHEDULED',
-        scheduledFor: { gt: now },
+        OR: [
+          { status: 'SCHEDULED', scheduledFor: { gt: now } },
+          {
+            status: 'CANCELED',
+            errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+          },
+        ],
       },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
     if (!existing) return false;
 
     const firstItem = group.items[0]!;
+    const reactivatingCanceled = existing.status === 'CANCELED';
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.messageDispatchItem.deleteMany({ where: { messageDispatchId: existing.id } });
       await tx.messageDispatch.update({
         where: { id: existing.id },
         data: {
@@ -1310,11 +1315,22 @@ export class BillingService {
           templateId: template.id,
           body: renderedContent,
           renderedContent,
+          status: 'SCHEDULED',
+          ...(reactivatingCanceled
+            ? {
+                attempts: 0,
+                sentAt: null,
+                providerMessageId: null,
+              }
+            : {}),
           scheduledFor: group.scheduledFor,
           nextAttemptAt: group.scheduledFor,
           errorCode: null,
           errorMessage: null,
-          items: { create: this.buildDispatchItemCreateInput(group.items) },
+          items: {
+            deleteMany: {},
+            create: this.buildDispatchItemCreateInput(group.items),
+          },
         },
       });
     });

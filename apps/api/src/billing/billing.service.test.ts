@@ -8,7 +8,7 @@ import { BillingTemplateRenderer } from './billing-template-renderer';
 const now = new Date('2026-09-11T12:00:00.000Z');
 const dueDate = new Date('2026-09-15T00:00:00.000Z');
 
-function plan() {
+function plan(overrides: Record<string, unknown> = {}) {
   return {
     id: 'plan-id',
     name: 'Mensal',
@@ -17,6 +17,7 @@ function plan() {
     active: true,
     createdAt: now,
     updatedAt: now,
+    ...overrides,
   };
 }
 
@@ -93,6 +94,10 @@ function receivable(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+type ReceivableWithReference = ReturnType<typeof receivable> & {
+  clientReference?: ReturnType<typeof clientReference>;
+};
 
 function template(overrides: Record<string, unknown> = {}) {
   return {
@@ -225,6 +230,7 @@ function serviceFactory({
   settingsRecord = automationSettings(),
   existingClientEvent = null,
   currentReceivables,
+  existingFutureDispatch = null,
 }: {
   clients?: Array<ReturnType<typeof client>>;
   dispatchForProcessing?: ReturnType<typeof dispatch>;
@@ -235,9 +241,8 @@ function serviceFactory({
   connectionRecord?: ReturnType<typeof connection> | null;
   settingsRecord?: ReturnType<typeof automationSettings>;
   existingClientEvent?: Record<string, unknown> | null;
-  currentReceivables?: Array<
-    ReturnType<typeof receivable> & { clientReference?: ReturnType<typeof clientReference> }
-  >;
+  existingFutureDispatch?: ReturnType<typeof dispatch> | null;
+  currentReceivables?: ReceivableWithReference[];
 } = {}) {
   const clientEventCreate = vi.fn().mockResolvedValue({});
   const clientEventFindFirst = vi.fn().mockResolvedValue(existingClientEvent);
@@ -249,6 +254,7 @@ function serviceFactory({
     const dispatchWithOptionalItems = dispatchForProcessing as typeof dispatchForProcessing & {
       items?: unknown[];
     };
+    const createdItems = data.items?.create ?? data.items;
 
     return Promise.resolve(
       dispatch({
@@ -256,8 +262,33 @@ function serviceFactory({
         ...data,
         receivable: updatedReceivable ?? dispatchForProcessing.receivable,
         clientReference: updatedReference ?? dispatchForProcessing.clientReference,
-        items: Array.isArray(data.items)
-          ? data.items
+        items: Array.isArray(createdItems)
+          ? createdItems.map((item: Record<string, unknown>, index: number) => {
+              const receivableRecord = (currentReceivables?.find(
+                (current) => current.id === item.receivableId,
+              ) ??
+                updatedReceivable ??
+                dispatchForProcessing.receivable) as ReceivableWithReference;
+              const referenceRecord =
+                receivableRecord.clientReference ??
+                updatedReference ??
+                dispatchForProcessing.clientReference;
+
+              return {
+                id: `updated-item-${index + 1}`,
+                messageDispatchId: dispatchForProcessing.id,
+                receivableId: receivableRecord.id,
+                clientReferenceId: referenceRecord.id,
+                amount: receivableRecord.amount,
+                dueDate: receivableRecord.dueDate,
+                referenceSnapshot: referenceRecord.reference,
+                statusSnapshot: receivableRecord.status,
+                createdAt: now,
+                updatedAt: now,
+                receivable: receivableRecord,
+                clientReference: referenceRecord,
+              };
+            })
           : updatedReceivable
             ? [
                 {
@@ -289,6 +320,46 @@ function serviceFactory({
 
     return Promise.resolve({ count: 0 });
   });
+  const findExistingFutureDispatch = vi.fn().mockImplementation(
+    ({
+      where,
+    }: {
+      where?: {
+        idempotencyKey?: string;
+        status?: unknown;
+        scheduledFor?: { gt?: Date };
+        OR?: Array<{ status?: unknown; errorCode?: unknown; scheduledFor?: { gt?: Date } }>;
+      };
+    }) => {
+      if (
+        !existingFutureDispatch ||
+        where?.idempotencyKey !== existingFutureDispatch.idempotencyKey
+      ) {
+        return Promise.resolve(null);
+      }
+
+      const matchesSimpleStatus =
+        typeof where?.status === 'string' &&
+        where.status === existingFutureDispatch.status &&
+        (!where.scheduledFor?.gt || existingFutureDispatch.scheduledFor > where.scheduledFor.gt);
+      const matchesOrStatus = Array.isArray(where?.OR)
+        ? where.OR.some(
+            (condition: Record<string, unknown>) =>
+              condition.status === existingFutureDispatch.status &&
+              (condition.errorCode === undefined ||
+                condition.errorCode === existingFutureDispatch.errorCode) &&
+              (!condition.scheduledFor ||
+                existingFutureDispatch.scheduledFor > (condition.scheduledFor as { gt: Date }).gt),
+          )
+        : false;
+
+      return Promise.resolve(
+        matchesSimpleStatus || matchesOrStatus
+          ? { id: existingFutureDispatch.id, status: existingFutureDispatch.status }
+          : null,
+      );
+    },
+  );
   const prisma = {
     messageTemplate: {
       upsert: vi.fn().mockImplementation(({ where }) =>
@@ -322,7 +393,7 @@ function serviceFactory({
       create: createDispatch,
       updateMany,
       findMany: vi.fn().mockResolvedValue([dispatch()]),
-      findFirst: vi.fn().mockResolvedValue(null),
+      findFirst: findExistingFutureDispatch,
       findUnique: vi.fn().mockResolvedValue(dispatchForProcessing),
       update: updateDispatch,
       count: vi.fn().mockResolvedValue(0),
@@ -801,6 +872,463 @@ describe('BillingService', () => {
     const result = await service.reconcile(now);
 
     expect(result.kept).toBe(1);
+  });
+
+  it('reactivates a cycle-changed canceled dispatch when recurring value changes but send date is unchanged', async () => {
+    const nextDueDate = new Date('2026-10-25T00:00:00.000Z');
+    const updatedReceivable = receivable({
+      amount: 30,
+      dueDate: nextDueDate,
+    });
+    const updatedReference = clientReference({
+      recurringValue: 30,
+      dueDate: nextDueDate,
+      receivables: [updatedReceivable],
+    });
+    const canceledDispatch = dispatch({
+      status: 'CANCELED',
+      errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+      errorMessage: 'Cobranca futura cancelada porque o ciclo da referencia foi alterado.',
+      idempotencyKey: 'billing-group:client-id:2026-10-25',
+      requestId: 'billing-group:client-id:2026-10-25',
+      scheduledFor: new Date('2026-10-25T12:00:00.000Z'),
+      nextAttemptAt: null,
+      receivable: { ...updatedReceivable, amount: 5 },
+      clientReference: updatedReference,
+      items: [
+        {
+          id: 'old-item',
+          messageDispatchId: 'dispatch-id',
+          receivableId: updatedReceivable.id,
+          clientReferenceId: updatedReference.id,
+          amount: 5,
+          dueDate: nextDueDate,
+          referenceSnapshot: updatedReference.reference,
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: { ...updatedReceivable, amount: 5 },
+          clientReference: updatedReference,
+        },
+      ],
+    });
+    const createDispatch = vi.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+    const { service, updateDispatch } = serviceFactory({
+      clients: [
+        client({
+          dueDate: nextDueDate,
+          recurringValue: 30,
+          references: [updatedReference],
+          receivables: [updatedReceivable],
+        }),
+      ],
+      createDispatch,
+      currentReceivables: [{ ...updatedReceivable, clientReference: updatedReference }],
+      dispatchForProcessing: canceledDispatch,
+      existingFutureDispatch: canceledDispatch,
+    });
+
+    const result = await service.reconcile(now);
+
+    expect(result).toMatchObject({ created: 0, kept: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'dispatch-id' },
+        data: expect.objectContaining({
+          status: 'SCHEDULED',
+          attempts: 0,
+          sentAt: null,
+          errorCode: null,
+          errorMessage: null,
+          scheduledFor: new Date('2026-10-25T12:00:00.000Z'),
+          nextAttemptAt: new Date('2026-10-25T12:00:00.000Z'),
+          body: expect.stringContaining('R$'),
+          renderedContent: expect.stringContaining('25/10/2026'),
+          items: expect.objectContaining({
+            deleteMany: {},
+            create: [
+              expect.objectContaining({
+                receivableId: updatedReceivable.id,
+                clientReferenceId: updatedReference.id,
+                amount: 30,
+                dueDate: nextDueDate,
+              }),
+            ],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('reactivates a cycle-changed canceled dispatch as due when scheduledFor already passed', async () => {
+    const pastDueDate = new Date('2026-09-10T00:00:00.000Z');
+    const pastScheduledFor = new Date('2026-09-10T12:00:00.000Z');
+    const updatedReceivable = receivable({
+      amount: 30,
+      dueDate: pastDueDate,
+    });
+    const updatedReference = clientReference({
+      recurringValue: 30,
+      dueDate: pastDueDate,
+      receivables: [updatedReceivable],
+    });
+    const canceledDispatch = dispatch({
+      status: 'CANCELED',
+      errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+      attempts: 2,
+      idempotencyKey: 'billing-group:client-id:2026-09-10',
+      requestId: 'billing-group:client-id:2026-09-10',
+      scheduledFor: pastScheduledFor,
+      nextAttemptAt: null,
+      receivable: { ...updatedReceivable, amount: 5 },
+      clientReference: updatedReference,
+    });
+    const createDispatch = vi.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+    const { service, updateDispatch } = serviceFactory({
+      clients: [
+        client({
+          dueDate: pastDueDate,
+          recurringValue: 30,
+          references: [updatedReference],
+          receivables: [updatedReceivable],
+        }),
+      ],
+      createDispatch,
+      currentReceivables: [{ ...updatedReceivable, clientReference: updatedReference }],
+      dispatchForProcessing: canceledDispatch,
+      existingFutureDispatch: canceledDispatch,
+    });
+
+    const result = await service.reconcile(now);
+
+    expect(result).toMatchObject({ created: 0, kept: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'dispatch-id' },
+        data: expect.objectContaining({
+          status: 'SCHEDULED',
+          attempts: 0,
+          sentAt: null,
+          providerMessageId: null,
+          scheduledFor: pastScheduledFor,
+          nextAttemptAt: pastScheduledFor,
+          items: expect.objectContaining({
+            deleteMany: {},
+            create: [expect.objectContaining({ amount: 30, dueDate: pastDueDate })],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('keeps replay reconciliation to one active dispatch after reactivation', async () => {
+    const scheduledDispatch = dispatch({
+      status: 'SCHEDULED',
+      attempts: 2,
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+    });
+    const createDispatch = vi.fn();
+    const { service, updateDispatch } = serviceFactory({
+      createDispatch,
+      existingFutureDispatch: scheduledDispatch,
+      dispatchForProcessing: scheduledDispatch,
+    });
+
+    await service.reconcile(now);
+    await service.reconcile(now);
+
+    expect(createDispatch).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledTimes(2);
+    expect(
+      updateDispatch.mock.calls.some((call) => {
+        const data = (call[0] as { data: { attempts?: number } }).data;
+        return data.attempts !== undefined;
+      }),
+    ).toBe(false);
+  });
+
+  it('reactivates a cycle-changed canceled dispatch after plan changes on the same send date', async () => {
+    const premiumPlan = plan({ name: 'Premium' });
+    const updatedReceivable = receivable({ amount: 150 });
+    const updatedReference = clientReference({
+      plan: premiumPlan,
+      planId: premiumPlan.id,
+      recurringValue: 150,
+      receivables: [updatedReceivable],
+    });
+    const canceledDispatch = dispatch({
+      status: 'CANCELED',
+      errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+      clientReference: updatedReference,
+      receivable: updatedReceivable,
+    });
+    const { service, updateDispatch } = serviceFactory({
+      clients: [
+        client({
+          plan: premiumPlan,
+          planId: premiumPlan.id,
+          recurringValue: 150,
+          references: [updatedReference],
+          receivables: [updatedReceivable],
+        }),
+      ],
+      currentReceivables: [{ ...updatedReceivable, clientReference: updatedReference }],
+      existingFutureDispatch: canceledDispatch,
+      dispatchForProcessing: canceledDispatch,
+    });
+
+    await service.reconcile(now);
+
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'SCHEDULED',
+          items: expect.objectContaining({
+            deleteMany: {},
+            create: [expect.objectContaining({ amount: 150 })],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('does not reactivate an old canceled dispatch when due date changes to a new send date', async () => {
+    const nextDueDate = new Date('2026-09-20T00:00:00.000Z');
+    const nextReceivable = receivable({ dueDate: nextDueDate });
+    const nextReference = clientReference({ dueDate: nextDueDate, receivables: [nextReceivable] });
+    const canceledDispatch = dispatch({
+      status: 'CANCELED',
+      errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service, updateDispatch } = serviceFactory({
+      clients: [
+        client({
+          dueDate: nextDueDate,
+          references: [nextReference],
+          receivables: [nextReceivable],
+        }),
+      ],
+      createDispatch,
+      existingFutureDispatch: canceledDispatch,
+    });
+
+    await service.reconcile(now);
+
+    expect(updateDispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'dispatch-id' },
+        data: expect.objectContaining({ status: 'SCHEDULED' }),
+      }),
+    );
+    expect(createDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          idempotencyKey: 'billing-group:client-id:2026-09-20',
+        }),
+      }),
+    );
+  });
+
+  it('does not reactivate canceled dispatches from other cancellation reasons', async () => {
+    const canceledDispatch = dispatch({
+      status: 'CANCELED',
+      errorCode: 'OBSOLETE_BILLING_INTENT',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+    });
+    const createDispatch = vi.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+    const { service, updateDispatch } = serviceFactory({
+      createDispatch,
+      existingFutureDispatch: canceledDispatch,
+      dispatchForProcessing: canceledDispatch,
+    });
+
+    const result = await service.reconcile(now);
+
+    expect(result.kept).toBe(1);
+    expect(updateDispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SCHEDULED' }),
+      }),
+    );
+  });
+
+  it.each([
+    ['PAGO', 'ATIVO'],
+    ['CANCELADO', 'ATIVO'],
+    ['PENDENTE', 'INATIVO'],
+  ])(
+    'does not reactivate controlled canceled dispatch when receivable is %s and reference is %s',
+    async (receivableStatus, referenceStatus) => {
+      const nextReceivable = receivable({ status: receivableStatus });
+      const nextReference = clientReference({
+        status: referenceStatus,
+        receivables: [nextReceivable],
+      });
+      const canceledDispatch = dispatch({
+        status: 'CANCELED',
+        errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+        idempotencyKey: 'billing-group:client-id:2026-09-15',
+        requestId: 'billing-group:client-id:2026-09-15',
+      });
+      const createDispatch = vi.fn();
+      const { service, updateDispatch } = serviceFactory({
+        clients: [
+          client({
+            status: referenceStatus,
+            references: [nextReference],
+            receivables: [nextReceivable],
+          }),
+        ],
+        createDispatch,
+        existingFutureDispatch: canceledDispatch,
+        dispatchForProcessing: canceledDispatch,
+      });
+
+      await service.reconcile(now);
+
+      expect(createDispatch).not.toHaveBeenCalled();
+      expect(updateDispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'SCHEDULED' }),
+        }),
+      );
+    },
+  );
+
+  it('reactivates a controlled canceled grouped dispatch with only current eligible items', async () => {
+    const firstReceivable = receivable({
+      id: 'receivable-a',
+      clientReferenceId: 'reference-a',
+      amount: 30,
+    });
+    const secondReceivable = receivable({
+      id: 'receivable-b',
+      clientReferenceId: 'reference-b',
+      amount: 45,
+    });
+    const thirdReceivable = receivable({
+      id: 'receivable-c',
+      clientReferenceId: 'reference-c',
+      amount: 60,
+    });
+    const obsoleteReceivable = receivable({
+      id: 'receivable-obsolete',
+      clientReferenceId: 'reference-obsolete',
+      amount: 5,
+    });
+    const firstReference = clientReference({
+      id: 'reference-a',
+      reference: 'A',
+      receivables: [firstReceivable],
+    });
+    const secondReference = clientReference({
+      id: 'reference-b',
+      reference: 'B',
+      receivables: [secondReceivable],
+    });
+    const thirdReference = clientReference({
+      id: 'reference-c',
+      reference: 'C',
+      receivables: [thirdReceivable],
+    });
+    const obsoleteReference = clientReference({
+      id: 'reference-obsolete',
+      reference: 'OLD',
+      receivables: [obsoleteReceivable],
+    });
+    const groupedDispatch = dispatch({
+      status: 'CANCELED',
+      errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+      items: [
+        {
+          id: 'old-item-a',
+          messageDispatchId: 'dispatch-id',
+          receivableId: firstReceivable.id,
+          clientReferenceId: firstReference.id,
+          amount: 30,
+          dueDate,
+          referenceSnapshot: 'A',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: firstReceivable,
+          clientReference: firstReference,
+        },
+        {
+          id: 'old-item-obsolete',
+          messageDispatchId: 'dispatch-id',
+          receivableId: obsoleteReceivable.id,
+          clientReferenceId: obsoleteReference.id,
+          amount: 5,
+          dueDate,
+          referenceSnapshot: 'OLD',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: obsoleteReceivable,
+          clientReference: obsoleteReference,
+        },
+      ],
+    });
+    const { service, updateDispatch } = serviceFactory({
+      clients: [
+        client({
+          receivables: [firstReceivable, secondReceivable, thirdReceivable],
+          references: [firstReference, secondReference, thirdReference],
+        }),
+      ],
+      currentReceivables: [
+        { ...firstReceivable, clientReference: firstReference },
+        { ...secondReceivable, clientReference: secondReference },
+        { ...thirdReceivable, clientReference: thirdReference },
+      ],
+      existingFutureDispatch: groupedDispatch,
+      dispatchForProcessing: groupedDispatch,
+    });
+
+    await service.reconcile(now);
+
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'SCHEDULED',
+          items: expect.objectContaining({
+            deleteMany: {},
+            create: [
+              expect.objectContaining({ receivableId: 'receivable-a', amount: 30 }),
+              expect.objectContaining({ receivableId: 'receivable-b', amount: 45 }),
+              expect.objectContaining({ receivableId: 'receivable-c', amount: 60 }),
+            ],
+          }),
+        }),
+      }),
+    );
   });
 
   it('cancels obsolete future dispatches when due date, notice days, or renewal intent changes', async () => {

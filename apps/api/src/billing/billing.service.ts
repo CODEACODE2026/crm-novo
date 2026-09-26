@@ -593,20 +593,17 @@ export class BillingService {
 
     return {
       templateId: template.id,
-      renderedContent: this.renderer.render(content, {
-        nome: dto.name?.trim() || 'Bruno',
-        primeiroNome: this.firstName(dto.name?.trim() || 'Bruno'),
-        valor: dto.value?.trim() || 'R$ 50,00',
-        vencimento: dto.dueDate?.trim() || '15/09/2026',
-        plano: dto.plan?.trim() || 'Mensal',
-        referencia: dto.reference?.trim() || 'bruno1499',
-        diasAtraso: dto.daysOverdue?.trim() || '7',
-        pix: '000201...',
-        quantidade: '3',
-        itens:
-          '• teste01 — R$ 30,00 — vence 15/09/2026\n• teste02 — R$ 30,00 — vence 15/09/2026\n• teste03 — R$ 30,00 — vence 15/09/2026',
-        valorTotal: 'R$ 90,00',
-      }),
+      renderedContent: this.renderer.render(
+        content,
+        this.renderer.previewContextForType(template.type, {
+          nome: dto.name?.trim(),
+          valor: dto.value?.trim(),
+          vencimento: dto.dueDate?.trim(),
+          plano: dto.plan?.trim(),
+          referencia: dto.reference?.trim(),
+          diasAtraso: dto.daysOverdue?.trim(),
+        }),
+      ),
     };
   }
 
@@ -1704,7 +1701,8 @@ export class BillingService {
   private presentTemplate(template: MessageTemplate) {
     return {
       ...template,
-      variables: this.renderer.variables,
+      variables: this.renderer.effectiveVariablesForType(template.type),
+      supportedVariables: this.renderer.variables,
     };
   }
 

@@ -4395,7 +4395,8 @@ function SettingsBillingAutomationPanel({
                 </div>
               ) : null}
               <div className="notice warning" role="note">
-                Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada.
+                Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada. Os dados de
+                exemplo seguem o contexto disponível para este tipo de template.
               </div>
               <span
                 className={`finance-status-pill tone-${previewingTemplate.active ? 'success' : 'muted'}`}

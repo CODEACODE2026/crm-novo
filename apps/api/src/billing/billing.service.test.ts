@@ -922,18 +922,97 @@ describe('BillingService', () => {
     );
   });
 
-  it('previews draft template content without creating a dispatch', async () => {
+  it('lists templates with effective runtime variables and preserves supported variables metadata', async () => {
+    const { service, prisma } = serviceFactory();
+    prisma.messageTemplate.findMany.mockResolvedValueOnce([
+      template({ type: 'BILLING_DUE' }),
+      template({ id: 'grouped-template-id', type: 'BILLING_DUE_GROUPED' }),
+      template({ id: 'recovery-template-id', type: 'RECOVERY_DAY_7' }),
+      template({ id: 'activation-template-id', type: 'INITIAL_ACTIVATION' }),
+    ]);
+
+    const result = await service.listTemplates();
+
+    expect(result.map((item) => ({ type: item.type, variables: item.variables }))).toEqual([
+      {
+        type: 'BILLING_DUE',
+        variables: ['nome', 'primeiroNome', 'valor', 'vencimento', 'plano', 'referencia'],
+      },
+      {
+        type: 'BILLING_DUE_GROUPED',
+        variables: ['nome', 'primeiroNome', 'quantidade', 'itens', 'valorTotal'],
+      },
+      {
+        type: 'RECOVERY_DAY_7',
+        variables: [
+          'nome',
+          'primeiroNome',
+          'valor',
+          'vencimento',
+          'plano',
+          'referencia',
+          'diasAtraso',
+        ],
+      },
+      {
+        type: 'INITIAL_ACTIVATION',
+        variables: ['nome', 'primeiroNome', 'valor', 'vencimento', 'plano', 'referencia', 'pix'],
+      },
+    ]);
+    expect(result[0]!.supportedVariables).toEqual([
+      'nome',
+      'primeiroNome',
+      'valor',
+      'vencimento',
+      'plano',
+      'referencia',
+      'diasAtraso',
+      'pix',
+      'quantidade',
+      'itens',
+      'valorTotal',
+    ]);
+  });
+
+  it('previews draft template content with billing individual context without creating a dispatch', async () => {
     const createDispatch = vi.fn();
     const { service } = serviceFactory({ createDispatch });
 
     const result = await service.previewTemplate('template-id', {
-      content: 'Teste {{primeiroNome}} {{valor}} {{diasAtraso}}',
+      content:
+        'Teste {{primeiroNome}} {{valor}} {{vencimento}} {{plano}} {{referencia}} {{diasAtraso}} {{pix}} {{quantidade}} {{itens}} {{valorTotal}}',
     });
 
-    expect(result.renderedContent).toContain('Teste Bruno');
-    expect(result.renderedContent).toContain('R$');
-    expect(result.renderedContent).toContain('7');
+    expect(result.renderedContent).toBe('Teste Bruno R$ 50,00 15/09/2026 Mensal bruno1499     ');
     expect(createDispatch).not.toHaveBeenCalled();
+  });
+
+  it('previews grouped, recovery, and activation templates with contextual sample data', async () => {
+    const content =
+      '{{primeiroNome}}|{{valor}}|{{vencimento}}|{{plano}}|{{referencia}}|{{diasAtraso}}|{{pix}}|{{quantidade}}|{{itens}}|{{valorTotal}}';
+
+    await expect(
+      serviceFactory({
+        templateRecord: template({ type: 'BILLING_DUE_GROUPED', content }),
+      }).service.previewTemplate('template-id', {}),
+    ).resolves.toMatchObject({
+      renderedContent:
+        'Bruno|||||||3|• teste01 — R$ 30,00 — vence 15/09/2026\n• teste02 — R$ 30,00 — vence 15/09/2026\n• teste03 — R$ 30,00 — vence 15/09/2026|R$ 90,00',
+    });
+    await expect(
+      serviceFactory({
+        templateRecord: template({ type: 'RECOVERY_DAY_7', content }),
+      }).service.previewTemplate('template-id', {}),
+    ).resolves.toMatchObject({
+      renderedContent: 'Bruno|R$ 50,00|15/09/2026|Mensal|bruno1499|7||||',
+    });
+    await expect(
+      serviceFactory({
+        templateRecord: template({ type: 'INITIAL_ACTIVATION', content }),
+      }).service.previewTemplate('template-id', {}),
+    ).resolves.toMatchObject({
+      renderedContent: 'Bruno|R$ 50,00|15/09/2026|Mensal|bruno1499||000201...|||',
+    });
   });
 
   it('rejects unsupported template variables with a friendly error', async () => {

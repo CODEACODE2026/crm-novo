@@ -751,6 +751,7 @@ export interface MessageTemplate {
   content: string;
   active: boolean;
   variables: string[];
+  supportedVariables?: string[];
   createdAt: string;
   updatedAt: string;
 }

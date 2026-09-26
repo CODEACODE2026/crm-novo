@@ -38,4 +38,79 @@ describe('BillingTemplateRenderer', () => {
 
     expect(result).toBe('Oi Bruno .');
   });
+
+  it('maps effective variables by template type', () => {
+    expect(renderer.variables).toEqual([
+      'nome',
+      'primeiroNome',
+      'valor',
+      'vencimento',
+      'plano',
+      'referencia',
+      'diasAtraso',
+      'pix',
+      'quantidade',
+      'itens',
+      'valorTotal',
+    ]);
+    expect(renderer.effectiveVariablesForType('BILLING_DUE')).toEqual([
+      'nome',
+      'primeiroNome',
+      'valor',
+      'vencimento',
+      'plano',
+      'referencia',
+    ]);
+    expect(renderer.effectiveVariablesForType('BILLING_DUE_GROUPED')).toEqual([
+      'nome',
+      'primeiroNome',
+      'quantidade',
+      'itens',
+      'valorTotal',
+    ]);
+    for (const type of [
+      'RECOVERY_DAY_3',
+      'RECOVERY_DAY_7',
+      'RECOVERY_DAY_10',
+      'RECOVERY_DAY_15',
+      'RECOVERY_DAY_30',
+    ] as const) {
+      expect(renderer.effectiveVariablesForType(type)).toEqual([
+        'nome',
+        'primeiroNome',
+        'valor',
+        'vencimento',
+        'plano',
+        'referencia',
+        'diasAtraso',
+      ]);
+    }
+    expect(renderer.effectiveVariablesForType('INITIAL_ACTIVATION')).toEqual([
+      'nome',
+      'primeiroNome',
+      'valor',
+      'vencimento',
+      'plano',
+      'referencia',
+      'pix',
+    ]);
+  });
+
+  it('builds contextual preview samples without filling unavailable runtime variables', () => {
+    const content =
+      '{{nome}}|{{primeiroNome}}|{{valor}}|{{vencimento}}|{{plano}}|{{referencia}}|{{diasAtraso}}|{{pix}}|{{quantidade}}|{{itens}}|{{valorTotal}}';
+
+    expect(renderer.render(content, renderer.previewContextForType('BILLING_DUE'))).toBe(
+      'Bruno|Bruno|R$ 50,00|15/09/2026|Mensal|bruno1499|||||',
+    );
+    expect(renderer.render(content, renderer.previewContextForType('BILLING_DUE_GROUPED'))).toBe(
+      'Bruno|Bruno|||||||3|• teste01 — R$ 30,00 — vence 15/09/2026\n• teste02 — R$ 30,00 — vence 15/09/2026\n• teste03 — R$ 30,00 — vence 15/09/2026|R$ 90,00',
+    );
+    expect(renderer.render(content, renderer.previewContextForType('RECOVERY_DAY_7'))).toBe(
+      'Bruno|Bruno|R$ 50,00|15/09/2026|Mensal|bruno1499|7||||',
+    );
+    expect(renderer.render(content, renderer.previewContextForType('INITIAL_ACTIVATION'))).toBe(
+      'Bruno|Bruno|R$ 50,00|15/09/2026|Mensal|bruno1499||000201...|||',
+    );
+  });
 });

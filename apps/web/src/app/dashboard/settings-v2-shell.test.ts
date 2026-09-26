@@ -263,6 +263,8 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain('setSelectedTemplate(template)');
     expect(settingsBillingSource).toContain('previewMessageTemplate(template.id, {})');
     expect(settingsBillingSource).toContain('Pré-visualizar');
+    expect(settingsBillingSource).toContain('openTemplateEditor(template)');
+    expect(settingsBillingSource).toContain('Editar');
     expect(settingsBillingSource).toContain('Visualização read-only');
     expect(settingsBillingSource).toContain('Conteúdo atual');
     expect(settingsBillingSource).toContain('Variáveis disponíveis');
@@ -276,18 +278,49 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain('Tentar novamente');
     expect(settingsBillingSource).toContain('Abrir templates em Automações');
     expect(settingsBillingSource).not.toContain('SET4C.2');
-    expect(settingsBillingSource).not.toContain('updateMessageTemplate');
     expect(settingsBillingSource).not.toContain('Restaurar padrão');
     expect(settingsBillingSource).not.toContain('Novo template');
     expect(settingsBillingSource).not.toContain('Excluir');
-    expect(settingsBillingSource).not.toContain('Salvar template');
     expect(stylesSource).toContain('.settings-billing-subnav');
     expect(stylesSource).toContain('.settings-template-panel');
     expect(stylesSource).toContain('.settings-template-summary');
     expect(stylesSource).toContain('.settings-template-detail');
+    expect(stylesSource).toContain('.settings-template-editor');
     expect(stylesSource).toContain('.settings-template-preview');
     expect(stylesSource).toContain('.settings-template-table thead');
     expect(stylesSource).toContain('content: attr(data-label)');
+  });
+
+  it('adds a safe Settings template editor using effective variables and draft preview', () => {
+    expect(settingsBillingSource).toContain('const [editingTemplate, setEditingTemplate]');
+    expect(settingsBillingSource).toContain('const templateEditorTextareaRef');
+    expect(settingsBillingSource).toContain('const templateEditorDirty');
+    expect(settingsBillingSource).toContain('function insertTemplateVariable');
+    expect(settingsBillingSource).toContain('textarea?.setSelectionRange(nextCursor, nextCursor)');
+    expect(settingsBillingSource).toContain('function previewTemplateEditorDraft');
+    expect(settingsBillingSource).toContain('previewMessageTemplate(editingTemplate.id,');
+    expect(settingsBillingSource).toContain('content: templateEditorContent');
+    expect(settingsBillingSource).toContain('function saveTemplateEditor');
+    expect(settingsBillingSource).toContain('templateEditorSaving || !templateEditorDirty');
+    expect(settingsBillingSource).toContain('updateMessageTemplate(editingTemplate.id');
+    expect(settingsBillingSource).toContain('content: templateEditorContent');
+    expect(settingsBillingSource).toContain('active: templateEditorActive');
+    expect(settingsBillingSource).toContain('Template atualizado.');
+    expect(settingsBillingSource).toContain('Template ativo');
+    expect(settingsBillingSource).toContain('Template inativo');
+    expect(settingsBillingSource).toContain('Salvar template');
+    expect(settingsBillingSource).toContain('Pré-visualizar rascunho');
+    expect(settingsBillingSource).toContain('editingTemplate.variables.map');
+    expect(settingsBillingSource).not.toContain('editingTemplate.supportedVariables');
+    expect(settingsBillingSource).toContain('Template legado.');
+    expect(settingsBillingSource).toContain('não participa das etapas atuais de');
+    expect(settingsBillingSource).toContain('Inativar este template pode interromper envios');
+    expect(settingsBillingSource).toContain('!templateEditorContent.trim()');
+    expect(settingsBillingSource).not.toContain('createMessageTemplate');
+    expect(settingsBillingSource).not.toContain('deleteMessageTemplate');
+    expect(settingsBillingSource).not.toContain('Restaurar padrão');
+    expect(settingsBillingSource).not.toContain('Novo template');
+    expect(settingsBillingSource).not.toContain('Excluir');
   });
 
   it('uses friendly labels and keeps legacy recovery semantics for templates', () => {

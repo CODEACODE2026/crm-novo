@@ -3763,6 +3763,16 @@ function SettingsBillingAutomationPanel({
   const [templatePreview, setTemplatePreview] = useState('');
   const [templatePreviewError, setTemplatePreviewError] = useState('');
   const [templatePreviewLoadingId, setTemplatePreviewLoadingId] = useState('');
+  const [editingTemplate, setEditingTemplate] = useState<MessageTemplate | null>(null);
+  const [templateEditorContent, setTemplateEditorContent] = useState('');
+  const [templateEditorActive, setTemplateEditorActive] = useState(true);
+  const [templateEditorError, setTemplateEditorError] = useState('');
+  const [templateEditorNotice, setTemplateEditorNotice] = useState('');
+  const [templateEditorPreview, setTemplateEditorPreview] = useState('');
+  const [templateEditorPreviewError, setTemplateEditorPreviewError] = useState('');
+  const [templateEditorPreviewLoading, setTemplateEditorPreviewLoading] = useState(false);
+  const [templateEditorSaving, setTemplateEditorSaving] = useState(false);
+  const templateEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const recoverySteps = [
     {
       enabled: recoveryDay3Enabled,
@@ -3809,6 +3819,10 @@ function SettingsBillingAutomationPanel({
 
     return matchesUsage && matchesStatus && matchesSearch;
   });
+  const templateEditorDirty = editingTemplate
+    ? templateEditorContent !== editingTemplate.content ||
+      templateEditorActive !== editingTemplate.active
+    : false;
 
   const loadMessageTemplates = useCallback(async () => {
     setTemplatesLoading(true);
@@ -3847,6 +3861,107 @@ function SettingsBillingAutomationPanel({
       );
     } finally {
       setTemplatePreviewLoadingId('');
+    }
+  }
+
+  function updateTemplateInState(updated: MessageTemplate) {
+    setMessageTemplates((current) =>
+      current.map((template) => (template.id === updated.id ? updated : template)),
+    );
+    setSelectedTemplate((current) => (current?.id === updated.id ? updated : current));
+    setPreviewingTemplate((current) => (current?.id === updated.id ? updated : current));
+  }
+
+  function openTemplateEditor(template: MessageTemplate) {
+    setEditingTemplate(template);
+    setTemplateEditorContent(template.content);
+    setTemplateEditorActive(template.active);
+    setTemplateEditorError('');
+    setTemplateEditorNotice('');
+    setTemplateEditorPreview('');
+    setTemplateEditorPreviewError('');
+  }
+
+  function closeTemplateEditor() {
+    setEditingTemplate(null);
+    setTemplateEditorContent('');
+    setTemplateEditorError('');
+    setTemplateEditorNotice('');
+    setTemplateEditorPreview('');
+    setTemplateEditorPreviewError('');
+  }
+
+  function insertTemplateVariable(variable: string) {
+    const textarea = templateEditorTextareaRef.current;
+    const placeholder = `{{${variable}}}`;
+    const start = textarea?.selectionStart ?? templateEditorContent.length;
+    const end = textarea?.selectionEnd ?? start;
+    const nextContent = `${templateEditorContent.slice(0, start)}${placeholder}${templateEditorContent.slice(end)}`;
+    const nextCursor = start + placeholder.length;
+
+    setTemplateEditorContent(nextContent);
+    window.setTimeout(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(nextCursor, nextCursor);
+    }, 0);
+  }
+
+  async function previewTemplateEditorDraft() {
+    if (!editingTemplate || templateEditorPreviewLoading) return;
+    setTemplateEditorPreviewLoading(true);
+    setTemplateEditorError('');
+    setTemplateEditorPreviewError('');
+    setTemplateEditorPreview('');
+
+    try {
+      const result = await previewMessageTemplate(editingTemplate.id, {
+        content: templateEditorContent,
+      });
+      setTemplateEditorPreview(result.renderedContent);
+    } catch (err) {
+      setTemplateEditorPreviewError(
+        err instanceof Error ? err.message : 'Não foi possível gerar preview.',
+      );
+    } finally {
+      setTemplateEditorPreviewLoading(false);
+    }
+  }
+
+  async function saveTemplateEditor() {
+    if (!editingTemplate || templateEditorSaving || !templateEditorDirty) return;
+
+    if (
+      editingTemplate.active &&
+      !templateEditorActive &&
+      !window.confirm(
+        'Inativar este template pode interromper envios automáticos que dependem dele. Deseja continuar?',
+      )
+    ) {
+      return;
+    }
+
+    setTemplateEditorSaving(true);
+    setTemplateEditorError('');
+    setTemplateEditorNotice('');
+
+    try {
+      const updated = await updateMessageTemplate(editingTemplate.id, {
+        content: templateEditorContent,
+        active: templateEditorActive,
+      });
+      updateTemplateInState(updated);
+      setEditingTemplate(updated);
+      setTemplateEditorContent(updated.content);
+      setTemplateEditorActive(updated.active);
+      setTemplateEditorNotice('Template atualizado.');
+      setTemplateEditorPreview('');
+      setTemplateEditorPreviewError('');
+    } catch (err) {
+      setTemplateEditorError(
+        err instanceof Error ? err.message : 'Não foi possível salvar template.',
+      );
+    } finally {
+      setTemplateEditorSaving(false);
     }
   }
 
@@ -4267,6 +4382,14 @@ function SettingsBillingAutomationPanel({
                           Visualizar
                         </Button>
                         <Button
+                          icon={Pencil}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => openTemplateEditor(template)}
+                        >
+                          Editar
+                        </Button>
+                        <Button
                           icon={MessageSquareText}
                           loading={templatePreviewLoadingId === template.id}
                           size="sm"
@@ -4356,6 +4479,139 @@ function SettingsBillingAutomationPanel({
             </section>
           ) : null}
 
+          {editingTemplate ? (
+            <section className="settings-template-editor" aria-labelledby="settings-editor-title">
+              <header className="settings-billing-header">
+                <div>
+                  <span className="metric-label">Editor seguro</span>
+                  <h3 id="settings-editor-title">
+                    {settingsTemplateTypeLabel(editingTemplate.type)}
+                  </h3>
+                  <p>{settingsTemplateDescription(editingTemplate.type)}</p>
+                </div>
+                <Button icon={X} size="sm" variant="secondary" onClick={closeTemplateEditor}>
+                  Fechar
+                </Button>
+              </header>
+
+              <dl className="detail-list settings-template-detail-list">
+                <div>
+                  <dt>Nome</dt>
+                  <dd>{editingTemplate.name}</dd>
+                </div>
+                <div>
+                  <dt>Tipo</dt>
+                  <dd>{settingsTemplateTypeLabel(editingTemplate.type)}</dd>
+                </div>
+                <div>
+                  <dt>Uso</dt>
+                  <dd>{settingsTemplateUsageLabel(editingTemplate.type)}</dd>
+                </div>
+                <div>
+                  <dt>Atualizado em</dt>
+                  <dd>{formatDateTime(editingTemplate.updatedAt)}</dd>
+                </div>
+              </dl>
+
+              {settingsTemplateUsage(editingTemplate.type) === 'legacy' ? (
+                <div className="notice warning" role="note">
+                  Template legado. Ele pode ser mantido, mas não participa das etapas atuais de
+                  recuperação.
+                </div>
+              ) : null}
+
+              <label className="toggle-row settings-template-active-toggle">
+                <input
+                  checked={templateEditorActive}
+                  type="checkbox"
+                  onChange={(event) => setTemplateEditorActive(event.target.checked)}
+                />
+                <span>{templateEditorActive ? 'Template ativo' : 'Template inativo'}</span>
+              </label>
+
+              {!templateEditorActive ? (
+                <div className="notice warning" role="note">
+                  Inativar este template pode interromper envios automáticos que dependem dele.
+                </div>
+              ) : null}
+
+              <label className="field settings-template-editor-content">
+                <span>Conteúdo do template</span>
+                <textarea
+                  ref={templateEditorTextareaRef}
+                  maxLength={1000}
+                  rows={10}
+                  value={templateEditorContent}
+                  onChange={(event) => setTemplateEditorContent(event.target.value)}
+                />
+              </label>
+
+              <div className="settings-template-variable-list settings-template-editor-variables">
+                <span>Variáveis disponíveis</span>
+                <div>
+                  {editingTemplate.variables.map((variable) => (
+                    <button
+                      key={variable}
+                      type="button"
+                      onClick={() => insertTemplateVariable(variable)}
+                    >
+                      {`{{${variable}}}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {templateEditorPreviewError ? (
+                <div className="notice danger" role="alert">
+                  {templateEditorPreviewError}
+                </div>
+              ) : null}
+              {templateEditorPreview ? (
+                <div className="settings-template-preview-result">
+                  <span>Prévia do rascunho</span>
+                  <pre>{templateEditorPreview}</pre>
+                </div>
+              ) : null}
+
+              <div className="notice warning" role="note">
+                Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada. Os dados de
+                exemplo seguem o contexto disponível para este tipo de template.
+              </div>
+
+              {templateEditorError ? (
+                <div className="notice danger" role="alert">
+                  {templateEditorError}
+                </div>
+              ) : null}
+              {templateEditorNotice ? (
+                <div className="notice success" role="status">
+                  {templateEditorNotice}
+                </div>
+              ) : null}
+
+              <footer className="settings-billing-actions">
+                <Button
+                  icon={MessageSquareText}
+                  loading={templateEditorPreviewLoading}
+                  variant="secondary"
+                  onClick={() => void previewTemplateEditorDraft()}
+                >
+                  Pré-visualizar rascunho
+                </Button>
+                <Button
+                  disabled={
+                    !templateEditorDirty || templateEditorSaving || !templateEditorContent.trim()
+                  }
+                  icon={Save}
+                  loading={templateEditorSaving}
+                  onClick={() => void saveTemplateEditor()}
+                >
+                  Salvar template
+                </Button>
+              </footer>
+            </section>
+          ) : null}
+
           {previewingTemplate ? (
             <section className="settings-template-preview" aria-labelledby="settings-preview-title">
               <header className="settings-billing-header">
@@ -4412,7 +4668,10 @@ function SettingsBillingAutomationPanel({
 
           <div className="settings-billing-note">
             <Info aria-hidden="true" size={16} />
-            <span>A edição dos templates continua temporariamente em Automações.</span>
+            <span>
+              Configurações passa a administrar os templates. O editor legado em Automações será
+              removido em uma etapa dedicada.
+            </span>
           </div>
 
           <footer className="settings-billing-actions">

@@ -190,6 +190,30 @@ function dispatch(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function dispatchItem(overrides: Record<string, unknown> = {}) {
+  const itemReceivable =
+    (overrides.receivable as ReturnType<typeof receivable> | undefined) ?? receivable();
+  const itemReference =
+    (overrides.clientReference as ReturnType<typeof clientReference> | undefined) ??
+    clientReference({ receivables: [itemReceivable] });
+
+  return {
+    id: 'item-id',
+    messageDispatchId: 'dispatch-id',
+    receivableId: itemReceivable.id,
+    clientReferenceId: itemReference.id,
+    amount: itemReceivable.amount,
+    dueDate: itemReceivable.dueDate,
+    referenceSnapshot: itemReference.reference,
+    statusSnapshot: itemReceivable.status,
+    createdAt: now,
+    updatedAt: now,
+    receivable: itemReceivable,
+    clientReference: itemReference,
+    ...overrides,
+  };
+}
+
 function billingClient(index: number, overrides: Record<string, unknown> = {}) {
   const clientId = `client-${String(index).padStart(2, '0')}`;
   const referenceId = `reference-${String(index).padStart(2, '0')}`;
@@ -1930,6 +1954,189 @@ describe('BillingService', () => {
         }),
       }),
     );
+  });
+
+  it('presents billing dispatch item snapshots instead of live receivable values', async () => {
+    const snapshotDueDate = new Date('2026-10-25T00:00:00.000Z');
+    const currentDueDate = new Date('2026-11-25T00:00:00.000Z');
+    const currentReceivable = receivable({
+      amount: 30,
+      dueDate: currentDueDate,
+    });
+    const currentReference = clientReference({
+      reference: 'teste10-atual',
+      dueDate: currentDueDate,
+      receivables: [currentReceivable],
+    });
+    const historicalDispatch = dispatch({
+      status: 'SENT',
+      body: 'Oi Bruno, vence em 25/10/2026: R$ 5,00.',
+      renderedContent: 'Oi Bruno, vence em 25/10/2026: R$ 5,00.',
+      sentAt: new Date('2026-10-25T12:05:00.000Z'),
+      receivable: currentReceivable,
+      clientReference: currentReference,
+      items: [
+        dispatchItem({
+          amount: 5,
+          dueDate: snapshotDueDate,
+          referenceSnapshot: 'teste10',
+          statusSnapshot: 'PENDENTE',
+          receivable: currentReceivable,
+          clientReference: currentReference,
+        }),
+      ],
+    });
+    const { service } = serviceFactory({ dispatchForProcessing: historicalDispatch });
+
+    const result = (await service.getDispatch('dispatch-id')) as {
+      status: string;
+      totalAmount: string;
+      dueDateLabel: string;
+      items: Array<{ amount: string; dueDate: string; reference: string; status: string }>;
+      clientReference: { reference: string };
+      receivable: { amount: string; dueDate: string; status: string };
+      renderedContent: string;
+    };
+
+    expect(result.status).toBe('SENT');
+    expect(result.totalAmount).toBe('5.00');
+    expect(result.dueDateLabel).toBe('2026-10-25');
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        amount: '5',
+        dueDate: '2026-10-25',
+        reference: 'teste10',
+        status: 'PENDENTE',
+      }),
+    ]);
+    expect(result.clientReference.reference).toBe('teste10');
+    expect(result.receivable).toMatchObject({
+      amount: '5',
+      dueDate: '2026-10-25',
+      status: 'PENDENTE',
+    });
+    expect(result.renderedContent).toBe('Oi Bruno, vence em 25/10/2026: R$ 5,00.');
+  });
+
+  it('sums grouped billing dispatch totals from item snapshots', async () => {
+    const firstReceivable = receivable({ id: 'receivable-a', amount: 30 });
+    const secondReceivable = receivable({ id: 'receivable-b', amount: 40 });
+    const firstReference = clientReference({
+      id: 'reference-a',
+      reference: 'A-atual',
+      receivables: [firstReceivable],
+    });
+    const secondReference = clientReference({
+      id: 'reference-b',
+      reference: 'B-atual',
+      receivables: [secondReceivable],
+    });
+    const groupedDispatch = dispatch({
+      status: 'SENT',
+      receivable: firstReceivable,
+      clientReference: firstReference,
+      items: [
+        dispatchItem({
+          id: 'item-a',
+          receivable: firstReceivable,
+          clientReference: firstReference,
+          amount: 5,
+          referenceSnapshot: 'A',
+        }),
+        dispatchItem({
+          id: 'item-b',
+          receivable: secondReceivable,
+          clientReference: secondReference,
+          amount: 10,
+          referenceSnapshot: 'B',
+        }),
+      ],
+    });
+    const { service } = serviceFactory({ dispatchForProcessing: groupedDispatch });
+
+    const result = (await service.getDispatch('dispatch-id')) as {
+      totalAmount: string;
+      items: Array<{ amount: string; reference: string }>;
+    };
+
+    expect(result.totalAmount).toBe('15.00');
+    expect(result.items).toEqual([
+      expect.objectContaining({ amount: '5', reference: 'A' }),
+      expect.objectContaining({ amount: '10', reference: 'B' }),
+    ]);
+  });
+
+  it.each(['SENT', 'CANCELED', 'FAILED', 'SCHEDULED'] as const)(
+    'keeps %s dispatch presentation on the prepared item snapshot',
+    async (status) => {
+      const currentReceivable = receivable({ amount: 30 });
+      const currentReference = clientReference({
+        reference: 'referencia-atual',
+        receivables: [currentReceivable],
+      });
+      const billingDispatch = dispatch({
+        status,
+        receivable: currentReceivable,
+        clientReference: currentReference,
+        items: [
+          dispatchItem({
+            amount: 5,
+            referenceSnapshot: 'referencia-snapshot',
+            statusSnapshot: 'PENDENTE',
+            receivable: currentReceivable,
+            clientReference: currentReference,
+          }),
+        ],
+      });
+      const { service } = serviceFactory({ dispatchForProcessing: billingDispatch });
+
+      const result = (await service.getDispatch('dispatch-id')) as {
+        totalAmount: string;
+        items: Array<{ amount: string; reference: string; status: string }>;
+      };
+
+      expect(result.totalAmount).toBe('5.00');
+      expect(result.items[0]).toMatchObject({
+        amount: '5',
+        reference: 'referencia-snapshot',
+        status: 'PENDENTE',
+      });
+    },
+  );
+
+  it('falls back to the linked receivable for legacy billing dispatches without items', async () => {
+    const currentReceivable = receivable({
+      amount: 30,
+      dueDate: new Date('2026-11-25T00:00:00.000Z'),
+      status: 'PENDENTE',
+    });
+    const currentReference = clientReference({
+      reference: 'referencia-legada',
+      dueDate: currentReceivable.dueDate,
+      receivables: [currentReceivable],
+    });
+    const legacyDispatch = dispatch({
+      status: 'SENT',
+      receivable: currentReceivable,
+      clientReference: currentReference,
+      items: [],
+    });
+    const { service } = serviceFactory({ dispatchForProcessing: legacyDispatch });
+
+    const result = (await service.getDispatch('dispatch-id')) as {
+      totalAmount: string;
+      dueDateLabel: string;
+      items: Array<{ amount: string; dueDate: string; reference: string; status: string }>;
+    };
+
+    expect(result.totalAmount).toBe('30.00');
+    expect(result.dueDateLabel).toBe('2026-11-25');
+    expect(result.items[0]).toMatchObject({
+      amount: '30',
+      dueDate: '2026-11-25',
+      reference: 'referencia-legada',
+      status: 'PENDENTE',
+    });
   });
 
   it('searches dispatches by ClientReference.reference without Client.reference fallback', async () => {

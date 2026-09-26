@@ -859,7 +859,7 @@ export class BillingService {
               description:
                 dispatchItems.length > 1
                   ? `${dispatchItems.length} referencias. Total: ${this.formatCurrency(
-                      this.sumDispatchItems(dispatchItems),
+                      this.sumDispatchItemSnapshots(dispatchItems),
                     )}.`
                   : `Vencimento: ${formatBusinessDate(
                       dispatchItems[0]!.receivable.dueDate,
@@ -1183,7 +1183,11 @@ export class BillingService {
     }));
   }
 
-  private sumDispatchItems(items: Array<Pick<BillingDispatchItem, 'receivable'>>) {
+  private sumDispatchItemSnapshots(items: Array<Pick<BillingDispatchItem, 'amount'>>) {
+    return items.reduce((total, item) => total + Number(item.amount), 0);
+  }
+
+  private sumDispatchReceivables(items: Array<Pick<BillingDispatchItem, 'receivable'>>) {
     return items.reduce((total, item) => total + Number(item.receivable.amount), 0);
   }
 
@@ -1560,7 +1564,7 @@ export class BillingService {
             )} — vence ${this.formatDisplayDate(item.receivable.dueDate)}`,
         )
         .join('\n'),
-      valorTotal: this.formatCurrency(this.sumDispatchItems(items)),
+      valorTotal: this.formatCurrency(this.sumDispatchReceivables(items)),
     });
   }
 
@@ -1740,9 +1744,14 @@ export class BillingService {
 
   private presentDispatch(dispatch: BillingDispatch) {
     const items = this.dispatchItems(dispatch);
-    const totalAmount = items.length ? this.sumDispatchItems(items) : null;
+    const totalAmount = items.length ? this.sumDispatchItemSnapshots(items) : null;
     const distinctDueDates = [...new Set(items.map((item) => formatBusinessDate(item.dueDate)))];
     const primaryItem = items[0] ?? null;
+    const primaryReference =
+      (items.length === 1 ? primaryItem?.clientReference : null) ??
+      dispatch.clientReference ??
+      dispatch.receivable?.clientReference;
+    const primaryReceivable = primaryItem?.receivable ?? dispatch.receivable;
 
     return {
       id: dispatch.id,
@@ -1772,21 +1781,19 @@ export class BillingService {
       dueDateLabel: distinctDueDates.length > 1 ? 'Vários' : (distinctDueDates[0] ?? null),
       items: items.map((item) => ({
         id: item.id,
-        receivableId: item.receivable.id,
-        clientReferenceId: item.clientReference.id,
-        reference: item.clientReference.reference,
-        amount: item.receivable.amount.toString(),
-        dueDate: formatBusinessDate(item.receivable.dueDate),
-        status: item.receivable.status,
+        receivableId: item.receivableId,
+        clientReferenceId: item.clientReferenceId,
+        reference: item.referenceSnapshot,
+        amount: item.amount.toString(),
+        dueDate: formatBusinessDate(item.dueDate),
+        status: item.statusSnapshot,
       })),
       client: dispatch.client
         ? {
             id: dispatch.client.id,
             name: dispatch.client.name,
             reference:
-              (items.length > 1
-                ? `${items.length} referencias`
-                : primaryItem?.clientReference.reference) ??
+              (items.length > 1 ? `${items.length} referencias` : primaryItem?.referenceSnapshot) ??
               dispatch.clientReference?.reference ??
               dispatch.client.reference,
             status:
@@ -1799,33 +1806,21 @@ export class BillingService {
               null,
           }
         : null,
-      clientReference:
-        ((items.length === 1 ? primaryItem?.clientReference : null) ??
-        dispatch.clientReference ??
-        dispatch.receivable?.clientReference)
-          ? {
-              id: ((items.length === 1 ? primaryItem?.clientReference : null) ??
-                dispatch.clientReference ??
-                dispatch.receivable?.clientReference)!.id,
-              reference: ((items.length === 1 ? primaryItem?.clientReference : null) ??
-                dispatch.clientReference ??
-                dispatch.receivable?.clientReference)!.reference,
-              status: ((items.length === 1 ? primaryItem?.clientReference : null) ??
-                dispatch.clientReference ??
-                dispatch.receivable?.clientReference)!.status,
-            }
-          : null,
-      receivable:
-        (primaryItem?.receivable ?? dispatch.receivable)
-          ? {
-              id: (primaryItem?.receivable ?? dispatch.receivable)!.id,
-              amount: (primaryItem?.receivable ?? dispatch.receivable)!.amount.toString(),
-              dueDate: formatBusinessDate(
-                (primaryItem?.receivable ?? dispatch.receivable)!.dueDate,
-              ),
-              status: (primaryItem?.receivable ?? dispatch.receivable)!.status,
-            }
-          : null,
+      clientReference: primaryReference
+        ? {
+            id: primaryReference.id,
+            reference: primaryItem?.referenceSnapshot ?? primaryReference.reference,
+            status: primaryReference.status,
+          }
+        : null,
+      receivable: primaryReceivable
+        ? {
+            id: primaryReceivable.id,
+            amount: (primaryItem?.amount ?? primaryReceivable.amount).toString(),
+            dueDate: formatBusinessDate(primaryItem?.dueDate ?? primaryReceivable.dueDate),
+            status: primaryItem?.statusSnapshot ?? primaryReceivable.status,
+          }
+        : null,
       template: dispatch.template
         ? {
             id: dispatch.template.id,

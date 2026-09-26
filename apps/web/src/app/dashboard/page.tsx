@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -3773,6 +3774,8 @@ function SettingsBillingAutomationPanel({
   const [templateEditorPreviewLoading, setTemplateEditorPreviewLoading] = useState(false);
   const [templateEditorSaving, setTemplateEditorSaving] = useState(false);
   const templateEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const templateModalRef = useRef<HTMLElement | null>(null);
+  const templateModalReturnFocusRef = useRef<HTMLElement | null>(null);
   const recoverySteps = [
     {
       enabled: recoveryDay3Enabled,
@@ -3847,7 +3850,11 @@ function SettingsBillingAutomationPanel({
   }, [activeBillingTab, loadMessageTemplates, templatesLoaded, templatesLoading]);
 
   async function loadTemplatePreview(template: MessageTemplate) {
+    if (!selectedTemplate) {
+      templateModalReturnFocusRef.current = document.activeElement as HTMLElement | null;
+    }
     setPreviewingTemplate(template);
+    setSelectedTemplate(null);
     setTemplatePreview('');
     setTemplatePreviewError('');
     setTemplatePreviewLoadingId(template.id);
@@ -3872,8 +3879,26 @@ function SettingsBillingAutomationPanel({
     setPreviewingTemplate((current) => (current?.id === updated.id ? updated : current));
   }
 
+  function openTemplateDetail(template: MessageTemplate) {
+    templateModalReturnFocusRef.current = document.activeElement as HTMLElement | null;
+    setSelectedTemplate(template);
+    setPreviewingTemplate(null);
+    setTemplatePreview('');
+    setTemplatePreviewError('');
+  }
+
+  function closeTemplateDetail() {
+    setSelectedTemplate(null);
+    window.setTimeout(() => templateModalReturnFocusRef.current?.focus(), 0);
+  }
+
   function openTemplateEditor(template: MessageTemplate) {
+    templateModalReturnFocusRef.current = document.activeElement as HTMLElement | null;
     setEditingTemplate(template);
+    setSelectedTemplate(null);
+    setPreviewingTemplate(null);
+    setTemplatePreview('');
+    setTemplatePreviewError('');
     setTemplateEditorContent(template.content);
     setTemplateEditorActive(template.active);
     setTemplateEditorError('');
@@ -3882,13 +3907,51 @@ function SettingsBillingAutomationPanel({
     setTemplateEditorPreviewError('');
   }
 
-  function closeTemplateEditor() {
+  function closeTemplatePreview() {
+    setPreviewingTemplate(null);
+    setTemplatePreview('');
+    setTemplatePreviewError('');
+    window.setTimeout(() => templateModalReturnFocusRef.current?.focus(), 0);
+  }
+
+  function closeTemplateEditor({ force = false }: { force?: boolean } = {}) {
+    if (
+      !force &&
+      templateEditorDirty &&
+      !window.confirm('Existem alterações não salvas. Deseja sair sem salvar?')
+    ) {
+      return;
+    }
+
     setEditingTemplate(null);
     setTemplateEditorContent('');
+    setTemplateEditorActive(true);
     setTemplateEditorError('');
     setTemplateEditorNotice('');
     setTemplateEditorPreview('');
     setTemplateEditorPreviewError('');
+    window.setTimeout(() => templateModalReturnFocusRef.current?.focus(), 0);
+  }
+
+  function handleTemplateModalBackdrop(event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget) return;
+    if (editingTemplate) {
+      closeTemplateEditor();
+      return;
+    }
+    if (selectedTemplate) closeTemplateDetail();
+    if (previewingTemplate) closeTemplatePreview();
+  }
+
+  function handleTemplateModalKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    if (editingTemplate) {
+      closeTemplateEditor();
+      return;
+    }
+    if (selectedTemplate) closeTemplateDetail();
+    if (previewingTemplate) closeTemplatePreview();
   }
 
   function insertTemplateVariable(variable: string) {
@@ -3964,6 +4027,18 @@ function SettingsBillingAutomationPanel({
       setTemplateEditorSaving(false);
     }
   }
+
+  useEffect(() => {
+    if (!selectedTemplate && !previewingTemplate && !editingTemplate) return;
+
+    window.setTimeout(() => {
+      if (editingTemplate) {
+        templateEditorTextareaRef.current?.focus();
+        return;
+      }
+      templateModalRef.current?.focus();
+    }, 0);
+  }, [editingTemplate, previewingTemplate, selectedTemplate]);
 
   return (
     <div className="settings-v2-panel settings-billing-panel">
@@ -4373,31 +4448,38 @@ function SettingsBillingAutomationPanel({
                       </td>
                       <td data-label="Atualização">{formatDateTime(template.updatedAt)}</td>
                       <td className="finance-actions-column" data-label="Ações">
-                        <Button
-                          icon={Eye}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setSelectedTemplate(template)}
-                        >
-                          Visualizar
-                        </Button>
-                        <Button
-                          icon={Pencil}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => openTemplateEditor(template)}
-                        >
-                          Editar
-                        </Button>
-                        <Button
-                          icon={MessageSquareText}
-                          loading={templatePreviewLoadingId === template.id}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => void loadTemplatePreview(template)}
-                        >
-                          Pré-visualizar
-                        </Button>
+                        <div className="settings-template-actions">
+                          <Button
+                            icon={Eye}
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => openTemplateDetail(template)}
+                          >
+                            Visualizar
+                          </Button>
+                          <Button
+                            icon={Pencil}
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => openTemplateEditor(template)}
+                          >
+                            Editar
+                          </Button>
+                          <ActionMenu
+                            items={[
+                              {
+                                disabled: templatePreviewLoadingId === template.id,
+                                icon: MessageSquareText,
+                                label:
+                                  templatePreviewLoadingId === template.id
+                                    ? 'Gerando preview...'
+                                    : 'Pré-visualizar',
+                                onSelect: () => void loadTemplatePreview(template),
+                              },
+                            ]}
+                            label="Mais ações do template"
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -4418,252 +4500,326 @@ function SettingsBillingAutomationPanel({
           ) : null}
 
           {selectedTemplate ? (
-            <section className="settings-template-detail" aria-labelledby="settings-detail-title">
-              <header className="settings-billing-header">
-                <div>
-                  <span className="metric-label">Visualização read-only</span>
-                  <h3 id="settings-detail-title">
-                    {settingsTemplateTypeLabel(selectedTemplate.type)}
-                  </h3>
-                  <p>{settingsTemplateDescription(selectedTemplate.type)}</p>
-                </div>
-                <Button
-                  icon={X}
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setSelectedTemplate(null)}
-                >
-                  Fechar
-                </Button>
-              </header>
+            <div
+              className="modal-backdrop"
+              role="presentation"
+              onClick={handleTemplateModalBackdrop}
+              onKeyDown={handleTemplateModalKeyDown}
+            >
+              <section
+                aria-labelledby="settings-detail-title"
+                aria-modal="true"
+                className="modal settings-template-modal"
+                ref={templateModalRef}
+                role="dialog"
+                tabIndex={-1}
+              >
+                <header className="modal-header settings-template-modal-header">
+                  <div>
+                    <span className="metric-label">Visualizar template</span>
+                    <h2 id="settings-detail-title">
+                      {settingsTemplateTypeLabel(selectedTemplate.type)}
+                    </h2>
+                    <p>{settingsTemplateDescription(selectedTemplate.type)}</p>
+                  </div>
+                  <IconButton icon={X} label="Fechar visualização" onClick={closeTemplateDetail} />
+                </header>
 
-              <dl className="detail-list settings-template-detail-list">
-                <div>
-                  <dt>Nome</dt>
-                  <dd>{selectedTemplate.name}</dd>
-                </div>
-                <div>
-                  <dt>Tipo</dt>
-                  <dd>{settingsTemplateTypeLabel(selectedTemplate.type)}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>{selectedTemplate.active ? 'Ativo' : 'Inativo'}</dd>
-                </div>
-                <div>
-                  <dt>Uso</dt>
-                  <dd>{settingsTemplateUsageLabel(selectedTemplate.type)}</dd>
-                </div>
-                <div>
-                  <dt>Atualizado em</dt>
-                  <dd>{formatDateTime(selectedTemplate.updatedAt)}</dd>
-                </div>
-              </dl>
+                <div className="settings-template-modal-body">
+                  <dl className="detail-list settings-template-detail-list">
+                    <div>
+                      <dt>Nome</dt>
+                      <dd>{selectedTemplate.name}</dd>
+                    </div>
+                    <div>
+                      <dt>Tipo</dt>
+                      <dd>{settingsTemplateTypeLabel(selectedTemplate.type)}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{selectedTemplate.active ? 'Ativo' : 'Inativo'}</dd>
+                    </div>
+                    <div>
+                      <dt>Uso</dt>
+                      <dd>{settingsTemplateUsageLabel(selectedTemplate.type)}</dd>
+                    </div>
+                    <div>
+                      <dt>Atualizado em</dt>
+                      <dd>{formatDateTime(selectedTemplate.updatedAt)}</dd>
+                    </div>
+                  </dl>
 
-              <div className="settings-template-readonly-content">
-                <span>Conteúdo atual</span>
-                <pre>{selectedTemplate.content}</pre>
-              </div>
-
-              <div className="settings-template-variable-list">
-                <span>Variáveis disponíveis</span>
-                <div>
-                  {selectedTemplate.variables.map((variable) => (
-                    <code key={variable}>{`{{${variable}}}`}</code>
-                  ))}
-                  {!selectedTemplate.variables.length ? (
-                    <span>Nenhuma variável retornada pela API.</span>
+                  {settingsTemplateUsage(selectedTemplate.type) === 'legacy' ? (
+                    <div className="notice warning" role="note">
+                      Template legado. Ele pode ser mantido, mas não participa das etapas atuais de
+                      recuperação.
+                    </div>
                   ) : null}
+
+                  <div className="settings-template-readonly-content">
+                    <span>Conteúdo atual</span>
+                    <pre>{selectedTemplate.content}</pre>
+                  </div>
+
+                  <div className="settings-template-variable-list">
+                    <span>Variáveis disponíveis</span>
+                    <div>
+                      {selectedTemplate.variables.map((variable) => (
+                        <code key={variable}>{`{{${variable}}}`}</code>
+                      ))}
+                      {!selectedTemplate.variables.length ? (
+                        <span>Nenhuma variável retornada pela API.</span>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </section>
+
+                <footer className="settings-template-modal-footer">
+                  <Button icon={X} variant="secondary" onClick={closeTemplateDetail}>
+                    Fechar
+                  </Button>
+                  <Button
+                    icon={MessageSquareText}
+                    loading={templatePreviewLoadingId === selectedTemplate.id}
+                    variant="secondary"
+                    onClick={() => void loadTemplatePreview(selectedTemplate)}
+                  >
+                    Pré-visualizar
+                  </Button>
+                </footer>
+              </section>
+            </div>
           ) : null}
 
           {editingTemplate ? (
-            <section className="settings-template-editor" aria-labelledby="settings-editor-title">
-              <header className="settings-billing-header">
-                <div>
-                  <span className="metric-label">Editor seguro</span>
-                  <h3 id="settings-editor-title">
-                    {settingsTemplateTypeLabel(editingTemplate.type)}
-                  </h3>
-                  <p>{settingsTemplateDescription(editingTemplate.type)}</p>
-                </div>
-                <Button icon={X} size="sm" variant="secondary" onClick={closeTemplateEditor}>
-                  Fechar
-                </Button>
-              </header>
+            <div
+              className="modal-backdrop"
+              role="presentation"
+              onClick={handleTemplateModalBackdrop}
+              onKeyDown={handleTemplateModalKeyDown}
+            >
+              <section
+                aria-labelledby="settings-editor-title"
+                aria-modal="true"
+                className="modal settings-template-modal settings-template-editor-modal"
+                ref={templateModalRef}
+                role="dialog"
+                tabIndex={-1}
+              >
+                <header className="modal-header settings-template-modal-header">
+                  <div>
+                    <span className="metric-label">Editar template</span>
+                    <h2 id="settings-editor-title">
+                      {settingsTemplateTypeLabel(editingTemplate.type)}
+                    </h2>
+                    <p>{settingsTemplateDescription(editingTemplate.type)}</p>
+                  </div>
+                  <IconButton
+                    icon={X}
+                    label="Fechar editor"
+                    onClick={() => closeTemplateEditor()}
+                  />
+                </header>
 
-              <dl className="detail-list settings-template-detail-list">
-                <div>
-                  <dt>Nome</dt>
-                  <dd>{editingTemplate.name}</dd>
-                </div>
-                <div>
-                  <dt>Tipo</dt>
-                  <dd>{settingsTemplateTypeLabel(editingTemplate.type)}</dd>
-                </div>
-                <div>
-                  <dt>Uso</dt>
-                  <dd>{settingsTemplateUsageLabel(editingTemplate.type)}</dd>
-                </div>
-                <div>
-                  <dt>Atualizado em</dt>
-                  <dd>{formatDateTime(editingTemplate.updatedAt)}</dd>
-                </div>
-              </dl>
+                <div className="settings-template-modal-body">
+                  <dl className="detail-list settings-template-detail-list">
+                    <div>
+                      <dt>Nome</dt>
+                      <dd>{editingTemplate.name}</dd>
+                    </div>
+                    <div>
+                      <dt>Tipo</dt>
+                      <dd>{settingsTemplateTypeLabel(editingTemplate.type)}</dd>
+                    </div>
+                    <div>
+                      <dt>Uso</dt>
+                      <dd>{settingsTemplateUsageLabel(editingTemplate.type)}</dd>
+                    </div>
+                    <div>
+                      <dt>Atualizado em</dt>
+                      <dd>{formatDateTime(editingTemplate.updatedAt)}</dd>
+                    </div>
+                  </dl>
 
-              {settingsTemplateUsage(editingTemplate.type) === 'legacy' ? (
-                <div className="notice warning" role="note">
-                  Template legado. Ele pode ser mantido, mas não participa das etapas atuais de
-                  recuperação.
+                  {settingsTemplateUsage(editingTemplate.type) === 'legacy' ? (
+                    <div className="notice warning" role="note">
+                      Template legado. Ele pode ser mantido, mas não participa das etapas atuais de
+                      recuperação.
+                    </div>
+                  ) : null}
+
+                  <label className="toggle-row settings-template-active-toggle">
+                    <input
+                      checked={templateEditorActive}
+                      type="checkbox"
+                      onChange={(event) => setTemplateEditorActive(event.target.checked)}
+                    />
+                    <span>{templateEditorActive ? 'Template ativo' : 'Template inativo'}</span>
+                  </label>
+
+                  {!templateEditorActive ? (
+                    <div className="notice warning" role="note">
+                      Inativar este template pode interromper envios automáticos que dependem dele.
+                    </div>
+                  ) : null}
+
+                  <label className="field settings-template-editor-content">
+                    <span>Conteúdo do template</span>
+                    <textarea
+                      ref={templateEditorTextareaRef}
+                      maxLength={1000}
+                      rows={10}
+                      value={templateEditorContent}
+                      onChange={(event) => setTemplateEditorContent(event.target.value)}
+                    />
+                  </label>
+
+                  <div className="settings-template-variable-list settings-template-editor-variables">
+                    <span>Variáveis disponíveis</span>
+                    <div>
+                      {editingTemplate.variables.map((variable) => (
+                        <button
+                          key={variable}
+                          type="button"
+                          onClick={() => insertTemplateVariable(variable)}
+                        >
+                          {`{{${variable}}}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="notice warning" role="note">
+                    Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada. Os dados
+                    de exemplo seguem o contexto disponível para este tipo de template.
+                  </div>
+
+                  {templateEditorPreviewError ? (
+                    <div className="notice danger" role="alert">
+                      {templateEditorPreviewError}
+                    </div>
+                  ) : null}
+                  {templateEditorPreview ? (
+                    <div className="settings-template-preview-result">
+                      <span>Prévia do rascunho</span>
+                      <pre>{templateEditorPreview}</pre>
+                    </div>
+                  ) : null}
+
+                  {templateEditorError ? (
+                    <div className="notice danger" role="alert">
+                      {templateEditorError}
+                    </div>
+                  ) : null}
+                  {templateEditorNotice ? (
+                    <div className="notice success" role="status">
+                      {templateEditorNotice}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
 
-              <label className="toggle-row settings-template-active-toggle">
-                <input
-                  checked={templateEditorActive}
-                  type="checkbox"
-                  onChange={(event) => setTemplateEditorActive(event.target.checked)}
-                />
-                <span>{templateEditorActive ? 'Template ativo' : 'Template inativo'}</span>
-              </label>
-
-              {!templateEditorActive ? (
-                <div className="notice warning" role="note">
-                  Inativar este template pode interromper envios automáticos que dependem dele.
-                </div>
-              ) : null}
-
-              <label className="field settings-template-editor-content">
-                <span>Conteúdo do template</span>
-                <textarea
-                  ref={templateEditorTextareaRef}
-                  maxLength={1000}
-                  rows={10}
-                  value={templateEditorContent}
-                  onChange={(event) => setTemplateEditorContent(event.target.value)}
-                />
-              </label>
-
-              <div className="settings-template-variable-list settings-template-editor-variables">
-                <span>Variáveis disponíveis</span>
-                <div>
-                  {editingTemplate.variables.map((variable) => (
-                    <button
-                      key={variable}
-                      type="button"
-                      onClick={() => insertTemplateVariable(variable)}
-                    >
-                      {`{{${variable}}}`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {templateEditorPreviewError ? (
-                <div className="notice danger" role="alert">
-                  {templateEditorPreviewError}
-                </div>
-              ) : null}
-              {templateEditorPreview ? (
-                <div className="settings-template-preview-result">
-                  <span>Prévia do rascunho</span>
-                  <pre>{templateEditorPreview}</pre>
-                </div>
-              ) : null}
-
-              <div className="notice warning" role="note">
-                Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada. Os dados de
-                exemplo seguem o contexto disponível para este tipo de template.
-              </div>
-
-              {templateEditorError ? (
-                <div className="notice danger" role="alert">
-                  {templateEditorError}
-                </div>
-              ) : null}
-              {templateEditorNotice ? (
-                <div className="notice success" role="status">
-                  {templateEditorNotice}
-                </div>
-              ) : null}
-
-              <footer className="settings-billing-actions">
-                <Button
-                  icon={MessageSquareText}
-                  loading={templateEditorPreviewLoading}
-                  variant="secondary"
-                  onClick={() => void previewTemplateEditorDraft()}
-                >
-                  Pré-visualizar rascunho
-                </Button>
-                <Button
-                  disabled={
-                    !templateEditorDirty || templateEditorSaving || !templateEditorContent.trim()
-                  }
-                  icon={Save}
-                  loading={templateEditorSaving}
-                  onClick={() => void saveTemplateEditor()}
-                >
-                  Salvar template
-                </Button>
-              </footer>
-            </section>
+                <footer className="settings-template-modal-footer">
+                  <Button icon={X} variant="secondary" onClick={() => closeTemplateEditor()}>
+                    Cancelar
+                  </Button>
+                  <Button
+                    icon={MessageSquareText}
+                    loading={templateEditorPreviewLoading}
+                    variant="secondary"
+                    onClick={() => void previewTemplateEditorDraft()}
+                  >
+                    Pré-visualizar rascunho
+                  </Button>
+                  <Button
+                    disabled={
+                      !templateEditorDirty || templateEditorSaving || !templateEditorContent.trim()
+                    }
+                    icon={Save}
+                    loading={templateEditorSaving}
+                    onClick={() => void saveTemplateEditor()}
+                  >
+                    Salvar template
+                  </Button>
+                </footer>
+              </section>
+            </div>
           ) : null}
 
           {previewingTemplate ? (
-            <section className="settings-template-preview" aria-labelledby="settings-preview-title">
-              <header className="settings-billing-header">
-                <div>
-                  <span className="metric-label">Prévia com dados de exemplo</span>
-                  <h3 id="settings-preview-title">
-                    {settingsTemplateTypeLabel(previewingTemplate.type)}
-                  </h3>
-                  <p>{previewingTemplate.name}</p>
-                </div>
-                <Button
-                  icon={X}
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => {
-                    setPreviewingTemplate(null);
-                    setTemplatePreview('');
-                    setTemplatePreviewError('');
-                  }}
-                >
-                  Fechar
-                </Button>
-              </header>
-
-              {templatePreviewError ? (
-                <div className="notice danger" role="alert">
-                  <span>{templatePreviewError}</span>
-                  <Button
-                    icon={RefreshCcw}
-                    loading={templatePreviewLoadingId === previewingTemplate.id}
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void loadTemplatePreview(previewingTemplate)}
-                  >
-                    Tentar novamente
-                  </Button>
-                </div>
-              ) : null}
-              <div className="notice warning" role="note">
-                Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada. Os dados de
-                exemplo seguem o contexto disponível para este tipo de template.
-              </div>
-              <span
-                className={`finance-status-pill tone-${previewingTemplate.active ? 'success' : 'muted'}`}
+            <div
+              className="modal-backdrop"
+              role="presentation"
+              onClick={handleTemplateModalBackdrop}
+              onKeyDown={handleTemplateModalKeyDown}
+            >
+              <section
+                aria-labelledby="settings-preview-title"
+                aria-modal="true"
+                className="modal settings-template-modal"
+                ref={templateModalRef}
+                role="dialog"
+                tabIndex={-1}
               >
-                {previewingTemplate.active ? 'Ativo' : 'Inativo'}
-              </span>
-              {templatePreview ? <pre>{templatePreview}</pre> : null}
-              {templatePreviewLoadingId ? (
-                <div className="empty-state">Gerando preview...</div>
-              ) : null}
-            </section>
+                <header className="modal-header settings-template-modal-header">
+                  <div>
+                    <span className="metric-label">Prévia com dados de exemplo</span>
+                    <h2 id="settings-preview-title">
+                      {settingsTemplateTypeLabel(previewingTemplate.type)}
+                    </h2>
+                    <p>{previewingTemplate.name}</p>
+                  </div>
+                  <IconButton icon={X} label="Fechar preview" onClick={closeTemplatePreview} />
+                </header>
+
+                <div className="settings-template-modal-body">
+                  {settingsTemplateUsage(previewingTemplate.type) === 'legacy' ? (
+                    <div className="notice warning" role="note">
+                      Template legado. Ele pode ser mantido, mas não participa das etapas atuais de
+                      recuperação.
+                    </div>
+                  ) : null}
+
+                  {templatePreviewError ? (
+                    <div className="notice danger" role="alert">
+                      <span>{templatePreviewError}</span>
+                      <Button
+                        icon={RefreshCcw}
+                        loading={templatePreviewLoadingId === previewingTemplate.id}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void loadTemplatePreview(previewingTemplate)}
+                      >
+                        Tentar novamente
+                      </Button>
+                    </div>
+                  ) : null}
+                  <div className="notice warning" role="note">
+                    Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada. Os dados
+                    de exemplo seguem o contexto disponível para este tipo de template.
+                  </div>
+                  <span
+                    className={`finance-status-pill tone-${previewingTemplate.active ? 'success' : 'muted'}`}
+                  >
+                    {previewingTemplate.active ? 'Ativo' : 'Inativo'}
+                  </span>
+                  {templatePreview ? (
+                    <div className="settings-template-preview-result">
+                      <span>Conteúdo renderizado</span>
+                      <pre>{templatePreview}</pre>
+                    </div>
+                  ) : null}
+                  {templatePreviewLoadingId ? (
+                    <div className="empty-state">Gerando preview...</div>
+                  ) : null}
+                </div>
+
+                <footer className="settings-template-modal-footer">
+                  <Button icon={X} variant="secondary" onClick={closeTemplatePreview}>
+                    Fechar
+                  </Button>
+                </footer>
+              </section>
+            </div>
           ) : null}
 
           <div className="settings-billing-note">

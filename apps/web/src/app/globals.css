@@ -6167,6 +6167,15 @@ tbody tr:hover,
   margin: 0;
 }
 
+.settings-template-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
 .settings-template-table td:first-child {
   min-width: 180px;
 }
@@ -6196,15 +6205,42 @@ tbody tr:hover,
   padding: 2px 7px;
 }
 
-.settings-template-detail,
-.settings-template-editor,
-.settings-template-preview {
+.settings-template-modal {
+  width: min(100%, 820px);
+  max-height: min(820px, calc(100vh - 36px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding: 0;
+}
+
+.settings-template-editor-modal {
+  width: min(100%, 960px);
+}
+
+.settings-template-modal-header,
+.settings-template-modal-body,
+.settings-template-modal-footer {
+  padding: 16px 18px;
+}
+
+.settings-template-modal-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-template-modal-body {
   display: grid;
   gap: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-soft);
-  padding: 14px;
+  overflow: auto;
+}
+
+.settings-template-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .settings-template-detail-list {
@@ -6230,7 +6266,7 @@ tbody tr:hover,
 
 .settings-template-readonly-content pre,
 .settings-template-preview-result pre,
-.settings-template-preview pre {
+.settings-template-modal pre {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -6246,6 +6282,7 @@ tbody tr:hover,
 .settings-template-editor-content textarea {
   min-height: 220px;
   resize: vertical;
+  width: 100%;
 }
 
 .settings-template-active-toggle {
@@ -6996,6 +7033,38 @@ tbody tr:hover,
   .settings-template-table .finance-actions-column {
     align-items: stretch;
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-template-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .settings-template-actions .ui-button {
+    justify-content: center;
+  }
+
+  .settings-template-modal {
+    width: min(100%, calc(100vw - 20px));
+    max-height: calc(100vh - 20px);
+  }
+
+  .settings-template-modal-header,
+  .settings-template-modal-body,
+  .settings-template-modal-footer {
+    padding: 14px;
+  }
+
+  .settings-template-modal-footer {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-template-detail-list {
     grid-template-columns: 1fr;
   }
 

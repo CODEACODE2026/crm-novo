@@ -260,12 +260,13 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain('settingsTemplateDescription(template.type)');
     expect(settingsBillingSource).toContain('Legado');
     expect(settingsBillingSource).toContain('Visualizar');
-    expect(settingsBillingSource).toContain('setSelectedTemplate(template)');
+    expect(settingsBillingSource).toContain('openTemplateDetail(template)');
     expect(settingsBillingSource).toContain('previewMessageTemplate(template.id, {})');
     expect(settingsBillingSource).toContain('Pré-visualizar');
+    expect(settingsBillingSource).toContain('ActionMenu');
     expect(settingsBillingSource).toContain('openTemplateEditor(template)');
     expect(settingsBillingSource).toContain('Editar');
-    expect(settingsBillingSource).toContain('Visualização read-only');
+    expect(settingsBillingSource).toContain('Visualizar template');
     expect(settingsBillingSource).toContain('Conteúdo atual');
     expect(settingsBillingSource).toContain('Variáveis disponíveis');
     expect(settingsBillingSource).toContain('Nenhuma variável retornada pela API.');
@@ -284,9 +285,9 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(stylesSource).toContain('.settings-billing-subnav');
     expect(stylesSource).toContain('.settings-template-panel');
     expect(stylesSource).toContain('.settings-template-summary');
-    expect(stylesSource).toContain('.settings-template-detail');
-    expect(stylesSource).toContain('.settings-template-editor');
-    expect(stylesSource).toContain('.settings-template-preview');
+    expect(stylesSource).toContain('.settings-template-modal');
+    expect(stylesSource).toContain('.settings-template-editor-modal');
+    expect(stylesSource).toContain('.settings-template-actions');
     expect(stylesSource).toContain('.settings-template-table thead');
     expect(stylesSource).toContain('content: attr(data-label)');
   });
@@ -310,6 +311,11 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain('Template inativo');
     expect(settingsBillingSource).toContain('Salvar template');
     expect(settingsBillingSource).toContain('Pré-visualizar rascunho');
+    expect(settingsBillingSource).toContain(
+      'Existem alterações não salvas. Deseja sair sem salvar?',
+    );
+    expect(settingsBillingSource).toContain('handleTemplateModalBackdrop');
+    expect(settingsBillingSource).toContain('handleTemplateModalKeyDown');
     expect(settingsBillingSource).toContain('editingTemplate.variables.map');
     expect(settingsBillingSource).not.toContain('editingTemplate.supportedVariables');
     expect(settingsBillingSource).toContain('Template legado.');

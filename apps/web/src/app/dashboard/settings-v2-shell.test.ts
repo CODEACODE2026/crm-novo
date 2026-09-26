@@ -235,24 +235,91 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).not.toContain('RecoveryAutomationPreviewModal');
   });
 
-  it('adds a local billing subnavigation with a safe templates placeholder', () => {
+  it('adds a local billing subnavigation with real template listing and preview', () => {
     expect(dashboardSource).toContain("onOpenAutomations={() => setView('automations')}");
     expect(settingsViewSource).toContain('onOpenAutomations={onOpenAutomations}');
     expect(settingsBillingSource).toContain('className="settings-billing-subnav"');
     expect(settingsBillingSource).toContain("setActiveBillingTab('rules')");
     expect(settingsBillingSource).toContain("setActiveBillingTab('templates')");
     expect(settingsBillingSource).toContain('activeBillingTab ===');
+    expect(settingsBillingSource).toContain('const [messageTemplates, setMessageTemplates]');
+    expect(settingsBillingSource).toContain('setMessageTemplates(await listMessageTemplates())');
+    expect(settingsBillingSource).toContain("activeBillingTab === 'templates'");
+    expect(settingsBillingSource).toContain('!templatesLoaded && !templatesLoading');
     expect(settingsBillingSource).toContain('Templates de mensagens');
     expect(settingsBillingSource).toContain(
-      'Gerencie os textos utilizados nas cobranças e recuperações automáticas.',
+      'Gerencie os textos utilizados nas cobranças, ativações e recuperações automáticas.',
     );
-    expect(settingsBillingSource).toContain('administração será centralizada nesta área.');
+    expect(settingsBillingSource).toContain('Templates</span>');
+    expect(settingsBillingSource).toContain('Ativos</span>');
+    expect(settingsBillingSource).toContain('Inativos</span>');
+    expect(settingsBillingSource).toContain('settingsTemplateUsageFilters.map');
+    expect(settingsBillingSource).toContain('settingsTemplateStatusFilters.map');
+    expect(settingsBillingSource).toContain('settingsTemplateTypeLabel(template.type)');
+    expect(settingsBillingSource).toContain('settingsTemplateUsageLabel(template.type)');
+    expect(settingsBillingSource).toContain('settingsTemplateDescription(template.type)');
+    expect(settingsBillingSource).toContain('Legado');
+    expect(settingsBillingSource).toContain('Visualizar');
+    expect(settingsBillingSource).toContain('setSelectedTemplate(template)');
+    expect(settingsBillingSource).toContain('previewMessageTemplate(template.id, {})');
+    expect(settingsBillingSource).toContain('Pré-visualizar');
+    expect(settingsBillingSource).toContain('Visualização read-only');
+    expect(settingsBillingSource).toContain('Conteúdo atual');
+    expect(settingsBillingSource).toContain('Variáveis disponíveis');
+    expect(settingsBillingSource).toContain('Nenhuma variável retornada pela API.');
+    expect(settingsBillingSource).toContain('Prévia com dados de exemplo');
+    expect(settingsBillingSource).toContain(
+      'Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada.',
+    );
+    expect(settingsBillingSource).toContain('Nenhum template cadastrado.');
+    expect(settingsBillingSource).toContain('Nenhum template encontrado com os filtros atuais.');
+    expect(settingsBillingSource).toContain('Tentar novamente');
     expect(settingsBillingSource).toContain('Abrir templates em Automações');
     expect(settingsBillingSource).not.toContain('SET4C.2');
     expect(settingsBillingSource).not.toContain('updateMessageTemplate');
-    expect(settingsBillingSource).not.toContain('previewMessageTemplate');
+    expect(settingsBillingSource).not.toContain('Restaurar padrão');
+    expect(settingsBillingSource).not.toContain('Novo template');
+    expect(settingsBillingSource).not.toContain('Excluir');
+    expect(settingsBillingSource).not.toContain('Salvar template');
     expect(stylesSource).toContain('.settings-billing-subnav');
-    expect(stylesSource).toContain('.settings-template-placeholder');
+    expect(stylesSource).toContain('.settings-template-panel');
+    expect(stylesSource).toContain('.settings-template-summary');
+    expect(stylesSource).toContain('.settings-template-detail');
+    expect(stylesSource).toContain('.settings-template-preview');
+    expect(stylesSource).toContain('.settings-template-table thead');
+    expect(stylesSource).toContain('content: attr(data-label)');
+  });
+
+  it('uses friendly labels and keeps legacy recovery semantics for templates', () => {
+    expect(settingsSource).toContain('function settingsTemplateTypeLabel');
+    expect(settingsSource).toContain("INITIAL_ACTIVATION: 'Ativação inicial'");
+    expect(settingsSource).toContain("BILLING_DUE: 'Cobrança individual'");
+    expect(settingsSource).toContain("BILLING_DUE_GROUPED: 'Cobrança agrupada'");
+    expect(settingsSource).toContain("RECOVERY_DAY_3: 'Recuperação D+3'");
+    expect(settingsSource).toContain("RECOVERY_DAY_7: 'Recuperação D+10'");
+    expect(settingsSource).toContain("RECOVERY_DAY_15: 'Recuperação D+15'");
+    expect(settingsSource).toContain("RECOVERY_DAY_30: 'Recuperação D+30'");
+    expect(settingsSource).toContain("RECOVERY_DAY_10: 'Recuperação — template legado'");
+    expect(settingsSource).toContain("if (type === 'RECOVERY_DAY_10') return 'legacy'");
+    expect(settingsSource).toContain('function settingsTemplateDescription');
+    expect(settingsSource).toContain("INITIAL_ACTIVATION: 'Mensagem usada na ativação inicial.'");
+    expect(settingsSource).toContain(
+      "BILLING_DUE: 'Cobrança individual próxima ou na data de vencimento conforme fluxo real.'",
+    );
+    expect(settingsSource).toContain(
+      "BILLING_DUE_GROUPED: 'Cobrança agrupada quando o cliente possui múltiplos itens no mesmo lote.'",
+    );
+    expect(settingsSource).toContain(
+      "RECOVERY_DAY_3: 'Mensagem da primeira etapa de recuperação.'",
+    );
+    expect(settingsSource).toContain(
+      "RECOVERY_DAY_7: 'Mensagem da etapa operacional exibida como D+10.'",
+    );
+    expect(settingsSource).toContain(
+      "RECOVERY_DAY_10: 'Template legado, não usado pelas etapas atuais.'",
+    );
+    expect(settingsSource).toContain("RECOVERY_DAY_15: 'Mensagem da etapa D+15.'");
+    expect(settingsSource).toContain("RECOVERY_DAY_30: 'Mensagem da etapa D+30.'");
   });
 
   it('saves billing settings only from the CTA and protects double submit', () => {

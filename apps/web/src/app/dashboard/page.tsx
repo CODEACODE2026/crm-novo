@@ -3587,6 +3587,72 @@ function SettingsFinancePanel({
   );
 }
 
+type SettingsTemplateUsage = 'activation' | 'billing' | 'recovery' | 'legacy';
+type SettingsTemplateUsageFilter = 'all' | 'billing' | 'recovery' | 'activation';
+type SettingsTemplateStatusFilter = 'all' | 'active' | 'inactive';
+
+const settingsTemplateUsageFilters = [
+  { id: 'all', label: 'Todos' },
+  { id: 'billing', label: 'Cobrança' },
+  { id: 'recovery', label: 'Recuperação' },
+  { id: 'activation', label: 'Ativação' },
+] satisfies Array<{ id: SettingsTemplateUsageFilter; label: string }>;
+
+const settingsTemplateStatusFilters = [
+  { id: 'all', label: 'Todos os status' },
+  { id: 'active', label: 'Ativos' },
+  { id: 'inactive', label: 'Inativos' },
+] satisfies Array<{ id: SettingsTemplateStatusFilter; label: string }>;
+
+function settingsTemplateTypeLabel(type: MessageTemplate['type']) {
+  const labels = {
+    INITIAL_ACTIVATION: 'Ativação inicial',
+    BILLING_DUE: 'Cobrança individual',
+    BILLING_DUE_GROUPED: 'Cobrança agrupada',
+    RECOVERY_DAY_3: 'Recuperação D+3',
+    RECOVERY_DAY_7: 'Recuperação D+10',
+    RECOVERY_DAY_10: 'Recuperação — template legado',
+    RECOVERY_DAY_15: 'Recuperação D+15',
+    RECOVERY_DAY_30: 'Recuperação D+30',
+  } satisfies Record<MessageTemplate['type'], string>;
+
+  return labels[type];
+}
+
+function settingsTemplateUsage(type: MessageTemplate['type']): SettingsTemplateUsage {
+  if (type === 'INITIAL_ACTIVATION') return 'activation';
+  if (type === 'BILLING_DUE' || type === 'BILLING_DUE_GROUPED') return 'billing';
+  if (type === 'RECOVERY_DAY_10') return 'legacy';
+  return 'recovery';
+}
+
+function settingsTemplateUsageLabel(type: MessageTemplate['type']) {
+  const usage = settingsTemplateUsage(type);
+  const labels = {
+    activation: 'Ativação',
+    billing: 'Cobrança',
+    recovery: 'Recuperação atual',
+    legacy: 'Legado',
+  } satisfies Record<SettingsTemplateUsage, string>;
+
+  return labels[usage];
+}
+
+function settingsTemplateDescription(type: MessageTemplate['type']) {
+  const descriptions = {
+    INITIAL_ACTIVATION: 'Mensagem usada na ativação inicial.',
+    BILLING_DUE: 'Cobrança individual próxima ou na data de vencimento conforme fluxo real.',
+    BILLING_DUE_GROUPED: 'Cobrança agrupada quando o cliente possui múltiplos itens no mesmo lote.',
+    RECOVERY_DAY_3: 'Mensagem da primeira etapa de recuperação.',
+    RECOVERY_DAY_7: 'Mensagem da etapa operacional exibida como D+10.',
+    RECOVERY_DAY_10: 'Template legado, não usado pelas etapas atuais.',
+    RECOVERY_DAY_15: 'Mensagem da etapa D+15.',
+    RECOVERY_DAY_30: 'Mensagem da etapa D+30.',
+  } satisfies Record<MessageTemplate['type'], string>;
+
+  return descriptions[type];
+}
+
 function SettingsBillingAutomationPanel({
   dirty,
   enabled,
@@ -3683,6 +3749,20 @@ function SettingsBillingAutomationPanel({
   onRecoverySendTimeChange: (value: string) => void;
 }) {
   const [activeBillingTab, setActiveBillingTab] = useState<'rules' | 'templates'>('rules');
+  const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState('');
+  const [templateUsageFilter, setTemplateUsageFilter] =
+    useState<SettingsTemplateUsageFilter>('all');
+  const [templateStatusFilter, setTemplateStatusFilter] =
+    useState<SettingsTemplateStatusFilter>('all');
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [selectedTemplate, setSelectedTemplate] = useState<MessageTemplate | null>(null);
+  const [previewingTemplate, setPreviewingTemplate] = useState<MessageTemplate | null>(null);
+  const [templatePreview, setTemplatePreview] = useState('');
+  const [templatePreviewError, setTemplatePreviewError] = useState('');
+  const [templatePreviewLoadingId, setTemplatePreviewLoadingId] = useState('');
   const recoverySteps = [
     {
       enabled: recoveryDay3Enabled,
@@ -3713,6 +3793,62 @@ function SettingsBillingAutomationPanel({
       onOffsetDaysChange: onRecoveryDay30OffsetDaysChange,
     },
   ];
+  const activeTemplates = messageTemplates.filter((template) => template.active).length;
+  const inactiveTemplates = messageTemplates.length - activeTemplates;
+  const filteredTemplates = messageTemplates.filter((template) => {
+    const usage = settingsTemplateUsage(template.type);
+    const matchesUsage = templateUsageFilter === 'all' || usage === templateUsageFilter;
+    const matchesStatus =
+      templateStatusFilter === 'all' ||
+      (templateStatusFilter === 'active' ? template.active : !template.active);
+    const search = templateSearch.trim().toLowerCase();
+    const matchesSearch =
+      !search ||
+      template.name.toLowerCase().includes(search) ||
+      settingsTemplateTypeLabel(template.type).toLowerCase().includes(search);
+
+    return matchesUsage && matchesStatus && matchesSearch;
+  });
+
+  const loadMessageTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    setTemplatesError('');
+
+    try {
+      setMessageTemplates(await listMessageTemplates());
+      setTemplatesLoaded(true);
+    } catch (err) {
+      setTemplatesError(
+        err instanceof Error ? err.message : 'Não foi possível carregar templates.',
+      );
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeBillingTab === 'templates' && !templatesLoaded && !templatesLoading) {
+      void loadMessageTemplates();
+    }
+  }, [activeBillingTab, loadMessageTemplates, templatesLoaded, templatesLoading]);
+
+  async function loadTemplatePreview(template: MessageTemplate) {
+    setPreviewingTemplate(template);
+    setTemplatePreview('');
+    setTemplatePreviewError('');
+    setTemplatePreviewLoadingId(template.id);
+
+    try {
+      const result = await previewMessageTemplate(template.id, {});
+      setTemplatePreview(result.renderedContent);
+    } catch (err) {
+      setTemplatePreviewError(
+        err instanceof Error ? err.message : 'Não foi possível gerar preview.',
+      );
+    } finally {
+      setTemplatePreviewLoadingId('');
+    }
+  }
 
   return (
     <div className="settings-v2-panel settings-billing-panel">
@@ -3994,7 +4130,7 @@ function SettingsBillingAutomationPanel({
 
       {activeBillingTab === 'templates' ? (
         <section
-          className="settings-billing-section settings-template-placeholder"
+          className="settings-billing-section settings-template-panel"
           aria-labelledby="settings-templates-title"
         >
           <header className="settings-billing-header">
@@ -4002,8 +4138,7 @@ function SettingsBillingAutomationPanel({
               <span className="metric-label">Templates de mensagens</span>
               <h3 id="settings-templates-title">Templates de mensagens</h3>
               <p>
-                Gerencie os textos utilizados nas cobranças e recuperações automáticas. A
-                administração será centralizada nesta área.
+                Gerencie os textos utilizados nas cobranças, ativações e recuperações automáticas.
               </p>
             </div>
             <span className="settings-v2-card-icon" aria-hidden="true">
@@ -4011,12 +4146,272 @@ function SettingsBillingAutomationPanel({
             </span>
           </header>
 
+          {templatesError ? (
+            <div className="notice danger" role="alert">
+              <span>{templatesError}</span>
+              <Button
+                icon={RefreshCcw}
+                loading={templatesLoading}
+                size="sm"
+                variant="secondary"
+                onClick={() => void loadMessageTemplates()}
+              >
+                Tentar novamente
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="settings-template-summary" aria-label="Resumo dos templates">
+            <article>
+              <span>Templates</span>
+              <strong>{messageTemplates.length}</strong>
+            </article>
+            <article>
+              <span>Ativos</span>
+              <strong>{activeTemplates}</strong>
+            </article>
+            <article>
+              <span>Inativos</span>
+              <strong>{inactiveTemplates}</strong>
+            </article>
+          </div>
+
+          <div className="settings-template-filters">
+            <div className="settings-template-filter-group" aria-label="Filtrar por uso">
+              {settingsTemplateUsageFilters.map((filter) => (
+                <button
+                  aria-pressed={templateUsageFilter === filter.id}
+                  className={templateUsageFilter === filter.id ? 'active' : ''}
+                  key={filter.id}
+                  type="button"
+                  onClick={() => setTemplateUsageFilter(filter.id)}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+
+            <label className="field">
+              <span>Status</span>
+              <select
+                value={templateStatusFilter}
+                onChange={(event) =>
+                  setTemplateStatusFilter(event.target.value as SettingsTemplateStatusFilter)
+                }
+              >
+                {settingsTemplateStatusFilters.map((filter) => (
+                  <option key={filter.id} value={filter.id}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span>Buscar</span>
+              <input
+                placeholder="Nome ou tipo"
+                value={templateSearch}
+                onChange={(event) => setTemplateSearch(event.target.value)}
+              />
+            </label>
+          </div>
+
+          {!templatesError ? (
+            <div className="table-wrap settings-template-table-wrap">
+              <table className="settings-template-table">
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>Uso</th>
+                    <th>Variáveis</th>
+                    <th>Status</th>
+                    <th>Atualização</th>
+                    <th className="finance-actions-column">Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTemplates.map((template) => (
+                    <tr key={template.id}>
+                      <td data-label="Nome">
+                        <strong>{settingsTemplateTypeLabel(template.type)}</strong>
+                        <span>{template.name}</span>
+                      </td>
+                      <td data-label="Uso">
+                        <strong>{settingsTemplateUsageLabel(template.type)}</strong>
+                        <span>{settingsTemplateDescription(template.type)}</span>
+                        {settingsTemplateUsage(template.type) === 'legacy' ? (
+                          <span className="settings-template-legacy-badge">Legado</span>
+                        ) : null}
+                      </td>
+                      <td data-label="Variáveis">
+                        {template.variables.length} variáveis disponíveis
+                      </td>
+                      <td data-label="Status">
+                        <span
+                          className={`finance-status-pill tone-${
+                            template.active ? 'success' : 'muted'
+                          }`}
+                        >
+                          {template.active ? 'Ativo' : 'Inativo'}
+                        </span>
+                      </td>
+                      <td data-label="Atualização">{formatDateTime(template.updatedAt)}</td>
+                      <td className="finance-actions-column" data-label="Ações">
+                        <Button
+                          icon={Eye}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setSelectedTemplate(template)}
+                        >
+                          Visualizar
+                        </Button>
+                        <Button
+                          icon={MessageSquareText}
+                          loading={templatePreviewLoadingId === template.id}
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void loadTemplatePreview(template)}
+                        >
+                          Pré-visualizar
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {!templatesLoading && templatesLoaded && !messageTemplates.length ? (
+                <div className="empty-state">Nenhum template cadastrado.</div>
+              ) : null}
+              {!templatesLoading &&
+              templatesLoaded &&
+              messageTemplates.length > 0 &&
+              !filteredTemplates.length ? (
+                <div className="empty-state">Nenhum template encontrado com os filtros atuais.</div>
+              ) : null}
+              {templatesLoading ? <div className="empty-state">Carregando templates...</div> : null}
+            </div>
+          ) : null}
+
+          {selectedTemplate ? (
+            <section className="settings-template-detail" aria-labelledby="settings-detail-title">
+              <header className="settings-billing-header">
+                <div>
+                  <span className="metric-label">Visualização read-only</span>
+                  <h3 id="settings-detail-title">
+                    {settingsTemplateTypeLabel(selectedTemplate.type)}
+                  </h3>
+                  <p>{settingsTemplateDescription(selectedTemplate.type)}</p>
+                </div>
+                <Button
+                  icon={X}
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setSelectedTemplate(null)}
+                >
+                  Fechar
+                </Button>
+              </header>
+
+              <dl className="detail-list settings-template-detail-list">
+                <div>
+                  <dt>Nome</dt>
+                  <dd>{selectedTemplate.name}</dd>
+                </div>
+                <div>
+                  <dt>Tipo</dt>
+                  <dd>{settingsTemplateTypeLabel(selectedTemplate.type)}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{selectedTemplate.active ? 'Ativo' : 'Inativo'}</dd>
+                </div>
+                <div>
+                  <dt>Uso</dt>
+                  <dd>{settingsTemplateUsageLabel(selectedTemplate.type)}</dd>
+                </div>
+                <div>
+                  <dt>Atualizado em</dt>
+                  <dd>{formatDateTime(selectedTemplate.updatedAt)}</dd>
+                </div>
+              </dl>
+
+              <div className="settings-template-readonly-content">
+                <span>Conteúdo atual</span>
+                <pre>{selectedTemplate.content}</pre>
+              </div>
+
+              <div className="settings-template-variable-list">
+                <span>Variáveis disponíveis</span>
+                <div>
+                  {selectedTemplate.variables.map((variable) => (
+                    <code key={variable}>{`{{${variable}}}`}</code>
+                  ))}
+                  {!selectedTemplate.variables.length ? (
+                    <span>Nenhuma variável retornada pela API.</span>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {previewingTemplate ? (
+            <section className="settings-template-preview" aria-labelledby="settings-preview-title">
+              <header className="settings-billing-header">
+                <div>
+                  <span className="metric-label">Prévia com dados de exemplo</span>
+                  <h3 id="settings-preview-title">
+                    {settingsTemplateTypeLabel(previewingTemplate.type)}
+                  </h3>
+                  <p>{previewingTemplate.name}</p>
+                </div>
+                <Button
+                  icon={X}
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setPreviewingTemplate(null);
+                    setTemplatePreview('');
+                    setTemplatePreviewError('');
+                  }}
+                >
+                  Fechar
+                </Button>
+              </header>
+
+              {templatePreviewError ? (
+                <div className="notice danger" role="alert">
+                  <span>{templatePreviewError}</span>
+                  <Button
+                    icon={RefreshCcw}
+                    loading={templatePreviewLoadingId === previewingTemplate.id}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void loadTemplatePreview(previewingTemplate)}
+                  >
+                    Tentar novamente
+                  </Button>
+                </div>
+              ) : null}
+              <div className="notice warning" role="note">
+                Pré-visualização com dados de exemplo. Nenhuma mensagem será enviada.
+              </div>
+              <span
+                className={`finance-status-pill tone-${previewingTemplate.active ? 'success' : 'muted'}`}
+              >
+                {previewingTemplate.active ? 'Ativo' : 'Inativo'}
+              </span>
+              {templatePreview ? <pre>{templatePreview}</pre> : null}
+              {templatePreviewLoadingId ? (
+                <div className="empty-state">Gerando preview...</div>
+              ) : null}
+            </section>
+          ) : null}
+
           <div className="settings-billing-note">
             <Info aria-hidden="true" size={16} />
-            <span>
-              A fonte oficial dos templates continua disponível em Automações enquanto esta área é
-              preparada.
-            </span>
+            <span>A edição dos templates continua temporariamente em Automações.</span>
           </div>
 
           <footer className="settings-billing-actions">

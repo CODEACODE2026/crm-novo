@@ -152,7 +152,8 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain(
       'Os envios dependem de uma conexão WhatsApp operacional.',
     );
-    expect(settingsBillingSource).toContain("useState<'rules' | 'templates'>('rules')");
+    expect(settingsSource).toContain("type SettingsBillingTab = 'rules' | 'templates'");
+    expect(settingsBillingSource).toContain('useState<SettingsBillingTab>(initialBillingTab)');
     expect(settingsBillingSource).toContain('Regras');
     expect(settingsBillingSource).toContain('Templates');
   });
@@ -236,11 +237,15 @@ describe('Settings V2 SET1 shell contracts', () => {
   });
 
   it('adds a local billing subnavigation with real template listing and preview', () => {
+    expect(dashboardSource).toContain('initialBillingTab={settingsInitialBillingTab}');
+    expect(dashboardSource).toContain('setSettingsInitialBillingTab(tab)');
     expect(dashboardSource).toContain("onOpenAutomations={() => setView('automations')}");
     expect(settingsViewSource).toContain('onOpenAutomations={onOpenAutomations}');
     expect(settingsBillingSource).toContain('className="settings-billing-subnav"');
     expect(settingsBillingSource).toContain("setActiveBillingTab('rules')");
     expect(settingsBillingSource).toContain("setActiveBillingTab('templates')");
+    expect(settingsBillingSource).toContain('useState<SettingsBillingTab>(initialBillingTab)');
+    expect(settingsBillingSource).toContain('setActiveBillingTab(initialBillingTab)');
     expect(settingsBillingSource).toContain('activeBillingTab ===');
     expect(settingsBillingSource).toContain('const [messageTemplates, setMessageTemplates]');
     expect(settingsBillingSource).toContain('setMessageTemplates(await listMessageTemplates())');
@@ -277,7 +282,7 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsBillingSource).toContain('Nenhum template cadastrado.');
     expect(settingsBillingSource).toContain('Nenhum template encontrado com os filtros atuais.');
     expect(settingsBillingSource).toContain('Tentar novamente');
-    expect(settingsBillingSource).toContain('Abrir templates em Automações');
+    expect(settingsBillingSource).toContain('Abrir Automações');
     expect(settingsBillingSource).not.toContain('SET4C.2');
     expect(settingsBillingSource).not.toContain('Restaurar padrão');
     expect(settingsBillingSource).not.toContain('Novo template');
@@ -377,14 +382,25 @@ describe('Settings V2 SET1 shell contracts', () => {
   it('keeps recovery, templates, and operation in Automations while linking to Settings', () => {
     expect(automationsSource).toContain('Configurar automação');
     expect(automationsSource).toContain('onOpenBillingSettings');
+    expect(automationsSource).toContain("onOpenBillingSettings('rules')");
+    expect(automationsSource).toContain("onOpenBillingSettings('templates')");
     expect(automationsSource).toContain('automation-billing-operation-grid');
     expect(automationsSource).not.toContain('saveBillingSettings');
     expect(automationsSource).not.toContain('updateBillingAutomationSettings');
     expect(automationsSource).not.toContain('updateRecoveryAutomationSettings');
-    expect(automationsSource).toContain('title="Mensagens da automação"');
+    expect(automationsSource).toContain('title="Templates de mensagens"');
+    expect(automationsSource).toContain('Gerenciar templates');
+    expect(automationsSource).toContain('automation-template-summary');
+    expect(automationsSource).not.toContain('openBillingTemplate');
+    expect(automationsSource).not.toContain('openRecoveryTemplate');
+    expect(automationsSource).not.toContain('toggleBillingTemplate');
+    expect(automationsSource).not.toContain('toggleRecoveryTemplate');
+    expect(automationsSource).not.toContain('saveBillingTemplate');
+    expect(automationsSource).not.toContain('saveRecoveryTemplate');
     expect(automationsSource).toContain('title="Recuperação por inadimplência"');
     expect(automationsSource).toContain('Configurar recuperação');
     expect(automationsSource).toContain('Configurar em Settings');
+    expect(automationsSource).toContain('title="Templates de recuperação"');
     expect(automationsSource).toContain('title="Campanhas de recuperação"');
   });
 

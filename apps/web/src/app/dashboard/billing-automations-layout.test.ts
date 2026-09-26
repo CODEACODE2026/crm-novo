@@ -111,27 +111,20 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.technical-id');
   });
 
-  it('moves billing automation messages to compact automation cards with safe previews', () => {
-    expect(dashboardSource).toContain('title="Mensagens da automação"');
-    expect(dashboardSource).toContain('Cobrança individual');
-    expect(dashboardSource).toContain('Cobrança agrupada');
-    expect(dashboardSource).toContain('Usada quando existe uma única cobrança para o cliente.');
+  it('keeps template administration out of Automations and links to Settings templates', () => {
+    expect(dashboardSource).toContain('title="Templates de mensagens"');
     expect(dashboardSource).toContain(
-      'Usada quando várias cobranças são consolidadas em uma única mensagem.',
+      'Resumo operacional dos templates usados pela cobrança automática.',
     );
-    expect(dashboardSource).toContain('Prévia da mensagem');
-    expect(dashboardSource).toContain('Exemplo de visualização');
-    expect(dashboardSource).toContain('Plano Mensal');
-    expect(dashboardSource).toContain('teste01 — R$ 30,00 — vence 20/09/2026');
-    expect(dashboardSource).toContain('Total: R$ 90,00');
-    expect(dashboardSource).toContain('Conteúdo da mensagem');
-    expect(dashboardSource).toContain(
-      'editingBillingTemplate.variables.map((variable) => `{{${variable}}}`).join',
-    );
-    expect(dashboardSource).toContain("label: template.active ? 'Desativar' : 'Ativar'");
-    expect(stylesSource).toContain('.automation-message-grid');
-    expect(stylesSource).toContain('.automation-message-card');
-    expect(stylesSource).toContain('.automation-preview-card');
+    expect(dashboardSource).toContain('Gerenciar templates');
+    expect(dashboardSource).toContain("onOpenBillingSettings('templates')");
+    expect(dashboardSource).toContain('billingTemplates.length');
+    expect(dashboardSource).toContain('activeBillingTemplates');
+    expect(dashboardSource).not.toContain('Conteúdo da mensagem');
+    expect(dashboardSource).not.toContain('editingBillingTemplate');
+    expect(dashboardSource).not.toContain('openBillingTemplate');
+    expect(dashboardSource).not.toContain('toggleBillingTemplate');
+    expect(stylesSource).toContain('.automation-template-summary');
   });
 
   it('renders recovery settings, offsets, campaign rows, and campaign detail steps', () => {
@@ -142,8 +135,11 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('Configurar em Settings');
     expect(dashboardSource).toContain('recovery-steps-timeline');
     expect(dashboardSource).toContain('D+{step.offsetDays}');
-    expect(dashboardSource).toContain('Mensagens de recuperação');
-    expect(dashboardSource).toContain('RecoveryAutomationPreviewModal');
+    expect(dashboardSource).toContain('Templates de recuperação');
+    expect(dashboardSource).not.toContain('RecoveryAutomationPreviewModal');
+    expect(dashboardSource).not.toContain('editingRecoveryTemplate');
+    expect(dashboardSource).not.toContain('openRecoveryTemplate');
+    expect(dashboardSource).not.toContain('toggleRecoveryTemplate');
     expect(dashboardSource).not.toContain('MENSAGENS POR ETAPA');
     expect(dashboardSource).not.toContain(
       "<p>{template?.content ?? 'Template da etapa indisponível.'}</p>",

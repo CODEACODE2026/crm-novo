@@ -3252,8 +3252,7 @@ a {
   font-weight: 700;
 }
 
-.automation-message-card p,
-.automation-preview-card p {
+.automation-message-card p {
   margin: 5px 0 0;
   color: var(--muted);
   font-size: 12px;
@@ -3267,51 +3266,30 @@ a {
   gap: 8px;
 }
 
-.automation-message-modal {
+.automation-template-summary {
   display: grid;
-  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.automation-preview-card {
+.automation-template-summary article {
   display: grid;
-  gap: 10px;
+  gap: 4px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-soft);
   padding: 14px;
 }
 
-.automation-preview-card dl,
-.automation-preview-card ul {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
+.automation-template-summary strong {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 750;
 }
 
-.automation-preview-card li {
-  list-style: none;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.automation-preview-card dl div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.automation-preview-card dt {
+.automation-template-summary span {
   color: var(--muted);
   font-size: 12px;
-}
-
-.automation-preview-card dd {
-  margin: 0;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .recovery-steps-timeline {
@@ -6723,6 +6701,7 @@ tbody tr:hover,
   .automation-billing-operation-grid,
   .automation-summary-grid,
   .automation-message-grid,
+  .automation-template-summary,
   .recovery-steps-timeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6824,6 +6803,7 @@ tbody tr:hover,
   .automation-billing-operation-grid,
   .automation-summary-grid,
   .automation-message-grid,
+  .automation-template-summary,
   .recovery-steps-timeline,
   .settings-recovery-steps,
   .settings-billing-form-grid,

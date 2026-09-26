@@ -287,6 +287,7 @@ import {
 import {
   billingMessageTemplates,
   messageTemplateTypeLabel,
+  recoveryMessageTemplates,
   recoveryTemplateCards,
   removalCountLabel,
   reportSummaryLabel,
@@ -391,6 +392,8 @@ export default function DashboardPage() {
   const [planFormOpen, setPlanFormOpen] = useState(false);
   const [financeInitialTab, setFinanceInitialTab] = useState<FinanceTab>('summary');
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('overview');
+  const [settingsInitialBillingTab, setSettingsInitialBillingTab] =
+    useState<SettingsBillingTab>('rules');
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
   const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
     null,
@@ -801,8 +804,9 @@ export default function DashboardPage() {
       {view === 'billing' ? <BillingView /> : null}
       {view === 'automations' ? (
         <AutomationsView
-          onOpenBillingSettings={() => {
+          onOpenBillingSettings={(tab = 'rules') => {
             setSettingsInitialSection('billing');
+            setSettingsInitialBillingTab(tab);
             setView('settings');
           }}
         />
@@ -810,6 +814,7 @@ export default function DashboardPage() {
       {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
       {view === 'settings' ? (
         <SettingsView
+          initialBillingTab={settingsInitialBillingTab}
           initialSection={settingsInitialSection}
           onOpenAutomations={() => setView('automations')}
           onOpenFinance={() => setView('finance')}
@@ -2804,6 +2809,7 @@ function reportSummaryValue(value: unknown) {
 }
 
 type SettingsSection = 'overview' | 'finance' | 'payments' | 'whatsapp' | 'billing' | 'system';
+type SettingsBillingTab = 'rules' | 'templates';
 
 const settingsSections = [
   {
@@ -2850,11 +2856,13 @@ const settingsSections = [
 }>;
 
 function SettingsView({
+  initialBillingTab,
   initialSection,
   onOpenAutomations,
   onOpenFinance,
   onOpenWhatsApp,
 }: {
+  initialBillingTab: SettingsBillingTab;
   initialSection: SettingsSection;
   onOpenAutomations: () => void;
   onOpenFinance: () => void;
@@ -3327,6 +3335,7 @@ function SettingsView({
               recoverySendIntervalSeconds={recoverySendIntervalSeconds}
               recoverySendTime={recoverySendTime}
               recoverySettings={recoverySettings}
+              initialBillingTab={initialBillingTab}
               onOpenAutomations={onOpenAutomations}
               onRecoveryDay10EnabledChange={setRecoveryDay10Enabled}
               onRecoveryDay10OffsetDaysChange={setRecoveryDay10OffsetDays}
@@ -3687,6 +3696,7 @@ function SettingsBillingAutomationPanel({
   recoverySendIntervalSeconds,
   recoverySendTime,
   recoverySettings,
+  initialBillingTab,
   onOpenAutomations,
   onRecoveryDay10EnabledChange,
   onRecoveryDay10OffsetDaysChange,
@@ -3734,6 +3744,7 @@ function SettingsBillingAutomationPanel({
   recoverySendIntervalSeconds: string;
   recoverySendTime: string;
   recoverySettings: RecoveryAutomationSettings | null;
+  initialBillingTab: SettingsBillingTab;
   onOpenAutomations: () => void;
   onRecoveryDay10EnabledChange: (value: boolean) => void;
   onRecoveryDay10OffsetDaysChange: (value: string) => void;
@@ -3749,7 +3760,7 @@ function SettingsBillingAutomationPanel({
   onRecoverySendIntervalSecondsChange: (value: string) => void;
   onRecoverySendTimeChange: (value: string) => void;
 }) {
-  const [activeBillingTab, setActiveBillingTab] = useState<'rules' | 'templates'>('rules');
+  const [activeBillingTab, setActiveBillingTab] = useState<SettingsBillingTab>(initialBillingTab);
   const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>([]);
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -3848,6 +3859,10 @@ function SettingsBillingAutomationPanel({
       void loadMessageTemplates();
     }
   }, [activeBillingTab, loadMessageTemplates, templatesLoaded, templatesLoading]);
+
+  useEffect(() => {
+    setActiveBillingTab(initialBillingTab);
+  }, [initialBillingTab]);
 
   async function loadTemplatePreview(template: MessageTemplate) {
     if (!selectedTemplate) {
@@ -4825,14 +4840,14 @@ function SettingsBillingAutomationPanel({
           <div className="settings-billing-note">
             <Info aria-hidden="true" size={16} />
             <span>
-              Configurações passa a administrar os templates. O editor legado em Automações será
-              removido em uma etapa dedicada.
+              Configurações é a fonte oficial para visualizar, editar, ativar e pré-visualizar
+              templates.
             </span>
           </div>
 
           <footer className="settings-billing-actions">
             <Button icon={ArrowRight} variant="secondary" onClick={onOpenAutomations}>
-              Abrir templates em Automações
+              Abrir Automações
             </Button>
           </footer>
         </section>
@@ -8074,16 +8089,6 @@ function BillingDispatchDetailModal({
   );
 }
 
-const recoveryTemplateVariables = [
-  'nome',
-  'primeiroNome',
-  'referencia',
-  'plano',
-  'valor',
-  'vencimento',
-  'diasAtraso',
-];
-
 type AutomationTab = 'billing' | 'recovery' | 'monitoring';
 type RecoveryTemplateCard = (typeof recoveryTemplateCards)[number];
 
@@ -8092,19 +8097,6 @@ const automationTabs = [
   { id: 'recovery', label: 'Recuperação por inadimplência' },
   { id: 'monitoring', label: 'Monitoramento' },
 ] satisfies Array<{ id: AutomationTab; label: string }>;
-
-function billingAutomationTemplateTitle(type: MessageTemplate['type']) {
-  if (type === 'BILLING_DUE_GROUPED') return 'Cobrança agrupada';
-  return 'Cobrança individual';
-}
-
-function billingAutomationTemplateDescription(type: MessageTemplate['type']) {
-  if (type === 'BILLING_DUE_GROUPED') {
-    return 'Usada quando várias cobranças são consolidadas em uma única mensagem.';
-  }
-
-  return 'Usada quando existe uma única cobrança para o cliente.';
-}
 
 function recoveryAutomationTemplateTitle(card: RecoveryTemplateCard) {
   return card.templateType.replace('RECOVERY_DAY_', 'D+');
@@ -8115,111 +8107,11 @@ function shortUuid(value: string | null | undefined) {
   return value.length > 8 ? `${value.slice(0, 8)}…` : value;
 }
 
-function BillingAutomationPreviewModal({
-  template,
-  onClose,
+function AutomationsView({
+  onOpenBillingSettings,
 }: {
-  template: MessageTemplate;
-  onClose: () => void;
+  onOpenBillingSettings: (tab?: SettingsBillingTab) => void;
 }) {
-  const grouped = template.type === 'BILLING_DUE_GROUPED';
-
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="modal automation-message-modal" aria-labelledby="billing-preview-title">
-        <header className="modal-header">
-          <div>
-            <h2 id="billing-preview-title">Prévia da mensagem</h2>
-            <p>Exemplo de visualização</p>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
-        </header>
-
-        <div className="automation-preview-card">
-          <span className="metric-label">{billingAutomationTemplateTitle(template.type)}</span>
-          <strong>João</strong>
-          {grouped ? (
-            <>
-              <p>3 serviços</p>
-              <ul>
-                <li>teste01 — R$ 30,00 — vence 20/09/2026</li>
-                <li>teste02 — R$ 30,00 — vence 20/09/2026</li>
-                <li>teste03 — R$ 30,00 — vence 20/09/2026</li>
-              </ul>
-              <strong>Total: R$ 90,00</strong>
-            </>
-          ) : (
-            <dl>
-              <div>
-                <dt>Plano</dt>
-                <dd>Plano Mensal</dd>
-              </div>
-              <div>
-                <dt>Valor</dt>
-                <dd>R$ 30,00</dd>
-              </div>
-              <div>
-                <dt>Vencimento</dt>
-                <dd>20/09/2026</dd>
-              </div>
-            </dl>
-          )}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function RecoveryAutomationPreviewModal({
-  card,
-  onClose,
-}: {
-  card: RecoveryTemplateCard;
-  onClose: () => void;
-}) {
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="modal automation-message-modal" aria-labelledby="recovery-preview-title">
-        <header className="modal-header">
-          <div>
-            <h2 id="recovery-preview-title">Prévia da mensagem</h2>
-            <p>Exemplo de visualização</p>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose}>
-            <X aria-hidden="true" size={17} />
-          </button>
-        </header>
-
-        <div className="automation-preview-card">
-          <span className="metric-label">{recoveryAutomationTemplateTitle(card)}</span>
-          <strong>João</strong>
-          <dl>
-            <div>
-              <dt>Referência</dt>
-              <dd>Plano Mensal</dd>
-            </div>
-            <div>
-              <dt>Valor em aberto</dt>
-              <dd>R$ 30,00</dd>
-            </div>
-            <div>
-              <dt>Vencimento</dt>
-              <dd>20/09/2026</dd>
-            </div>
-            <div>
-              <dt>Etapa</dt>
-              <dd>{card.title}</dd>
-            </div>
-          </dl>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () => void }) {
   const [automationTab, setAutomationTab] = useState<AutomationTab>('billing');
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
@@ -8227,20 +8119,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
   const [recoverySummary, setRecoverySummary] = useState<RecoverySummary | null>(null);
   const [campaigns, setCampaigns] = useState<RecoveryCampaign[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
-  const [previewingBillingTemplate, setPreviewingBillingTemplate] =
-    useState<MessageTemplate | null>(null);
-  const [editingBillingTemplate, setEditingBillingTemplate] = useState<MessageTemplate | null>(
-    null,
-  );
-  const [billingTemplateContent, setBillingTemplateContent] = useState('');
-  const [editingRecoveryTemplate, setEditingRecoveryTemplate] = useState<MessageTemplate | null>(
-    null,
-  );
-  const [recoveryTemplateContent, setRecoveryTemplateContent] = useState('');
-  const [recoveryTemplateName, setRecoveryTemplateName] = useState('');
-  const [recoveryTemplatePreview, setRecoveryTemplatePreview] = useState('');
-  const [previewingRecoveryTemplate, setPreviewingRecoveryTemplate] =
-    useState<RecoveryTemplateCard | null>(null);
   const [selectedAutomationDispatch, setSelectedAutomationDispatch] =
     useState<MessageDispatch | null>(null);
   const [selectedCampaign, setSelectedCampaign] = useState<RecoveryCampaign | null>(null);
@@ -8254,6 +8132,9 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
   const billingTemplates = billingMessageTemplates(templates);
+  const recoveryTemplates = recoveryMessageTemplates(templates);
+  const activeBillingTemplates = billingTemplates.filter((template) => template.active).length;
+  const activeRecoveryTemplates = recoveryTemplates.filter((template) => template.active).length;
 
   const loadAutomations = useCallback(async () => {
     setLoading(true);
@@ -8298,42 +8179,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
     void loadAutomations();
   }, [loadAutomations]);
 
-  function openBillingTemplate(template: MessageTemplate) {
-    setEditingBillingTemplate(template);
-    setBillingTemplateContent(template.content);
-    setError('');
-  }
-
-  async function saveBillingTemplate() {
-    if (!editingBillingTemplate) return;
-    setWorking('billing-template');
-    setError('');
-
-    try {
-      await updateMessageTemplate(editingBillingTemplate.id, { content: billingTemplateContent });
-      setEditingBillingTemplate(null);
-      await loadAutomations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível salvar mensagem.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  async function toggleBillingTemplate(template: MessageTemplate) {
-    setWorking(template.id);
-    setError('');
-
-    try {
-      await updateMessageTemplate(template.id, { active: !template.active });
-      await loadAutomations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível alterar mensagem.');
-    } finally {
-      setWorking('');
-    }
-  }
-
   async function runRecoveryReconcile() {
     setWorking('reconcile');
     setError('');
@@ -8343,64 +8188,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
       await loadAutomations();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível reconciliar recuperação.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  function openRecoveryTemplate(template: MessageTemplate) {
-    setEditingRecoveryTemplate(template);
-    setRecoveryTemplateName(template.name);
-    setRecoveryTemplateContent(template.content);
-    setRecoveryTemplatePreview('');
-    setError('');
-  }
-
-  async function saveRecoveryTemplate() {
-    if (!editingRecoveryTemplate) return;
-    setWorking('recovery-template');
-    setError('');
-
-    try {
-      await updateMessageTemplate(editingRecoveryTemplate.id, {
-        name: recoveryTemplateName,
-        content: recoveryTemplateContent,
-      });
-      setEditingRecoveryTemplate(null);
-      await loadAutomations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível salvar mensagem.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  async function toggleRecoveryTemplate(template: MessageTemplate) {
-    setWorking(template.id);
-    setError('');
-
-    try {
-      await updateMessageTemplate(template.id, { active: !template.active });
-      await loadAutomations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível alterar mensagem.');
-    } finally {
-      setWorking('');
-    }
-  }
-
-  async function loadRecoveryTemplatePreview() {
-    if (!editingRecoveryTemplate) return;
-    setWorking('recovery-preview');
-    setError('');
-
-    try {
-      const result = await previewMessageTemplate(editingRecoveryTemplate.id, {
-        content: recoveryTemplateContent,
-      });
-      setRecoveryTemplatePreview(result.renderedContent);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não foi possível gerar preview.');
     } finally {
       setWorking('');
     }
@@ -8528,7 +8315,7 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                     icon={Settings}
                     size="sm"
                     variant="secondary"
-                    onClick={onOpenBillingSettings}
+                    onClick={() => onOpenBillingSettings('rules')}
                   >
                     Configurar automação
                   </Button>
@@ -8570,59 +8357,36 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
 
             <section className="settings-card automation-section automation-message-section">
               <AutomationSectionHeading
+                action={
+                  <Button
+                    icon={ArrowRight}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onOpenBillingSettings('templates')}
+                  >
+                    Gerenciar templates
+                  </Button>
+                }
                 icon={MessageSquareText}
-                title="Mensagens da automação"
-                description="Templates usados pela cobrança automática."
+                title="Templates de mensagens"
+                description="Resumo operacional dos templates usados pela cobrança automática."
               />
-              <div className="automation-message-grid">
-                {billingTemplates.map((template) => (
-                  <article className="automation-message-card" key={template.id}>
-                    <header>
-                      <div>
-                        <strong>{billingAutomationTemplateTitle(template.type)}</strong>
-                        <p>{billingAutomationTemplateDescription(template.type)}</p>
-                      </div>
-                      <span
-                        className={`finance-status-pill tone-${
-                          template.active ? 'success' : 'muted'
-                        }`}
-                      >
-                        {template.active ? 'Ativa' : 'Inativa'}
-                      </span>
-                    </header>
-                    <div className="automation-message-actions">
-                      <Button
-                        icon={Eye}
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setPreviewingBillingTemplate(template)}
-                      >
-                        Visualizar
-                      </Button>
-                      <Button
-                        icon={Pencil}
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => openBillingTemplate(template)}
-                      >
-                        Editar
-                      </Button>
-                      <ActionMenu
-                        items={[
-                          {
-                            disabled: working === template.id,
-                            icon: Power,
-                            label: template.active ? 'Desativar' : 'Ativar',
-                            onSelect: () => void toggleBillingTemplate(template),
-                          },
-                        ]}
-                      />
-                    </div>
-                  </article>
-                ))}
-                {!billingTemplates.length ? (
-                  <div className="empty-state">Nenhuma mensagem da automação cadastrada.</div>
-                ) : null}
+              <div
+                className="automation-template-summary"
+                aria-label="Resumo dos templates de cobrança"
+              >
+                <article>
+                  <strong>{billingTemplates.length}</strong>
+                  <span>templates de cobrança</span>
+                </article>
+                <article>
+                  <strong>{activeBillingTemplates}</strong>
+                  <span>ativos</span>
+                </article>
+                <article>
+                  <strong>{billingTemplates.length - activeBillingTemplates}</strong>
+                  <span>inativos</span>
+                </article>
               </div>
             </section>
 
@@ -8700,7 +8464,7 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                     icon={Settings}
                     size="sm"
                     variant="secondary"
-                    onClick={onOpenBillingSettings}
+                    onClick={() => onOpenBillingSettings('rules')}
                   >
                     Configurar recuperação
                   </Button>
@@ -8750,7 +8514,7 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
                     icon={Settings}
                     size="sm"
                     variant="secondary"
-                    onClick={onOpenBillingSettings}
+                    onClick={() => onOpenBillingSettings('rules')}
                   >
                     Configurar em Settings
                   </Button>
@@ -8775,62 +8539,38 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
 
             <section className="settings-card automation-section template-panel">
               <AutomationSectionHeading
+                action={
+                  <Button
+                    icon={ArrowRight}
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onOpenBillingSettings('templates')}
+                  >
+                    Gerenciar templates
+                  </Button>
+                }
                 icon={MessageSquareText}
-                title="Mensagens de recuperação"
-                description="Mensagens utilizadas em cada etapa da recuperação."
+                title="Templates de recuperação"
+                description="Resumo operacional dos templates usados nas etapas de recuperação."
               />
-              <div className="automation-message-grid">
-                {recoveryTemplateCards.map((card) => {
-                  const template = templates.find((item) => item.type === card.templateType);
-
-                  return (
-                    <article className="automation-message-card" key={card.templateType}>
-                      <header>
-                        <div>
-                          <strong>{recoveryAutomationTemplateTitle(card)}</strong>
-                          <p>{card.title}</p>
-                        </div>
-                        <span
-                          className={`finance-status-pill tone-${
-                            template?.active ? 'success' : 'muted'
-                          }`}
-                        >
-                          {template?.active ? 'Ativa' : 'Inativa'}
-                        </span>
-                      </header>
-                      <div className="automation-message-actions">
-                        <Button
-                          disabled={!template}
-                          icon={Eye}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setPreviewingRecoveryTemplate(card)}
-                        >
-                          Visualizar
-                        </Button>
-                        <Button
-                          disabled={!template}
-                          icon={Pencil}
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => template && openRecoveryTemplate(template)}
-                        >
-                          Editar
-                        </Button>
-                        <ActionMenu
-                          items={[
-                            {
-                              disabled: !template || working === template.id,
-                              icon: Power,
-                              label: template?.active ? 'Desativar' : 'Ativar',
-                              onSelect: () => template && void toggleRecoveryTemplate(template),
-                            },
-                          ]}
-                        />
-                      </div>
-                    </article>
-                  );
-                })}
+              <div
+                className="automation-template-summary"
+                aria-label="Resumo dos templates de recuperação"
+              >
+                <article>
+                  <strong>{recoveryTemplates.length}</strong>
+                  <span>templates de recuperação</span>
+                </article>
+                <article>
+                  <strong>{activeRecoveryTemplates}</strong>
+                  <span>ativos</span>
+                </article>
+                <article>
+                  <strong>
+                    {recoveryTemplateCards.map(recoveryAutomationTemplateTitle).join(', ')}
+                  </strong>
+                  <span>etapas operacionais</span>
+                </article>
               </div>
             </section>
           </div>
@@ -9045,157 +8785,6 @@ function AutomationsView({ onOpenBillingSettings }: { onOpenBillingSettings: () 
         ) : null}
       </section>
 
-      {previewingBillingTemplate ? (
-        <BillingAutomationPreviewModal
-          template={previewingBillingTemplate}
-          onClose={() => setPreviewingBillingTemplate(null)}
-        />
-      ) : null}
-      {previewingRecoveryTemplate ? (
-        <RecoveryAutomationPreviewModal
-          card={previewingRecoveryTemplate}
-          onClose={() => setPreviewingRecoveryTemplate(null)}
-        />
-      ) : null}
-      {editingBillingTemplate ? (
-        <div className="modal-backdrop" role="presentation">
-          <section
-            className="modal automation-message-modal"
-            aria-labelledby="billing-template-title"
-          >
-            <header className="modal-header">
-              <div>
-                <h2 id="billing-template-title">Editar mensagem da automação</h2>
-                <p>{billingAutomationTemplateTitle(editingBillingTemplate.type)}</p>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setEditingBillingTemplate(null)}
-              >
-                <X aria-hidden="true" size={17} />
-              </button>
-            </header>
-            <label className="field">
-              <span>Conteúdo da mensagem</span>
-              <textarea
-                maxLength={1000}
-                rows={8}
-                value={billingTemplateContent}
-                onChange={(event) => setBillingTemplateContent(event.target.value)}
-              />
-            </label>
-            <div className="mini-list">
-              <article>
-                <strong>Variáveis disponíveis</strong>
-                <span>
-                  {editingBillingTemplate.variables.map((variable) => `{{${variable}}}`).join(' ')}
-                </span>
-              </article>
-            </div>
-            <div className="form-actions">
-              <span className="error-message">{error}</span>
-              <div className="button-row">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setEditingBillingTemplate(null)}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={working === 'billing-template' || !billingTemplateContent.trim()}
-                  type="button"
-                  onClick={() => void saveBillingTemplate()}
-                >
-                  Salvar
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
-      {editingRecoveryTemplate ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="modal" aria-labelledby="recovery-template-title">
-            <header className="modal-header">
-              <h2 id="recovery-template-title">Editar mensagem de recuperação</h2>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setEditingRecoveryTemplate(null)}
-              >
-                <X aria-hidden="true" size={17} />
-              </button>
-            </header>
-            <label className="field">
-              <span>Nome do template</span>
-              <input
-                maxLength={80}
-                value={recoveryTemplateName}
-                onChange={(event) => setRecoveryTemplateName(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Conteúdo</span>
-              <textarea
-                maxLength={1000}
-                rows={8}
-                value={recoveryTemplateContent}
-                onChange={(event) => setRecoveryTemplateContent(event.target.value)}
-              />
-            </label>
-            <div className="mini-list">
-              <article>
-                <strong>Variáveis disponíveis</strong>
-                <span>
-                  {recoveryTemplateVariables.map((variable) => `{{${variable}}}`).join(' ')}
-                </span>
-              </article>
-            </div>
-            {recoveryTemplatePreview ? (
-              <div className="preview-box">
-                <span>Preview</span>
-                <strong>{recoveryTemplatePreview}</strong>
-              </div>
-            ) : null}
-            <div className="form-actions">
-              <span className="error-message">{error}</span>
-              <div className="button-row">
-                <button
-                  className="secondary-button"
-                  disabled={working === 'recovery-preview'}
-                  type="button"
-                  onClick={() => void loadRecoveryTemplatePreview()}
-                >
-                  <Eye aria-hidden="true" size={16} />
-                  Preview
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setEditingRecoveryTemplate(null)}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={
-                    working === 'recovery-template' ||
-                    !recoveryTemplateName.trim() ||
-                    !recoveryTemplateContent.trim()
-                  }
-                  type="button"
-                  onClick={() => void saveRecoveryTemplate()}
-                >
-                  Salvar
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
       {selectedAutomationDispatch ? (
         <BillingDispatchDetailModal
           dispatch={selectedAutomationDispatch}

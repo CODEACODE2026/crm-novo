@@ -261,11 +261,13 @@ export class PaymentProviderCredentialsService {
   }
 
   private getPublicWebhookUrl(provider: PaymentProviderCode) {
-    const publicUrl = this.config.get<string>('CRM_PUBLIC_URL')?.trim();
+    const publicUrl =
+      this.config.get<string>('CRM_API_PUBLIC_URL')?.trim() ||
+      this.config.get<string>('CRM_PUBLIC_URL')?.trim();
 
     if (!publicUrl) {
       throw new BadRequestException(
-        'CRM_PUBLIC_URL deve estar configurada para registrar webhook.',
+        'CRM_API_PUBLIC_URL deve estar configurada para registrar webhook.',
       );
     }
 

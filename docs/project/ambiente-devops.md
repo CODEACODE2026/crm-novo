@@ -64,6 +64,12 @@ Backend:
 - `CORS_ORIGIN`.
 - `BCRYPT_ROUNDS`.
 - `APP_TIMEZONE=America/Sao_Paulo`.
+- `CRM_API_PUBLIC_URL`: URL publica HTTPS da API para webhooks externos
+  (WhatsApp e registro de webhook de pagamentos).
+- `CRM_PUBLIC_URL`: fallback legado aceito pelo registro de webhook de
+  pagamentos; novas instalacoes devem usar `CRM_API_PUBLIC_URL`.
+- `FASTDEPIX_NOTIFICATION_URL`: URL explicita opcional enviada na criacao de
+  PIX; quando configurada, sobrescreve a ausencia de URL derivada.
 - `ADMIN_EMAIL`.
 - `ADMIN_NAME`.
 - `ADMIN_PASSWORD`.

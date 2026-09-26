@@ -14,7 +14,12 @@ import { PaymentProviderCredentialsService } from './payment-provider-credential
 
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 
-function createService(apiProvider = 'fastflow') {
+function createService(
+  apiProvider = 'fastflow',
+  configValues: Record<string, string | undefined> = {
+    CRM_API_PUBLIC_URL: 'https://crm.example.test',
+  },
+) {
   const records: Array<Record<string, unknown>> = [];
   const prisma = {
     paymentProviderCredential: {
@@ -82,7 +87,7 @@ function createService(apiProvider = 'fastflow') {
       encryption as never,
       apiClient as never,
       {
-        get: (key: string) => (key === 'CRM_PUBLIC_URL' ? 'https://crm.example.test' : undefined),
+        get: (key: string) => configValues[key],
       } as never,
     ),
     prisma,
@@ -411,6 +416,44 @@ describe('PaymentProviderCredentialsService', () => {
     expect(JSON.stringify(result)).not.toContain('fake_webhook_secret_123');
     expect(result.webhookSecretConfigured).toBe(true);
     expect(fake.apiClient.listWebhooks).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy CRM_PUBLIC_URL as fallback for payment webhook registration', async () => {
+    const fake = createService('fastflow', {
+      CRM_PUBLIC_URL: 'https://legacy-crm.example.test',
+    });
+    await fake.service.save({
+      provider: 'FASTFLOW',
+      name: 'FastFlow principal',
+      token: 'fdpx_test_token_A7F2',
+    });
+
+    await fake.service.registerWebhook('FASTFLOW');
+
+    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('token-A7F2', {
+      url: 'https://legacy-crm.example.test/payment-webhooks/fastflow',
+      events: [
+        'transaction.created',
+        'transaction.approved',
+        'transaction.paid',
+        'transaction.expired',
+        'transaction.refunded',
+      ],
+    });
+  });
+
+  it('rejects payment webhook registration without a public API URL', async () => {
+    const fake = createService('fastflow', {});
+    await fake.service.save({
+      provider: 'FASTFLOW',
+      name: 'FastFlow principal',
+      token: 'fdpx_test_token_A7F2',
+    });
+
+    await expect(fake.service.registerWebhook('FASTFLOW')).rejects.toThrow(
+      'CRM_API_PUBLIC_URL deve estar configurada para registrar webhook.',
+    );
+    expect(fake.apiClient.registerWebhook).not.toHaveBeenCalled();
   });
 
   it('falls back to GET webhooks and refuses ambiguous webhook URLs', async () => {

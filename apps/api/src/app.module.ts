@@ -8,6 +8,7 @@ import { PrismaModule } from './common/prisma/prisma.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
 import { HealthModule } from './health/health.module';
+import { LegacyImportModule } from './legacy-import/legacy-import.module';
 import { PlansModule } from './plans/plans.module';
 import { RecoveryModule } from './recovery/recovery.module';
 import { ReferralsModule } from './referrals/referrals.module';
@@ -33,6 +34,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     RecoveryModule,
     ReferralsModule,
     ReportsModule,
+    LegacyImportModule,
     HealthModule,
   ],
 })

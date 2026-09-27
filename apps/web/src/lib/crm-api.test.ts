@@ -23,6 +23,7 @@ import {
   listWhatsAppPendingContacts,
   payReceivable,
   payReceivables,
+  previewLegacyClients,
   previewReceivablePixReplacement,
   previewReceivablePixReplacementRecovery,
   previewRenewalReversal,
@@ -185,6 +186,23 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/payment-intents/intent-1/send-whatsapp'),
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('posts legacy client preview payload to the read-only import endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ summary: { total: 0 }, ignoredFields: [], rows: [] }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewLegacyClients({ schemaVersion: 1, source: 'legacy', clients: [] });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/legacy-import/clients/preview'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toMatchObject({ schemaVersion: 1, source: 'legacy' });
   });
 
   it('keeps the session when PIX WhatsApp send returns a provider auth boundary error', async () => {

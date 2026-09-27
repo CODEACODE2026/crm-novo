@@ -160,6 +160,7 @@ import {
   logoutWhatsApp,
   payReceivable,
   payReceivables,
+  previewLegacyClients,
   previewDeleteClient,
   previewDeleteClientReference,
   previewReferenceRenewal,
@@ -234,6 +235,9 @@ import {
   type FinancialTransactionPayload,
   type FinancialTransactionType,
   type HealthStatus,
+  type LegacyImportClassification,
+  type LegacyImportPreview,
+  type LegacyImportPreviewRow,
   type PaginatedClients,
   type PaginatedClientEvents,
   type PaymentIntent,
@@ -271,6 +275,7 @@ import {
   type WhatsAppPendingContactsSummary,
   type WhatsAppProviderHealth,
 } from '../../lib/crm-api';
+import { readLegacyImportJsonFile } from '../../lib/legacy-import-file';
 import {
   canStartWhatsAppAction,
   extractWebhookUrl,
@@ -313,6 +318,7 @@ type View =
   | 'billing'
   | 'automations'
   | 'reports'
+  | 'imports'
   | 'settings';
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses';
 
@@ -325,6 +331,7 @@ const navItems = [
   { id: 'billing', label: 'Cobranças', icon: Bell },
   { id: 'automations', label: 'Automações', icon: Activity },
   { id: 'reports', label: 'Relatórios', icon: BarChart3 },
+  { id: 'imports', label: 'Importação', icon: FileText },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'waitlist', label: 'Lista de Espera', icon: ListChecks },
   { id: 'settings', label: 'Configurações', icon: Settings },
@@ -812,6 +819,7 @@ export default function DashboardPage() {
         />
       ) : null}
       {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
+      {view === 'imports' ? <LegacyImportPreviewView /> : null}
       {view === 'settings' ? (
         <SettingsView
           initialBillingTab={settingsInitialBillingTab}
@@ -866,6 +874,7 @@ function viewTitle(view: View) {
     clients: 'Clientes',
     dashboard: 'Dashboard',
     finance: 'Financeiro',
+    imports: 'Importação',
     plans: 'Planos',
     referrals: 'Indicações',
     reports: 'Relatórios',
@@ -884,6 +893,7 @@ function viewSubtitle(view: View) {
     clients: 'Base de clientes, referências e histórico',
     dashboard: 'Visão operacional do dia e do período',
     finance: 'Receitas, despesas e contas a receber',
+    imports: 'Preview temporário da migração legado',
     plans: 'Planos comerciais e recorrências',
     referrals: 'Indicações, benefícios e recompensas',
     reports: 'Exportações e análises administrativas',
@@ -893,6 +903,295 @@ function viewSubtitle(view: View) {
   } satisfies Record<View, string>;
 
   return subtitles[view];
+}
+
+const legacyImportClassificationLabels = {
+  CONFLICT: 'Conflito',
+  INVALID: 'Inválido',
+  NEEDS_DECISION: 'Precisa decisão',
+  POSSIBLE_MATCH: 'Possível match',
+  READY_CREATE: 'Pronto criar',
+  READY_UPDATE: 'Pronto atualizar',
+  UNCHANGED: 'Sem alteração',
+} satisfies Record<LegacyImportClassification, string>;
+
+const legacyImportClassificationTone = {
+  CONFLICT: 'danger',
+  INVALID: 'danger',
+  NEEDS_DECISION: 'warning',
+  POSSIBLE_MATCH: 'warning',
+  READY_CREATE: 'success',
+  READY_UPDATE: 'info',
+  UNCHANGED: 'muted',
+} satisfies Record<LegacyImportClassification, string>;
+
+const legacyImportFilters = [
+  { id: 'all', label: 'Todos' },
+  { id: 'READY_CREATE', label: 'Criar' },
+  { id: 'READY_UPDATE', label: 'Atualizar' },
+  { id: 'UNCHANGED', label: 'Sem alteração' },
+  { id: 'POSSIBLE_MATCH', label: 'Matches' },
+  { id: 'NEEDS_DECISION', label: 'Decisão' },
+  { id: 'CONFLICT', label: 'Conflitos' },
+  { id: 'INVALID', label: 'Inválidos' },
+] satisfies Array<{ id: LegacyImportClassification | 'all'; label: string }>;
+
+function LegacyImportPreviewView() {
+  const [fileName, setFileName] = useState('');
+  const [fileText, setFileText] = useState('');
+  const [preview, setPreview] = useState<LegacyImportPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState<LegacyImportClassification | 'all'>('all');
+  const [selectedRow, setSelectedRow] = useState<LegacyImportPreviewRow | null>(null);
+
+  const filteredRows =
+    preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
+
+  async function handleFileChange(file: File | undefined) {
+    setPreview(null);
+    setSelectedRow(null);
+    setError('');
+
+    if (!file) {
+      setFileName('');
+      setFileText('');
+      return;
+    }
+
+    const fileRead = await readLegacyImportJsonFile(file);
+    setFileName(fileRead.fileName);
+    setFileText(fileRead.text);
+
+    if (!fileRead.ok) {
+      setError(fileRead.error);
+    }
+  }
+
+  async function runPreview() {
+    setLoading(true);
+    setError('');
+    setSelectedRow(null);
+
+    try {
+      const payload = JSON.parse(fileText) as unknown;
+      const result = await previewLegacyClients(payload);
+      setPreview(result);
+      setFilter('all');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível validar o arquivo.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="workspace-main legacy-import-view">
+      <PageHeader
+        eyebrow="Legacy Import"
+        icon={FileText}
+        title="Importação de clientes"
+        subtitle="IMPORT1.1"
+        actions={
+          <Button
+            disabled={!fileText || loading}
+            icon={RefreshCw}
+            loading={loading}
+            variant="primary"
+            onClick={() => void runPreview()}
+          >
+            Validar
+          </Button>
+        }
+      />
+
+      {error ? <div className="notice danger">{error}</div> : null}
+
+      <div className="legacy-import-upload">
+        <label className="field">
+          <span>Arquivo JSON</span>
+          <input
+            accept="application/json,.json"
+            type="file"
+            onChange={(event) => void handleFileChange(event.target.files?.[0])}
+          />
+        </label>
+        <div className="legacy-import-file-state">
+          <strong>{fileName || 'Nenhum arquivo selecionado'}</strong>
+          <span>Importação real será habilitada na próxima etapa.</span>
+        </div>
+      </div>
+
+      {preview ? (
+        <>
+          <div className="legacy-import-summary">
+            <StatCard label="Total" value={preview.summary.total} />
+            <StatCard
+              label="Prontos para criar"
+              tone="success"
+              value={preview.summary.readyCreate}
+            />
+            <StatCard
+              label="Prontos para atualizar"
+              tone="info"
+              value={preview.summary.readyUpdate}
+            />
+            <StatCard label="Sem alteração" value={preview.summary.unchanged} />
+            <StatCard
+              label="Possíveis correspondências"
+              tone="warning"
+              value={preview.summary.possibleMatch}
+            />
+            <StatCard
+              label="Precisam decisão"
+              tone="warning"
+              value={preview.summary.needsDecision}
+            />
+            <StatCard label="Conflitos" tone="danger" value={preview.summary.conflict} />
+            <StatCard label="Inválidos" tone="danger" value={preview.summary.invalid} />
+          </div>
+
+          <div className="legacy-import-filter-row">
+            {legacyImportFilters.map((item) => (
+              <button
+                className={`segmented-button ${filter === item.id ? 'active' : ''}`}
+                key={item.id}
+                type="button"
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="legacy-import-table-wrap">
+            <table className="legacy-import-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Referência</th>
+                  <th>Telefone</th>
+                  <th>Status legado</th>
+                  <th>Plano</th>
+                  <th>Valor</th>
+                  <th>Vencimento</th>
+                  <th>Resultado</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((row) => (
+                  <tr key={`${row.index}:${row.legacyClientId ?? 'invalid'}`}>
+                    <td>
+                      <strong>{row.name ?? '-'}</strong>
+                      <span>{row.email ?? '-'}</span>
+                    </td>
+                    <td>{row.reference ?? '-'}</td>
+                    <td>
+                      <span>{row.phone ?? '-'}</span>
+                      <small>{row.phoneNormalized ?? '-'}</small>
+                    </td>
+                    <td>{row.status ?? '-'}</td>
+                    <td>
+                      {row.plan?.name ??
+                        (row.plan?.durationMonths ? `${row.plan.durationMonths} meses` : '-')}
+                    </td>
+                    <td>{row.recurringValue ? formatCurrency(row.recurringValue) : '-'}</td>
+                    <td>{row.dueDate ? formatDate(row.dueDate) : '-'}</td>
+                    <td>
+                      <span
+                        className={`legacy-import-badge tone-${legacyImportClassificationTone[row.classification]}`}
+                      >
+                        {legacyImportClassificationLabels[row.classification]}
+                      </span>
+                    </td>
+                    <td>
+                      <IconButton
+                        icon={Eye}
+                        label="Ver detalhes"
+                        size="sm"
+                        onClick={() => setSelectedRow(row)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
+
+      {selectedRow ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal legacy-import-detail-modal"
+            aria-labelledby="legacy-import-detail-title"
+          >
+            <header className="modal-header">
+              <div>
+                <h2 id="legacy-import-detail-title">{selectedRow.name ?? 'Registro inválido'}</h2>
+                <p>{legacyImportClassificationLabels[selectedRow.classification]}</p>
+              </div>
+              <IconButton icon={X} label="Fechar" onClick={() => setSelectedRow(null)} />
+            </header>
+            <div className="legacy-import-detail-grid">
+              <dl className="detail-list">
+                <dt>Legacy ID</dt>
+                <dd>{selectedRow.legacyClientId ?? '-'}</dd>
+                <dt>Referência</dt>
+                <dd>{selectedRow.reference ?? '-'}</dd>
+                <dt>Status CRM</dt>
+                <dd>{selectedRow.normalizedStatus ?? '-'}</dd>
+                <dt>Anchor</dt>
+                <dd>{selectedRow.billingAnchorDay ?? '-'}</dd>
+                <dt>Aviso</dt>
+                <dd>{selectedRow.billingNoticeDays ?? '-'}</dd>
+                <dt>Hash</dt>
+                <dd>{selectedRow.payloadHash ?? '-'}</dd>
+              </dl>
+              <div className="legacy-import-detail-section">
+                <h3>Erros</h3>
+                <CodeList items={selectedRow.errors} empty="Nenhum erro" />
+                <h3>Avisos</h3>
+                <CodeList items={selectedRow.warnings} empty="Nenhum aviso" />
+              </div>
+              <div className="legacy-import-detail-section">
+                <h3>Correspondências</h3>
+                {selectedRow.candidateMatches.length ? (
+                  <ul className="legacy-import-match-list">
+                    {selectedRow.candidateMatches.map((match) => (
+                      <li key={`${match.field}:${match.clientId}:${match.clientReferenceId ?? ''}`}>
+                        <strong>{match.clientName}</strong>
+                        <span>
+                          {match.field} · {match.reference ?? match.clientId}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="empty-state">Nenhuma correspondência</p>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function CodeList({ empty, items }: { empty: string; items: string[] }) {
+  if (!items.length) {
+    return <p className="empty-state">{empty}</p>;
+  }
+
+  return (
+    <ul className="legacy-import-code-list">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
+  );
 }
 
 function DeletionConfirmationModal({

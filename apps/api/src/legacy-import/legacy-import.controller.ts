@@ -1,0 +1,16 @@
+import { Body, Controller, Inject, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { LegacyImportService } from './legacy-import.service';
+
+@UseGuards(JwtAuthGuard)
+@Controller('legacy-import')
+export class LegacyImportController {
+  constructor(
+    @Inject(LegacyImportService) private readonly legacyImportService: LegacyImportService,
+  ) {}
+
+  @Post('clients/preview')
+  previewClients(@Body() payload: unknown) {
+    return this.legacyImportService.previewClients(payload);
+  }
+}

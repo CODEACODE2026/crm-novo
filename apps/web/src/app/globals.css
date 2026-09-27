@@ -6558,6 +6558,199 @@ tbody tr:hover,
   color: var(--muted);
 }
 
+.legacy-import-view {
+  gap: 18px;
+}
+
+.legacy-import-upload {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: end;
+}
+
+.legacy-import-file-state {
+  display: grid;
+  gap: 4px;
+  min-height: 47px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 3%);
+  padding: 10px 12px;
+}
+
+.legacy-import-file-state strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legacy-import-file-state span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legacy-import-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.legacy-import-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segmented-button {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 3%);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 12px;
+}
+
+.segmented-button.active,
+.segmented-button:hover {
+  border-color: rgb(38 198 163 / 55%);
+  background: rgb(38 198 163 / 12%);
+  color: var(--text);
+}
+
+.legacy-import-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.legacy-import-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.legacy-import-table th,
+.legacy-import-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.legacy-import-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.legacy-import-table td {
+  font-size: 13px;
+}
+
+.legacy-import-table td strong,
+.legacy-import-table td span,
+.legacy-import-table td small {
+  display: block;
+}
+
+.legacy-import-table td small,
+.legacy-import-table td span {
+  color: var(--muted);
+}
+
+.legacy-import-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.legacy-import-badge.tone-success {
+  background: rgb(38 198 163 / 14%);
+  color: var(--accent-strong);
+}
+
+.legacy-import-badge.tone-info {
+  background: rgb(104 169 255 / 14%);
+  color: var(--info);
+}
+
+.legacy-import-badge.tone-warning {
+  background: rgb(241 184 75 / 14%);
+  color: var(--warning);
+}
+
+.legacy-import-badge.tone-danger {
+  background: rgb(255 107 107 / 14%);
+  color: var(--danger);
+}
+
+.legacy-import-badge.tone-muted {
+  background: rgb(255 255 255 / 6%);
+  color: var(--muted);
+}
+
+.legacy-import-detail-modal {
+  max-width: 920px;
+}
+
+.legacy-import-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 18px;
+}
+
+.legacy-import-detail-section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.legacy-import-detail-section h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.legacy-import-code-list,
+.legacy-import-match-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legacy-import-code-list li,
+.legacy-import-match-list li {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 3%);
+  padding: 8px 10px;
+}
+
+.legacy-import-code-list li {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.legacy-import-match-list li {
+  display: grid;
+  gap: 2px;
+}
+
+.legacy-import-match-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -6713,6 +6906,98 @@ tbody tr:hover,
 }
 
 @media (max-width: 640px) {
+  .legacy-import-upload,
+  .legacy-import-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .legacy-import-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .legacy-import-filter-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .segmented-button {
+    width: 100%;
+  }
+
+  .legacy-import-table-wrap {
+    overflow: visible;
+    border: 0;
+  }
+
+  .legacy-import-table,
+  .legacy-import-table tbody,
+  .legacy-import-table tr,
+  .legacy-import-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .legacy-import-table thead {
+    display: none;
+  }
+
+  .legacy-import-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: rgb(255 255 255 / 3%);
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+
+  .legacy-import-table td {
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .legacy-import-table td::before {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .legacy-import-table td:nth-child(1)::before {
+    content: 'Cliente';
+  }
+
+  .legacy-import-table td:nth-child(2)::before {
+    content: 'Referência';
+  }
+
+  .legacy-import-table td:nth-child(3)::before {
+    content: 'Telefone';
+  }
+
+  .legacy-import-table td:nth-child(4)::before {
+    content: 'Status';
+  }
+
+  .legacy-import-table td:nth-child(5)::before {
+    content: 'Plano';
+  }
+
+  .legacy-import-table td:nth-child(6)::before {
+    content: 'Valor';
+  }
+
+  .legacy-import-table td:nth-child(7)::before {
+    content: 'Vencimento';
+  }
+
+  .legacy-import-table td:nth-child(8)::before {
+    content: 'Resultado';
+  }
+
+  .legacy-import-table td:nth-child(9)::before {
+    content: 'Detalhes';
+  }
+
   .pagination {
     justify-content: stretch;
   }

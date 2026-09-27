@@ -200,6 +200,12 @@ enum WhatsAppInboundMessageType {
   UNKNOWN
 }
 
+enum LegacyImportRecordStatus {
+  IMPORTED
+  UPDATED
+  FAILED
+}
+
 model User {
   id                    String                 @id @default(uuid()) @db.Uuid
   name                  String
@@ -955,4 +961,24 @@ model ClientEvent {
   @@index([type])
   @@index([createdAt])
   @@map("client_events")
+}
+
+model LegacyImportRecord {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  source               String
+  legacyClientId       String
+  crmClientId          String?                  @db.Uuid
+  crmClientReferenceId String?                  @db.Uuid
+  payloadHash          String                   @db.VarChar(64)
+  status               LegacyImportRecordStatus
+  errorCode            String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  @@unique([source, legacyClientId])
+  @@index([crmClientId])
+  @@index([crmClientReferenceId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("legacy_import_records")
 }

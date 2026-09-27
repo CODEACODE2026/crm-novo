@@ -684,6 +684,63 @@ export interface ReceivableCycleReport {
   items: ReceivableCycleIssue[];
 }
 
+export type LegacyImportClassification =
+  | 'READY_CREATE'
+  | 'READY_UPDATE'
+  | 'UNCHANGED'
+  | 'POSSIBLE_MATCH'
+  | 'NEEDS_DECISION'
+  | 'CONFLICT'
+  | 'INVALID';
+
+export interface LegacyImportCandidateMatch {
+  field: 'reference' | 'phone' | 'email' | 'name';
+  clientId: string;
+  clientName: string;
+  clientReferenceId?: string | null;
+  reference?: string | null;
+}
+
+export interface LegacyImportPreviewRow {
+  index: number;
+  legacyClientId: string | null;
+  name: string | null;
+  reference: string | null;
+  status: string | null;
+  normalizedStatus: ClientStatus | null;
+  phone: string | null;
+  phoneNormalized: string | null;
+  email: string | null;
+  plan: { id: string | null; name: string | null; durationMonths: number } | null;
+  recurringValue: string | null;
+  dueDate: string | null;
+  billingAnchorDay: number | null;
+  billingNoticeDays: number | null;
+  legacyCreatedAt: string | null;
+  legacyUpdatedAt: string | null;
+  legacyDisabledAt: string | null;
+  payloadHash: string | null;
+  classification: LegacyImportClassification;
+  errors: string[];
+  warnings: string[];
+  candidateMatches: LegacyImportCandidateMatch[];
+}
+
+export interface LegacyImportPreview {
+  summary: {
+    total: number;
+    readyCreate: number;
+    readyUpdate: number;
+    unchanged: number;
+    possibleMatch: number;
+    needsDecision: number;
+    conflict: number;
+    invalid: number;
+  };
+  ignoredFields: string[];
+  rows: LegacyImportPreviewRow[];
+}
+
 export interface ReceivableCyclePreview {
   allowed: boolean;
   status: {
@@ -1275,6 +1332,13 @@ export function listClientOptions(search: string) {
 
   const query = params.toString();
   return apiFetch<ClientOption[]>(`/clients/options${query ? `?${query}` : ''}`);
+}
+
+export function previewLegacyClients(payload: unknown) {
+  return apiFetch<LegacyImportPreview>('/legacy-import/clients/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getClient(id: string) {

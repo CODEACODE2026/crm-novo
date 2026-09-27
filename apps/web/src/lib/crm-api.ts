@@ -744,6 +744,25 @@ export interface LegacyImportPreview {
 export type LegacyImportPlanCycle = 'MENSAL' | 'BIMESTRAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
 export type LegacyImportPlanMapping = Partial<Record<LegacyImportPlanCycle, string>>;
 
+export interface LegacyImportResultRow {
+  legacyClientId: string | null;
+  result: 'IMPORTED' | 'SKIPPED' | 'FAILED';
+  crmClientId?: string;
+  crmClientReferenceId?: string;
+  code: string;
+  message: string;
+}
+
+export interface LegacyImportResult {
+  summary: {
+    requested: number;
+    imported: number;
+    skipped: number;
+    failed: number;
+  };
+  rows: LegacyImportResultRow[];
+}
+
 export interface ReceivableCyclePreview {
   allowed: boolean;
   status: {
@@ -1339,6 +1358,13 @@ export function listClientOptions(search: string) {
 
 export function previewLegacyClients(payload: unknown) {
   return apiFetch<LegacyImportPreview>('/legacy-import/clients/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function importLegacyClients(payload: unknown) {
+  return apiFetch<LegacyImportResult>('/legacy-import/clients/import', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

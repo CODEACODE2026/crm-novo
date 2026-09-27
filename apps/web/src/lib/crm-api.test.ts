@@ -14,6 +14,7 @@ import {
   getPaymentIntentsSummary,
   getReferralSummary,
   getReceivablesSummary,
+  importLegacyClients,
   listBillingDispatches,
   listClientOptions,
   listClients,
@@ -205,6 +206,36 @@ describe('CRM UI formatters', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/legacy-import/clients/preview'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toMatchObject({
+      schemaVersion: 1,
+      source: 'legacy',
+      planMapping: { MENSAL: 'plan-1' },
+    });
+  });
+
+  it('posts legacy client import payload to the guarded import endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          summary: { requested: 0, imported: 0, skipped: 0, failed: 0 },
+          rows: [],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await importLegacyClients({
+      schemaVersion: 1,
+      source: 'legacy',
+      planMapping: { MENSAL: 'plan-1' },
+      clients: [],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/legacy-import/clients/import'),
       expect.objectContaining({ method: 'POST' }),
     );
     expect(latestJsonBody(fetchMock)).toMatchObject({

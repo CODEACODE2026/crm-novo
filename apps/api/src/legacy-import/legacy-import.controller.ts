@@ -13,4 +13,9 @@ export class LegacyImportController {
   previewClients(@Body() payload: unknown) {
     return this.legacyImportService.previewClients(payload);
   }
+
+  @Post('clients/import')
+  importClients(@Body() payload: unknown) {
+    return this.legacyImportService.importClients(payload);
+  }
 }

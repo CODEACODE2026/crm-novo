@@ -47,6 +47,7 @@ const defaultPlanMapping = {
   SEMESTRAL: 'plan-6',
   TRIMESTRAL: 'plan-3',
 };
+type CreateArgs = { data: Record<string, unknown> };
 
 function envelope(
   clients = [baseClient],
@@ -63,19 +64,37 @@ function envelope(
 
 function createService(
   options: {
+    clientFindFirst?: unknown;
     clients?: unknown[];
+    importRecordFindFirst?: unknown;
     importRecords?: unknown[];
     plans?: unknown[];
+    referenceCreateErrorFor?: string;
+    referenceFindUnique?: unknown;
     references?: unknown[];
   } = {},
 ) {
+  let clientSequence = 0;
+  let referenceSequence = 0;
   const writes = {
-    clientCreate: vi.fn(),
+    clientCreate: vi.fn((args: CreateArgs) =>
+      Promise.resolve({ id: `client-created-${++clientSequence}`, ...args.data }),
+    ),
     clientEventCreate: vi.fn(),
     clientReferenceUpdate: vi.fn(),
-    clientReferenceCreate: vi.fn(),
+    clientReferenceCreate: vi.fn((args: CreateArgs) => {
+      if (args.data.reference === options.referenceCreateErrorFor) {
+        return Promise.reject(
+          Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+        );
+      }
+
+      return Promise.resolve({ id: `reference-created-${++referenceSequence}`, ...args.data });
+    }),
     financialTransactionCreate: vi.fn(),
-    legacyImportRecordCreate: vi.fn(),
+    legacyImportRecordCreate: vi.fn((args: CreateArgs) =>
+      Promise.resolve({ id: 'legacy-import-record-created', ...args.data }),
+    ),
     legacyImportRecordUpdate: vi.fn(),
     legacyImportRecordUpsert: vi.fn(),
     messageDispatchCreate: vi.fn(),
@@ -87,15 +106,56 @@ function createService(
     statusHistoryCreate: vi.fn(),
     clientUpdate: vi.fn(),
   };
+  const defaultPlans = (options.plans ?? [
+    { id: 'plan-1', name: 'Mensal', durationMonths: 1, active: true, defaultValue: '0.00' },
+    {
+      id: 'plan-2',
+      name: 'Bimestral',
+      durationMonths: 2,
+      active: true,
+      defaultValue: '0.00',
+    },
+    {
+      id: 'plan-3',
+      name: 'Trimestral',
+      durationMonths: 3,
+      active: true,
+      defaultValue: '0.00',
+    },
+    {
+      id: 'plan-6',
+      name: 'Semestral',
+      durationMonths: 6,
+      active: true,
+      defaultValue: '0.00',
+    },
+    {
+      id: 'plan-12',
+      name: 'Anual',
+      durationMonths: 12,
+      active: true,
+      defaultValue: '0.00',
+    },
+  ]) as Array<{
+    active: boolean;
+    defaultValue?: string;
+    durationMonths: number;
+    id: string;
+    name: string;
+  }>;
   const prisma = {
-    $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    $transaction: vi.fn((input: Array<Promise<unknown>> | ((tx: unknown) => Promise<unknown>)) =>
+      typeof input === 'function' ? input(prisma) : Promise.all(input),
+    ),
     client: {
       create: writes.clientCreate,
+      findFirst: vi.fn(() => Promise.resolve(options.clientFindFirst ?? null)),
       findMany: vi.fn(() => Promise.resolve(options.clients ?? [])),
       update: writes.clientUpdate,
     },
     clientReference: {
       create: writes.clientReferenceCreate,
+      findUnique: vi.fn(() => Promise.resolve(options.referenceFindUnique ?? null)),
       findMany: vi.fn(() => Promise.resolve(options.references ?? [])),
       update: writes.clientReferenceUpdate,
     },
@@ -103,6 +163,7 @@ function createService(
     financialTransaction: { create: writes.financialTransactionCreate },
     legacyImportRecord: {
       create: writes.legacyImportRecordCreate,
+      findFirst: vi.fn(() => Promise.resolve(options.importRecordFindFirst ?? null)),
       findMany: vi.fn(() => Promise.resolve(options.importRecords ?? [])),
       update: writes.legacyImportRecordUpdate,
       upsert: writes.legacyImportRecordUpsert,
@@ -110,40 +171,9 @@ function createService(
     messageDispatch: { create: writes.messageDispatchCreate, update: writes.messageDispatchUpdate },
     paymentIntent: { create: writes.paymentIntentCreate, update: writes.paymentIntentUpdate },
     plan: {
-      findMany: vi.fn(() =>
-        Promise.resolve(
-          options.plans ?? [
-            { id: 'plan-1', name: 'Mensal', durationMonths: 1, active: true, defaultValue: '0.00' },
-            {
-              id: 'plan-2',
-              name: 'Bimestral',
-              durationMonths: 2,
-              active: true,
-              defaultValue: '0.00',
-            },
-            {
-              id: 'plan-3',
-              name: 'Trimestral',
-              durationMonths: 3,
-              active: true,
-              defaultValue: '0.00',
-            },
-            {
-              id: 'plan-6',
-              name: 'Semestral',
-              durationMonths: 6,
-              active: true,
-              defaultValue: '0.00',
-            },
-            {
-              id: 'plan-12',
-              name: 'Anual',
-              durationMonths: 12,
-              active: true,
-              defaultValue: '0.00',
-            },
-          ],
-        ),
+      findMany: vi.fn(() => Promise.resolve(defaultPlans)),
+      findUnique: vi.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(defaultPlans.find((plan) => plan.id === where.id) ?? null),
       ),
     },
     receivable: { create: writes.receivableCreate, update: writes.receivableUpdate },
@@ -151,6 +181,15 @@ function createService(
   };
 
   return { prisma, service: new LegacyImportService(prisma as never), writes };
+}
+
+function expectNoOperationalSideEffects(writes: ReturnType<typeof createService>['writes']) {
+  expect(writes.receivableCreate).not.toHaveBeenCalled();
+  expect(writes.messageDispatchCreate).not.toHaveBeenCalled();
+  expect(writes.paymentIntentCreate).not.toHaveBeenCalled();
+  expect(writes.financialTransactionCreate).not.toHaveBeenCalled();
+  expect(writes.clientEventCreate).not.toHaveBeenCalled();
+  expect(writes.statusHistoryCreate).not.toHaveBeenCalled();
 }
 
 describe('LegacyImportService', () => {
@@ -185,6 +224,389 @@ describe('LegacyImportService', () => {
     });
     expect(result.rows[0]?.payloadHash).toMatch(/^[a-f0-9]{64}$/);
     expect(Object.values(writes).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+  });
+
+  it('imports READY_CREATE rows as Client, ClientReference and LegacyImportRecord only', async () => {
+    const { service, writes } = createService({
+      plans: [
+        {
+          active: true,
+          defaultValue: '30.00',
+          durationMonths: 1,
+          id: 'plan-1',
+          name: 'Mensal',
+        },
+      ],
+    });
+
+    const result = await service.importClients(
+      envelope(
+        [
+          {
+            ...baseClient,
+            avisar: 0,
+            email: null,
+            id: 2352,
+            name: 'edilson',
+            phone: '5581997927581',
+            referencia: 'edilson7581',
+            type_cobranca: 'MENSAL',
+            value_mensalidade: '35.00',
+            vencimento: '2026-10-26',
+          },
+        ],
+        { MENSAL: 'plan-1' },
+      ),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 1, skipped: 0 });
+    expect(result.rows[0]).toMatchObject({
+      code: 'IMPORTED',
+      crmClientId: 'client-created-1',
+      crmClientReferenceId: 'reference-created-1',
+      legacyClientId: '2352',
+      result: 'IMPORTED',
+    });
+    expect(writes.clientCreate.mock.calls[0]?.[0].data).toMatchObject({
+      billingAnchorDay: 26,
+      billingNoticeDays: 0,
+      email: null,
+      name: 'edilson',
+      notes: 'Observacao',
+      phone: '5581997927581',
+      phoneNormalized: '5581997927581',
+      planId: 'plan-1',
+      recurringValue: '35.00',
+      reference: 'edilson7581',
+      status: 'ATIVO',
+    });
+    expect(writes.clientReferenceCreate.mock.calls[0]?.[0].data).toMatchObject({
+      billingAnchorDay: 26,
+      billingNoticeDays: 0,
+      clientId: 'client-created-1',
+      notes: 'Observacao',
+      planId: 'plan-1',
+      recurringValue: '35.00',
+      reference: 'edilson7581',
+      status: 'ATIVO',
+    });
+    expect(writes.legacyImportRecordCreate.mock.calls[0]?.[0].data).toMatchObject({
+      crmClientId: 'client-created-1',
+      crmClientReferenceId: 'reference-created-1',
+      errorCode: null,
+      legacyClientId: '2352',
+      source: 'legacy',
+      status: 'IMPORTED',
+    });
+    expect(writes.clientCreate.mock.calls[0]?.[0].data.dueDate).toEqual(new Date('2026-10-26'));
+    expect(writes.clientReferenceCreate.mock.calls[0]?.[0].data.dueDate).toEqual(
+      new Date('2026-10-26'),
+    );
+    expect(writes.legacyImportRecordCreate.mock.calls[0]?.[0].data.payloadHash).toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it.each([
+    ['Ativo', 'ATIVO'],
+    ['Inativo', 'INATIVO'],
+    ['Cancelado', 'CANCELADO'],
+  ])('imports legacy status %s as %s', async (legacyStatus, expectedStatus) => {
+    const { service, writes } = createService();
+
+    const result = await service.importClients(
+      envelope([
+        { ...baseClient, id: 10, status: legacyStatus, referencia: `status-${legacyStatus}` },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 1, skipped: 0 });
+    expect(writes.clientCreate.mock.calls[0]?.[0].data).toMatchObject({ status: expectedStatus });
+    expect(writes.clientReferenceCreate.mock.calls[0]?.[0].data).toMatchObject({
+      status: expectedStatus,
+    });
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('skips non READY_CREATE rows and does not create operational side effects', async () => {
+    const { service, writes } = createService({
+      clients: [existingCrmClient],
+      references: [existingCrmReference],
+    });
+
+    const result = await service.importClients(
+      envelope([
+        { ...baseClient, id: 1, referencia: 'possible-match' },
+        { ...baseClient, id: 2, status: 'Novo', referencia: 'needs-decision' },
+        { ...baseClient, id: 3, phone: '123', referencia: 'invalid' },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 3, skipped: 3 });
+    expect(result.rows.map((row) => row.code)).toEqual([
+      'POSSIBLE_MATCH',
+      'NEEDS_DECISION',
+      'INVALID',
+    ]);
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('does not import Novo, Pendente, possible match, conflict, invalid or ready update rows', async () => {
+    const { service, writes } = createService({
+      clients: [existingCrmClient],
+      references: [existingCrmReference],
+      importRecords: [
+        {
+          legacyClientId: '6',
+          payloadHash: '0'.repeat(64),
+          source: 'legacy',
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+        },
+      ],
+    });
+
+    const result = await service.importClients(
+      envelope([
+        { ...baseClient, id: 1, status: 'Novo', referencia: 'novo' },
+        { ...baseClient, id: 2, status: 'Pendente', referencia: 'pendente' },
+        { ...baseClient, id: 3, phone: existingCrmClient.phoneNormalized, referencia: 'match' },
+        { ...baseClient, id: 4, referencia: 'dup' },
+        { ...baseClient, id: 5, referencia: 'dup' },
+        { ...baseClient, id: 6, referencia: 'cliente123' },
+        { ...baseClient, id: 8, phone: '123', referencia: 'invalid' },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 7, skipped: 7 });
+    expect(result.rows.map((row) => row.code)).toEqual([
+      'NEEDS_DECISION',
+      'NEEDS_DECISION',
+      'POSSIBLE_MATCH',
+      'CONFLICT',
+      'CONFLICT',
+      'READY_UPDATE',
+      'INVALID',
+    ]);
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('ignores frontend classification fields and recalculates eligibility on the backend', async () => {
+    const { service, writes } = createService();
+
+    const result = await service.importClients(
+      envelope([
+        {
+          ...baseClient,
+          classification: 'READY_CREATE',
+          id: 70,
+          phone: '123',
+          referencia: 'forged-ready-create',
+        },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ code: 'INVALID', result: 'SKIPPED' });
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('keeps client and reference operational fields consistent for imported rows', async () => {
+    const { service, writes } = createService();
+
+    await service.importClients(envelope());
+
+    const clientData = writes.clientCreate.mock.calls[0]?.[0].data;
+    const referenceData = writes.clientReferenceCreate.mock.calls[0]?.[0].data;
+
+    expect(clientData).toMatchObject({
+      billingAnchorDay: referenceData?.billingAnchorDay,
+      billingNoticeDays: referenceData?.billingNoticeDays,
+      dueDate: referenceData?.dueDate,
+      planId: referenceData?.planId,
+      recurringValue: referenceData?.recurringValue,
+      reference: referenceData?.reference,
+      status: referenceData?.status,
+    });
+  });
+
+  it('does not invent lifecycle metadata when importing inactive or canceled rows', async () => {
+    const { service, writes } = createService();
+
+    await service.importClients(
+      envelope([
+        { ...baseClient, id: 80, referencia: 'inactive-row', status: 'Inativo' },
+        { ...baseClient, id: 81, referencia: 'canceled-row', status: 'Cancelado' },
+      ]),
+    );
+
+    const references = writes.clientReferenceCreate.mock.calls.map((call) => call[0].data);
+
+    expect(references[0]).toMatchObject({ status: 'INATIVO' });
+    expect(references[0]).not.toHaveProperty('inactivatedAt');
+    expect(references[0]).not.toHaveProperty('inactivationReason');
+    expect(references[0]).not.toHaveProperty('inactivatedByUserId');
+    expect(references[1]).toMatchObject({ status: 'CANCELADO' });
+    expect(references[1]).not.toHaveProperty('canceledAt');
+    expect(references[1]).not.toHaveProperty('cancellationReason');
+    expect(references[1]).not.toHaveProperty('canceledByUserId');
+  });
+
+  it('keeps import idempotent when legacy mapping already exists', async () => {
+    const first = createService();
+    const firstPreview = await first.service.previewClients(envelope());
+    const payloadHash = firstPreview.rows[0]?.payloadHash;
+    const { service, writes } = createService({
+      clients: [existingCrmClient],
+      references: [existingCrmReference],
+      importRecords: [
+        {
+          legacyClientId: '123',
+          payloadHash,
+          source: 'legacy',
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+        },
+      ],
+    });
+
+    const result = await service.importClients(envelope());
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({
+      code: 'UNCHANGED',
+      result: 'SKIPPED',
+    });
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+  });
+
+  it('skips hash-changed existing imports without updating or duplicating records', async () => {
+    const { service, writes } = createService({
+      clients: [existingCrmClient],
+      references: [existingCrmReference],
+      importRecords: [
+        {
+          legacyClientId: '123',
+          payloadHash: '0'.repeat(64),
+          source: 'legacy',
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+        },
+      ],
+    });
+
+    const result = await service.importClients(
+      envelope([{ ...baseClient, value_mensalidade: '40.00' }]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ code: 'READY_UPDATE', result: 'SKIPPED' });
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.clientUpdate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceUpdate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns UNCHANGED on repreview after a successful import', async () => {
+    const first = createService();
+    const firstPreview = await first.service.previewClients(envelope());
+    const payloadHash = firstPreview.rows[0]?.payloadHash;
+    const { service } = createService({
+      clients: [existingCrmClient],
+      references: [existingCrmReference],
+      importRecords: [
+        {
+          legacyClientId: '123',
+          payloadHash,
+          source: 'legacy',
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+        },
+      ],
+    });
+
+    const repreview = await service.previewClients(envelope());
+
+    expect(repreview.summary).toMatchObject({ unchanged: 1 });
+    expect(repreview.rows[0]).toMatchObject({
+      classification: 'UNCHANGED',
+      legacyClientId: '123',
+    });
+  });
+
+  it('rolls back row transaction when reference unique race happens', async () => {
+    const { prisma, service, writes } = createService();
+    prisma.clientReference.create.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+
+    const result = await service.importClients(envelope());
+
+    expect(result.summary).toEqual({ failed: 1, imported: 0, requested: 1, skipped: 0 });
+    expect(result.rows[0]).toMatchObject({ code: 'CONFLICT', result: 'FAILED' });
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('maps a legacy id unique race to a failed row without creating financial side effects', async () => {
+    const { prisma, service, writes } = createService();
+    prisma.legacyImportRecord.create.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+
+    const result = await service.importClients(envelope());
+
+    expect(result.summary).toEqual({ failed: 1, imported: 0, requested: 1, skipped: 0 });
+    expect(result.rows[0]).toMatchObject({ code: 'CONFLICT', result: 'FAILED' });
+    expect(writes.clientCreate).toHaveBeenCalledTimes(1);
+    expect(writes.clientReferenceCreate).toHaveBeenCalledTimes(1);
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('revalidates current matches inside the row transaction before writing', async () => {
+    const { service, writes } = createService({
+      referenceFindUnique: { id: 'reference-created-between-preview-and-import' },
+    });
+
+    const result = await service.importClients(envelope());
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ code: 'REFERENCE_MATCH', result: 'SKIPPED' });
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('continues the batch when the middle READY_CREATE row fails safely', async () => {
+    const { service, writes } = createService({ referenceCreateErrorFor: 'race-reference' });
+
+    const result = await service.importClients(
+      envelope([
+        { ...baseClient, id: 1, email: 'primeiro@exemplo.com', referencia: 'first-reference' },
+        { ...baseClient, id: 2, email: 'segundo@exemplo.com', referencia: 'race-reference' },
+        { ...baseClient, id: 3, email: 'terceiro@exemplo.com', referencia: 'third-reference' },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 1, imported: 2, requested: 3, skipped: 0 });
+    expect(result.rows.map((row) => row.result)).toEqual(['IMPORTED', 'FAILED', 'IMPORTED']);
+    expect(writes.clientCreate).toHaveBeenCalledTimes(3);
+    expect(writes.clientReferenceCreate).toHaveBeenCalledTimes(3);
+    expect(writes.legacyImportRecordCreate).toHaveBeenCalledTimes(2);
+    expectNoOperationalSideEffects(writes);
   });
 
   it('keeps legacy ids as canonical strings, including bigint unsigned boundaries', async () => {

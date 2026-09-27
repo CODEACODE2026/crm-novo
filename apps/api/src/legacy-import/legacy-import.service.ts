@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { ClientStatus } from '@prisma/client';
+import { ClientStatus, Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import {
   formatBusinessDate,
@@ -93,6 +93,23 @@ type PlanLookup = {
   id: string;
   name: string;
 };
+type LegacyImportResultRow = {
+  code: string;
+  crmClientId?: string;
+  crmClientReferenceId?: string;
+  legacyClientId: string | null;
+  message: string;
+  result: 'IMPORTED' | 'SKIPPED' | 'FAILED';
+};
+
+class LegacyImportSkip extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 @Injectable()
 export class LegacyImportService {
@@ -191,6 +208,50 @@ export class LegacyImportService {
     return {
       summary: this.summarize(rows),
       ignoredFields: ignoredLegacyFields,
+      rows,
+    };
+  }
+
+  async importClients(payload: unknown) {
+    const preview = await this.previewClients(payload);
+    const envelope = this.parseEnvelope(payload);
+    const normalizedRows = envelope.clients.map((client) => this.normalizeClient(client).value);
+    const rows: LegacyImportResultRow[] = [];
+
+    for (const row of preview.rows) {
+      if (row.classification !== 'READY_CREATE') {
+        rows.push({
+          code: row.classification,
+          legacyClientId: row.legacyClientId,
+          message: 'Registro nao esta elegivel para importacao nesta etapa.',
+          result: 'SKIPPED',
+        });
+        continue;
+      }
+
+      const normalized = normalizedRows[row.index];
+      const planId = row.plan?.id;
+
+      if (!normalized || !planId || !row.payloadHash) {
+        rows.push({
+          code: 'INVALID_IMPORT_ROW',
+          legacyClientId: row.legacyClientId,
+          message: 'Registro nao possui dados validos para importacao.',
+          result: 'SKIPPED',
+        });
+        continue;
+      }
+
+      rows.push(await this.importReadyCreateRow(normalized, planId, row.payloadHash));
+    }
+
+    return {
+      summary: {
+        requested: preview.rows.length,
+        imported: rows.filter((row) => row.result === 'IMPORTED').length,
+        skipped: rows.filter((row) => row.result === 'SKIPPED').length,
+        failed: rows.filter((row) => row.result === 'FAILED').length,
+      },
       rows,
     };
   }
@@ -613,6 +674,204 @@ export class LegacyImportService {
     return plan;
   }
 
+  private async importReadyCreateRow(
+    normalized: NormalizedLegacyClient,
+    planId: string,
+    payloadHash: string,
+  ): Promise<LegacyImportResultRow> {
+    const required = this.importableNormalizedClient(normalized);
+
+    if (!required) {
+      return {
+        code: 'INVALID_IMPORT_ROW',
+        legacyClientId: normalized.legacyClientId,
+        message: 'Registro nao possui dados normalizados suficientes para importacao.',
+        result: 'SKIPPED',
+      };
+    }
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const plan = await tx.plan.findUnique({ where: { id: planId } });
+
+        if (
+          !plan ||
+          !plan.active ||
+          plan.durationMonths !== billingCycleMonths[required.planCycle]
+        ) {
+          throw new LegacyImportSkip(
+            'INVALID_PLAN_MAPPING',
+            'Plano nao esta mais valido para este ciclo.',
+          );
+        }
+
+        const existingImportRecord = await tx.legacyImportRecord.findFirst({
+          where: { source, legacyClientId: required.legacyClientId },
+        });
+
+        if (existingImportRecord) {
+          return {
+            code: existingImportRecord.payloadHash === payloadHash ? 'UNCHANGED' : 'READY_UPDATE',
+            ...(existingImportRecord.crmClientId
+              ? { crmClientId: existingImportRecord.crmClientId }
+              : {}),
+            ...(existingImportRecord.crmClientReferenceId
+              ? { crmClientReferenceId: existingImportRecord.crmClientReferenceId }
+              : {}),
+            legacyClientId: required.legacyClientId,
+            message:
+              existingImportRecord.payloadHash === payloadHash
+                ? 'Registro legado ja foi importado sem alteracoes.'
+                : 'Registro legado ja possui importacao previa e nao sera atualizado nesta etapa.',
+            result: 'SKIPPED' as const,
+          };
+        }
+
+        await this.ensureNoCurrentMatches(tx, required);
+
+        const client = await tx.client.create({
+          data: {
+            billingAnchorDay: required.billingAnchorDay,
+            billingNoticeDays: required.billingNoticeDays,
+            dueDate: required.dueDate,
+            email: required.email,
+            name: required.name,
+            notes: required.notes,
+            phone: required.phone,
+            phoneNormalized: required.phoneNormalized,
+            planId,
+            recurringValue: required.recurringValue,
+            reference: required.reference,
+            status: required.status,
+          },
+        });
+        const clientReference = await tx.clientReference.create({
+          data: {
+            billingAnchorDay: required.billingAnchorDay,
+            billingNoticeDays: required.billingNoticeDays,
+            clientId: client.id,
+            dueDate: required.dueDate,
+            notes: required.notes,
+            planId,
+            recurringValue: required.recurringValue,
+            reference: required.reference,
+            status: required.status,
+          },
+        });
+
+        await tx.legacyImportRecord.create({
+          data: {
+            crmClientId: client.id,
+            crmClientReferenceId: clientReference.id,
+            errorCode: null,
+            legacyClientId: required.legacyClientId,
+            payloadHash,
+            source,
+            status: 'IMPORTED',
+          },
+        });
+
+        return {
+          code: 'IMPORTED',
+          crmClientId: client.id,
+          crmClientReferenceId: clientReference.id,
+          legacyClientId: required.legacyClientId,
+          message: 'Cliente importado.',
+          result: 'IMPORTED' as const,
+        };
+      });
+    } catch (error) {
+      if (error instanceof LegacyImportSkip) {
+        return {
+          code: error.code,
+          legacyClientId: required.legacyClientId,
+          message: error.message,
+          result: 'SKIPPED',
+        };
+      }
+
+      if (this.isUniqueConstraint(error)) {
+        return {
+          code: 'CONFLICT',
+          legacyClientId: required.legacyClientId,
+          message: 'Registro entrou em conflito com dados criados durante a importacao.',
+          result: 'FAILED',
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  private importableNormalizedClient(normalized: NormalizedLegacyClient) {
+    if (
+      !normalized.billingAnchorDay ||
+      normalized.billingNoticeDays === null ||
+      !normalized.dueDate ||
+      !normalized.legacyClientId ||
+      !normalized.name ||
+      !normalized.phone ||
+      !normalized.phoneNormalized ||
+      !normalized.planCycle ||
+      !normalized.rawReference ||
+      !normalized.recurringValue ||
+      !normalized.status
+    ) {
+      return null;
+    }
+
+    return {
+      billingAnchorDay: normalized.billingAnchorDay,
+      billingNoticeDays: normalized.billingNoticeDays,
+      dueDate: normalized.dueDate,
+      email: normalized.email,
+      legacyClientId: normalized.legacyClientId,
+      name: normalized.name,
+      notes: normalized.notes,
+      phone: normalized.phone,
+      phoneNormalized: normalized.phoneNormalized,
+      planCycle: normalized.planCycle,
+      recurringValue: normalized.recurringValue,
+      reference: normalized.rawReference,
+      status: normalized.status,
+    };
+  }
+
+  private async ensureNoCurrentMatches(
+    tx: Prisma.TransactionClient,
+    normalized: NonNullable<ReturnType<LegacyImportService['importableNormalizedClient']>>,
+  ) {
+    const reference = await tx.clientReference.findUnique({
+      where: { reference: normalized.reference },
+      select: { id: true },
+    });
+
+    if (reference) {
+      throw new LegacyImportSkip(
+        'REFERENCE_MATCH',
+        'Referencia foi criada por outro processo antes da importacao.',
+      );
+    }
+
+    const client = await tx.client.findFirst({
+      where: {
+        OR: [
+          { phoneNormalized: normalized.phoneNormalized },
+          ...(normalized.email ? [{ email: normalized.email }] : []),
+          { name: normalized.name },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (client) {
+      throw new LegacyImportSkip(
+        'POSSIBLE_MATCH',
+        'Cliente semelhante foi criado antes da importacao.',
+      );
+    }
+  }
+
   private findCandidateMatches(
     normalized: NormalizedLegacyClient,
     lookups: Awaited<ReturnType<LegacyImportService['loadLookups']>>,
@@ -884,5 +1143,12 @@ export class LegacyImportService {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  private isUniqueConstraint(error: unknown) {
+    return (
+      (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') ||
+      (this.isRecord(error) && error.code === 'P2002')
+    );
   }
 }

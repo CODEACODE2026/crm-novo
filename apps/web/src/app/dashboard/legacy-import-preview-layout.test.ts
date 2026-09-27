@@ -24,10 +24,11 @@ describe('legacy import preview UI', () => {
   it('keeps IMPORT1.1 as preview only without a functional import action', () => {
     expect(dashboardSource).toContain("from '../../lib/legacy-import-file'");
     expect(importViewSource).toContain('readLegacyImportJsonFile(file)');
-    expect(importViewSource).toContain('previewLegacyClients(previewPayload)');
-    expect(importViewSource).toContain('disabled={!fileText || loading}');
-    expect(importViewSource).toContain('Importação real será habilitada na próxima etapa.');
-    expect(importViewSource).not.toContain('Importar</Button>');
+    expect(importViewSource).toContain('previewLegacyClients(buildLegacyImportPayload())');
+    expect(importViewSource).toContain('disabled={!fileText || loading || importing}');
+    expect(importViewSource).toContain(
+      'Importação real limitada aos clientes prontos, sem efeitos financeiros.',
+    );
     expect(importViewSource).not.toContain('confirmImport');
   });
 
@@ -61,6 +62,21 @@ describe('legacy import preview UI', () => {
     );
     expect(importViewSource).toContain('setPreview(null)');
     expect(importViewSource).toContain('setFileText(fileRead.text)');
+  });
+
+  it('adds guarded batch import UX for READY_CREATE clients only', () => {
+    expect(importViewSource).toContain('importLegacyClients(buildLegacyImportPayload())');
+    expect(importViewSource).toContain('importInFlightRef.current');
+    expect(importViewSource).toContain('Importar prontos');
+    expect(importViewSource).toContain('readyCreateCount === 0');
+    expect(importViewSource).toContain('Importar {readyCreateCount} clientes prontos?');
+    expect(importViewSource).toContain('Receivables');
+    expect(importViewSource).toContain('Cobranças');
+    expect(importViewSource).toContain('PIX');
+    expect(importViewSource).toContain('Resultado da importação');
+    expect(importViewSource).toContain('runPreview({ preserveImportResult: true })');
+    expect(stylesSource).toContain('.legacy-import-result');
+    expect(stylesSource).toContain('.legacy-import-confirm-grid');
   });
 
   it('renders summary, filtering, table and read-only details', () => {

@@ -63,6 +63,7 @@ import {
   Timer,
   Trash2,
   ToggleLeft,
+  Upload,
   UserRound,
   UserRoundPlus,
   UserCheck,
@@ -161,6 +162,7 @@ import {
   logoutWhatsApp,
   payReceivable,
   payReceivables,
+  importLegacyClients,
   previewLegacyClients,
   previewDeleteClient,
   previewDeleteClientReference,
@@ -241,6 +243,7 @@ import {
   type LegacyImportPlanMapping,
   type LegacyImportPreview,
   type LegacyImportPreviewRow,
+  type LegacyImportResult,
   type PaginatedClients,
   type PaginatedClientEvents,
   type PaymentIntent,
@@ -1032,9 +1035,13 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
   );
   const [preview, setPreview] = useState<LegacyImportPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<LegacyImportClassification | 'all'>('all');
   const [selectedRow, setSelectedRow] = useState<LegacyImportPreviewRow | null>(null);
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
+  const [importResult, setImportResult] = useState<LegacyImportResult | null>(null);
+  const importInFlightRef = useRef(false);
   const activePlans = plans.filter((plan) => plan.active);
   const cycleCounts = useMemo(() => countLegacyImportCycles(fileText), [fileText]);
   const fileHasClientCounts = Boolean(fileText.trim());
@@ -1043,6 +1050,7 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
   const mappingCompletenessText = fileHasClientCounts
     ? `${mappedUsedCycleCount} de ${usedCycles.length} ciclos utilizados configurados.`
     : 'Carregue um JSON para ver os ciclos utilizados neste lote.';
+  const readyCreateCount = preview?.summary.readyCreate ?? 0;
 
   const filteredRows =
     preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
@@ -1096,12 +1104,14 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
     setPreview(null);
     setSelectedRow(null);
     setFilter('all');
+    setImportResult(null);
   }
 
   async function handleFileChange(file: File | undefined) {
     setPreview(null);
     setSelectedRow(null);
     setError('');
+    setImportResult(null);
 
     if (!file) {
       setFileName('');
@@ -1118,24 +1128,52 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
     }
   }
 
-  async function runPreview() {
+  function buildLegacyImportPayload() {
+    const payload = JSON.parse(fileText) as unknown;
+
+    return typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+      ? { ...payload, planMapping }
+      : payload;
+  }
+
+  async function runPreview(options: { preserveImportResult?: boolean } = {}) {
     setLoading(true);
     setError('');
     setSelectedRow(null);
+    if (!options.preserveImportResult) {
+      setImportResult(null);
+    }
 
     try {
-      const payload = JSON.parse(fileText) as unknown;
-      const previewPayload =
-        typeof payload === 'object' && payload !== null && !Array.isArray(payload)
-          ? { ...payload, planMapping }
-          : payload;
-      const result = await previewLegacyClients(previewPayload);
+      const result = await previewLegacyClients(buildLegacyImportPayload());
       setPreview(result);
       setFilter('all');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível validar o arquivo.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runImportReadyCreate() {
+    if (importInFlightRef.current) {
+      return;
+    }
+
+    importInFlightRef.current = true;
+    setImporting(true);
+    setError('');
+
+    try {
+      const result = await importLegacyClients(buildLegacyImportPayload());
+      setImportResult(result);
+      setImportConfirmOpen(false);
+      await runPreview({ preserveImportResult: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível importar os clientes.');
+    } finally {
+      importInFlightRef.current = false;
+      setImporting(false);
     }
   }
 
@@ -1147,19 +1185,39 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
         title="Importação de clientes"
         subtitle="IMPORT1.1"
         actions={
-          <Button
-            disabled={!fileText || loading}
-            icon={RefreshCw}
-            loading={loading}
-            variant="primary"
-            onClick={() => void runPreview()}
-          >
-            Validar
-          </Button>
+          <>
+            <Button
+              disabled={!fileText || loading || importing}
+              icon={RefreshCw}
+              loading={loading}
+              variant="secondary"
+              onClick={() => void runPreview()}
+            >
+              Validar
+            </Button>
+            <Button
+              disabled={!preview || readyCreateCount === 0 || loading || importing}
+              icon={Upload}
+              loading={importing}
+              variant="primary"
+              onClick={() => setImportConfirmOpen(true)}
+            >
+              Importar prontos
+            </Button>
+          </>
         }
       />
 
       {error ? <div className="notice danger">{error}</div> : null}
+
+      {importResult ? (
+        <div className="legacy-import-result" aria-live="polite">
+          <strong>Resultado da importação</strong>
+          <span>{importResult.summary.imported} importados</span>
+          <span>{importResult.summary.skipped} ignorados</span>
+          <span>{importResult.summary.failed} falhas</span>
+        </div>
+      ) : null}
 
       <section className="legacy-import-plan-mapping" aria-labelledby="legacy-plan-mapping-title">
         <div>
@@ -1256,7 +1314,7 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
         </label>
         <div className="legacy-import-file-state">
           <strong>{fileName || 'Nenhum arquivo selecionado'}</strong>
-          <span>Importação real será habilitada na próxima etapa.</span>
+          <span>Importação real limitada aos clientes prontos, sem efeitos financeiros.</span>
         </div>
       </div>
 
@@ -1411,6 +1469,56 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
                 )}
               </div>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {importConfirmOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" aria-labelledby="legacy-import-confirm-title">
+            <header className="modal-header">
+              <div>
+                <h2 id="legacy-import-confirm-title">
+                  Importar {readyCreateCount} clientes prontos?
+                </h2>
+                <p>Esta etapa importa apenas clientes e referências.</p>
+              </div>
+              <IconButton
+                disabled={importing}
+                icon={X}
+                label="Fechar"
+                onClick={() => setImportConfirmOpen(false)}
+              />
+            </header>
+            <div className="legacy-import-confirm-grid">
+              <StatCard label="Clientes" value={readyCreateCount} />
+              <StatCard label="Receivables" value={0} />
+              <StatCard label="Cobranças" value={0} />
+              <StatCard label="PIX" value={0} />
+            </div>
+            <p className="modal-copy">
+              O financeiro e os agendamentos serão migrados depois. Nenhum PIX, WhatsApp,
+              Receivable, MessageDispatch ou FinancialTransaction será criado nesta etapa.
+            </p>
+            <footer className="modal-actions">
+              <Button
+                disabled={importing}
+                type="button"
+                variant="secondary"
+                onClick={() => setImportConfirmOpen(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                disabled={importing}
+                loading={importing}
+                type="button"
+                variant="primary"
+                onClick={() => void runImportReadyCreate()}
+              >
+                Confirmar importação
+              </Button>
+            </footer>
           </section>
         </div>
       ) : null}

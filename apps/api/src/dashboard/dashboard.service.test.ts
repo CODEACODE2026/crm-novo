@@ -126,6 +126,12 @@ function createDashboardPrisma() {
     {
       transactionDate: parseBusinessDate('2026-09-10'),
       type: 'ENTRADA' as const,
+      origin: 'LEGACY_IMPORT' as const,
+      amount: decimal('35.00'),
+    },
+    {
+      transactionDate: parseBusinessDate('2026-09-10'),
+      type: 'ENTRADA' as const,
       origin: 'MANUAL' as const,
       amount: decimal('50.00'),
     },
@@ -255,13 +261,23 @@ function createDashboardPrisma() {
       aggregate: ({
         where,
       }: {
-        where: { type: string; origin?: string; transactionDate: { gte: Date; lte: Date } };
+        where: {
+          type: string;
+          origin?: string | { in: string[] };
+          transactionDate: { gte: Date; lte: Date };
+        };
       }) =>
         Promise.resolve({
           _sum: {
             amount: transactions
               .filter((transaction) => transaction.type === where.type)
-              .filter((transaction) => !where.origin || transaction.origin === where.origin)
+              .filter((transaction) =>
+                !where.origin
+                  ? true
+                  : typeof where.origin === 'string'
+                    ? transaction.origin === where.origin
+                    : where.origin.in.includes(transaction.origin),
+              )
               .filter((transaction) =>
                 inDateRange(transaction.transactionDate, where.transactionDate),
               )
@@ -273,12 +289,22 @@ function createDashboardPrisma() {
         where,
       }: {
         by: string[];
-        where: { type?: string; origin?: string; transactionDate: { gte: Date; lte: Date } };
+        where: {
+          type?: string;
+          origin?: string | { in: string[] };
+          transactionDate: { gte: Date; lte: Date };
+        };
       }) =>
         Promise.resolve(
           transactions
             .filter((transaction) => !where.type || transaction.type === where.type)
-            .filter((transaction) => !where.origin || transaction.origin === where.origin)
+            .filter((transaction) =>
+              !where.origin
+                ? true
+                : typeof where.origin === 'string'
+                  ? transaction.origin === where.origin
+                  : where.origin.in.includes(transaction.origin),
+            )
             .filter((transaction) =>
               inDateRange(transaction.transactionDate, where.transactionDate),
             )
@@ -400,12 +426,12 @@ describe('DashboardService', () => {
       overdueClients: 1,
     });
     expect(summary.finance).toEqual({
-      received: '100.00',
+      received: '135.00',
       receivablePending: '60.00',
       receivableOverdue: '40.00',
-      entries: '150.00',
+      entries: '185.00',
       expenses: '80.00',
-      balance: '70.00',
+      balance: '105.00',
     });
     expect(summary.renewals).toEqual({ count: 1, amount: '125.00' });
     expect(summary.pending.counts).toMatchObject({
@@ -425,10 +451,10 @@ describe('DashboardService', () => {
     expect(summary.lists.recentActivity[0]).toMatchObject({ title: 'Cliente renovado.' });
     expect(summary.charts.cashflow[0]).toMatchObject({
       period: '2026-09-10',
-      entries: '150.00',
+      entries: '185.00',
       expenses: '80.00',
     });
-    expect(summary.charts.received[0]).toMatchObject({ amount: '100.00' });
+    expect(summary.charts.received[0]).toMatchObject({ amount: '135.00' });
   });
 
   it('uses America/Sao_Paulo for today near UTC day boundaries', async () => {

@@ -81,6 +81,14 @@ enum FinancialTransactionType {
 enum FinancialTransactionOrigin {
   RECEIVABLE_PAYMENT
   MANUAL
+  LEGACY_IMPORT
+}
+
+enum FinancialPaymentMethod {
+  PIX
+  BOLETO
+  CARTAO
+  TRANSFERENCIA
 }
 
 enum PaymentProviderCode {
@@ -863,6 +871,7 @@ model FinancialTransaction {
   id                String                     @id @default(uuid()) @db.Uuid
   type              FinancialTransactionType
   origin            FinancialTransactionOrigin @default(MANUAL)
+  paymentMethod     FinancialPaymentMethod?
   categoryId        String                     @db.Uuid
   clientId          String?                    @db.Uuid
   clientReferenceId String?                    @db.Uuid
@@ -884,6 +893,7 @@ model FinancialTransaction {
 
   @@index([type])
   @@index([origin])
+  @@index([paymentMethod])
   @@index([categoryId])
   @@index([clientId])
   @@index([clientReferenceId])
@@ -981,4 +991,30 @@ model LegacyImportRecord {
   @@index([status])
   @@index([createdAt])
   @@map("legacy_import_records")
+}
+
+model LegacyFinancialImportRecord {
+  id                     String                   @id @default(uuid()) @db.Uuid
+  source                 String
+  legacyPaymentId        String
+  legacyClientId         String
+  crmClientId            String?                  @db.Uuid
+  crmClientReferenceId   String?                  @db.Uuid
+  financialTransactionId String?                  @db.Uuid
+  receivableId           String?                  @db.Uuid
+  payloadHash            String                   @db.VarChar(64)
+  status                 LegacyImportRecordStatus
+  errorCode              String?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+
+  @@unique([source, legacyPaymentId])
+  @@index([legacyClientId])
+  @@index([crmClientId])
+  @@index([crmClientReferenceId])
+  @@index([financialTransactionId])
+  @@index([receivableId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("legacy_financial_import_records")
 }

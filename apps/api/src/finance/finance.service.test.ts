@@ -639,7 +639,23 @@ type SummaryReceivable = {
   status: 'PENDENTE' | 'PAGO' | 'CANCELADO';
 };
 
-function createReceivablesSummaryPrisma(receivables: SummaryReceivable[]) {
+type SummaryFinancialTransaction = {
+  amount: Prisma.Decimal;
+  client?: { name: string } | null;
+  clientId: string | null;
+  clientReference?: { reference: string } | null;
+  clientReferenceId: string | null;
+  description: string;
+  notes: string | null;
+  origin: 'RECEIVABLE_PAYMENT' | 'MANUAL' | 'LEGACY_IMPORT';
+  transactionDate: Date;
+  type: 'ENTRADA' | 'SAIDA';
+};
+
+function createReceivablesSummaryPrisma(
+  receivables: SummaryReceivable[],
+  transactions: SummaryFinancialTransaction[] = [],
+) {
   const matchesStringFilter = (value: string, filter: { contains: string }) =>
     value.toLocaleLowerCase().includes(filter.contains.toLocaleLowerCase());
   const matchesDateFilter = (value: Date, filter: { gte?: Date; lte?: Date; lt?: Date }) => {
@@ -696,6 +712,67 @@ function createReceivablesSummaryPrisma(receivables: SummaryReceivable[]) {
 
     return true;
   };
+  const matchesTransactionWhere = (
+    transaction: SummaryFinancialTransaction,
+    where: Record<string, unknown>,
+  ): boolean => {
+    if (where.type && transaction.type !== where.type) return false;
+    if (where.origin && transaction.origin !== where.origin) return false;
+    if (where.clientId && transaction.clientId !== where.clientId) return false;
+    if (where.clientReferenceId && transaction.clientReferenceId !== where.clientReferenceId) {
+      return false;
+    }
+    if (where.transactionDate) {
+      const transactionDate = where.transactionDate;
+
+      if (
+        transactionDate instanceof Date &&
+        transaction.transactionDate.getTime() !== transactionDate.getTime()
+      ) {
+        return false;
+      }
+      if (
+        !(transactionDate instanceof Date) &&
+        !matchesDateFilter(transaction.transactionDate, transactionDate)
+      ) {
+        return false;
+      }
+    }
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item) =>
+        matchesTransactionWhere(transaction, item as Record<string, unknown>),
+      );
+    }
+    if (where.description) {
+      const filter = where.description as { contains: string };
+      if (!matchesStringFilter(transaction.description, filter)) return false;
+    }
+    if (where.notes) {
+      const filter = where.notes as { contains: string };
+      if (!transaction.notes || !matchesStringFilter(transaction.notes, filter)) return false;
+    }
+    if (where.client) {
+      const clientWhere = where.client as { name?: { contains: string } };
+      if (
+        clientWhere.name &&
+        (!transaction.client || !matchesStringFilter(transaction.client.name, clientWhere.name))
+      ) {
+        return false;
+      }
+    }
+    if (where.clientReference) {
+      const referenceWhere = where.clientReference as { reference?: { contains: string } };
+      if (
+        referenceWhere.reference &&
+        (!transaction.clientReference ||
+          !matchesStringFilter(transaction.clientReference.reference, referenceWhere.reference))
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  };
 
   const receivable = {
     aggregate: vi.fn(({ where }: { where: Record<string, unknown> }) => {
@@ -709,6 +786,15 @@ function createReceivablesSummaryPrisma(receivables: SummaryReceivable[]) {
 
   return {
     receivable,
+    financialTransaction: {
+      aggregate: vi.fn(({ where }: { where: Record<string, unknown> }) => {
+        const amount = transactions
+          .filter((item) => matchesTransactionWhere(item, where))
+          .reduce((total, item) => total.add(item.amount), new Prisma.Decimal('0.00'));
+
+        return Promise.resolve({ _sum: { amount } });
+      }),
+    },
     $transaction: <T>(items: Array<Promise<T>>) => Promise.all(items),
   };
 }
@@ -1560,6 +1646,257 @@ describe('FinanceService', () => {
     expect(canceledPageThree).toEqual(all);
 
     vi.useRealTimers();
+  });
+
+  it('adds legacy imported entries to client paid totals without double counting operational payments', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-19T12:00:00.000Z'));
+    const prisma = createReceivablesSummaryPrisma(
+      [
+        {
+          amount: new Prisma.Decimal('100.00'),
+          client: { name: 'Cliente Operacional' },
+          clientId: 'client-1',
+          clientReference: { reference: 'REF-1' },
+          clientReferenceId: 'ref-1',
+          description: 'Recebível pago',
+          dueDate: parseBusinessDate('2026-09-10'),
+          status: 'PAGO',
+        },
+      ],
+      [
+        {
+          amount: new Prisma.Decimal('100.00'),
+          client: { name: 'Cliente Operacional' },
+          clientId: 'client-1',
+          clientReference: { reference: 'REF-1' },
+          clientReferenceId: 'ref-1',
+          description: 'Recebimento operacional',
+          notes: null,
+          origin: 'RECEIVABLE_PAYMENT',
+          transactionDate: parseBusinessDate('2026-09-10'),
+          type: 'ENTRADA',
+        },
+        {
+          amount: new Prisma.Decimal('35.00'),
+          client: { name: 'Cliente Operacional' },
+          clientId: 'client-1',
+          clientReference: { reference: 'REF-1' },
+          clientReferenceId: 'ref-1',
+          description: 'Receita histórica',
+          notes: 'PIX',
+          origin: 'LEGACY_IMPORT',
+          transactionDate: parseBusinessDate('2026-09-26'),
+          type: 'ENTRADA',
+        },
+      ],
+    );
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(service.receivablesSummary({ clientId: 'client-1' })).resolves.toMatchObject({
+      paidAmount: '135.00',
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('models Edilson payment 11670 as legacy financial history without operational side effects', async () => {
+    const legacyClient = {
+      billingNoticeDays: 0,
+      dueDate: '2026-10-26',
+      id: '2352',
+      name: 'edilson',
+      recurringValue: '35.00',
+      reference: 'edilson7581',
+      status: 'ATIVO',
+    };
+    const legacyPayment = {
+      client_id: 2352,
+      data_criado: '2026-09-26',
+      data_pagamento: '2026-09-26',
+      id: 11670,
+      observation: null,
+      status: 'PAGO',
+      tipo_pagamento: 'PIX',
+      tipo_transacao: 'RECEITA',
+      valor_debito: '35.00',
+    };
+    const crmClient = {
+      billingNoticeDays: legacyClient.billingNoticeDays,
+      dueDate: parseBusinessDate(legacyClient.dueDate),
+      id: 'client-edilson',
+      name: 'Edilson',
+      recurringValue: new Prisma.Decimal(legacyClient.recurringValue),
+      reference: 'edilson',
+      status: 'ATIVO' as const,
+    };
+    const crmClientReference = {
+      billingNoticeDays: legacyClient.billingNoticeDays,
+      dueDate: parseBusinessDate(legacyClient.dueDate),
+      id: 'reference-edilson-7581',
+      recurringValue: new Prisma.Decimal(legacyClient.recurringValue),
+      reference: legacyClient.reference,
+      status: 'ATIVO' as const,
+    };
+    const category = {
+      active: true,
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'Receita histórica',
+      type: 'ENTRADA' as const,
+      updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+    };
+    const legacyTransaction = {
+      amount: new Prisma.Decimal('35.00'),
+      category,
+      categoryId: category.id,
+      client: crmClient,
+      clientId: crmClient.id,
+      clientReference: crmClientReference,
+      clientReferenceId: crmClientReference.id,
+      createdAt: new Date('2026-09-27T10:00:00.000Z'),
+      createdByUserId: null,
+      description: `Receita histórica legado pagamento ${legacyPayment.id}`,
+      id: 'transaction-payment-11670',
+      notes: legacyPayment.observation,
+      origin: 'LEGACY_IMPORT' as const,
+      paymentGroupId: null,
+      paymentMethod: legacyPayment.tipo_pagamento,
+      receivable: null,
+      receivableId: null,
+      transactionDate: parseBusinessDate(legacyPayment.data_pagamento),
+      type: 'ENTRADA' as const,
+      updatedAt: new Date('2026-09-27T10:00:00.000Z'),
+    };
+    const paymentIntentCreate = vi.fn();
+    const messageDispatchCreate = vi.fn();
+    const clientEventCreate = vi.fn();
+    const statusHistoryCreate = vi.fn();
+    const recoveryCampaignCreate = vi.fn();
+    const whatsAppConnectionCreate = vi.fn();
+    const providerCreatePix = vi.fn();
+    const matchesTransactionWhere = (where: Record<string, unknown>) => {
+      if (where.type && legacyTransaction.type !== where.type) return false;
+      if (where.origin && legacyTransaction.origin !== where.origin) return false;
+      if (where.clientId && legacyTransaction.clientId !== where.clientId) return false;
+      if (
+        where.clientReferenceId &&
+        legacyTransaction.clientReferenceId !== where.clientReferenceId
+      ) {
+        return false;
+      }
+      if (where.transactionDate) {
+        const range = where.transactionDate as { gte?: Date; lte?: Date };
+        if (range.gte && legacyTransaction.transactionDate < range.gte) return false;
+        if (range.lte && legacyTransaction.transactionDate > range.lte) return false;
+      }
+
+      return true;
+    };
+    const prisma = {
+      receivable: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: new Prisma.Decimal('0.00') } }),
+        count: vi.fn().mockResolvedValue(0),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      financialTransaction: {
+        aggregate: vi.fn(({ where }: { where: Record<string, unknown> }) =>
+          Promise.resolve({
+            _sum: {
+              amount: matchesTransactionWhere(where)
+                ? legacyTransaction.amount
+                : new Prisma.Decimal('0.00'),
+            },
+          }),
+        ),
+        count: vi.fn(({ where }: { where: Record<string, unknown> }) =>
+          Promise.resolve(matchesTransactionWhere(where) ? 1 : 0),
+        ),
+        findMany: vi.fn(({ where }: { where: Record<string, unknown> }) =>
+          Promise.resolve(matchesTransactionWhere(where) ? [legacyTransaction] : []),
+        ),
+      },
+      paymentIntent: { create: paymentIntentCreate },
+      messageDispatch: { create: messageDispatchCreate },
+      clientEvent: { create: clientEventCreate },
+      clientStatusHistory: { create: statusHistoryCreate },
+      recoveryCampaign: { create: recoveryCampaignCreate },
+      whatsAppConnection: { create: whatsAppConnectionCreate },
+      $transaction: <T>(items: Array<Promise<T>>) => Promise.all(items),
+    };
+    const service = new FinanceService(
+      prisma as never,
+      { createPix: providerCreatePix } as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.receivablesSummary({
+        clientId: crmClient.id,
+        clientReferenceId: crmClientReference.id,
+        endDate: '2026-09-30',
+        startDate: '2026-09-01',
+      }),
+    ).resolves.toEqual({
+      canceledAmount: '0.00',
+      overdueAmount: '0.00',
+      paidAmount: '35.00',
+      pendingAmount: '0.00',
+    });
+    await expect(
+      service.listTransactions({
+        clientId: crmClient.id,
+        clientReferenceId: crmClientReference.id,
+        endDate: '2026-09-30',
+        origin: 'LEGACY_IMPORT',
+        page: 1,
+        pageSize: 10,
+        startDate: '2026-09-01',
+        type: 'ENTRADA',
+      }),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          amount: '35.00',
+          category: { name: 'Receita histórica' },
+          client: { name: 'Edilson' },
+          clientReference: { reference: 'edilson7581' },
+          id: 'transaction-payment-11670',
+          origin: 'LEGACY_IMPORT',
+          paymentMethod: 'PIX',
+          receivableId: null,
+          transactionDate: '2026-09-26',
+          type: 'ENTRADA',
+        },
+      ],
+      pagination: { page: 1, pageSize: 10, total: 1, totalPages: 1 },
+    });
+    await expect(
+      service.listReceivables({
+        clientId: crmClient.id,
+        clientReferenceId: crmClientReference.id,
+        endDate: '2026-09-30',
+        page: 1,
+        pageSize: 10,
+        startDate: '2026-09-01',
+      }),
+    ).resolves.toMatchObject({
+      items: [],
+      pagination: { page: 1, pageSize: 10, total: 0, totalPages: 0 },
+    });
+    expect(crmClient.recurringValue.toFixed(2)).toBe('35.00');
+    expect(crmClientReference.recurringValue.toFixed(2)).toBe('35.00');
+    expect(crmClientReference.dueDate).toEqual(parseBusinessDate('2026-10-26'));
+    expect(crmClientReference.billingNoticeDays).toBe(0);
+    expect(crmClientReference.status).toBe('ATIVO');
+    expect(paymentIntentCreate).not.toHaveBeenCalled();
+    expect(messageDispatchCreate).not.toHaveBeenCalled();
+    expect(clientEventCreate).not.toHaveBeenCalled();
+    expect(statusHistoryCreate).not.toHaveBeenCalled();
+    expect(recoveryCampaignCreate).not.toHaveBeenCalled();
+    expect(whatsAppConnectionCreate).not.toHaveBeenCalled();
+    expect(providerCreatePix).not.toHaveBeenCalled();
   });
 
   it('pays three selected receivables from the same client as one manual payment group', async () => {

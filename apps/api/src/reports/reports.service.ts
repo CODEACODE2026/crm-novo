@@ -336,6 +336,7 @@ export class ReportsService {
         'Data',
         'Tipo',
         'Origem',
+        'Metodo',
         'Categoria',
         'Cliente',
         'Referencia',
@@ -346,6 +347,7 @@ export class ReportsService {
         Data: formatBusinessDate(transaction.transactionDate),
         Tipo: transaction.type,
         Origem: transaction.origin,
+        Metodo: transaction.paymentMethod ?? '',
         Categoria: transaction.category.name,
         Cliente: transaction.client?.name ?? '',
         Referencia:

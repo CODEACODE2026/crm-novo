@@ -61,6 +61,10 @@ import { PaymentProviderCredentialsService } from './payments/payment-provider-c
 
 const pageSizeLimit = 100;
 const activePixStatuses: PaymentIntentStatus[] = ['CREATED', 'WAITING_PAYMENT'];
+const receivedTransactionOrigins: FinancialTransactionOrigin[] = [
+  'RECEIVABLE_PAYMENT',
+  'LEGACY_IMPORT',
+];
 const pixExpirationMinutes = 30;
 const supportedTransactionWebhookEvents = new Set([
   'transaction.created',
@@ -261,13 +265,18 @@ export class FinanceService {
     const baseWhere = this.buildReceivableWhere(query, { includeStatus: false });
     const today = parseBusinessDate(formatBusinessDate(new Date()));
 
-    const [pending, paid, overdue, canceled] = await this.prisma.$transaction([
+    const legacyPaidWhere = this.buildLegacyImportPaidWhere(query);
+    const [pending, paid, legacyPaid, overdue, canceled] = await this.prisma.$transaction([
       this.prisma.receivable.aggregate({
         where: { AND: [baseWhere, { status: 'PENDENTE' }, { dueDate: { gte: today } }] },
         _sum: { amount: true },
       }),
       this.prisma.receivable.aggregate({
         where: { AND: [baseWhere, { status: 'PAGO' }] },
+        _sum: { amount: true },
+      }),
+      this.prisma.financialTransaction.aggregate({
+        where: legacyPaidWhere,
         _sum: { amount: true },
       }),
       this.prisma.receivable.aggregate({
@@ -282,7 +291,11 @@ export class FinanceService {
 
     return {
       pendingAmount: this.formatDecimal(pending._sum.amount),
-      paidAmount: this.formatDecimal(paid._sum.amount),
+      paidAmount: this.formatDecimal(
+        (paid._sum.amount ?? new Prisma.Decimal(0)).plus(
+          legacyPaid._sum.amount ?? new Prisma.Decimal(0),
+        ),
+      ),
       overdueAmount: this.formatDecimal(overdue._sum.amount),
       canceledAmount: this.formatDecimal(canceled._sum.amount),
     };
@@ -1652,7 +1665,7 @@ export class FinanceService {
         this.prisma.financialTransaction.aggregate({
           where: {
             type: 'ENTRADA',
-            origin: 'RECEIVABLE_PAYMENT',
+            origin: { in: receivedTransactionOrigins },
             transactionDate: { gte: startDate, lte: endDate },
           },
           _sum: { amount: true },
@@ -1836,6 +1849,52 @@ export class FinanceService {
 
     if (query.startDate || query.endDate) {
       where.transactionDate = {
+        ...(query.startDate ? { gte: parseBusinessDate(query.startDate) } : {}),
+        ...(query.endDate ? { lte: parseBusinessDate(query.endDate) } : {}),
+      };
+    }
+
+    if (query.search) {
+      const search = query.search.trim();
+
+      if (search) {
+        where.OR = [
+          { description: { contains: search, mode: 'insensitive' } },
+          { notes: { contains: search, mode: 'insensitive' } },
+          { client: { name: { contains: search, mode: 'insensitive' } } },
+          { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
+        ];
+      }
+    }
+
+    return where;
+  }
+
+  private buildLegacyImportPaidWhere(
+    query: ListReceivablesDto,
+  ): Prisma.FinancialTransactionWhereInput {
+    const where: Prisma.FinancialTransactionWhereInput = {
+      type: 'ENTRADA',
+      origin: 'LEGACY_IMPORT',
+    };
+
+    if (query.clientId) {
+      where.clientId = query.clientId;
+    }
+
+    if (query.clientReferenceId) {
+      where.clientReferenceId = query.clientReferenceId;
+    }
+
+    if (query.dueDate) {
+      where.transactionDate = parseBusinessDate(query.dueDate);
+    }
+
+    if (query.startDate || query.endDate) {
+      where.transactionDate = {
+        ...(typeof where.transactionDate === 'object' && !Array.isArray(where.transactionDate)
+          ? where.transactionDate
+          : {}),
         ...(query.startDate ? { gte: parseBusinessDate(query.startDate) } : {}),
         ...(query.endDate ? { lte: parseBusinessDate(query.endDate) } : {}),
       };
@@ -3176,6 +3235,7 @@ export class FinanceService {
       id: transaction.id,
       type: transaction.type,
       origin: transaction.origin,
+      paymentMethod: transaction.paymentMethod,
       categoryId: transaction.categoryId,
       clientId: transaction.clientId,
       clientReferenceId:

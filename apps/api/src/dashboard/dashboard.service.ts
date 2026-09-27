@@ -1,11 +1,15 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { FinancialTransactionType, Prisma } from '@prisma/client';
+import { FinancialTransactionOrigin, FinancialTransactionType, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { DashboardSummaryDto } from './dto/dashboard-summary.dto';
 
 const operationalTimeZone = 'America/Sao_Paulo';
 const recentLimit = 8;
+const receivedTransactionOrigins: FinancialTransactionOrigin[] = [
+  'RECEIVABLE_PAYMENT',
+  'LEGACY_IMPORT',
+];
 
 type DateSeriesPoint = {
   period: string;
@@ -72,7 +76,7 @@ export class DashboardService {
       this.prisma.financialTransaction.aggregate({
         where: {
           type: 'ENTRADA',
-          origin: 'RECEIVABLE_PAYMENT',
+          origin: { in: receivedTransactionOrigins },
           transactionDate: { gte: range.startDate, lte: range.endDate },
         },
         _sum: { amount: true },
@@ -133,7 +137,7 @@ export class DashboardService {
         by: ['transactionDate'],
         where: {
           type: 'ENTRADA',
-          origin: 'RECEIVABLE_PAYMENT',
+          origin: { in: receivedTransactionOrigins },
           transactionDate: { gte: chartStart, lte: range.endDate },
         },
         _sum: { amount: true },

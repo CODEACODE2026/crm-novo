@@ -232,6 +232,7 @@ import {
   type ClientUpdatePayload,
   type DashboardSummary as DashboardSummaryPayload,
   type FinancialCategory,
+  type FinancialPaymentMethod,
   type FinancialSummary,
   type FinancialTransaction,
   type FinancialTransactionOrigin,
@@ -3331,6 +3332,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
             >
               <option value="">Todas as origens</option>
               <option value="RECEIVABLE_PAYMENT">Contas a receber</option>
+              <option value="LEGACY_IMPORT">Histórico legado</option>
               <option value="MANUAL">Manual</option>
             </select>
           </>
@@ -6117,6 +6119,12 @@ function ClientsView({
   const [clientFinancePagination, setClientFinancePagination] = useState<
     PaginatedClients['pagination'] | null
   >(null);
+  const [clientFinancialHistoryItems, setClientFinancialHistoryItems] = useState<
+    FinancialTransaction[]
+  >([]);
+  const [clientFinancialHistoryPagination, setClientFinancialHistoryPagination] = useState<
+    PaginatedClients['pagination'] | null
+  >(null);
   const [clientFinanceSummary, setClientFinanceSummary] = useState<ReceivablesSummary | null>(null);
   const [clientOverviewSummary, setClientOverviewSummary] = useState<{
     clientId: string;
@@ -6129,6 +6137,7 @@ function ClientsView({
   } | null>(null);
   const [clientPixSummaryError, setClientPixSummaryError] = useState('');
   const [clientFinancePage, setClientFinancePage] = useState(1);
+  const [clientFinancialHistoryPage, setClientFinancialHistoryPage] = useState(1);
   const [clientFinancePeriod, setClientFinancePeriod] = useState<FinancePeriod>(() =>
     currentFinancePeriod(),
   );
@@ -6258,7 +6267,7 @@ function ClientsView({
     };
 
     try {
-      const [nextReceivables, nextSummary] = await Promise.all([
+      const [nextReceivables, nextSummary, nextFinancialHistory] = await Promise.all([
         listReceivables({
           ...baseFilters,
           page: clientFinancePage,
@@ -6266,11 +6275,20 @@ function ClientsView({
           status: clientFinanceStatus,
         }),
         getReceivablesSummary(baseFilters),
+        listFinancialTransactions({
+          ...baseFilters,
+          origin: 'LEGACY_IMPORT',
+          page: clientFinancialHistoryPage,
+          pageSize: listPageSize,
+          type: 'ENTRADA',
+        }),
       ]);
 
       setClientFinanceItems(nextReceivables.items);
       setClientFinancePagination(nextReceivables.pagination);
       setClientFinanceSummary(nextSummary);
+      setClientFinancialHistoryItems(nextFinancialHistory.items);
+      setClientFinancialHistoryPagination(nextFinancialHistory.pagination);
       if (
         !nextReceivables.items.length &&
         nextReceivables.pagination.page > 1 &&
@@ -6278,9 +6296,18 @@ function ClientsView({
       ) {
         setClientFinancePage(Math.max(1, nextReceivables.pagination.totalPages));
       }
+      if (
+        !nextFinancialHistory.items.length &&
+        nextFinancialHistory.pagination.page > 1 &&
+        nextFinancialHistory.pagination.total > 0
+      ) {
+        setClientFinancialHistoryPage(Math.max(1, nextFinancialHistory.pagination.totalPages));
+      }
     } catch (err) {
       setClientFinanceItems([]);
       setClientFinancePagination(null);
+      setClientFinancialHistoryItems([]);
+      setClientFinancialHistoryPagination(null);
       setClientFinanceSummary(null);
       setClientFinanceError(
         err instanceof Error ? err.message : 'Não foi possível carregar financeiro do cliente.',
@@ -6290,6 +6317,7 @@ function ClientsView({
     }
   }, [
     clientFinancePage,
+    clientFinancialHistoryPage,
     clientFinancePeriod.endDate,
     clientFinancePeriod.startDate,
     clientFinanceReferenceId,
@@ -6375,6 +6403,8 @@ function ClientsView({
     setClientActionError('');
     setClientFinanceItems([]);
     setClientFinancePagination(null);
+    setClientFinancialHistoryItems([]);
+    setClientFinancialHistoryPagination(null);
     setClientFinanceSummary(null);
     setClientOverviewSummary(null);
     setClientOverviewSummaryError('');
@@ -6389,6 +6419,7 @@ function ClientsView({
     setClientBillingLoading(false);
     setClientBillingError('');
     setClientFinancePage(1);
+    setClientFinancialHistoryPage(1);
     setClientFinancePeriod(currentFinancePeriod());
     setClientFinanceReferenceId('');
     setClientFinanceStatus('');
@@ -6430,6 +6461,7 @@ function ClientsView({
     setSelectedReceivableIds([]);
   }, [
     clientFinancePage,
+    clientFinancialHistoryPage,
     clientFinancePeriod.startDate,
     clientFinanceReferenceId,
     clientFinanceStatus,
@@ -6522,6 +6554,7 @@ function ClientsView({
   function changeClientFinanceMonth(months: number) {
     setClientFinancePeriod((current) => shiftFinancePeriod(current, months));
     setClientFinancePage(1);
+    setClientFinancialHistoryPage(1);
   }
 
   return (
@@ -7537,6 +7570,7 @@ function ClientsView({
                       onChange={(event) => {
                         setClientFinanceReferenceId(event.target.value);
                         setClientFinancePage(1);
+                        setClientFinancialHistoryPage(1);
                       }}
                     >
                       <option value="">Todas as referências</option>
@@ -7702,6 +7736,56 @@ function ClientsView({
                       onPageChange={setClientFinancePage}
                     />
                   </div>
+                  <section className="client-financial-history-section">
+                    <ClientSectionHeading
+                      description="Pagamentos importados do sistema legado."
+                      icon={Receipt}
+                      title="Histórico financeiro"
+                    />
+                    <div className="table-wrap compact-table">
+                      <table className="client-finance-table">
+                        <thead>
+                          <tr>
+                            <th>Data</th>
+                            <th>Descrição</th>
+                            <th>Referência</th>
+                            <th>Categoria</th>
+                            <th>Método</th>
+                            <th className="finance-amount-column">Valor</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientFinancialHistoryItems.map((transaction) => (
+                            <tr key={transaction.id}>
+                              <td>{formatDate(transaction.transactionDate)}</td>
+                              <td>
+                                <strong>{transaction.description}</strong>
+                                <span>{financialTransactionOriginLabel(transaction.origin)}</span>
+                              </td>
+                              <td>{transaction.clientReference?.reference ?? '-'}</td>
+                              <td>{transaction.category.name}</td>
+                              <td>{financialPaymentMethodLabel(transaction.paymentMethod)}</td>
+                              <td className="finance-amount-column">
+                                {formatCurrency(transaction.amount)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {!clientFinancialHistoryItems.length ? (
+                        <div className="empty-state">
+                          {clientFinanceLoading
+                            ? 'Carregando histórico financeiro...'
+                            : 'Sem histórico financeiro importado.'}
+                        </div>
+                      ) : null}
+                      <PaginationControls
+                        itemLabel="movimentações"
+                        pagination={clientFinancialHistoryPagination}
+                        onPageChange={setClientFinancialHistoryPage}
+                      />
+                    </div>
+                  </section>
                   {clientFinanceItems.some((receivable) => receivable.paymentIntents?.length) ? (
                     <div className="pix-intent-list">
                       {clientFinanceItems.flatMap((receivable) =>
@@ -12903,7 +12987,9 @@ function TransactionSection({
                   {formatCurrency(transaction.amount)}
                 </td>
                 <td className="finance-status-column">
-                  <span className="finance-status-pill tone-info">{transaction.origin}</span>
+                  <span className="finance-status-pill tone-info">
+                    {financialTransactionOriginLabel(transaction.origin)}
+                  </span>
                 </td>
                 <td className="finance-actions-column">
                   <div className="button-row">
@@ -13646,6 +13732,29 @@ function financeReceivableTone(receivable: Pick<Receivable, 'displayStatus' | 's
   if (status === 'CANCELADO') return 'muted';
 
   return 'danger';
+}
+
+function financialTransactionOriginLabel(origin: FinancialTransactionOrigin) {
+  const labels = {
+    LEGACY_IMPORT: 'Histórico legado',
+    MANUAL: 'Manual',
+    RECEIVABLE_PAYMENT: 'Conta a receber',
+  } satisfies Record<FinancialTransactionOrigin, string>;
+
+  return labels[origin];
+}
+
+function financialPaymentMethodLabel(method: FinancialPaymentMethod | null) {
+  if (!method) return '-';
+
+  const labels = {
+    BOLETO: 'Boleto',
+    CARTAO: 'Cartão',
+    PIX: 'PIX',
+    TRANSFERENCIA: 'Transferência',
+  } satisfies Record<FinancialPaymentMethod, string>;
+
+  return labels[method];
 }
 
 function PixReceivableModal({

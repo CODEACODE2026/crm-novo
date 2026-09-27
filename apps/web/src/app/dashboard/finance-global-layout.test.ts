@@ -90,6 +90,13 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('Nenhuma categoria encontrada.');
   });
 
+  it('labels legacy imported financial transactions without enabling manual actions', () => {
+    expect(dashboardSource).toContain('function financialTransactionOriginLabel');
+    expect(dashboardSource).toContain("LEGACY_IMPORT: 'Histórico legado'");
+    expect(dashboardSource).toContain('<option value="LEGACY_IMPORT">Histórico legado</option>');
+    expect(dashboardSource).toContain("transaction.origin !== 'MANUAL'");
+  });
+
   it('keeps central UI 2.0 modal headers for finance flows', () => {
     expect(dashboardSource).toContain('modal-header modal-header-with-icon');
     expect(dashboardSource).toContain('modal finance-transaction-modal');

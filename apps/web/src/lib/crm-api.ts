@@ -165,7 +165,8 @@ export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
 export type ReceivablePurpose = 'RENEWAL' | 'INITIAL_ACTIVATION';
 export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
 export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
-export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL';
+export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL' | 'LEGACY_IMPORT';
+export type FinancialPaymentMethod = 'PIX' | 'BOLETO' | 'CARTAO' | 'TRANSFERENCIA';
 export type PaymentIntentStatus =
   | 'CREATED'
   | 'WAITING_PAYMENT'
@@ -430,6 +431,7 @@ export interface FinancialTransaction {
   id: string;
   type: FinancialTransactionType;
   origin: FinancialTransactionOrigin;
+  paymentMethod: FinancialPaymentMethod | null;
   categoryId: string;
   clientId: string | null;
   clientReferenceId?: string | null;
@@ -440,6 +442,7 @@ export interface FinancialTransaction {
   notes: string | null;
   category: FinancialCategory;
   client: Pick<Client, 'id' | 'name' | 'reference'> | null;
+  clientReference: Pick<ClientReference, 'id' | 'reference'> | null;
 }
 
 export interface PaginatedReceivables {

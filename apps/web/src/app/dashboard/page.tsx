@@ -236,6 +236,8 @@ import {
   type FinancialTransactionType,
   type HealthStatus,
   type LegacyImportClassification,
+  type LegacyImportPlanCycle,
+  type LegacyImportPlanMapping,
   type LegacyImportPreview,
   type LegacyImportPreviewRow,
   type PaginatedClients,
@@ -819,7 +821,7 @@ export default function DashboardPage() {
         />
       ) : null}
       {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
-      {view === 'imports' ? <LegacyImportPreviewView /> : null}
+      {view === 'imports' ? <LegacyImportPreviewView plans={plans} /> : null}
       {view === 'settings' ? (
         <SettingsView
           initialBillingTab={settingsInitialBillingTab}
@@ -936,17 +938,74 @@ const legacyImportFilters = [
   { id: 'INVALID', label: 'Inválidos' },
 ] satisfies Array<{ id: LegacyImportClassification | 'all'; label: string }>;
 
-function LegacyImportPreviewView() {
+const legacyPlanCycles = [
+  { cycle: 'MENSAL', label: 'Mensal', durationMonths: 1 },
+  { cycle: 'BIMESTRAL', label: 'Bimestral', durationMonths: 2 },
+  { cycle: 'TRIMESTRAL', label: 'Trimestral', durationMonths: 3 },
+  { cycle: 'SEMESTRAL', label: 'Semestral', durationMonths: 6 },
+  { cycle: 'ANUAL', label: 'Anual', durationMonths: 12 },
+] satisfies Array<{ cycle: LegacyImportPlanCycle; label: string; durationMonths: number }>;
+
+function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
   const [fileName, setFileName] = useState('');
   const [fileText, setFileText] = useState('');
+  const [planMapping, setPlanMapping] = useState<LegacyImportPlanMapping>({});
   const [preview, setPreview] = useState<LegacyImportPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<LegacyImportClassification | 'all'>('all');
   const [selectedRow, setSelectedRow] = useState<LegacyImportPreviewRow | null>(null);
+  const activePlans = plans.filter((plan) => plan.active);
 
   const filteredRows =
     preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
+
+  useEffect(() => {
+    setPlanMapping((current) => {
+      let changed = false;
+      const next: LegacyImportPlanMapping = { ...current };
+      const selectablePlans = plans.filter((plan) => plan.active);
+
+      for (const item of legacyPlanCycles) {
+        const candidates = selectablePlans.filter(
+          (plan) => item.durationMonths === plan.durationMonths,
+        );
+        const currentPlan = next[item.cycle]
+          ? candidates.find((plan) => plan.id === next[item.cycle])
+          : null;
+
+        if (currentPlan) continue;
+
+        if (candidates.length === 1) {
+          next[item.cycle] = candidates[0]!.id;
+          changed = true;
+          continue;
+        }
+
+        if (next[item.cycle]) {
+          delete next[item.cycle];
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [plans]);
+
+  function handlePlanMappingChange(cycle: LegacyImportPlanCycle, planId: string) {
+    setPlanMapping((current) => {
+      const next = { ...current };
+      if (planId) {
+        next[cycle] = planId;
+      } else {
+        delete next[cycle];
+      }
+      return next;
+    });
+    setPreview(null);
+    setSelectedRow(null);
+    setFilter('all');
+  }
 
   async function handleFileChange(file: File | undefined) {
     setPreview(null);
@@ -975,7 +1034,11 @@ function LegacyImportPreviewView() {
 
     try {
       const payload = JSON.parse(fileText) as unknown;
-      const result = await previewLegacyClients(payload);
+      const previewPayload =
+        typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+          ? { ...payload, planMapping }
+          : payload;
+      const result = await previewLegacyClients(previewPayload);
       setPreview(result);
       setFilter('all');
     } catch (err) {
@@ -1006,6 +1069,59 @@ function LegacyImportPreviewView() {
       />
 
       {error ? <div className="notice danger">{error}</div> : null}
+
+      <section className="legacy-import-plan-mapping" aria-labelledby="legacy-plan-mapping-title">
+        <div>
+          <h2 id="legacy-plan-mapping-title">Mapeamento de planos</h2>
+          <p>Selecione o plano CRM correspondente a cada ciclo legado antes do preview.</p>
+        </div>
+
+        <div className="legacy-import-plan-grid">
+          {legacyPlanCycles.map((item) => {
+            const candidates = activePlans.filter(
+              (plan) => item.durationMonths === plan.durationMonths,
+            );
+            const selectedPlanId = planMapping[item.cycle] ?? '';
+            const hasSingleCandidate = candidates.length === 1;
+            const hasNoCandidates = candidates.length === 0;
+
+            return (
+              <label className="legacy-import-plan-row" key={item.cycle}>
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{formatPlanDuration(item.durationMonths)}</small>
+                </span>
+                <select
+                  aria-describedby={`legacy-plan-${item.cycle}-hint`}
+                  aria-label={`Plano para ${item.label}`}
+                  value={selectedPlanId}
+                  onChange={(event) => handlePlanMappingChange(item.cycle, event.target.value)}
+                >
+                  <option value="">
+                    {hasNoCandidates
+                      ? 'Nenhum plano ativo compatível'
+                      : `Selecione o plano correspondente ao ciclo ${item.label}`}
+                  </option>
+                  {candidates.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name} - {formatCurrency(plan.defaultValue)}
+                    </option>
+                  ))}
+                </select>
+                <small id={`legacy-plan-${item.cycle}-hint`}>
+                  {hasNoCandidates
+                    ? 'Nenhum plano ativo compatível.'
+                    : hasSingleCandidate
+                      ? 'Selecionado automaticamente.'
+                      : selectedPlanId
+                        ? 'Seleção manual.'
+                        : `Selecione o plano correspondente ao ciclo ${item.label}.`}
+                </small>
+              </label>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="legacy-import-upload">
         <label className="field">

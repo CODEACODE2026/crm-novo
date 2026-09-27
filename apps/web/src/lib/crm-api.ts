@@ -741,6 +741,9 @@ export interface LegacyImportPreview {
   rows: LegacyImportPreviewRow[];
 }
 
+export type LegacyImportPlanCycle = 'MENSAL' | 'BIMESTRAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
+export type LegacyImportPlanMapping = Partial<Record<LegacyImportPlanCycle, string>>;
+
 export interface ReceivableCyclePreview {
   allowed: boolean;
   status: {

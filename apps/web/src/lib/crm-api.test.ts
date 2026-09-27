@@ -196,13 +196,22 @@ describe('CRM UI formatters', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await previewLegacyClients({ schemaVersion: 1, source: 'legacy', clients: [] });
+    await previewLegacyClients({
+      schemaVersion: 1,
+      source: 'legacy',
+      planMapping: { MENSAL: 'plan-1' },
+      clients: [],
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/legacy-import/clients/preview'),
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(latestJsonBody(fetchMock)).toMatchObject({ schemaVersion: 1, source: 'legacy' });
+    expect(latestJsonBody(fetchMock)).toMatchObject({
+      schemaVersion: 1,
+      source: 'legacy',
+      planMapping: { MENSAL: 'plan-1' },
+    });
   });
 
   it('keeps the session when PIX WhatsApp send returns a provider auth boundary error', async () => {

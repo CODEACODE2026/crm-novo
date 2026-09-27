@@ -6562,6 +6562,54 @@ tbody tr:hover,
   gap: 18px;
 }
 
+.legacy-import-plan-mapping {
+  display: grid;
+  gap: 14px;
+}
+
+.legacy-import-plan-mapping h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.legacy-import-plan-mapping p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.legacy-import-plan-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.legacy-import-plan-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 180px) minmax(220px, 1fr) minmax(150px, 220px);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 3%);
+  padding: 10px 12px;
+}
+
+.legacy-import-plan-row > span,
+.legacy-import-plan-row > small {
+  display: grid;
+  gap: 3px;
+}
+
+.legacy-import-plan-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legacy-import-plan-row select {
+  width: 100%;
+  min-width: 0;
+}
+
 .legacy-import-upload {
   display: grid;
   grid-template-columns: minmax(260px, 420px) minmax(0, 1fr);
@@ -6906,6 +6954,7 @@ tbody tr:hover,
 }
 
 @media (max-width: 640px) {
+  .legacy-import-plan-row,
   .legacy-import-upload,
   .legacy-import-detail-grid {
     grid-template-columns: 1fr;

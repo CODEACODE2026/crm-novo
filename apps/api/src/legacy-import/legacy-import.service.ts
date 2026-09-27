@@ -30,6 +30,7 @@ const billingCycleMonths = {
   SEMESTRAL: 6,
   TRIMESTRAL: 3,
 } as const;
+type LegacyBillingCycle = keyof typeof billingCycleMonths;
 
 const legacyStatusMap = {
   Ativo: 'ATIVO',
@@ -67,6 +68,7 @@ type NormalizedLegacyClient = {
   legacyUpdatedAt: string | null;
   name: string | null;
   notes: string | null;
+  planCycle: LegacyBillingCycle | null;
   phone: string | null;
   phoneNormalized: string | null;
   planDurationMonths: number | null;
@@ -85,6 +87,12 @@ type LegacyImportRecordLookup = {
 };
 type ClientIdLookup = { id: string };
 type ClientReferenceIdLookup = { id: string; clientId: string };
+type PlanLookup = {
+  active: boolean;
+  durationMonths: number;
+  id: string;
+  name: string;
+};
 
 @Injectable()
 export class LegacyImportService {
@@ -103,15 +111,17 @@ export class LegacyImportService {
     this.markDuplicateLegacyIds(normalizedRows);
     this.markDuplicateReferences(normalizedRows);
 
-    const lookups = await this.loadLookups(normalizedRows);
+    const lookups = await this.loadLookups(normalizedRows, envelope.planMapping);
 
     const rows = normalizedRows.map((row) => {
       const errors = [...row.normalized.errors, ...row.errors];
       const warnings = [...row.normalized.warnings, ...row.warnings];
       const normalized = row.normalized.value;
       const planMatch = this.resolvePlan(
+        normalized.planCycle,
         normalized.planDurationMonths,
-        lookups.plansByDuration,
+        envelope.planMapping,
+        lookups.plansById,
         errors,
       );
       const importRecord = normalized.legacyClientId
@@ -214,6 +224,7 @@ export class LegacyImportService {
 
         return client;
       }),
+      planMapping: this.parsePlanMapping(payload.planMapping),
     };
   }
 
@@ -231,7 +242,7 @@ export class LegacyImportService {
     const dueDate = this.normalizeDueDate(dueDateText, errors, warnings);
     const billingNoticeDays = this.normalizeBillingNoticeDays(input.avisar, errors);
     const recurringValue = this.normalizeRecurringValue(input.value_mensalidade, errors);
-    const planDurationMonths = this.normalizeBillingCycle(input.type_cobranca, errors);
+    const planCycle = this.normalizeBillingCycle(input.type_cobranca, errors);
     const reference = this.optionalString(input.referencia)?.trim() || null;
     const notes = this.optionalString(input.observation)?.trim() || null;
 
@@ -252,9 +263,10 @@ export class LegacyImportService {
       legacyUpdatedAt: this.optionalString(input.updated_at)?.trim() || null,
       name,
       notes,
+      planCycle: planCycle?.cycle ?? null,
       phone,
       phoneNormalized,
-      planDurationMonths,
+      planDurationMonths: planCycle?.durationMonths ?? null,
       planName: this.optionalString(input.type_cobranca)?.trim() || null,
       rawReference: reference,
       recurringValue,
@@ -420,11 +432,47 @@ export class LegacyImportService {
       return null;
     }
 
-    return billingCycleMonths[cycle as keyof typeof billingCycleMonths];
+    return {
+      cycle: cycle as LegacyBillingCycle,
+      durationMonths: billingCycleMonths[cycle as LegacyBillingCycle],
+    };
+  }
+
+  private parsePlanMapping(value: unknown) {
+    const mapping: Partial<Record<LegacyBillingCycle, string>> = {};
+
+    if (value === undefined) {
+      return mapping;
+    }
+
+    if (!this.isRecord(value)) {
+      throw new BadRequestException('INVALID_PLAN_MAPPING');
+    }
+
+    const validCycles = new Set(Object.keys(billingCycleMonths));
+    if (Object.keys(value).some((key) => !validCycles.has(key))) {
+      throw new BadRequestException('INVALID_PLAN_MAPPING');
+    }
+
+    for (const cycle of Object.keys(billingCycleMonths) as LegacyBillingCycle[]) {
+      const planId = value[cycle];
+      if (planId === undefined || planId === null || planId === '') {
+        continue;
+      }
+
+      if (typeof planId !== 'string' || !planId.trim()) {
+        throw new BadRequestException('INVALID_PLAN_MAPPING');
+      }
+
+      mapping[cycle] = planId.trim();
+    }
+
+    return mapping;
   }
 
   private async loadLookups(
     rows: Array<{ normalized: ReturnType<LegacyImportService['normalizeClient']> }>,
+    planMapping: Partial<Record<LegacyBillingCycle, string>>,
   ) {
     const legacyIds = this.unique(
       rows
@@ -448,8 +496,14 @@ export class LegacyImportService {
       rows.map((row) => row.normalized.value.name).filter((item): item is string => Boolean(item)),
     );
 
+    const mappedPlanIds = this.unique(Object.values(planMapping).filter(Boolean));
+
     const [plans, importRecords, referenceMatches, clientMatches] = await this.prisma.$transaction([
-      this.prisma.plan.findMany({ where: { active: true } }),
+      this.prisma.plan.findMany({
+        where: mappedPlanIds.length
+          ? { OR: [{ active: true }, { id: { in: mappedPlanIds } }] }
+          : { active: true },
+      }),
       legacyIds.length
         ? this.prisma.legacyImportRecord.findMany({
             where: { source, legacyClientId: { in: legacyIds } },
@@ -526,33 +580,37 @@ export class LegacyImportService {
       mappedClients: new Map(
         (mappedClients as ClientIdLookup[]).map((client) => [client.id, client]),
       ),
-      plansByDuration: this.groupPlansByDuration(plans),
+      plansById: new Map((plans as PlanLookup[]).map((plan) => [plan.id, plan])),
       references: referenceMatches,
     };
   }
 
   private resolvePlan(
+    cycle: LegacyBillingCycle | null,
     durationMonths: number | null,
-    plansByDuration: Map<number, Array<{ id: string; name: string; durationMonths: number }>>,
+    planMapping: Partial<Record<LegacyBillingCycle, string>>,
+    plansById: Map<string, PlanLookup>,
     errors: string[],
   ) {
-    if (!durationMonths) {
+    if (!cycle || !durationMonths) {
       return null;
     }
 
-    const matches = plansByDuration.get(durationMonths) ?? [];
+    const mappedPlanId = planMapping[cycle];
 
-    if (matches.length === 0) {
-      errors.push('PLAN_NOT_FOUND');
+    if (!mappedPlanId) {
+      errors.push('PLAN_NOT_MAPPED');
       return null;
     }
 
-    if (matches.length > 1) {
-      errors.push('PLAN_AMBIGUOUS');
+    const plan = plansById.get(mappedPlanId);
+
+    if (!plan || !plan.active || plan.durationMonths !== durationMonths) {
+      errors.push('INVALID_PLAN_MAPPING');
       return null;
     }
 
-    return matches[0]!;
+    return plan;
   }
 
   private findCandidateMatches(
@@ -605,7 +663,9 @@ export class LegacyImportService {
     normalized: NormalizedLegacyClient;
     payloadHash: string | null;
   }): LegacyImportClassification {
-    if (input.errors.some((error) => error.startsWith('INVALID_'))) {
+    if (
+      input.errors.some((error) => error.startsWith('INVALID_') && error !== 'INVALID_PLAN_MAPPING')
+    ) {
       return 'INVALID';
     }
 
@@ -615,9 +675,11 @@ export class LegacyImportService {
           'DUPLICATE_LEGACY_ID_IN_FILE',
           'DUPLICATE_REFERENCE_IN_FILE',
           'INCOMPLETE_LEGACY_MAPPING',
+          'INVALID_PLAN_MAPPING',
           'ORPHAN_LEGACY_MAPPING',
           'PLAN_AMBIGUOUS',
           'PLAN_NOT_FOUND',
+          'PLAN_NOT_MAPPED',
         ].includes(error),
       )
     ) {
@@ -733,16 +795,6 @@ export class LegacyImportService {
         row.errors.push(code);
       }
     }
-  }
-
-  private groupPlansByDuration(plans: Array<{ id: string; name: string; durationMonths: number }>) {
-    const grouped = new Map<number, Array<{ id: string; name: string; durationMonths: number }>>();
-
-    for (const plan of plans) {
-      grouped.set(plan.durationMonths, [...(grouped.get(plan.durationMonths) ?? []), plan]);
-    }
-
-    return grouped;
   }
 
   private hasExistingReferenceWithoutImportRecord(

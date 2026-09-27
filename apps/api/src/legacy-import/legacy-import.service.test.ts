@@ -40,11 +40,23 @@ const existingCrmReference = {
   client: { id: 'client-legacy', name: 'Cliente Teste' },
 };
 
-function envelope(clients = [baseClient]) {
+const defaultPlanMapping = {
+  ANUAL: 'plan-12',
+  BIMESTRAL: 'plan-2',
+  MENSAL: 'plan-1',
+  SEMESTRAL: 'plan-6',
+  TRIMESTRAL: 'plan-3',
+};
+
+function envelope(
+  clients = [baseClient],
+  planMapping: Partial<Record<string, string>> = defaultPlanMapping,
+) {
   return {
     schemaVersion: 1,
     source: 'legacy',
     exportedAt: '2026-09-26T00:00:00Z',
+    planMapping,
     clients,
   };
 }
@@ -331,13 +343,13 @@ describe('LegacyImportService', () => {
     expect(result.rows[0]?.errors).toContain('INVALID_PHONE');
   });
 
-  it('maps all legacy billing cycles through active plan duration and reports missing or ambiguous plans', async () => {
+  it('maps all legacy billing cycles through explicit active plans', async () => {
     const { service } = createService({
       plans: [
         { id: 'plan-1', name: 'Mensal', durationMonths: 1, active: true },
         { id: 'plan-2', name: 'Bimestral', durationMonths: 2, active: true },
-        { id: 'plan-3a', name: 'Tri A', durationMonths: 3, active: true },
-        { id: 'plan-3b', name: 'Tri B', durationMonths: 3, active: true },
+        { id: 'plan-3', name: 'Trimestral', durationMonths: 3, active: true },
+        { id: 'plan-6', name: 'Semestral', durationMonths: 6, active: true },
         { id: 'plan-12', name: 'Anual', durationMonths: 12, active: true },
       ],
     });
@@ -354,11 +366,216 @@ describe('LegacyImportService', () => {
 
     expect(result.rows[0]?.plan).toMatchObject({ durationMonths: 1, id: 'plan-1' });
     expect(result.rows[1]?.plan).toMatchObject({ durationMonths: 2, id: 'plan-2' });
-    expect(result.rows[2]?.classification).toBe('CONFLICT');
-    expect(result.rows[2]?.errors).toContain('PLAN_AMBIGUOUS');
-    expect(result.rows[3]?.classification).toBe('CONFLICT');
-    expect(result.rows[3]?.errors).toContain('PLAN_NOT_FOUND');
+    expect(result.rows[2]?.plan).toMatchObject({ durationMonths: 3, id: 'plan-3' });
+    expect(result.rows[3]?.plan).toMatchObject({ durationMonths: 6, id: 'plan-6' });
     expect(result.rows[4]?.plan).toMatchObject({ durationMonths: 12, id: 'plan-12' });
+  });
+
+  it('blocks missing and invalid explicit plan mappings without falling back to duration matching', async () => {
+    const { service } = createService({
+      plans: [
+        { id: 'plan-1', name: 'Mensal', durationMonths: 1, active: true },
+        { id: 'plan-3', name: 'Trimestral', durationMonths: 3, active: true },
+        { id: 'inactive-plan', name: 'Mensal Inativo', durationMonths: 1, active: false },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope(
+        [
+          { ...baseClient, id: 1, referencia: 'missing', type_cobranca: 'MENSAL' },
+          { ...baseClient, id: 2, referencia: 'wrong-duration', type_cobranca: 'MENSAL' },
+          { ...baseClient, id: 3, referencia: 'inactive', type_cobranca: 'MENSAL' },
+          { ...baseClient, id: 4, referencia: 'not-found', type_cobranca: 'MENSAL' },
+        ],
+        {
+          BIMESTRAL: 'plan-2',
+          TRIMESTRAL: 'plan-3',
+          SEMESTRAL: 'plan-6',
+          ANUAL: 'plan-12',
+        },
+      ),
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'CONFLICT',
+      errors: ['PLAN_NOT_MAPPED'],
+    });
+
+    const wrongDuration = await service.previewClients(
+      envelope([{ ...baseClient, id: 5, referencia: 'wrong-duration' }], {
+        ...defaultPlanMapping,
+        MENSAL: 'plan-3',
+      }),
+    );
+    expect(wrongDuration.rows[0]).toMatchObject({
+      classification: 'CONFLICT',
+      errors: ['INVALID_PLAN_MAPPING'],
+    });
+
+    const inactive = await service.previewClients(
+      envelope([{ ...baseClient, id: 6, referencia: 'inactive' }], {
+        ...defaultPlanMapping,
+        MENSAL: 'inactive-plan',
+      }),
+    );
+    expect(inactive.rows[0]).toMatchObject({
+      classification: 'CONFLICT',
+      errors: ['INVALID_PLAN_MAPPING'],
+    });
+
+    const notFound = await service.previewClients(
+      envelope([{ ...baseClient, id: 7, referencia: 'not-found' }], {
+        ...defaultPlanMapping,
+        MENSAL: 'missing-plan',
+      }),
+    );
+    expect(notFound.rows[0]).toMatchObject({
+      classification: 'CONFLICT',
+      errors: ['INVALID_PLAN_MAPPING'],
+    });
+  });
+
+  it('uses explicit mapping even when multiple active plans share the same duration', async () => {
+    const { service } = createService({
+      plans: [
+        { id: 'plan-1', name: 'Mensal', durationMonths: 1, active: true },
+        { id: 'plan-alt', name: 'Mensal Premium', durationMonths: 1, active: true },
+      ],
+    });
+
+    const result = await service.previewClients(envelope());
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY_CREATE',
+      plan: { durationMonths: 1, id: 'plan-1', name: 'Mensal' },
+    });
+    expect(result.rows[0]?.errors).not.toContain('PLAN_AMBIGUOUS');
+  });
+
+  it('changes the payload hash when explicit mapping points to a different valid plan', async () => {
+    const { service } = createService({
+      plans: [
+        { id: 'plan-1', name: 'Mensal', durationMonths: 1, active: true },
+        { id: 'plan-alt', name: 'Mensal Premium', durationMonths: 1, active: true },
+      ],
+    });
+
+    const first = await service.previewClients(envelope());
+    const second = await service.previewClients(
+      envelope([{ ...baseClient, referencia: 'cliente123' }], {
+        ...defaultPlanMapping,
+        MENSAL: 'plan-alt',
+      }),
+    );
+
+    expect(first.rows[0]?.payloadHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(second.rows[0]?.payloadHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(second.rows[0]?.plan).toMatchObject({ id: 'plan-alt' });
+    expect(second.rows[0]?.payloadHash).not.toBe(first.rows[0]?.payloadHash);
+  });
+
+  it('keeps mapping scoped per row in multi-cycle files', async () => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope([
+        { ...baseClient, id: 1, referencia: 'mensal', type_cobranca: 'MENSAL' },
+        { ...baseClient, id: 2, referencia: 'bimestral', type_cobranca: 'BIMESTRAL' },
+        { ...baseClient, id: 3, referencia: 'trimestral', type_cobranca: 'TRIMESTRAL' },
+        { ...baseClient, id: 4, referencia: 'semestral', type_cobranca: 'SEMESTRAL' },
+        { ...baseClient, id: 5, referencia: 'anual', type_cobranca: 'ANUAL' },
+      ]),
+    );
+
+    expect(result.rows.map((row) => row.plan?.id)).toEqual([
+      'plan-1',
+      'plan-2',
+      'plan-3',
+      'plan-6',
+      'plan-12',
+    ]);
+    expect(result.summary).toMatchObject({ conflict: 0, readyCreate: 5 });
+  });
+
+  it('allows partial mappings and blocks only rows whose cycle is not mapped', async () => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope(
+        [
+          { ...baseClient, id: 1, referencia: 'mensal', type_cobranca: 'MENSAL' },
+          { ...baseClient, id: 2, referencia: 'anual', type_cobranca: 'ANUAL' },
+        ],
+        { MENSAL: 'plan-1' },
+      ),
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY_CREATE',
+      plan: { id: 'plan-1' },
+    });
+    expect(result.rows[1]).toMatchObject({
+      classification: 'CONFLICT',
+      errors: ['PLAN_NOT_MAPPED'],
+    });
+  });
+
+  it('ignores unused known-cycle mappings without changing a used row', async () => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, id: 1, referencia: 'mensal', type_cobranca: 'MENSAL' }], {
+        MENSAL: 'plan-1',
+        BIMESTRAL: 'missing-unused-plan',
+        TRIMESTRAL: 'missing-unused-plan',
+        SEMESTRAL: 'missing-unused-plan',
+        ANUAL: 'missing-unused-plan',
+      }),
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY_CREATE',
+      errors: [],
+      plan: { id: 'plan-1' },
+    });
+  });
+
+  it('rejects unknown plan mapping keys at the envelope boundary', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.previewClients({
+        ...envelope(),
+        planMapping: { ...defaultPlanMapping, MENSAL_PREMIUM: 'plan-1' },
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects reusing the same plan for a cycle with a different expected duration', async () => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope(
+        [
+          { ...baseClient, id: 1, referencia: 'mensal', type_cobranca: 'MENSAL' },
+          { ...baseClient, id: 2, referencia: 'bimestral', type_cobranca: 'BIMESTRAL' },
+        ],
+        {
+          MENSAL: 'plan-1',
+          BIMESTRAL: 'plan-1',
+        },
+      ),
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY_CREATE',
+      plan: { id: 'plan-1' },
+    });
+    expect(result.rows[1]).toMatchObject({
+      classification: 'CONFLICT',
+      errors: ['INVALID_PLAN_MAPPING'],
+    });
   });
 
   it('returns candidate matches and does not auto-merge by reference, phone, email or name', async () => {

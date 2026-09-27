@@ -15,18 +15,30 @@ describe('legacy import preview UI', () => {
   it('adds an isolated temporary import view to the dashboard navigation', () => {
     expect(dashboardSource).toContain("| 'imports'");
     expect(dashboardSource).toContain("{ id: 'imports', label: 'Importação', icon: FileText }");
-    expect(dashboardSource).toContain("{view === 'imports' ? <LegacyImportPreviewView /> : null}");
+    expect(dashboardSource).toContain(
+      "{view === 'imports' ? <LegacyImportPreviewView plans={plans} /> : null}",
+    );
     expect(dashboardSource).toContain("imports: 'Preview temporário da migração legado'");
   });
 
   it('keeps IMPORT1.1 as preview only without a functional import action', () => {
     expect(dashboardSource).toContain("from '../../lib/legacy-import-file'");
     expect(importViewSource).toContain('readLegacyImportJsonFile(file)');
-    expect(importViewSource).toContain('previewLegacyClients(payload)');
+    expect(importViewSource).toContain('previewLegacyClients(previewPayload)');
     expect(importViewSource).toContain('disabled={!fileText || loading}');
     expect(importViewSource).toContain('Importação real será habilitada na próxima etapa.');
     expect(importViewSource).not.toContain('Importar</Button>');
     expect(importViewSource).not.toContain('confirmImport');
+  });
+
+  it('adds temporary explicit plan mapping controls before preview', () => {
+    expect(importViewSource).toContain('legacyPlanCycles.map');
+    expect(importViewSource).toContain('Mapeamento de planos');
+    expect(importViewSource).toContain('aria-label={`Plano para ${item.label}`}');
+    expect(importViewSource).toContain('{ ...payload, planMapping }');
+    expect(importViewSource).toContain('setPreview(null)');
+    expect(stylesSource).toContain('.legacy-import-plan-mapping');
+    expect(stylesSource).toContain('.legacy-import-plan-row');
   });
 
   it('renders summary, filtering, table and read-only details', () => {

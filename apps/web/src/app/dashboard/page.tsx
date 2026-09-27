@@ -8,6 +8,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -946,16 +947,102 @@ const legacyPlanCycles = [
   { cycle: 'ANUAL', label: 'Anual', durationMonths: 12 },
 ] satisfies Array<{ cycle: LegacyImportPlanCycle; label: string; durationMonths: number }>;
 
+const legacyPlanCycleSet = new Set<LegacyImportPlanCycle>(
+  legacyPlanCycles.map((item) => item.cycle),
+);
+const legacyPlanMappingSessionKey = 'crm-novo:legacy-import-plan-mapping';
+
+function emptyLegacyCycleCounts() {
+  return legacyPlanCycles.reduce(
+    (counts, item) => ({ ...counts, [item.cycle]: 0 }),
+    {} as Record<LegacyImportPlanCycle, number>,
+  );
+}
+
+function normalizeLegacyPlanCycle(value: unknown) {
+  const cycle = typeof value === 'string' ? value.trim().toUpperCase() : '';
+
+  return legacyPlanCycleSet.has(cycle as LegacyImportPlanCycle)
+    ? (cycle as LegacyImportPlanCycle)
+    : null;
+}
+
+function countLegacyImportCycles(fileText: string) {
+  const counts = emptyLegacyCycleCounts();
+
+  if (!fileText.trim()) {
+    return counts;
+  }
+
+  try {
+    const payload = JSON.parse(fileText) as unknown;
+    const clients =
+      typeof payload === 'object' &&
+      payload !== null &&
+      !Array.isArray(payload) &&
+      Array.isArray((payload as { clients?: unknown }).clients)
+        ? (payload as { clients: unknown[] }).clients
+        : [];
+
+    for (const client of clients) {
+      if (typeof client !== 'object' || client === null || Array.isArray(client)) continue;
+
+      const cycle = normalizeLegacyPlanCycle((client as { type_cobranca?: unknown }).type_cobranca);
+      if (cycle) counts[cycle] += 1;
+    }
+  } catch {
+    return counts;
+  }
+
+  return counts;
+}
+
+function readLegacyPlanMappingSession() {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const stored = window.sessionStorage.getItem(legacyPlanMappingSessionKey);
+    if (!stored) return {};
+
+    const parsed = JSON.parse(stored) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return legacyPlanCycles.reduce((mapping, item) => {
+      const planId = (parsed as Record<string, unknown>)[item.cycle];
+      if (typeof planId === 'string' && planId.trim()) {
+        mapping[item.cycle] = planId.trim();
+      }
+
+      return mapping;
+    }, {} as LegacyImportPlanMapping);
+  } catch {
+    return {};
+  }
+}
+
 function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
   const [fileName, setFileName] = useState('');
   const [fileText, setFileText] = useState('');
-  const [planMapping, setPlanMapping] = useState<LegacyImportPlanMapping>({});
+  const [planMapping, setPlanMapping] = useState<LegacyImportPlanMapping>(
+    readLegacyPlanMappingSession,
+  );
   const [preview, setPreview] = useState<LegacyImportPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<LegacyImportClassification | 'all'>('all');
   const [selectedRow, setSelectedRow] = useState<LegacyImportPreviewRow | null>(null);
   const activePlans = plans.filter((plan) => plan.active);
+  const cycleCounts = useMemo(() => countLegacyImportCycles(fileText), [fileText]);
+  const fileHasClientCounts = Boolean(fileText.trim());
+  const usedCycles = legacyPlanCycles.filter((item) => cycleCounts[item.cycle] > 0);
+  const mappedUsedCycleCount = usedCycles.filter((item) => planMapping[item.cycle]).length;
+  const mappingCompletenessText = fileHasClientCounts
+    ? `${mappedUsedCycleCount} de ${usedCycles.length} ciclos utilizados configurados.`
+    : 'Carregue um JSON para ver os ciclos utilizados neste lote.';
 
   const filteredRows =
     preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
@@ -991,6 +1078,10 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
       return changed ? next : current;
     });
   }, [plans]);
+
+  useEffect(() => {
+    window.sessionStorage.setItem(legacyPlanMappingSessionKey, JSON.stringify(planMapping));
+  }, [planMapping]);
 
   function handlePlanMappingChange(cycle: LegacyImportPlanCycle, planId: string) {
     setPlanMapping((current) => {
@@ -1072,8 +1163,17 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
 
       <section className="legacy-import-plan-mapping" aria-labelledby="legacy-plan-mapping-title">
         <div>
-          <h2 id="legacy-plan-mapping-title">Mapeamento de planos</h2>
-          <p>Selecione o plano CRM correspondente a cada ciclo legado antes do preview.</p>
+          <h2 id="legacy-plan-mapping-title">Mapeamento de planos do lote</h2>
+          <p>
+            Escolha uma vez qual plano do CRM corresponde a cada ciclo do sistema legado. A seleção
+            será aplicada automaticamente a todos os clientes do arquivo com o mesmo tipo de
+            cobrança.
+          </p>
+        </div>
+
+        <div className="legacy-import-plan-status" aria-live="polite">
+          <strong>Mapeamento do lote</strong>
+          <span>{mappingCompletenessText}</span>
         </div>
 
         <div className="legacy-import-plan-grid">
@@ -1084,16 +1184,37 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
             const selectedPlanId = planMapping[item.cycle] ?? '';
             const hasSingleCandidate = candidates.length === 1;
             const hasNoCandidates = candidates.length === 0;
+            const cycleClientCount = cycleCounts[item.cycle];
+            const hasCycleClients = cycleClientCount > 0;
+            const cycleCountText = fileHasClientCounts
+              ? hasCycleClients
+                ? `${cycleClientCount} ${
+                    cycleClientCount === 1 ? 'cliente no arquivo' : 'clientes no arquivo'
+                  }`
+                : 'Nenhum cliente deste ciclo no arquivo.'
+              : 'Carregue um JSON para ver quantos clientes usam este ciclo.';
+            const isAutoSelected =
+              hasSingleCandidate && selectedPlanId === candidates[0]?.id && Boolean(selectedPlanId);
+            const scopeHint = !hasCycleClients
+              ? 'Nenhum cliente deste ciclo no arquivo.'
+              : !selectedPlanId
+                ? `${cycleClientCount} ${
+                    cycleClientCount === 1 ? 'cliente depende' : 'clientes dependem'
+                  } deste mapeamento.`
+                : isAutoSelected
+                  ? 'Selecionado automaticamente — único plano compatível.'
+                  : `Selecionado para todos os clientes ${item.label} deste arquivo.`;
 
             return (
               <label className="legacy-import-plan-row" key={item.cycle}>
                 <span>
                   <strong>{item.label}</strong>
                   <small>{formatPlanDuration(item.durationMonths)}</small>
+                  <small>{cycleCountText}</small>
                 </span>
                 <select
                   aria-describedby={`legacy-plan-${item.cycle}-hint`}
-                  aria-label={`Plano para ${item.label}`}
+                  aria-label={`Plano CRM para ciclo ${item.label}`}
                   value={selectedPlanId}
                   onChange={(event) => handlePlanMappingChange(item.cycle, event.target.value)}
                 >
@@ -1111,11 +1232,12 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
                 <small id={`legacy-plan-${item.cycle}-hint`}>
                   {hasNoCandidates
                     ? 'Nenhum plano ativo compatível.'
-                    : hasSingleCandidate
-                      ? 'Selecionado automaticamente.'
-                      : selectedPlanId
-                        ? 'Seleção manual.'
-                        : `Selecione o plano correspondente ao ciclo ${item.label}.`}
+                    : selectedPlanId || hasCycleClients
+                      ? scopeHint
+                      : `Selecione o plano correspondente ao ciclo ${item.label} se ele aparecer no lote.`}
+                  {selectedPlanId
+                    ? ' O valor do plano é apenas referência; o valor recorrente de cada cliente será preservado do arquivo legado.'
+                    : ''}
                 </small>
               </label>
             );

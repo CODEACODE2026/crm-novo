@@ -6578,6 +6578,22 @@ tbody tr:hover,
   font-size: 13px;
 }
 
+.legacy-import-plan-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  border: 1px solid rgb(20 184 166 / 35%);
+  border-radius: var(--radius-md);
+  background: rgb(20 184 166 / 10%);
+  padding: 10px 12px;
+}
+
+.legacy-import-plan-status span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .legacy-import-plan-grid {
   display: grid;
   gap: 10px;
@@ -6585,7 +6601,7 @@ tbody tr:hover,
 
 .legacy-import-plan-row {
   display: grid;
-  grid-template-columns: minmax(130px, 180px) minmax(220px, 1fr) minmax(150px, 220px);
+  grid-template-columns: minmax(130px, 180px) minmax(220px, 1fr) minmax(220px, 320px);
   gap: 12px;
   align-items: center;
   border: 1px solid var(--border);
@@ -6598,11 +6614,13 @@ tbody tr:hover,
 .legacy-import-plan-row > small {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .legacy-import-plan-row small {
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .legacy-import-plan-row select {

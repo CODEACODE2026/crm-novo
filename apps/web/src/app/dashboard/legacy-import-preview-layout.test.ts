@@ -33,12 +33,34 @@ describe('legacy import preview UI', () => {
 
   it('adds temporary explicit plan mapping controls before preview', () => {
     expect(importViewSource).toContain('legacyPlanCycles.map');
-    expect(importViewSource).toContain('Mapeamento de planos');
-    expect(importViewSource).toContain('aria-label={`Plano para ${item.label}`}');
+    expect(importViewSource).toContain('Mapeamento de planos do lote');
+    expect(importViewSource).toContain('aria-label={`Plano CRM para ciclo ${item.label}`}');
     expect(importViewSource).toContain('{ ...payload, planMapping }');
     expect(importViewSource).toContain('setPreview(null)');
     expect(stylesSource).toContain('.legacy-import-plan-mapping');
     expect(stylesSource).toContain('.legacy-import-plan-row');
+  });
+
+  it('makes plan mapping clearly batch-scoped with cycle counts and completeness', () => {
+    expect(importViewSource).toContain('countLegacyImportCycles(fileText)');
+    expect(importViewSource).toContain('Mapeamento do lote');
+    expect(importViewSource).toContain('ciclos utilizados configurados');
+    expect(importViewSource).toContain('Nenhum cliente deste ciclo no arquivo.');
+    expect(importViewSource).toContain('clientes dependem');
+    expect(importViewSource).toContain('Selecionado automaticamente — único plano compatível.');
+    expect(importViewSource).toContain('Selecionado para todos os clientes');
+    expect(importViewSource).toContain('será aplicada automaticamente a todos os clientes');
+    expect(stylesSource).toContain('.legacy-import-plan-status');
+  });
+
+  it('preserves client values and temporary browser mapping without making storage authoritative', () => {
+    expect(importViewSource).toContain('legacyPlanMappingSessionKey');
+    expect(importViewSource).toContain('window.sessionStorage.setItem');
+    expect(importViewSource).toContain(
+      'O valor do plano é apenas referência; o valor recorrente de cada cliente será preservado do arquivo legado.',
+    );
+    expect(importViewSource).toContain('setPreview(null)');
+    expect(importViewSource).toContain('setFileText(fileRead.text)');
   });
 
   it('renders summary, filtering, table and read-only details', () => {

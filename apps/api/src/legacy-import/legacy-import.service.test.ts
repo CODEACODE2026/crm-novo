@@ -498,6 +498,84 @@ describe('LegacyImportService', () => {
     expect(result.summary).toMatchObject({ conflict: 0, readyCreate: 5 });
   });
 
+  it('applies one cycle mapping to every client in a 100-row batch without per-client plan choice', async () => {
+    const { service } = createService();
+    const distribution = [
+      ['MENSAL', 70, 'plan-1'],
+      ['BIMESTRAL', 10, 'plan-2'],
+      ['TRIMESTRAL', 10, 'plan-3'],
+      ['SEMESTRAL', 5, 'plan-6'],
+      ['ANUAL', 5, 'plan-12'],
+    ] as const;
+    const clients = distribution.flatMap(([cycle, count], groupIndex) =>
+      Array.from({ length: count }, (_, index) => {
+        const absoluteIndex =
+          distribution
+            .slice(0, groupIndex)
+            .reduce((total, [, previousCount]) => total + previousCount, 0) + index;
+
+        return {
+          ...baseClient,
+          id: absoluteIndex + 1,
+          email: `cliente-${absoluteIndex}@exemplo.com`,
+          phone: `4499${String(absoluteIndex).padStart(7, '0')}`,
+          referencia: `cliente-${absoluteIndex}`,
+          type_cobranca: cycle,
+        };
+      }),
+    );
+
+    const result = await service.previewClients(envelope(clients));
+
+    expect(result.summary).toMatchObject({ readyCreate: 100, total: 100 });
+    for (const [cycle, count, planId] of distribution) {
+      const rows = result.rows.filter((row) => clients[row.index]?.type_cobranca === cycle);
+
+      expect(rows).toHaveLength(count);
+      expect(rows.every((row) => row.plan?.id === planId)).toBe(true);
+    }
+  });
+
+  it('keeps client recurring value from the legacy file instead of Plan defaultValue', async () => {
+    const { service } = createService({
+      plans: [
+        {
+          active: true,
+          defaultValue: '30.00',
+          durationMonths: 1,
+          id: 'plan-1',
+          name: 'Mensal',
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope(
+        [
+          {
+            ...baseClient,
+            id: 2352,
+            name: 'Edilson',
+            referencia: 'edilson7581',
+            type_cobranca: 'MENSAL',
+            value_mensalidade: '35.00',
+            vencimento: '2026-10-26',
+          },
+        ],
+        { MENSAL: 'plan-1' },
+      ),
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY_CREATE',
+      dueDate: '2026-10-26',
+      legacyClientId: '2352',
+      plan: { id: 'plan-1', name: 'Mensal' },
+      recurringValue: '35.00',
+      reference: 'edilson7581',
+    });
+  });
+
   it('allows partial mappings and blocks only rows whose cycle is not mapped', async () => {
     const { service } = createService();
 

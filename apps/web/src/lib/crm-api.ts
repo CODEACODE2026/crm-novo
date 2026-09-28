@@ -814,6 +814,25 @@ export interface LegacyImportResult {
   rows: LegacyImportResultRow[];
 }
 
+export interface LegacyPaymentImportResultRow {
+  legacyPaymentId: string | null;
+  legacyClientId: string | null;
+  result: 'IMPORTED' | 'SKIPPED' | 'FAILED';
+  financialTransactionId?: string;
+  code: string;
+  message: string;
+}
+
+export interface LegacyPaymentImportResult {
+  summary: {
+    requested: number;
+    imported: number;
+    skipped: number;
+    failed: number;
+  };
+  rows: LegacyPaymentImportResultRow[];
+}
+
 export interface ReceivableCyclePreview {
   allowed: boolean;
   status: {
@@ -1424,6 +1443,21 @@ export function previewLegacyPayments(payload: unknown) {
     : payload;
 
   return apiFetch<LegacyPaymentPreview>('/legacy-import/payments/preview', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function importLegacyPayments(payload: unknown) {
+  const body = Array.isArray(payload)
+    ? {
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: payload,
+      }
+    : payload;
+
+  return apiFetch<LegacyPaymentImportResult>('/legacy-import/payments/import', {
     method: 'POST',
     body: JSON.stringify(body),
   });

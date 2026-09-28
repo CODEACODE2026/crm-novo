@@ -21,7 +21,7 @@ describe('legacy import preview UI', () => {
     expect(dashboardSource).toContain("imports: 'Preview temporário da migração legado'");
   });
 
-  it('keeps IMPORT1.1 as preview only without a functional import action', () => {
+  it('keeps IMPORT1 client import isolated from financial import state', () => {
     expect(dashboardSource).toContain("from '../../lib/legacy-import-file'");
     expect(importViewSource).toContain('readLegacyImportJsonFile(file)');
     expect(importViewSource).toContain('previewLegacyClients(buildLegacyImportPayload())');
@@ -29,7 +29,7 @@ describe('legacy import preview UI', () => {
     expect(importViewSource).toContain(
       'Importação real limitada aos clientes prontos, sem efeitos financeiros.',
     );
-    expect(importViewSource).not.toContain('confirmImport');
+    expect(importViewSource).toContain('importConfirmOpen');
   });
 
   it('adds temporary explicit plan mapping controls before preview', () => {
@@ -96,16 +96,21 @@ describe('legacy import preview UI', () => {
     expect(stylesSource).toContain("content: 'Cliente';");
   });
 
-  it('adds a read-only financial preview tab without an import action', () => {
+  it('adds guarded financial import for ready paid history only', () => {
     expect(importViewSource).toContain('<LegacyFinancialImportPreviewView />');
     expect(importViewSource).toContain('previewLegacyPayments(buildLegacyPaymentPreviewPayload())');
+    expect(importViewSource).toContain('importLegacyPayments(buildLegacyPaymentPreviewPayload())');
+    expect(importViewSource).toContain('readyPaidHistoryCount === 0');
+    expect(importViewSource).toContain('Importar {readyPaidHistoryCount} pagamento histórico?');
+    expect(importViewSource).toContain(
+      'Não cria contas a receber, novas cobranças, PIX operacionais',
+    );
     expect(importViewSource).toContain('schemaVersion: 1');
     expect(importViewSource).toContain("source: 'legacy'");
     expect(importViewSource).toContain('Prontos histórico');
     expect(importViewSource).toContain('Cliente não importado');
     expect(importViewSource).toContain('legacyPaymentPageSize');
     expect(importViewSource).toContain('até 2.000 pagamentos por arquivo');
-    expect(importViewSource).not.toContain('importLegacyPayments');
     expect(stylesSource).toContain('.legacy-payment-table td:nth-child(8)::before');
   });
 });

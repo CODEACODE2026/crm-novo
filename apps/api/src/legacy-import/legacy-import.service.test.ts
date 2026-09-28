@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { LegacyImportService } from './legacy-import.service';
 
@@ -92,6 +93,7 @@ function createService(
 ) {
   let clientSequence = 0;
   let referenceSequence = 0;
+  let financialTransactionSequence = 0;
   const writes = {
     clientCreate: vi.fn((args: CreateArgs) =>
       Promise.resolve({ id: `client-created-${++clientSequence}`, ...args.data }),
@@ -107,8 +109,15 @@ function createService(
 
       return Promise.resolve({ id: `reference-created-${++referenceSequence}`, ...args.data });
     }),
-    financialTransactionCreate: vi.fn(),
-    legacyFinancialImportRecordCreate: vi.fn(),
+    financialTransactionCreate: vi.fn((args: CreateArgs) =>
+      Promise.resolve({
+        id: `financial-transaction-${++financialTransactionSequence}`,
+        ...args.data,
+      }),
+    ),
+    legacyFinancialImportRecordCreate: vi.fn((args: CreateArgs) =>
+      Promise.resolve({ id: 'legacy-financial-import-record-created', ...args.data }),
+    ),
     legacyImportRecordCreate: vi.fn((args: CreateArgs) =>
       Promise.resolve({ id: 'legacy-import-record-created', ...args.data }),
     ),
@@ -168,11 +177,26 @@ function createService(
       create: writes.clientCreate,
       findFirst: vi.fn(() => Promise.resolve(options.clientFindFirst ?? null)),
       findMany: vi.fn(() => Promise.resolve(options.clients ?? [])),
+      findUnique: vi.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          ((options.clients as Array<{ id: string }> | undefined) ?? []).find(
+            (client) => client.id === where.id,
+          ) ?? null,
+        ),
+      ),
       update: writes.clientUpdate,
     },
     clientReference: {
       create: writes.clientReferenceCreate,
-      findUnique: vi.fn(() => Promise.resolve(options.referenceFindUnique ?? null)),
+      findUnique: vi.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          options.referenceFindUnique ??
+            ((options.references as Array<{ id: string }> | undefined) ?? []).find(
+              (reference) => reference.id === where.id,
+            ) ??
+            null,
+        ),
+      ),
       findMany: vi.fn(() => Promise.resolve(options.references ?? [])),
       update: writes.clientReferenceUpdate,
     },
@@ -189,14 +213,44 @@ function createService(
     financialTransaction: {
       create: writes.financialTransactionCreate,
       findMany: vi.fn(() => Promise.resolve(options.financialTransactions ?? [])),
+      findUnique: vi.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          ((options.financialTransactions as Array<{ id: string }> | undefined) ?? []).find(
+            (transaction) => transaction.id === where.id,
+          ) ?? null,
+        ),
+      ),
     },
     legacyFinancialImportRecord: {
       create: writes.legacyFinancialImportRecordCreate,
+      findFirst: vi.fn(({ where }: { where: { legacyPaymentId: string; source: string } }) =>
+        Promise.resolve(
+          (
+            (options.financialImportRecords as
+              Array<{ legacyPaymentId: string; source: string }> | undefined) ?? []
+          ).find(
+            (record) =>
+              record.legacyPaymentId === where.legacyPaymentId && record.source === where.source,
+          ) ?? null,
+        ),
+      ),
       findMany: vi.fn(() => Promise.resolve(options.financialImportRecords ?? [])),
     },
     legacyImportRecord: {
       create: writes.legacyImportRecordCreate,
-      findFirst: vi.fn(() => Promise.resolve(options.importRecordFindFirst ?? null)),
+      findFirst: vi.fn(({ where }: { where: { legacyClientId: string; source: string } }) =>
+        Promise.resolve(
+          options.importRecordFindFirst ??
+            (
+              (options.importRecords as
+                Array<{ legacyClientId: string; source: string }> | undefined) ?? []
+            ).find(
+              (record) =>
+                record.legacyClientId === where.legacyClientId && record.source === where.source,
+            ) ??
+            null,
+        ),
+      ),
       findMany: vi.fn(() => Promise.resolve(options.importRecords ?? [])),
       update: writes.legacyImportRecordUpdate,
       upsert: writes.legacyImportRecordUpsert,
@@ -1926,5 +1980,355 @@ describe('LegacyImportService', () => {
     expect(missing.rows[0]?.errors).toContain('CATEGORY_NOT_FOUND');
     expect(inactive.rows[0]).toMatchObject({ classification: 'CONFLICT' });
     expect(inactive.rows[0]?.errors).toContain('CATEGORY_INACTIVE');
+  });
+
+  it('imports only READY_PAID_HISTORY payments with one atomic transaction per payment', async () => {
+    const { prisma, service, writes } = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+
+    const result = await service.importPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment, { ...basePayment, id: 11671, client_id: 9999 }],
+    });
+
+    expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 2, skipped: 1 });
+    expect(result.rows).toMatchObject([
+      {
+        code: 'IMPORTED',
+        financialTransactionId: 'financial-transaction-1',
+        legacyClientId: '2352',
+        legacyPaymentId: '11670',
+        result: 'IMPORTED',
+      },
+      {
+        code: 'CLIENT_NOT_IMPORTED',
+        legacyClientId: '9999',
+        legacyPaymentId: '11671',
+        result: 'SKIPPED',
+      },
+    ]);
+    expect(
+      prisma.$transaction.mock.calls.filter(([input]) => typeof input === 'function'),
+    ).toHaveLength(1);
+    expect(writes.financialTransactionCreate).toHaveBeenCalledTimes(1);
+    expect(writes.financialTransactionCreate).toHaveBeenCalledWith({
+      data: {
+        amount: new Prisma.Decimal('35.00'),
+        categoryId: 'category-history',
+        clientId: 'client-edilson',
+        clientReferenceId: 'reference-edilson',
+        description: 'Receita histórica importada',
+        notes: null,
+        origin: 'LEGACY_IMPORT',
+        paymentMethod: 'PIX',
+        receivableId: null,
+        transactionDate: new Date('2026-09-26T00:00:00.000Z'),
+        type: 'ENTRADA',
+      },
+    });
+    expect(writes.legacyFinancialImportRecordCreate.mock.calls[0]?.[0].data).toMatchObject({
+      crmClientId: 'client-edilson',
+      crmClientReferenceId: 'reference-edilson',
+      errorCode: null,
+      financialTransactionId: 'financial-transaction-1',
+      legacyClientId: '2352',
+      legacyPaymentId: '11670',
+      receivableId: null,
+      source: 'legacy',
+      status: 'IMPORTED',
+    });
+    expect(writes.legacyFinancialImportRecordCreate.mock.calls[0]?.[0].data.payloadHash).toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+    expect(writes.receivableCreate).not.toHaveBeenCalled();
+    expect(writes.paymentIntentCreate).not.toHaveBeenCalled();
+    expect(writes.messageDispatchCreate).not.toHaveBeenCalled();
+    expect(writes.clientEventCreate).not.toHaveBeenCalled();
+    expect(writes.statusHistoryCreate).not.toHaveBeenCalled();
+    expect(writes.clientUpdate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not import pending, expense, invalid, conflict or unchanged payments', async () => {
+    const mappedOptions = {
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    };
+    const preview = await createService(mappedOptions).service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+    const { service, writes } = createService({
+      ...mappedOptions,
+      financialImportRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          financialTransactionId: 'transaction-1',
+          legacyClientId: '2352',
+          legacyPaymentId: '11670',
+          payloadHash: preview.rows[0]?.payloadHash,
+          receivableId: null,
+          status: 'IMPORTED',
+        },
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          financialTransactionId: 'missing-transaction',
+          legacyClientId: '2352',
+          legacyPaymentId: '11674',
+          payloadHash: '0'.repeat(64),
+          receivableId: null,
+          status: 'IMPORTED',
+        },
+      ],
+      financialTransactions: [
+        { clientId: 'client-edilson', clientReferenceId: 'reference-edilson', id: 'transaction-1' },
+      ],
+    });
+
+    const result = await service.importPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        basePayment,
+        { ...basePayment, id: 11671, status: 'PENDENTE' },
+        { ...basePayment, id: 11672, tipo_transacao: 'DESPESA' },
+        { ...basePayment, id: 11673, valor_debito: '0' },
+        { ...basePayment, id: 11674 },
+        { ...basePayment, id: 11675, client_id: 9999 },
+      ],
+    });
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 6, skipped: 6 });
+    expect(result.rows.map((row) => row.code)).toEqual([
+      'UNCHANGED',
+      'PENDING_NOT_SUPPORTED',
+      'UNSUPPORTED',
+      'INVALID',
+      'CONFLICT',
+      'CLIENT_NOT_IMPORTED',
+    ]);
+    expect(writes.financialTransactionCreate).not.toHaveBeenCalled();
+    expect(writes.legacyFinancialImportRecordCreate).not.toHaveBeenCalled();
+    expect(writes.receivableCreate).not.toHaveBeenCalled();
+    expect(writes.paymentIntentCreate).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the payment transaction when idempotency unique constraint wins a race', async () => {
+    const { service, writes } = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+    writes.legacyFinancialImportRecordCreate.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+
+    const result = await service.importPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({
+      code: 'UNCHANGED',
+      legacyPaymentId: '11670',
+      result: 'SKIPPED',
+    });
+    expect(writes.financialTransactionCreate).toHaveBeenCalledTimes(1);
+    expect(writes.legacyFinancialImportRecordCreate).toHaveBeenCalledTimes(1);
+    expect(writes.receivableCreate).not.toHaveBeenCalled();
+    expect(writes.paymentIntentCreate).not.toHaveBeenCalled();
+  });
+
+  it('revalidates category and client ownership inside the payment import transaction', async () => {
+    const inactiveCategoryRace = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+    inactiveCategoryRace.prisma.financialCategory.findMany
+      .mockResolvedValueOnce([
+        { id: 'category-history', name: 'Receita histórica', type: 'ENTRADA', active: true },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'category-history', name: 'Receita histórica', type: 'ENTRADA', active: false },
+      ]);
+
+    const categoryResult = await inactiveCategoryRace.service.importPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(categoryResult.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(categoryResult.rows[0]).toMatchObject({
+      code: 'CATEGORY_CHANGED',
+      legacyPaymentId: '11670',
+      result: 'SKIPPED',
+    });
+    expect(inactiveCategoryRace.writes.financialTransactionCreate).not.toHaveBeenCalled();
+    expect(inactiveCategoryRace.writes.legacyFinancialImportRecordCreate).not.toHaveBeenCalled();
+
+    const clientRace = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+    clientRace.prisma.clientReference.findUnique.mockResolvedValueOnce({
+      clientId: 'other-client',
+      id: 'reference-edilson',
+    });
+
+    const clientResult = await clientRace.service.importPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(clientResult.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(clientResult.rows[0]).toMatchObject({
+      code: 'ORPHAN_LEGACY_CLIENT_MAPPING',
+      legacyPaymentId: '11670',
+      result: 'SKIPPED',
+    });
+    expect(clientRace.writes.financialTransactionCreate).not.toHaveBeenCalled();
+    expect(clientRace.writes.legacyFinancialImportRecordCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps partial payment batches moving for isolated business failures', async () => {
+    const { service, writes } = createService({
+      clients: [
+        { id: 'client-1', name: 'Cliente 1' },
+        { id: 'client-2', name: 'Cliente 2' },
+        { id: 'client-3', name: 'Cliente 3' },
+      ],
+      importRecords: [
+        {
+          crmClientId: 'client-1',
+          crmClientReferenceId: 'reference-1',
+          legacyClientId: '1',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+        {
+          crmClientId: 'client-2',
+          crmClientReferenceId: 'reference-2',
+          legacyClientId: '2',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+        {
+          crmClientId: 'client-3',
+          crmClientReferenceId: 'reference-3',
+          legacyClientId: '3',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-1', clientId: 'client-1', reference: 'cliente1' },
+        { id: 'reference-2', clientId: 'client-2', reference: 'cliente2' },
+        { id: 'reference-3', clientId: 'client-3', reference: 'cliente3' },
+      ],
+    });
+
+    const result = await service.importPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        { ...basePayment, id: 1, client_id: 1 },
+        { ...basePayment, id: 2, client_id: 2, valor_debito: '0' },
+        { ...basePayment, id: 3, client_id: 3 },
+      ],
+    });
+
+    expect(result.summary).toEqual({ failed: 0, imported: 2, requested: 3, skipped: 1 });
+    expect(result.rows.map((row) => row.result)).toEqual(['IMPORTED', 'SKIPPED', 'IMPORTED']);
+    expect(writes.financialTransactionCreate).toHaveBeenCalledTimes(2);
+    expect(writes.legacyFinancialImportRecordCreate).toHaveBeenCalledTimes(2);
+    expect(writes.receivableCreate).not.toHaveBeenCalled();
+  });
+
+  it('enforces a 2000 payments limit for the write endpoint', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.importPayments({
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: Array.from({ length: 2_001 }, (_, index) => ({
+          ...basePayment,
+          id: index + 1,
+          client_id: index + 1,
+        })),
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

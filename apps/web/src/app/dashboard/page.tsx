@@ -163,6 +163,7 @@ import {
   payReceivable,
   payReceivables,
   importLegacyClients,
+  importLegacyPayments,
   previewLegacyClients,
   previewLegacyPayments,
   previewDeleteClient,
@@ -1601,10 +1602,18 @@ function LegacyFinancialImportPreviewView() {
   const [fileText, setFileText] = useState('');
   const [preview, setPreview] = useState<LegacyPaymentPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<LegacyPaymentPreviewClassification | 'all'>('all');
   const [page, setPage] = useState(1);
   const [selectedRow, setSelectedRow] = useState<LegacyPaymentPreviewRow | null>(null);
+  const [confirmImport, setConfirmImport] = useState(false);
+  const [importResult, setImportResult] = useState<Awaited<
+    ReturnType<typeof importLegacyPayments>
+  > | null>(null);
+  const importActionRef = useRef(false);
+  const readyPaidHistoryCount = preview?.summary.readyPaidHistory ?? 0;
+  const importBatchTooLarge = (preview?.summary.total ?? 0) > 2_000;
 
   const filteredRows =
     preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
@@ -1622,6 +1631,8 @@ function LegacyFinancialImportPreviewView() {
   async function handleFileChange(file: File | undefined) {
     setPreview(null);
     setSelectedRow(null);
+    setImportResult(null);
+    setConfirmImport(false);
     setError('');
     setFilter('all');
     setPage(1);
@@ -1666,11 +1677,36 @@ function LegacyFinancialImportPreviewView() {
     try {
       const result = await previewLegacyPayments(buildLegacyPaymentPreviewPayload());
       setPreview(result);
+      setImportResult(null);
       setFilter('all');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível validar o financeiro.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runImportReadyPaidHistory() {
+    if (importActionRef.current || !preview || readyPaidHistoryCount === 0 || importBatchTooLarge) {
+      return;
+    }
+
+    importActionRef.current = true;
+    setImporting(true);
+    setError('');
+
+    try {
+      const result = await importLegacyPayments(buildLegacyPaymentPreviewPayload());
+      setImportResult(result);
+      const nextPreview = await previewLegacyPayments(buildLegacyPaymentPreviewPayload());
+      setPreview(nextPreview);
+      setFilter('all');
+      setConfirmImport(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível importar o histórico.');
+    } finally {
+      setImporting(false);
+      importActionRef.current = false;
     }
   }
 
@@ -1680,21 +1716,50 @@ function LegacyFinancialImportPreviewView() {
         eyebrow="Legacy Import"
         icon={Receipt}
         title="Importação financeira"
-        subtitle="IMPORT2A.1 preview read-only"
+        subtitle="IMPORT2A.2 histórico pago"
         actions={
-          <Button
-            disabled={!fileText || loading}
-            icon={RefreshCw}
-            loading={loading}
-            variant="secondary"
-            onClick={() => void runPreview()}
-          >
-            Validar
-          </Button>
+          <>
+            <Button
+              disabled={!fileText || loading || importing}
+              icon={RefreshCw}
+              loading={loading}
+              variant="secondary"
+              onClick={() => void runPreview()}
+            >
+              Validar
+            </Button>
+            <Button
+              disabled={
+                !preview ||
+                readyPaidHistoryCount === 0 ||
+                importBatchTooLarge ||
+                loading ||
+                importing
+              }
+              icon={Upload}
+              loading={importing}
+              variant="primary"
+              onClick={() => setConfirmImport(true)}
+            >
+              Importar prontos
+            </Button>
+          </>
         }
       />
 
       {error ? <div className="notice danger">{error}</div> : null}
+      {importResult ? (
+        <div className="notice success">
+          Importados: {importResult.summary.imported} | Ignorados: {importResult.summary.skipped} |
+          Falhas: {importResult.summary.failed}
+        </div>
+      ) : null}
+      {importBatchTooLarge ? (
+        <div className="notice warning">
+          Importação real limitada a 2.000 pagamentos por arquivo. Divida o JSON em lotes para
+          importar os prontos.
+        </div>
+      ) : null}
 
       <div className="legacy-import-upload">
         <label className="field">
@@ -1809,6 +1874,49 @@ function LegacyFinancialImportPreviewView() {
             }}
           />
         </>
+      ) : null}
+
+      {confirmImport ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal legacy-import-confirm-modal"
+            aria-labelledby="legacy-payment-import-title"
+          >
+            <header className="modal-header">
+              <div>
+                <h2 id="legacy-payment-import-title">
+                  Importar {readyPaidHistoryCount} pagamento histórico?
+                </h2>
+                <p>Esta etapa registra somente pagamentos históricos já realizados.</p>
+              </div>
+              <IconButton icon={X} label="Fechar" onClick={() => setConfirmImport(false)} />
+            </header>
+            <div className="legacy-import-confirm-grid">
+              <StatCard label="Pagamentos históricos" value={readyPaidHistoryCount} />
+              <StatCard label="FinancialTransactions" value={readyPaidHistoryCount} />
+              <StatCard label="Receivables" value={0} />
+              <StatCard label="Cobranças" value={0} />
+              <StatCard label="PIX operacionais" value={0} />
+            </div>
+            <div className="notice warning">
+              Não cria contas a receber, novas cobranças, PIX operacionais, mensagens ou eventos de
+              cliente.
+            </div>
+            <footer className="modal-actions">
+              <Button variant="secondary" onClick={() => setConfirmImport(false)}>
+                Cancelar
+              </Button>
+              <Button
+                disabled={importing}
+                icon={Upload}
+                loading={importing}
+                onClick={() => void runImportReadyPaidHistory()}
+              >
+                Confirmar importação
+              </Button>
+            </footer>
+          </section>
+        </div>
       ) : null}
 
       {selectedRow ? (

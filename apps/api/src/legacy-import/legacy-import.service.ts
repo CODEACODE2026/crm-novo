@@ -11,6 +11,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 
 const maxClientsPerPreview = 10_000;
 const maxPaymentsPerPreview = 10_000;
+const maxPaymentsPerImport = 2_000;
 const maxUnsignedBigInt = 18_446_744_073_709_551_615n;
 const source = 'legacy';
 const orphanLegacyMappingMessage =
@@ -55,6 +56,7 @@ type LegacyPaymentPreviewClassification =
   | 'UNSUPPORTED'
   | 'CONFLICT'
   | 'INVALID';
+type LegacyPaymentImportResult = 'IMPORTED' | 'SKIPPED' | 'FAILED';
 
 type CandidateMatch = {
   field: 'reference' | 'phone' | 'email' | 'name';
@@ -128,6 +130,33 @@ type LegacyImportResultRow = {
   legacyClientId: string | null;
   message: string;
   result: 'IMPORTED' | 'SKIPPED' | 'FAILED';
+};
+type LegacyPaymentImportResultRow = {
+  code: string;
+  financialTransactionId?: string;
+  legacyClientId: string | null;
+  legacyPaymentId: string | null;
+  message: string;
+  result: LegacyPaymentImportResult;
+};
+type LegacyPaymentPreviewRow = {
+  amount: string | null;
+  category: { id: string; name: string; type: string } | null;
+  classification: LegacyPaymentPreviewClassification;
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  dataCriado: string | null;
+  dataPagamento: string | null;
+  errors: string[];
+  index: number;
+  legacyClientId: string | null;
+  legacyPaymentId: string | null;
+  observation: string | null;
+  paymentMethod: FinancialPaymentMethod | null;
+  payloadHash: string | null;
+  receivableId: null;
+  transactionDate: string | null;
+  warnings: string[];
 };
 type NormalizedLegacyPayment = {
   amount: string | null;
@@ -297,7 +326,41 @@ export class LegacyImportService {
   }
 
   async previewPayments(payload: unknown) {
-    const envelope = this.parsePaymentsEnvelope(payload);
+    return this.buildPaymentPreview(payload, maxPaymentsPerPreview);
+  }
+
+  async importPayments(payload: unknown) {
+    const preview = await this.buildPaymentPreview(payload, maxPaymentsPerImport);
+    const rows: LegacyPaymentImportResultRow[] = [];
+
+    for (const row of preview.rows) {
+      if (row.classification === 'READY_PAID_HISTORY') {
+        rows.push(await this.importReadyPaidHistoryRow(row));
+        continue;
+      }
+
+      rows.push({
+        code: row.classification,
+        legacyClientId: row.legacyClientId,
+        legacyPaymentId: row.legacyPaymentId,
+        message: 'Pagamento nao elegivel para importacao historica nesta fase.',
+        result: 'SKIPPED',
+      });
+    }
+
+    return {
+      summary: {
+        requested: rows.length,
+        imported: rows.filter((row) => row.result === 'IMPORTED').length,
+        skipped: rows.filter((row) => row.result === 'SKIPPED').length,
+        failed: rows.filter((row) => row.result === 'FAILED').length,
+      },
+      rows,
+    };
+  }
+
+  private async buildPaymentPreview(payload: unknown, maxPayments: number) {
+    const envelope = this.parsePaymentsEnvelope(payload, maxPayments);
     const normalizedRows = envelope.payments.map((payment, index) => ({
       errors: [] as string[],
       index,
@@ -432,7 +495,7 @@ export class LegacyImportService {
     };
   }
 
-  private parsePaymentsEnvelope(payload: unknown) {
+  private parsePaymentsEnvelope(payload: unknown, maxPayments: number) {
     if (!this.isRecord(payload)) {
       throw new BadRequestException('INVALID_JSON_ENVELOPE');
     }
@@ -449,7 +512,7 @@ export class LegacyImportService {
       throw new BadRequestException('INVALID_PAYMENTS_ARRAY');
     }
 
-    if (payload.payments.length > maxPaymentsPerPreview) {
+    if (payload.payments.length > maxPayments) {
       throw new BadRequestException('PAYMENTS_LIMIT_EXCEEDED');
     }
 
@@ -1230,6 +1293,230 @@ export class LegacyImportService {
 
       throw error;
     }
+  }
+
+  private async importReadyPaidHistoryRow(
+    row: LegacyPaymentPreviewRow,
+  ): Promise<LegacyPaymentImportResultRow> {
+    const required = this.importablePaymentPreviewRow(row);
+
+    if (!required) {
+      return {
+        code: 'INVALID_IMPORT_ROW',
+        legacyClientId: row.legacyClientId,
+        legacyPaymentId: row.legacyPaymentId,
+        message: 'Pagamento nao possui dados validados suficientes para importacao historica.',
+        result: 'SKIPPED',
+      };
+    }
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const currentState = await this.revalidatePaymentImportInsideTransaction(tx, required);
+        if (currentState) {
+          return currentState;
+        }
+
+        const financialTransaction = await tx.financialTransaction.create({
+          data: {
+            amount: required.amount,
+            categoryId: required.categoryId,
+            clientId: required.crmClientId,
+            clientReferenceId: required.crmClientReferenceId,
+            description: 'Receita histórica importada',
+            notes: required.observation,
+            origin: 'LEGACY_IMPORT',
+            paymentMethod: required.paymentMethod,
+            receivableId: null,
+            transactionDate: required.transactionDate,
+            type: 'ENTRADA',
+          },
+        });
+
+        await tx.legacyFinancialImportRecord.create({
+          data: {
+            crmClientId: required.crmClientId,
+            crmClientReferenceId: required.crmClientReferenceId,
+            errorCode: null,
+            financialTransactionId: financialTransaction.id,
+            legacyClientId: required.legacyClientId,
+            legacyPaymentId: required.legacyPaymentId,
+            payloadHash: required.payloadHash,
+            receivableId: null,
+            source,
+            status: 'IMPORTED',
+          },
+        });
+
+        return {
+          code: 'IMPORTED',
+          financialTransactionId: financialTransaction.id,
+          legacyClientId: required.legacyClientId,
+          legacyPaymentId: required.legacyPaymentId,
+          message: 'Pagamento historico importado.',
+          result: 'IMPORTED' as const,
+        };
+      });
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        return {
+          code: 'UNCHANGED',
+          legacyClientId: required.legacyClientId,
+          legacyPaymentId: required.legacyPaymentId,
+          message: 'Pagamento legado ja foi importado por outra execucao.',
+          result: 'SKIPPED',
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  private async revalidatePaymentImportInsideTransaction(
+    tx: Prisma.TransactionClient,
+    required: NonNullable<ReturnType<LegacyImportService['importablePaymentPreviewRow']>>,
+  ): Promise<LegacyPaymentImportResultRow | null> {
+    const [categories, clientMapping, existingFinancialRecord] = await Promise.all([
+      tx.financialCategory.findMany({
+        where: {
+          name: { equals: 'Receita histórica', mode: 'insensitive' },
+          type: 'ENTRADA',
+        },
+      }),
+      tx.legacyImportRecord.findFirst({
+        where: { legacyClientId: required.legacyClientId, source },
+      }),
+      tx.legacyFinancialImportRecord.findFirst({
+        where: { legacyPaymentId: required.legacyPaymentId, source },
+      }),
+    ]);
+
+    const category = categories.find((item) => item.active) ?? null;
+
+    if (categories.length !== 1 || !category || category.id !== required.categoryId) {
+      return {
+        code: 'CATEGORY_CHANGED',
+        legacyClientId: required.legacyClientId,
+        legacyPaymentId: required.legacyPaymentId,
+        message: 'Categoria Receita histórica nao esta valida para importacao.',
+        result: 'SKIPPED',
+      };
+    }
+
+    if (
+      !clientMapping ||
+      clientMapping.status !== 'IMPORTED' ||
+      clientMapping.crmClientId !== required.crmClientId ||
+      clientMapping.crmClientReferenceId !== required.crmClientReferenceId
+    ) {
+      return {
+        code: 'ORPHAN_LEGACY_CLIENT_MAPPING',
+        legacyClientId: required.legacyClientId,
+        legacyPaymentId: required.legacyPaymentId,
+        message: 'Mapeamento do cliente legado mudou antes da importacao.',
+        result: 'SKIPPED',
+      };
+    }
+
+    const [client, reference] = await Promise.all([
+      tx.client.findUnique({ where: { id: required.crmClientId }, select: { id: true } }),
+      tx.clientReference.findUnique({
+        where: { id: required.crmClientReferenceId },
+        select: { clientId: true, id: true },
+      }),
+    ]);
+
+    if (!client || !reference || reference.clientId !== required.crmClientId) {
+      return {
+        code: 'ORPHAN_LEGACY_CLIENT_MAPPING',
+        legacyClientId: required.legacyClientId,
+        legacyPaymentId: required.legacyPaymentId,
+        message: 'Cliente ou referencia mudou antes da importacao.',
+        result: 'SKIPPED',
+      };
+    }
+
+    if (!existingFinancialRecord) {
+      return null;
+    }
+
+    if (
+      !existingFinancialRecord.crmClientId ||
+      !existingFinancialRecord.crmClientReferenceId ||
+      !existingFinancialRecord.financialTransactionId
+    ) {
+      return {
+        code: 'ORPHAN_FINANCIAL_MAPPING',
+        legacyClientId: required.legacyClientId,
+        legacyPaymentId: required.legacyPaymentId,
+        message: 'Mapeamento financeiro legado esta incompleto.',
+        result: 'SKIPPED',
+      };
+    }
+
+    const transaction = await tx.financialTransaction.findUnique({
+      where: { id: existingFinancialRecord.financialTransactionId },
+      select: { clientId: true, clientReferenceId: true, id: true },
+    });
+
+    if (
+      !transaction ||
+      transaction.clientId !== existingFinancialRecord.crmClientId ||
+      transaction.clientReferenceId !== existingFinancialRecord.crmClientReferenceId
+    ) {
+      return {
+        code: 'ORPHAN_FINANCIAL_MAPPING',
+        legacyClientId: required.legacyClientId,
+        legacyPaymentId: required.legacyPaymentId,
+        message: 'Mapeamento financeiro legado esta orfao ou inconsistente.',
+        result: 'SKIPPED',
+      };
+    }
+
+    return {
+      code:
+        existingFinancialRecord.payloadHash === required.payloadHash
+          ? 'UNCHANGED'
+          : 'UPDATE_NOT_SUPPORTED',
+      financialTransactionId: existingFinancialRecord.financialTransactionId,
+      legacyClientId: required.legacyClientId,
+      legacyPaymentId: required.legacyPaymentId,
+      message:
+        existingFinancialRecord.payloadHash === required.payloadHash
+          ? 'Pagamento legado ja foi importado sem alteracoes.'
+          : 'Pagamento legado ja possui importacao previa com payload diferente.',
+      result: 'SKIPPED',
+    };
+  }
+
+  private importablePaymentPreviewRow(row: LegacyPaymentPreviewRow) {
+    if (
+      row.classification !== 'READY_PAID_HISTORY' ||
+      !row.amount ||
+      !row.category?.id ||
+      !row.crmClientId ||
+      !row.crmClientReferenceId ||
+      !row.legacyClientId ||
+      !row.legacyPaymentId ||
+      !row.paymentMethod ||
+      !row.payloadHash ||
+      !row.transactionDate
+    ) {
+      return null;
+    }
+
+    return {
+      amount: new Prisma.Decimal(row.amount),
+      categoryId: row.category.id,
+      crmClientId: row.crmClientId,
+      crmClientReferenceId: row.crmClientReferenceId,
+      legacyClientId: row.legacyClientId,
+      legacyPaymentId: row.legacyPaymentId,
+      observation: row.observation,
+      paymentMethod: row.paymentMethod,
+      payloadHash: row.payloadHash,
+      transactionDate: parseBusinessDate(row.transactionDate),
+    };
   }
 
   private importableNormalizedClient(normalized: NormalizedLegacyClient) {

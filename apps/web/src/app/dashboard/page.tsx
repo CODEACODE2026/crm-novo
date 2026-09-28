@@ -1008,6 +1008,7 @@ const legacyCutoverFilters = [
 ] satisfies Array<{ id: LegacyCutoverPreviewClassification | 'all' | 'warnings'; label: string }>;
 
 const legacyPaymentPageSize = 100;
+const legacyCutoverActivationLimit = 500;
 
 const legacyPlanCycles = [
   { cycle: 'MENSAL', label: 'Mensal', durationMonths: 1 },
@@ -1150,6 +1151,9 @@ function LegacyCutoverPreviewView() {
     'all',
   );
   const [page, setPage] = useState(1);
+  const [selectedReadyReferenceIds, setSelectedReadyReferenceIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [selectedRow, setSelectedRow] = useState<LegacyCutoverPreviewRow | null>(null);
 
   const filteredRows =
@@ -1171,10 +1175,17 @@ function LegacyCutoverPreviewView() {
     preview?.rows
       .filter((row) => row.classification === 'READY' && row.crmClientReferenceId)
       .map((row) => row.crmClientReferenceId as string) ?? [];
+  const readyReferenceIdSet = useMemo(() => new Set(readyReferenceIds), [readyReferenceIds]);
+  const selectedReadyIds = useMemo(
+    () => [...selectedReadyReferenceIds].filter((id) => readyReferenceIdSet.has(id)),
+    [readyReferenceIdSet, selectedReadyReferenceIds],
+  );
+  const selectedReadyCount = selectedReadyIds.length;
+  const selectedReadyOverLimit = selectedReadyCount > legacyCutoverActivationLimit;
   const canActivate = Boolean(
     preview &&
-    preview.summary.ready > 0 &&
-    preview.summary.ready <= 500 &&
+    selectedReadyCount > 0 &&
+    !selectedReadyOverLimit &&
     schedulersDisabled &&
     !loading &&
     !activating,
@@ -1188,6 +1199,7 @@ function LegacyCutoverPreviewView() {
     setLoading(true);
     setError('');
     setSelectedRow(null);
+    setSelectedReadyReferenceIds(new Set());
 
     try {
       const result = await previewLegacyCutover();
@@ -1202,17 +1214,18 @@ function LegacyCutoverPreviewView() {
   }
 
   async function runActivate() {
-    if (activatingRef.current) return;
+    if (activatingRef.current || !canActivate) return;
     activatingRef.current = true;
     setActivating(true);
     setError('');
 
     try {
-      const result = await activateLegacyCutover(readyReferenceIds);
+      const result = await activateLegacyCutover(selectedReadyIds);
       setActivateResult(result);
       setActivateConfirmOpen(false);
       const nextPreview = await previewLegacyCutover();
       setPreview(nextPreview);
+      setSelectedReadyReferenceIds(new Set());
       setFilter('all');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível ativar o cutover.');
@@ -1220,6 +1233,28 @@ function LegacyCutoverPreviewView() {
       activatingRef.current = false;
       setActivating(false);
     }
+  }
+
+  function toggleReadySelection(crmClientReferenceId: string, selected: boolean) {
+    setSelectedReadyReferenceIds((current) => {
+      const next = new Set(current);
+
+      if (selected) {
+        next.add(crmClientReferenceId);
+      } else {
+        next.delete(crmClientReferenceId);
+      }
+
+      return next;
+    });
+  }
+
+  function selectAllReady() {
+    setSelectedReadyReferenceIds(new Set(readyReferenceIds));
+  }
+
+  function clearReadySelection() {
+    setSelectedReadyReferenceIds(new Set());
   }
 
   return (
@@ -1248,6 +1283,7 @@ function LegacyCutoverPreviewView() {
                 onClick={() => setActivateConfirmOpen(true)}
               >
                 Criar Receivables de renovação
+                {selectedReadyCount > 0 ? ` (${selectedReadyCount})` : ''}
               </Button>
             ) : null}
           </>
@@ -1267,9 +1303,10 @@ function LegacyCutoverPreviewView() {
           {preview.metadata.recoverySchedulerStatus === 'DISABLED' ? 'Desabilitado' : 'Habilitado'}
         </div>
       ) : null}
-      {preview && preview.summary.ready > 500 ? (
+      {selectedReadyOverLimit ? (
         <div className="notice danger">
-          Limite de ativação: no máximo 500 referências prontas por execução.
+          Limite de ativação: selecione no máximo {legacyCutoverActivationLimit} referências por
+          execução.
         </div>
       ) : null}
       {activateResult ? (
@@ -1315,10 +1352,37 @@ function LegacyCutoverPreviewView() {
             ))}
           </div>
 
+          <div className="legacy-import-selection-bar">
+            <strong>
+              Selecionadas: {selectedReadyCount} de {readyReferenceIds.length} prontas
+            </strong>
+            <div>
+              <Button
+                disabled={!readyReferenceIds.length || loading || activating}
+                icon={ListChecks}
+                size="sm"
+                variant="secondary"
+                onClick={selectAllReady}
+              >
+                Selecionar todas as prontas
+              </Button>
+              <Button
+                disabled={!selectedReadyCount || loading || activating}
+                icon={XCircle}
+                size="sm"
+                variant="ghost"
+                onClick={clearReadySelection}
+              >
+                Limpar seleção
+              </Button>
+            </div>
+          </div>
+
           <div className="legacy-import-table-wrap">
             <table className="legacy-import-table legacy-cutover-table">
               <thead>
                 <tr>
+                  <th>Selecionar</th>
                   <th>Cliente</th>
                   <th>Referência</th>
                   <th>Plano</th>
@@ -1331,38 +1395,56 @@ function LegacyCutoverPreviewView() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row) => (
-                  <tr key={`${row.legacyClientId}:${row.crmClientReferenceId ?? 'missing'}`}>
-                    <td>
-                      <strong>{row.clientName ?? '-'}</strong>
-                      <small>Legado {row.legacyClientId}</small>
-                    </td>
-                    <td>{row.reference ?? '-'}</td>
-                    <td>{row.planName ?? '-'}</td>
-                    <td>{row.amount ? formatCurrency(row.amount) : '-'}</td>
-                    <td>{row.dueDate ? formatDate(row.dueDate) : '-'}</td>
-                    <td>{row.billingNoticeDays ?? '-'}</td>
-                    <td>
-                      {row.scheduledForEstimated ? formatDateTime(row.scheduledForEstimated) : '-'}
-                    </td>
-                    <td>
-                      <span
-                        className={`legacy-import-badge tone-${legacyCutoverClassificationTone[row.classification]}`}
-                      >
-                        {legacyCutoverClassificationLabels[row.classification]}
-                      </span>
-                      {row.warnings.length ? <small>{row.warnings.length} avisos</small> : null}
-                    </td>
-                    <td>
-                      <IconButton
-                        icon={Eye}
-                        label="Ver detalhes"
-                        size="sm"
-                        onClick={() => setSelectedRow(row)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                {visibleRows.map((row) => {
+                  const selectable = row.classification === 'READY' && row.crmClientReferenceId;
+                  const selectionKey = row.crmClientReferenceId ?? '';
+
+                  return (
+                    <tr key={`${row.legacyClientId}:${row.crmClientReferenceId ?? 'missing'}`}>
+                      <td>
+                        <input
+                          aria-label={`Selecionar referência ${row.reference ?? row.legacyClientId}`}
+                          checked={selectable ? selectedReadyReferenceIds.has(selectionKey) : false}
+                          disabled={!selectable || loading || activating}
+                          type="checkbox"
+                          onChange={(event) =>
+                            toggleReadySelection(selectionKey, event.currentTarget.checked)
+                          }
+                        />
+                      </td>
+                      <td>
+                        <strong>{row.clientName ?? '-'}</strong>
+                        <small>Legado {row.legacyClientId}</small>
+                      </td>
+                      <td>{row.reference ?? '-'}</td>
+                      <td>{row.planName ?? '-'}</td>
+                      <td>{row.amount ? formatCurrency(row.amount) : '-'}</td>
+                      <td>{row.dueDate ? formatDate(row.dueDate) : '-'}</td>
+                      <td>{row.billingNoticeDays ?? '-'}</td>
+                      <td>
+                        {row.scheduledForEstimated
+                          ? formatDateTime(row.scheduledForEstimated)
+                          : '-'}
+                      </td>
+                      <td>
+                        <span
+                          className={`legacy-import-badge tone-${legacyCutoverClassificationTone[row.classification]}`}
+                        >
+                          {legacyCutoverClassificationLabels[row.classification]}
+                        </span>
+                        {row.warnings.length ? <small>{row.warnings.length} avisos</small> : null}
+                      </td>
+                      <td>
+                        <IconButton
+                          icon={Eye}
+                          label="Ver detalhes"
+                          size="sm"
+                          onClick={() => setSelectedRow(row)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1472,12 +1554,12 @@ function LegacyCutoverPreviewView() {
               />
             </header>
             <div className="legacy-import-confirm-grid">
-              <StatCard label="Referências prontas" tone="success" value={preview.summary.ready} />
               <StatCard
-                label="Receivables que podem ser criadas"
+                label="Referências selecionadas"
                 tone="success"
-                value={preview.summary.ready}
+                value={selectedReadyCount}
               />
+              <StatCard label="Receivables a criar" tone="success" value={selectedReadyCount} />
               <StatCard label="MessageDispatches" value={0} />
               <StatCard label="PIX" value={0} />
               <StatCard label="WhatsApp" value={0} />
@@ -1505,6 +1587,7 @@ function LegacyCutoverPreviewView() {
                 onClick={() => void runActivate()}
               >
                 Criar Receivables de renovação
+                {selectedReadyCount > 0 ? ` (${selectedReadyCount})` : ''}
               </Button>
             </footer>
           </section>

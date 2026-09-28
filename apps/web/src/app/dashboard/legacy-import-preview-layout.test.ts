@@ -119,21 +119,44 @@ describe('legacy import preview UI', () => {
   });
 
   it('adds controlled cutover activation behind scheduler and confirmation guards', () => {
-    expect(importViewSource).toContain('activateLegacyCutover(readyReferenceIds)');
+    expect(importViewSource).toContain('activateLegacyCutover(selectedReadyIds)');
     expect(importViewSource).toContain('Criar Receivables de renovação');
     expect(importViewSource).toContain('Criar Receivables de renovação?');
     expect(importViewSource).toContain('preview.metadata.billingSchedulerStatus');
     expect(importViewSource).toContain('preview.metadata.recoverySchedulerStatus');
-    expect(importViewSource).toContain('Referências prontas');
+    expect(importViewSource).toContain('Referências selecionadas');
     expect(importViewSource).toContain('MessageDispatches');
     expect(importViewSource).toContain('WhatsApp');
     expect(importViewSource).toContain('Nenhuma cobrança será');
     expect(importViewSource).toContain('Mantenha ambos');
     expect(importViewSource).toContain('desabilitados até a conferência final');
     expect(importViewSource).toContain('activatingRef.current');
-    expect(importViewSource).toContain('readyReferenceIds');
-    expect(importViewSource).toContain('preview.summary.ready <= 500');
+    expect(importViewSource).toContain('selectedReadyCount > 0');
+    expect(importViewSource).toContain('selectedReadyCount > legacyCutoverActivationLimit');
     expect(importViewSource).toContain('Limite de ativação');
+  });
+
+  it('adds manual READY reference selection for cutover activation', () => {
+    expect(importViewSource).toContain('selectedReadyReferenceIds');
+    expect(importViewSource).toContain('new Set()');
+    expect(importViewSource).toContain(
+      "row.classification === 'READY' && row.crmClientReferenceId",
+    );
+    expect(importViewSource).toContain('selectedReadyReferenceIds.has(selectionKey)');
+    expect(importViewSource).toContain('toggleReadySelection(selectionKey');
+    expect(importViewSource).toContain('setSelectedReadyReferenceIds(new Set(readyReferenceIds))');
+    expect(importViewSource).toContain('Limpar seleção');
+    expect(importViewSource).toContain(
+      'Selecionadas: {selectedReadyCount} de {readyReferenceIds.length} prontas',
+    );
+    expect(importViewSource).toContain("setFilter('all')");
+    expect(importViewSource).toContain('setSelectedReadyReferenceIds(new Set())');
+    expect(importViewSource).toContain('disabled={!selectable || loading || activating}');
+    expect(importViewSource).toContain('Criar Receivables de renovação');
+    expect(importViewSource).toContain('{selectedReadyCount > 0 ? ` (${selectedReadyCount})` :');
+    expect(importViewSource).toContain('!canActivate');
+    expect(stylesSource).toContain('.legacy-import-selection-bar');
+    expect(stylesSource).toContain('.legacy-cutover-table td:nth-child(10)::before');
   });
 
   it('wraps long legacy payment hashes inside the detail modal', () => {

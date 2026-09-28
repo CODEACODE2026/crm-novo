@@ -354,6 +354,40 @@ describe('CRM UI formatters', () => {
     });
   });
 
+  it('posts exactly the selected Edilson cutover reference id', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            mode: 'CONTROLLED_ACTIVATION',
+            unit: 'CLIENT_REFERENCE',
+            purpose: 'RENEWAL',
+            summary: {
+              requested: 1,
+              created: 1,
+              unchanged: 0,
+              skipped: 0,
+              failed: 0,
+              warnings: 0,
+            },
+            rows: [],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await activateLegacyCutover(['reference-edilson']);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const activationCall = fetchMock.mock.calls[0] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    expect(JSON.parse(activationCall?.[1]?.body as string)).toEqual({
+      clientReferenceIds: ['reference-edilson'],
+    });
+  });
+
   it('keeps the session when PIX WhatsApp send returns a provider auth boundary error', async () => {
     const assign = vi.fn();
     vi.stubGlobal(

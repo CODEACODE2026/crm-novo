@@ -6698,6 +6698,28 @@ tbody tr:hover,
   gap: 8px;
 }
 
+.legacy-import-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 3%);
+  padding: 10px 12px;
+}
+
+.legacy-import-selection-bar strong {
+  font-size: 13px;
+}
+
+.legacy-import-selection-bar > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .segmented-button {
   min-height: 34px;
   border: 1px solid var(--border);
@@ -6743,6 +6765,12 @@ tbody tr:hover,
 
 .legacy-import-table td {
   font-size: 13px;
+}
+
+.legacy-import-table input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .legacy-import-table td strong,
@@ -7102,6 +7130,46 @@ tbody tr:hover,
   }
 
   .legacy-import-table td:nth-child(9)::before {
+    content: 'Detalhes';
+  }
+
+  .legacy-cutover-table td:nth-child(1)::before {
+    content: 'Selecionar';
+  }
+
+  .legacy-cutover-table td:nth-child(2)::before {
+    content: 'Cliente';
+  }
+
+  .legacy-cutover-table td:nth-child(3)::before {
+    content: 'Referência';
+  }
+
+  .legacy-cutover-table td:nth-child(4)::before {
+    content: 'Plano';
+  }
+
+  .legacy-cutover-table td:nth-child(5)::before {
+    content: 'Valor';
+  }
+
+  .legacy-cutover-table td:nth-child(6)::before {
+    content: 'Próximo vencimento';
+  }
+
+  .legacy-cutover-table td:nth-child(7)::before {
+    content: 'Avisar';
+  }
+
+  .legacy-cutover-table td:nth-child(8)::before {
+    content: 'Agendamento';
+  }
+
+  .legacy-cutover-table td:nth-child(9)::before {
+    content: 'Situação';
+  }
+
+  .legacy-cutover-table td:nth-child(10)::before {
     content: 'Detalhes';
   }
 

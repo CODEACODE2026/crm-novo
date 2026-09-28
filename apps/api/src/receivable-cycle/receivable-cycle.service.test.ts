@@ -285,6 +285,15 @@ describe('ReceivableCycleService', () => {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
     expect(fake.prisma.$queryRaw).toHaveBeenCalled();
+    const lockQuery = fake.prisma.$queryRaw.mock.calls[0]?.[0] as Prisma.Sql;
+    expect(lockQuery.text).toContain('FROM "client_references" cr');
+    expect(lockQuery.text).toContain('JOIN "clients" c ON c.id = cr."clientId"');
+    expect(lockQuery.text).toContain('JOIN "plans" p ON p.id = cr."planId"');
+    expect(lockQuery.text).toContain('FOR UPDATE OF cr, c, p');
+    expect(lockQuery.text).not.toContain('"ClientReference"');
+    expect(lockQuery.text).not.toContain('"Client"');
+    expect(lockQuery.text).not.toContain('"Plan"');
+    expect(lockQuery.values).toEqual(['reference-id']);
     expect(fake.created).toHaveLength(1);
   });
 

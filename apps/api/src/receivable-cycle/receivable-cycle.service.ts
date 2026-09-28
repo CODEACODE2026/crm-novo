@@ -486,9 +486,9 @@ export class ReceivableCycleService {
 
     await lockableDb.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT cr.id
-      FROM "ClientReference" cr
-      JOIN "Client" c ON c.id = cr."clientId"
-      JOIN "Plan" p ON p.id = cr."planId"
+      FROM "client_references" cr
+      JOIN "clients" c ON c.id = cr."clientId"
+      JOIN "plans" p ON p.id = cr."planId"
       WHERE cr.id = ${clientReferenceId}::uuid
       FOR UPDATE OF cr, c, p
     `);

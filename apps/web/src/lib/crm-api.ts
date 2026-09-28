@@ -699,7 +699,7 @@ export type LegacyImportClassification =
   | 'READY_UPDATE'
   | 'UNCHANGED'
   | 'POSSIBLE_MATCH'
-  | 'NEEDS_DECISION'
+  | 'SKIPPED_NOT_ACTIVE'
   | 'CONFLICT'
   | 'INVALID';
 
@@ -743,7 +743,7 @@ export interface LegacyImportPreview {
     readyUpdate: number;
     unchanged: number;
     possibleMatch: number;
-    needsDecision: number;
+    notActive: number;
     conflict: number;
     invalid: number;
   };

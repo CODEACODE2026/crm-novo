@@ -514,26 +514,45 @@ describe('LegacyImportService', () => {
     expectNoOperationalSideEffects(writes);
   });
 
-  it.each([
-    ['Ativo', 'ATIVO'],
-    ['Inativo', 'INATIVO'],
-    ['Cancelado', 'CANCELADO'],
-  ])('imports legacy status %s as %s', async (legacyStatus, expectedStatus) => {
+  it('imports only active legacy status as ATIVO', async () => {
     const { service, writes } = createService();
 
     const result = await service.importClients(
-      envelope([
-        { ...baseClient, id: 10, status: legacyStatus, referencia: `status-${legacyStatus}` },
-      ]),
+      envelope([{ ...baseClient, id: 10, status: 'Ativo', referencia: 'status-ativo' }]),
     );
 
     expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 1, skipped: 0 });
-    expect(writes.clientCreate.mock.calls[0]?.[0].data).toMatchObject({ status: expectedStatus });
+    expect(writes.clientCreate.mock.calls[0]?.[0].data).toMatchObject({ status: 'ATIVO' });
     expect(writes.clientReferenceCreate.mock.calls[0]?.[0].data).toMatchObject({
-      status: expectedStatus,
+      status: 'ATIVO',
     });
     expectNoOperationalSideEffects(writes);
   });
+
+  it.each(['Novo', 'Pendente', 'Inativo', 'Cancelado'])(
+    'classifies legacy status %s as SKIPPED_NOT_ACTIVE',
+    async (legacyStatus) => {
+      const { service } = createService();
+
+      const result = await service.previewClients(
+        envelope([
+          { ...baseClient, id: 10, status: legacyStatus, referencia: `status-${legacyStatus}` },
+        ]),
+      );
+
+      expect(result.summary).toMatchObject({ notActive: 1, readyCreate: 0, total: 1 });
+      expect(result.rows[0]).toMatchObject({
+        classification: 'SKIPPED_NOT_ACTIVE',
+        normalizedStatus:
+          legacyStatus === 'Inativo'
+            ? 'INATIVO'
+            : legacyStatus === 'Cancelado'
+              ? 'CANCELADO'
+              : null,
+        status: legacyStatus,
+      });
+    },
+  );
 
   it('skips non READY_CREATE rows and does not create operational side effects', async () => {
     const { service, writes } = createService({
@@ -544,7 +563,7 @@ describe('LegacyImportService', () => {
     const result = await service.importClients(
       envelope([
         { ...baseClient, id: 1, referencia: 'possible-match' },
-        { ...baseClient, id: 2, status: 'Novo', referencia: 'needs-decision' },
+        { ...baseClient, id: 2, status: 'Novo', referencia: 'not-active' },
         { ...baseClient, id: 3, phone: '123', referencia: 'invalid' },
       ]),
     );
@@ -552,7 +571,7 @@ describe('LegacyImportService', () => {
     expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 3, skipped: 3 });
     expect(result.rows.map((row) => row.code)).toEqual([
       'POSSIBLE_MATCH',
-      'NEEDS_DECISION',
+      'SKIPPED_NOT_ACTIVE',
       'INVALID',
     ]);
     expect(writes.clientCreate).not.toHaveBeenCalled();
@@ -561,7 +580,7 @@ describe('LegacyImportService', () => {
     expectNoOperationalSideEffects(writes);
   });
 
-  it('does not import Novo, Pendente, possible match, conflict, invalid or ready update rows', async () => {
+  it('does not import non-active, possible match, conflict, invalid or ready update rows', async () => {
     const { service, writes } = createService({
       clients: [existingCrmClient],
       references: [existingCrmReference],
@@ -590,8 +609,8 @@ describe('LegacyImportService', () => {
 
     expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 7, skipped: 7 });
     expect(result.rows.map((row) => row.code)).toEqual([
-      'NEEDS_DECISION',
-      'NEEDS_DECISION',
+      'SKIPPED_NOT_ACTIVE',
+      'SKIPPED_NOT_ACTIVE',
       'POSSIBLE_MATCH',
       'CONFLICT',
       'CONFLICT',
@@ -627,6 +646,29 @@ describe('LegacyImportService', () => {
     expectNoOperationalSideEffects(writes);
   });
 
+  it('does not import a non-active row even when frontend fields are forged as ready', async () => {
+    const { service, writes } = createService();
+
+    const result = await service.importClients(
+      envelope([
+        {
+          ...baseClient,
+          classification: 'READY_CREATE',
+          id: 71,
+          referencia: 'forged-not-active',
+          status: 'Inativo',
+        },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 0, requested: 1, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ code: 'SKIPPED_NOT_ACTIVE', result: 'SKIPPED' });
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
   it('keeps client and reference operational fields consistent for imported rows', async () => {
     const { service, writes } = createService();
 
@@ -646,26 +688,142 @@ describe('LegacyImportService', () => {
     });
   });
 
-  it('does not invent lifecycle metadata when importing inactive or canceled rows', async () => {
+  it('does not create clients, references or lifecycle metadata for inactive or canceled rows', async () => {
     const { service, writes } = createService();
 
-    await service.importClients(
+    const result = await service.importClients(
       envelope([
         { ...baseClient, id: 80, referencia: 'inactive-row', status: 'Inativo' },
         { ...baseClient, id: 81, referencia: 'canceled-row', status: 'Cancelado' },
       ]),
     );
 
-    const references = writes.clientReferenceCreate.mock.calls.map((call) => call[0].data);
+    expect(result.rows.map((row) => row.code)).toEqual([
+      'SKIPPED_NOT_ACTIVE',
+      'SKIPPED_NOT_ACTIVE',
+    ]);
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
 
-    expect(references[0]).toMatchObject({ status: 'INATIVO' });
-    expect(references[0]).not.toHaveProperty('inactivatedAt');
-    expect(references[0]).not.toHaveProperty('inactivationReason');
-    expect(references[0]).not.toHaveProperty('inactivatedByUserId');
-    expect(references[1]).toMatchObject({ status: 'CANCELADO' });
-    expect(references[1]).not.toHaveProperty('canceledAt');
-    expect(references[1]).not.toHaveProperty('cancellationReason');
-    expect(references[1]).not.toHaveProperty('canceledByUserId');
+  it('counts mixed active-only batches without importing non-active rows', async () => {
+    const { service } = createService();
+    const clients = [
+      ...Array.from({ length: 10 }, (_, index) => ({
+        ...baseClient,
+        id: 100 + index,
+        referencia: `active-${index}`,
+        status: 'Ativo',
+      })),
+      ...Array.from({ length: 2 }, (_, index) => ({
+        ...baseClient,
+        id: 200 + index,
+        referencia: `novo-${index}`,
+        status: 'Novo',
+      })),
+      ...Array.from({ length: 3 }, (_, index) => ({
+        ...baseClient,
+        id: 300 + index,
+        referencia: `pendente-${index}`,
+        status: 'Pendente',
+      })),
+      ...Array.from({ length: 4 }, (_, index) => ({
+        ...baseClient,
+        id: 400 + index,
+        referencia: `inativo-${index}`,
+        status: 'Inativo',
+      })),
+      { ...baseClient, id: 500, referencia: 'cancelado-0', status: 'Cancelado' },
+    ];
+
+    const result = await service.previewClients(envelope(clients));
+
+    expect(result.summary).toMatchObject({ notActive: 10, readyCreate: 10, total: 20 });
+  });
+
+  it('does not let non-active duplicate references block active importable rows', async () => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope([
+        { ...baseClient, id: 1, referencia: 'shared-reference', status: 'Ativo' },
+        { ...baseClient, id: 2, referencia: 'shared-reference', status: 'Inativo' },
+      ]),
+    );
+
+    expect(result.rows[0]).toMatchObject({ classification: 'READY_CREATE', errors: [] });
+    expect(result.rows[1]).toMatchObject({ classification: 'SKIPPED_NOT_ACTIVE' });
+    expect(result.rows[1]?.errors).not.toContain('DUPLICATE_REFERENCE_IN_FILE');
+  });
+
+  it('keeps duplicate legacy ids structural even when one row is non-active', async () => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope([
+        { ...baseClient, id: 1, referencia: 'active-duplicate-id', status: 'Ativo' },
+        { ...baseClient, id: 1, referencia: 'inactive-duplicate-id', status: 'Inativo' },
+      ]),
+    );
+
+    expect(result.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[1]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[0]?.errors).toContain('DUPLICATE_LEGACY_ID_IN_FILE');
+    expect(result.rows[1]?.errors).toContain('DUPLICATE_LEGACY_ID_IN_FILE');
+  });
+
+  it('reports an existing legacy mapping that is now non-active without changing CRM data', async () => {
+    const { service, writes } = createService({
+      clients: [existingCrmClient],
+      importRecords: [
+        {
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+          legacyClientId: '123',
+          payloadHash: '0'.repeat(64),
+          source: 'legacy',
+        },
+      ],
+      references: [existingCrmReference],
+    });
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, id: 123, referencia: 'cliente123', status: 'Inativo' }]),
+    );
+
+    expect(result.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[0]?.errors).toContain('NOT_ACTIVE_EXISTING_MAPPING');
+    expect(writes.clientUpdate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceUpdate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps financial and cutover flows blind to non-active clients skipped by IMPORT1', async () => {
+    const { service, writes } = createService();
+
+    const importResult = await service.importClients(
+      envelope([{ ...baseClient, id: 2352, referencia: 'edilson7581', status: 'Pendente' }]),
+    );
+    const paymentPreview = await service.previewPayments({
+      exportedAt: '2026-09-26T00:00:00Z',
+      payments: [basePayment],
+      schemaVersion: 1,
+      source: 'legacy',
+    });
+    const cutoverPreview = await service.previewCutover();
+
+    expect(importResult.rows[0]).toMatchObject({
+      code: 'SKIPPED_NOT_ACTIVE',
+      result: 'SKIPPED',
+    });
+    expect(paymentPreview.rows[0]).toMatchObject({ classification: 'CLIENT_NOT_IMPORTED' });
+    expect(cutoverPreview.summary).toMatchObject({ ready: 0, total: 0 });
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+    expect(writes.financialTransactionCreate).not.toHaveBeenCalled();
   });
 
   it('keeps import idempotent when legacy mapping already exists', async () => {
@@ -949,26 +1107,49 @@ describe('LegacyImportService', () => {
         'INVALID_DUE_DATE',
         'INVALID_BILLING_NOTICE_DAYS',
         'INVALID_RECURRING_VALUE',
-        'DUPLICATE_REFERENCE_IN_FILE',
       ]),
     );
     expect(result.rows[1]?.classification).toBe('CONFLICT');
-    expect(result.rows[1]?.errors).toEqual(
-      expect.arrayContaining(['DUPLICATE_LEGACY_ID_IN_FILE', 'DUPLICATE_REFERENCE_IN_FILE']),
-    );
+    expect(result.rows[1]?.errors).toEqual(expect.arrayContaining(['DUPLICATE_LEGACY_ID_IN_FILE']));
   });
 
-  it('keeps INVALID precedence over NEEDS_DECISION when ambiguous statuses also have invalid fields', async () => {
+  it('keeps non-active precedence over import-only validation errors', async () => {
     const { service } = createService();
 
     const result = await service.previewClients(
-      envelope([
-        { ...baseClient, id: 1, status: 'Novo', phone: '123', referencia: 'novo-invalid' },
-      ]),
+      envelope(
+        [
+          { ...baseClient, id: 1, status: 'Pendente', phone: '123', referencia: 'pendente-phone' },
+          {
+            ...baseClient,
+            id: 2,
+            status: 'Inativo',
+            referencia: 'inactive-plan',
+            type_cobranca: 'MENSAL',
+          },
+        ],
+        {},
+      ),
+    );
+
+    expect(result.rows[0]?.classification).toBe('SKIPPED_NOT_ACTIVE');
+    expect(result.rows[0]?.errors).toContain('INVALID_PHONE');
+    expect(result.rows[1]?.classification).toBe('SKIPPED_NOT_ACTIVE');
+    expect(result.rows[1]?.errors).not.toContain('PLAN_NOT_MAPPED');
+  });
+
+  it.each([
+    ['Desconhecido', 'INVALID_STATUS'],
+    ['', 'INVALID_STATUS'],
+  ])('classifies legacy status %s as INVALID', async (legacyStatus, code) => {
+    const { service } = createService();
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, id: 1, status: legacyStatus, referencia: 'bad-status' }]),
     );
 
     expect(result.rows[0]?.classification).toBe('INVALID');
-    expect(result.rows[0]?.errors).toContain('INVALID_PHONE');
+    expect(result.rows[0]?.errors).toContain(code);
   });
 
   it('maps all legacy billing cycles through explicit active plans', async () => {

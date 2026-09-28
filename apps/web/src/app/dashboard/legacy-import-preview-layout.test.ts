@@ -27,8 +27,9 @@ describe('legacy import preview UI', () => {
     expect(importViewSource).toContain('previewLegacyClients(buildLegacyImportPayload())');
     expect(importViewSource).toContain('disabled={!fileText || loading || importing}');
     expect(importViewSource).toContain(
-      'Importação real limitada aos clientes prontos, sem efeitos financeiros.',
+      'Na migração final, somente clientes com status Ativo serão importados.',
     );
+    expect(importViewSource).toContain('Cancelado permanecem fora da migração.');
     expect(importViewSource).toContain('importConfirmOpen');
   });
 
@@ -81,6 +82,9 @@ describe('legacy import preview UI', () => {
 
   it('renders summary, filtering, table and read-only details', () => {
     expect(importViewSource).toContain('Prontos para criar');
+    expect(importViewSource).toContain('Fora da migração');
+    expect(dashboardSource).toContain("SKIPPED_NOT_ACTIVE: 'Fora da migração'");
+    expect(dashboardSource).toContain("{ id: 'SKIPPED_NOT_ACTIVE', label: 'Não ativos' }");
     expect(importViewSource).toContain('Possíveis correspondências');
     expect(importViewSource).toContain('legacyImportFilters.map');
     expect(importViewSource).toContain('legacy-import-table');

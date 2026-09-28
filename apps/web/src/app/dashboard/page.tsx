@@ -924,20 +924,20 @@ function viewSubtitle(view: View) {
 const legacyImportClassificationLabels = {
   CONFLICT: 'Conflito',
   INVALID: 'Inválido',
-  NEEDS_DECISION: 'Precisa decisão',
   POSSIBLE_MATCH: 'Possível match',
   READY_CREATE: 'Pronto criar',
   READY_UPDATE: 'Pronto atualizar',
+  SKIPPED_NOT_ACTIVE: 'Fora da migração',
   UNCHANGED: 'Sem alteração',
 } satisfies Record<LegacyImportClassification, string>;
 
 const legacyImportClassificationTone = {
   CONFLICT: 'danger',
   INVALID: 'danger',
-  NEEDS_DECISION: 'warning',
   POSSIBLE_MATCH: 'warning',
   READY_CREATE: 'success',
   READY_UPDATE: 'info',
+  SKIPPED_NOT_ACTIVE: 'muted',
   UNCHANGED: 'muted',
 } satisfies Record<LegacyImportClassification, string>;
 
@@ -947,7 +947,7 @@ const legacyImportFilters = [
   { id: 'READY_UPDATE', label: 'Atualizar' },
   { id: 'UNCHANGED', label: 'Sem alteração' },
   { id: 'POSSIBLE_MATCH', label: 'Matches' },
-  { id: 'NEEDS_DECISION', label: 'Decisão' },
+  { id: 'SKIPPED_NOT_ACTIVE', label: 'Não ativos' },
   { id: 'CONFLICT', label: 'Conflitos' },
   { id: 'INVALID', label: 'Inválidos' },
 ] satisfies Array<{ id: LegacyImportClassification | 'all'; label: string }>;
@@ -1665,7 +1665,10 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
         </label>
         <div className="legacy-import-file-state">
           <strong>{fileName || 'Nenhum arquivo selecionado'}</strong>
-          <span>Importação real limitada aos clientes prontos, sem efeitos financeiros.</span>
+          <span>
+            Na migração final, somente clientes com status Ativo serão importados. Novo, Pendente,
+            Inativo e Cancelado permanecem fora da migração.
+          </span>
         </div>
       </div>
 
@@ -1689,11 +1692,7 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
               tone="warning"
               value={preview.summary.possibleMatch}
             />
-            <StatCard
-              label="Precisam decisão"
-              tone="warning"
-              value={preview.summary.needsDecision}
-            />
+            <StatCard label="Fora da migração" value={preview.summary.notActive} />
             <StatCard label="Conflitos" tone="danger" value={preview.summary.conflict} />
             <StatCard label="Inválidos" tone="danger" value={preview.summary.invalid} />
           </div>
@@ -1797,6 +1796,12 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
                 <dd className="legacy-import-hash-value">{selectedRow.payloadHash ?? '-'}</dd>
               </dl>
               <div className="legacy-import-detail-section">
+                {selectedRow.classification === 'SKIPPED_NOT_ACTIVE' ? (
+                  <p className="notice warning">
+                    Somente clientes Ativo são importados no cutover. Novo, Pendente, Inativo e
+                    Cancelado permanecem fora da migração.
+                  </p>
+                ) : null}
                 <h3>Erros</h3>
                 <CodeList items={selectedRow.errors} empty="Nenhum erro" />
                 <h3>Avisos</h3>

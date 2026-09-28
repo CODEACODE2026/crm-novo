@@ -5,13 +5,19 @@ import { json } from 'express';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { createOriginProtectionMiddleware, parseCorsOrigins } from './config/security';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
-  const corsOrigin = config.getOrThrow<string>('CORS_ORIGIN');
+  const corsOrigins = parseCorsOrigins(config.getOrThrow<string>('CORS_ORIGIN'));
+  const apiHost =
+    config.get<string>('API_HOST') ??
+    (config.get<string>('NODE_ENV') === 'production' ? '127.0.0.1' : undefined);
 
+  app.set('trust proxy', 'loopback');
   app.use('/whatsapp/webhook/kirago', json({ limit: '32kb' }));
   app.use(
     '/payment-webhooks',
@@ -28,8 +34,9 @@ async function bootstrap() {
   app.use(json({ limit: '1mb' }));
   app.use(helmet());
   app.use(cookieParser());
+  app.use(createOriginProtectionMiddleware(corsOrigins));
   app.enableCors({
-    origin: corsOrigin.split(',').map((origin) => origin.trim()),
+    origin: corsOrigins,
     credentials: true,
   });
   app.useGlobalPipes(
@@ -39,6 +46,11 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  if (apiHost) {
+    await app.listen(config.get<number>('PORT', 3001), apiHost);
+    return;
+  }
 
   await app.listen(config.get<number>('PORT', 3001));
 }

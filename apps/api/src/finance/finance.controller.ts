@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { PaymentProviderCode } from '@prisma/client';
+import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
@@ -46,7 +47,7 @@ import { PaymentProviderCredentialsService } from './payments/payment-provider-c
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller()
 export class FinanceController {
   constructor(

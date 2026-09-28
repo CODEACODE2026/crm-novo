@@ -10,13 +10,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import { BillingService } from './billing.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
 import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
 import { UpdateMessageTemplateDto } from './dto/update-message-template.dto';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('billing')
 export class BillingController {
   constructor(@Inject(BillingService) private readonly billingService: BillingService) {}

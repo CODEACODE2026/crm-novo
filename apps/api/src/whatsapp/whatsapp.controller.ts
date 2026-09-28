@@ -1,7 +1,21 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Inject,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
+import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { validateKiragoWebhookToken } from '../config/security';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
@@ -12,7 +26,7 @@ import { WhatsAppService } from './whatsapp.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('whatsapp')
 export class WhatsAppController {
   constructor(@Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService) {}
@@ -112,7 +126,7 @@ export class WhatsAppController {
   }
 }
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('payment-intents')
 export class PaymentIntentWhatsAppController {
   constructor(@Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService) {}
@@ -125,10 +139,21 @@ export class PaymentIntentWhatsAppController {
 
 @Controller('whatsapp/webhook')
 export class WhatsAppWebhookController {
-  constructor(@Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService) {}
+  constructor(
+    @Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService,
+    @Inject(ConfigService) private readonly config: ConfigService,
+  ) {}
 
   @Post('kirago')
-  receiveKiragoWebhook(@Body() payload: unknown) {
+  receiveKiragoWebhook(
+    @Body() payload: unknown,
+    @Headers('x-kirago-webhook-token') headerToken: string | undefined,
+    @Query('kirago_webhook_token') queryToken: string | undefined,
+  ) {
+    validateKiragoWebhookToken(
+      headerToken ?? queryToken,
+      this.config.getOrThrow<string>('KIRAGO_WEBHOOK_TOKEN'),
+    );
     return this.whatsAppService.receiveWebhook(payload);
   }
 }

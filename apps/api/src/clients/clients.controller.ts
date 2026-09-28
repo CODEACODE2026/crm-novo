@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { ClientsService } from './clients.service';
 import { CreateClientReferenceDto } from './dto/create-client-reference.dto';
@@ -28,7 +29,7 @@ import { UpdateClientDto } from './dto/update-client.dto';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('clients')
 export class ClientsController {
   constructor(@Inject(ClientsService) private readonly clientsService: ClientsService) {}

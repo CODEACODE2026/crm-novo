@@ -23,6 +23,7 @@ import {
 } from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { isSchedulerDisabled } from '../config/security';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 
 const maxClientsPerPreview = 10_000;
@@ -1338,7 +1339,7 @@ export class LegacyImportService {
   }
 
   private isSchedulerDisabled(key: 'BILLING_SCHEDULER_ENABLED' | 'RECOVERY_SCHEDULER_ENABLED') {
-    return this.config.get<string>(key) === 'false';
+    return isSchedulerDisabled(this.config.get<string>(key));
   }
 
   private isCutoverBusinessError(error: unknown): error is ConflictException | NotFoundException {

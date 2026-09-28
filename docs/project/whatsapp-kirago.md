@@ -13,6 +13,8 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 
 - `KIRAGO_BASE_URL`: URL base da Kirago.
 - `KIRAGO_ADMIN_TOKEN`: token admin Kirago.
+- `KIRAGO_WEBHOOK_TOKEN`: token forte anexado pelo CRM a URL configurada do
+  webhook e validado em todo POST recebido em `/whatsapp/webhook/kirago`.
 - `KIRAGO_HTTP_TIMEOUT_MS`: timeout das chamadas HTTP.
 - `CRM_API_PUBLIC_URL`: URL publica da API do CRM para webhook.
 - `WHATSAPP_TOKEN_ENCRYPTION_KEY`: chave de 32 bytes para AES-256-GCM.
@@ -42,7 +44,15 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - O payload bruto da Kirago nao e persistido; somente campos normalizados e metadata minima de midia sao gravados.
 - A configuracao direta usa a API de instancia Kirago: `POST /webhook`, header `token`, body `{ webhook, events, active: true }`.
 - `CRM_API_PUBLIC_URL` deve apontar para uma URL publica HTTPS; localhost, HTTP e IP privado sao recusados para registro externo.
-- A integracao Kirago v1.11 em uso neste projeto nao possui contrato local documentado de assinatura, secret ou HMAC para webhook recebido. Sem esse contrato, o CRM nao inventa validacao inexistente; a protecao fica em limite de payload, normalizacao defensiva, aceite apenas de eventos esperados, erros sanitizados e idempotencia de banco.
+- A integracao Kirago v1.11 em uso neste projeto nao possui contrato local
+  documentado de assinatura, secret ou HMAC para webhook recebido. Como a API
+  permite configurar a URL do webhook, o CRM inclui um token forte na URL
+  registrada e rejeita requests sem token valido antes de normalizar ou gravar
+  eventos.
+- Como esse token pode trafegar em query string por compatibilidade com a
+  Kirago v1.11, o Nginx/reverse proxy nao deve registrar a query completa desse
+  endpoint em access logs. Preferir logging sem `$args`/`$request_uri` para
+  `/whatsapp/webhook/kirago`, ou mascarar `kirago_webhook_token`.
 
 ## Envio manual
 

@@ -1,6 +1,7 @@
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RecoveryService } from './recovery.service';
+import { isSchedulerEnabled } from '../config/security';
 
 @Injectable()
 export class RecoveryScheduler implements OnModuleInit, OnModuleDestroy {
@@ -13,7 +14,7 @@ export class RecoveryScheduler implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    if (this.config.get<string>('RECOVERY_SCHEDULER_ENABLED') === 'false') {
+    if (!isSchedulerEnabled(this.config.get<string>('RECOVERY_SCHEDULER_ENABLED'))) {
       return;
     }
 

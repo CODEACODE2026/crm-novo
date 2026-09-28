@@ -241,7 +241,8 @@ export class WhatsAppService {
   async getWebhook() {
     const connection = await this.requireConnection();
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-    return this.mapProviderError(() => this.provider.getWebhook(instanceToken));
+    const webhook = await this.mapProviderError(() => this.provider.getWebhook(instanceToken));
+    return this.redactWebhookToken(webhook);
   }
 
   async configureWebhook(dto: ConfigureWhatsAppWebhookDto = {}) {
@@ -1256,7 +1257,45 @@ export class WhatsAppService {
     }
 
     this.ensurePublicHttpsWebhookUrl(url);
+    this.appendWebhookToken(url);
     return url.toString();
+  }
+
+  private appendWebhookToken(url: URL) {
+    const token = this.config.get<string>('KIRAGO_WEBHOOK_TOKEN')?.trim();
+
+    if (token && !url.searchParams.has('kirago_webhook_token')) {
+      url.searchParams.set('kirago_webhook_token', token);
+    }
+  }
+
+  private redactWebhookToken(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.redactWebhookToken(item));
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          typeof item === 'string' ? this.redactWebhookUrl(item) : this.redactWebhookToken(item),
+        ]),
+      );
+    }
+
+    return typeof value === 'string' ? this.redactWebhookUrl(value) : value;
+  }
+
+  private redactWebhookUrl(value: string) {
+    try {
+      const url = new URL(value);
+      if (url.searchParams.has('kirago_webhook_token')) {
+        url.searchParams.set('kirago_webhook_token', '[redacted]');
+      }
+      return url.toString();
+    } catch {
+      return value.replace(/(kirago_webhook_token=)[^&\s]+/gi, '$1[redacted]');
+    }
   }
 
   private ensurePublicHttpsWebhookUrl(url: URL) {

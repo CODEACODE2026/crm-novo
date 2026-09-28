@@ -5324,6 +5324,26 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(0);
   });
 
+  it('blocks mock confirmation in production before touching provider state', async () => {
+    const fake = createFinancePrisma();
+    const config = {
+      get: vi.fn((key: string) => (key === 'NODE_ENV' ? 'production' : undefined)),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    await expect(service.confirmMockPaymentIntent(intent.id, actorUserId)).rejects.toThrow(
+      'Intencao de pagamento nao encontrada.',
+    );
+    expect(fake.provider.markPixPaid).not.toHaveBeenCalled();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
   it('confirms mock paid through provider sync and creates one financial write-off with timeline', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(

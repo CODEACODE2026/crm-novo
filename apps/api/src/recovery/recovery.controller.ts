@@ -10,11 +10,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import { ListRecoveryCampaignsDto } from './dto/list-recovery-campaigns.dto';
 import { RecoveryService } from './recovery.service';
 import { UpdateRecoveryAutomationSettingsDto } from './dto/update-recovery-automation-settings.dto';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('recovery')
 export class RecoveryController {
   constructor(@Inject(RecoveryService) private readonly recoveryService: RecoveryService) {}

@@ -1,6 +1,7 @@
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BillingService } from './billing.service';
+import { isSchedulerEnabled } from '../config/security';
 
 @Injectable()
 export class BillingScheduler implements OnModuleInit, OnModuleDestroy {
@@ -13,7 +14,7 @@ export class BillingScheduler implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    if (this.config.get<string>('BILLING_SCHEDULER_ENABLED') === 'false') {
+    if (!isSchedulerEnabled(this.config.get<string>('BILLING_SCHEDULER_ENABLED'))) {
       return;
     }
 

@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CreateRenewalDto } from './dto/create-renewal.dto';
 import { RenewalPreviewDto } from './dto/renewal-preview.dto';
@@ -9,7 +10,7 @@ import { RenewalsService } from './renewals.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('clients/:clientId/renewals')
 export class RenewalsController {
   constructor(@Inject(RenewalsService) private readonly renewalsService: RenewalsService) {}
@@ -29,7 +30,7 @@ export class RenewalsController {
   }
 }
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('client-references/:clientReferenceId/renewals')
 export class ClientReferenceRenewalsController {
   constructor(@Inject(RenewalsService) private readonly renewalsService: RenewalsService) {}

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, Param, Post, Query, Req, UseGuards } fro
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import { ApplyReferralRewardDto } from './dto/apply-referral-reward.dto';
 import { CancelReferralDto } from './dto/cancel-referral.dto';
 import { ListReferralsDto } from './dto/list-referrals.dto';
@@ -9,7 +10,7 @@ import { ReferralsService } from './referrals.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('referrals')
 export class ReferralsController {
   constructor(@Inject(ReferralsService) private readonly referralsService: ReferralsService) {}

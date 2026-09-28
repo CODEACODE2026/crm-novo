@@ -1,8 +1,9 @@
 import { Body, Controller, Inject, Post, UseGuards } from '@nestjs/common';
+import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { LegacyImportService } from './legacy-import.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('legacy-import')
 export class LegacyImportController {
   constructor(

@@ -10,12 +10,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import { CreatePlanDto } from './dto/create-plan.dto';
 import { UpdatePlanActiveDto } from './dto/update-plan-active.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
 import { PlansService } from './plans.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('plans')
 export class PlansController {
   constructor(@Inject(PlansService) private readonly plansService: PlansService) {}

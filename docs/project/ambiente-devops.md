@@ -58,12 +58,21 @@ Backend:
 
 - `NODE_ENV`.
 - `PORT`.
+- `API_HOST`: host de bind da API Nest. Em producao atras de Nginx, usar
+  `127.0.0.1` ou rede privada; nao expor a porta Nest diretamente na internet.
 - `DATABASE_URL`.
 - `JWT_SECRET`.
 - `JWT_EXPIRES_IN`.
 - `CORS_ORIGIN`.
 - `BCRYPT_ROUNDS`.
 - `APP_TIMEZONE=America/Sao_Paulo`.
+- `BILLING_SCHEDULER_ENABLED`: em producao e obrigatorio configurar
+  explicitamente `true` ou `false`. Para primeiro deploy publico, usar
+  `false`.
+- `RECOVERY_SCHEDULER_ENABLED`: em producao e obrigatorio configurar
+  explicitamente `true` ou `false`. Para primeiro deploy publico, usar
+  `false`.
+- `KIRAGO_WEBHOOK_TOKEN`: token forte validado no webhook publico Kirago.
 - `CRM_API_PUBLIC_URL`: URL publica HTTPS da API para webhooks externos
   (WhatsApp e registro de webhook de pagamentos).
 - `CRM_PUBLIC_URL`: fallback legado aceito pelo registro de webhook de
@@ -97,15 +106,23 @@ Futuro PIX:
 - Nenhum segredo deve entrar no Git.
 - Criar `.env.example` apenas com nomes e valores ficticios seguros.
 - JWT secret deve ser forte e obrigatorio em producao.
+- Producao falha no startup se `JWT_SECRET`, `CORS_ORIGIN`, chave de
+  criptografia de provider, `KIRAGO_WEBHOOK_TOKEN` ou flags de scheduler forem
+  ausentes/fracos/invalidos.
 - Autenticacao web deve usar JWT em cookie `HttpOnly`.
 - Cookie de autenticacao deve usar `Secure` em producao e `SameSite` adequado.
 - Token principal de autenticacao nao deve ser armazenado em `localStorage`.
 - Refresh token fica preparado como estrategia futura, sem complexidade
   prematura na primeira entrega.
 - CORS em producao deve usar allowlist.
+- Como a autenticacao usa cookie, requisicoes mutaveis autenticadas vindas de
+  navegador devem passar por validacao de `Origin` contra `CORS_ORIGIN`.
 - Login deve ter rate limit quando exposto.
 - Logs nao devem expor tokens, cookies, senhas ou payloads sensiveis completos.
 - Erros de producao nao devem expor stack trace.
+
+Fora de producao, flags ausentes ou desconhecidas continuam fail-closed: nao
+ligam scheduler.
 
 ## Banco
 

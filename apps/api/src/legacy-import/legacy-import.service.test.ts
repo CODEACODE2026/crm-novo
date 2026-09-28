@@ -3170,8 +3170,8 @@ describe('LegacyImportService', () => {
     vi.useRealTimers();
   });
 
-  it('blocks cutover activation when billing or recovery schedulers are effectively enabled', async () => {
-    const { service } = createCutoverService({ billingSchedulerEnabled: undefined });
+  it('blocks cutover activation when billing scheduler is explicitly enabled', async () => {
+    const { service } = createCutoverService({ billingSchedulerEnabled: 'true' });
 
     try {
       await service.activateCutover({});
@@ -3186,24 +3186,7 @@ describe('LegacyImportService', () => {
   it.each([
     ['billing true', { billingSchedulerEnabled: 'true', recoverySchedulerEnabled: 'false' }],
     ['recovery true', { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: 'true' }],
-    [
-      'billing undefined',
-      { billingSchedulerEnabled: undefined, recoverySchedulerEnabled: 'false' },
-    ],
-    [
-      'recovery undefined',
-      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: undefined },
-    ],
-    ['both undefined', { billingSchedulerEnabled: undefined, recoverySchedulerEnabled: undefined }],
-    ['billing TRUE', { billingSchedulerEnabled: 'TRUE', recoverySchedulerEnabled: 'false' }],
-    ['mixed case false', { billingSchedulerEnabled: 'FALSE', recoverySchedulerEnabled: 'false' }],
-    [
-      'recovery mixed case false',
-      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: 'FALSE' },
-    ],
-    ['billing zero', { billingSchedulerEnabled: '0', recoverySchedulerEnabled: 'false' }],
-    ['empty billing', { billingSchedulerEnabled: '', recoverySchedulerEnabled: 'false' }],
-  ])('blocks cutover activation when scheduler env is not exactly false: %s', async (_, config) => {
+  ])('blocks cutover activation when scheduler is enabled: %s', async (_, config) => {
     const { receivableCycleService, service, writes } = createCutoverService(config);
 
     await expect(service.activateCutover({})).rejects.toBeInstanceOf(BadRequestException);
@@ -3224,6 +3207,39 @@ describe('LegacyImportService', () => {
 
     expect(result.summary).toMatchObject({ requested: 1, created: 1 });
     vi.useRealTimers();
+  });
+
+  it.each([
+    [
+      'billing undefined',
+      { billingSchedulerEnabled: undefined, recoverySchedulerEnabled: 'false' },
+    ],
+    [
+      'recovery undefined',
+      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: undefined },
+    ],
+    ['both undefined', { billingSchedulerEnabled: undefined, recoverySchedulerEnabled: undefined }],
+    [
+      'uppercase billing true',
+      { billingSchedulerEnabled: 'TRUE', recoverySchedulerEnabled: 'false' },
+    ],
+    [
+      'uppercase recovery true',
+      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: 'TRUE' },
+    ],
+    ['mixed case false', { billingSchedulerEnabled: 'FALSE', recoverySchedulerEnabled: 'false' }],
+    [
+      'recovery mixed case false',
+      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: 'FALSE' },
+    ],
+    ['billing zero', { billingSchedulerEnabled: '0', recoverySchedulerEnabled: 'false' }],
+    ['empty billing', { billingSchedulerEnabled: '', recoverySchedulerEnabled: 'false' }],
+  ])('allows cutover activation when scheduler is fail-closed disabled: %s', async (_, config) => {
+    const { service } = createCutoverService(config);
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 1 });
   });
 
   it('rejects more than 500 selected references before any receivable write', async () => {

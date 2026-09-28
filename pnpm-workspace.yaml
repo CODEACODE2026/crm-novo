@@ -1,6 +1,10 @@
 packages:
-  - "apps/*"
-  - "packages/*"
+  - 'apps/*'
+  - 'packages/*'
+overrides:
+  deepmerge-ts: ^8.0.2
+  multer: ^2.3.0
+  postcss: ^8.5.23
 allowBuilds:
   '@prisma/client': true
   '@prisma/engines': true

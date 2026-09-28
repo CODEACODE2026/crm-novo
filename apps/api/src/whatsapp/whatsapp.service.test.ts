@@ -135,11 +135,13 @@ function serviceFactory({
   currentConnection = connection(),
   providerOverrides = {},
   encryptionOverrides = {},
+  configOverrides = {},
   prismaOverrides = {},
 }: {
   currentConnection?: ReturnType<typeof connection> | null;
   providerOverrides?: Record<string, unknown>;
   encryptionOverrides?: Record<string, unknown>;
+  configOverrides?: Record<string, string | undefined>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
   const txClientReferenceUpdate = vi.fn();
@@ -370,7 +372,13 @@ function serviceFactory({
     createReceivablePix: vi.fn(),
   };
   const config = {
-    get: (name: string) => (name === 'CRM_API_PUBLIC_URL' ? 'https://crm.example.com' : undefined),
+    get: (name: string) => {
+      if (configOverrides && Object.prototype.hasOwnProperty.call(configOverrides, name)) {
+        return configOverrides[name];
+      }
+
+      return name === 'CRM_API_PUBLIC_URL' ? 'https://crm.example.com' : undefined;
+    },
   };
   const normalizer = {
     normalize: vi.fn(),
@@ -446,6 +454,40 @@ describe('WhatsAppService', () => {
       'https://crm.example.com/whatsapp/webhook/kirago',
       ['Message'],
     );
+  });
+
+  it('adds the Kirago webhook token to the configured public URL', async () => {
+    const { service, provider } = serviceFactory({
+      configOverrides: { KIRAGO_WEBHOOK_TOKEN: 'strong-webhook-token' },
+    });
+
+    await service.configureWebhook();
+
+    expect(provider.configureWebhook).toHaveBeenCalledWith(
+      'instance-token',
+      'https://crm.example.com/whatsapp/webhook/kirago?kirago_webhook_token=strong-webhook-token',
+      ['Message'],
+    );
+  });
+
+  it('redacts the Kirago webhook token before returning webhook status', async () => {
+    const { service } = serviceFactory({
+      providerOverrides: {
+        getWebhook: vi.fn().mockResolvedValue({
+          data: {
+            WebhookURL:
+              'https://crm.example.com/whatsapp/webhook/kirago?kirago_webhook_token=strong-webhook-token',
+          },
+        }),
+      },
+    });
+
+    await expect(service.getWebhook()).resolves.toEqual({
+      data: {
+        WebhookURL:
+          'https://crm.example.com/whatsapp/webhook/kirago?kirago_webhook_token=%5Bredacted%5D',
+      },
+    });
   });
 
   it.each(['http://crm.example.com', 'https://localhost:3001', 'https://192.168.0.10'])(

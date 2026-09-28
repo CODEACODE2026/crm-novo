@@ -1115,6 +1115,10 @@ export class FinanceService {
   }
 
   async confirmMockPaymentIntent(id: string, actorUserId: string) {
+    if (this.config.get<string>('NODE_ENV') === 'production') {
+      throw new NotFoundException('Intencao de pagamento nao encontrada.');
+    }
+
     const intent = await this.prisma.paymentIntent.findUnique({ where: { id } });
 
     if (!intent) {

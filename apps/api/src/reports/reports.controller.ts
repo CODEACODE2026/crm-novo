@@ -1,10 +1,11 @@
 import { Controller, Get, Header, Inject, Param, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 import { ListReportDto } from './dto/list-report.dto';
 import { ReportsService, type ReportType } from './reports.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('reports')
 export class ReportsController {
   constructor(@Inject(ReportsService) private readonly reportsService: ReportsService) {}

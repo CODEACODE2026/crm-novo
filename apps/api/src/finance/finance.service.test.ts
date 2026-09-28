@@ -799,6 +799,307 @@ function createReceivablesSummaryPrisma(
   };
 }
 
+type ListReceivableFixture = SummaryReceivable & {
+  createdAt?: Date;
+  id: string;
+};
+
+type ListTransactionFixture = SummaryFinancialTransaction & {
+  category?: TestCategory;
+  createdAt?: Date;
+  id: string;
+  paymentMethod?: 'PIX' | 'BOLETO' | 'CARTAO' | 'TRANSFERENCIA' | null;
+  receivableId?: string | null;
+  updatedAt?: Date;
+};
+
+function createListReceivablesPrisma(
+  receivables: ListReceivableFixture[],
+  transactions: ListTransactionFixture[],
+) {
+  const category = {
+    active: true,
+    id: '11111111-1111-4111-8111-111111111111',
+    name: 'Receita histórica',
+    type: 'ENTRADA' as const,
+  };
+  const plan = {
+    active: true,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    defaultValue: new Prisma.Decimal('35.00'),
+    durationMonths: 1,
+    id: '22222222-2222-4222-8222-222222222222',
+    name: 'Mensal',
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  };
+  const matchesStringFilter = (value: string, filter: { contains: string }) =>
+    value.toLocaleLowerCase().includes(filter.contains.toLocaleLowerCase());
+  const matchesDateFilter = (value: Date, filter: { gte?: Date; lte?: Date; lt?: Date }) => {
+    const time = value.getTime();
+
+    if (filter.gte && time < filter.gte.getTime()) return false;
+    if (filter.lte && time > filter.lte.getTime()) return false;
+    if (filter.lt && time >= filter.lt.getTime()) return false;
+    return true;
+  };
+  const matchesReceivableWhere = (
+    receivable: ListReceivableFixture,
+    where: Record<string, unknown>,
+  ): boolean => {
+    if (Array.isArray(where.AND)) {
+      return where.AND.every((item) =>
+        matchesReceivableWhere(receivable, item as Record<string, unknown>),
+      );
+    }
+
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item) =>
+        matchesReceivableWhere(receivable, item as Record<string, unknown>),
+      );
+    }
+
+    if (where.clientId && receivable.clientId !== where.clientId) return false;
+    if (where.clientReferenceId && receivable.clientReferenceId !== where.clientReferenceId) {
+      return false;
+    }
+    if (where.status && receivable.status !== where.status) return false;
+    if (where.dueDate) {
+      const dueDate = where.dueDate;
+
+      if (dueDate instanceof Date && receivable.dueDate.getTime() !== dueDate.getTime()) {
+        return false;
+      }
+      if (!(dueDate instanceof Date) && !matchesDateFilter(receivable.dueDate, dueDate)) {
+        return false;
+      }
+    }
+    if (where.description) {
+      const filter = where.description as { contains: string };
+      if (!matchesStringFilter(receivable.description, filter)) return false;
+    }
+    if (where.client) {
+      const clientWhere = where.client as { name?: { contains: string } };
+      if (clientWhere.name && !matchesStringFilter(receivable.client.name, clientWhere.name)) {
+        return false;
+      }
+    }
+    if (where.clientReference) {
+      const referenceWhere = where.clientReference as { reference?: { contains: string } };
+      if (
+        referenceWhere.reference &&
+        !matchesStringFilter(receivable.clientReference.reference, referenceWhere.reference)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+  const matchesTransactionWhere = (
+    transaction: ListTransactionFixture,
+    where: Record<string, unknown>,
+  ): boolean => {
+    if (where.type && transaction.type !== where.type) return false;
+    if (where.origin && transaction.origin !== where.origin) return false;
+    if (where.clientId && transaction.clientId !== where.clientId) return false;
+    if (where.clientReferenceId && transaction.clientReferenceId !== where.clientReferenceId) {
+      return false;
+    }
+    if (where.transactionDate) {
+      const transactionDate = where.transactionDate;
+
+      if (
+        transactionDate instanceof Date &&
+        transaction.transactionDate.getTime() !== transactionDate.getTime()
+      ) {
+        return false;
+      }
+      if (
+        !(transactionDate instanceof Date) &&
+        !matchesDateFilter(transaction.transactionDate, transactionDate)
+      ) {
+        return false;
+      }
+    }
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item) =>
+        matchesTransactionWhere(transaction, item as Record<string, unknown>),
+      );
+    }
+    if (where.description) {
+      const filter = where.description as { contains: string };
+      if (!matchesStringFilter(transaction.description, filter)) return false;
+    }
+    if (where.notes) {
+      const filter = where.notes as { contains: string };
+      if (!transaction.notes || !matchesStringFilter(transaction.notes, filter)) return false;
+    }
+    if (where.client) {
+      const clientWhere = where.client as { name?: { contains: string } };
+      if (
+        clientWhere.name &&
+        (!transaction.client || !matchesStringFilter(transaction.client.name, clientWhere.name))
+      ) {
+        return false;
+      }
+    }
+    if (where.clientReference) {
+      const referenceWhere = where.clientReference as { reference?: { contains: string } };
+      if (
+        referenceWhere.reference &&
+        (!transaction.clientReference ||
+          !matchesStringFilter(transaction.clientReference.reference, referenceWhere.reference))
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+  const receivableWithRelations = (receivable: ListReceivableFixture) => ({
+    ...receivable,
+    cancelReason: null,
+    canceledAt: null,
+    createdAt: receivable.createdAt ?? new Date('2026-09-01T00:00:00.000Z'),
+    paidAt: receivable.status === 'PAGO' ? receivable.dueDate : null,
+    paymentIntents: [],
+    paymentTransaction: null,
+    purpose: 'RENEWAL',
+    renewal: null,
+    updatedAt: receivable.createdAt ?? new Date('2026-09-01T00:00:00.000Z'),
+    client: {
+      id: receivable.clientId,
+      name: receivable.client.name,
+      reference: receivable.clientReference.reference,
+    },
+    clientReference: {
+      id: receivable.clientReferenceId,
+      reference: receivable.clientReference.reference,
+      status: 'ATIVO',
+      plan,
+    },
+  });
+  const transactionWithRelations = (transaction: ListTransactionFixture) => ({
+    ...transaction,
+    category: transaction.category ?? category,
+    categoryId: transaction.category?.id ?? category.id,
+    createdAt: transaction.createdAt ?? new Date('2026-09-01T00:00:00.000Z'),
+    createdByUserId: null,
+    paymentGroupId: null,
+    paymentMethod: transaction.paymentMethod ?? 'PIX',
+    receivable: null,
+    receivableId: transaction.receivableId ?? null,
+    updatedAt:
+      transaction.updatedAt ?? transaction.createdAt ?? new Date('2026-09-01T00:00:00.000Z'),
+    client: transaction.client
+      ? {
+          id: transaction.clientId,
+          name: transaction.client.name,
+          reference: transaction.clientReference?.reference ?? 'REF',
+        }
+      : null,
+    clientReference: transaction.clientReference
+      ? {
+          id: transaction.clientReferenceId,
+          reference: transaction.clientReference.reference,
+          status: 'ATIVO',
+        }
+      : null,
+  });
+  const sortByDateCreatedId = <T extends { createdAt?: Date; id: string }>(
+    items: T[],
+    dateKey: keyof T,
+  ) =>
+    [...items].sort((a, b) => {
+      const dateDiff = (b[dateKey] as Date).getTime() - (a[dateKey] as Date).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      const createdAtDiff =
+        (b.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime() -
+        (a.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime();
+      if (createdAtDiff !== 0) return createdAtDiff;
+      return a.id.localeCompare(b.id);
+    });
+
+  return {
+    receivable: {
+      count: vi.fn(({ where }: { where: Record<string, unknown> }) =>
+        Promise.resolve(receivables.filter((item) => matchesReceivableWhere(item, where)).length),
+      ),
+      findMany: vi.fn(({ where, take }: { take: number; where: Record<string, unknown> }) =>
+        Promise.resolve(
+          sortByDateCreatedId(
+            receivables.filter((item) => matchesReceivableWhere(item, where)),
+            'dueDate',
+          )
+            .slice(0, take)
+            .map(receivableWithRelations),
+        ),
+      ),
+    },
+    financialTransaction: {
+      count: vi.fn(({ where }: { where: Record<string, unknown> }) =>
+        Promise.resolve(transactions.filter((item) => matchesTransactionWhere(item, where)).length),
+      ),
+      findMany: vi.fn(({ where, take }: { take: number; where: Record<string, unknown> }) =>
+        Promise.resolve(
+          sortByDateCreatedId(
+            transactions.filter((item) => matchesTransactionWhere(item, where)),
+            'transactionDate',
+          )
+            .slice(0, take)
+            .map(transactionWithRelations),
+        ),
+      ),
+    },
+    $transaction: <T>(items: Array<Promise<T>>) => Promise.all(items),
+  };
+}
+
+function receivableFixture(overrides: Partial<ListReceivableFixture>): ListReceivableFixture {
+  const id = overrides.id ?? 'receivable-fixture';
+  const clientId = overrides.clientId ?? 'client-a';
+  const clientReferenceId = overrides.clientReferenceId ?? 'ref-a';
+
+  return {
+    amount: new Prisma.Decimal('10.00'),
+    client: { name: 'Cliente A' },
+    clientId,
+    clientReference: { reference: 'REF-A' },
+    clientReferenceId,
+    createdAt: new Date('2026-09-01T00:00:00.000Z'),
+    description: id,
+    dueDate: parseBusinessDate('2026-09-10'),
+    id,
+    status: 'PAGO',
+    ...overrides,
+  };
+}
+
+function legacyTransactionFixture(
+  overrides: Partial<ListTransactionFixture>,
+): ListTransactionFixture {
+  const id = overrides.id ?? 'legacy-fixture';
+  const clientId = overrides.clientId ?? 'client-a';
+  const clientReferenceId = overrides.clientReferenceId ?? 'ref-a';
+
+  return {
+    amount: new Prisma.Decimal('10.00'),
+    client: { name: 'Cliente A' },
+    clientId,
+    clientReference: { reference: 'REF-A' },
+    clientReferenceId,
+    createdAt: new Date('2026-09-01T00:00:00.000Z'),
+    description: id,
+    id,
+    notes: null,
+    origin: 'LEGACY_IMPORT',
+    paymentMethod: 'PIX',
+    transactionDate: parseBusinessDate('2026-09-10'),
+    type: 'ENTRADA',
+    ...overrides,
+  };
+}
+
 type SummaryPaymentIntent = {
   id: string;
   receivableClientId?: string | null;
@@ -1700,6 +2001,222 @@ describe('FinanceService', () => {
     vi.useRealTimers();
   });
 
+  it('paginates receivables and legacy imports with global date ordering across page boundaries', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({ id: 'r-30', dueDate: parseBusinessDate('2026-09-30') }),
+          receivableFixture({ id: 'r-20', dueDate: parseBusinessDate('2026-09-20') }),
+          receivableFixture({ id: 'r-10', dueDate: parseBusinessDate('2026-09-10') }),
+        ],
+        [
+          legacyTransactionFixture({
+            id: 'l-25',
+            transactionDate: parseBusinessDate('2026-09-25'),
+          }),
+          legacyTransactionFixture({
+            id: 'l-15',
+            transactionDate: parseBusinessDate('2026-09-15'),
+          }),
+          legacyTransactionFixture({
+            id: 'l-05',
+            transactionDate: parseBusinessDate('2026-09-05'),
+          }),
+        ],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.listReceivables({ page: 1, pageSize: 3 })).resolves.toMatchObject({
+      items: [{ id: 'r-30' }, { id: 'legacy:l-25' }, { id: 'r-20' }],
+      pagination: { page: 1, pageSize: 3, total: 6, totalPages: 2 },
+    });
+    await expect(service.listReceivables({ page: 2, pageSize: 3 })).resolves.toMatchObject({
+      items: [{ id: 'legacy:l-15' }, { id: 'r-10' }, { id: 'legacy:l-05' }],
+      pagination: { page: 2, pageSize: 3, total: 6, totalPages: 2 },
+    });
+  });
+
+  it('keeps deterministic page placement when records share date and createdAt', async () => {
+    const sharedDate = parseBusinessDate('2026-09-30');
+    const sharedCreatedAt = new Date('2026-09-30T12:00:00.000Z');
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'b-receivable',
+            dueDate: sharedDate,
+            createdAt: sharedCreatedAt,
+          }),
+          receivableFixture({
+            id: 'd-receivable',
+            dueDate: sharedDate,
+            createdAt: sharedCreatedAt,
+          }),
+        ],
+        [
+          legacyTransactionFixture({
+            id: 'a-legacy',
+            transactionDate: sharedDate,
+            createdAt: sharedCreatedAt,
+          }),
+          legacyTransactionFixture({
+            id: 'c-legacy',
+            transactionDate: sharedDate,
+            createdAt: sharedCreatedAt,
+          }),
+        ],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const firstRun = await service.listReceivables({ page: 1, pageSize: 2 });
+    const secondRun = await service.listReceivables({ page: 2, pageSize: 2 });
+    const repeatedFirstRun = await service.listReceivables({ page: 1, pageSize: 2 });
+
+    expect(firstRun.items.map((item) => item.id)).toEqual(['legacy:a-legacy', 'b-receivable']);
+    expect(secondRun.items.map((item) => item.id)).toEqual(['legacy:c-legacy', 'd-receivable']);
+    expect(repeatedFirstRun.items.map((item) => item.id)).toEqual(
+      firstRun.items.map((item) => item.id),
+    );
+  });
+
+  it.each([
+    { legacyCount: 120, name: 'large legacy history', receivableCount: 12 },
+    { legacyCount: 12, name: 'reverse distribution', receivableCount: 120 },
+    { legacyCount: 50, name: 'only legacy history', receivableCount: 0 },
+    { legacyCount: 0, name: 'only receivables', receivableCount: 50 },
+    { legacyCount: 0, name: 'empty client', receivableCount: 0 },
+  ])('returns every unique item for $name', async ({ legacyCount, receivableCount }) => {
+    const receivables = Array.from({ length: receivableCount }, (_, index) =>
+      receivableFixture({
+        id: `r-${String(index).padStart(3, '0')}`,
+        dueDate: parseBusinessDate(`2026-09-${String((index % 28) + 1).padStart(2, '0')}`),
+      }),
+    );
+    const legacyTransactions = Array.from({ length: legacyCount }, (_, index) =>
+      legacyTransactionFixture({
+        id: `l-${String(index).padStart(3, '0')}`,
+        transactionDate: parseBusinessDate(`2026-09-${String((index % 28) + 1).padStart(2, '0')}`),
+      }),
+    );
+    const service = new FinanceService(
+      createListReceivablesPrisma(receivables, legacyTransactions) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const pageSize = 10;
+    const firstPage = await service.listReceivables({ page: 1, pageSize });
+    const pages = await Promise.all(
+      Array.from({ length: firstPage.pagination.totalPages }, (_, index) =>
+        service.listReceivables({ page: index + 1, pageSize }),
+      ),
+    );
+    const ids = pages.flatMap((page) => page.items.map((item) => item.id));
+
+    expect(firstPage.pagination.total).toBe(receivableCount + legacyCount);
+    expect(ids).toHaveLength(receivableCount + legacyCount);
+    expect(new Set(ids).size).toBe(receivableCount + legacyCount);
+  });
+
+  it('keeps status, reference, client and transaction-origin filters scoped to the read model', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const prisma = createListReceivablesPrisma(
+      [
+        receivableFixture({ id: 'paid-a', status: 'PAGO', clientId: 'client-a' }),
+        receivableFixture({
+          id: 'pending-a',
+          status: 'PENDENTE',
+          dueDate: parseBusinessDate('2026-09-30'),
+          clientId: 'client-a',
+        }),
+        receivableFixture({
+          id: 'overdue-a',
+          status: 'PENDENTE',
+          dueDate: parseBusinessDate('2026-09-01'),
+          clientId: 'client-a',
+        }),
+        receivableFixture({ id: 'canceled-a', status: 'CANCELADO', clientId: 'client-a' }),
+        receivableFixture({ id: 'paid-b', status: 'PAGO', clientId: 'client-b' }),
+      ],
+      [
+        legacyTransactionFixture({ id: 'legacy-a-ref-a', clientId: 'client-a' }),
+        legacyTransactionFixture({
+          id: 'legacy-a-ref-b',
+          clientId: 'client-a',
+          clientReferenceId: 'ref-b',
+          clientReference: { reference: 'REF-B' },
+        }),
+        legacyTransactionFixture({ id: 'legacy-b', clientId: 'client-b' }),
+        legacyTransactionFixture({ id: 'manual-a', clientId: 'client-a', origin: 'MANUAL' }),
+        legacyTransactionFixture({
+          id: 'receivable-payment-a',
+          clientId: 'client-a',
+          origin: 'RECEIVABLE_PAYMENT',
+        }),
+        legacyTransactionFixture({ id: 'legacy-expense-a', clientId: 'client-a', type: 'SAIDA' }),
+      ],
+    );
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+
+    const paid = await service.listReceivables({
+      clientId: 'client-a',
+      status: 'PAGO',
+      page: 1,
+      pageSize: 20,
+    });
+    const pending = await service.listReceivables({
+      clientId: 'client-a',
+      status: 'PENDENTE',
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(paid.pagination.total).toBe(3);
+    expect(paid.items.map((item) => item.id)).toEqual([
+      'legacy:legacy-a-ref-a',
+      'legacy:legacy-a-ref-b',
+      'paid-a',
+    ]);
+    expect(pending.pagination.total).toBe(2);
+    expect(pending.items.map((item) => item.id).sort()).toEqual(['overdue-a', 'pending-a']);
+    await expect(
+      service.listReceivables({ clientId: 'client-a', status: 'VENCIDO', page: 1, pageSize: 20 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'overdue-a' }],
+      pagination: { total: 1 },
+    });
+    await expect(
+      service.listReceivables({ clientId: 'client-a', status: 'CANCELADO', page: 1, pageSize: 20 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'canceled-a' }],
+      pagination: { total: 1 },
+    });
+    await expect(
+      service.listReceivables({
+        clientId: 'client-a',
+        clientReferenceId: 'ref-b',
+        page: 1,
+        pageSize: 20,
+      }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'legacy:legacy-a-ref-b' }],
+      pagination: { total: 1 },
+    });
+    const clientB = await service.listReceivables({ clientId: 'client-b', page: 1, pageSize: 20 });
+
+    expect(clientB.pagination.total).toBe(2);
+    expect(clientB.items.map((item) => item.id).sort()).toEqual(['legacy:legacy-b', 'paid-b']);
+
+    vi.useRealTimers();
+  });
+
   it('models Edilson payment 11670 as legacy financial history without operational side effects', async () => {
     const legacyClient = {
       billingNoticeDays: 0,
@@ -1880,6 +2397,37 @@ describe('FinanceService', () => {
         page: 1,
         pageSize: 10,
         startDate: '2026-09-01',
+      }),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          amount: '35.00',
+          client: { name: 'Edilson' },
+          clientReference: { reference: 'edilson7581' },
+          description: 'Pagamento / Receita histórica',
+          displayStatus: 'PAGO',
+          dueDate: '2026-09-26',
+          id: 'legacy:transaction-payment-11670',
+          origin: 'LEGACY_IMPORT',
+          paymentIntents: [],
+          paymentMethod: 'PIX',
+          paymentTransactionId: 'transaction-payment-11670',
+          sourceId: 'transaction-payment-11670',
+          sourceKind: 'LEGACY_IMPORT',
+          status: 'PAGO',
+        },
+      ],
+      pagination: { page: 1, pageSize: 10, total: 1, totalPages: 1 },
+    });
+    await expect(
+      service.listReceivables({
+        clientId: crmClient.id,
+        clientReferenceId: crmClientReference.id,
+        endDate: '2026-09-30',
+        page: 1,
+        pageSize: 10,
+        startDate: '2026-09-01',
+        status: 'PENDENTE',
       }),
     ).resolves.toMatchObject({
       items: [],

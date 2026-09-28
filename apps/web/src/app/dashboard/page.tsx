@@ -1514,7 +1514,7 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
                 <dt>Aviso</dt>
                 <dd>{selectedRow.billingNoticeDays ?? '-'}</dd>
                 <dt>Hash</dt>
-                <dd>{selectedRow.payloadHash ?? '-'}</dd>
+                <dd className="legacy-import-hash-value">{selectedRow.payloadHash ?? '-'}</dd>
               </dl>
               <div className="legacy-import-detail-section">
                 <h3>Erros</h3>
@@ -1961,7 +1961,7 @@ function LegacyFinancialImportPreviewView() {
                 <dt>Categoria</dt>
                 <dd>{selectedRow.category?.name ?? '-'}</dd>
                 <dt>Hash</dt>
-                <dd>{selectedRow.payloadHash ?? '-'}</dd>
+                <dd className="legacy-import-hash-value">{selectedRow.payloadHash ?? '-'}</dd>
               </dl>
               <div className="legacy-import-detail-section">
                 <h3>Observação</h3>
@@ -3784,7 +3784,7 @@ function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
             >
               <option value="">Todas as origens</option>
               <option value="RECEIVABLE_PAYMENT">Contas a receber</option>
-              <option value="LEGACY_IMPORT">Histórico legado</option>
+              <option value="LEGACY_IMPORT">Importação histórica</option>
               <option value="MANUAL">Manual</option>
             </select>
           </>
@@ -6571,12 +6571,6 @@ function ClientsView({
   const [clientFinancePagination, setClientFinancePagination] = useState<
     PaginatedClients['pagination'] | null
   >(null);
-  const [clientFinancialHistoryItems, setClientFinancialHistoryItems] = useState<
-    FinancialTransaction[]
-  >([]);
-  const [clientFinancialHistoryPagination, setClientFinancialHistoryPagination] = useState<
-    PaginatedClients['pagination'] | null
-  >(null);
   const [clientFinanceSummary, setClientFinanceSummary] = useState<ReceivablesSummary | null>(null);
   const [clientOverviewSummary, setClientOverviewSummary] = useState<{
     clientId: string;
@@ -6589,7 +6583,6 @@ function ClientsView({
   } | null>(null);
   const [clientPixSummaryError, setClientPixSummaryError] = useState('');
   const [clientFinancePage, setClientFinancePage] = useState(1);
-  const [clientFinancialHistoryPage, setClientFinancialHistoryPage] = useState(1);
   const [clientFinancePeriod, setClientFinancePeriod] = useState<FinancePeriod>(() =>
     currentFinancePeriod(),
   );
@@ -6602,6 +6595,7 @@ function ClientsView({
   const [paymentReceivables, setPaymentReceivables] = useState<Receivable[] | null>(null);
   const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
+  const [viewingLegacyPayment, setViewingLegacyPayment] = useState<Receivable | null>(null);
   const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
   const [selectedDispatch, setSelectedDispatch] = useState<MessageDispatch | null>(null);
   const [clientBillingDispatches, setClientBillingDispatches] = useState<MessageDispatch[]>([]);
@@ -6719,7 +6713,7 @@ function ClientsView({
     };
 
     try {
-      const [nextReceivables, nextSummary, nextFinancialHistory] = await Promise.all([
+      const [nextReceivables, nextSummary] = await Promise.all([
         listReceivables({
           ...baseFilters,
           page: clientFinancePage,
@@ -6727,20 +6721,11 @@ function ClientsView({
           status: clientFinanceStatus,
         }),
         getReceivablesSummary(baseFilters),
-        listFinancialTransactions({
-          ...baseFilters,
-          origin: 'LEGACY_IMPORT',
-          page: clientFinancialHistoryPage,
-          pageSize: listPageSize,
-          type: 'ENTRADA',
-        }),
       ]);
 
       setClientFinanceItems(nextReceivables.items);
       setClientFinancePagination(nextReceivables.pagination);
       setClientFinanceSummary(nextSummary);
-      setClientFinancialHistoryItems(nextFinancialHistory.items);
-      setClientFinancialHistoryPagination(nextFinancialHistory.pagination);
       if (
         !nextReceivables.items.length &&
         nextReceivables.pagination.page > 1 &&
@@ -6748,18 +6733,9 @@ function ClientsView({
       ) {
         setClientFinancePage(Math.max(1, nextReceivables.pagination.totalPages));
       }
-      if (
-        !nextFinancialHistory.items.length &&
-        nextFinancialHistory.pagination.page > 1 &&
-        nextFinancialHistory.pagination.total > 0
-      ) {
-        setClientFinancialHistoryPage(Math.max(1, nextFinancialHistory.pagination.totalPages));
-      }
     } catch (err) {
       setClientFinanceItems([]);
       setClientFinancePagination(null);
-      setClientFinancialHistoryItems([]);
-      setClientFinancialHistoryPagination(null);
       setClientFinanceSummary(null);
       setClientFinanceError(
         err instanceof Error ? err.message : 'Não foi possível carregar financeiro do cliente.',
@@ -6769,7 +6745,6 @@ function ClientsView({
     }
   }, [
     clientFinancePage,
-    clientFinancialHistoryPage,
     clientFinancePeriod.endDate,
     clientFinancePeriod.startDate,
     clientFinanceReferenceId,
@@ -6851,12 +6826,11 @@ function ClientsView({
     setPaymentReceivables(null);
     setPixReceivables(null);
     setCancelingReceivable(null);
+    setViewingLegacyPayment(null);
     setClientActionNotice('');
     setClientActionError('');
     setClientFinanceItems([]);
     setClientFinancePagination(null);
-    setClientFinancialHistoryItems([]);
-    setClientFinancialHistoryPagination(null);
     setClientFinanceSummary(null);
     setClientOverviewSummary(null);
     setClientOverviewSummaryError('');
@@ -6871,7 +6845,6 @@ function ClientsView({
     setClientBillingLoading(false);
     setClientBillingError('');
     setClientFinancePage(1);
-    setClientFinancialHistoryPage(1);
     setClientFinancePeriod(currentFinancePeriod());
     setClientFinanceReferenceId('');
     setClientFinanceStatus('');
@@ -6913,7 +6886,6 @@ function ClientsView({
     setSelectedReceivableIds([]);
   }, [
     clientFinancePage,
-    clientFinancialHistoryPage,
     clientFinancePeriod.startDate,
     clientFinanceReferenceId,
     clientFinanceStatus,
@@ -7006,7 +6978,6 @@ function ClientsView({
   function changeClientFinanceMonth(months: number) {
     setClientFinancePeriod((current) => shiftFinancePeriod(current, months));
     setClientFinancePage(1);
-    setClientFinancialHistoryPage(1);
   }
 
   return (
@@ -8022,7 +7993,6 @@ function ClientsView({
                       onChange={(event) => {
                         setClientFinanceReferenceId(event.target.value);
                         setClientFinancePage(1);
-                        setClientFinancialHistoryPage(1);
                       }}
                     >
                       <option value="">Todas as referências</option>
@@ -8098,6 +8068,7 @@ function ClientsView({
                         {clientFinanceItems.map((receivable) => {
                           const checked = selectedReceivableIds.includes(receivable.id);
                           const status = receivableVisualStatus(receivable);
+                          const legacyImport = isLegacyImportReceivable(receivable);
 
                           return (
                             <tr key={receivable.id}>
@@ -8105,7 +8076,7 @@ function ClientsView({
                                 <input
                                   aria-label={`Selecionar ${receivable.description}`}
                                   checked={checked}
-                                  disabled={receivable.status !== 'PENDENTE'}
+                                  disabled={legacyImport || receivable.status !== 'PENDENTE'}
                                   type="checkbox"
                                   onChange={(event) => {
                                     toggleClientReceivableSelection(
@@ -8136,39 +8107,50 @@ function ClientsView({
                                 </span>
                               </td>
                               <td className="finance-actions-column">
-                                <div className="table-actions">
-                                  <IconButton
-                                    disabled={
-                                      receivable.status !== 'PENDENTE' &&
-                                      !receivable.paymentIntents?.length
-                                    }
-                                    icon={QrCode}
-                                    label="Gerar ou ver PIX"
-                                    onClick={() => setPixReceivable(receivable)}
-                                  />
-                                  <ActionMenu
-                                    items={[
-                                      {
-                                        disabled: receivable.status !== 'PENDENTE',
-                                        icon: QrCode,
-                                        label: 'Gerar PIX',
-                                        onSelect: () => setPixReceivable(receivable),
-                                      },
-                                      {
-                                        disabled: receivable.status !== 'PENDENTE',
-                                        icon: CircleCheck,
-                                        label: 'Dar baixa',
-                                        onSelect: () => setPaymentReceivable(receivable),
-                                      },
-                                      {
-                                        disabled: receivable.status !== 'PENDENTE',
-                                        icon: XCircle,
-                                        label: 'Cancelar',
-                                        onSelect: () => setCancelingReceivable(receivable),
-                                      },
-                                    ]}
-                                  />
-                                </div>
+                                {legacyImport ? (
+                                  <Button
+                                    icon={Eye}
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => setViewingLegacyPayment(receivable)}
+                                  >
+                                    Visualizar
+                                  </Button>
+                                ) : (
+                                  <div className="table-actions">
+                                    <IconButton
+                                      disabled={
+                                        receivable.status !== 'PENDENTE' &&
+                                        !receivable.paymentIntents?.length
+                                      }
+                                      icon={QrCode}
+                                      label="Gerar ou ver PIX"
+                                      onClick={() => setPixReceivable(receivable)}
+                                    />
+                                    <ActionMenu
+                                      items={[
+                                        {
+                                          disabled: receivable.status !== 'PENDENTE',
+                                          icon: QrCode,
+                                          label: 'Gerar PIX',
+                                          onSelect: () => setPixReceivable(receivable),
+                                        },
+                                        {
+                                          disabled: receivable.status !== 'PENDENTE',
+                                          icon: CircleCheck,
+                                          label: 'Dar baixa',
+                                          onSelect: () => setPaymentReceivable(receivable),
+                                        },
+                                        {
+                                          disabled: receivable.status !== 'PENDENTE',
+                                          icon: XCircle,
+                                          label: 'Cancelar',
+                                          onSelect: () => setCancelingReceivable(receivable),
+                                        },
+                                      ]}
+                                    />
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           );
@@ -8188,56 +8170,6 @@ function ClientsView({
                       onPageChange={setClientFinancePage}
                     />
                   </div>
-                  <section className="client-financial-history-section">
-                    <ClientSectionHeading
-                      description="Pagamentos importados do sistema legado."
-                      icon={Receipt}
-                      title="Histórico financeiro"
-                    />
-                    <div className="table-wrap compact-table">
-                      <table className="client-finance-table">
-                        <thead>
-                          <tr>
-                            <th>Data</th>
-                            <th>Descrição</th>
-                            <th>Referência</th>
-                            <th>Categoria</th>
-                            <th>Método</th>
-                            <th className="finance-amount-column">Valor</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {clientFinancialHistoryItems.map((transaction) => (
-                            <tr key={transaction.id}>
-                              <td>{formatDate(transaction.transactionDate)}</td>
-                              <td>
-                                <strong>{transaction.description}</strong>
-                                <span>{financialTransactionOriginLabel(transaction.origin)}</span>
-                              </td>
-                              <td>{transaction.clientReference?.reference ?? '-'}</td>
-                              <td>{transaction.category.name}</td>
-                              <td>{financialPaymentMethodLabel(transaction.paymentMethod)}</td>
-                              <td className="finance-amount-column">
-                                {formatCurrency(transaction.amount)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {!clientFinancialHistoryItems.length ? (
-                        <div className="empty-state">
-                          {clientFinanceLoading
-                            ? 'Carregando histórico financeiro...'
-                            : 'Sem histórico financeiro importado.'}
-                        </div>
-                      ) : null}
-                      <PaginationControls
-                        itemLabel="movimentações"
-                        pagination={clientFinancialHistoryPagination}
-                        onPageChange={setClientFinancialHistoryPage}
-                      />
-                    </div>
-                  </section>
                   {clientFinanceItems.some((receivable) => receivable.paymentIntents?.length) ? (
                     <div className="pix-intent-list">
                       {clientFinanceItems.flatMap((receivable) =>
@@ -8557,6 +8489,12 @@ function ClientsView({
               setCancelingReceivable(null);
               await refreshClientFinance('Conta a receber cancelada.');
             }}
+          />
+        ) : null}
+        {viewingLegacyPayment ? (
+          <LegacyPaymentDetailModal
+            receivable={viewingLegacyPayment}
+            onClose={() => setViewingLegacyPayment(null)}
           />
         ) : null}
         {whatsAppClient ? (
@@ -12719,6 +12657,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
   const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
+  const [viewingLegacyPayment, setViewingLegacyPayment] = useState<Receivable | null>(null);
   const [transactionModal, setTransactionModal] = useState<{
     kind: FinancialTransactionType;
     transaction: FinancialTransaction | undefined;
@@ -13151,62 +13090,82 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                 </tr>
               </thead>
               <tbody>
-                {receivables.map((receivable) => (
-                  <tr key={receivable.id}>
-                    <td className="finance-select-column">
-                      <input
-                        aria-label={`Selecionar ${receivable.description}`}
-                        checked={selectedReceivableIds.includes(receivable.id)}
-                        disabled={
-                          receivable.status !== 'PENDENTE' ||
-                          Boolean(selectedClientId && selectedClientId !== receivable.clientId)
-                        }
-                        type="checkbox"
-                        onChange={() => toggleReceivableSelection(receivable)}
-                      />
-                    </td>
-                    <td>{receivable.client?.name ?? '-'}</td>
-                    <td>{receivable.client?.reference ?? '-'}</td>
-                    <td>{receivable.description}</td>
-                    <td>{formatDate(receivable.dueDate)}</td>
-                    <td className="finance-amount-column">{formatCurrency(receivable.amount)}</td>
-                    <td className="finance-status-column">
-                      <span
-                        className={`finance-status-pill tone-${financeReceivableTone(receivable)}`}
-                      >
-                        {receivable.displayStatus}
-                      </span>
-                    </td>
-                    <td className="finance-actions-column">
-                      <div className="table-actions">
-                        <IconButton
-                          disabled={receivable.status !== 'PENDENTE'}
-                          icon={QrCode}
-                          label={`Gerar PIX para ${receivable.description}`}
-                          variant="secondary"
-                          onClick={() => setPixReceivable(receivable)}
+                {receivables.map((receivable) => {
+                  const legacyImport = isLegacyImportReceivable(receivable);
+
+                  return (
+                    <tr key={receivable.id}>
+                      <td className="finance-select-column">
+                        <input
+                          aria-label={`Selecionar ${receivable.description}`}
+                          checked={selectedReceivableIds.includes(receivable.id)}
+                          disabled={
+                            legacyImport ||
+                            receivable.status !== 'PENDENTE' ||
+                            Boolean(selectedClientId && selectedClientId !== receivable.clientId)
+                          }
+                          type="checkbox"
+                          onChange={() => toggleReceivableSelection(receivable)}
                         />
-                        <ActionMenu
-                          items={[
-                            {
-                              disabled: receivable.status !== 'PENDENTE',
-                              icon: CircleCheck,
-                              label: 'Dar baixa',
-                              onSelect: () => setPaymentReceivable(receivable),
-                            },
-                            {
-                              danger: true,
-                              disabled: receivable.status !== 'PENDENTE',
-                              icon: XCircle,
-                              label: 'Cancelar',
-                              onSelect: () => setCancelingReceivable(receivable),
-                            },
-                          ]}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>{receivable.client?.name ?? '-'}</td>
+                      <td>
+                        {receivable.clientReference?.reference ??
+                          receivable.client?.reference ??
+                          '-'}
+                      </td>
+                      <td>{receivable.description}</td>
+                      <td>{formatDate(receivable.dueDate)}</td>
+                      <td className="finance-amount-column">{formatCurrency(receivable.amount)}</td>
+                      <td className="finance-status-column">
+                        <span
+                          className={`finance-status-pill tone-${financeReceivableTone(receivable)}`}
+                        >
+                          {receivable.displayStatus}
+                        </span>
+                      </td>
+                      <td className="finance-actions-column">
+                        {legacyImport ? (
+                          <Button
+                            icon={Eye}
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setViewingLegacyPayment(receivable)}
+                          >
+                            Visualizar
+                          </Button>
+                        ) : (
+                          <div className="table-actions">
+                            <IconButton
+                              disabled={receivable.status !== 'PENDENTE'}
+                              icon={QrCode}
+                              label={`Gerar PIX para ${receivable.description}`}
+                              variant="secondary"
+                              onClick={() => setPixReceivable(receivable)}
+                            />
+                            <ActionMenu
+                              items={[
+                                {
+                                  disabled: receivable.status !== 'PENDENTE',
+                                  icon: CircleCheck,
+                                  label: 'Dar baixa',
+                                  onSelect: () => setPaymentReceivable(receivable),
+                                },
+                                {
+                                  danger: true,
+                                  disabled: receivable.status !== 'PENDENTE',
+                                  icon: XCircle,
+                                  label: 'Cancelar',
+                                  onSelect: () => setCancelingReceivable(receivable),
+                                },
+                              ]}
+                            />
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             {!receivables.length ? (
@@ -13311,6 +13270,12 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             setCancelingReceivable(null);
             await reloadWithNotice('Conta a receber cancelada.');
           }}
+        />
+      ) : null}
+      {viewingLegacyPayment ? (
+        <LegacyPaymentDetailModal
+          receivable={viewingLegacyPayment}
+          onClose={() => setViewingLegacyPayment(null)}
         />
       ) : null}
       {transactionModal ? (
@@ -14188,7 +14153,7 @@ function financeReceivableTone(receivable: Pick<Receivable, 'displayStatus' | 's
 
 function financialTransactionOriginLabel(origin: FinancialTransactionOrigin) {
   const labels = {
-    LEGACY_IMPORT: 'Histórico legado',
+    LEGACY_IMPORT: 'Importação histórica',
     MANUAL: 'Manual',
     RECEIVABLE_PAYMENT: 'Conta a receber',
   } satisfies Record<FinancialTransactionOrigin, string>;
@@ -14207,6 +14172,67 @@ function financialPaymentMethodLabel(method: FinancialPaymentMethod | null) {
   } satisfies Record<FinancialPaymentMethod, string>;
 
   return labels[method];
+}
+
+function isLegacyImportReceivable(receivable: Receivable) {
+  return receivable.sourceKind === 'LEGACY_IMPORT' || receivable.origin === 'LEGACY_IMPORT';
+}
+
+function LegacyPaymentDetailModal({
+  receivable,
+  onClose,
+}: {
+  receivable: Receivable;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="legacy-payment-detail-title">
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <Receipt size={15} />
+          </span>
+          <div>
+            <span className="metric-label">Pagamento</span>
+            <h2 id="legacy-payment-detail-title">Detalhe do pagamento</h2>
+            <p>Registro financeiro somente para consulta.</p>
+          </div>
+          <IconButton icon={X} label="Fechar detalhe do pagamento" onClick={onClose} />
+        </header>
+
+        <dl className="detail-list">
+          <div>
+            <dt>Data</dt>
+            <dd>{formatDate(receivable.dueDate)}</dd>
+          </div>
+          <div>
+            <dt>Valor</dt>
+            <dd>{formatCurrency(receivable.amount)}</dd>
+          </div>
+          <div>
+            <dt>Referência</dt>
+            <dd>{receivable.clientReference?.reference ?? receivable.client?.reference ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Método</dt>
+            <dd>{financialPaymentMethodLabel(receivable.paymentMethod ?? null)}</dd>
+          </div>
+          <div>
+            <dt>Categoria</dt>
+            <dd>{receivable.category?.name ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Descrição</dt>
+            <dd>{receivable.originalDescription ?? receivable.description}</dd>
+          </div>
+          <div>
+            <dt>Origem</dt>
+            <dd>{financialTransactionOriginLabel(receivable.origin ?? 'LEGACY_IMPORT')}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
 }
 
 function PixReceivableModal({

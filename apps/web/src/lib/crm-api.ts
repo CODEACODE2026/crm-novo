@@ -197,6 +197,8 @@ export interface Renewal {
 }
 
 export interface Receivable {
+  sourceKind?: 'RECEIVABLE' | 'LEGACY_IMPORT';
+  sourceId?: string;
   id: string;
   clientId: string;
   clientReferenceId?: string;
@@ -212,6 +214,11 @@ export interface Receivable {
   cancelReason?: string | null;
   paymentTransactionId?: string | null;
   paymentIntents?: PaymentIntent[];
+  paymentMethod?: FinancialPaymentMethod | null;
+  origin?: FinancialTransactionOrigin;
+  category?: FinancialCategory;
+  originalDescription?: string;
+  notes?: string | null;
   createdAt: string;
   updatedAt: string;
   client?: Pick<Client, 'id' | 'name' | 'reference'>;

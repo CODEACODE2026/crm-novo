@@ -92,8 +92,10 @@ describe('global finance presentation source', () => {
 
   it('labels legacy imported financial transactions without enabling manual actions', () => {
     expect(dashboardSource).toContain('function financialTransactionOriginLabel');
-    expect(dashboardSource).toContain("LEGACY_IMPORT: 'Histórico legado'");
-    expect(dashboardSource).toContain('<option value="LEGACY_IMPORT">Histórico legado</option>');
+    expect(dashboardSource).toContain("LEGACY_IMPORT: 'Importação histórica'");
+    expect(dashboardSource).toContain(
+      '<option value="LEGACY_IMPORT">Importação histórica</option>',
+    );
     expect(dashboardSource).toContain("transaction.origin !== 'MANUAL'");
   });
 

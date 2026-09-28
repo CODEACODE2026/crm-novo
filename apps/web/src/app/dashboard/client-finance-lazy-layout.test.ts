@@ -66,30 +66,30 @@ describe('phase E2A client finance lazy loading source', () => {
     expect(clientFinanceSource).toContain('onPageChange={setClientFinancePage}');
   });
 
-  it('loads legacy financial history separately from client receivables', () => {
-    expect(clientsSource).toContain('const [clientFinancialHistoryItems');
-    expect(clientsSource).toContain('const [clientFinancialHistoryPagination');
-    expect(clientsSource).toContain("origin: 'LEGACY_IMPORT'");
-    expect(clientsSource).toContain('page: clientFinancialHistoryPage');
-    expect(clientFinanceSource).toContain('Histórico financeiro');
-    expect(clientFinanceSource).toContain('clientFinancialHistoryItems.map((transaction)');
-    expect(clientFinanceSource).toContain('financialPaymentMethodLabel(transaction.paymentMethod)');
-    expect(clientFinanceSource).toContain('pagination={clientFinancialHistoryPagination}');
-    expect(clientFinanceSource).toContain('onPageChange={setClientFinancialHistoryPage}');
+  it('shows legacy imported payments inside the normal client finance table', () => {
+    expect(clientsSource).toContain('isLegacyImportReceivable(receivable)');
+    expect(clientsSource).toContain('setViewingLegacyPayment(receivable)');
+    expect(clientsSource).not.toContain('const [clientFinancialHistoryItems');
+    expect(clientsSource).not.toContain('const [clientFinancialHistoryPagination');
+    expect(clientFinanceSource).not.toContain('Histórico financeiro');
+    expect(clientFinanceSource).not.toContain('clientFinancialHistoryItems.map((transaction)');
+    expect(dashboardSource).toContain('financialPaymentMethodLabel(receivable.paymentMethod');
+    expect(clientFinanceSource).not.toContain('pagination={clientFinancialHistoryPagination}');
+    expect(clientFinanceSource).not.toContain('onPageChange={setClientFinancialHistoryPage}');
   });
 
   it('clears client finance state and current-page selection on safe boundaries', () => {
     expect(clientsSource).toContain('setClientFinanceItems([]);');
     expect(clientsSource).toContain('setClientFinancePagination(null);');
-    expect(clientsSource).toContain('setClientFinancialHistoryItems([]);');
-    expect(clientsSource).toContain('setClientFinancialHistoryPagination(null);');
+    expect(clientsSource).not.toContain('setClientFinancialHistoryItems([]);');
+    expect(clientsSource).not.toContain('setClientFinancialHistoryPagination(null);');
     expect(clientsSource).toContain('setClientFinanceSummary(null);');
     expect(clientsSource).toContain('setClientFinancePeriod(currentFinancePeriod());');
     expect(clientsSource).toContain('setClientFinanceReferenceId');
     expect(clientsSource).toContain('setClientFinanceStatus');
     expect(clientsSource).toContain('setSelectedReceivableIds([]);');
     expect(clientsSource).toContain('clientFinancePage');
-    expect(clientsSource).toContain('clientFinancialHistoryPage');
+    expect(clientsSource).not.toContain('clientFinancialHistoryPage');
     expect(clientsSource).toContain('clientFinanceReferenceId');
     expect(clientsSource).toContain('clientFinanceStatus');
   });

@@ -100,6 +100,22 @@ type TransactionWithRelations = Prisma.FinancialTransactionGetPayload<{
   };
 }>;
 
+type ReceivableListItem =
+  | {
+      createdAt: Date;
+      date: Date;
+      id: string;
+      kind: 'RECEIVABLE';
+      receivable: ReceivableWithRelations;
+    }
+  | {
+      createdAt: Date;
+      date: Date;
+      id: string;
+      kind: 'LEGACY_IMPORT';
+      transaction: TransactionWithRelations;
+    };
+
 type PaymentWebhookStatus = PaymentProviderStatus & {
   eventKey: string;
 };
@@ -237,26 +253,78 @@ export class FinanceService {
     const page = query.page ?? 1;
     const pageSize = Math.min(query.pageSize ?? 20, pageSizeLimit);
     const where = this.buildReceivableWhere(query);
+    const includeLegacyPaid = !query.status || query.status === 'PAGO';
+    const legacyWhere = includeLegacyPaid ? this.buildLegacyImportPaidWhere(query) : null;
+    const windowSize = (page - 1) * pageSize + pageSize;
 
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.receivable.findMany({
-        where,
-        include: {
-          client: true,
-          clientReference: { include: { plan: true } },
-          renewal: true,
-          paymentTransaction: true,
-          paymentIntents: { orderBy: { createdAt: 'desc' } },
-        },
-        orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.receivable.count({ where }),
-    ]);
+    const receivableListQuery = this.prisma.receivable.findMany({
+      where,
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        renewal: true,
+        paymentTransaction: true,
+        paymentIntents: { orderBy: { createdAt: 'desc' } },
+      },
+      orderBy: [{ dueDate: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
+      take: windowSize,
+    });
+    const receivableCountQuery = this.prisma.receivable.count({ where });
+
+    const [receivableItems, receivableTotal, legacyItems, legacyTotal] = legacyWhere
+      ? await this.prisma.$transaction([
+          receivableListQuery,
+          receivableCountQuery,
+          this.prisma.financialTransaction.findMany({
+            where: legacyWhere,
+            include: {
+              category: true,
+              client: true,
+              clientReference: true,
+              receivable: { include: { clientReference: true } },
+            },
+            orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
+            take: windowSize,
+          }),
+          this.prisma.financialTransaction.count({ where: legacyWhere }),
+        ])
+      : [...(await this.prisma.$transaction([receivableListQuery, receivableCountQuery])), [], 0];
+
+    const offset = (page - 1) * pageSize;
+    const mergedItems: ReceivableListItem[] = [
+      ...receivableItems.map((receivable) => ({
+        createdAt: receivable.createdAt,
+        date: receivable.dueDate,
+        id: receivable.id,
+        kind: 'RECEIVABLE' as const,
+        receivable,
+      })),
+      ...legacyItems.map((transaction) => ({
+        createdAt: transaction.createdAt,
+        date: transaction.transactionDate,
+        id: transaction.id,
+        kind: 'LEGACY_IMPORT' as const,
+        transaction,
+      })),
+    ];
+
+    mergedItems.sort((a, b) => {
+      const dateDiff = b.date.getTime() - a.date.getTime();
+      if (dateDiff !== 0) return dateDiff;
+      const createdAtDiff = b.createdAt.getTime() - a.createdAt.getTime();
+      if (createdAtDiff !== 0) return createdAtDiff;
+      return a.id.localeCompare(b.id);
+    });
+
+    const items = mergedItems.slice(offset, offset + pageSize);
+    const total = receivableTotal + legacyTotal;
 
     return {
-      items: items.map((receivable) => this.presentReceivable(receivable)),
+      items: items.map((item) =>
+        item.kind === 'RECEIVABLE'
+          ? this.presentReceivable(item.receivable)
+          : this.presentLegacyImportReceivable(item.transaction),
+      ),
       pagination: this.presentPagination(page, pageSize, total),
     };
   }
@@ -3167,6 +3235,7 @@ export class FinanceService {
 
   private presentReceivable(receivable: ReceivableWithRelations) {
     return {
+      sourceKind: 'RECEIVABLE',
       id: receivable.id,
       clientId: receivable.clientId,
       clientReferenceId: receivable.clientReferenceId,
@@ -3203,6 +3272,53 @@ export class FinanceService {
             planName: receivable.renewal.planName,
           }
         : null,
+    };
+  }
+
+  private presentLegacyImportReceivable(transaction: TransactionWithRelations) {
+    const clientReference = transaction.clientReference ?? transaction.receivable?.clientReference;
+
+    return {
+      sourceKind: 'LEGACY_IMPORT',
+      id: `legacy:${transaction.id}`,
+      sourceId: transaction.id,
+      clientId: transaction.clientId,
+      clientReferenceId:
+        transaction.clientReferenceId ?? transaction.receivable?.clientReferenceId ?? null,
+      renewalId: null,
+      purpose: 'RENEWAL',
+      description: 'Pagamento / Receita histórica',
+      amount: transaction.amount.toFixed(2),
+      dueDate: formatBusinessDate(transaction.transactionDate),
+      status: 'PAGO',
+      displayStatus: 'PAGO',
+      paidAt: formatBusinessDate(transaction.transactionDate),
+      canceledAt: null,
+      cancelReason: null,
+      paymentTransactionId: transaction.id,
+      paymentIntents: [],
+      paymentMethod: transaction.paymentMethod,
+      origin: transaction.origin,
+      category: transaction.category,
+      originalDescription: transaction.description,
+      notes: transaction.notes,
+      createdAt: transaction.createdAt,
+      updatedAt: transaction.updatedAt,
+      client: transaction.client
+        ? {
+            id: transaction.client.id,
+            name: transaction.client.name,
+            reference: clientReference?.reference ?? transaction.client.reference,
+          }
+        : null,
+      clientReference: clientReference
+        ? {
+            id: clientReference.id,
+            reference: clientReference.reference,
+            status: clientReference.status,
+          }
+        : null,
+      renewal: null,
     };
   }
 

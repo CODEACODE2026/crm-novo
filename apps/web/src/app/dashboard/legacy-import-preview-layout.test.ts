@@ -113,4 +113,10 @@ describe('legacy import preview UI', () => {
     expect(importViewSource).toContain('até 2.000 pagamentos por arquivo');
     expect(stylesSource).toContain('.legacy-payment-table td:nth-child(8)::before');
   });
+
+  it('wraps long legacy payment hashes inside the detail modal', () => {
+    expect(importViewSource).toContain('legacy-import-hash-value');
+    expect(stylesSource).toContain('.legacy-import-hash-value');
+    expect(stylesSource).toContain('overflow-wrap: anywhere;');
+  });
 });

@@ -6814,6 +6814,11 @@ tbody tr:hover,
   font-size: 14px;
 }
 
+.legacy-import-hash-value {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .legacy-import-code-list,
 .legacy-import-match-list {
   display: grid;

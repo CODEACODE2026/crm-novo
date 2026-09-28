@@ -25,6 +25,7 @@ import {
   payReceivable,
   payReceivables,
   previewLegacyClients,
+  previewLegacyPayments,
   previewReceivablePixReplacement,
   previewReceivablePixReplacementRecovery,
   previewRenewalReversal,
@@ -242,6 +243,41 @@ describe('CRM UI formatters', () => {
       schemaVersion: 1,
       source: 'legacy',
       planMapping: { MENSAL: 'plan-1' },
+    });
+  });
+
+  it('wraps pure legacy payment arrays before posting to the read-only financial preview endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          summary: {
+            total: 0,
+            readyPaidHistory: 0,
+            unchanged: 0,
+            clientNotImported: 0,
+            pending: 0,
+            unsupported: 0,
+            conflict: 0,
+            invalid: 0,
+          },
+          hashFields: [],
+          rows: [],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewLegacyPayments([{ id: 11670, client_id: 2352 }]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/legacy-import/payments/preview'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toMatchObject({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [{ id: 11670, client_id: 2352 }],
     });
   });
 

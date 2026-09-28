@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { ClientStatus, Prisma } from '@prisma/client';
+import { ClientStatus, FinancialPaymentMethod, Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import {
   formatBusinessDate,
@@ -10,6 +10,7 @@ import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
 
 const maxClientsPerPreview = 10_000;
+const maxPaymentsPerPreview = 10_000;
 const maxUnsignedBigInt = 18_446_744_073_709_551_615n;
 const source = 'legacy';
 const orphanLegacyMappingMessage =
@@ -46,6 +47,14 @@ type LegacyImportClassification =
   | 'NEEDS_DECISION'
   | 'CONFLICT'
   | 'INVALID';
+type LegacyPaymentPreviewClassification =
+  | 'READY_PAID_HISTORY'
+  | 'UNCHANGED'
+  | 'CLIENT_NOT_IMPORTED'
+  | 'PENDING_NOT_SUPPORTED'
+  | 'UNSUPPORTED'
+  | 'CONFLICT'
+  | 'INVALID';
 
 type CandidateMatch = {
   field: 'reference' | 'phone' | 'email' | 'name';
@@ -79,14 +88,33 @@ type NormalizedLegacyClient = {
 };
 
 type LegacyClientInput = Record<string, unknown>;
+type LegacyPaymentInput = Record<string, unknown>;
 type LegacyImportRecordLookup = {
   legacyClientId: string;
   payloadHash: string;
   crmClientId: string | null;
   crmClientReferenceId: string | null;
+  status?: string;
+};
+type LegacyFinancialImportRecordLookup = {
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  financialTransactionId: string | null;
+  legacyClientId: string;
+  legacyPaymentId: string;
+  payloadHash: string;
+  receivableId: string | null;
+  status: string;
 };
 type ClientIdLookup = { id: string };
-type ClientReferenceIdLookup = { id: string; clientId: string };
+type ClientLookup = { id: string; name: string };
+type ClientReferenceIdLookup = { id: string; clientId: string; reference?: string };
+type FinancialCategoryLookup = { active: boolean; id: string; name: string; type: string };
+type FinancialTransactionLookup = {
+  clientId: string | null;
+  clientReferenceId: string | null;
+  id: string;
+};
 type PlanLookup = {
   active: boolean;
   durationMonths: number;
@@ -100,6 +128,18 @@ type LegacyImportResultRow = {
   legacyClientId: string | null;
   message: string;
   result: 'IMPORTED' | 'SKIPPED' | 'FAILED';
+};
+type NormalizedLegacyPayment = {
+  amount: string | null;
+  createdAt: string | null;
+  legacyClientId: string | null;
+  legacyPaymentId: string | null;
+  observation: string | null;
+  paymentMethod: FinancialPaymentMethod | null;
+  rawPaymentMethod: string | null;
+  status: string | null;
+  transactionDate: string | null;
+  transactionType: string | null;
 };
 
 class LegacyImportSkip extends Error {
@@ -256,6 +296,109 @@ export class LegacyImportService {
     };
   }
 
+  async previewPayments(payload: unknown) {
+    const envelope = this.parsePaymentsEnvelope(payload);
+    const normalizedRows = envelope.payments.map((payment, index) => ({
+      errors: [] as string[],
+      index,
+      input: payment,
+      normalized: this.normalizePayment(payment),
+      warnings: [] as string[],
+    }));
+
+    this.markDuplicateLegacyPaymentIds(normalizedRows);
+
+    const lookups = await this.loadPaymentLookups(normalizedRows);
+
+    const rows = normalizedRows.map((row) => {
+      const errors = [...row.normalized.errors, ...row.errors];
+      const warnings = [...row.normalized.warnings, ...row.warnings];
+      const normalized = row.normalized.value;
+      const legacyClientMapping = normalized.legacyClientId
+        ? (lookups.importRecords.get(normalized.legacyClientId) ?? null)
+        : null;
+      const category = lookups.category ?? null;
+      const existingFinancialRecord = normalized.legacyPaymentId
+        ? (lookups.financialImportRecords.get(normalized.legacyPaymentId) ?? null)
+        : null;
+
+      this.validateHistoricalCategory(lookups.categories, errors, category);
+      this.validateLegacyClientMapping(legacyClientMapping, lookups, errors, warnings);
+      this.validateExistingFinancialMapping(existingFinancialRecord, lookups, errors, warnings);
+
+      const crmClientId =
+        legacyClientMapping?.crmClientId ?? existingFinancialRecord?.crmClientId ?? null;
+      const crmClientReferenceId =
+        legacyClientMapping?.crmClientReferenceId ??
+        existingFinancialRecord?.crmClientReferenceId ??
+        null;
+      const client = crmClientId ? (lookups.mappedClients.get(crmClientId) ?? null) : null;
+      const reference = crmClientReferenceId
+        ? (lookups.mappedClientReferences.get(crmClientReferenceId) ?? null)
+        : null;
+      const payloadHash =
+        this.paymentHashable(normalized, category, crmClientId, crmClientReferenceId) &&
+        !errors.some((error) => error.startsWith('INVALID_'))
+          ? this.hashNormalizedPaymentPayload(normalized, {
+              categoryId: category?.id ?? '',
+              crmClientId,
+              crmClientReferenceId,
+            })
+          : null;
+      const classification = this.classifyPayment({
+        errors,
+        existingFinancialRecord,
+        legacyClientMapping,
+        normalized,
+        payloadHash,
+      });
+
+      return {
+        index: row.index,
+        legacyPaymentId: normalized.legacyPaymentId,
+        legacyClientId: normalized.legacyClientId,
+        crmClientId,
+        crmClientReferenceId,
+        clientName: client?.name ?? null,
+        reference: reference?.reference ?? null,
+        legacyStatus: normalized.status,
+        transactionType: normalized.transactionType,
+        dataCriado: normalized.createdAt,
+        dataPagamento: normalized.transactionDate,
+        amount: normalized.amount,
+        transactionDate: normalized.transactionDate,
+        paymentMethod: normalized.paymentMethod,
+        observation: normalized.observation,
+        category: category ? { id: category.id, name: category.name, type: category.type } : null,
+        receivableId: null,
+        classification,
+        errors: this.unique(errors),
+        warnings: this.unique(warnings),
+        payloadHash,
+      };
+    });
+
+    return {
+      summary: this.summarizePayments(rows),
+      hashFields: [
+        'source',
+        'legacyPaymentId',
+        'legacyClientId',
+        'status',
+        'amount',
+        'transactionDate',
+        'paymentMethod',
+        'transactionType',
+        'observation',
+        'crmClientId',
+        'crmClientReferenceId',
+        'categoryId',
+        'origin',
+      ],
+      rows,
+    };
+  }
+
   private parseEnvelope(payload: unknown) {
     if (!this.isRecord(payload)) {
       throw new BadRequestException('INVALID_JSON_ENVELOPE');
@@ -286,6 +429,38 @@ export class LegacyImportService {
         return client;
       }),
       planMapping: this.parsePlanMapping(payload.planMapping),
+    };
+  }
+
+  private parsePaymentsEnvelope(payload: unknown) {
+    if (!this.isRecord(payload)) {
+      throw new BadRequestException('INVALID_JSON_ENVELOPE');
+    }
+
+    if (payload.schemaVersion !== 1) {
+      throw new BadRequestException('UNSUPPORTED_SCHEMA_VERSION');
+    }
+
+    if (payload.source !== source) {
+      throw new BadRequestException('INVALID_SOURCE');
+    }
+
+    if (!Array.isArray(payload.payments)) {
+      throw new BadRequestException('INVALID_PAYMENTS_ARRAY');
+    }
+
+    if (payload.payments.length > maxPaymentsPerPreview) {
+      throw new BadRequestException('PAYMENTS_LIMIT_EXCEEDED');
+    }
+
+    return {
+      payments: payload.payments.map((payment) => {
+        if (!this.isRecord(payment)) {
+          return {};
+        }
+
+        return payment;
+      }),
     };
   }
 
@@ -337,10 +512,71 @@ export class LegacyImportService {
     return { errors, value, warnings };
   }
 
+  private normalizePayment(input: LegacyPaymentInput) {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const legacyPaymentId = this.normalizeLegacyPaymentId(input.id, errors);
+    const legacyClientId = this.normalizeLegacyClientId(input.client_id, errors);
+    const status = this.optionalString(input.status)?.trim().toUpperCase() || null;
+    const transactionType = this.optionalString(input.tipo_transacao)?.trim().toUpperCase() || null;
+    const rawPaymentMethod = this.optionalString(input.tipo_pagamento)?.trim() || null;
+    const paymentMethod = this.normalizeHistoricalPaymentMethod(rawPaymentMethod, errors);
+    const amount = this.normalizePaymentAmount(input.valor_debito, errors);
+    const transactionDate = this.normalizePaymentDate(input.data_pagamento, errors, status);
+    const createdAt = this.optionalString(input.data_criado)?.trim() || null;
+    const observation = this.normalizeObservation(input.observation);
+
+    if (!status) {
+      errors.push('INVALID_STATUS');
+    }
+
+    if (!transactionType) {
+      errors.push('INVALID_TRANSACTION_TYPE');
+    }
+
+    const value: NormalizedLegacyPayment = {
+      amount,
+      createdAt,
+      legacyClientId,
+      legacyPaymentId,
+      observation,
+      paymentMethod,
+      rawPaymentMethod,
+      status,
+      transactionDate,
+      transactionType,
+    };
+
+    if (createdAt && !this.isDateLike(createdAt)) {
+      warnings.push('INVALID_DATA_CRIADO');
+    }
+
+    return { errors, value, warnings };
+  }
+
+  private normalizeLegacyPaymentId(value: unknown, errors: string[]) {
+    const id = this.normalizeUnsignedBigIntId(value);
+
+    if (!id) {
+      errors.push('INVALID_LEGACY_PAYMENT_ID');
+    }
+
+    return id;
+  }
+
   private normalizeLegacyClientId(value: unknown, errors: string[]) {
+    const id = this.normalizeUnsignedBigIntId(value);
+
+    if (!id) {
+      errors.push('INVALID_LEGACY_ID');
+    }
+
+    return id;
+  }
+
+  private normalizeUnsignedBigIntId(value: unknown) {
     if (typeof value === 'number') {
       if (!Number.isSafeInteger(value) || value <= 0) {
-        errors.push('INVALID_LEGACY_ID');
         return null;
       }
 
@@ -351,14 +587,12 @@ export class LegacyImportService {
       const parsed = BigInt(value.trim());
 
       if (parsed <= 0n || parsed > maxUnsignedBigInt) {
-        errors.push('INVALID_LEGACY_ID');
         return null;
       }
 
       return parsed.toString();
     }
 
-    errors.push('INVALID_LEGACY_ID');
     return null;
   }
 
@@ -483,6 +717,83 @@ export class LegacyImportService {
     }
 
     return `${whole}.${decimal.padEnd(2, '0')}`;
+  }
+
+  private normalizePaymentAmount(value: unknown, errors: string[]) {
+    const text =
+      typeof value === 'number'
+        ? value.toFixed(2)
+        : typeof value === 'string'
+          ? value.trim().replace(',', '.')
+          : null;
+
+    if (!text || !/^\d+(\.\d{1,2})?$/.test(text)) {
+      errors.push('INVALID_AMOUNT');
+      return null;
+    }
+
+    const [whole = '0', decimal = ''] = text.split('.');
+    const cents = BigInt(whole) * 100n + BigInt(decimal.padEnd(2, '0'));
+
+    if (cents <= 0n || cents > 999_999_999_999n) {
+      errors.push('INVALID_AMOUNT');
+      return null;
+    }
+
+    return `${whole}.${decimal.padEnd(2, '0')}`;
+  }
+
+  private normalizePaymentDate(value: unknown, errors: string[], status: string | null) {
+    const text = this.optionalString(value)?.trim();
+
+    if (!text) {
+      if (status === 'PAGO') {
+        errors.push('INVALID_PAYMENT_DATE');
+      }
+
+      return null;
+    }
+
+    try {
+      return formatBusinessDate(parseBusinessDate(text));
+    } catch {
+      errors.push('INVALID_PAYMENT_DATE');
+      return null;
+    }
+  }
+
+  private normalizeHistoricalPaymentMethod(value: string | null, errors: string[]) {
+    const method = value
+      ?.normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase();
+
+    if (!method) {
+      errors.push('INVALID_PAYMENT_METHOD');
+      return null;
+    }
+
+    if (['PIX', 'BOLETO', 'CARTAO', 'TRANSFERENCIA'].includes(method)) {
+      return method as FinancialPaymentMethod;
+    }
+
+    errors.push('INVALID_PAYMENT_METHOD');
+    return null;
+  }
+
+  private normalizeObservation(value: unknown) {
+    const text = this.optionalString(value)?.trim();
+    return text || null;
+  }
+
+  private isDateLike(value: string) {
+    try {
+      parseBusinessDate(value.slice(0, 10));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private normalizeBillingCycle(value: unknown, errors: string[]) {
@@ -643,6 +954,124 @@ export class LegacyImportService {
       ),
       plansById: new Map((plans as PlanLookup[]).map((plan) => [plan.id, plan])),
       references: referenceMatches,
+    };
+  }
+
+  private async loadPaymentLookups(
+    rows: Array<{ normalized: ReturnType<LegacyImportService['normalizePayment']> }>,
+  ) {
+    const legacyClientIds = this.unique(
+      rows
+        .map((row) => row.normalized.value.legacyClientId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const legacyPaymentIds = this.unique(
+      rows
+        .map((row) => row.normalized.value.legacyPaymentId)
+        .filter((id): id is string => Boolean(id)),
+    );
+
+    const [categories, importRecords, financialImportRecords] = await this.prisma.$transaction([
+      this.prisma.financialCategory.findMany({
+        where: {
+          name: { equals: 'Receita histórica', mode: 'insensitive' },
+          type: 'ENTRADA',
+        },
+      }),
+      legacyClientIds.length
+        ? this.prisma.legacyImportRecord.findMany({
+            where: { legacyClientId: { in: legacyClientIds }, source },
+          })
+        : this.prisma.legacyImportRecord.findMany({ where: { id: { in: [] } } }),
+      legacyPaymentIds.length
+        ? this.prisma.legacyFinancialImportRecord.findMany({
+            where: { legacyPaymentId: { in: legacyPaymentIds }, source },
+          })
+        : this.prisma.legacyFinancialImportRecord.findMany({ where: { id: { in: [] } } }),
+    ]);
+    const mappedClientIds = this.unique(
+      [
+        ...importRecords.map((record) => record.crmClientId),
+        ...financialImportRecords.map((record) => record.crmClientId),
+      ].filter((id): id is string => Boolean(id)),
+    );
+    const mappedClientReferenceIds = this.unique(
+      [
+        ...importRecords.map((record) => record.crmClientReferenceId),
+        ...financialImportRecords.map((record) => record.crmClientReferenceId),
+      ].filter((id): id is string => Boolean(id)),
+    );
+    const financialTransactionIds = this.unique(
+      financialImportRecords
+        .map((record) => record.financialTransactionId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const [mappedClients, mappedClientReferences, financialTransactions] =
+      mappedClientIds.length || mappedClientReferenceIds.length || financialTransactionIds.length
+        ? await this.prisma.$transaction([
+            mappedClientIds.length
+              ? this.prisma.client.findMany({
+                  where: { id: { in: mappedClientIds } },
+                  select: { id: true, name: true },
+                })
+              : this.prisma.client.findMany({
+                  where: { id: { in: [] } },
+                  select: { id: true, name: true },
+                }),
+            mappedClientReferenceIds.length
+              ? this.prisma.clientReference.findMany({
+                  where: { id: { in: mappedClientReferenceIds } },
+                  select: { clientId: true, id: true, reference: true },
+                })
+              : this.prisma.clientReference.findMany({
+                  where: { id: { in: [] } },
+                  select: { clientId: true, id: true, reference: true },
+                }),
+            financialTransactionIds.length
+              ? this.prisma.financialTransaction.findMany({
+                  where: { id: { in: financialTransactionIds } },
+                  select: { clientId: true, clientReferenceId: true, id: true },
+                })
+              : this.prisma.financialTransaction.findMany({
+                  where: { id: { in: [] } },
+                  select: { clientId: true, clientReferenceId: true, id: true },
+                }),
+          ])
+        : [[], [], []];
+    const activeCategories = (categories as FinancialCategoryLookup[]).filter(
+      (category) => category.active,
+    );
+
+    return {
+      categories: categories as FinancialCategoryLookup[],
+      category: activeCategories.length === 1 ? activeCategories[0]! : null,
+      financialImportRecords: new Map(
+        (financialImportRecords as LegacyFinancialImportRecordLookup[]).map((record) => [
+          record.legacyPaymentId,
+          record,
+        ]),
+      ),
+      financialTransactions: new Map(
+        (financialTransactions as FinancialTransactionLookup[]).map((transaction) => [
+          transaction.id,
+          transaction,
+        ]),
+      ),
+      importRecords: new Map(
+        (importRecords as LegacyImportRecordLookup[]).map((record) => [
+          record.legacyClientId,
+          record,
+        ]),
+      ),
+      mappedClientReferences: new Map(
+        (mappedClientReferences as ClientReferenceIdLookup[]).map((reference) => [
+          reference.id,
+          reference,
+        ]),
+      ),
+      mappedClients: new Map(
+        (mappedClients as ClientLookup[]).map((client) => [client.id, client]),
+      ),
     };
   }
 
@@ -872,6 +1301,200 @@ export class LegacyImportService {
     }
   }
 
+  private validateHistoricalCategory(
+    categories: FinancialCategoryLookup[],
+    errors: string[],
+    category: FinancialCategoryLookup | null,
+  ) {
+    if (!categories.length) {
+      errors.push('CATEGORY_NOT_FOUND');
+      return;
+    }
+
+    if (categories.some((item) => !item.active)) {
+      errors.push('CATEGORY_INACTIVE');
+      return;
+    }
+
+    if (!category || categories.length !== 1) {
+      errors.push('CATEGORY_AMBIGUOUS');
+    }
+  }
+
+  private validateLegacyClientMapping(
+    importRecord: LegacyImportRecordLookup | null,
+    lookups: Awaited<ReturnType<LegacyImportService['loadPaymentLookups']>>,
+    errors: string[],
+    warnings: string[],
+  ) {
+    if (!importRecord) {
+      return;
+    }
+
+    if (importRecord.status !== 'IMPORTED') {
+      errors.push('ORPHAN_LEGACY_CLIENT_MAPPING');
+      warnings.push(orphanLegacyMappingMessage);
+      return;
+    }
+
+    if (!importRecord.crmClientId || !importRecord.crmClientReferenceId) {
+      errors.push('ORPHAN_LEGACY_CLIENT_MAPPING');
+      warnings.push(orphanLegacyMappingMessage);
+      return;
+    }
+
+    const client = lookups.mappedClients.get(importRecord.crmClientId);
+    const reference = lookups.mappedClientReferences.get(importRecord.crmClientReferenceId);
+
+    if (!client || !reference || reference.clientId !== importRecord.crmClientId) {
+      errors.push('ORPHAN_LEGACY_CLIENT_MAPPING');
+      warnings.push(orphanLegacyMappingMessage);
+    }
+  }
+
+  private validateExistingFinancialMapping(
+    record: LegacyFinancialImportRecordLookup | null,
+    lookups: Awaited<ReturnType<LegacyImportService['loadPaymentLookups']>>,
+    errors: string[],
+    warnings: string[],
+  ) {
+    if (!record) {
+      return;
+    }
+
+    if (!record.crmClientId || !record.crmClientReferenceId || !record.financialTransactionId) {
+      errors.push('ORPHAN_FINANCIAL_MAPPING');
+      warnings.push('Existe um vínculo financeiro legado incompleto.');
+      return;
+    }
+
+    const client = lookups.mappedClients.get(record.crmClientId);
+    const reference = lookups.mappedClientReferences.get(record.crmClientReferenceId);
+    const transaction = lookups.financialTransactions.get(record.financialTransactionId);
+
+    if (
+      !client ||
+      !reference ||
+      reference.clientId !== record.crmClientId ||
+      !transaction ||
+      transaction.clientId !== record.crmClientId ||
+      transaction.clientReferenceId !== record.crmClientReferenceId
+    ) {
+      errors.push('ORPHAN_FINANCIAL_MAPPING');
+      warnings.push('Existe um vínculo financeiro legado órfão ou inconsistente.');
+    }
+  }
+
+  private classifyPayment(input: {
+    errors: string[];
+    existingFinancialRecord: LegacyFinancialImportRecordLookup | null;
+    legacyClientMapping: LegacyImportRecordLookup | null;
+    normalized: NormalizedLegacyPayment;
+    payloadHash: string | null;
+  }): LegacyPaymentPreviewClassification {
+    if (input.errors.some((error) => error.startsWith('INVALID_'))) {
+      return 'INVALID';
+    }
+
+    if (
+      input.errors.some((error) =>
+        [
+          'CATEGORY_AMBIGUOUS',
+          'CATEGORY_INACTIVE',
+          'CATEGORY_NOT_FOUND',
+          'DUPLICATE_LEGACY_PAYMENT_ID_IN_FILE',
+          'ORPHAN_FINANCIAL_MAPPING',
+          'ORPHAN_LEGACY_CLIENT_MAPPING',
+        ].includes(error),
+      )
+    ) {
+      return 'CONFLICT';
+    }
+
+    if (
+      input.existingFinancialRecord &&
+      input.payloadHash &&
+      input.existingFinancialRecord.payloadHash === input.payloadHash
+    ) {
+      return 'UNCHANGED';
+    }
+
+    if (
+      input.existingFinancialRecord &&
+      input.payloadHash &&
+      input.existingFinancialRecord.payloadHash !== input.payloadHash
+    ) {
+      return 'CONFLICT';
+    }
+
+    if (!input.legacyClientMapping) {
+      return 'CLIENT_NOT_IMPORTED';
+    }
+
+    if (input.normalized.status === 'PENDENTE') {
+      return 'PENDING_NOT_SUPPORTED';
+    }
+
+    if (input.normalized.transactionType !== 'RECEITA') {
+      return 'UNSUPPORTED';
+    }
+
+    if (input.normalized.status !== 'PAGO') {
+      return 'UNSUPPORTED';
+    }
+
+    return 'READY_PAID_HISTORY';
+  }
+
+  private paymentHashable(
+    normalized: NormalizedLegacyPayment,
+    category: FinancialCategoryLookup | null,
+    crmClientId: string | null,
+    crmClientReferenceId: string | null,
+  ) {
+    return Boolean(
+      normalized.amount &&
+      normalized.legacyClientId &&
+      normalized.legacyPaymentId &&
+      normalized.paymentMethod &&
+      normalized.status &&
+      normalized.transactionDate &&
+      normalized.transactionType &&
+      category &&
+      crmClientId &&
+      crmClientReferenceId,
+    );
+  }
+
+  private hashNormalizedPaymentPayload(
+    normalized: NormalizedLegacyPayment,
+    resolved: {
+      categoryId: string;
+      crmClientId: string | null;
+      crmClientReferenceId: string | null;
+    },
+  ) {
+    return createHash('sha256')
+      .update(
+        this.stableStringify({
+          amount: normalized.amount,
+          categoryId: resolved.categoryId,
+          crmClientId: resolved.crmClientId,
+          crmClientReferenceId: resolved.crmClientReferenceId,
+          legacyClientId: normalized.legacyClientId,
+          legacyPaymentId: normalized.legacyPaymentId,
+          observation: normalized.observation,
+          origin: 'LEGACY_IMPORT',
+          paymentMethod: normalized.paymentMethod,
+          source,
+          status: normalized.status,
+          transactionDate: normalized.transactionDate,
+          transactionType: normalized.transactionType,
+        }),
+      )
+      .digest('hex');
+  }
+
   private findCandidateMatches(
     normalized: NormalizedLegacyClient,
     lookups: Awaited<ReturnType<LegacyImportService['loadLookups']>>,
@@ -1008,6 +1631,19 @@ export class LegacyImportService {
     };
   }
 
+  private summarizePayments(rows: Array<{ classification: LegacyPaymentPreviewClassification }>) {
+    return {
+      total: rows.length,
+      readyPaidHistory: rows.filter((row) => row.classification === 'READY_PAID_HISTORY').length,
+      unchanged: rows.filter((row) => row.classification === 'UNCHANGED').length,
+      clientNotImported: rows.filter((row) => row.classification === 'CLIENT_NOT_IMPORTED').length,
+      pending: rows.filter((row) => row.classification === 'PENDING_NOT_SUPPORTED').length,
+      unsupported: rows.filter((row) => row.classification === 'UNSUPPORTED').length,
+      conflict: rows.filter((row) => row.classification === 'CONFLICT').length,
+      invalid: rows.filter((row) => row.classification === 'INVALID').length,
+    };
+  }
+
   private markDuplicateLegacyIds(
     rows: Array<{
       normalized: ReturnType<LegacyImportService['normalizeClient']>;
@@ -1018,6 +1654,19 @@ export class LegacyImportService {
       rows,
       (row) => row.normalized.value.legacyClientId,
       'DUPLICATE_LEGACY_ID_IN_FILE',
+    );
+  }
+
+  private markDuplicateLegacyPaymentIds(
+    rows: Array<{
+      normalized: ReturnType<LegacyImportService['normalizePayment']>;
+      errors: string[];
+    }>,
+  ) {
+    this.markDuplicates(
+      rows,
+      (row) => row.normalized.value.legacyPaymentId,
+      'DUPLICATE_LEGACY_PAYMENT_ID_IN_FILE',
     );
   }
 

@@ -39,6 +39,19 @@ const existingCrmReference = {
   reference: 'cliente123',
   client: { id: 'client-legacy', name: 'Cliente Teste' },
 };
+const basePayment: Record<string, unknown> = {
+  id: 11670,
+  client_id: 2352,
+  data_criado: '2026-09-26',
+  status: 'PAGO',
+  valor_debito: '35.00',
+  tipo_pagamento: 'PIX',
+  tipo_transacao: 'RECEITA',
+  data_pagamento: '2026-09-26',
+  observation: null,
+  created_at: '2026-09-26 10:00:00',
+  updated_at: '2026-09-27 10:00:00',
+};
 
 const defaultPlanMapping = {
   ANUAL: 'plan-12',
@@ -66,6 +79,9 @@ function createService(
   options: {
     clientFindFirst?: unknown;
     clients?: unknown[];
+    financialCategories?: unknown[];
+    financialImportRecords?: unknown[];
+    financialTransactions?: unknown[];
     importRecordFindFirst?: unknown;
     importRecords?: unknown[];
     plans?: unknown[];
@@ -92,6 +108,7 @@ function createService(
       return Promise.resolve({ id: `reference-created-${++referenceSequence}`, ...args.data });
     }),
     financialTransactionCreate: vi.fn(),
+    legacyFinancialImportRecordCreate: vi.fn(),
     legacyImportRecordCreate: vi.fn((args: CreateArgs) =>
       Promise.resolve({ id: 'legacy-import-record-created', ...args.data }),
     ),
@@ -160,7 +177,23 @@ function createService(
       update: writes.clientReferenceUpdate,
     },
     clientEvent: { create: writes.clientEventCreate },
-    financialTransaction: { create: writes.financialTransactionCreate },
+    financialCategory: {
+      findMany: vi.fn(() =>
+        Promise.resolve(
+          options.financialCategories ?? [
+            { id: 'category-history', name: 'Receita histórica', type: 'ENTRADA', active: true },
+          ],
+        ),
+      ),
+    },
+    financialTransaction: {
+      create: writes.financialTransactionCreate,
+      findMany: vi.fn(() => Promise.resolve(options.financialTransactions ?? [])),
+    },
+    legacyFinancialImportRecord: {
+      create: writes.legacyFinancialImportRecordCreate,
+      findMany: vi.fn(() => Promise.resolve(options.financialImportRecords ?? [])),
+    },
     legacyImportRecord: {
       create: writes.legacyImportRecordCreate,
       findFirst: vi.fn(() => Promise.resolve(options.importRecordFindFirst ?? null)),
@@ -1356,5 +1389,542 @@ describe('LegacyImportService', () => {
     });
     expect(result.rows[6]?.errors).toContain('INVALID_RECURRING_VALUE');
     expect(result.rows[7]?.errors).toContain('INVALID_RECURRING_VALUE');
+  });
+
+  it('previews Edilson payment 11670 as READY_PAID_HISTORY without writes when mapping exists', async () => {
+    const { service, writes } = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(result.summary).toMatchObject({ readyPaidHistory: 1, total: 1 });
+    expect(result.rows[0]).toMatchObject({
+      amount: '35.00',
+      category: { name: 'Receita histórica', type: 'ENTRADA' },
+      classification: 'READY_PAID_HISTORY',
+      clientName: 'Edilson',
+      crmClientId: 'client-edilson',
+      crmClientReferenceId: 'reference-edilson',
+      legacyClientId: '2352',
+      legacyPaymentId: '11670',
+      paymentMethod: 'PIX',
+      receivableId: null,
+      reference: 'edilson7581',
+      transactionDate: '2026-09-26',
+    });
+    expect(result.rows[0]?.payloadHash).toMatch(/^[a-f0-9]{64}$/);
+    expectNoOperationalSideEffects(writes);
+    expect(writes.legacyFinancialImportRecordCreate).not.toHaveBeenCalled();
+    expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+  });
+
+  it('classifies Edilson payment 11670 as CLIENT_NOT_IMPORTED when DEV has no client mapping', async () => {
+    const { service, writes } = createService();
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(result.summary).toMatchObject({ clientNotImported: 1, total: 1 });
+    expect(result.rows[0]).toMatchObject({
+      classification: 'CLIENT_NOT_IMPORTED',
+      legacyClientId: '2352',
+      legacyPaymentId: '11670',
+    });
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('normalizes unsigned bigint payment ids and flags duplicates without writes', async () => {
+    const { service, writes } = createService();
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        { ...basePayment, id: 1, client_id: 1 },
+        { ...basePayment, id: '18446744073709551615', client_id: 2 },
+        { ...basePayment, id: '18446744073709551616', client_id: 3 },
+        { ...basePayment, id: 0, client_id: 4 },
+        { ...basePayment, id: -1, client_id: 5 },
+        { ...basePayment, id: '00011670', client_id: 6 },
+        { ...basePayment, id: 11670, client_id: 7 },
+      ],
+    });
+
+    expect(result.rows.map((row) => row.legacyPaymentId)).toEqual([
+      '1',
+      '18446744073709551615',
+      null,
+      null,
+      null,
+      '11670',
+      '11670',
+    ]);
+    expect(result.rows[2]?.classification).toBe('INVALID');
+    expect(result.rows[2]?.errors).toContain('INVALID_LEGACY_PAYMENT_ID');
+    expect(result.rows[3]?.errors).toContain('INVALID_LEGACY_PAYMENT_ID');
+    expect(result.rows[4]?.errors).toContain('INVALID_LEGACY_PAYMENT_ID');
+    expect(result.rows[5]?.classification).toBe('CONFLICT');
+    expect(result.rows[6]?.classification).toBe('CONFLICT');
+    expect(result.rows[5]?.errors).toContain('DUPLICATE_LEGACY_PAYMENT_ID_IN_FILE');
+    expect(result.rows[6]?.errors).toContain('DUPLICATE_LEGACY_PAYMENT_ID_IN_FILE');
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('rejects unsafe JS payment ids and enforces the 10000 payments preview limit', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.previewPayments({
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: Array.from({ length: 10_000 }, (_, index) => ({
+          ...basePayment,
+          id: index + 1,
+          client_id: index + 1,
+        })),
+      }),
+    ).resolves.toMatchObject({ summary: { total: 10_000 } });
+    await expect(
+      service.previewPayments({
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: Array.from({ length: 10_001 }, (_, index) => ({
+          ...basePayment,
+          id: index + 1,
+          client_id: index + 1,
+        })),
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const unsafe = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [{ ...basePayment, id: Number.MAX_SAFE_INTEGER + 1 }],
+    });
+
+    expect(unsafe.rows[0]).toMatchObject({ classification: 'INVALID', legacyPaymentId: null });
+    expect(unsafe.rows[0]?.errors).toContain('INVALID_LEGACY_PAYMENT_ID');
+  });
+
+  it('previews 9337 mapped payments with batched lookups and a consistent summary', async () => {
+    const payments = Array.from({ length: 9_337 }, (_, index) => ({
+      ...basePayment,
+      id: index + 1,
+      client_id: index + 1,
+    }));
+    const importRecords = payments.map((payment, index) => ({
+      crmClientId: `client-${index + 1}`,
+      crmClientReferenceId: `reference-${index + 1}`,
+      legacyClientId: String(payment.client_id),
+      payloadHash: 'client-hash',
+      source: 'legacy',
+      status: 'IMPORTED',
+    }));
+    const clients = importRecords.map((record, index) => ({
+      id: record.crmClientId,
+      name: `Cliente ${index + 1}`,
+    }));
+    const references = importRecords.map((record, index) => ({
+      clientId: record.crmClientId,
+      id: record.crmClientReferenceId,
+      reference: `cliente-${index + 1}`,
+    }));
+    const { prisma, service, writes } = createService({ clients, importRecords, references });
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments,
+    });
+
+    expect(result.summary).toEqual({
+      clientNotImported: 0,
+      conflict: 0,
+      invalid: 0,
+      pending: 0,
+      readyPaidHistory: 9_337,
+      total: 9_337,
+      unchanged: 0,
+      unsupported: 0,
+    });
+    expect(
+      Object.entries(result.summary)
+        .filter(([key]) => key !== 'total')
+        .reduce((sum, [, value]) => sum + value, 0),
+    ).toBe(result.summary.total);
+    expect(prisma.financialCategory.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.legacyImportRecord.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.legacyFinancialImportRecord.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.client.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.clientReference.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.financialTransaction.findMany).toHaveBeenCalledTimes(1);
+    expectNoOperationalSideEffects(writes);
+    expect(writes.legacyFinancialImportRecordCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps payment hash deterministic and ignores updated_at and property order', async () => {
+    const options = {
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    };
+    const { service } = createService(options);
+    const first = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+    const reordered = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        {
+          updated_at: '2030-01-01',
+          observation: null,
+          data_pagamento: '2026-09-26',
+          tipo_transacao: 'RECEITA',
+          tipo_pagamento: 'PIX',
+          valor_debito: '35,00',
+          status: 'PAGO',
+          data_criado: '2026-09-26',
+          client_id: '0002352',
+          id: '00011670',
+        },
+      ],
+    });
+    const amountChanged = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [{ ...basePayment, valor_debito: '36.00' }],
+    });
+    const methodChanged = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [{ ...basePayment, tipo_pagamento: 'BOLETO' }],
+    });
+    const dateChanged = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [{ ...basePayment, data_pagamento: '2026-09-27' }],
+    });
+
+    expect(reordered.rows[0]?.payloadHash).toBe(first.rows[0]?.payloadHash);
+    expect(amountChanged.rows[0]?.payloadHash).not.toBe(first.rows[0]?.payloadHash);
+    expect(methodChanged.rows[0]?.payloadHash).not.toBe(first.rows[0]?.payloadHash);
+    expect(dateChanged.rows[0]?.payloadHash).not.toBe(first.rows[0]?.payloadHash);
+  });
+
+  it('normalizes payment values and rejects invalid values and dates without date fallback', async () => {
+    const { service } = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        { ...basePayment, id: 1, valor_debito: 35 },
+        { ...basePayment, id: 2, valor_debito: 35.0 },
+        { ...basePayment, id: 3, valor_debito: '35.00' },
+        { ...basePayment, id: 4, valor_debito: '35,00' },
+        { ...basePayment, id: 5, valor_debito: 0 },
+        { ...basePayment, id: 6, valor_debito: -1 },
+        { ...basePayment, id: 7, valor_debito: 'abc' },
+        { ...basePayment, id: 8, data_pagamento: null },
+        { ...basePayment, id: 9, data_pagamento: '2026-02-30' },
+        { ...basePayment, id: 10, data_pagamento: '2026-13-01' },
+        { ...basePayment, id: 11, data_pagamento: 'texto' },
+      ],
+    });
+
+    expect(result.rows.slice(0, 4).map((row) => row.amount)).toEqual([
+      '35.00',
+      '35.00',
+      '35.00',
+      '35.00',
+    ]);
+    expect(result.rows[0]).toMatchObject({ transactionDate: '2026-09-26' });
+    for (const row of result.rows.slice(4, 7)) {
+      expect(row.classification).toBe('INVALID');
+      expect(row.errors).toContain('INVALID_AMOUNT');
+    }
+    for (const row of result.rows.slice(7)) {
+      expect(row.classification).toBe('INVALID');
+      expect(row.errors).toContain('INVALID_PAYMENT_DATE');
+    }
+  });
+
+  it('classifies pending, expense, invalid value, orphan client mapping and existing financial mapping', async () => {
+    const mappedOptions = {
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    };
+    const first = createService(mappedOptions);
+    const preview = await first.service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+    const payloadHash = preview.rows[0]?.payloadHash;
+    const unchanged = createService({
+      ...mappedOptions,
+      financialImportRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          financialTransactionId: 'transaction-1',
+          legacyClientId: '2352',
+          legacyPaymentId: '11670',
+          payloadHash,
+          receivableId: null,
+          status: 'IMPORTED',
+        },
+      ],
+      financialTransactions: [
+        {
+          clientId: 'client-edilson',
+          clientReferenceId: 'reference-edilson',
+          id: 'transaction-1',
+        },
+      ],
+    });
+
+    await expect(
+      unchanged.service.previewPayments({
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: [basePayment],
+      }),
+    ).resolves.toMatchObject({ summary: { unchanged: 1 } });
+
+    const conflict = createService({
+      ...mappedOptions,
+      financialImportRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          financialTransactionId: 'transaction-1',
+          legacyClientId: '2352',
+          legacyPaymentId: '11670',
+          payloadHash: '0'.repeat(64),
+          receivableId: null,
+          status: 'IMPORTED',
+        },
+      ],
+      financialTransactions: [
+        {
+          clientId: 'client-edilson',
+          clientReferenceId: 'reference-edilson',
+          id: 'transaction-1',
+        },
+      ],
+    });
+    const mixed = await conflict.service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        { ...basePayment, id: 1, status: 'PENDENTE' },
+        { ...basePayment, id: 2, tipo_transacao: 'DESPESA' },
+        { ...basePayment, id: 3, valor_debito: '0' },
+        basePayment,
+      ],
+    });
+
+    expect(mixed.rows.map((row) => row.classification)).toEqual([
+      'PENDING_NOT_SUPPORTED',
+      'UNSUPPORTED',
+      'INVALID',
+      'CONFLICT',
+    ]);
+
+    const orphan = await createService({
+      importRecords: [
+        {
+          crmClientId: 'client-missing',
+          crmClientReferenceId: 'reference-missing',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+    }).service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(orphan.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(orphan.rows[0]?.errors).toContain('ORPHAN_LEGACY_CLIENT_MAPPING');
+  });
+
+  it('uses safe financial preview classification precedence', async () => {
+    const { service } = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2353',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'FAILED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        { ...basePayment, id: 'bad', status: 'PENDENTE' },
+        { ...basePayment, id: 2, client_id: 2353 },
+        { ...basePayment, id: 3, client_id: 9999, status: 'PENDENTE' },
+        { ...basePayment, id: 4, status: 'PENDENTE' },
+        { ...basePayment, id: 5, tipo_transacao: 'DESPESA' },
+        { ...basePayment, id: 6, status: 'BAIXADO' },
+      ],
+    });
+
+    expect(result.rows.map((row) => row.classification)).toEqual([
+      'INVALID',
+      'CONFLICT',
+      'CLIENT_NOT_IMPORTED',
+      'PENDING_NOT_SUPPORTED',
+      'UNSUPPORTED',
+      'UNSUPPORTED',
+    ]);
+    expect(result.rows[1]?.errors).toContain('ORPHAN_LEGACY_CLIENT_MAPPING');
+  });
+
+  it('keeps historical BOLETO, CARTAO and TRANSFERENCIA ready without provider side effects', async () => {
+    const { service, writes } = createService({
+      clients: [{ id: 'client-edilson', name: 'Edilson' }],
+      importRecords: [
+        {
+          crmClientId: 'client-edilson',
+          crmClientReferenceId: 'reference-edilson',
+          legacyClientId: '2352',
+          payloadHash: 'client-hash',
+          source: 'legacy',
+          status: 'IMPORTED',
+        },
+      ],
+      references: [
+        { id: 'reference-edilson', clientId: 'client-edilson', reference: 'edilson7581' },
+      ],
+    });
+
+    const result = await service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [
+        { ...basePayment, id: 1, tipo_pagamento: 'PIX' },
+        { ...basePayment, id: 2, tipo_pagamento: 'BOLETO' },
+        { ...basePayment, id: 3, tipo_pagamento: 'CARTAO' },
+        { ...basePayment, id: 4, tipo_pagamento: 'TRANSFERENCIA' },
+        { ...basePayment, id: 5, tipo_pagamento: 'DINHEIRO' },
+      ],
+    });
+
+    expect(result.rows.slice(0, 4).map((row) => row.classification)).toEqual([
+      'READY_PAID_HISTORY',
+      'READY_PAID_HISTORY',
+      'READY_PAID_HISTORY',
+      'READY_PAID_HISTORY',
+    ]);
+    expect(result.rows[4]).toMatchObject({ classification: 'INVALID' });
+    expect(result.rows[4]?.errors).toContain('INVALID_PAYMENT_METHOD');
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('reports category conflicts without creating the historical category during preview', async () => {
+    const missing = await createService({ financialCategories: [] }).service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+    const inactive = await createService({
+      financialCategories: [
+        { id: 'category-history', name: 'Receita histórica', type: 'ENTRADA', active: false },
+      ],
+    }).service.previewPayments({
+      schemaVersion: 1,
+      source: 'legacy',
+      payments: [basePayment],
+    });
+
+    expect(missing.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(missing.rows[0]?.errors).toContain('CATEGORY_NOT_FOUND');
+    expect(inactive.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(inactive.rows[0]?.errors).toContain('CATEGORY_INACTIVE');
   });
 });

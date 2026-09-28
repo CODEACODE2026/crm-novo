@@ -22,6 +22,7 @@ async function bootstrap() {
       },
     }),
   );
+  app.use('/legacy-import/payments/preview', json({ limit: '8mb' }));
   app.use(json({ limit: '1mb' }));
   app.use(helmet());
   app.use(cookieParser());

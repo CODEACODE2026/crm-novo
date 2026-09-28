@@ -744,6 +744,54 @@ export interface LegacyImportPreview {
   rows: LegacyImportPreviewRow[];
 }
 
+export type LegacyPaymentPreviewClassification =
+  | 'READY_PAID_HISTORY'
+  | 'UNCHANGED'
+  | 'CLIENT_NOT_IMPORTED'
+  | 'PENDING_NOT_SUPPORTED'
+  | 'UNSUPPORTED'
+  | 'CONFLICT'
+  | 'INVALID';
+
+export interface LegacyPaymentPreviewRow {
+  index: number;
+  legacyPaymentId: string | null;
+  legacyClientId: string | null;
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  clientName: string | null;
+  reference: string | null;
+  legacyStatus: string | null;
+  transactionType: string | null;
+  dataCriado: string | null;
+  dataPagamento: string | null;
+  amount: string | null;
+  transactionDate: string | null;
+  paymentMethod: FinancialPaymentMethod | null;
+  observation: string | null;
+  category: { id: string; name: string; type: FinancialTransactionType } | null;
+  receivableId: null;
+  classification: LegacyPaymentPreviewClassification;
+  errors: string[];
+  warnings: string[];
+  payloadHash: string | null;
+}
+
+export interface LegacyPaymentPreview {
+  summary: {
+    total: number;
+    readyPaidHistory: number;
+    unchanged: number;
+    clientNotImported: number;
+    pending: number;
+    unsupported: number;
+    conflict: number;
+    invalid: number;
+  };
+  hashFields: string[];
+  rows: LegacyPaymentPreviewRow[];
+}
+
 export type LegacyImportPlanCycle = 'MENSAL' | 'BIMESTRAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
 export type LegacyImportPlanMapping = Partial<Record<LegacyImportPlanCycle, string>>;
 
@@ -1363,6 +1411,21 @@ export function previewLegacyClients(payload: unknown) {
   return apiFetch<LegacyImportPreview>('/legacy-import/clients/preview', {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export function previewLegacyPayments(payload: unknown) {
+  const body = Array.isArray(payload)
+    ? {
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: payload,
+      }
+    : payload;
+
+  return apiFetch<LegacyPaymentPreview>('/legacy-import/payments/preview', {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }
 

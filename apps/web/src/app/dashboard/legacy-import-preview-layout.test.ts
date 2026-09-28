@@ -95,4 +95,17 @@ describe('legacy import preview UI', () => {
     expect(stylesSource).toContain('.legacy-import-table td:nth-child(1)::before');
     expect(stylesSource).toContain("content: 'Cliente';");
   });
+
+  it('adds a read-only financial preview tab without an import action', () => {
+    expect(importViewSource).toContain('<LegacyFinancialImportPreviewView />');
+    expect(importViewSource).toContain('previewLegacyPayments(buildLegacyPaymentPreviewPayload())');
+    expect(importViewSource).toContain('schemaVersion: 1');
+    expect(importViewSource).toContain("source: 'legacy'");
+    expect(importViewSource).toContain('Prontos histórico');
+    expect(importViewSource).toContain('Cliente não importado');
+    expect(importViewSource).toContain('legacyPaymentPageSize');
+    expect(importViewSource).toContain('até 2.000 pagamentos por arquivo');
+    expect(importViewSource).not.toContain('importLegacyPayments');
+    expect(stylesSource).toContain('.legacy-payment-table td:nth-child(8)::before');
+  });
 });

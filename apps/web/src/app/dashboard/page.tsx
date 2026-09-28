@@ -164,6 +164,7 @@ import {
   payReceivables,
   importLegacyClients,
   previewLegacyClients,
+  previewLegacyPayments,
   previewDeleteClient,
   previewDeleteClientReference,
   previewReferenceRenewal,
@@ -245,6 +246,9 @@ import {
   type LegacyImportPreview,
   type LegacyImportPreviewRow,
   type LegacyImportResult,
+  type LegacyPaymentPreview,
+  type LegacyPaymentPreviewClassification,
+  type LegacyPaymentPreviewRow,
   type PaginatedClients,
   type PaginatedClientEvents,
   type PaymentIntent,
@@ -943,6 +947,39 @@ const legacyImportFilters = [
   { id: 'INVALID', label: 'Inválidos' },
 ] satisfies Array<{ id: LegacyImportClassification | 'all'; label: string }>;
 
+const legacyPaymentClassificationLabels = {
+  CLIENT_NOT_IMPORTED: 'Cliente não importado',
+  CONFLICT: 'Conflito',
+  INVALID: 'Inválido',
+  PENDING_NOT_SUPPORTED: 'Pendente',
+  READY_PAID_HISTORY: 'Pronto histórico',
+  UNCHANGED: 'Sem alteração',
+  UNSUPPORTED: 'Não suportado',
+} satisfies Record<LegacyPaymentPreviewClassification, string>;
+
+const legacyPaymentClassificationTone = {
+  CLIENT_NOT_IMPORTED: 'warning',
+  CONFLICT: 'danger',
+  INVALID: 'danger',
+  PENDING_NOT_SUPPORTED: 'warning',
+  READY_PAID_HISTORY: 'success',
+  UNCHANGED: 'muted',
+  UNSUPPORTED: 'warning',
+} satisfies Record<LegacyPaymentPreviewClassification, string>;
+
+const legacyPaymentFilters = [
+  { id: 'all', label: 'Todos' },
+  { id: 'READY_PAID_HISTORY', label: 'Prontos' },
+  { id: 'UNCHANGED', label: 'Sem alteração' },
+  { id: 'CLIENT_NOT_IMPORTED', label: 'Cliente não importado' },
+  { id: 'PENDING_NOT_SUPPORTED', label: 'Pendentes' },
+  { id: 'UNSUPPORTED', label: 'Não suportados' },
+  { id: 'CONFLICT', label: 'Conflitos' },
+  { id: 'INVALID', label: 'Inválidos' },
+] satisfies Array<{ id: LegacyPaymentPreviewClassification | 'all'; label: string }>;
+
+const legacyPaymentPageSize = 100;
+
 const legacyPlanCycles = [
   { cycle: 'MENSAL', label: 'Mensal', durationMonths: 1 },
   { cycle: 'BIMESTRAL', label: 'Bimestral', durationMonths: 2 },
@@ -1029,6 +1066,38 @@ function readLegacyPlanMappingSession() {
 }
 
 function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
+  const [tab, setTab] = useState<'clients' | 'finance'>('clients');
+
+  return (
+    <section className="workspace-main legacy-import-view">
+      <div className="legacy-import-tabs" role="tablist" aria-label="Tipo de importação legado">
+        <button
+          className={`segmented-button ${tab === 'clients' ? 'active' : ''}`}
+          role="tab"
+          type="button"
+          aria-selected={tab === 'clients'}
+          onClick={() => setTab('clients')}
+        >
+          Clientes
+        </button>
+        <button
+          className={`segmented-button ${tab === 'finance' ? 'active' : ''}`}
+          role="tab"
+          type="button"
+          aria-selected={tab === 'finance'}
+          onClick={() => setTab('finance')}
+        >
+          Financeiro
+        </button>
+      </div>
+
+      {tab === 'clients' ? <LegacyClientImportPreviewView plans={plans} /> : null}
+      {tab === 'finance' ? <LegacyFinancialImportPreviewView /> : null}
+    </section>
+  );
+}
+
+function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
   const [fileName, setFileName] = useState('');
   const [fileText, setFileText] = useState('');
   const [planMapping, setPlanMapping] = useState<LegacyImportPlanMapping>(
@@ -1520,6 +1589,281 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
                 Confirmar importação
               </Button>
             </footer>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function LegacyFinancialImportPreviewView() {
+  const [fileName, setFileName] = useState('');
+  const [fileText, setFileText] = useState('');
+  const [preview, setPreview] = useState<LegacyPaymentPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState<LegacyPaymentPreviewClassification | 'all'>('all');
+  const [page, setPage] = useState(1);
+  const [selectedRow, setSelectedRow] = useState<LegacyPaymentPreviewRow | null>(null);
+
+  const filteredRows =
+    preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / legacyPaymentPageSize));
+  const safePage = Math.min(page, totalPages);
+  const visibleRows = filteredRows.slice(
+    (safePage - 1) * legacyPaymentPageSize,
+    safePage * legacyPaymentPageSize,
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, preview]);
+
+  async function handleFileChange(file: File | undefined) {
+    setPreview(null);
+    setSelectedRow(null);
+    setError('');
+    setFilter('all');
+    setPage(1);
+
+    if (!file) {
+      setFileName('');
+      setFileText('');
+      return;
+    }
+
+    const fileRead = await readLegacyImportJsonFile(file, {
+      maxSizeBytes: 8 * 1024 * 1024,
+      maxSizeLabel: '8 MB',
+    });
+    setFileName(fileRead.fileName);
+    setFileText(fileRead.text);
+
+    if (!fileRead.ok) {
+      setError(fileRead.error);
+    }
+  }
+
+  function buildLegacyPaymentPreviewPayload() {
+    const payload = JSON.parse(fileText) as unknown;
+
+    if (Array.isArray(payload)) {
+      return {
+        schemaVersion: 1,
+        source: 'legacy',
+        payments: payload,
+      };
+    }
+
+    return payload;
+  }
+
+  async function runPreview() {
+    setLoading(true);
+    setError('');
+    setSelectedRow(null);
+
+    try {
+      const result = await previewLegacyPayments(buildLegacyPaymentPreviewPayload());
+      setPreview(result);
+      setFilter('all');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível validar o financeiro.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="legacy-import-view">
+      <PageHeader
+        eyebrow="Legacy Import"
+        icon={Receipt}
+        title="Importação financeira"
+        subtitle="IMPORT2A.1 preview read-only"
+        actions={
+          <Button
+            disabled={!fileText || loading}
+            icon={RefreshCw}
+            loading={loading}
+            variant="secondary"
+            onClick={() => void runPreview()}
+          >
+            Validar
+          </Button>
+        }
+      />
+
+      {error ? <div className="notice danger">{error}</div> : null}
+
+      <div className="legacy-import-upload">
+        <label className="field">
+          <span>Arquivo JSON financeiro</span>
+          <input
+            accept="application/json,.json"
+            type="file"
+            onChange={(event) => void handleFileChange(event.target.files?.[0])}
+          />
+        </label>
+        <div className="legacy-import-file-state">
+          <strong>{fileName || 'Nenhum arquivo selecionado'}</strong>
+          <span>
+            Aceita array puro do MySQL ou envelope versionado. Preview read-only; lote recomendado:
+            até 2.000 pagamentos por arquivo.
+          </span>
+        </div>
+      </div>
+
+      {preview ? (
+        <>
+          <div className="legacy-import-summary">
+            <StatCard label="Total" value={preview.summary.total} />
+            <StatCard
+              label="Prontos histórico"
+              tone="success"
+              value={preview.summary.readyPaidHistory}
+            />
+            <StatCard label="Sem alteração" value={preview.summary.unchanged} />
+            <StatCard
+              label="Cliente não importado"
+              tone="warning"
+              value={preview.summary.clientNotImported}
+            />
+            <StatCard label="Pendentes" tone="warning" value={preview.summary.pending} />
+            <StatCard label="Não suportados" tone="warning" value={preview.summary.unsupported} />
+            <StatCard label="Conflitos" tone="danger" value={preview.summary.conflict} />
+            <StatCard label="Inválidos" tone="danger" value={preview.summary.invalid} />
+          </div>
+
+          <div className="legacy-import-filter-row">
+            {legacyPaymentFilters.map((item) => (
+              <button
+                className={`segmented-button ${filter === item.id ? 'active' : ''}`}
+                key={item.id}
+                type="button"
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="legacy-import-table-wrap">
+            <table className="legacy-import-table legacy-payment-table">
+              <thead>
+                <tr>
+                  <th>ID legado</th>
+                  <th>Cliente</th>
+                  <th>Referência</th>
+                  <th>Data pagamento</th>
+                  <th>Método</th>
+                  <th>Valor</th>
+                  <th>Situação</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row) => (
+                  <tr key={`${row.index}:${row.legacyPaymentId ?? 'invalid'}`}>
+                    <td>
+                      <strong>{row.legacyPaymentId ?? '-'}</strong>
+                      <small>Cliente legado {row.legacyClientId ?? '-'}</small>
+                    </td>
+                    <td>
+                      <strong>{row.clientName ?? '-'}</strong>
+                      <small>{row.crmClientId ?? '-'}</small>
+                    </td>
+                    <td>{row.reference ?? '-'}</td>
+                    <td>{row.transactionDate ? formatDate(row.transactionDate) : '-'}</td>
+                    <td>{financialPaymentMethodLabel(row.paymentMethod)}</td>
+                    <td>{row.amount ? formatCurrency(row.amount) : '-'}</td>
+                    <td>
+                      <span
+                        className={`legacy-import-badge tone-${legacyPaymentClassificationTone[row.classification]}`}
+                      >
+                        {legacyPaymentClassificationLabels[row.classification]}
+                      </span>
+                    </td>
+                    <td>
+                      <IconButton
+                        icon={Eye}
+                        label="Ver detalhes"
+                        size="sm"
+                        onClick={() => setSelectedRow(row)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <PaginationControls
+            itemLabel="pagamentos"
+            onPageChange={setPage}
+            pagination={{
+              page: safePage,
+              pageSize: legacyPaymentPageSize,
+              total: filteredRows.length,
+              totalPages,
+            }}
+          />
+        </>
+      ) : null}
+
+      {selectedRow ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal legacy-import-detail-modal"
+            aria-labelledby="legacy-payment-detail-title"
+          >
+            <header className="modal-header">
+              <div>
+                <h2 id="legacy-payment-detail-title">
+                  Pagamento {selectedRow.legacyPaymentId ?? 'inválido'}
+                </h2>
+                <p>{legacyPaymentClassificationLabels[selectedRow.classification]}</p>
+              </div>
+              <IconButton icon={X} label="Fechar" onClick={() => setSelectedRow(null)} />
+            </header>
+            <div className="legacy-import-detail-grid">
+              <dl className="detail-list">
+                <dt>Legacy payment id</dt>
+                <dd>{selectedRow.legacyPaymentId ?? '-'}</dd>
+                <dt>Legacy client id</dt>
+                <dd>{selectedRow.legacyClientId ?? '-'}</dd>
+                <dt>CRM client</dt>
+                <dd>{selectedRow.clientName ?? '-'}</dd>
+                <dt>Referência</dt>
+                <dd>{selectedRow.reference ?? '-'}</dd>
+                <dt>Status legado</dt>
+                <dd>{selectedRow.legacyStatus ?? '-'}</dd>
+                <dt>Tipo</dt>
+                <dd>{selectedRow.transactionType ?? '-'}</dd>
+              </dl>
+              <dl className="detail-list">
+                <dt>Método</dt>
+                <dd>{financialPaymentMethodLabel(selectedRow.paymentMethod)}</dd>
+                <dt>Valor</dt>
+                <dd>{selectedRow.amount ? formatCurrency(selectedRow.amount) : '-'}</dd>
+                <dt>Data criado</dt>
+                <dd>{selectedRow.dataCriado ?? '-'}</dd>
+                <dt>Data pagamento</dt>
+                <dd>{selectedRow.dataPagamento ? formatDate(selectedRow.dataPagamento) : '-'}</dd>
+                <dt>Categoria</dt>
+                <dd>{selectedRow.category?.name ?? '-'}</dd>
+                <dt>Hash</dt>
+                <dd>{selectedRow.payloadHash ?? '-'}</dd>
+              </dl>
+              <div className="legacy-import-detail-section">
+                <h3>Observação</h3>
+                <p className="empty-state">{selectedRow.observation ?? 'Sem observação'}</p>
+                <h3>Erros</h3>
+                <CodeList items={selectedRow.errors} empty="Nenhum erro" />
+                <h3>Avisos</h3>
+                <CodeList items={selectedRow.warnings} empty="Nenhum aviso" />
+              </div>
+            </div>
           </section>
         </div>
       ) : null}

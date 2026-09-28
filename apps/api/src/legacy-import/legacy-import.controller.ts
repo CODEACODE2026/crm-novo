@@ -33,4 +33,9 @@ export class LegacyImportController {
   previewCutover() {
     return this.legacyImportService.previewCutover();
   }
+
+  @Post('cutover/activate')
+  activateCutover(@Body() payload: unknown) {
+    return this.legacyImportService.activateCutover(payload);
+  }
 }

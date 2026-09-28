@@ -1,4 +1,11 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ClientStatus,
   FinancialPaymentMethod,
@@ -16,10 +23,12 @@ import {
 } from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 
 const maxClientsPerPreview = 10_000;
 const maxPaymentsPerPreview = 10_000;
 const maxPaymentsPerImport = 2_000;
+const maxCutoverActivateReferences = 500;
 const maxUnsignedBigInt = 18_446_744_073_709_551_615n;
 const source = 'legacy';
 const defaultBillingSendTime = '09:00';
@@ -67,6 +76,7 @@ type LegacyPaymentPreviewClassification =
   | 'CONFLICT'
   | 'INVALID';
 type LegacyPaymentImportResult = 'IMPORTED' | 'SKIPPED' | 'FAILED';
+type LegacyCutoverActivateResult = 'CREATED' | 'UNCHANGED' | 'SKIPPED' | 'FAILED';
 type LegacyCutoverPreviewClassification = 'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID';
 
 type CandidateMatch = {
@@ -210,6 +220,17 @@ type LegacyPaymentImportResultRow = {
   message: string;
   result: LegacyPaymentImportResult;
 };
+type LegacyCutoverActivateRow = {
+  code?: string;
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  legacyClientId: string | null;
+  message?: string;
+  receivableId?: string;
+  reference: string | null;
+  result: LegacyCutoverActivateResult;
+  warnings: string[];
+};
 type LegacyPaymentPreviewRow = {
   amount: string | null;
   category: { id: string; name: string; type: string } | null;
@@ -253,7 +274,11 @@ class LegacyImportSkip extends Error {
 
 @Injectable()
 export class LegacyImportService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(ReceivableCycleService) private readonly receivableCycleService: ReceivableCycleService,
+  ) {}
 
   async previewClients(payload: unknown) {
     const envelope = this.parseEnvelope(payload);
@@ -592,9 +617,140 @@ export class LegacyImportService {
       metadata: {
         unique: ['clientReferenceId', 'purpose', 'dueDate'],
         billingSchedulerControlledBy: 'BILLING_SCHEDULER_ENABLED',
+        billingSchedulerStatus: this.isSchedulerDisabled('BILLING_SCHEDULER_ENABLED')
+          ? 'DISABLED'
+          : 'ENABLED',
         recoverySchedulerControlledBy: 'RECOVERY_SCHEDULER_ENABLED',
+        recoverySchedulerStatus: this.isSchedulerDisabled('RECOVERY_SCHEDULER_ENABLED')
+          ? 'DISABLED'
+          : 'ENABLED',
         safety:
           'Este preview nao cria cobrancas. Durante o cutover, mantenha Billing e Recovery desabilitados ate a conferencia final.',
+      },
+      rows,
+    };
+  }
+
+  async activateCutover(payload: unknown = {}) {
+    this.assertCutoverSchedulersDisabled();
+    const selection = this.parseCutoverActivationPayload(payload);
+    const preview = await this.previewCutover();
+    const rowsByReferenceId = new Map(
+      preview.rows
+        .filter((row) => row.crmClientReferenceId)
+        .map((row) => [row.crmClientReferenceId as string, row]),
+    );
+
+    if (selection.clientReferenceIds.length > maxCutoverActivateReferences) {
+      throw new BadRequestException({
+        code: 'CUTOVER_BATCH_LIMIT_EXCEEDED',
+        message: `Ative no maximo ${maxCutoverActivateReferences} referencias por request.`,
+      });
+    }
+
+    const rows: LegacyCutoverActivateRow[] = [];
+
+    for (const clientReferenceId of selection.clientReferenceIds) {
+      const row = rowsByReferenceId.get(clientReferenceId);
+
+      if (!row) {
+        rows.push({
+          legacyClientId: null,
+          crmClientId: null,
+          crmClientReferenceId: clientReferenceId,
+          reference: null,
+          result: 'SKIPPED',
+          code: 'NOT_FOUND',
+          message: 'Referencia nao pertence ao preview legado atual.',
+          warnings: [],
+        });
+        continue;
+      }
+
+      if (row.classification === 'UNCHANGED' && row.existingReceivable) {
+        rows.push({
+          legacyClientId: row.legacyClientId,
+          crmClientId: row.crmClientId,
+          crmClientReferenceId: row.crmClientReferenceId,
+          reference: row.reference,
+          result: 'UNCHANGED',
+          receivableId: row.existingReceivable.id,
+          code: 'UNCHANGED',
+          message: 'Conta a receber do ciclo atual ja existe.',
+          warnings: row.warnings,
+        });
+        continue;
+      }
+
+      if (row.classification !== 'READY' || !row.crmClientReferenceId) {
+        rows.push({
+          legacyClientId: row.legacyClientId,
+          crmClientId: row.crmClientId,
+          crmClientReferenceId: row.crmClientReferenceId,
+          reference: row.reference,
+          result: 'SKIPPED',
+          code: row.errors[0] ?? row.classification,
+          message: 'Referencia nao esta READY no estado atual.',
+          warnings: row.warnings,
+        });
+        continue;
+      }
+
+      try {
+        const result = await this.receivableCycleService.ensureCurrentCycleReceivable(
+          row.crmClientReferenceId,
+          {
+            currentDate: new Date(),
+            expectedClientId: row.crmClientId,
+            rejectPastDue: true,
+            requireClientActive: true,
+            requirePlanActive: true,
+          },
+        );
+        rows.push({
+          legacyClientId: row.legacyClientId,
+          crmClientId: row.crmClientId,
+          crmClientReferenceId: row.crmClientReferenceId,
+          reference: row.reference,
+          result: result.action === 'created' ? 'CREATED' : 'UNCHANGED',
+          receivableId: result.receivable.id,
+          code: result.action === 'created' ? 'CREATED' : 'UNCHANGED',
+          message:
+            result.action === 'created'
+              ? 'Conta a receber do proximo ciclo criada.'
+              : 'Conta a receber do ciclo atual ja existe.',
+          warnings: row.warnings,
+        });
+      } catch (error) {
+        if (this.isCutoverBusinessError(error)) {
+          rows.push({
+            legacyClientId: row.legacyClientId,
+            crmClientId: row.crmClientId,
+            crmClientReferenceId: row.crmClientReferenceId,
+            reference: row.reference,
+            result: 'SKIPPED',
+            code: this.cutoverBusinessErrorCode(error),
+            message: this.cutoverBusinessErrorMessage(error),
+            warnings: row.warnings,
+          });
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    return {
+      mode: 'CONTROLLED_ACTIVATION',
+      unit: 'CLIENT_REFERENCE',
+      purpose: 'RENEWAL',
+      summary: {
+        requested: selection.clientReferenceIds.length,
+        created: rows.filter((row) => row.result === 'CREATED').length,
+        unchanged: rows.filter((row) => row.result === 'UNCHANGED').length,
+        skipped: rows.filter((row) => row.result === 'SKIPPED').length,
+        failed: rows.filter((row) => row.result === 'FAILED').length,
+        warnings: rows.filter((row) => row.warnings.length > 0).length,
       },
       rows,
     };
@@ -1108,6 +1264,107 @@ export class LegacyImportService {
       dueToday: rows.filter((row) => row.warnings.includes('WARNING_DUE_TODAY')).length,
       dispatchNotReady: rows.filter((row) => !row.dispatchReady).length,
     };
+  }
+
+  private parseCutoverActivationPayload(payload: unknown) {
+    if (payload === undefined || payload === null) {
+      return { clientReferenceIds: [] };
+    }
+
+    if (typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new BadRequestException('Payload de ativacao do cutover invalido.');
+    }
+
+    const input = payload as Record<string, unknown>;
+    const allowedKeys = new Set(['clientReferenceIds']);
+    const unsupportedKeys = Object.keys(input).filter(
+      (key) => !allowedKeys.has(key) && input[key] !== undefined,
+    );
+
+    if (unsupportedKeys.length) {
+      throw new BadRequestException('Payload de ativacao aceita somente clientReferenceIds.');
+    }
+
+    const clientReferenceIds =
+      this.parseOptionalStringArray(input.clientReferenceIds, 'clientReferenceIds') ?? [];
+
+    if (clientReferenceIds.length > maxCutoverActivateReferences) {
+      throw new BadRequestException({
+        code: 'CUTOVER_BATCH_LIMIT_EXCEEDED',
+        message: `Ative no maximo ${maxCutoverActivateReferences} referencias por request.`,
+      });
+    }
+
+    return { clientReferenceIds };
+  }
+
+  private parseOptionalStringArray(value: unknown, field: string) {
+    if (value === undefined) {
+      return null;
+    }
+
+    if (!Array.isArray(value)) {
+      throw new BadRequestException(`${field} deve conter apenas strings nao vazias.`);
+    }
+
+    const items: unknown[] = value;
+
+    if (items.some((item) => typeof item !== 'string' || !item.trim())) {
+      throw new BadRequestException(`${field} deve conter apenas strings nao vazias.`);
+    }
+
+    return this.unique(items.map((item) => (item as string).trim()));
+  }
+
+  private assertCutoverSchedulersDisabled() {
+    if (
+      this.isSchedulerDisabled('BILLING_SCHEDULER_ENABLED') &&
+      this.isSchedulerDisabled('RECOVERY_SCHEDULER_ENABLED')
+    ) {
+      return;
+    }
+
+    throw new BadRequestException({
+      code: 'SCHEDULERS_MUST_BE_DISABLED',
+      message:
+        'BILLING_SCHEDULER_ENABLED e RECOVERY_SCHEDULER_ENABLED devem estar exatamente como false antes da ativacao.',
+      billingSchedulerStatus: this.isSchedulerDisabled('BILLING_SCHEDULER_ENABLED')
+        ? 'DISABLED'
+        : 'ENABLED',
+      recoverySchedulerStatus: this.isSchedulerDisabled('RECOVERY_SCHEDULER_ENABLED')
+        ? 'DISABLED'
+        : 'ENABLED',
+    });
+  }
+
+  private isSchedulerDisabled(key: 'BILLING_SCHEDULER_ENABLED' | 'RECOVERY_SCHEDULER_ENABLED') {
+    return this.config.get<string>(key) === 'false';
+  }
+
+  private isCutoverBusinessError(error: unknown): error is ConflictException | NotFoundException {
+    return error instanceof ConflictException || error instanceof NotFoundException;
+  }
+
+  private cutoverBusinessErrorCode(error: ConflictException | NotFoundException) {
+    const response = error.getResponse();
+
+    if (typeof response === 'object' && response && 'code' in response) {
+      const code = (response as { code?: unknown }).code;
+      if (typeof code === 'string' && code.trim()) return code;
+    }
+
+    return error instanceof NotFoundException ? 'NOT_FOUND' : 'CONFLICT';
+  }
+
+  private cutoverBusinessErrorMessage(error: ConflictException | NotFoundException) {
+    const response = error.getResponse();
+
+    if (typeof response === 'object' && response && 'message' in response) {
+      const message = (response as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) return message;
+    }
+
+    return error.message;
   }
 
   private calculateCutoverScheduledFor(

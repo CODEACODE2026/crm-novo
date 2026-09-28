@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { LegacyImportService } from './legacy-import.service';
@@ -87,11 +87,16 @@ function createService(
     importRecords?: unknown[];
     plans?: unknown[];
     receivables?: unknown[];
+    receivableCycleResult?: unknown;
+    receivableCycleError?: Error;
+    receivableCycleHandler?: (clientReferenceId: string) => unknown;
     referenceCreateErrorFor?: string;
     referenceFindUnique?: unknown;
     references?: unknown[];
     billingSettings?: unknown;
+    billingSchedulerEnabled?: string | undefined;
     messageTemplates?: unknown[];
+    recoverySchedulerEnabled?: string | undefined;
     whatsAppConnection?: unknown;
   } = {},
 ) {
@@ -310,7 +315,53 @@ function createService(
     },
   };
 
-  return { prisma, service: new LegacyImportService(prisma as never), writes };
+  const config = {
+    get: vi.fn((key: string) => {
+      if (key === 'BILLING_SCHEDULER_ENABLED') {
+        return Object.prototype.hasOwnProperty.call(options, 'billingSchedulerEnabled')
+          ? options.billingSchedulerEnabled
+          : 'false';
+      }
+
+      if (key === 'RECOVERY_SCHEDULER_ENABLED') {
+        return Object.prototype.hasOwnProperty.call(options, 'recoverySchedulerEnabled')
+          ? options.recoverySchedulerEnabled
+          : 'false';
+      }
+
+      return undefined;
+    }),
+  };
+  const receivableCycleService = {
+    ensureCurrentCycleReceivable: vi.fn((clientReferenceId: string) => {
+      if (options.receivableCycleHandler) {
+        return Promise.resolve(options.receivableCycleHandler(clientReferenceId));
+      }
+
+      if (options.receivableCycleError) {
+        return Promise.reject(options.receivableCycleError);
+      }
+
+      return Promise.resolve(
+        options.receivableCycleResult ?? {
+          action: 'created',
+          receivable: { id: `receivable-${clientReferenceId}` },
+        },
+      );
+    }),
+  };
+
+  return {
+    config,
+    prisma,
+    receivableCycleService,
+    service: new LegacyImportService(
+      prisma as never,
+      config as never,
+      receivableCycleService as never,
+    ),
+    writes,
+  };
 }
 
 function expectNoOperationalSideEffects(writes: ReturnType<typeof createService>['writes']) {
@@ -2892,6 +2943,394 @@ describe('LegacyImportService', () => {
       amount: '35.00',
       dueDate: '2026-10-26',
     });
+    vi.useRealTimers();
+  });
+
+  it('activates READY cutover references by creating only the renewal receivable', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { receivableCycleService, service, writes } = createCutoverService();
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result).toMatchObject({
+      mode: 'CONTROLLED_ACTIVATION',
+      unit: 'CLIENT_REFERENCE',
+      purpose: 'RENEWAL',
+      summary: { requested: 1, created: 1, unchanged: 0, skipped: 0, failed: 0 },
+    });
+    expect(result.rows[0]).toMatchObject({
+      legacyClientId: '2352',
+      crmClientId: 'client-edilson',
+      crmClientReferenceId: 'reference-edilson',
+      reference: 'edilson7581',
+      result: 'CREATED',
+      receivableId: 'receivable-reference-edilson',
+      code: 'CREATED',
+    });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      'reference-edilson',
+      expect.objectContaining({
+        expectedClientId: 'client-edilson',
+        rejectPastDue: true,
+        requireClientActive: true,
+        requirePlanActive: true,
+      }),
+    );
+    expectNoOperationalSideEffects(writes);
+    vi.useRealTimers();
+  });
+
+  it('treats replayed cutover activation as UNCHANGED without another write request', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { receivableCycleService, service } = createCutoverService({
+      receivables: [cutoverReceivable()],
+    });
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 0, unchanged: 1 });
+    expect(result.rows[0]).toMatchObject({
+      result: 'UNCHANGED',
+      receivableId: 'receivable-edilson',
+      code: 'UNCHANGED',
+    });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('can activate an explicitly selected unchanged reference idempotently', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { receivableCycleService, service } = createCutoverService({
+      receivables: [cutoverReceivable()],
+    });
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 0, unchanged: 1 });
+    expect(result.rows[0]).toMatchObject({
+      result: 'UNCHANGED',
+      receivableId: 'receivable-edilson',
+      code: 'UNCHANGED',
+    });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('blocks cutover activation when billing or recovery schedulers are effectively enabled', async () => {
+    const { service } = createCutoverService({ billingSchedulerEnabled: undefined });
+
+    try {
+      await service.activateCutover({});
+      throw new Error('Expected cutover activation to be blocked.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+      const response: unknown = (error as BadRequestException).getResponse();
+      expect(response).toMatchObject({ code: 'SCHEDULERS_MUST_BE_DISABLED' });
+    }
+  });
+
+  it.each([
+    ['billing true', { billingSchedulerEnabled: 'true', recoverySchedulerEnabled: 'false' }],
+    ['recovery true', { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: 'true' }],
+    [
+      'billing undefined',
+      { billingSchedulerEnabled: undefined, recoverySchedulerEnabled: 'false' },
+    ],
+    [
+      'recovery undefined',
+      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: undefined },
+    ],
+    ['both undefined', { billingSchedulerEnabled: undefined, recoverySchedulerEnabled: undefined }],
+    ['billing TRUE', { billingSchedulerEnabled: 'TRUE', recoverySchedulerEnabled: 'false' }],
+    ['mixed case false', { billingSchedulerEnabled: 'FALSE', recoverySchedulerEnabled: 'false' }],
+    [
+      'recovery mixed case false',
+      { billingSchedulerEnabled: 'false', recoverySchedulerEnabled: 'FALSE' },
+    ],
+    ['billing zero', { billingSchedulerEnabled: '0', recoverySchedulerEnabled: 'false' }],
+    ['empty billing', { billingSchedulerEnabled: '', recoverySchedulerEnabled: 'false' }],
+  ])('blocks cutover activation when scheduler env is not exactly false: %s', async (_, config) => {
+    const { receivableCycleService, service, writes } = createCutoverService(config);
+
+    await expect(service.activateCutover({})).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('allows cutover activation when both schedulers are exactly false', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      billingSchedulerEnabled: 'false',
+      recoverySchedulerEnabled: 'false',
+    });
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 1 });
+    vi.useRealTimers();
+  });
+
+  it('rejects more than 500 selected references before any receivable write', async () => {
+    const { receivableCycleService, service, writes } = createCutoverService();
+
+    try {
+      await service.activateCutover({
+        clientReferenceIds: Array.from({ length: 501 }, (_, index) => `reference-${index}`),
+      });
+      throw new Error('Expected cutover activation to reject over-limit batches.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+      const response: unknown = (error as BadRequestException).getResponse();
+      expect(response).toMatchObject({ code: 'CUTOVER_BATCH_LIMIT_EXCEEDED' });
+    }
+
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expectNoOperationalSideEffects(writes);
+  });
+
+  it('accepts a 500-reference activation selection limit', async () => {
+    const { service } = createCutoverService();
+
+    const result = await service.activateCutover({
+      clientReferenceIds: Array.from({ length: 500 }, (_, index) => `reference-${index}`),
+    });
+
+    expect(result.summary).toMatchObject({ requested: 500, created: 0, skipped: 500 });
+  });
+
+  it('does not activate all ready references for an empty cutover selection', async () => {
+    const { receivableCycleService, service } = createCutoverService();
+
+    const result = await service.activateCutover({ clientReferenceIds: [] });
+
+    expect(result.summary).toMatchObject({ requested: 0, created: 0, skipped: 0 });
+    expect(result.rows).toEqual([]);
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an omitted cutover selection as activate all', async () => {
+    const { receivableCycleService, service } = createCutoverService();
+
+    const result = await service.activateCutover({});
+
+    expect(result.summary).toMatchObject({ requested: 0, created: 0, skipped: 0 });
+    expect(result.rows).toEqual([]);
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+  });
+
+  it('rejects array payloads instead of treating them as activate all', async () => {
+    const { receivableCycleService, service } = createCutoverService();
+
+    await expect(service.activateCutover([])).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+  });
+
+  it('rejects frontend authority fields in cutover activation payloads', async () => {
+    const { receivableCycleService, service } = createCutoverService();
+
+    await expect(
+      service.activateCutover({
+        amount: '35.00',
+        classification: 'READY',
+        clientReferenceIds: ['reference-edilson'],
+        dueDate: '2026-10-26',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates repeated cutover reference ids before processing', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { receivableCycleService, service } = createCutoverService();
+
+    const result = await service.activateCutover({
+      clientReferenceIds: ['reference-edilson', 'reference-edilson', 'reference-edilson'],
+    });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 1 });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('skips unknown cutover reference ids without writes', async () => {
+    const { receivableCycleService, service } = createCutoverService();
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-unknown'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 0, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({
+      crmClientReferenceId: 'reference-unknown',
+      result: 'SKIPPED',
+      code: 'NOT_FOUND',
+    });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+  });
+
+  it('activates only the requested ready reference when preview has multiple ready rows', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { receivableCycleService, service } = createCutoverService({
+      clients: [
+        cutoverClient({ id: 'client-a', name: 'Cliente A' }),
+        cutoverClient({ id: 'client-b', name: 'Cliente B' }),
+      ],
+      importRecords: [
+        cutoverImportRecord({
+          legacyClientId: '2352',
+          crmClientId: 'client-a',
+          crmClientReferenceId: 'reference-a',
+        }),
+        cutoverImportRecord({
+          legacyClientId: '2353',
+          crmClientId: 'client-b',
+          crmClientReferenceId: 'reference-b',
+        }),
+      ],
+      references: [
+        cutoverReference({ id: 'reference-a', clientId: 'client-a', reference: 'cliente-a' }),
+        cutoverReference({ id: 'reference-b', clientId: 'client-b', reference: 'cliente-b' }),
+      ],
+    });
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-b'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 1 });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+    expect(receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      'reference-b',
+      expect.objectContaining({
+        expectedClientId: 'client-b',
+        rejectPastDue: true,
+        requireClientActive: true,
+        requirePlanActive: true,
+      }),
+    );
+    vi.useRealTimers();
+  });
+
+  it('revalidates past due references during activation and skips without creating', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+    const { receivableCycleService, service } = createCutoverService();
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 0, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({
+      result: 'SKIPPED',
+      code: 'CONFLICT_PAST_DUE_DATE',
+    });
+    expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('handles expected receivable race conflicts as SKIPPED instead of HTTP 500', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivableCycleError: new ConflictException(
+        'Ciclo financeiro possui conta a receber conflitante.',
+      ),
+    });
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 0, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ result: 'SKIPPED', code: 'CONFLICT' });
+    vi.useRealTimers();
+  });
+
+  it('surfaces domain conflict codes from the final cutover guard', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivableCycleError: new ConflictException({
+        code: 'PLAN_INACTIVE',
+        message: 'Plano da referencia nao esta ativo para gerar conta a receber.',
+      }),
+    });
+
+    const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+    expect(result.summary).toMatchObject({ requested: 1, created: 0, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({
+      result: 'SKIPPED',
+      code: 'PLAN_INACTIVE',
+      message: 'Plano da referencia nao esta ativo para gerar conta a receber.',
+    });
+    vi.useRealTimers();
+  });
+
+  it('keeps partial cutover batches moving for isolated business conflicts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      clients: [
+        cutoverClient({ id: 'client-a', name: 'Cliente A' }),
+        cutoverClient({ id: 'client-b', name: 'Cliente B' }),
+        cutoverClient({ id: 'client-c', name: 'Cliente C' }),
+      ],
+      importRecords: [
+        cutoverImportRecord({
+          legacyClientId: '2352',
+          crmClientId: 'client-a',
+          crmClientReferenceId: 'reference-a',
+        }),
+        cutoverImportRecord({
+          legacyClientId: '2353',
+          crmClientId: 'client-b',
+          crmClientReferenceId: 'reference-b',
+        }),
+        cutoverImportRecord({
+          legacyClientId: '2354',
+          crmClientId: 'client-c',
+          crmClientReferenceId: 'reference-c',
+        }),
+      ],
+      references: [
+        cutoverReference({ id: 'reference-a', clientId: 'client-a', reference: 'cliente-a' }),
+        cutoverReference({ id: 'reference-b', clientId: 'client-b', reference: 'cliente-b' }),
+        cutoverReference({ id: 'reference-c', clientId: 'client-c', reference: 'cliente-c' }),
+      ],
+      receivableCycleHandler: (clientReferenceId) => {
+        if (clientReferenceId === 'reference-b') {
+          throw new ConflictException('Conflito de negocio isolado.');
+        }
+
+        return {
+          action: 'created',
+          receivable: { id: `receivable-${clientReferenceId}` },
+        };
+      },
+    });
+
+    const result = await service.activateCutover({
+      clientReferenceIds: ['reference-a', 'reference-b', 'reference-c'],
+    });
+
+    expect(result.summary).toMatchObject({ requested: 3, created: 2, skipped: 1 });
+    expect(result.rows.map((row) => row.result)).toEqual(['CREATED', 'SKIPPED', 'CREATED']);
+    vi.useRealTimers();
+  });
+
+  it('does not convert systemic cutover failures into skipped rows', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivableCycleError: new Error('Prisma engine failure'),
+    });
+
+    await expect(
+      service.activateCutover({ clientReferenceIds: ['reference-edilson'] }),
+    ).rejects.toThrow('Prisma engine failure');
     vi.useRealTimers();
   });
 

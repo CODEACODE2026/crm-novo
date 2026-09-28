@@ -1,6 +1,10 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientReference, Prisma, Receivable } from '@prisma/client';
-import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
+import {
+  formatBusinessDate,
+  parseBusinessDate,
+  parseSaoPauloBusinessDate,
+} from '../clients/utils/business-date';
 import { PrismaService } from '../common/prisma/prisma.service';
 
 export type CycleIssueCode =
@@ -13,6 +17,14 @@ export type CycleIssueCode =
 
 type DbClient = PrismaService | Prisma.TransactionClient;
 
+export type EnsureCurrentCycleReceivableOptions = {
+  expectedClientId?: string | null;
+  requireClientActive?: boolean;
+  requirePlanActive?: boolean;
+  rejectPastDue?: boolean;
+  currentDate?: Date;
+};
+
 type ReferenceWithRelations = Prisma.ClientReferenceGetPayload<{
   include: {
     client: true;
@@ -21,16 +33,49 @@ type ReferenceWithRelations = Prisma.ClientReferenceGetPayload<{
   };
 }>;
 
+type CycleStatus = {
+  code: CycleIssueCode;
+  reason: string;
+  receivable: Receivable | null;
+  sameCycleReceivables: Receivable[];
+};
+
+export type EnsureCurrentCycleReceivableResult = {
+  action: 'created' | 'kept';
+  receivable: Receivable;
+  status: CycleStatus;
+};
+
 @Injectable()
 export class ReceivableCycleService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  async ensureCurrentCycleReceivable(clientReferenceId: string, db: DbClient = this.prisma) {
+  async ensureCurrentCycleReceivable(
+    clientReferenceId: string,
+    dbOrOptions: DbClient | EnsureCurrentCycleReceivableOptions = this.prisma,
+    maybeOptions: EnsureCurrentCycleReceivableOptions = {},
+  ): Promise<EnsureCurrentCycleReceivableResult> {
+    const db = this.isDbClient(dbOrOptions) ? dbOrOptions : this.prisma;
+    const options = this.isDbClient(dbOrOptions) ? maybeOptions : dbOrOptions;
+
+    if (this.shouldWrapGuardedOperation(db, options)) {
+      return this.prisma.$transaction<EnsureCurrentCycleReceivableResult>(
+        (tx) => this.ensureCurrentCycleReceivable(clientReferenceId, tx, options),
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    }
+
+    if (this.hasFinalGuards(options)) {
+      await this.lockReferenceGraph(clientReferenceId, db);
+    }
+
     const reference = await this.findReference(clientReferenceId, db);
 
     if (!reference) {
       throw new NotFoundException('Referencia do cliente nao encontrada.');
     }
+
+    this.assertFinalGuards(reference, options);
 
     const status = this.classifyReference(reference);
 
@@ -72,6 +117,9 @@ export class ReceivableCycleService {
       }
 
       const current = await this.findReference(clientReferenceId, db);
+      if (current) {
+        this.assertFinalGuards(current, options);
+      }
       const currentStatus = current ? this.classifyReference(current) : null;
 
       if (currentStatus?.code === 'OK' && currentStatus.receivable) {
@@ -275,7 +323,7 @@ export class ReceivableCycleService {
     });
   }
 
-  private classifyReference(reference: ReferenceWithRelations) {
+  private classifyReference(reference: ReferenceWithRelations): CycleStatus {
     const sameCycleReceivables = reference.receivables.filter(
       (receivable) =>
         receivable.purpose === 'RENEWAL' &&
@@ -292,11 +340,27 @@ export class ReceivableCycleService {
       };
     }
 
-    if (sameCycleReceivables.some((item) => item.status === 'PENDENTE')) {
+    const sameCyclePending =
+      sameCycleReceivables.find((item) => item.status === 'PENDENTE') ?? null;
+    const sameCyclePendingCompatible =
+      sameCyclePending && this.sameDecimal(sameCyclePending.amount, reference.recurringValue)
+        ? sameCyclePending
+        : null;
+
+    if (sameCyclePending && !sameCyclePendingCompatible) {
+      return {
+        code: 'RECEIVABLE_DIVERGENT' as const,
+        reason: 'Conta a receber pendente existe, mas com valor divergente.',
+        receivable: sameCyclePending,
+        sameCycleReceivables,
+      };
+    }
+
+    if (sameCyclePendingCompatible) {
       return {
         code: 'OK' as const,
         reason: 'Conta a receber pendente do ciclo atual encontrada.',
-        receivable: sameCycleReceivables.find((item) => item.status === 'PENDENTE') ?? receivable,
+        receivable: sameCyclePendingCompatible,
         sameCycleReceivables,
       };
     }
@@ -368,6 +432,87 @@ export class ReceivableCycleService {
     return `Renovacao - Plano ${planName}`;
   }
 
+  private assertFinalGuards(
+    reference: ReferenceWithRelations,
+    options: EnsureCurrentCycleReceivableOptions,
+  ) {
+    if (options.expectedClientId && reference.clientId !== options.expectedClientId) {
+      throw new ConflictException({
+        code: 'CLIENT_REFERENCE_MAPPING_MISMATCH',
+        message: 'Referencia nao pertence ao cliente esperado.',
+      });
+    }
+
+    if (options.requireClientActive && reference.client.status !== 'ATIVO') {
+      throw new ConflictException({
+        code: 'CLIENT_NOT_ACTIVE',
+        message: 'Cliente nao esta ativo para gerar conta a receber.',
+      });
+    }
+
+    if (reference.status !== 'ATIVO') {
+      throw new ConflictException({
+        code: 'REFERENCE_NOT_ACTIVE',
+        message: 'Referencia nao esta ativa para gerar conta a receber.',
+      });
+    }
+
+    if (options.requirePlanActive && !reference.plan.active) {
+      throw new ConflictException({
+        code: 'PLAN_INACTIVE',
+        message: 'Plano da referencia nao esta ativo para gerar conta a receber.',
+      });
+    }
+
+    if (options.rejectPastDue) {
+      const today = options.currentDate ?? parseSaoPauloBusinessDate(new Date());
+      if (formatBusinessDate(reference.dueDate) < formatBusinessDate(today)) {
+        throw new ConflictException({
+          code: 'CONFLICT_PAST_DUE_DATE',
+          message: 'Referencia possui vencimento passado.',
+        });
+      }
+    }
+  }
+
+  private async lockReferenceGraph(clientReferenceId: string, db: DbClient) {
+    const lockableDb = db as {
+      $queryRaw?: PrismaService['$queryRaw'];
+    };
+
+    if (!lockableDb.$queryRaw) {
+      return;
+    }
+
+    await lockableDb.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT cr.id
+      FROM "ClientReference" cr
+      JOIN "Client" c ON c.id = cr."clientId"
+      JOIN "Plan" p ON p.id = cr."planId"
+      WHERE cr.id = ${clientReferenceId}::uuid
+      FOR UPDATE OF cr, c, p
+    `);
+  }
+
+  private hasFinalGuards(options: EnsureCurrentCycleReceivableOptions) {
+    return Boolean(
+      options.expectedClientId ||
+      options.requireClientActive ||
+      options.requirePlanActive ||
+      options.rejectPastDue,
+    );
+  }
+
+  private shouldWrapGuardedOperation(db: DbClient, options: EnsureCurrentCycleReceivableOptions) {
+    return db === this.prisma && this.hasFinalGuards(options);
+  }
+
+  private isDbClient(value: DbClient | EnsureCurrentCycleReceivableOptions): value is DbClient {
+    return Boolean(
+      value && typeof value === 'object' && 'clientReference' in value && 'receivable' in value,
+    );
+  }
+
   private presentCycle(
     reference: ReferenceWithRelations,
     status: ReturnType<ReceivableCycleService['classifyReference']>,
@@ -416,5 +561,12 @@ export class ReceivableCycleService {
 
   private isUniqueConstraint(error: unknown) {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+  }
+
+  private sameDecimal(
+    left: Prisma.Decimal | number | string,
+    right: Prisma.Decimal | number | string,
+  ) {
+    return new Prisma.Decimal(left).equals(new Prisma.Decimal(right));
   }
 }

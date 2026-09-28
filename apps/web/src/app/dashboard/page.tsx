@@ -115,6 +115,7 @@ import {
   StatCard,
 } from '../../components/ui/primitives';
 import {
+  activateLegacyCutover,
   cancelReceivable,
   cancelPaymentIntent,
   confirmMockPaymentIntent,
@@ -1138,6 +1139,12 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
 function LegacyCutoverPreviewView() {
   const [preview, setPreview] = useState<LegacyCutoverPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activating, setActivating] = useState(false);
+  const activatingRef = useRef(false);
+  const [activateConfirmOpen, setActivateConfirmOpen] = useState(false);
+  const [activateResult, setActivateResult] = useState<Awaited<
+    ReturnType<typeof activateLegacyCutover>
+  > | null>(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<LegacyCutoverPreviewClassification | 'all' | 'warnings'>(
     'all',
@@ -1157,6 +1164,21 @@ function LegacyCutoverPreviewView() {
     (safePage - 1) * legacyPaymentPageSize,
     safePage * legacyPaymentPageSize,
   );
+  const schedulersDisabled =
+    preview?.metadata.billingSchedulerStatus === 'DISABLED' &&
+    preview.metadata.recoverySchedulerStatus === 'DISABLED';
+  const readyReferenceIds =
+    preview?.rows
+      .filter((row) => row.classification === 'READY' && row.crmClientReferenceId)
+      .map((row) => row.crmClientReferenceId as string) ?? [];
+  const canActivate = Boolean(
+    preview &&
+    preview.summary.ready > 0 &&
+    preview.summary.ready <= 500 &&
+    schedulersDisabled &&
+    !loading &&
+    !activating,
+  );
 
   useEffect(() => {
     setPage(1);
@@ -1170,11 +1192,33 @@ function LegacyCutoverPreviewView() {
     try {
       const result = await previewLegacyCutover();
       setPreview(result);
+      setActivateResult(null);
       setFilter('all');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível analisar o cutover.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runActivate() {
+    if (activatingRef.current) return;
+    activatingRef.current = true;
+    setActivating(true);
+    setError('');
+
+    try {
+      const result = await activateLegacyCutover(readyReferenceIds);
+      setActivateResult(result);
+      setActivateConfirmOpen(false);
+      const nextPreview = await previewLegacyCutover();
+      setPreview(nextPreview);
+      setFilter('all');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível ativar o cutover.');
+    } finally {
+      activatingRef.current = false;
+      setActivating(false);
     }
   }
 
@@ -1184,16 +1228,29 @@ function LegacyCutoverPreviewView() {
         eyebrow="Legacy Import"
         icon={Workflow}
         title="Ativação operacional"
-        subtitle="IMPORT3.1 preview read-only"
+        subtitle="IMPORT3.2 ativação controlada"
         actions={
-          <Button
-            icon={RefreshCw}
-            loading={loading}
-            variant="secondary"
-            onClick={() => void runPreview()}
-          >
-            Analisar cutover
-          </Button>
+          <>
+            <Button
+              icon={RefreshCw}
+              loading={loading}
+              variant="secondary"
+              onClick={() => void runPreview()}
+            >
+              Analisar cutover
+            </Button>
+            {preview && preview.summary.ready > 0 && !loading && !activating ? (
+              <Button
+                disabled={!canActivate}
+                icon={Receipt}
+                loading={activating}
+                variant="primary"
+                onClick={() => setActivateConfirmOpen(true)}
+              >
+                Criar Receivables de renovação
+              </Button>
+            ) : null}
+          </>
         }
       />
 
@@ -1202,6 +1259,27 @@ function LegacyCutoverPreviewView() {
         desabilitados até a conferência final.
       </div>
       {error ? <div className="notice danger">{error}</div> : null}
+      {preview ? (
+        <div className={schedulersDisabled ? 'notice success' : 'notice danger'}>
+          Billing Scheduler:{' '}
+          {preview.metadata.billingSchedulerStatus === 'DISABLED' ? 'Desabilitado' : 'Habilitado'} ·
+          Recovery Scheduler:{' '}
+          {preview.metadata.recoverySchedulerStatus === 'DISABLED' ? 'Desabilitado' : 'Habilitado'}
+        </div>
+      ) : null}
+      {preview && preview.summary.ready > 500 ? (
+        <div className="notice danger">
+          Limite de ativação: no máximo 500 referências prontas por execução.
+        </div>
+      ) : null}
+      {activateResult ? (
+        <div className="legacy-import-result" aria-live="polite">
+          <span>Criadas: {activateResult.summary.created}</span>
+          <span>Sem alteração: {activateResult.summary.unchanged}</span>
+          <span>Ignoradas: {activateResult.summary.skipped}</span>
+          <span>Falhas: {activateResult.summary.failed}</span>
+        </div>
+      ) : null}
 
       {preview ? (
         <>
@@ -1371,6 +1449,64 @@ function LegacyCutoverPreviewView() {
                 <CodeList items={selectedRow.warnings} empty="Nenhum aviso" />
               </div>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activateConfirmOpen && preview ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal legacy-import-confirm-modal"
+            aria-labelledby="cutover-activate-title"
+          >
+            <header className="modal-header">
+              <div>
+                <h2 id="cutover-activate-title">Criar Receivables de renovação?</h2>
+                <p>Esta etapa cria somente contas a receber de renovação.</p>
+              </div>
+              <IconButton
+                disabled={activating}
+                icon={X}
+                label="Fechar"
+                onClick={() => setActivateConfirmOpen(false)}
+              />
+            </header>
+            <div className="legacy-import-confirm-grid">
+              <StatCard label="Referências prontas" tone="success" value={preview.summary.ready} />
+              <StatCard
+                label="Receivables que podem ser criadas"
+                tone="success"
+                value={preview.summary.ready}
+              />
+              <StatCard label="MessageDispatches" value={0} />
+              <StatCard label="PIX" value={0} />
+              <StatCard label="WhatsApp" value={0} />
+            </div>
+            <p className="modal-copy">
+              Esta etapa cria somente as contas a receber do próximo ciclo. Nenhuma cobrança será
+              enviada enquanto Billing e Recovery permanecerem desabilitados. Mantenha ambos
+              desabilitados até a conferência final.
+            </p>
+            <footer className="modal-actions">
+              <Button
+                disabled={activating}
+                type="button"
+                variant="secondary"
+                onClick={() => setActivateConfirmOpen(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                disabled={!canActivate}
+                icon={Receipt}
+                loading={activating}
+                type="button"
+                variant="primary"
+                onClick={() => void runActivate()}
+              >
+                Criar Receivables de renovação
+              </Button>
+            </footer>
           </section>
         </div>
       ) : null}

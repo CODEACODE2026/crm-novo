@@ -849,10 +849,37 @@ export interface LegacyCutoverPreview {
   metadata: {
     unique: string[];
     billingSchedulerControlledBy: string;
+    billingSchedulerStatus: 'DISABLED' | 'ENABLED';
     recoverySchedulerControlledBy: string;
+    recoverySchedulerStatus: 'DISABLED' | 'ENABLED';
     safety: string;
   };
   rows: LegacyCutoverPreviewRow[];
+}
+
+export interface LegacyCutoverActivateResult {
+  mode: 'CONTROLLED_ACTIVATION';
+  unit: 'CLIENT_REFERENCE';
+  purpose: 'RENEWAL';
+  summary: {
+    requested: number;
+    created: number;
+    unchanged: number;
+    skipped: number;
+    failed: number;
+    warnings: number;
+  };
+  rows: Array<{
+    legacyClientId: string | null;
+    crmClientId: string | null;
+    crmClientReferenceId: string | null;
+    reference: string | null;
+    result: 'CREATED' | 'UNCHANGED' | 'SKIPPED' | 'FAILED';
+    receivableId?: string;
+    code?: string;
+    message?: string;
+    warnings: string[];
+  }>;
 }
 
 export type LegacyImportPlanCycle = 'MENSAL' | 'BIMESTRAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
@@ -1515,6 +1542,13 @@ export function previewLegacyCutover() {
   return apiFetch<LegacyCutoverPreview>('/legacy-import/cutover/preview', {
     method: 'POST',
     body: JSON.stringify({}),
+  });
+}
+
+export function activateLegacyCutover(clientReferenceIds?: string[]) {
+  return apiFetch<LegacyCutoverActivateResult>('/legacy-import/cutover/activate', {
+    method: 'POST',
+    body: JSON.stringify(clientReferenceIds?.length ? { clientReferenceIds } : {}),
   });
 }
 

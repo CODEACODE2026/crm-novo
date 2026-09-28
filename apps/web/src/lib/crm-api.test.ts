@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
+  activateLegacyCutover,
   apiFetch,
   applyReferralReward,
   cancelPaymentIntent,
@@ -26,6 +27,7 @@ import {
   payReceivable,
   payReceivables,
   previewLegacyClients,
+  previewLegacyCutover,
   previewLegacyPayments,
   previewReceivablePixReplacement,
   previewReceivablePixReplacementRecovery,
@@ -304,6 +306,51 @@ describe('CRM UI formatters', () => {
       schemaVersion: 1,
       source: 'legacy',
       payments: [{ id: 11670, client_id: 2352 }],
+    });
+  });
+
+  it('posts cutover preview and controlled activation without frontend authority fields', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            mode: 'READ_ONLY',
+            unit: 'CLIENT_REFERENCE',
+            purpose: 'RENEWAL',
+            summary: { total: 0 },
+            metadata: {
+              unique: ['clientReferenceId', 'purpose', 'dueDate'],
+              billingSchedulerControlledBy: 'BILLING_SCHEDULER_ENABLED',
+              billingSchedulerStatus: 'DISABLED',
+              recoverySchedulerControlledBy: 'RECOVERY_SCHEDULER_ENABLED',
+              recoverySchedulerStatus: 'DISABLED',
+              safety: '',
+            },
+            rows: [],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewLegacyCutover();
+    await activateLegacyCutover(['reference-edilson']);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('/legacy-import/cutover/preview'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/legacy-import/cutover/activate'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const activationCall = fetchMock.mock.calls[1] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    expect(JSON.parse(activationCall?.[1]?.body as string)).toEqual({
+      clientReferenceIds: ['reference-edilson'],
     });
   });
 

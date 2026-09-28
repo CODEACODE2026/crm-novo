@@ -79,7 +79,29 @@ type TestReference = Omit<ReturnType<typeof reference>, 'receivables'> & {
 function fakeService(initialReference = reference()) {
   const state: { reference: TestReference } = { reference: initialReference };
   const created: TestReceivable[] = [];
-  const prisma = {
+  const prisma: {
+    $queryRaw: ReturnType<typeof vi.fn>;
+    $transaction: ReturnType<typeof vi.fn>;
+    clientReference: {
+      findUnique: ReturnType<typeof vi.fn>;
+      findMany: ReturnType<typeof vi.fn>;
+    };
+    receivable: {
+      create: ReturnType<typeof vi.fn>;
+      findMany: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  } = {
+    $queryRaw: vi.fn(() => Promise.resolve([])),
+    $transaction: vi.fn((callback: (tx: unknown) => unknown) =>
+      Promise.resolve(
+        callback({
+          $queryRaw: prisma.$queryRaw,
+          clientReference: prisma.clientReference,
+          receivable: prisma.receivable,
+        }),
+      ),
+    ),
     clientReference: {
       findUnique: vi.fn(() => Promise.resolve(state.reference)),
       findMany: vi.fn(() => Promise.resolve([state.reference])),
@@ -117,6 +139,24 @@ function fakeService(initialReference = reference()) {
   return { service: new ReceivableCycleService(prisma as never), prisma, state, created };
 }
 
+function p2002() {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+    clientVersion: 'test',
+    code: 'P2002',
+  });
+}
+
+async function expectConflictCode(promise: Promise<unknown>, code: string) {
+  try {
+    await promise;
+    throw new Error('Expected conflict.');
+  } catch (error) {
+    expect(error).toBeInstanceOf(ConflictException);
+    const response = (error as ConflictException).getResponse();
+    expect(response).toMatchObject({ code });
+  }
+}
+
 describe('ReceivableCycleService', () => {
   it('creates one renewal receivable for an active billable reference', async () => {
     const fake = fakeService();
@@ -136,6 +176,39 @@ describe('ReceivableCycleService', () => {
   it('is idempotent when the current cycle already has a pending receivable', async () => {
     const existing = receivable();
     const fake = fakeService(reference({ receivables: [existing] }));
+
+    const result = await fake.service.ensureCurrentCycleReceivable('reference-id');
+
+    expect(result.action).toBe('kept');
+    expect(result.receivable.id).toBe(existing.id);
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('treats a same-cycle pending receivable with a different amount as divergent', async () => {
+    const fake = fakeService(
+      reference({
+        receivables: [receivable({ amount: new Prisma.Decimal('30.00') })],
+      }),
+    );
+
+    const preview = await fake.service.previewCurrentCycleReceivable('reference-id');
+
+    expect(preview.allowed).toBe(false);
+    expect(preview.status.code).toBe('RECEIVABLE_DIVERGENT');
+    await expect(fake.service.ensureCurrentCycleReceivable('reference-id')).rejects.toThrow(
+      'Ja existe uma conta a receber pendente com vencimento divergente para esta referencia. Resolva a divergencia antes de gerar uma nova conta.',
+    );
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts semantically equal decimal amounts for same-cycle pending receivables', async () => {
+    const existing = receivable({ amount: new Prisma.Decimal('50') });
+    const fake = fakeService(
+      reference({
+        recurringValue: new Prisma.Decimal('50.00'),
+        receivables: [existing],
+      }),
+    );
 
     const result = await fake.service.ensureCurrentCycleReceivable('reference-id');
 
@@ -195,6 +268,141 @@ describe('ReceivableCycleService', () => {
       dueDate: parseBusinessDate('2026-09-10'),
     });
     expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('applies cutover final guards in one serializable transaction before creating', async () => {
+    const fake = fakeService();
+
+    await fake.service.ensureCurrentCycleReceivable('reference-id', {
+      currentDate: parseBusinessDate('2026-09-28'),
+      expectedClientId: 'client-id',
+      rejectPastDue: true,
+      requireClientActive: true,
+      requirePlanActive: true,
+    });
+
+    expect(fake.prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+    expect(fake.prisma.$queryRaw).toHaveBeenCalled();
+    expect(fake.created).toHaveLength(1);
+  });
+
+  it('blocks cutover creation when the client became inactive before final create', async () => {
+    const fake = fakeService(
+      reference({
+        client: { ...reference().client, status: 'INATIVO' },
+      }),
+    );
+
+    await expectConflictCode(
+      fake.service.ensureCurrentCycleReceivable('reference-id', {
+        currentDate: parseBusinessDate('2026-09-28'),
+        rejectPastDue: true,
+        requireClientActive: true,
+      }),
+      'CLIENT_NOT_ACTIVE',
+    );
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks cutover creation when the reference became inactive before final create', async () => {
+    const fake = fakeService(reference({ status: 'INATIVO' }));
+
+    await expectConflictCode(
+      fake.service.ensureCurrentCycleReceivable('reference-id', {
+        currentDate: parseBusinessDate('2026-09-28'),
+        rejectPastDue: true,
+      }),
+      'REFERENCE_NOT_ACTIVE',
+    );
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks cutover creation when the plan became inactive before final create', async () => {
+    const fake = fakeService(
+      reference({
+        plan: { ...reference().plan, active: false },
+      }),
+    );
+
+    await expectConflictCode(
+      fake.service.ensureCurrentCycleReceivable('reference-id', {
+        currentDate: parseBusinessDate('2026-09-28'),
+        rejectPastDue: true,
+        requirePlanActive: true,
+      }),
+      'PLAN_INACTIVE',
+    );
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks cutover creation when the due date became past before final create', async () => {
+    const fake = fakeService(reference({ dueDate: parseBusinessDate('2026-09-27') }));
+
+    await expectConflictCode(
+      fake.service.ensureCurrentCycleReceivable('reference-id', {
+        currentDate: parseBusinessDate('2026-09-28'),
+        rejectPastDue: true,
+      }),
+      'CONFLICT_PAST_DUE_DATE',
+    );
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('uses the current reference amount when the value changed before final create', async () => {
+    const fake = fakeService(reference({ recurringValue: new Prisma.Decimal('40.00') }));
+
+    await fake.service.ensureCurrentCycleReceivable('reference-id', {
+      currentDate: parseBusinessDate('2026-09-28'),
+      rejectPastDue: true,
+    });
+
+    expect(fake.created[0]?.amount).toEqual(new Prisma.Decimal('40.00'));
+  });
+
+  it('uses the current reference due date when it changed before final create', async () => {
+    const fake = fakeService(reference({ dueDate: parseBusinessDate('2026-11-26') }));
+
+    await fake.service.ensureCurrentCycleReceivable('reference-id', {
+      currentDate: parseBusinessDate('2026-09-28'),
+      rejectPastDue: true,
+    });
+
+    expect(fake.created[0]?.dueDate).toEqual(parseBusinessDate('2026-11-26'));
+  });
+
+  it('keeps a compatible receivable after a P2002 race', async () => {
+    const fake = fakeService();
+    const concurrent = receivable({ amount: new Prisma.Decimal('50.00') });
+    fake.prisma.receivable.create.mockImplementationOnce(() => {
+      fake.state.reference.receivables.unshift(concurrent);
+      return Promise.reject(p2002());
+    });
+
+    const result = await fake.service.ensureCurrentCycleReceivable('reference-id', {
+      currentDate: parseBusinessDate('2026-09-28'),
+      rejectPastDue: true,
+    });
+
+    expect(result.action).toBe('kept');
+    expect(result.receivable.id).toBe(concurrent.id);
+  });
+
+  it('rejects an incompatible receivable after a P2002 race', async () => {
+    const fake = fakeService();
+    fake.prisma.receivable.create.mockImplementationOnce(() => {
+      fake.state.reference.receivables.unshift(receivable({ amount: new Prisma.Decimal('30.00') }));
+      return Promise.reject(p2002());
+    });
+
+    await expect(
+      fake.service.ensureCurrentCycleReceivable('reference-id', {
+        currentDate: parseBusinessDate('2026-09-28'),
+        rejectPastDue: true,
+      }),
+    ).rejects.toThrow('Ciclo financeiro possui conta a receber conflitante.');
+    expect(fake.created).toHaveLength(0);
   });
 
   it('updates a pending same-cycle receivable when due date changes explicitly', async () => {

@@ -118,6 +118,24 @@ describe('legacy import preview UI', () => {
     expect(stylesSource).toContain('.legacy-payment-table td:nth-child(8)::before');
   });
 
+  it('adds controlled cutover activation behind scheduler and confirmation guards', () => {
+    expect(importViewSource).toContain('activateLegacyCutover(readyReferenceIds)');
+    expect(importViewSource).toContain('Criar Receivables de renovação');
+    expect(importViewSource).toContain('Criar Receivables de renovação?');
+    expect(importViewSource).toContain('preview.metadata.billingSchedulerStatus');
+    expect(importViewSource).toContain('preview.metadata.recoverySchedulerStatus');
+    expect(importViewSource).toContain('Referências prontas');
+    expect(importViewSource).toContain('MessageDispatches');
+    expect(importViewSource).toContain('WhatsApp');
+    expect(importViewSource).toContain('Nenhuma cobrança será');
+    expect(importViewSource).toContain('Mantenha ambos');
+    expect(importViewSource).toContain('desabilitados até a conferência final');
+    expect(importViewSource).toContain('activatingRef.current');
+    expect(importViewSource).toContain('readyReferenceIds');
+    expect(importViewSource).toContain('preview.summary.ready <= 500');
+    expect(importViewSource).toContain('Limite de ativação');
+  });
+
   it('wraps long legacy payment hashes inside the detail modal', () => {
     expect(importViewSource).toContain('legacy-import-hash-value');
     expect(stylesSource).toContain('.legacy-import-hash-value');

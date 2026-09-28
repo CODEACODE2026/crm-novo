@@ -740,6 +740,8 @@ export interface LegacyImportPreview {
   summary: {
     total: number;
     readyCreate: number;
+    readyCreateActive: number;
+    readyCreateCanceled: number;
     readyUpdate: number;
     unchanged: number;
     possibleMatch: number;

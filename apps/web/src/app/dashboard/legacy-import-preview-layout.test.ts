@@ -27,9 +27,10 @@ describe('legacy import preview UI', () => {
     expect(importViewSource).toContain('previewLegacyClients(buildLegacyImportPayload())');
     expect(importViewSource).toContain('disabled={!fileText || loading || importing}');
     expect(importViewSource).toContain(
-      'Na migração final, somente clientes com status Ativo serão importados.',
+      'Ativo entra como ativo. Inativo e Cancelado entram como cancelados históricos.',
     );
-    expect(importViewSource).toContain('Cancelado permanecem fora da migração.');
+    expect(importViewSource).toContain('Novo e');
+    expect(importViewSource).toContain('Pendente permanecem fora da migração.');
     expect(importViewSource).toContain('importConfirmOpen');
   });
 
@@ -82,9 +83,16 @@ describe('legacy import preview UI', () => {
 
   it('renders summary, filtering, table and read-only details', () => {
     expect(importViewSource).toContain('Prontos para criar');
+    expect(importViewSource).toContain('Prontos ativos');
+    expect(importViewSource).toContain('Históricos cancelados');
+    expect(importViewSource).toContain('Status CRM');
     expect(importViewSource).toContain('Fora da migração');
     expect(dashboardSource).toContain("SKIPPED_NOT_ACTIVE: 'Fora da migração'");
-    expect(dashboardSource).toContain("{ id: 'SKIPPED_NOT_ACTIVE', label: 'Não ativos' }");
+    expect(dashboardSource).toContain("{ id: 'READY_CREATE_ACTIVE', label: 'Ativos' }");
+    expect(dashboardSource).toContain(
+      "{ id: 'READY_CREATE_CANCELED', label: 'Históricos cancelados' }",
+    );
+    expect(dashboardSource).toContain("{ id: 'SKIPPED_NOT_ACTIVE', label: 'Fora da migração' }");
     expect(importViewSource).toContain('Possíveis correspondências');
     expect(importViewSource).toContain('legacyImportFilters.map');
     expect(importViewSource).toContain('legacy-import-table');

@@ -945,13 +945,18 @@ const legacyImportClassificationTone = {
 const legacyImportFilters = [
   { id: 'all', label: 'Todos' },
   { id: 'READY_CREATE', label: 'Criar' },
+  { id: 'READY_CREATE_ACTIVE', label: 'Ativos' },
+  { id: 'READY_CREATE_CANCELED', label: 'Históricos cancelados' },
   { id: 'READY_UPDATE', label: 'Atualizar' },
   { id: 'UNCHANGED', label: 'Sem alteração' },
   { id: 'POSSIBLE_MATCH', label: 'Matches' },
-  { id: 'SKIPPED_NOT_ACTIVE', label: 'Não ativos' },
+  { id: 'SKIPPED_NOT_ACTIVE', label: 'Fora da migração' },
   { id: 'CONFLICT', label: 'Conflitos' },
   { id: 'INVALID', label: 'Inválidos' },
-] satisfies Array<{ id: LegacyImportClassification | 'all'; label: string }>;
+] satisfies Array<{
+  id: LegacyImportClassification | 'all' | 'READY_CREATE_ACTIVE' | 'READY_CREATE_CANCELED';
+  label: string;
+}>;
 
 const legacyPaymentClassificationLabels = {
   CLIENT_NOT_IMPORTED: 'Cliente não importado',
@@ -1057,6 +1062,12 @@ function countLegacyImportCycles(fileText: string) {
 
     for (const client of clients) {
       if (typeof client !== 'object' || client === null || Array.isArray(client)) continue;
+
+      const status =
+        typeof (client as { status?: unknown }).status === 'string'
+          ? (client as { status: string }).status.trim()
+          : '';
+      if (!['Ativo', 'Inativo', 'Cancelado'].includes(status)) continue;
 
       const cycle = normalizeLegacyPlanCycle((client as { type_cobranca?: unknown }).type_cobranca);
       if (cycle) counts[cycle] += 1;
@@ -1607,7 +1618,9 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState<LegacyImportClassification | 'all'>('all');
+  const [filter, setFilter] = useState<
+    LegacyImportClassification | 'all' | 'READY_CREATE_ACTIVE' | 'READY_CREATE_CANCELED'
+  >('all');
   const [selectedRow, setSelectedRow] = useState<LegacyImportPreviewRow | null>(null);
   const [importConfirmOpen, setImportConfirmOpen] = useState(false);
   const [importResult, setImportResult] = useState<LegacyImportResult | null>(null);
@@ -1623,7 +1636,16 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
   const readyCreateCount = preview?.summary.readyCreate ?? 0;
 
   const filteredRows =
-    preview?.rows.filter((row) => filter === 'all' || row.classification === filter) ?? [];
+    preview?.rows.filter((row) => {
+      if (filter === 'all') return true;
+      if (filter === 'READY_CREATE_ACTIVE') {
+        return row.classification === 'READY_CREATE' && row.normalizedStatus === 'ATIVO';
+      }
+      if (filter === 'READY_CREATE_CANCELED') {
+        return row.classification === 'READY_CREATE' && row.normalizedStatus === 'CANCELADO';
+      }
+      return row.classification === filter;
+    }) ?? [];
 
   useEffect(() => {
     setPlanMapping((current) => {
@@ -1885,8 +1907,8 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
         <div className="legacy-import-file-state">
           <strong>{fileName || 'Nenhum arquivo selecionado'}</strong>
           <span>
-            Na migração final, somente clientes com status Ativo serão importados. Novo, Pendente,
-            Inativo e Cancelado permanecem fora da migração.
+            Ativo entra como ativo. Inativo e Cancelado entram como cancelados históricos. Novo e
+            Pendente permanecem fora da migração.
           </span>
         </div>
       </div>
@@ -1900,6 +1922,12 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
               tone="success"
               value={preview.summary.readyCreate}
             />
+            <StatCard
+              label="Prontos ativos"
+              tone="success"
+              value={preview.summary.readyCreateActive}
+            />
+            <StatCard label="Históricos cancelados" value={preview.summary.readyCreateCanceled} />
             <StatCard
               label="Prontos para atualizar"
               tone="info"
@@ -1937,6 +1965,7 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
                   <th>Referência</th>
                   <th>Telefone</th>
                   <th>Status legado</th>
+                  <th>Status CRM</th>
                   <th>Plano</th>
                   <th>Valor</th>
                   <th>Vencimento</th>
@@ -1957,6 +1986,7 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
                       <small>{row.phoneNormalized ?? '-'}</small>
                     </td>
                     <td>{row.status ?? '-'}</td>
+                    <td>{row.normalizedStatus ?? '-'}</td>
                     <td>
                       {row.plan?.name ??
                         (row.plan?.durationMonths ? `${row.plan.durationMonths} meses` : '-')}
@@ -2017,8 +2047,15 @@ function LegacyClientImportPreviewView({ plans }: { plans: Plan[] }) {
               <div className="legacy-import-detail-section">
                 {selectedRow.classification === 'SKIPPED_NOT_ACTIVE' ? (
                   <p className="notice warning">
-                    Somente clientes Ativo são importados no cutover. Novo, Pendente, Inativo e
-                    Cancelado permanecem fora da migração.
+                    Novo e Pendente permanecem fora da migração. Pendências devem ser resolvidas no
+                    legado antes do snapshot final.
+                  </p>
+                ) : null}
+                {selectedRow.classification === 'READY_CREATE' &&
+                selectedRow.normalizedStatus === 'CANCELADO' ? (
+                  <p className="notice warning">
+                    Este cadastro será preservado como Cancelado histórico, sem cobrança, WhatsApp,
+                    PIX ou entrada no cutover.
                   </p>
                 ) : null}
                 <h3>Erros</h3>

@@ -56,7 +56,7 @@ type LegacyBillingCycle = keyof typeof billingCycleMonths;
 const legacyStatusMap = {
   Ativo: 'ATIVO',
   Cancelado: 'CANCELADO',
-  Inativo: 'INATIVO',
+  Inativo: 'CANCELADO',
 } satisfies Record<string, ClientStatus>;
 
 type LegacyImportClassification =
@@ -299,8 +299,8 @@ export class LegacyImportService {
       const errors = [...row.normalized.errors, ...row.errors];
       const warnings = [...row.normalized.warnings, ...row.warnings];
       const normalized = row.normalized.value;
-      const isActiveLegacyClient = this.isActiveLegacyClient(normalized);
-      const planMatch = isActiveLegacyClient
+      const isImportableLegacyClient = this.isImportableLegacyClient(normalized);
+      const planMatch = isImportableLegacyClient
         ? this.resolvePlan(
             normalized.planCycle,
             normalized.planDurationMonths,
@@ -312,15 +312,15 @@ export class LegacyImportService {
       const importRecord = normalized.legacyClientId
         ? (lookups.importRecords.get(normalized.legacyClientId) ?? null)
         : null;
-      const candidateMatches = isActiveLegacyClient
+      const candidateMatches = isImportableLegacyClient
         ? this.findCandidateMatches(normalized, lookups)
         : [];
       this.validateExistingLegacyMapping(importRecord, lookups, errors, warnings);
-      if (this.isKnownNonActiveLegacyClient(normalized) && importRecord) {
+      if (this.isSkippedLegacyClient(normalized) && importRecord) {
         errors.push('NOT_ACTIVE_EXISTING_MAPPING');
       }
       const payloadHash =
-        !isActiveLegacyClient ||
+        !isImportableLegacyClient ||
         errors.some((error) => error.startsWith('INVALID_')) ||
         normalized.legacyClientId === null
           ? null
@@ -2336,6 +2336,8 @@ export class LegacyImportService {
   }
 
   private importableNormalizedClient(normalized: NormalizedLegacyClient) {
+    const targetStatus = normalized.status;
+
     if (
       !normalized.billingAnchorDay ||
       normalized.billingNoticeDays === null ||
@@ -2347,7 +2349,8 @@ export class LegacyImportService {
       !normalized.planCycle ||
       !normalized.rawReference ||
       !normalized.recurringValue ||
-      normalized.status !== 'ATIVO'
+      !targetStatus ||
+      !this.isImportableLegacyClient(normalized)
     ) {
       return null;
     }
@@ -2365,7 +2368,7 @@ export class LegacyImportService {
       planCycle: normalized.planCycle,
       recurringValue: normalized.recurringValue,
       reference: normalized.rawReference,
-      status: normalized.status,
+      status: targetStatus,
     };
   }
 
@@ -2660,7 +2663,7 @@ export class LegacyImportService {
       return 'CONFLICT';
     }
 
-    if (this.isKnownNonActiveLegacyClient(input.normalized)) {
+    if (this.isSkippedLegacyClient(input.normalized)) {
       return 'SKIPPED_NOT_ACTIVE';
     }
 
@@ -2733,10 +2736,21 @@ export class LegacyImportService {
       .digest('hex');
   }
 
-  private summarize(rows: Array<{ classification: LegacyImportClassification }>) {
+  private summarize(
+    rows: Array<{
+      classification: LegacyImportClassification;
+      normalizedStatus: ClientStatus | null;
+    }>,
+  ) {
     return {
       total: rows.length,
       readyCreate: rows.filter((row) => row.classification === 'READY_CREATE').length,
+      readyCreateActive: rows.filter(
+        (row) => row.classification === 'READY_CREATE' && row.normalizedStatus === 'ATIVO',
+      ).length,
+      readyCreateCanceled: rows.filter(
+        (row) => row.classification === 'READY_CREATE' && row.normalizedStatus === 'CANCELADO',
+      ).length,
       readyUpdate: rows.filter((row) => row.classification === 'READY_UPDATE').length,
       unchanged: rows.filter((row) => row.classification === 'UNCHANGED').length,
       possibleMatch: rows.filter((row) => row.classification === 'POSSIBLE_MATCH').length,
@@ -2794,17 +2808,23 @@ export class LegacyImportService {
     this.markDuplicates(
       rows,
       (row) =>
-        this.isActiveLegacyClient(row.normalized.value) ? row.normalized.value.rawReference : null,
+        this.isImportableLegacyClient(row.normalized.value)
+          ? row.normalized.value.rawReference
+          : null,
       'DUPLICATE_REFERENCE_IN_FILE',
     );
   }
 
-  private isActiveLegacyClient(normalized: NormalizedLegacyClient) {
-    return normalized.legacyStatus === 'Ativo' && normalized.status === 'ATIVO';
+  private isImportableLegacyClient(normalized: NormalizedLegacyClient) {
+    return (
+      (normalized.legacyStatus === 'Ativo' && normalized.status === 'ATIVO') ||
+      (['Inativo', 'Cancelado'].includes(normalized.legacyStatus ?? '') &&
+        normalized.status === 'CANCELADO')
+    );
   }
 
-  private isKnownNonActiveLegacyClient(normalized: NormalizedLegacyClient) {
-    return ['Novo', 'Pendente', 'Inativo', 'Cancelado'].includes(normalized.legacyStatus ?? '');
+  private isSkippedLegacyClient(normalized: NormalizedLegacyClient) {
+    return ['Novo', 'Pendente'].includes(normalized.legacyStatus ?? '');
   }
 
   private markDuplicates<T extends { errors: string[] }>(

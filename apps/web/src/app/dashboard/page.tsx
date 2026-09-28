@@ -164,6 +164,7 @@ import {
   payReceivables,
   importLegacyClients,
   importLegacyPayments,
+  previewLegacyCutover,
   previewLegacyClients,
   previewLegacyPayments,
   previewDeleteClient,
@@ -241,6 +242,9 @@ import {
   type FinancialTransactionPayload,
   type FinancialTransactionType,
   type HealthStatus,
+  type LegacyCutoverPreview,
+  type LegacyCutoverPreviewClassification,
+  type LegacyCutoverPreviewRow,
   type LegacyImportClassification,
   type LegacyImportPlanCycle,
   type LegacyImportPlanMapping,
@@ -979,6 +983,29 @@ const legacyPaymentFilters = [
   { id: 'INVALID', label: 'Inválidos' },
 ] satisfies Array<{ id: LegacyPaymentPreviewClassification | 'all'; label: string }>;
 
+const legacyCutoverClassificationLabels = {
+  CONFLICT: 'Conflito',
+  INVALID: 'Inválido',
+  READY: 'Pronta',
+  UNCHANGED: 'Sem alteração',
+} satisfies Record<LegacyCutoverPreviewClassification, string>;
+
+const legacyCutoverClassificationTone = {
+  CONFLICT: 'danger',
+  INVALID: 'danger',
+  READY: 'success',
+  UNCHANGED: 'muted',
+} satisfies Record<LegacyCutoverPreviewClassification, string>;
+
+const legacyCutoverFilters = [
+  { id: 'all', label: 'Todos' },
+  { id: 'READY', label: 'Prontas' },
+  { id: 'UNCHANGED', label: 'Sem alteração' },
+  { id: 'CONFLICT', label: 'Conflitos' },
+  { id: 'INVALID', label: 'Inválidas' },
+  { id: 'warnings', label: 'Com avisos' },
+] satisfies Array<{ id: LegacyCutoverPreviewClassification | 'all' | 'warnings'; label: string }>;
+
 const legacyPaymentPageSize = 100;
 
 const legacyPlanCycles = [
@@ -1067,7 +1094,7 @@ function readLegacyPlanMappingSession() {
 }
 
 function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
-  const [tab, setTab] = useState<'clients' | 'finance'>('clients');
+  const [tab, setTab] = useState<'clients' | 'finance' | 'cutover'>('clients');
 
   return (
     <section className="workspace-main legacy-import-view">
@@ -1090,10 +1117,263 @@ function LegacyImportPreviewView({ plans }: { plans: Plan[] }) {
         >
           Financeiro
         </button>
+        <button
+          className={`segmented-button ${tab === 'cutover' ? 'active' : ''}`}
+          role="tab"
+          type="button"
+          aria-selected={tab === 'cutover'}
+          onClick={() => setTab('cutover')}
+        >
+          Ativação operacional
+        </button>
       </div>
 
       {tab === 'clients' ? <LegacyClientImportPreviewView plans={plans} /> : null}
       {tab === 'finance' ? <LegacyFinancialImportPreviewView /> : null}
+      {tab === 'cutover' ? <LegacyCutoverPreviewView /> : null}
+    </section>
+  );
+}
+
+function LegacyCutoverPreviewView() {
+  const [preview, setPreview] = useState<LegacyCutoverPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState<LegacyCutoverPreviewClassification | 'all' | 'warnings'>(
+    'all',
+  );
+  const [page, setPage] = useState(1);
+  const [selectedRow, setSelectedRow] = useState<LegacyCutoverPreviewRow | null>(null);
+
+  const filteredRows =
+    preview?.rows.filter((row) => {
+      if (filter === 'all') return true;
+      if (filter === 'warnings') return row.warnings.length > 0 || row.dispatchWarnings.length > 0;
+      return row.classification === filter;
+    }) ?? [];
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / legacyPaymentPageSize));
+  const safePage = Math.min(page, totalPages);
+  const visibleRows = filteredRows.slice(
+    (safePage - 1) * legacyPaymentPageSize,
+    safePage * legacyPaymentPageSize,
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, preview]);
+
+  async function runPreview() {
+    setLoading(true);
+    setError('');
+    setSelectedRow(null);
+
+    try {
+      const result = await previewLegacyCutover();
+      setPreview(result);
+      setFilter('all');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível analisar o cutover.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="legacy-import-view">
+      <PageHeader
+        eyebrow="Legacy Import"
+        icon={Workflow}
+        title="Ativação operacional"
+        subtitle="IMPORT3.1 preview read-only"
+        actions={
+          <Button
+            icon={RefreshCw}
+            loading={loading}
+            variant="secondary"
+            onClick={() => void runPreview()}
+          >
+            Analisar cutover
+          </Button>
+        }
+      />
+
+      <div className="notice warning">
+        Este preview não cria cobranças. Durante o cutover, mantenha Billing e Recovery
+        desabilitados até a conferência final.
+      </div>
+      {error ? <div className="notice danger">{error}</div> : null}
+
+      {preview ? (
+        <>
+          <div className="legacy-import-summary">
+            <StatCard label="Total referências" value={preview.summary.total} />
+            <StatCard label="Prontas" tone="success" value={preview.summary.ready} />
+            <StatCard label="Sem alteração" value={preview.summary.unchanged} />
+            <StatCard label="Conflitos" tone="danger" value={preview.summary.conflict} />
+            <StatCard label="Inválidas" tone="danger" value={preview.summary.invalid} />
+            <StatCard label="Com avisos" tone="warning" value={preview.summary.warnings} />
+            <StatCard
+              label="Aviso vencido"
+              tone="warning"
+              value={preview.summary.noticeDatePassed}
+            />
+            <StatCard
+              label="Dispatch não pronto"
+              tone="warning"
+              value={preview.summary.dispatchNotReady}
+            />
+          </div>
+
+          <div className="legacy-import-filter-row">
+            {legacyCutoverFilters.map((item) => (
+              <button
+                className={`segmented-button ${filter === item.id ? 'active' : ''}`}
+                key={item.id}
+                type="button"
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="legacy-import-table-wrap">
+            <table className="legacy-import-table legacy-cutover-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Referência</th>
+                  <th>Plano</th>
+                  <th>Valor</th>
+                  <th>Próximo vencimento</th>
+                  <th>Avisar</th>
+                  <th>Agendamento estimado</th>
+                  <th>Situação</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row) => (
+                  <tr key={`${row.legacyClientId}:${row.crmClientReferenceId ?? 'missing'}`}>
+                    <td>
+                      <strong>{row.clientName ?? '-'}</strong>
+                      <small>Legado {row.legacyClientId}</small>
+                    </td>
+                    <td>{row.reference ?? '-'}</td>
+                    <td>{row.planName ?? '-'}</td>
+                    <td>{row.amount ? formatCurrency(row.amount) : '-'}</td>
+                    <td>{row.dueDate ? formatDate(row.dueDate) : '-'}</td>
+                    <td>{row.billingNoticeDays ?? '-'}</td>
+                    <td>
+                      {row.scheduledForEstimated ? formatDateTime(row.scheduledForEstimated) : '-'}
+                    </td>
+                    <td>
+                      <span
+                        className={`legacy-import-badge tone-${legacyCutoverClassificationTone[row.classification]}`}
+                      >
+                        {legacyCutoverClassificationLabels[row.classification]}
+                      </span>
+                      {row.warnings.length ? <small>{row.warnings.length} avisos</small> : null}
+                    </td>
+                    <td>
+                      <IconButton
+                        icon={Eye}
+                        label="Ver detalhes"
+                        size="sm"
+                        onClick={() => setSelectedRow(row)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <PaginationControls
+            itemLabel="referências"
+            onPageChange={setPage}
+            pagination={{
+              page: safePage,
+              pageSize: legacyPaymentPageSize,
+              total: filteredRows.length,
+              totalPages,
+            }}
+          />
+        </>
+      ) : null}
+
+      {selectedRow ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal legacy-import-detail-modal"
+            aria-labelledby="legacy-cutover-detail-title"
+          >
+            <header className="modal-header">
+              <div>
+                <h2 id="legacy-cutover-detail-title">
+                  {selectedRow.clientName ?? 'Mapping legado'}
+                </h2>
+                <p>{legacyCutoverClassificationLabels[selectedRow.classification]}</p>
+              </div>
+              <IconButton icon={X} label="Fechar" onClick={() => setSelectedRow(null)} />
+            </header>
+            <div className="legacy-import-detail-grid">
+              <dl className="detail-list">
+                <dt>Legacy client id</dt>
+                <dd>{selectedRow.legacyClientId}</dd>
+                <dt>Client status</dt>
+                <dd>{selectedRow.clientStatus ?? '-'}</dd>
+                <dt>Reference status</dt>
+                <dd>{selectedRow.referenceStatus ?? '-'}</dd>
+                <dt>Purpose</dt>
+                <dd>{selectedRow.purpose}</dd>
+                <dt>Existing Receivable</dt>
+                <dd>
+                  {selectedRow.existingReceivable
+                    ? `${selectedRow.existingReceivable.status} · ${formatDate(
+                        selectedRow.existingReceivable.dueDate,
+                      )}`
+                    : '-'}
+                </dd>
+              </dl>
+              <dl className="detail-list">
+                <dt>Plano</dt>
+                <dd>{selectedRow.planName ?? '-'}</dd>
+                <dt>Valor</dt>
+                <dd>{selectedRow.amount ? formatCurrency(selectedRow.amount) : '-'}</dd>
+                <dt>Due date</dt>
+                <dd>{selectedRow.dueDate ? formatDate(selectedRow.dueDate) : '-'}</dd>
+                <dt>Anchor</dt>
+                <dd>{selectedRow.billingAnchorDay ?? '-'}</dd>
+                <dt>Notice</dt>
+                <dd>{selectedRow.billingNoticeDays ?? '-'}</dd>
+              </dl>
+              <div className="legacy-import-detail-section">
+                <h3>Dispatch readiness</h3>
+                <p
+                  className={selectedRow.dispatchReady ? 'empty-state success-text' : 'empty-state'}
+                >
+                  {selectedRow.dispatchReady ? 'Pronto para agendamento' : 'Requer atenção'}
+                </p>
+                <CodeList items={selectedRow.dispatchWarnings} empty="Nenhum aviso operacional" />
+                <h3>Erros</h3>
+                {selectedRow.errors.includes('CONFLICT_PAST_DUE_DATE') ? (
+                  <p className="notice danger">Vencimento passado — corrigir antes do cutover.</p>
+                ) : null}
+                <CodeList items={selectedRow.errors} empty="Nenhum erro" />
+                <h3>Avisos</h3>
+                {selectedRow.warnings.includes('WARNING_BILLING_NOTICE_DATE_PASSED') ? (
+                  <p className="notice warning">
+                    Data prevista de aviso já passou. Cliente ainda pode estar financeiramente
+                    pronto.
+                  </p>
+                ) : null}
+                <CodeList items={selectedRow.warnings} empty="Nenhum aviso" />
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

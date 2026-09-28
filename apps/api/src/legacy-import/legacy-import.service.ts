@@ -1,10 +1,18 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { ClientStatus, FinancialPaymentMethod, Prisma } from '@prisma/client';
+import {
+  ClientStatus,
+  FinancialPaymentMethod,
+  Prisma,
+  ReceivableStatus,
+  WhatsAppConnectionStatus,
+} from '@prisma/client';
 import { createHash } from 'node:crypto';
 import {
   formatBusinessDate,
+  formatSaoPauloBusinessDate,
   getBusinessDateDay,
   parseBusinessDate,
+  parseSaoPauloBusinessDate,
 } from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -14,6 +22,8 @@ const maxPaymentsPerPreview = 10_000;
 const maxPaymentsPerImport = 2_000;
 const maxUnsignedBigInt = 18_446_744_073_709_551_615n;
 const source = 'legacy';
+const defaultBillingSendTime = '09:00';
+const defaultBillingTimezone = 'America/Sao_Paulo';
 const orphanLegacyMappingMessage =
   'Existe um vínculo de importação anterior, mas o cliente ou referência associado não está mais disponível ou está inconsistente.';
 const ignoredLegacyFields = [
@@ -57,6 +67,7 @@ type LegacyPaymentPreviewClassification =
   | 'CONFLICT'
   | 'INVALID';
 type LegacyPaymentImportResult = 'IMPORTED' | 'SKIPPED' | 'FAILED';
+type LegacyCutoverPreviewClassification = 'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID';
 
 type CandidateMatch = {
   field: 'reference' | 'phone' | 'email' | 'name';
@@ -120,8 +131,68 @@ type FinancialTransactionLookup = {
 type PlanLookup = {
   active: boolean;
   durationMonths: number;
+  defaultValue?: Prisma.Decimal | number | string;
   id: string;
   name: string;
+};
+type CutoverImportRecord = {
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  legacyClientId: string;
+  status: string;
+};
+type CutoverClient = {
+  id: string;
+  name: string;
+  phoneNormalized: string;
+  status: ClientStatus;
+};
+type CutoverReference = {
+  billingAnchorDay: number;
+  billingNoticeDays: number;
+  clientId: string;
+  dueDate: Date;
+  id: string;
+  planId: string;
+  recurringValue: Prisma.Decimal | number | string | null;
+  reference: string;
+  status: ClientStatus;
+};
+type CutoverReceivable = {
+  amount: Prisma.Decimal | number | string;
+  dueDate: Date;
+  id: string;
+  purpose: string;
+  status: ReceivableStatus;
+};
+type CutoverRow = {
+  amount: string | null;
+  billingAnchorDay: number | null;
+  billingNoticeDays: number | null;
+  classification: LegacyCutoverPreviewClassification;
+  clientName: string | null;
+  clientStatus: ClientStatus | null;
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  dispatchReady: boolean;
+  dispatchWarnings: string[];
+  dueDate: string | null;
+  errors: string[];
+  existingReceivable: {
+    amount: string;
+    dueDate: string;
+    id: string;
+    purpose: string;
+    status: ReceivableStatus;
+  } | null;
+  legacyClientId: string;
+  planId: string | null;
+  planName: string | null;
+  purpose: 'RENEWAL';
+  reference: string | null;
+  referenceStatus: ClientStatus | null;
+  scheduledForEstimated: string | null;
+  warnings: string[];
 };
 type LegacyImportResultRow = {
   code: string;
@@ -354,6 +425,166 @@ export class LegacyImportService {
         imported: rows.filter((row) => row.result === 'IMPORTED').length,
         skipped: rows.filter((row) => row.result === 'SKIPPED').length,
         failed: rows.filter((row) => row.result === 'FAILED').length,
+      },
+      rows,
+    };
+  }
+
+  async previewCutover() {
+    const today = parseSaoPauloBusinessDate(new Date());
+    const [importRecords, billingSettings, billingTemplates, whatsAppConnection] =
+      await this.prisma.$transaction([
+        this.prisma.legacyImportRecord.findMany({
+          where: { source, status: 'IMPORTED' },
+          orderBy: [{ legacyClientId: 'asc' }, { createdAt: 'asc' }],
+        }),
+        this.prisma.billingAutomationSettings.findUnique({ where: { scope: 'global' } }),
+        this.prisma.messageTemplate.findMany({
+          where: { type: { in: ['BILLING_DUE', 'BILLING_DUE_GROUPED'] } },
+        }),
+        this.prisma.whatsAppConnection.findFirst({
+          where: {
+            status: 'CONNECTED',
+            connected: true,
+            loggedIn: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+    const records = importRecords as CutoverImportRecord[];
+    const clientIds = this.unique(
+      records.map((record) => record.crmClientId).filter((id): id is string => Boolean(id)),
+    );
+    const referenceIds = this.unique(
+      records
+        .map((record) => record.crmClientReferenceId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const [clients, references, receivables] = await this.prisma.$transaction([
+      clientIds.length
+        ? this.prisma.client.findMany({
+            where: { id: { in: clientIds } },
+            select: { id: true, name: true, phoneNormalized: true, status: true },
+          })
+        : this.prisma.client.findMany({
+            where: { id: { in: [] } },
+            select: { id: true, name: true, phoneNormalized: true, status: true },
+          }),
+      referenceIds.length
+        ? this.prisma.clientReference.findMany({
+            where: { id: { in: referenceIds } },
+            select: {
+              billingAnchorDay: true,
+              billingNoticeDays: true,
+              clientId: true,
+              dueDate: true,
+              id: true,
+              planId: true,
+              recurringValue: true,
+              reference: true,
+              status: true,
+            },
+          })
+        : this.prisma.clientReference.findMany({
+            where: { id: { in: [] } },
+            select: {
+              billingAnchorDay: true,
+              billingNoticeDays: true,
+              clientId: true,
+              dueDate: true,
+              id: true,
+              planId: true,
+              recurringValue: true,
+              reference: true,
+              status: true,
+            },
+          }),
+      referenceIds.length
+        ? this.prisma.receivable.findMany({
+            where: { clientReferenceId: { in: referenceIds } },
+            select: {
+              amount: true,
+              clientReferenceId: true,
+              dueDate: true,
+              id: true,
+              purpose: true,
+              status: true,
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          })
+        : this.prisma.receivable.findMany({
+            where: { id: { in: [] } },
+            select: {
+              amount: true,
+              clientReferenceId: true,
+              dueDate: true,
+              id: true,
+              purpose: true,
+              status: true,
+            },
+          }),
+    ]);
+    const planIds = this.unique(
+      (references as CutoverReference[]).map((reference) => reference.planId),
+    );
+    const plans = planIds.length
+      ? ((await this.prisma.plan.findMany({ where: { id: { in: planIds } } })) as PlanLookup[])
+      : [];
+    const clientsById = new Map((clients as CutoverClient[]).map((client) => [client.id, client]));
+    const referencesById = new Map(
+      (references as CutoverReference[]).map((reference) => [reference.id, reference]),
+    );
+    const plansById = new Map(plans.map((plan) => [plan.id, plan]));
+    const receivablesByReferenceId = new Map<string, CutoverReceivable[]>();
+    for (const receivable of receivables as Array<
+      CutoverReceivable & { clientReferenceId: string }
+    >) {
+      const items = receivablesByReferenceId.get(receivable.clientReferenceId) ?? [];
+      items.push(receivable);
+      receivablesByReferenceId.set(receivable.clientReferenceId, items);
+    }
+    const duplicateReferenceMappings = this.countBy(
+      records
+        .map((record) => record.crmClientReferenceId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const templateReady = billingTemplates.some(
+      (template) => template.type === 'BILLING_DUE' && template.active,
+    );
+    const connectionReady = this.isOperationalWhatsAppConnection(whatsAppConnection);
+    const rows = records.map((record) =>
+      this.buildCutoverPreviewRow(record, {
+        billingSettings,
+        client: record.crmClientId ? (clientsById.get(record.crmClientId) ?? null) : null,
+        duplicateReferenceCount: record.crmClientReferenceId
+          ? (duplicateReferenceMappings.get(record.crmClientReferenceId) ?? 0)
+          : 0,
+        plan: record.crmClientReferenceId
+          ? (plansById.get(referencesById.get(record.crmClientReferenceId)?.planId ?? '') ?? null)
+          : null,
+        receivables: record.crmClientReferenceId
+          ? (receivablesByReferenceId.get(record.crmClientReferenceId) ?? [])
+          : [],
+        reference: record.crmClientReferenceId
+          ? (referencesById.get(record.crmClientReferenceId) ?? null)
+          : null,
+        templateReady,
+        today,
+        whatsAppReady: connectionReady,
+      }),
+    );
+
+    return {
+      mode: 'READ_ONLY',
+      unit: 'CLIENT_REFERENCE',
+      purpose: 'RENEWAL',
+      summary: this.summarizeCutover(rows),
+      metadata: {
+        unique: ['clientReferenceId', 'purpose', 'dueDate'],
+        billingSchedulerControlledBy: 'BILLING_SCHEDULER_ENABLED',
+        recoverySchedulerControlledBy: 'RECOVERY_SCHEDULER_ENABLED',
+        safety:
+          'Este preview nao cria cobrancas. Durante o cutover, mantenha Billing e Recovery desabilitados ate a conferencia final.',
       },
       rows,
     };
@@ -615,6 +846,324 @@ export class LegacyImportService {
     }
 
     return { errors, value, warnings };
+  }
+
+  private buildCutoverPreviewRow(
+    record: CutoverImportRecord,
+    context: {
+      billingSettings: { sendTime: string; timezone: string } | null;
+      client: CutoverClient | null;
+      duplicateReferenceCount: number;
+      plan: PlanLookup | null;
+      receivables: CutoverReceivable[];
+      reference: CutoverReference | null;
+      templateReady: boolean;
+      today: Date;
+      whatsAppReady: boolean;
+    },
+  ): CutoverRow {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const dispatchWarnings: string[] = [];
+    const { client, plan, reference } = context;
+
+    if (!record.crmClientId || !record.crmClientReferenceId) {
+      errors.push('ORPHAN_LEGACY_MAPPING');
+    }
+
+    if (!client) {
+      errors.push('CLIENT_NOT_FOUND');
+    }
+
+    if (!reference) {
+      errors.push('CLIENT_REFERENCE_NOT_FOUND');
+    }
+
+    if (client && reference && reference.clientId !== record.crmClientId) {
+      errors.push('CLIENT_REFERENCE_MAPPING_MISMATCH');
+    }
+
+    if (context.duplicateReferenceCount > 1) {
+      errors.push('DUPLICATE_LEGACY_MAPPING');
+    }
+
+    if (client && client.status !== 'ATIVO') {
+      errors.push('CLIENT_NOT_ACTIVE');
+    }
+
+    if (reference && reference.status !== 'ATIVO') {
+      errors.push('REFERENCE_NOT_ACTIVE');
+    }
+
+    if (reference && !plan) {
+      errors.push('PLAN_NOT_FOUND');
+    }
+
+    if (plan && !plan.active) {
+      errors.push('PLAN_INACTIVE');
+    }
+
+    const amount = reference ? Number(reference.recurringValue) : 0;
+    if (reference && (!Number.isFinite(amount) || amount <= 0)) {
+      errors.push('INVALID_RECURRING_VALUE');
+    }
+
+    if (
+      reference &&
+      (!Number.isInteger(reference.billingAnchorDay) ||
+        reference.billingAnchorDay < 1 ||
+        reference.billingAnchorDay > 31)
+    ) {
+      errors.push('INVALID_BILLING_ANCHOR_DAY');
+    }
+
+    if (
+      reference &&
+      Number.isInteger(reference.billingAnchorDay) &&
+      reference.billingAnchorDay !== getBusinessDateDay(reference.dueDate)
+    ) {
+      warnings.push('WARNING_BILLING_ANCHOR_DAY_DIVERGENT');
+    }
+
+    if (
+      reference &&
+      (!Number.isInteger(reference.billingNoticeDays) || reference.billingNoticeDays < 0)
+    ) {
+      errors.push('INVALID_BILLING_NOTICE_DAYS');
+    }
+
+    const dueDate = reference ? formatBusinessDate(reference.dueDate) : null;
+    const today = formatBusinessDate(context.today);
+
+    if (dueDate && dueDate < today) {
+      errors.push('CONFLICT_PAST_DUE_DATE');
+    }
+
+    if (dueDate && dueDate === today) {
+      warnings.push('WARNING_DUE_TODAY');
+    }
+
+    const sameCycleReceivables = reference
+      ? context.receivables.filter(
+          (receivable) =>
+            receivable.purpose === 'RENEWAL' && formatBusinessDate(receivable.dueDate) === dueDate,
+        )
+      : [];
+    const sameCyclePending =
+      sameCycleReceivables.find((receivable) => receivable.status === 'PENDENTE') ?? null;
+    const sameCyclePendingCompatible =
+      sameCyclePending &&
+      reference &&
+      this.sameDecimal(sameCyclePending.amount, reference.recurringValue)
+        ? sameCyclePending
+        : null;
+    const sameCyclePaid =
+      sameCycleReceivables.find((receivable) => receivable.status === 'PAGO') ?? null;
+    const sameCycleCanceled =
+      sameCycleReceivables.find((receivable) => receivable.status === 'CANCELADO') ?? null;
+    const sameDateWrongPurposeReceivable =
+      context.receivables.find(
+        (receivable) =>
+          receivable.purpose !== 'RENEWAL' && formatBusinessDate(receivable.dueDate) === dueDate,
+      ) ?? null;
+    const divergentReceivable =
+      context.receivables.find(
+        (receivable) =>
+          (receivable.purpose === 'RENEWAL' &&
+            formatBusinessDate(receivable.dueDate) !== dueDate) ||
+          receivable === sameDateWrongPurposeReceivable,
+      ) ?? null;
+
+    if (sameCycleReceivables.length > 1) {
+      errors.push('RECEIVABLE_DUPLICATE');
+    }
+
+    if (sameCyclePending && !sameCyclePendingCompatible) {
+      errors.push('RECEIVABLE_DIVERGENT');
+    }
+
+    if (sameCyclePaid) {
+      errors.push('RECEIVABLE_ALREADY_PAID');
+    }
+
+    if (sameCycleCanceled) {
+      errors.push('RECEIVABLE_CANCELED');
+    }
+
+    if (divergentReceivable) {
+      errors.push('RECEIVABLE_DIVERGENT');
+    }
+
+    let scheduledForEstimated: string | null = null;
+    if (
+      reference &&
+      Number.isInteger(reference.billingNoticeDays) &&
+      reference.billingNoticeDays >= 0
+    ) {
+      scheduledForEstimated = this.calculateCutoverScheduledFor(
+        reference.dueDate,
+        reference.billingNoticeDays,
+        context.billingSettings,
+      ).toISOString();
+
+      if (scheduledForEstimated < new Date().toISOString() && dueDate && dueDate > today) {
+        warnings.push('WARNING_BILLING_NOTICE_DATE_PASSED');
+      } else if (formatSaoPauloBusinessDate(new Date(scheduledForEstimated)) === today) {
+        warnings.push('WARNING_BILLING_NOTICE_DATE_TODAY');
+      }
+    }
+
+    if (!client?.phoneNormalized || !this.isValidPhone(client.phoneNormalized)) {
+      dispatchWarnings.push('WARNING_INVALID_PHONE_FOR_DISPATCH');
+    }
+
+    if (!context.whatsAppReady) {
+      dispatchWarnings.push('WARNING_WHATSAPP_NOT_READY');
+    }
+
+    if (!context.templateReady) {
+      dispatchWarnings.push('WARNING_BILLING_TEMPLATE_NOT_READY');
+    }
+
+    warnings.push(...dispatchWarnings);
+
+    const existingReceivable =
+      sameCyclePending ?? sameCyclePaid ?? sameCycleCanceled ?? divergentReceivable;
+    const uniqueErrors = this.unique(errors);
+    const uniqueWarnings = this.unique(warnings);
+    const classification = this.classifyCutoverRow(uniqueErrors, sameCyclePendingCompatible);
+
+    return {
+      amount: reference ? this.decimalToFixed(reference.recurringValue) : null,
+      billingAnchorDay: reference?.billingAnchorDay ?? null,
+      billingNoticeDays: reference?.billingNoticeDays ?? null,
+      classification,
+      clientName: client?.name ?? null,
+      clientStatus: client?.status ?? null,
+      crmClientId: record.crmClientId,
+      crmClientReferenceId: record.crmClientReferenceId,
+      dispatchReady: dispatchWarnings.length === 0,
+      dispatchWarnings: this.unique(dispatchWarnings),
+      dueDate,
+      errors: uniqueErrors,
+      existingReceivable: existingReceivable
+        ? {
+            amount: this.decimalToFixed(existingReceivable.amount),
+            dueDate: formatBusinessDate(existingReceivable.dueDate),
+            id: existingReceivable.id,
+            purpose: existingReceivable.purpose,
+            status: existingReceivable.status,
+          }
+        : null,
+      legacyClientId: record.legacyClientId,
+      planId: reference?.planId ?? null,
+      planName: plan?.name ?? null,
+      purpose: 'RENEWAL',
+      reference: reference?.reference ?? null,
+      referenceStatus: reference?.status ?? null,
+      scheduledForEstimated,
+      warnings: uniqueWarnings,
+    };
+  }
+
+  private classifyCutoverRow(errors: string[], sameCyclePending: CutoverReceivable | null) {
+    if (errors.some((error) => error.startsWith('INVALID_'))) {
+      return 'INVALID' as const;
+    }
+
+    if (errors.length) {
+      return 'CONFLICT' as const;
+    }
+
+    if (sameCyclePending) {
+      return 'UNCHANGED' as const;
+    }
+
+    return 'READY' as const;
+  }
+
+  private summarizeCutover(rows: CutoverRow[]) {
+    const warnings = rows.filter((row) => row.warnings.length > 0).length;
+
+    return {
+      total: rows.length,
+      ready: rows.filter((row) => row.classification === 'READY').length,
+      unchanged: rows.filter((row) => row.classification === 'UNCHANGED').length,
+      conflict: rows.filter((row) => row.classification === 'CONFLICT').length,
+      invalid: rows.filter((row) => row.classification === 'INVALID').length,
+      warnings,
+      noticeDatePassed: rows.filter((row) =>
+        row.warnings.includes('WARNING_BILLING_NOTICE_DATE_PASSED'),
+      ).length,
+      dueToday: rows.filter((row) => row.warnings.includes('WARNING_DUE_TODAY')).length,
+      dispatchNotReady: rows.filter((row) => !row.dispatchReady).length,
+    };
+  }
+
+  private calculateCutoverScheduledFor(
+    dueDate: Date,
+    billingNoticeDays: number,
+    settings: { sendTime: string; timezone: string } | null,
+  ) {
+    const [yearPart, monthPart, dayPart] = formatBusinessDate(dueDate).split('-');
+    const year = Number(yearPart);
+    const month = Number(monthPart);
+    const day = Number(dayPart);
+    const scheduledDate = new Date(Date.UTC(year, month - 1, day - billingNoticeDays));
+    const yyyyMmDd = formatBusinessDate(scheduledDate);
+    const sendTime = settings?.sendTime ?? defaultBillingSendTime;
+    const timezone = settings?.timezone ?? defaultBillingTimezone;
+
+    if (timezone !== defaultBillingTimezone) {
+      throw new BadRequestException('Timezone de cobranca invalido.');
+    }
+
+    return new Date(`${yyyyMmDd}T${sendTime}:00-03:00`);
+  }
+
+  private decimalToFixed(value: Prisma.Decimal | number | string | null) {
+    if (value === null) return '0.00';
+    if (value instanceof Prisma.Decimal) return value.toFixed(2);
+    return Number(value).toFixed(2);
+  }
+
+  private sameDecimal(
+    left: Prisma.Decimal | number | string | null,
+    right: Prisma.Decimal | number | string | null,
+  ) {
+    return this.decimalToFixed(left) === this.decimalToFixed(right);
+  }
+
+  private isOperationalWhatsAppConnection(
+    connection: {
+      connected: boolean;
+      loggedIn: boolean;
+      status: WhatsAppConnectionStatus;
+    } | null,
+  ) {
+    return Boolean(
+      connection &&
+      connection.status === 'CONNECTED' &&
+      connection.connected &&
+      connection.loggedIn,
+    );
+  }
+
+  private isValidPhone(phone: string) {
+    try {
+      normalizeBrazilPhone(phone);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private countBy(values: string[]) {
+    const counts = new Map<string, number>();
+    for (const value of values) {
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+    return counts;
   }
 
   private normalizeLegacyPaymentId(value: unknown, errors: string[]) {

@@ -28,4 +28,9 @@ export class LegacyImportController {
   importPayments(@Body() payload: unknown) {
     return this.legacyImportService.importPayments(payload);
   }
+
+  @Post('cutover/preview')
+  previewCutover() {
+    return this.legacyImportService.previewCutover();
+  }
 }

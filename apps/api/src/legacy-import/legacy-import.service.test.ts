@@ -86,9 +86,13 @@ function createService(
     importRecordFindFirst?: unknown;
     importRecords?: unknown[];
     plans?: unknown[];
+    receivables?: unknown[];
     referenceCreateErrorFor?: string;
     referenceFindUnique?: unknown;
     references?: unknown[];
+    billingSettings?: unknown;
+    messageTemplates?: unknown[];
+    whatsAppConnection?: unknown;
   } = {},
 ) {
   let clientSequence = 0;
@@ -129,6 +133,7 @@ function createService(
     paymentIntentUpdate: vi.fn(),
     receivableCreate: vi.fn(),
     receivableUpdate: vi.fn(),
+    receivableUpsert: vi.fn(),
     statusHistoryCreate: vi.fn(),
     clientUpdate: vi.fn(),
   };
@@ -255,6 +260,25 @@ function createService(
       update: writes.legacyImportRecordUpdate,
       upsert: writes.legacyImportRecordUpsert,
     },
+    billingAutomationSettings: {
+      findUnique: vi.fn(() =>
+        Promise.resolve(
+          options.billingSettings ?? {
+            sendTime: '09:00',
+            timezone: 'America/Sao_Paulo',
+          },
+        ),
+      ),
+    },
+    messageTemplate: {
+      findMany: vi.fn(() =>
+        Promise.resolve(
+          options.messageTemplates ?? [
+            { id: 'billing-template', type: 'BILLING_DUE', active: true },
+          ],
+        ),
+      ),
+    },
     messageDispatch: { create: writes.messageDispatchCreate, update: writes.messageDispatchUpdate },
     paymentIntent: { create: writes.paymentIntentCreate, update: writes.paymentIntentUpdate },
     plan: {
@@ -263,8 +287,27 @@ function createService(
         Promise.resolve(defaultPlans.find((plan) => plan.id === where.id) ?? null),
       ),
     },
-    receivable: { create: writes.receivableCreate, update: writes.receivableUpdate },
+    receivable: {
+      create: writes.receivableCreate,
+      findMany: vi.fn(() => Promise.resolve(options.receivables ?? [])),
+      update: writes.receivableUpdate,
+      upsert: writes.receivableUpsert,
+    },
     statusHistory: { create: writes.statusHistoryCreate },
+    whatsAppConnection: {
+      findFirst: vi.fn(() =>
+        Promise.resolve(
+          'whatsAppConnection' in options
+            ? options.whatsAppConnection
+            : {
+                id: 'whatsapp-connection',
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              },
+        ),
+      ),
+    },
   };
 
   return { prisma, service: new LegacyImportService(prisma as never), writes };
@@ -277,6 +320,82 @@ function expectNoOperationalSideEffects(writes: ReturnType<typeof createService>
   expect(writes.financialTransactionCreate).not.toHaveBeenCalled();
   expect(writes.clientEventCreate).not.toHaveBeenCalled();
   expect(writes.statusHistoryCreate).not.toHaveBeenCalled();
+}
+
+function expectNoCutoverWrites(writes: ReturnType<typeof createService>['writes']) {
+  expect(writes.clientCreate).not.toHaveBeenCalled();
+  expect(writes.clientUpdate).not.toHaveBeenCalled();
+  expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+  expect(writes.clientReferenceUpdate).not.toHaveBeenCalled();
+  expect(writes.receivableCreate).not.toHaveBeenCalled();
+  expect(writes.receivableUpdate).not.toHaveBeenCalled();
+  expect(writes.receivableUpsert).not.toHaveBeenCalled();
+  expect(writes.messageDispatchCreate).not.toHaveBeenCalled();
+  expect(writes.messageDispatchUpdate).not.toHaveBeenCalled();
+  expect(writes.paymentIntentCreate).not.toHaveBeenCalled();
+  expect(writes.financialTransactionCreate).not.toHaveBeenCalled();
+  expect(writes.legacyImportRecordCreate).not.toHaveBeenCalled();
+  expect(writes.legacyImportRecordUpdate).not.toHaveBeenCalled();
+}
+
+function cutoverImportRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    legacyClientId: '2352',
+    source: 'legacy',
+    status: 'IMPORTED',
+    crmClientId: 'client-edilson',
+    crmClientReferenceId: 'reference-edilson',
+    payloadHash: 'a'.repeat(64),
+    ...overrides,
+  };
+}
+
+function cutoverClient(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'client-edilson',
+    name: 'edilson',
+    phoneNormalized: '5581997927581',
+    status: 'ATIVO',
+    ...overrides,
+  };
+}
+
+function cutoverReference(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'reference-edilson',
+    clientId: 'client-edilson',
+    reference: 'edilson7581',
+    planId: 'plan-1',
+    recurringValue: new Prisma.Decimal('35.00'),
+    dueDate: new Date('2026-10-26T00:00:00.000Z'),
+    billingAnchorDay: 26,
+    billingNoticeDays: 0,
+    status: 'ATIVO',
+    ...overrides,
+  };
+}
+
+function cutoverReceivable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'receivable-edilson',
+    clientReferenceId: 'reference-edilson',
+    purpose: 'RENEWAL',
+    amount: new Prisma.Decimal('35.00'),
+    dueDate: new Date('2026-10-26T00:00:00.000Z'),
+    status: 'PENDENTE',
+    ...overrides,
+  };
+}
+
+function createCutoverService(
+  options: Parameters<typeof createService>[0] = {},
+): ReturnType<typeof createService> {
+  return createService({
+    clients: [cutoverClient()],
+    importRecords: [cutoverImportRecord()],
+    references: [cutoverReference()],
+    ...options,
+  });
 }
 
 describe('LegacyImportService', () => {
@@ -2330,5 +2449,323 @@ describe('LegacyImportService', () => {
         })),
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('previews Edilson cutover as READY without creating operational data', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service, writes } = createCutoverService();
+
+    const result = await service.previewCutover();
+
+    expect(result).toMatchObject({
+      mode: 'READ_ONLY',
+      unit: 'CLIENT_REFERENCE',
+      purpose: 'RENEWAL',
+      summary: { ready: 1, total: 1 },
+    });
+    expect(result.rows[0]).toMatchObject({
+      legacyClientId: '2352',
+      reference: 'edilson7581',
+      clientStatus: 'ATIVO',
+      referenceStatus: 'ATIVO',
+      planName: 'Mensal',
+      amount: '35.00',
+      dueDate: '2026-10-26',
+      billingAnchorDay: 26,
+      billingNoticeDays: 0,
+      purpose: 'RENEWAL',
+      classification: 'READY',
+      existingReceivable: null,
+      errors: [],
+    });
+    expect(result.rows[0]?.scheduledForEstimated).toBe('2026-10-26T12:00:00.000Z');
+    expectNoCutoverWrites(writes);
+    vi.useRealTimers();
+  });
+
+  it('classifies due today as READY with WARNING_DUE_TODAY', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-26T13:00:00.000Z'));
+    const { service } = createCutoverService();
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(result.rows[0]?.warnings).toContain('WARNING_DUE_TODAY');
+    vi.useRealTimers();
+  });
+
+  it('classifies past due references as CONFLICT_PAST_DUE_DATE', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+    const { service } = createCutoverService();
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[0]?.errors).toContain('CONFLICT_PAST_DUE_DATE');
+    vi.useRealTimers();
+  });
+
+  it('uses the Sao Paulo business day near the UTC date boundary', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-27T02:30:00.000Z'));
+    const { service } = createCutoverService();
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(result.rows[0]?.warnings).toContain('WARNING_DUE_TODAY');
+    expect(result.rows[0]?.errors).not.toContain('CONFLICT_PAST_DUE_DATE');
+    vi.useRealTimers();
+  });
+
+  it('keeps future due references READY when notice date already passed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-25T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      references: [cutoverReference({ billingNoticeDays: 3 })],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(result.rows[0]?.warnings).toContain('WARNING_BILLING_NOTICE_DATE_PASSED');
+    vi.useRealTimers();
+  });
+
+  it('keeps notice today clean before send time and warns after send time', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-23T11:00:00.000Z'));
+    const beforeSend = createCutoverService({
+      references: [cutoverReference({ billingNoticeDays: 3 })],
+    });
+
+    const beforeResult = await beforeSend.service.previewCutover();
+
+    expect(beforeResult.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(beforeResult.rows[0]?.warnings).toContain('WARNING_BILLING_NOTICE_DATE_TODAY');
+    expect(beforeResult.rows[0]?.warnings).not.toContain('WARNING_BILLING_NOTICE_DATE_PASSED');
+
+    vi.setSystemTime(new Date('2026-10-23T13:00:00.000Z'));
+    const afterSend = createCutoverService({
+      references: [cutoverReference({ billingNoticeDays: 3 })],
+    });
+
+    const afterResult = await afterSend.service.previewCutover();
+
+    expect(afterResult.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(afterResult.rows[0]?.warnings).toContain('WARNING_BILLING_NOTICE_DATE_PASSED');
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['PENDENTE', 'UNCHANGED', []],
+    ['PAGO', 'CONFLICT', ['RECEIVABLE_ALREADY_PAID']],
+    ['CANCELADO', 'CONFLICT', ['RECEIVABLE_CANCELED']],
+  ])('handles same-cycle %s receivables as %s', async (status, classification, errors) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivables: [cutoverReceivable({ status })],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification, existingReceivable: { status } });
+    for (const error of errors) {
+      expect(result.rows[0]?.errors).toContain(error);
+    }
+    vi.useRealTimers();
+  });
+
+  it('blocks divergent pending renewal receivables', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivables: [cutoverReceivable({ dueDate: new Date('2026-11-26T00:00:00.000Z') })],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[0]?.errors).toContain('RECEIVABLE_DIVERGENT');
+    vi.useRealTimers();
+  });
+
+  it('does not mark same-cycle pending receivables with a wrong amount as unchanged', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivables: [cutoverReceivable({ amount: new Prisma.Decimal('30.00') })],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[0]?.errors).toContain('RECEIVABLE_DIVERGENT');
+    vi.useRealTimers();
+  });
+
+  it('flags same-date receivables with a wrong purpose as operational conflicts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      receivables: [cutoverReceivable({ purpose: 'INITIAL_ACTIVATION' })],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({ classification: 'CONFLICT' });
+    expect(result.rows[0]?.errors).toContain('RECEIVABLE_DIVERGENT');
+    vi.useRealTimers();
+  });
+
+  it.each([
+    [{ status: 'INATIVO' }, {}, 'CLIENT_NOT_ACTIVE'],
+    [{}, { status: 'INATIVO' }, 'REFERENCE_NOT_ACTIVE'],
+    [{}, { recurringValue: new Prisma.Decimal('0.00') }, 'INVALID_RECURRING_VALUE'],
+    [{}, { billingNoticeDays: -1 }, 'INVALID_BILLING_NOTICE_DAYS'],
+  ])('reports cutover validation code %s', async (clientOverrides, referenceOverrides, code) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      clients: [cutoverClient(clientOverrides)],
+      references: [cutoverReference(referenceOverrides)],
+    });
+
+    const result = await service.previewCutover();
+
+    expect([...result.rows[0]!.errors, ...result.rows[0]!.warnings]).toContain(code);
+    vi.useRealTimers();
+  });
+
+  it('keeps two active references as independent cutover rows', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      importRecords: [
+        cutoverImportRecord(),
+        cutoverImportRecord({
+          legacyClientId: '2353',
+          crmClientReferenceId: 'reference-second',
+        }),
+      ],
+      references: [
+        cutoverReference(),
+        cutoverReference({
+          id: 'reference-second',
+          reference: 'edilson7582',
+          dueDate: new Date('2026-11-26T00:00:00.000Z'),
+        }),
+      ],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.summary).toMatchObject({ ready: 2, total: 2 });
+    expect(result.rows.map((row) => row.reference)).toEqual(['edilson7581', 'edilson7582']);
+    vi.useRealTimers();
+  });
+
+  it('does not require legacy financial history and reports dispatch warnings separately', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      clients: [cutoverClient({ phoneNormalized: '123' })],
+      whatsAppConnection: null,
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY',
+      dispatchReady: false,
+    });
+    expect(result.rows[0]?.warnings).toEqual(
+      expect.arrayContaining(['WARNING_INVALID_PHONE_FOR_DISPATCH', 'WARNING_WHATSAPP_NOT_READY']),
+    );
+    expect(result.summary.warnings).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('keeps cutover classification independent from imported financial history volume', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const withNoHistory = createCutoverService();
+    const withLargeHistory = createCutoverService({
+      financialTransactions: Array.from({ length: 100 }, (_, index) => ({
+        id: `legacy-history-${index}`,
+        clientId: 'client-edilson',
+        clientReferenceId: 'reference-edilson',
+      })),
+    });
+
+    const noHistoryResult = await withNoHistory.service.previewCutover();
+    const largeHistoryResult = await withLargeHistory.service.previewCutover();
+
+    expect(noHistoryResult.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(largeHistoryResult.rows[0]).toMatchObject({ classification: 'READY' });
+    expect(largeHistoryResult.rows[0]).toMatchObject({
+      amount: '35.00',
+      dueDate: '2026-10-26',
+    });
+    vi.useRealTimers();
+  });
+
+  it('flags duplicate legacy mappings without returning duplicate READY rows', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      importRecords: [cutoverImportRecord(), cutoverImportRecord({ legacyClientId: '9999' })],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.summary).toMatchObject({ conflict: 2, ready: 0 });
+    expect(result.rows.every((row) => row.errors.includes('DUPLICATE_LEGACY_MAPPING'))).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('previews 1000 cutover references with batched lookups and no N+1 queries', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const size = 1_000;
+    const { prisma, service } = createCutoverService({
+      clients: Array.from({ length: size }, (_, index) =>
+        cutoverClient({
+          id: `client-${index}`,
+          name: `Cliente ${index}`,
+          phoneNormalized: `55449999${String(index).padStart(6, '0')}`,
+        }),
+      ),
+      importRecords: Array.from({ length: size }, (_, index) =>
+        cutoverImportRecord({
+          legacyClientId: String(10_000 + index),
+          crmClientId: `client-${index}`,
+          crmClientReferenceId: `reference-${index}`,
+        }),
+      ),
+      references: Array.from({ length: size }, (_, index) =>
+        cutoverReference({
+          id: `reference-${index}`,
+          clientId: `client-${index}`,
+          reference: `cliente${index}`,
+        }),
+      ),
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.summary).toMatchObject({ ready: size, total: size });
+    expect(prisma.legacyImportRecord.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.client.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.clientReference.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.receivable.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.plan.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.messageTemplate.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppConnection.findFirst).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

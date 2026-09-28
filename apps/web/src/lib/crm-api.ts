@@ -799,6 +799,62 @@ export interface LegacyPaymentPreview {
   rows: LegacyPaymentPreviewRow[];
 }
 
+export type LegacyCutoverPreviewClassification = 'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID';
+
+export interface LegacyCutoverPreviewRow {
+  legacyClientId: string;
+  crmClientId: string | null;
+  crmClientReferenceId: string | null;
+  clientName: string | null;
+  reference: string | null;
+  clientStatus: ClientStatus | null;
+  referenceStatus: ClientStatus | null;
+  planId: string | null;
+  planName: string | null;
+  amount: string | null;
+  dueDate: string | null;
+  billingAnchorDay: number | null;
+  billingNoticeDays: number | null;
+  purpose: 'RENEWAL';
+  existingReceivable: {
+    id: string;
+    amount: string;
+    dueDate: string;
+    purpose: ReceivablePurpose;
+    status: ReceivableStatus;
+  } | null;
+  scheduledForEstimated: string | null;
+  dispatchReady: boolean;
+  dispatchWarnings: string[];
+  classification: LegacyCutoverPreviewClassification;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface LegacyCutoverPreview {
+  mode: 'READ_ONLY';
+  unit: 'CLIENT_REFERENCE';
+  purpose: 'RENEWAL';
+  summary: {
+    total: number;
+    ready: number;
+    unchanged: number;
+    conflict: number;
+    invalid: number;
+    warnings: number;
+    noticeDatePassed: number;
+    dueToday: number;
+    dispatchNotReady: number;
+  };
+  metadata: {
+    unique: string[];
+    billingSchedulerControlledBy: string;
+    recoverySchedulerControlledBy: string;
+    safety: string;
+  };
+  rows: LegacyCutoverPreviewRow[];
+}
+
 export type LegacyImportPlanCycle = 'MENSAL' | 'BIMESTRAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
 export type LegacyImportPlanMapping = Partial<Record<LegacyImportPlanCycle, string>>;
 
@@ -1452,6 +1508,13 @@ export function previewLegacyPayments(payload: unknown) {
   return apiFetch<LegacyPaymentPreview>('/legacy-import/payments/preview', {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+export function previewLegacyCutover() {
+  return apiFetch<LegacyCutoverPreview>('/legacy-import/cutover/preview', {
+    method: 'POST',
+    body: JSON.stringify({}),
   });
 }
 

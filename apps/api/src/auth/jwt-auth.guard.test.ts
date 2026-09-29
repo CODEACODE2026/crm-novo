@@ -4,11 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from './authenticated-user';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
-function createContext(token?: string): ExecutionContext {
+function createContext(token?: string, origin?: string): ExecutionContext {
   return {
     switchToHttp: () => ({
       getRequest: () => ({
         cookies: token ? { crm_novo_auth: token } : {},
+        headers: origin ? { origin } : {},
       }),
     }),
   } as ExecutionContext;
@@ -26,6 +27,15 @@ describe('JwtAuthGuard', () => {
     const auth = { validateToken: vi.fn().mockResolvedValue(user) };
     const guard = new JwtAuthGuard(auth as never);
     const context = createContext('valid-token');
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(auth.validateToken).toHaveBeenCalledWith('valid-token');
+  });
+
+  it('authenticates /auth/me style cross-site requests when the JWT cookie is present', async () => {
+    const auth = { validateToken: vi.fn().mockResolvedValue(user) };
+    const guard = new JwtAuthGuard(auth as never);
+    const context = createContext('valid-token', 'https://crmnovo.ddns.net');
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
     expect(auth.validateToken).toHaveBeenCalledWith('valid-token');

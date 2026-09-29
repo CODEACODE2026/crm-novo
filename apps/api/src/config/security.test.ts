@@ -58,6 +58,42 @@ describe('security config helpers', () => {
     expect(next.mock.calls[0]?.[0]).toBeInstanceOf(ForbiddenException);
   });
 
+  it('allows mutating cookie-authenticated browser requests from an allowed origin', () => {
+    const middleware = createOriginProtectionMiddleware(['https://crmnovo.ddns.net']);
+    const next = vi.fn();
+
+    middleware(
+      {
+        method: 'POST',
+        path: '/clients',
+        cookies: { crm_novo_auth: 'token' },
+        headers: { origin: 'https://crmnovo.ddns.net' },
+      } as never,
+      {} as never,
+      next,
+    );
+
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('rejects mutating cookie-authenticated browser requests from a malicious origin', () => {
+    const middleware = createOriginProtectionMiddleware(['https://crmnovo.ddns.net']);
+    const next = vi.fn();
+
+    middleware(
+      {
+        method: 'PATCH',
+        path: '/clients/client-id',
+        cookies: { crm_novo_auth: 'token' },
+        headers: { origin: 'https://evil.example' },
+      } as never,
+      {} as never,
+      next,
+    );
+
+    expect(next.mock.calls[0]?.[0]).toBeInstanceOf(ForbiddenException);
+  });
+
   it('does not apply origin protection to public webhooks', () => {
     const middleware = createOriginProtectionMiddleware(['https://crm.example.com']);
     const next = vi.fn();

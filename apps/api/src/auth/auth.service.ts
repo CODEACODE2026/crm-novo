@@ -55,24 +55,21 @@ export class AuthService {
   }
 
   setAuthCookie(response: Response, token: string) {
-    const isProduction = this.config.get<string>('NODE_ENV') === 'production';
-
-    response.cookie('crm_novo_auth', token, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'lax',
-      path: '/',
-    });
+    response.cookie('crm_novo_auth', token, this.getAuthCookieOptions());
   }
 
   clearAuthCookie(response: Response) {
+    response.clearCookie('crm_novo_auth', this.getAuthCookieOptions());
+  }
+
+  private getAuthCookieOptions() {
     const isProduction = this.config.get<string>('NODE_ENV') === 'production';
 
-    response.clearCookie('crm_novo_auth', {
+    return {
       httpOnly: true,
       secure: isProduction,
-      sameSite: 'lax',
+      sameSite: isProduction ? 'none' : 'lax',
       path: '/',
-    });
+    } as const;
   }
 }

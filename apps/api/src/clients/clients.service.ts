@@ -706,12 +706,11 @@ export class ClientsService {
 
     if (query.search) {
       const search = query.search.trim();
-      const normalizedPhone = this.tryNormalizePhone(search);
 
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { references: { some: { reference: { contains: search, mode: 'insensitive' } } } },
-        ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
+        ...this.buildPhoneSearchConditions(search),
       ];
     }
 
@@ -754,10 +753,43 @@ export class ClientsService {
       OR: [
         { name: { contains: search, mode: 'insensitive' } },
         { references: { some: { reference: { contains: search, mode: 'insensitive' } } } },
-        { phone: { contains: search, mode: 'insensitive' } },
+        ...this.buildPhoneSearchConditions(search),
         ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
       ],
     };
+  }
+
+  private buildPhoneSearchConditions(search: string): Prisma.ClientWhereInput[] {
+    const conditions: Prisma.ClientWhereInput[] = [
+      { phone: { contains: search, mode: 'insensitive' } },
+    ];
+
+    for (const term of this.phoneSearchTerms(search)) {
+      conditions.push({ phoneNormalized: { contains: term } });
+    }
+
+    return conditions;
+  }
+
+  private phoneSearchTerms(search: string) {
+    const digits = search.replace(/\D/g, '');
+
+    if (digits.length < 4) {
+      return [];
+    }
+
+    const terms = new Set([digits]);
+
+    if (digits.startsWith('55')) {
+      const withoutCountryCode = digits.slice(2);
+      if (withoutCountryCode.length >= 4) {
+        terms.add(withoutCountryCode);
+      }
+    } else {
+      terms.add(`55${digits}`);
+    }
+
+    return [...terms];
   }
 
   private buildOrderBy(query: ListClientsDto): Prisma.ClientOrderByWithRelationInput {

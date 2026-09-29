@@ -80,8 +80,13 @@ function createService() {
   return new ClientsService(prisma as never, {} as never, {} as never, {} as never);
 }
 
-function getContains(filter: { contains?: unknown } | string | undefined) {
-  if (typeof filter === 'object' && 'contains' in filter && typeof filter.contains === 'string') {
+function getContains(filter: unknown) {
+  if (
+    typeof filter === 'object' &&
+    filter !== null &&
+    'contains' in filter &&
+    typeof filter.contains === 'string'
+  ) {
     return filter.contains;
   }
 
@@ -228,6 +233,259 @@ function validateClientEventsQuery(payload: Record<string, unknown>) {
   return validate(plainToInstance(ListClientEventsDto, payload));
 }
 
+type TestClientReference = {
+  id: string;
+  clientId: string;
+  reference: string;
+  planId: string;
+  status: 'ATIVO' | 'INATIVO' | 'CANCELADO' | 'PENDENTE_PAGAMENTO';
+  plan: {
+    id: string;
+    name: string;
+    durationMonths: number;
+    defaultValue: string;
+    active: boolean;
+  };
+};
+
+type TestClientListItem = {
+  id: string;
+  name: string;
+  phone: string;
+  phoneNormalized: string;
+  email: string | null;
+  reference: string;
+  planId: string;
+  recurringValue: string;
+  dueDate: Date;
+  billingAnchorDay: number;
+  billingNoticeDays: number;
+  status: 'ATIVO' | 'INATIVO' | 'CANCELADO' | 'PENDENTE_PAGAMENTO';
+  notes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  plan: TestClientReference['plan'];
+  references: TestClientReference[];
+  renewals: [];
+  receivables: [];
+  messageDispatches: [];
+  statusHistory: [];
+  events: [];
+  recoveryCampaigns: [];
+  referralReceived: null;
+  referralsMade: [];
+};
+
+const planBasic = {
+  id: '11111111-1111-4111-8111-111111111101',
+  name: 'Basico',
+  durationMonths: 1,
+  defaultValue: '49.90',
+  active: true,
+};
+
+const planPremium = {
+  id: '22222222-2222-4222-8222-222222222202',
+  name: 'Premium',
+  durationMonths: 1,
+  defaultValue: '89.90',
+  active: true,
+};
+
+function clientListReference(
+  clientId: string,
+  overrides: Partial<TestClientReference> = {},
+): TestClientReference {
+  const plan = overrides.plan ?? planBasic;
+
+  return {
+    id: `${clientId.slice(0, 8)}-${overrides.reference ?? 'ref'}`,
+    clientId,
+    reference: 'REF-001',
+    planId: plan.id,
+    recurringValue: '49.90',
+    dueDate: new Date('2026-10-20T00:00:00.000Z'),
+    billingAnchorDay: 20,
+    billingNoticeDays: 0,
+    status: 'ATIVO',
+    notes: null,
+    inactivatedAt: null,
+    inactivationReason: null,
+    inactivatedByUserId: null,
+    canceledAt: null,
+    cancellationReason: null,
+    canceledByUserId: null,
+    createdAt: new Date('2026-09-01T12:00:00.000Z'),
+    updatedAt: new Date('2026-09-01T12:00:00.000Z'),
+    plan,
+    ...overrides,
+  } as TestClientReference;
+}
+
+function clientListItem(overrides: Partial<TestClientListItem>): TestClientListItem {
+  const id = overrides.id ?? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const plan = overrides.plan ?? planBasic;
+  const references = overrides.references ?? [
+    clientListReference(id, { reference: overrides.reference ?? 'REF-001', plan }),
+  ];
+
+  return {
+    id,
+    name: 'Cliente Teste',
+    phone: '(44) 99999-0000',
+    phoneNormalized: '5544999990000',
+    email: null,
+    reference: references[0]?.reference ?? 'REF-001',
+    planId: plan.id,
+    recurringValue: '49.90',
+    dueDate: new Date('2026-10-20T00:00:00.000Z'),
+    billingAnchorDay: 20,
+    billingNoticeDays: 0,
+    status: 'ATIVO',
+    notes: null,
+    createdAt: new Date('2026-09-01T12:00:00.000Z'),
+    updatedAt: new Date('2026-09-01T12:00:00.000Z'),
+    plan,
+    references,
+    renewals: [],
+    receivables: [],
+    messageDispatches: [],
+    statusHistory: [],
+    events: [],
+    recoveryCampaigns: [],
+    referralReceived: null,
+    referralsMade: [],
+    ...overrides,
+  };
+}
+
+function createClientListService(seed: TestClientListItem[]) {
+  const findMany = vi.fn((args: Prisma.ClientFindManyArgs) => {
+    const filtered = seed
+      .filter((client) => matchesClientWhere(client, args.where))
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+
+    return Promise.resolve(filtered.slice(args.skip ?? 0, (args.skip ?? 0) + (args.take ?? 20)));
+  });
+  const count = vi.fn((args: Prisma.ClientCountArgs) =>
+    Promise.resolve(seed.filter((client) => matchesClientWhere(client, args.where)).length),
+  );
+  const prisma = {
+    $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    client: { findMany, count },
+  };
+
+  return {
+    service: new ClientsService(prisma as never, {} as never, {} as never, {} as never),
+    prisma,
+  };
+}
+
+function matchesClientWhere(client: TestClientListItem, where: Prisma.ClientWhereInput = {}) {
+  if (where.OR?.length && !where.OR.some((condition) => matchesClientWhere(client, condition))) {
+    return false;
+  }
+
+  if (!matchesContains(client.name, where.name)) {
+    return false;
+  }
+
+  if (!matchesContains(client.phone, where.phone)) {
+    return false;
+  }
+
+  if (!matchesContains(client.phoneNormalized, where.phoneNormalized)) {
+    return false;
+  }
+
+  const referenceFilter = where.references?.some;
+  if (
+    referenceFilter &&
+    !client.references.some((reference) => matchesReference(reference, referenceFilter))
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesReference(
+  reference: TestClientReference,
+  filter: Prisma.ClientReferenceWhereInput,
+) {
+  if (!matchesContains(reference.reference, filter.reference)) {
+    return false;
+  }
+
+  if (filter.status && reference.status !== filter.status) {
+    return false;
+  }
+
+  if (filter.planId && reference.planId !== filter.planId) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesContains(value: string, filter: unknown) {
+  const contains = getContains(filter);
+  if (!contains) return true;
+
+  return value.toLowerCase().includes(contains.toLowerCase());
+}
+
+const searchableClients = [
+  clientListItem({
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    name: 'Bruno Silva',
+    phone: '(44) 99999-1234',
+    phoneNormalized: '5544999991234',
+    reference: 'BRUNO-001',
+    references: [
+      clientListReference('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
+        reference: 'BRUNO-001',
+        plan: planBasic,
+      }),
+      clientListReference('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
+        id: 'aaaaaaaa-premium',
+        reference: 'BRUNO-ALT',
+        plan: planPremium,
+      }),
+    ],
+    createdAt: new Date('2026-09-03T12:00:00.000Z'),
+  }),
+  clientListItem({
+    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    name: 'Maria Legacy',
+    phone: '44 98888-7777',
+    phoneNormalized: '5544988887777',
+    reference: 'LEGACY-777',
+    references: [
+      clientListReference('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', {
+        reference: 'LEGACY-777',
+        plan: planBasic,
+      }),
+    ],
+    createdAt: new Date('2026-09-02T12:00:00.000Z'),
+  }),
+  clientListItem({
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    name: 'Joao Premium',
+    phone: '+55 44 97777-6666',
+    phoneNormalized: '5544977776666',
+    reference: 'JOAO-777',
+    references: [
+      clientListReference('cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
+        reference: 'JOAO-777',
+        plan: planPremium,
+        status: 'INATIVO',
+      }),
+    ],
+    createdAt: new Date('2026-09-01T12:00:00.000Z'),
+  }),
+];
+
 describe('ClientsService options', () => {
   it('searches lightweight client options by name', async () => {
     const service = createService();
@@ -258,6 +516,159 @@ describe('ClientsService options', () => {
 
     await expect(service.options({ search: 'inexistente' })).resolves.toEqual([]);
     await expect(service.options({ search: '' })).resolves.toEqual([]);
+  });
+});
+
+describe('ClientsService list search', () => {
+  it('finds clients by name', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: 'bruno' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
+  });
+
+  it('finds clients by reference', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: 'LEGACY-777' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ]);
+  });
+
+  it('finds clients by exact normalized phone', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '5544999991234' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
+  });
+
+  it('finds formatted stored phones when searching only digits', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '44999991234' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
+  });
+
+  it('finds clients when searching with a formatted phone', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '(44) 99999-1234' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
+  });
+
+  it('returns an empty page for unknown phones', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '44911110000' });
+
+    expect(result.items).toEqual([]);
+    expect(result.pagination).toMatchObject({ page: 1, pageSize: 20, total: 0, totalPages: 0 });
+  });
+
+  it('does not duplicate clients with multiple matching references', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: 'BRUNO' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
+    expect(result.pagination.total).toBe(1);
+  });
+
+  it('combines search with status filters', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const activeResult = await fake.service.list({ search: '777', status: 'ATIVO' });
+    const inactiveResult = await fake.service.list({ search: '777', status: 'INATIVO' });
+
+    expect(activeResult.items.map((client) => client.id)).toEqual([
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ]);
+    expect(inactiveResult.items.map((client) => client.id)).toEqual([
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ]);
+  });
+
+  it('combines search with plan filters', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '777', planId: planPremium.id });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ]);
+  });
+
+  it('preserves pagination for searched clients', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '44', page: 2, pageSize: 1 });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ]);
+    expect(result.pagination).toEqual({ page: 2, pageSize: 1, total: 3, totalPages: 3 });
+  });
+
+  it('finds legacy imported clients by normalized phone fragments', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '988887777' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ]);
+  });
+
+  it('preserves regular listing when search is empty', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ page: 1, pageSize: 2 });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ]);
+    expect(result.pagination).toEqual({ page: 1, pageSize: 2, total: 3, totalPages: 2 });
+  });
+
+  it('matches phone searches with or without the Brazil country code', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const withCountryCode = await fake.service.list({ search: '5544977776666' });
+    const withoutCountryCode = await fake.service.list({ search: '44977776666' });
+
+    expect(withCountryCode.items.map((client) => client.id)).toEqual([
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ]);
+    expect(withoutCountryCode.items.map((client) => client.id)).toEqual([
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ]);
+  });
+
+  it('finds partial normalized phone fragments with at least four digits', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '99991234' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
   });
 });
 

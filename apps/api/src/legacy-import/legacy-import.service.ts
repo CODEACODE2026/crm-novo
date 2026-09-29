@@ -339,6 +339,13 @@ export class LegacyImportService {
         warnings.push('EMAIL_MATCH');
       }
 
+      if (
+        candidateMatches.some((match) => match.field === 'name') &&
+        !this.hasStrongCandidateMatch(candidateMatches)
+      ) {
+        warnings.push('WARNING_NAME_MATCH_ONLY');
+      }
+
       const classification = this.classify({
         candidateMatches,
         errors,
@@ -2394,7 +2401,6 @@ export class LegacyImportService {
         OR: [
           { phoneNormalized: normalized.phoneNormalized },
           ...(normalized.email ? [{ email: normalized.email }] : []),
-          { name: normalized.name },
         ],
       },
       select: { id: true },
@@ -2691,7 +2697,7 @@ export class LegacyImportService {
       return 'CONFLICT';
     }
 
-    if (input.candidateMatches.length && !input.importRecord) {
+    if (this.hasStrongCandidateMatch(input.candidateMatches) && !input.importRecord) {
       return 'POSSIBLE_MATCH';
     }
 
@@ -2855,6 +2861,10 @@ export class LegacyImportService {
     importRecord: object | null,
   ) {
     return !importRecord && candidateMatches.some((match) => match.field === 'reference');
+  }
+
+  private hasStrongCandidateMatch(candidateMatches: CandidateMatch[]) {
+    return candidateMatches.some((match) => match.field !== 'name');
   }
 
   private validateExistingLegacyMapping(

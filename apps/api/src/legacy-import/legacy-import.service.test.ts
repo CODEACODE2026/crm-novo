@@ -1644,7 +1644,367 @@ describe('LegacyImportService', () => {
     expect(result.rows[0]?.candidateMatches).toEqual(
       expect.arrayContaining([expect.objectContaining({ field: 'name' })]),
     );
+    expect(result.rows[0]?.classification).toBe('READY_CREATE');
+    expect(result.rows[0]?.warnings).toContain('WARNING_NAME_MATCH_ONLY');
+  });
+
+  it('keeps the real JOAO name-only case ready to create with an informational warning', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-joao',
+          name: 'JOAO',
+          phoneNormalized: '5599999999999',
+          email: 'joao3424@example.com',
+          reference: 'JOAO3424',
+          references: [{ id: 'ref-joao', reference: 'JOAO3424' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([
+        {
+          ...baseClient,
+          email: null,
+          id: 28,
+          name: 'JOAO',
+          phone: '44988887777',
+          referencia: 'JOAOBATISTAMOURA',
+          status: 'Ativo',
+        },
+      ]),
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'READY_CREATE',
+      legacyClientId: '28',
+      reference: 'JOAOBATISTAMOURA',
+      warnings: ['WARNING_NAME_MATCH_ONLY'],
+    });
+    expect(result.rows[0]?.candidateMatches).toEqual([
+      expect.objectContaining({
+        clientName: 'JOAO',
+        field: 'name',
+        reference: 'JOAO3424',
+      }),
+    ]);
+    expect(result.rows[0]?.candidateMatches.some((match) => match.field !== 'name')).toBe(false);
+  });
+
+  it('keeps exact reference matches as strong possible matches', async () => {
+    const { service } = createService({
+      references: [
+        {
+          id: 'ref-existing',
+          clientId: 'client-existing',
+          reference: 'cliente123',
+          client: { id: 'client-existing', name: 'Outro Cliente' },
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, email: null, name: 'Cliente Novo', phone: '44988887777' }]),
+    );
+
     expect(result.rows[0]?.classification).toBe('POSSIBLE_MATCH');
+    expect(result.rows[0]?.candidateMatches).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'reference' })]),
+    );
+    expect(result.rows[0]?.warnings).toContain('REFERENCE_MATCH');
+  });
+
+  it('keeps valid normalized phone matches as strong possible matches', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-phone',
+          name: 'Outro Cliente',
+          phoneNormalized: '5544999999999',
+          email: 'outro@exemplo.com',
+          reference: 'manual',
+          references: [{ id: 'ref-phone', reference: 'manual' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, email: null, name: 'Cliente Novo', referencia: 'nova-ref' }]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('POSSIBLE_MATCH');
+    expect(result.rows[0]?.candidateMatches).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'phone' })]),
+    );
+    expect(result.rows[0]?.warnings).toContain('PHONE_MATCH');
+  });
+
+  it('keeps normalized email matches as strong possible matches', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-email',
+          name: 'Outro Cliente',
+          phoneNormalized: '5544888888888',
+          email: 'cliente@exemplo.com',
+          reference: 'manual',
+          references: [{ id: 'ref-email', reference: 'manual' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, name: 'Cliente Novo', phone: '44988887777', referencia: 'nova' }]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('POSSIBLE_MATCH');
+    expect(result.rows[0]?.candidateMatches).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'email' })]),
+    );
+    expect(result.rows[0]?.warnings).toContain('EMAIL_MATCH');
+  });
+
+  it('keeps name plus valid phone as a strong possible match', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-name-phone',
+          name: 'Cliente Teste',
+          phoneNormalized: '5544999999999',
+          email: 'outro@exemplo.com',
+          reference: 'manual',
+          references: [{ id: 'ref-name-phone', reference: 'manual' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, email: null, referencia: 'nova-ref' }]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('POSSIBLE_MATCH');
+    expect(result.rows[0]?.candidateMatches.map((match) => match.field)).toEqual(
+      expect.arrayContaining(['name', 'phone']),
+    );
+    expect(result.rows[0]?.warnings).toContain('PHONE_MATCH');
+    expect(result.rows[0]?.warnings).not.toContain('WARNING_NAME_MATCH_ONLY');
+  });
+
+  it('keeps name plus normalized email as a strong possible match', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-name-email',
+          name: 'Cliente Teste',
+          phoneNormalized: '5544888888888',
+          email: 'cliente@exemplo.com',
+          reference: 'manual',
+          references: [{ id: 'ref-name-email', reference: 'manual' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([{ ...baseClient, phone: '44988887777', referencia: 'nova-ref' }]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('POSSIBLE_MATCH');
+    expect(result.rows[0]?.candidateMatches.map((match) => match.field)).toEqual(
+      expect.arrayContaining(['name', 'email']),
+    );
+    expect(result.rows[0]?.warnings).toContain('EMAIL_MATCH');
+    expect(result.rows[0]?.warnings).not.toContain('WARNING_NAME_MATCH_ONLY');
+  });
+
+  it('does not block when several CRM clients share only the same name', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-name-a',
+          name: 'JOAO',
+          phoneNormalized: '5599999999991',
+          email: 'joao-a@example.com',
+          reference: 'JOAO-A',
+          references: [{ id: 'ref-name-a', reference: 'JOAO-A' }],
+        },
+        {
+          id: 'client-name-b',
+          name: 'JOAO',
+          phoneNormalized: '5599999999992',
+          email: 'joao-b@example.com',
+          reference: 'JOAO-B',
+          references: [{ id: 'ref-name-b', reference: 'JOAO-B' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([
+        {
+          ...baseClient,
+          email: null,
+          id: 28,
+          name: 'JOAO',
+          phone: '44988887777',
+          referencia: 'JOAOBATISTAMOURA',
+        },
+      ]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('READY_CREATE');
+    expect(result.rows[0]?.candidateMatches.filter((match) => match.field === 'name')).toHaveLength(
+      2,
+    );
+    expect(result.rows[0]?.warnings).toContain('WARNING_NAME_MATCH_ONLY');
+  });
+
+  it('keeps normalized name-only matches non-blocking with accents and spaces', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-accented-name',
+          name: 'João',
+          phoneNormalized: '5599999999999',
+          email: 'joao@example.com',
+          reference: 'JOAO3424',
+          references: [{ id: 'ref-accented-name', reference: 'JOAO3424' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([
+        {
+          ...baseClient,
+          email: null,
+          id: 29,
+          name: '  João  ',
+          phone: '44988887777',
+          referencia: 'JOAOBATISTAMOURA',
+        },
+      ]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('READY_CREATE');
+    expect(result.rows[0]?.name).toBe('João');
+    expect(result.rows[0]?.warnings).toContain('WARNING_NAME_MATCH_ONLY');
+  });
+
+  it('does not treat empty legacy phone as a strong phone match', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-phone',
+          name: 'Outro Cliente',
+          phoneNormalized: '5544999999999',
+          email: 'outro@exemplo.com',
+          reference: 'manual',
+          references: [{ id: 'ref-phone', reference: 'manual' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([
+        { ...baseClient, email: null, name: 'Cliente Novo', phone: '', referencia: 'nova' },
+      ]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('INVALID');
+    expect(result.rows[0]?.errors).toContain('INVALID_PHONE');
+    expect(result.rows[0]?.candidateMatches.some((match) => match.field === 'phone')).toBe(false);
+    expect(result.rows[0]?.warnings).not.toContain('PHONE_MATCH');
+  });
+
+  it('does not treat empty legacy email as a strong email match', async () => {
+    const { service } = createService({
+      clients: [
+        {
+          id: 'client-email',
+          name: 'Outro Cliente',
+          phoneNormalized: '5544888888888',
+          email: 'cliente@exemplo.com',
+          reference: 'manual',
+          references: [{ id: 'ref-email', reference: 'manual' }],
+        },
+      ],
+    });
+
+    const result = await service.previewClients(
+      envelope([
+        {
+          ...baseClient,
+          email: '',
+          name: 'Cliente Novo',
+          phone: '44988887777',
+          referencia: 'nova',
+        },
+      ]),
+    );
+
+    expect(result.rows[0]?.classification).toBe('READY_CREATE');
+    expect(result.rows[0]?.candidateMatches.some((match) => match.field === 'email')).toBe(false);
+    expect(result.rows[0]?.warnings).not.toContain('EMAIL_MATCH');
+  });
+
+  it('keeps partial import replay idempotent while releasing old name-only matches', async () => {
+    const first = createService();
+    const firstPreview = await first.service.previewClients(envelope());
+    const payloadHash = firstPreview.rows[0]?.payloadHash;
+    const { service, writes } = createService({
+      clients: [
+        existingCrmClient,
+        {
+          id: 'client-joao',
+          name: 'JOAO',
+          phoneNormalized: '5599999999999',
+          email: 'joao3424@example.com',
+          reference: 'JOAO3424',
+          references: [{ id: 'ref-joao', reference: 'JOAO3424' }],
+        },
+      ],
+      references: [existingCrmReference],
+      importRecords: [
+        {
+          legacyClientId: '123',
+          payloadHash,
+          source: 'legacy',
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+        },
+      ],
+    });
+
+    const result = await service.importClients(
+      envelope([
+        baseClient,
+        {
+          ...baseClient,
+          email: null,
+          id: 28,
+          name: 'JOAO',
+          phone: '44988887777',
+          referencia: 'JOAOBATISTAMOURA',
+        },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 2, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ code: 'UNCHANGED', result: 'SKIPPED' });
+    expect(result.rows[1]).toMatchObject({
+      code: 'IMPORTED',
+      legacyClientId: '28',
+      result: 'IMPORTED',
+    });
+    expect(writes.clientCreate).toHaveBeenCalledTimes(1);
+    expect(writes.clientReferenceCreate).toHaveBeenCalledTimes(1);
+    expect(writes.legacyImportRecordCreate).toHaveBeenCalledTimes(1);
+    expect(writes.legacyImportRecordCreate.mock.calls[0]?.[0].data).toMatchObject({
+      legacyClientId: '28',
+      source: 'legacy',
+      status: 'IMPORTED',
+    });
   });
 
   it('uses normalized payload hash for UNCHANGED and READY_UPDATE', async () => {

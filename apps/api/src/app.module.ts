@@ -18,14 +18,12 @@ import { RenewalsModule } from './renewals/renewals.module';
 import { UsersModule } from './users/users.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { validateEnv } from './config/env.validation';
+import { rateLimitThrottlers } from './config/rate-limit';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
-    ThrottlerModule.forRoot([
-      { name: 'default', ttl: 60_000, limit: 60 },
-      { name: 'login', ttl: 60_000, limit: 8 },
-    ]),
+    ThrottlerModule.forRoot(rateLimitThrottlers),
     PrismaModule,
     UsersModule,
     AuthModule,

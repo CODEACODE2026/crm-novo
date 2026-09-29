@@ -15,6 +15,7 @@ import { AuthService } from './auth.service';
 import type { AuthenticatedUser } from './authenticated-user';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { loginThrottle } from '../config/rate-limit';
 
 type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
 
@@ -23,7 +24,7 @@ export class AuthController {
   constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   @Post('login')
-  @Throttle({ login: { limit: 8, ttl: 60_000 } })
+  @Throttle(loginThrottle)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: Response) {
     const result = await this.authService.login(dto.email, dto.password);
     this.authService.setAuthCookie(response, result.accessToken);

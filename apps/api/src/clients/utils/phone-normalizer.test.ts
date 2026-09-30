@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { normalizeBrazilPhone } from './phone-normalizer';
+import { brazilLegacyMobileVariant, normalizeBrazilPhone } from './phone-normalizer';
 
 describe('normalizeBrazilPhone', () => {
   it.each([
@@ -21,4 +21,19 @@ describe('normalizeBrazilPhone', () => {
     expect(() => normalizeBrazilPhone('123')).toThrow(BadRequestException);
     expect(() => normalizeBrazilPhone('+1 (555) 9929-4022')).toThrow(BadRequestException);
   });
+
+  it.each([
+    ['559184805831', '5591984805831'],
+    ['555184629666', '5551984629666'],
+    ['558599294022', '5585999294022'],
+  ])('generates a controlled legacy mobile variant for %s', (input, expected) => {
+    expect(brazilLegacyMobileVariant(input)).toBe(expected);
+  });
+
+  it.each(['558532324022', '5591984805831', '123', '+1 (555) 9929-4022'])(
+    'does not generate a legacy mobile variant for %s',
+    (input) => {
+      expect(brazilLegacyMobileVariant(input)).toBeNull();
+    },
+  );
 });

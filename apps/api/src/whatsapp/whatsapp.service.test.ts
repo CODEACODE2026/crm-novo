@@ -1043,6 +1043,258 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
   });
 
+  it('matches ROD by controlled legacy mobile variant and skips waitlist', async () => {
+    const realNormalizer = new KiragoWebhookNormalizer();
+    const rod = client({
+      id: '88888888-8888-4888-8888-888888888888',
+      name: 'ROD',
+      phone: '5591984805831',
+      phoneNormalized: '5591984805831',
+      reference: 'ROD',
+    });
+    const findMany = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([rod]);
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(rod),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockImplementation((payloadValue: unknown) =>
+      realNormalizer.normalize(payloadValue, now),
+    );
+
+    const result = await service.receiveWebhook({
+      type: 'Message',
+      instanceName: 'CRM Principal',
+      userID: 'kirago-user',
+      isGroup: false,
+      jid: {
+        contact: { pn: '+55 (91) 8480-5831' },
+        chat: { pn: '+55 (91) 8480-5831', raw: '559184805831@s.whatsapp.net' },
+        sender: { pn: '+55 (91) 8480-5831', raw: '559184805831@s.whatsapp.net' },
+      },
+      event: {
+        Info: {
+          ID: 'rod-msg-1',
+          PushName: 'Rod',
+          Timestamp: 1789088400,
+          IsFromMe: false,
+          IsGroup: false,
+          SenderAlt: '+55 (91) 8480-5831',
+          Chat: '559184805831@s.whatsapp.net',
+          Sender: '559184805831@s.whatsapp.net',
+          Type: 'text',
+        },
+        Message: { conversation: 'Oi' },
+      },
+    });
+    const inboundCreateArgs = (prisma.whatsAppInboundMessage.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: { clientId?: string | null; phoneNormalized?: string | null } };
+
+    expect(result).toMatchObject({ action: 'client_exists', inboundMessageId: 'inbound-id' });
+    expect(findMany).toHaveBeenNthCalledWith(1, {
+      where: { phoneNormalized: '559184805831' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(findMany).toHaveBeenNthCalledWith(2, {
+      where: { phoneNormalized: '5591984805831' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(inboundCreateArgs.data).toMatchObject({
+      clientId: rod.id,
+      phoneNormalized: '559184805831',
+    });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('matches BG/Tati by phone variant even when names differ', async () => {
+    const tati = client({
+      id: '12121212-1212-4121-8121-121212121212',
+      name: 'Tati',
+      phoneNormalized: '5551984629666',
+      reference: 'TATI',
+    });
+    const findMany = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([tati]);
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(tati),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '555184629666',
+        contactName: 'BG',
+        messageId: 'bg-msg-1',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'client_exists' });
+    expect(findMany).toHaveBeenNthCalledWith(2, {
+      where: { phoneNormalized: '5551984629666' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact phone match priority over a possible legacy mobile variant', async () => {
+    const exactClient = client({
+      id: '13131313-1313-4131-8131-131313131313',
+      phoneNormalized: '559184805831',
+    });
+    const findMany = vi.fn().mockResolvedValue([exactClient]);
+    const { service, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(exactClient),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '559184805831',
+        messageId: 'exact-priority-msg',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'client_exists' });
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { phoneNormalized: '559184805831' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+  });
+
+  it('does not generate a mobile variant for a Brazilian fixed line', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '558532324022',
+        contactName: 'Empresa',
+        messageId: 'fixed-line-msg',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'pending_contact_upserted' });
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { phoneNormalized: '558532324022' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalled();
+  });
+
+  it('does not generate another 9 for a modern mobile number', async () => {
+    const modernClient = client({ phoneNormalized: '5591984805831' });
+    const findMany = vi.fn().mockResolvedValue([modernClient]);
+    const { service, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(modernClient),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '5591984805831',
+        messageId: 'modern-mobile-msg',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'client_exists' });
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps waitlist behavior when a legacy mobile variant has no client', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '559184805831',
+        messageId: 'legacy-unknown-msg',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'pending_contact_upserted' });
+    expect(findMany).toHaveBeenNthCalledWith(2, {
+      where: { phoneNormalized: '5591984805831' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalled();
+  });
+
+  it('does not choose automatically when the legacy mobile variant is ambiguous', async () => {
+    const firstClient = client({
+      id: '14141414-1414-4141-8141-141414141414',
+      phoneNormalized: '5591984805831',
+    });
+    const secondClient = client({
+      id: '15151515-1515-4151-8151-151515151515',
+      phoneNormalized: '5591984805831',
+      reference: 'CLI-2',
+    });
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([firstClient, secondClient]);
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(firstClient),
+          findMany,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '559184805831',
+        messageId: 'legacy-ambiguous-msg',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'ambiguous_client_phone', clientMatches: 2 });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
   it('matches by exact phone even when the inbound name differs from the client name', async () => {
     const knownClient = client({ name: 'GERGLAUCIO', phoneNormalized: '5585999294022' });
     const { service, prisma, normalizer } = serviceFactory({

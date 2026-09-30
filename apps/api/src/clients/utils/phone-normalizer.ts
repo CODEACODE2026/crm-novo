@@ -20,3 +20,20 @@ export function normalizeBrazilPhone(input: string) {
 
   return normalized;
 }
+
+export function brazilLegacyMobileVariant(phoneNormalized: string) {
+  const digits = phoneNormalized.replace(/\D/g, '');
+
+  if (!/^55\d{10}$/.test(digits)) {
+    return null;
+  }
+
+  const areaCode = digits.slice(2, 4);
+  const subscriber = digits.slice(4);
+
+  if (!/^[6-9]\d{7}$/.test(subscriber)) {
+    return null;
+  }
+
+  return `55${areaCode}9${subscriber}`;
+}

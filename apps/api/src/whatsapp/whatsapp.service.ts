@@ -26,7 +26,7 @@ import {
   getBusinessDateDay,
   parseBusinessDate,
 } from '../clients/utils/business-date';
-import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
+import { brazilLegacyMobileVariant, normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import {
   KiragoWebhookNormalizer,
@@ -950,7 +950,7 @@ export class WhatsAppService {
     connectionId: string,
     normalized: NormalizedWhatsAppMessage & { phone: string },
   ) {
-    const clients = await this.findClientsByPhone(normalized.phone);
+    const clients = await this.findClientsForIncomingPhone(normalized.phone);
     const client = clients.length === 1 ? clients[0] : null;
 
     try {
@@ -1137,6 +1137,22 @@ export class WhatsAppService {
       orderBy: { createdAt: 'asc' },
       take: 2,
     });
+  }
+
+  private async findClientsForIncomingPhone(phoneNormalized: string) {
+    const exactMatches = await this.findClientsByPhone(phoneNormalized);
+
+    if (exactMatches.length > 0) {
+      return exactMatches;
+    }
+
+    const legacyVariant = brazilLegacyMobileVariant(phoneNormalized);
+
+    if (!legacyVariant) {
+      return exactMatches;
+    }
+
+    return this.findClientsByPhone(legacyVariant);
   }
 
   private async createPendingDispatch(input: {

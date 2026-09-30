@@ -126,6 +126,7 @@ import {
   createFinancialCategory,
   createManualEntry,
   createManualExpense,
+  createReferenceReactivation,
   createReceivablePix,
   createReceivablesPix,
   createPlan,
@@ -383,6 +384,11 @@ type RenewalTarget = {
   reference: ClientReference;
 };
 
+type ReactivationTarget = {
+  client: Client;
+  reference: ClientReference;
+};
+
 type RenewalReversalTarget = {
   client: Client;
   renewal: Renewal;
@@ -419,6 +425,7 @@ export default function DashboardPage() {
   const [settingsInitialBillingTab, setSettingsInitialBillingTab] =
     useState<SettingsBillingTab>('rules');
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
+  const [reactivationTarget, setReactivationTarget] = useState<ReactivationTarget | null>(null);
   const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
     null,
   );
@@ -579,7 +586,7 @@ export default function DashboardPage() {
     await loadData();
   }
 
-  function openRenewal(client: Client, reference?: ClientReference) {
+  function openReferenceLifecycleAction(client: Client, reference?: ClientReference) {
     const selectedReference =
       reference ?? (client.references?.length === 1 ? client.references[0] : null);
 
@@ -591,6 +598,12 @@ export default function DashboardPage() {
     }
 
     setRenewalNotice('');
+
+    if (isReactivationReference(selectedReference)) {
+      setReactivationTarget({ client, reference: selectedReference });
+      return;
+    }
+
     setRenewalTarget({ client, reference: selectedReference });
   }
 
@@ -605,6 +618,20 @@ export default function DashboardPage() {
     setRenewalTarget(null);
     setRenewalNotice(
       `Referência ${target.reference.reference} renovada com sucesso. Novo vencimento: ${formatDate(result.newDueDate)}. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
+    );
+  }
+
+  async function handleReactivationConfirm(
+    target: ReactivationTarget,
+    payload: { planId: string; amount: number; activationDate: string; idempotencyKey: string },
+  ) {
+    const result = await createReferenceReactivation(target.reference.id, payload);
+    await loadData();
+    const detailed = await getClient(target.client.id);
+    setSelectedClient(detailed);
+    setReactivationTarget(null);
+    setRenewalNotice(
+      `Reativação da referência ${target.reference.reference} criada e aguardando pagamento. A referência continua CANCELADA; gere o PIX manualmente em Cobranças/PIX. Conta a receber criada: ${formatCurrency(result.receivable.amount)}.`,
     );
   }
 
@@ -700,7 +727,7 @@ export default function DashboardPage() {
           onRenew={async (id, clientReferenceId) => {
             const client = await getClient(id);
             const reference = client.references?.find((item) => item.id === clientReferenceId);
-            openRenewal(client, reference);
+            openReferenceLifecycleAction(client, reference);
           }}
         />
       ) : null}
@@ -725,7 +752,7 @@ export default function DashboardPage() {
             setEditingClient(null);
             setClientFormOpen(true);
           }}
-          onRenew={openRenewal}
+          onReferenceLifecycleAction={openReferenceLifecycleAction}
           onRevertRenewal={(client, renewal) => void openRenewalReversal(client, renewal)}
           onCreateReference={async (client, payload) => {
             await createClientReference(client.id, payload);
@@ -862,6 +889,14 @@ export default function DashboardPage() {
           plans={plans.filter((plan) => plan.active || plan.id === renewalTarget.reference.planId)}
           onClose={() => setRenewalTarget(null)}
           onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
+        />
+      ) : null}
+      {reactivationTarget ? (
+        <ReactivationModal
+          target={reactivationTarget}
+          plans={plans.filter((plan) => plan.active)}
+          onClose={() => setReactivationTarget(null)}
+          onConfirm={async (payload) => handleReactivationConfirm(reactivationTarget, payload)}
         />
       ) : null}
       {renewalReversalTarget ? (
@@ -7048,7 +7083,7 @@ function ClientsView({
   onNew,
   onClearSelection,
   onCloseForm,
-  onRenew,
+  onReferenceLifecycleAction,
   onRevertRenewal,
   onCreateReference,
   onUpdateReference,
@@ -7081,7 +7116,7 @@ function ClientsView({
   onEdit: (client: Client) => void;
   onNew: () => void;
   onClearSelection: () => void;
-  onRenew: (client: Client, reference?: ClientReference) => void;
+  onReferenceLifecycleAction: (client: Client, reference?: ClientReference) => void;
   onRevertRenewal: (client: Client, renewal: Renewal) => void;
   onCreateReference: (
     client: Client,
@@ -7687,8 +7722,12 @@ function ClientsView({
                                 {
                                   disabled: !singleReference,
                                   icon: RefreshCw,
-                                  label: 'Renovar',
-                                  onSelect: () => onRenew(client, singleReference ?? undefined),
+                                  label: referenceLifecycleActionLabel(singleReference),
+                                  onSelect: () =>
+                                    onReferenceLifecycleAction(
+                                      client,
+                                      singleReference ?? undefined,
+                                    ),
                                 },
                                 {
                                   danger: true,
@@ -7744,9 +7783,9 @@ function ClientsView({
                     disabled={!uniqueSelectedReference}
                     size="sm"
                     variant="primary"
-                    onClick={() => onRenew(selectedClient)}
+                    onClick={() => onReferenceLifecycleAction(selectedClient)}
                   >
-                    Renovar
+                    {referenceLifecycleActionLabel(uniqueSelectedReference)}
                   </Button>
                   <Button
                     icon={Send}
@@ -8179,9 +8218,9 @@ function ClientsView({
                             icon={RefreshCw}
                             size="sm"
                             variant="secondary"
-                            onClick={() => onRenew(selectedClient, reference)}
+                            onClick={() => onReferenceLifecycleAction(selectedClient, reference)}
                           >
-                            Renovar
+                            {referenceLifecycleActionLabel(reference)}
                           </Button>
                           <IconButton
                             icon={Pencil}
@@ -12605,6 +12644,28 @@ function formatDateTime(value: string) {
   return new Date(value).toLocaleString('pt-BR');
 }
 
+function formatSaoPauloDateInput(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  return year && month && day ? `${year}-${month}-${day}` : formatBusinessDate(date);
+}
+
+function isReactivationReference(reference?: Pick<ClientReference, 'status'> | null) {
+  return reference?.status === 'CANCELADO';
+}
+
+function referenceLifecycleActionLabel(reference?: Pick<ClientReference, 'status'> | null) {
+  return isReactivationReference(reference) ? 'Reativar' : 'Renovar';
+}
+
 function ClientReferenceForm({
   plans,
   reference,
@@ -12934,6 +12995,194 @@ function RenewalModal({
               onClick={() => void handleConfirm()}
             >
               Confirmar renovação
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ReactivationModal({
+  target,
+  plans,
+  onClose,
+  onConfirm,
+}: {
+  target: ReactivationTarget;
+  plans: Plan[];
+  onClose: () => void;
+  onConfirm: (payload: {
+    planId: string;
+    amount: number;
+    activationDate: string;
+    idempotencyKey: string;
+  }) => Promise<void>;
+}) {
+  const { client, reference } = target;
+  const reactivationPlans = sortPlansByDuration(plans);
+  const firstReactivationPlan = reactivationPlans[0] ?? null;
+  const initialAmount =
+    Number(reference.recurringValue) > 0
+      ? reference.recurringValue
+      : (firstReactivationPlan?.defaultValue ?? '');
+  const [planId, setPlanId] = useState(firstReactivationPlan?.id ?? '');
+  const [amount, setAmount] = useState(initialAmount);
+  const [activationDate, setActivationDate] = useState(() => formatSaoPauloDateInput(new Date()));
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const selectedPlan = reactivationPlans.find((plan) => plan.id === planId) ?? null;
+  const parsedAmount = Number(amount);
+  const reactivationPreview = useMemo(() => {
+    if (!selectedPlan || Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      return null;
+    }
+
+    try {
+      const parsedActivationDate = parseBusinessDate(activationDate);
+      const anchorDay = parsedActivationDate.getUTCDate();
+      const nextDueDate = addCalendarMonthsPreservingAnchor(
+        parsedActivationDate,
+        selectedPlan.durationMonths,
+        anchorDay,
+      );
+
+      return {
+        anchorDay,
+        nextDueDate: formatBusinessDate(nextDueDate),
+      };
+    } catch {
+      return null;
+    }
+  }, [activationDate, parsedAmount, selectedPlan]);
+  const canSubmit = Boolean(planId) && Boolean(reactivationPreview);
+
+  async function handleConfirm() {
+    if (!canSubmit) {
+      setError('Preencha plano, valor e data de ativação válidos.');
+      return;
+    }
+
+    setError('');
+    setSaving(true);
+
+    try {
+      await onConfirm({
+        planId,
+        amount: parsedAmount,
+        activationDate,
+        idempotencyKey,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível criar a reativação.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" aria-labelledby="reactivation-title">
+        <header className="modal-header">
+          <h2 id="reactivation-title">Reativar referência</h2>
+          <IconButton icon={X} label="Fechar reativação" onClick={onClose} />
+        </header>
+
+        <dl className="detail-list">
+          <div>
+            <dt>Cliente</dt>
+            <dd>{client.name}</dd>
+          </div>
+          <div>
+            <dt>Referência</dt>
+            <dd>{reference.reference}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{reference.status}</dd>
+          </div>
+          <div>
+            <dt>Plano histórico</dt>
+            <dd>{reference.plan.name}</dd>
+          </div>
+          <div>
+            <dt>Valor histórico</dt>
+            <dd>{formatCurrency(reference.recurringValue)}</dd>
+          </div>
+        </dl>
+
+        <div className="notice warning">
+          A reativação cria uma cobrança manual. A referência permanece CANCELADA até o pagamento
+          ser confirmado.
+        </div>
+
+        <div className="form-grid">
+          <label className="field">
+            <span>Plano</span>
+            <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
+              {reactivationPlans.map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Valor</span>
+            <input
+              min="0.01"
+              step="0.01"
+              type="number"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Data de ativação</span>
+            <input
+              type="date"
+              value={activationDate}
+              onChange={(event) => setActivationDate(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <section className="preview-box">
+          {reactivationPreview && selectedPlan ? (
+            <>
+              <strong>Cobrança de reativação: {formatCurrency(parsedAmount)}</strong>
+              <span>Vencimento da reativação: {formatDate(activationDate)}.</span>
+              <span>
+                Após o pagamento, próximo ciclo em {formatDate(reactivationPreview.nextDueDate)}.
+              </span>
+              <span>
+                Plano {selectedPlan.name}; anchor {reactivationPreview.anchorDay}.
+              </span>
+            </>
+          ) : (
+            <span>Preencha os dados para visualizar o próximo ciclo.</span>
+          )}
+        </section>
+
+        <div className="notice">
+          Nenhum PIX ou WhatsApp será gerado automaticamente. Use Cobranças/PIX depois da criação.
+        </div>
+
+        <div className="form-actions">
+          <span className="error-message">{error}</span>
+          <div className="button-row">
+            <Button icon={X} variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={saving || !canSubmit}
+              icon={RefreshCw}
+              loading={saving}
+              variant="primary"
+              onClick={() => void handleConfirm()}
+            >
+              Criar reativação
             </Button>
           </div>
         </div>

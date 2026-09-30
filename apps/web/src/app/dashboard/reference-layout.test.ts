@@ -49,6 +49,39 @@ describe('client reference presentation source', () => {
     expect(stylesSource).toContain('.reference-card.status-cancelado');
   });
 
+  it('routes canceled reference actions to reactivation instead of renewal', () => {
+    expect(dashboardSource).toContain("reference?.status === 'CANCELADO'");
+    expect(dashboardSource).toContain(
+      "return isReactivationReference(reference) ? 'Reativar' : 'Renovar';",
+    );
+    expect(dashboardSource).toContain('function openReferenceLifecycleAction');
+    expect(dashboardSource).toContain(
+      'setReactivationTarget({ client, reference: selectedReference });',
+    );
+    expect(dashboardSource).toContain(
+      'setRenewalTarget({ client, reference: selectedReference });',
+    );
+    expect(dashboardSource).toContain('function ReactivationModal');
+    expect(dashboardSource).toContain('createReferenceReactivation(target.reference.id, payload)');
+    expect(dashboardSource).toContain('previewReferenceRenewal(reference.id, {');
+    expect(dashboardSource).toContain('confirmReferenceRenewal(target.reference.id, payload)');
+  });
+
+  it('keeps client-level and card-level labels driven by the selected ClientReference status', () => {
+    expect(dashboardSource).toContain('referenceLifecycleActionLabel(singleReference)');
+    expect(dashboardSource).toContain('referenceLifecycleActionLabel(uniqueSelectedReference)');
+    expect(dashboardSource).toContain('referenceLifecycleActionLabel(reference)');
+    expect(dashboardSource).toContain('onReferenceLifecycleAction(selectedClient, reference)');
+    expect(dashboardSource).not.toContain('onClick={() => onRenew(selectedClient, reference)}');
+    expect(dashboardSource).not.toContain('onClick={() => onRenew(selectedClient)}');
+  });
+
+  it('documents that reactivation waits for payment and does not generate PIX automatically', () => {
+    expect(dashboardSource).toContain('A referência permanece CANCELADA até o pagamento');
+    expect(dashboardSource).toContain('Nenhum PIX ou WhatsApp será gerado automaticamente');
+    expect(dashboardSource).toContain('gere o PIX manualmente em Cobranças/PIX');
+  });
+
   it('keeps semantic status badge tones available', () => {
     expect(stylesSource).toContain('.status-ativo');
     expect(stylesSource).toContain('.status-pendente_pagamento');

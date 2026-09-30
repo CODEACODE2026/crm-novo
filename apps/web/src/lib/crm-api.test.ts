@@ -6,6 +6,7 @@ import {
   applyReferralReward,
   cancelPaymentIntent,
   confirmRenewalReversal,
+  createReferenceReactivation,
   createClient,
   deleteClient,
   formatCurrency,
@@ -606,6 +607,33 @@ describe('CRM UI formatters', () => {
     expect(JSON.parse(secondCall?.[1]?.body as string)).toEqual({
       idempotencyKey: 'reversal-key-123',
       reason: 'Ajuste operacional',
+    });
+  });
+
+  it('posts client reference reactivation to the dedicated reactivation endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'reactivation-1', alreadyExisted: false }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createReferenceReactivation('reference-1', {
+      planId: 'plan-1',
+      amount: 120,
+      activationDate: '2026-09-30',
+      idempotencyKey: 'reactivation-key-123',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/client-references/reference-1/reactivations'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toEqual({
+      planId: 'plan-1',
+      amount: 120,
+      activationDate: '2026-09-30',
+      idempotencyKey: 'reactivation-key-123',
     });
   });
 

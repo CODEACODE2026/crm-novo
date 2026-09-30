@@ -37,15 +37,50 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('replaceReceivablePix(receivable.id');
     expect(pixModalSource).toContain('expectedCurrentIntentId: activeIntent.id');
     expect(pixModalSource).toContain('const [replacementProvider, setReplacementProvider]');
-    expect(pixModalSource).toContain("setReplacementProvider('FASTPIX')");
-    expect(pixModalSource).toContain('provider: replacementProvider');
-    expect(pixModalSource).toContain('FastFlow - padrão');
+    expect(pixModalSource).toContain(
+      'const [paymentProviderCredentials, setPaymentProviderCredentials]',
+    );
+    expect(pixModalSource).toContain('listPaymentProviderCredentials()');
+    expect(pixModalSource).toContain('eligibleReplacementProviders.map((provider)');
+    expect(pixModalSource).toContain('isOperationalPixProviderCredential(credential)');
+    expect(pixModalSource).toContain('provider: selectedReplacementProvider');
+    expect(pixModalSource).toContain(
+      'replacementProviderLabel(provider, defaultReplacementProvider)',
+    );
     expect(pixModalSource).toContain('Um novo PIX será criado para esta cobrança.');
     expect(pixModalSource).toContain(
       'Use esta opção somente quando o PIX atual não puder mais ser utilizado.',
     );
     expect(pixModalSource).toContain('replacementPreview.blockers.map');
     expect(pixModalSource).toContain('disabled={busy || !canConfirmReplacement}');
+  });
+
+  it('derives manual replacement providers from configured active credentials', () => {
+    expect(dashboardSource).toContain('function isOperationalPixProviderCredential');
+    expect(dashboardSource).toContain('credential.configured &&');
+    expect(dashboardSource).toContain('credential.active !== false');
+    expect(dashboardSource).toContain("credential.status === 'CONFIGURADO'");
+    expect(dashboardSource).toContain("credential.status === 'VALIDO'");
+    expect(pixModalSource).toContain('configurablePaymentProviders.filter((provider)');
+    expect(pixModalSource).toContain(
+      'paymentProviderCredentials.find((item) => item.provider === provider)',
+    );
+    expect(pixModalSource).toContain('defaultReplacementProvider');
+    expect(pixModalSource).toContain('selectedReplacementProvider');
+    expect(pixModalSource).not.toContain("setReplacementProvider('FASTPIX')");
+    expect(pixModalSource).not.toContain('<span>FastPIX</span>');
+  });
+
+  it('shows current provider, selected new provider and sends the selected provider to preview and replace', () => {
+    expect(pixModalSource).toContain('<dt>Provider atual</dt>');
+    expect(pixModalSource).toContain('<dt>Novo provider</dt>');
+    expect(pixModalSource).toContain('previewReceivablePixReplacement(receivable.id, {');
+    expect(pixModalSource).toContain('provider: selectedReplacementProvider');
+    expect(pixModalSource).toContain('replaceReceivablePix(receivable.id, {');
+    expect(pixModalSource).toContain(
+      'idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}:${selectedReplacementProvider}`',
+    );
+    expect(pixModalSource).toContain('disabled={busy || !selectedReplacementProvider}');
   });
 
   it('keeps replacement recovery clearly separated from generating a new PIX', () => {

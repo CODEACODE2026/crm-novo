@@ -3488,6 +3488,12 @@ function formatPeriodLabel(period: string) {
 
 type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
 
+const configurablePaymentProviders = [
+  'FASTFLOW',
+  'FASTPIX',
+  'FASTPAY',
+] satisfies ConfigurablePaymentProvider[];
+
 function ReferralsView({ clients }: { clients: Client[] }) {
   const [items, setItems] = useState<Referral[]>([]);
   const [summary, setSummary] = useState<ReferralSummary | null>(null);
@@ -5156,46 +5162,44 @@ function SettingsPaymentsPanel({
         </Button>
       </div>
       <div className="payment-provider-grid">
-        {(['FASTFLOW', 'FASTPIX', 'FASTPAY'] satisfies ConfigurablePaymentProvider[]).map(
-          (provider) => (
-            <PaymentProviderCard
-              credential={byProvider(provider)}
-              key={provider}
-              loading={loading}
-              provider={provider}
-              onDeactivate={() =>
-                runAction(
-                  () => deactivatePaymentProviderCredential(provider),
-                  `${paymentProviderLabel(provider)} desativado.`,
-                )
-              }
-              onSave={(payload) =>
-                runAction(
-                  () => savePaymentProviderCredential(payload),
-                  `${paymentProviderLabel(provider)} configurado.`,
-                )
-              }
-              onSetDefault={() =>
-                runAction(
-                  () => setDefaultPaymentProvider(provider),
-                  `${paymentProviderLabel(provider)} definido como padrao.`,
-                )
-              }
-              onTest={() =>
-                runAction(
-                  () => testPaymentProviderCredential(provider),
-                  `${paymentProviderLabel(provider)} validado.`,
-                )
-              }
-              onRegisterWebhook={() =>
-                runAction(
-                  () => registerPaymentWebhook(provider),
-                  `Webhook do ${paymentProviderLabel(provider)} registrado.`,
-                )
-              }
-            />
-          ),
-        )}
+        {configurablePaymentProviders.map((provider) => (
+          <PaymentProviderCard
+            credential={byProvider(provider)}
+            key={provider}
+            loading={loading}
+            provider={provider}
+            onDeactivate={() =>
+              runAction(
+                () => deactivatePaymentProviderCredential(provider),
+                `${paymentProviderLabel(provider)} desativado.`,
+              )
+            }
+            onSave={(payload) =>
+              runAction(
+                () => savePaymentProviderCredential(payload),
+                `${paymentProviderLabel(provider)} configurado.`,
+              )
+            }
+            onSetDefault={() =>
+              runAction(
+                () => setDefaultPaymentProvider(provider),
+                `${paymentProviderLabel(provider)} definido como padrao.`,
+              )
+            }
+            onTest={() =>
+              runAction(
+                () => testPaymentProviderCredential(provider),
+                `${paymentProviderLabel(provider)} validado.`,
+              )
+            }
+            onRegisterWebhook={() =>
+              runAction(
+                () => registerPaymentWebhook(provider),
+                `Webhook do ${paymentProviderLabel(provider)} registrado.`,
+              )
+            }
+          />
+        ))}
       </div>
     </div>
   );
@@ -12432,6 +12436,22 @@ function paymentProviderDisplay(provider: PaymentProviderCode) {
   return labels[provider];
 }
 
+function isOperationalPixProviderCredential(credential: PaymentProviderCredentialStatus) {
+  return (
+    credential.configured &&
+    credential.active !== false &&
+    (credential.status === 'CONFIGURADO' || credential.status === 'VALIDO')
+  );
+}
+
+function replacementProviderLabel(
+  provider: ConfigurablePaymentProvider,
+  defaultProvider: ConfigurablePaymentProvider | null,
+) {
+  const label = paymentProviderDisplay(provider);
+  return provider === defaultProvider ? `${label} - padrão` : label;
+}
+
 function paymentIntentStatusLabel(status: PaymentIntentStatus) {
   const labels: Record<PaymentIntentStatus, string> = {
     CREATED: 'Criado',
@@ -14811,6 +14831,9 @@ function PixReceivableModal({
 }) {
   const [intents, setIntents] = useState<PaymentIntent[]>([]);
   const [activeIntent, setActiveIntent] = useState<PaymentIntent | null>(null);
+  const [paymentProviderCredentials, setPaymentProviderCredentials] = useState<
+    PaymentProviderCredentialStatus[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -14844,6 +14867,29 @@ function PixReceivableModal({
   const replacePreviewActionRef = useRef(false);
   const recoveryPreviewActionRef = useRef(false);
   const paidIntentRefreshRef = useRef<Set<string>>(new Set());
+  const eligibleReplacementProviders = useMemo(
+    () =>
+      configurablePaymentProviders.filter((provider) => {
+        const credential = paymentProviderCredentials.find((item) => item.provider === provider);
+        return credential ? isOperationalPixProviderCredential(credential) : false;
+      }),
+    [paymentProviderCredentials],
+  );
+  const defaultReplacementProvider =
+    eligibleReplacementProviders.find((provider) =>
+      paymentProviderCredentials.some(
+        (credential) =>
+          credential.provider === provider &&
+          credential.defaultForPix &&
+          isOperationalPixProviderCredential(credential),
+      ),
+    ) ??
+    eligibleReplacementProviders[0] ??
+    null;
+  const canUseReplacementProvider = eligibleReplacementProviders.includes(replacementProvider);
+  const selectedReplacementProvider = canUseReplacementProvider
+    ? replacementProvider
+    : defaultReplacementProvider;
 
   const loadIntents = useCallback(
     async (
@@ -14855,10 +14901,11 @@ function PixReceivableModal({
       setError('');
 
       try {
-        const nextIntents = await listPaymentIntents(receivable.id);
-        const nextWhatsAppConnection = refreshConnection
-          ? await getWhatsAppConnection().catch(() => null)
-          : null;
+        const [nextIntents, nextCredentials, nextWhatsAppConnection] = await Promise.all([
+          listPaymentIntents(receivable.id),
+          listPaymentProviderCredentials(),
+          refreshConnection ? getWhatsAppConnection().catch(() => null) : Promise.resolve(null),
+        ]);
         const visibleIntents = sortPaymentIntentsForDisplay(
           mergePaymentIntentsWithFallback(nextIntents, fallbackIntent, receivable.id),
         );
@@ -14867,6 +14914,7 @@ function PixReceivableModal({
           : null;
 
         setIntents(visibleIntents);
+        setPaymentProviderCredentials(nextCredentials);
         setActiveIntent(
           fallbackFromList && isSelectablePixIntent(fallbackFromList)
             ? fallbackFromList
@@ -14916,12 +14964,17 @@ function PixReceivableModal({
     setShowPixData(activeIntent?.status === 'WAITING_PAYMENT');
     setShowAllHistory(false);
     setExpandedHistoryIntentId(null);
-    setReplacementProvider(
-      activeIntent?.provider === 'FASTFLOW' || activeIntent?.provider === 'FASTPIX'
-        ? activeIntent.provider
-        : 'FASTFLOW',
-    );
-  }, [activeIntent?.id, activeIntent?.provider, activeIntent?.status]);
+    if (defaultReplacementProvider) {
+      setReplacementProvider(defaultReplacementProvider);
+      setReplacementPreview(null);
+    }
+  }, [activeIntent?.id, activeIntent?.status, defaultReplacementProvider]);
+
+  useEffect(() => {
+    if (!selectedReplacementProvider || selectedReplacementProvider === replacementProvider) return;
+    setReplacementProvider(selectedReplacementProvider);
+    setReplacementPreview(null);
+  }, [replacementProvider, selectedReplacementProvider]);
 
   async function runAction(
     action: () => Promise<PaymentIntent>,
@@ -15099,6 +15152,11 @@ function PixReceivableModal({
   async function runReplacementPreview() {
     if (!activeIntent || replacePreviewActionRef.current) return;
 
+    if (!selectedReplacementProvider) {
+      setError('Nenhum provider PIX configurado para gerar substituição.');
+      return;
+    }
+
     replacePreviewActionRef.current = true;
     setBusy(true);
     setError('');
@@ -15107,7 +15165,7 @@ function PixReceivableModal({
 
     try {
       const preview = await previewReceivablePixReplacement(receivable.id, {
-        provider: replacementProvider,
+        provider: selectedReplacementProvider,
       });
       setReplacementPreview(preview);
     } catch (err) {
@@ -15123,7 +15181,8 @@ function PixReceivableModal({
       !activeIntent ||
       !replacementPreview?.replaceable ||
       replacementPreview.currentIntent?.id !== activeIntent.id ||
-      replacementPreview.provider !== replacementProvider ||
+      !selectedReplacementProvider ||
+      replacementPreview.provider !== selectedReplacementProvider ||
       actionRef.current
     ) {
       return;
@@ -15132,9 +15191,9 @@ function PixReceivableModal({
     await runAction(
       () =>
         replaceReceivablePix(receivable.id, {
-          provider: replacementProvider,
+          provider: selectedReplacementProvider,
           expectedCurrentIntentId: activeIntent.id,
-          idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}:${replacementProvider}`,
+          idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}:${selectedReplacementProvider}`,
           ...(replaceReason.trim() ? { reason: replaceReason.trim() } : {}),
         }),
       'Novo PIX gerado.',
@@ -15163,7 +15222,8 @@ function PixReceivableModal({
   const canConfirmReplacement =
     Boolean(replacementPreview?.replaceable) &&
     replacementPreview?.currentIntent?.id === activeIntent?.id &&
-    replacementPreview?.provider === replacementProvider;
+    Boolean(selectedReplacementProvider) &&
+    replacementPreview?.provider === selectedReplacementProvider;
   const canConfirmReplacementRecovery =
     Boolean(recoveryPreview?.recoverable) &&
     recoveryPreview?.provider === recoveryProvider &&
@@ -15596,7 +15656,11 @@ function PixReceivableModal({
           <section className="pix-panel pix-tool-panel">
             <div className="pix-status-row">
               <strong>Gerar novo PIX</strong>
-              <span>{paymentProviderDisplay(replacementProvider)}</span>
+              <span>
+                {selectedReplacementProvider
+                  ? paymentProviderDisplay(selectedReplacementProvider)
+                  : 'Nenhum provider configurado'}
+              </span>
             </div>
             <ol className="pix-step-list" aria-label="Etapas para gerar novo PIX">
               <li>Configurar</li>
@@ -15624,6 +15688,14 @@ function PixReceivableModal({
                 <dd>{paymentProviderDisplay(activeIntent.provider)}</dd>
               </div>
               <div>
+                <dt>Novo provider</dt>
+                <dd>
+                  {selectedReplacementProvider
+                    ? paymentProviderDisplay(selectedReplacementProvider)
+                    : '-'}
+                </dd>
+              </div>
+              <div>
                 <dt>Transaction ID atual</dt>
                 <dd>{activeIntent.providerTransactionId ?? '-'}</dd>
               </div>
@@ -15638,32 +15710,27 @@ function PixReceivableModal({
             </dl>
             <fieldset className="field">
               <span>Provedor</span>
-              <label className="choice-row">
-                <input
-                  checked={replacementProvider === 'FASTFLOW'}
-                  name="replacement-provider"
-                  type="radio"
-                  value="FASTFLOW"
-                  onChange={() => {
-                    setReplacementProvider('FASTFLOW');
-                    setReplacementPreview(null);
-                  }}
-                />
-                <span>FastFlow - padrão</span>
-              </label>
-              <label className="choice-row">
-                <input
-                  checked={replacementProvider === 'FASTPIX'}
-                  name="replacement-provider"
-                  type="radio"
-                  value="FASTPIX"
-                  onChange={() => {
-                    setReplacementProvider('FASTPIX');
-                    setReplacementPreview(null);
-                  }}
-                />
-                <span>FastPIX</span>
-              </label>
+              {eligibleReplacementProviders.length ? (
+                eligibleReplacementProviders.map((provider) => (
+                  <label className="choice-row" key={provider}>
+                    <input
+                      checked={selectedReplacementProvider === provider}
+                      name="replacement-provider"
+                      type="radio"
+                      value={provider}
+                      onChange={() => {
+                        setReplacementProvider(provider);
+                        setReplacementPreview(null);
+                      }}
+                    />
+                    <span>{replacementProviderLabel(provider, defaultReplacementProvider)}</span>
+                  </label>
+                ))
+              ) : (
+                <span className="field-hint">
+                  Configure ao menos um provider PIX ativo para gerar uma substituição.
+                </span>
+              )}
             </fieldset>
             <label className="field">
               <span>Motivo</span>
@@ -15684,7 +15751,7 @@ function PixReceivableModal({
             <div className="button-row">
               <button
                 className="secondary-button"
-                disabled={busy}
+                disabled={busy || !selectedReplacementProvider}
                 type="button"
                 onClick={() => void runReplacementPreview()}
               >

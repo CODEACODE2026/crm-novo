@@ -599,6 +599,22 @@ describe('Payment provider DI pipeline', () => {
     expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
   });
 
+  it('returns a controlled error when FastPIX has no active credential', async () => {
+    configuredProvider = 'FASTPIX';
+    prisma.paymentProviderCredential.findFirst.mockResolvedValue(null);
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastPixPaymentProvider);
+
+    await expect(
+      provider.createPix({ ...pixInput('FASTPIX'), notificationUrl: null }),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(apiClient.createTransaction).not.toHaveBeenCalled();
+    expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
+  });
+
   it('does not use an inactive credential for provider createPix', async () => {
     credentialActive = false;
     app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {

@@ -21,7 +21,11 @@ const paymentCardSource = dashboardSource.slice(
 
 describe('payment integrations workspace polish', () => {
   it('keeps the real providers and does not add unsupported providers', () => {
-    expect(settingsSource).toContain("(['FASTFLOW', 'FASTPIX', 'FASTPAY']");
+    expect(dashboardSource).toContain('const configurablePaymentProviders =');
+    expect(dashboardSource).toContain("'FASTFLOW',");
+    expect(dashboardSource).toContain("'FASTPIX',");
+    expect(dashboardSource).toContain("'FASTPAY',");
+    expect(settingsSource).toContain('configurablePaymentProviders.map((provider)');
     expect(settingsSource).toContain("if (provider === 'FASTPIX') return 'FastPIX';");
     expect(settingsSource).not.toContain("'DEPIX'");
   });

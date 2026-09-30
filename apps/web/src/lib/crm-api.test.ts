@@ -804,17 +804,17 @@ describe('CRM UI formatters', () => {
       .mockImplementation(() => Promise.resolve(new Response('{}', { status: 200 })));
     vi.stubGlobal('fetch', fetchMock);
 
-    await previewReceivablePixReplacement('receivable-1', { provider: 'FASTFLOW' });
+    await previewReceivablePixReplacement('receivable-1', { provider: 'FASTPAY' });
     await replaceReceivablePix('receivable-1', {
-      provider: 'FASTFLOW',
+      provider: 'FASTPAY',
       expectedCurrentIntentId: 'intent-1',
       reason: 'QR expirado',
-      idempotencyKey: 'pix-replace:receivable-1:intent-1',
+      idempotencyKey: 'pix-replace:receivable-1:intent-1:FASTPAY',
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining('/receivables/receivable-1/pix/replace-preview?provider=FASTFLOW'),
+      expect.stringContaining('/receivables/receivable-1/pix/replace-preview?provider=FASTPAY'),
       expect.any(Object),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -827,10 +827,10 @@ describe('CRM UI formatters', () => {
     const confirmBody = confirmCall?.[1]?.body;
     expect(typeof confirmBody).toBe('string');
     expect(JSON.parse(confirmBody as string)).toEqual({
-      provider: 'FASTFLOW',
+      provider: 'FASTPAY',
       expectedCurrentIntentId: 'intent-1',
       reason: 'QR expirado',
-      idempotencyKey: 'pix-replace:receivable-1:intent-1',
+      idempotencyKey: 'pix-replace:receivable-1:intent-1:FASTPAY',
     });
   });
 

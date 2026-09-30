@@ -14,9 +14,7 @@ const pixModalSource = dashboardSource.slice(
 describe('PIX reconciliation UI contract', () => {
   it('keeps reconciliation behind the PIX action menu and starts with empty operator inputs', () => {
     expect(pixModalSource).toContain("label: 'Reconciliar PIX externo'");
-    expect(pixModalSource).toContain(
-      "useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW')",
-    );
+    expect(pixModalSource).toContain("useState<ConfigurablePaymentProvider>('FASTFLOW')");
     expect(pixModalSource).toContain(
       "const [reconcileTransactionId, setReconcileTransactionId] = useState('');",
     );
@@ -38,6 +36,10 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('previewReceivablePixReplacement(receivable.id');
     expect(pixModalSource).toContain('replaceReceivablePix(receivable.id');
     expect(pixModalSource).toContain('expectedCurrentIntentId: activeIntent.id');
+    expect(pixModalSource).toContain('const [replacementProvider, setReplacementProvider]');
+    expect(pixModalSource).toContain("setReplacementProvider('FASTPIX')");
+    expect(pixModalSource).toContain('provider: replacementProvider');
+    expect(pixModalSource).toContain('FastFlow - padrão');
     expect(pixModalSource).toContain('Um novo PIX será criado para esta cobrança.');
     expect(pixModalSource).toContain(
       'Use esta opção somente quando o PIX atual não puder mais ser utilizado.',

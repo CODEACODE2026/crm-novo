@@ -7,7 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FinanceService } from '../finance.service';
 import { FastDepixApiClient } from './fastdepix-api.client';
-import { FastFlowPaymentProvider, FastPayPaymentProvider } from './fastdepix-payment.provider';
+import {
+  FastFlowPaymentProvider,
+  FastPayPaymentProvider,
+  FastPixPaymentProvider,
+} from './fastdepix-payment.provider';
 import { MockPaymentProvider } from './mock-payment.provider';
 import { PAYMENT_PROVIDER } from './payment-provider';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
@@ -17,7 +21,8 @@ import { TokenEncryptionService } from '../../whatsapp/security/token-encryption
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
 const fixedNow = new Date('2026-09-24T00:00:00.000Z');
-let configuredProvider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'> = 'FASTFLOW';
+let configuredProvider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'> =
+  'FASTFLOW';
 let credentialActive = true;
 
 const apiClient = {
@@ -72,6 +77,7 @@ const prisma = {
   providers: [
     FinanceService,
     FastFlowPaymentProvider,
+    FastPixPaymentProvider,
     FastPayPaymentProvider,
     MockPaymentProvider,
     PaymentProviderCredentialsService,
@@ -125,7 +131,9 @@ function pixInput(provider: PaymentProviderCode = 'FASTFLOW') {
     notificationUrl:
       provider === 'FASTPAY'
         ? 'https://crm.example.test/payment-webhooks/fastpay'
-        : 'https://crm.example.test/payment-webhooks/fastflow',
+        : provider === 'FASTPIX'
+          ? 'https://crm.example.test/payment-webhooks/fastpix'
+          : 'https://crm.example.test/payment-webhooks/fastflow',
   };
 }
 
@@ -226,12 +234,14 @@ describe('Payment provider DI pipeline', () => {
     vi.restoreAllMocks();
   });
 
-  it('declares explicit FastDepix dependencies for FastFlow and FastPay runtime DI', () => {
+  it('declares explicit FastDepix dependencies for FastFlow, FastPIX and FastPay runtime DI', () => {
     const fastFlowDeps = Reflect.getMetadata(
       SELF_DECLARED_DEPS_METADATA,
       FastFlowPaymentProvider,
     ) as Array<{ index: number; param: unknown }> | undefined;
     const fastPayDeps = Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, FastPayPaymentProvider) as
+      Array<{ index: number; param: unknown }> | undefined;
+    const fastPixDeps = Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, FastPixPaymentProvider) as
       Array<{ index: number; param: unknown }> | undefined;
 
     expect(fastFlowDeps).toEqual(
@@ -241,6 +251,12 @@ describe('Payment provider DI pipeline', () => {
       ]),
     );
     expect(fastPayDeps).toEqual(
+      expect.arrayContaining([
+        { index: 0, param: FastDepixApiClient },
+        { index: 1, param: PaymentProviderCredentialsService },
+      ]),
+    );
+    expect(fastPixDeps).toEqual(
       expect.arrayContaining([
         { index: 0, param: FastDepixApiClient },
         { index: 1, param: PaymentProviderCredentialsService },
@@ -403,6 +419,38 @@ describe('Payment provider DI pipeline', () => {
     });
   });
 
+  it('resolves FastPixPaymentProvider via Nest and uses only the FastPIX token', async () => {
+    configuredProvider = 'FASTPIX';
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastPixPaymentProvider);
+
+    expect(provider).toMatchObject({
+      apiClient,
+      credentials: expect.any(PaymentProviderCredentialsService),
+    });
+
+    const result = await provider.createPix(pixInput('FASTPIX'));
+
+    expect(result).toMatchObject({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastdepix-transaction-1',
+      pixCopyPaste: 'pix-copy-paste',
+    });
+    expect(JSON.stringify(result)).not.toContain('fastpix-active-token');
+    expect(apiClient.createTransaction).toHaveBeenCalledWith('fastpix-active-token', {
+      amount: 123.45,
+      user: { name: 'Cliente Teste' },
+      payer_phone: '5544999999999',
+      notification_url: 'https://crm.example.test/payment-webhooks/fastpix',
+    });
+    expect(apiClient.createTransaction).not.toHaveBeenCalledWith(
+      'fastflow-active-token',
+      expect.anything(),
+    );
+  });
+
   it('resolves PaymentProviderRegistryService via Nest and selects FastFlow without undefined deps', async () => {
     app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
       logger: false,
@@ -410,6 +458,7 @@ describe('Payment provider DI pipeline', () => {
     const registry = app.get(PaymentProviderRegistryService);
     expect(app.get(MockPaymentProvider)).toBeDefined();
     expect(app.get(FastFlowPaymentProvider)).toBeDefined();
+    expect(app.get(FastPixPaymentProvider)).toBeDefined();
     expect(app.get(FastPayPaymentProvider)).toBeDefined();
 
     await expect(registry.createPix(pixInput())).resolves.toMatchObject({

@@ -12,7 +12,8 @@ import {
   type FastDepixWebhookRegistrationResponse,
 } from './fastdepix-api.client';
 
-const configurableProviders = ['FASTFLOW', 'FASTPAY'] satisfies PaymentProviderCode[];
+const configurableProviders = ['FASTFLOW', 'FASTPIX', 'FASTPAY'] satisfies PaymentProviderCode[];
+const defaultPixProviders = ['FASTFLOW', 'FASTPAY'] satisfies PaymentProviderCode[];
 const supportedWebhookEvents = [
   'transaction.created',
   'transaction.approved',
@@ -65,7 +66,7 @@ export class PaymentProviderCredentialsService {
         tokenEncrypted: this.encryption.encrypt(trimmedToken),
         tokenLastFour: trimmedToken.slice(-4),
         active: true,
-        defaultForPix: !(await this.hasDefaultProvider()),
+        defaultForPix: this.canBeDefaultForPix(dto.provider) && !(await this.hasDefaultProvider()),
         validatedAt: new Date(),
         lastValidationStatus: 'VALIDO',
         companyId: null,
@@ -110,6 +111,7 @@ export class PaymentProviderCredentialsService {
 
   async setDefaultProvider(provider: PaymentProviderCode) {
     this.ensureConfigurableProvider(provider);
+    this.ensureDefaultPixProvider(provider);
     const credential = await this.getActiveCredential(provider);
 
     await this.prisma.$transaction([
@@ -184,7 +186,7 @@ export class PaymentProviderCredentialsService {
   async getDefaultProvider() {
     const credential = await this.prisma.paymentProviderCredential.findFirst({
       where: {
-        provider: { in: [...configurableProviders] },
+        provider: { in: [...defaultPixProviders] },
         active: true,
         defaultForPix: true,
         companyId: null,
@@ -222,7 +224,7 @@ export class PaymentProviderCredentialsService {
   private async hasDefaultProvider() {
     const count = await this.prisma.paymentProviderCredential.count({
       where: {
-        provider: { in: [...configurableProviders] },
+        provider: { in: [...defaultPixProviders] },
         active: true,
         defaultForPix: true,
         companyId: null,
@@ -253,8 +255,19 @@ export class PaymentProviderCredentialsService {
     }
   }
 
+  private ensureDefaultPixProvider(provider: PaymentProviderCode) {
+    if (!this.canBeDefaultForPix(provider)) {
+      throw new BadRequestException('FastPIX e um provider alternativo manual nesta versao.');
+    }
+  }
+
+  private canBeDefaultForPix(provider: PaymentProviderCode) {
+    return defaultPixProviders.includes(provider as (typeof defaultPixProviders)[number]);
+  }
+
   private labelForProvider(provider: string | undefined) {
     if (provider === 'fastflow') return 'FastFlow';
+    if (provider === 'fastpix') return 'FastPIX';
     if (provider === 'fastpay') return 'FastPay';
     if (provider === 'depix') return 'Depix';
     return provider || 'provider desconhecido';

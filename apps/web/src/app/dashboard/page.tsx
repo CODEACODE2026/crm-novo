@@ -3486,7 +3486,7 @@ function formatPeriodLabel(period: string) {
   return formatDate(period);
 }
 
-type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
 
 function ReferralsView({ clients }: { clients: Client[] }) {
   const [items, setItems] = useState<Referral[]>([]);
@@ -5156,44 +5156,46 @@ function SettingsPaymentsPanel({
         </Button>
       </div>
       <div className="payment-provider-grid">
-        {(['FASTFLOW', 'FASTPAY'] satisfies ConfigurablePaymentProvider[]).map((provider) => (
-          <PaymentProviderCard
-            credential={byProvider(provider)}
-            key={provider}
-            loading={loading}
-            provider={provider}
-            onDeactivate={() =>
-              runAction(
-                () => deactivatePaymentProviderCredential(provider),
-                `${paymentProviderLabel(provider)} desativado.`,
-              )
-            }
-            onSave={(payload) =>
-              runAction(
-                () => savePaymentProviderCredential(payload),
-                `${paymentProviderLabel(provider)} configurado.`,
-              )
-            }
-            onSetDefault={() =>
-              runAction(
-                () => setDefaultPaymentProvider(provider),
-                `${paymentProviderLabel(provider)} definido como padrao.`,
-              )
-            }
-            onTest={() =>
-              runAction(
-                () => testPaymentProviderCredential(provider),
-                `${paymentProviderLabel(provider)} validado.`,
-              )
-            }
-            onRegisterWebhook={() =>
-              runAction(
-                () => registerPaymentWebhook(provider),
-                `Webhook do ${paymentProviderLabel(provider)} registrado.`,
-              )
-            }
-          />
-        ))}
+        {(['FASTFLOW', 'FASTPIX', 'FASTPAY'] satisfies ConfigurablePaymentProvider[]).map(
+          (provider) => (
+            <PaymentProviderCard
+              credential={byProvider(provider)}
+              key={provider}
+              loading={loading}
+              provider={provider}
+              onDeactivate={() =>
+                runAction(
+                  () => deactivatePaymentProviderCredential(provider),
+                  `${paymentProviderLabel(provider)} desativado.`,
+                )
+              }
+              onSave={(payload) =>
+                runAction(
+                  () => savePaymentProviderCredential(payload),
+                  `${paymentProviderLabel(provider)} configurado.`,
+                )
+              }
+              onSetDefault={() =>
+                runAction(
+                  () => setDefaultPaymentProvider(provider),
+                  `${paymentProviderLabel(provider)} definido como padrao.`,
+                )
+              }
+              onTest={() =>
+                runAction(
+                  () => testPaymentProviderCredential(provider),
+                  `${paymentProviderLabel(provider)} validado.`,
+                )
+              }
+              onRegisterWebhook={() =>
+                runAction(
+                  () => registerPaymentWebhook(provider),
+                  `Webhook do ${paymentProviderLabel(provider)} registrado.`,
+                )
+              }
+            />
+          ),
+        )}
       </div>
     </div>
   );
@@ -6629,6 +6631,7 @@ function PaymentProviderCard({
   const canSubmitConfig = canSaveCredential;
   const webhookUrl = credential.webhookUrl ?? `/payment-webhooks/${provider.toLowerCase()}`;
   const actionDisabled = loading || saving || testing || registeringWebhook;
+  const canSetDefault = provider !== 'FASTPIX';
 
   function closeConfigModal() {
     if (saving) return;
@@ -6711,7 +6714,11 @@ function PaymentProviderCard({
                 onSelect: () => setWebhookOpen(true),
               },
               {
-                disabled: !configured || Boolean(credential.defaultForPix) || actionDisabled,
+                disabled:
+                  !canSetDefault ||
+                  !configured ||
+                  Boolean(credential.defaultForPix) ||
+                  actionDisabled,
                 icon: CircleCheck,
                 label: 'Definir como padrão',
                 onSelect: () => void onSetDefault(),
@@ -6928,11 +6935,15 @@ function PaymentProviderCard({
 }
 
 function paymentProviderLabel(provider: ConfigurablePaymentProvider) {
-  return provider === 'FASTFLOW' ? 'FastFlow' : 'FastPay';
+  if (provider === 'FASTFLOW') return 'FastFlow';
+  if (provider === 'FASTPIX') return 'FastPIX';
+  return 'FastPay';
 }
 
 function paymentProviderDescription(provider: ConfigurablePaymentProvider) {
-  return provider === 'FASTFLOW' ? 'Pagamentos via PIX FastFlow' : 'Pagamentos via PIX FastPay';
+  if (provider === 'FASTFLOW') return 'Pagamentos via PIX FastFlow';
+  if (provider === 'FASTPIX') return 'Pagamentos via PIX FastPIX alternativo manual';
+  return 'Pagamentos via PIX FastPay';
 }
 
 function paymentProviderStatusLabel(status: PaymentProviderCredentialStatus['status']) {
@@ -12413,6 +12424,7 @@ function paymentProviderDisplay(provider: PaymentProviderCode) {
   const labels: Record<PaymentProviderCode, string> = {
     MOCK: 'Mock',
     FASTFLOW: 'FastFlow',
+    FASTPIX: 'FastPIX',
     FASTPAY: 'FastPay',
     DEPIX: 'Depix',
   };
@@ -14813,18 +14825,19 @@ function PixReceivableModal({
   const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [whatsAppSending, setWhatsAppSending] = useState(false);
   const [reconcileProvider, setReconcileProvider] =
-    useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
+    useState<ConfigurablePaymentProvider>('FASTFLOW');
   const [reconcileTransactionId, setReconcileTransactionId] = useState('');
   const [reconcileReason, setReconcileReason] = useState('');
   const [reconcilePreview, setReconcilePreview] = useState<PixReconciliationPreview | null>(null);
-  const [recoveryProvider, setRecoveryProvider] =
-    useState<Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>>('FASTFLOW');
+  const [recoveryProvider, setRecoveryProvider] = useState<ConfigurablePaymentProvider>('FASTFLOW');
   const [recoveryTransactionId, setRecoveryTransactionId] = useState('');
   const [recoveryReason, setRecoveryReason] = useState('');
   const [recoveryPreview, setRecoveryPreview] = useState<PixReplacementRecoveryPreview | null>(
     null,
   );
   const [replaceReason, setReplaceReason] = useState('');
+  const [replacementProvider, setReplacementProvider] =
+    useState<ConfigurablePaymentProvider>('FASTFLOW');
   const [replacementPreview, setReplacementPreview] = useState<PixReplacementPreview | null>(null);
   const actionRef = useRef(false);
   const previewActionRef = useRef(false);
@@ -14903,7 +14916,12 @@ function PixReceivableModal({
     setShowPixData(activeIntent?.status === 'WAITING_PAYMENT');
     setShowAllHistory(false);
     setExpandedHistoryIntentId(null);
-  }, [activeIntent?.id, activeIntent?.status]);
+    setReplacementProvider(
+      activeIntent?.provider === 'FASTFLOW' || activeIntent?.provider === 'FASTPIX'
+        ? activeIntent.provider
+        : 'FASTFLOW',
+    );
+  }, [activeIntent?.id, activeIntent?.provider, activeIntent?.status]);
 
   async function runAction(
     action: () => Promise<PaymentIntent>,
@@ -15089,7 +15107,7 @@ function PixReceivableModal({
 
     try {
       const preview = await previewReceivablePixReplacement(receivable.id, {
-        provider: activeIntent.provider,
+        provider: replacementProvider,
       });
       setReplacementPreview(preview);
     } catch (err) {
@@ -15105,6 +15123,7 @@ function PixReceivableModal({
       !activeIntent ||
       !replacementPreview?.replaceable ||
       replacementPreview.currentIntent?.id !== activeIntent.id ||
+      replacementPreview.provider !== replacementProvider ||
       actionRef.current
     ) {
       return;
@@ -15113,9 +15132,9 @@ function PixReceivableModal({
     await runAction(
       () =>
         replaceReceivablePix(receivable.id, {
-          provider: activeIntent.provider,
+          provider: replacementProvider,
           expectedCurrentIntentId: activeIntent.id,
-          idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}`,
+          idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}:${replacementProvider}`,
           ...(replaceReason.trim() ? { reason: replaceReason.trim() } : {}),
         }),
       'Novo PIX gerado.',
@@ -15143,7 +15162,8 @@ function PixReceivableModal({
     reconcilePreview.providerTransactionId === reconcileTransactionId.trim();
   const canConfirmReplacement =
     Boolean(replacementPreview?.replaceable) &&
-    replacementPreview?.currentIntent?.id === activeIntent?.id;
+    replacementPreview?.currentIntent?.id === activeIntent?.id &&
+    replacementPreview?.provider === replacementProvider;
   const canConfirmReplacementRecovery =
     Boolean(recoveryPreview?.recoverable) &&
     recoveryPreview?.provider === recoveryProvider &&
@@ -15576,7 +15596,7 @@ function PixReceivableModal({
           <section className="pix-panel pix-tool-panel">
             <div className="pix-status-row">
               <strong>Gerar novo PIX</strong>
-              <span>{paymentProviderDisplay(activeIntent.provider)}</span>
+              <span>{paymentProviderDisplay(replacementProvider)}</span>
             </div>
             <ol className="pix-step-list" aria-label="Etapas para gerar novo PIX">
               <li>Configurar</li>
@@ -15600,7 +15620,7 @@ function PixReceivableModal({
                 <dd>{formatCurrency(receivable.amount)}</dd>
               </div>
               <div>
-                <dt>Provider</dt>
+                <dt>Provider atual</dt>
                 <dd>{paymentProviderDisplay(activeIntent.provider)}</dd>
               </div>
               <div>
@@ -15616,6 +15636,35 @@ function PixReceivableModal({
                 <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
               </div>
             </dl>
+            <fieldset className="field">
+              <span>Provedor</span>
+              <label className="choice-row">
+                <input
+                  checked={replacementProvider === 'FASTFLOW'}
+                  name="replacement-provider"
+                  type="radio"
+                  value="FASTFLOW"
+                  onChange={() => {
+                    setReplacementProvider('FASTFLOW');
+                    setReplacementPreview(null);
+                  }}
+                />
+                <span>FastFlow - padrão</span>
+              </label>
+              <label className="choice-row">
+                <input
+                  checked={replacementProvider === 'FASTPIX'}
+                  name="replacement-provider"
+                  type="radio"
+                  value="FASTPIX"
+                  onChange={() => {
+                    setReplacementProvider('FASTPIX');
+                    setReplacementPreview(null);
+                  }}
+                />
+                <span>FastPIX</span>
+              </label>
+            </fieldset>
             <label className="field">
               <span>Motivo</span>
               <select
@@ -15704,6 +15753,7 @@ function PixReceivableModal({
                   }}
                 >
                   <option value="FASTFLOW">FastFlow</option>
+                  <option value="FASTPIX">FastPIX</option>
                   <option value="FASTPAY">FastPay</option>
                 </select>
               </label>
@@ -15801,6 +15851,7 @@ function PixReceivableModal({
                   }}
                 >
                   <option value="FASTFLOW">FastFlow</option>
+                  <option value="FASTPIX">FastPIX</option>
                   <option value="FASTPAY">FastPay</option>
                 </select>
               </label>

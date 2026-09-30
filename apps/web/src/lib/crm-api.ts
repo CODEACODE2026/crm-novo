@@ -176,7 +176,7 @@ export type PaymentIntentStatus =
   | 'CANCELED'
   | 'FAILED'
   | 'REFUNDED';
-export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPAY' | 'DEPIX';
+export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'DEPIX';
 export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
 export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
 export type RenewalStatus = 'ACTIVE' | 'REVERTED';
@@ -409,7 +409,7 @@ export interface ReferralSummary {
 
 export interface PaymentProviderCredentialStatus {
   id?: string;
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
   name?: string;
   configured: boolean;
   active?: boolean;
@@ -2077,7 +2077,7 @@ export function listPaymentProviderCredentials() {
 }
 
 export function savePaymentProviderCredential(payload: {
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>;
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
   name: string;
   token: string;
 }) {
@@ -2088,7 +2088,7 @@ export function savePaymentProviderCredential(payload: {
 }
 
 export function testPaymentProviderCredential(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
 ) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/test`,
@@ -2097,7 +2097,7 @@ export function testPaymentProviderCredential(
 }
 
 export function deactivatePaymentProviderCredential(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
 ) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/deactivate`,
@@ -2106,7 +2106,7 @@ export function deactivatePaymentProviderCredential(
 }
 
 export function setDefaultPaymentProvider(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
 ) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/default`,
@@ -2115,7 +2115,7 @@ export function setDefaultPaymentProvider(
 }
 
 export function savePaymentWebhookSecret(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
   secret: string,
 ) {
   return apiFetch<PaymentProviderCredentialStatus>(
@@ -2128,7 +2128,7 @@ export function savePaymentWebhookSecret(
 }
 
 export function registerPaymentWebhook(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPAY'>,
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
 ) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/webhook/register`,

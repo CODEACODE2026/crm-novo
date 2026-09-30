@@ -183,6 +183,16 @@ export class FastFlowPaymentProvider extends BaseFastDepixPaymentProvider {
 }
 
 @Injectable()
+export class FastPixPaymentProvider extends BaseFastDepixPaymentProvider {
+  constructor(
+    @Inject(FastDepixApiClient) apiClient: FastDepixApiClient,
+    @Inject(PaymentProviderCredentialsService) credentials: PaymentProviderCredentialsService,
+  ) {
+    super(apiClient, credentials, 'FASTPIX');
+  }
+}
+
+@Injectable()
 export class FastPayPaymentProvider extends BaseFastDepixPaymentProvider {
   constructor(
     @Inject(FastDepixApiClient) apiClient: FastDepixApiClient,

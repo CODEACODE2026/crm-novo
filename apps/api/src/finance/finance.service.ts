@@ -490,7 +490,7 @@ export class FinanceService {
   }
 
   async previewReceivablePixReplacement(id: string, dto: ReplaceReceivablePixPreviewDto) {
-    const inspection = await this.inspectReceivableForPixReplacement(this.prisma, id, dto.provider);
+    const inspection = await this.inspectReceivableForPixReplacement(this.prisma, id);
     return this.presentPixReplacementPreview(inspection, dto.provider);
   }
 
@@ -499,7 +499,7 @@ export class FinanceService {
       const intent = await this.prisma.$transaction(async (tx) => {
         await this.acquirePixCreationLocks(tx, [id]);
 
-        const inspection = await this.inspectReceivableForPixReplacement(tx, id, dto.provider);
+        const inspection = await this.inspectReceivableForPixReplacement(tx, id);
 
         if (!inspection.currentIntent) {
           throw new ConflictException('Nenhum PIX elegivel para substituicao.');
@@ -601,7 +601,7 @@ export class FinanceService {
     dto: RecoverReceivablePixReplacementPreviewDto,
   ) {
     const providerTransactionId = this.normalizeExternalTransactionId(dto.providerTransactionId);
-    const inspection = await this.inspectReceivableForPixReplacement(this.prisma, id, dto.provider);
+    const inspection = await this.inspectReceivableForPixReplacement(this.prisma, id);
 
     if (inspection.blockers.length > 0 || !inspection.currentIntent) {
       return this.presentPixReplacementRecoveryPreview({
@@ -658,7 +658,7 @@ export class FinanceService {
         return { intent: existing, providerTransaction: null };
       }
 
-      const inspection = await this.inspectReceivableForPixReplacement(tx, id, dto.provider);
+      const inspection = await this.inspectReceivableForPixReplacement(tx, id);
 
       if (!inspection.currentIntent) {
         throw new ConflictException('Nenhum PIX elegivel para recuperacao de substituicao.');
@@ -1549,6 +1549,8 @@ export class FinanceService {
         });
       }
 
+      await this.supersedeOpenSiblingPaymentIntents(tx, receivable.id, current.id);
+
       if (!receivable.paymentTransaction) {
         const category = await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
         const createdTransaction = await tx.financialTransaction.create({
@@ -1605,6 +1607,24 @@ export class FinanceService {
     });
 
     return this.presentPaymentIntent(synced);
+  }
+
+  private async supersedeOpenSiblingPaymentIntents(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    paidIntentId: string,
+  ) {
+    await tx.paymentIntent.updateMany({
+      where: {
+        receivableId,
+        id: { not: paidIntentId },
+        status: { in: activePixStatuses },
+      },
+      data: {
+        status: 'SUPERSEDED',
+        lastSyncAt: new Date(),
+      },
+    });
   }
 
   async listTransactions(query: ListFinancialTransactionsDto) {
@@ -2486,7 +2506,7 @@ export class FinanceService {
   }
 
   private ensureWebhookProvider(provider: PaymentProviderCode) {
-    if (provider !== 'FASTFLOW' && provider !== 'FASTPAY') {
+    if (provider !== 'FASTFLOW' && provider !== 'FASTPIX' && provider !== 'FASTPAY') {
       throw new BadRequestException('Provider de webhook de pagamento nao suportado.');
     }
   }
@@ -2553,7 +2573,6 @@ export class FinanceService {
   private async inspectReceivableForPixReplacement(
     tx: Pick<Prisma.TransactionClient, 'receivable' | 'paymentIntent'>,
     receivableId: string,
-    provider: PaymentProviderCode,
   ) {
     const blockers: PixReplacementBlocker[] = [];
     const receivable = await tx.receivable.findUnique({
@@ -2604,13 +2623,6 @@ export class FinanceService {
         blockers.push({
           code: 'INTENT_STATUS_NOT_SUPPORTED',
           message: 'Apenas PIX com status WAITING_PAYMENT pode ser substituido nesta fase.',
-        });
-      }
-
-      if (currentIntent.provider !== provider) {
-        blockers.push({
-          code: 'PROVIDER_MISMATCH',
-          message: 'Provider informado nao corresponde ao PIX atual.',
         });
       }
     }

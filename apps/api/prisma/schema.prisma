@@ -94,6 +94,7 @@ enum FinancialPaymentMethod {
 enum PaymentProviderCode {
   MOCK
   FASTFLOW
+  FASTPIX
   FASTPAY
   DEPIX
 }

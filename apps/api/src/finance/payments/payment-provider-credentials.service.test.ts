@@ -191,6 +191,42 @@ describe('PaymentProviderCredentialsService', () => {
     expect(JSON.stringify(result)).not.toContain('fdpx_test_token_A7F2');
   });
 
+  it('saves encrypted FastPIX credentials independently from FastFlow', async () => {
+    const fake = createService('fastpix');
+
+    const result = await fake.service.save({
+      provider: 'FASTPIX',
+      name: 'FastPIX alternativo',
+      token: 'fdpx_fastpix_token_B8P9',
+    });
+
+    expect(result).toMatchObject({
+      provider: 'FASTPIX',
+      tokenMask: 'fdpx_************B8P9',
+      status: 'VALIDO',
+    });
+    expect(fake.records.at(0)).toMatchObject({
+      provider: 'FASTPIX',
+      tokenEncrypted: 'encrypted:B8P9',
+      defaultForPix: false,
+    });
+    expect(JSON.stringify(result)).not.toContain('fdpx_fastpix_token_B8P9');
+  });
+
+  it('does not allow FastPIX to become the default PIX provider', async () => {
+    const fake = createService('fastpix');
+    await fake.service.save({
+      provider: 'FASTPIX',
+      name: 'FastPIX alternativo',
+      token: 'fdpx_fastpix_token_B8P9',
+    });
+
+    await expect(fake.service.setDefaultProvider('FASTPIX')).rejects.toThrow(
+      'FastPIX e um provider alternativo manual nesta versao.',
+    );
+    expect(fake.records.at(0)?.defaultForPix).toBe(false);
+  });
+
   it('rejects a FastPay token when saving it in the FastFlow card', async () => {
     const fake = createService('fastpay');
 
@@ -416,6 +452,42 @@ describe('PaymentProviderCredentialsService', () => {
     expect(JSON.stringify(result)).not.toContain('fake_webhook_secret_123');
     expect(result.webhookSecretConfigured).toBe(true);
     expect(fake.apiClient.listWebhooks).not.toHaveBeenCalled();
+  });
+
+  it('registers FastPIX webhook at provider-specific URL and stores its own secret encrypted', async () => {
+    const fake = createService('fastpix');
+    fake.apiClient.registerWebhook.mockResolvedValueOnce({
+      id: 14,
+      url: 'https://crm.example.test/payment-webhooks/fastpix',
+      events: ['transaction.paid'],
+      secret_key: 'fastpix_webhook_secret_456',
+      is_active: true,
+    });
+    await fake.service.save({
+      provider: 'FASTPIX',
+      name: 'FastPIX alternativo',
+      token: 'fdpx_fastpix_token_B8P9',
+    });
+
+    const result = await fake.service.registerWebhook('FASTPIX');
+
+    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('token-B8P9', {
+      url: 'https://crm.example.test/payment-webhooks/fastpix',
+      events: [
+        'transaction.created',
+        'transaction.approved',
+        'transaction.paid',
+        'transaction.expired',
+        'transaction.refunded',
+      ],
+    });
+    expect(fake.records.at(0)).toMatchObject({
+      provider: 'FASTPIX',
+      webhookSecretEncrypted: 'encrypted:_456',
+      webhookSecretLastFour: '_456',
+      webhookUrl: 'https://crm.example.test/payment-webhooks/fastpix',
+    });
+    expect(JSON.stringify(result)).not.toContain('fastpix_webhook_secret_456');
   });
 
   it('keeps legacy CRM_PUBLIC_URL as fallback for payment webhook registration', async () => {

@@ -105,7 +105,7 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsPaymentsSource).toContain('settings-v2-toolbar');
     expect(settingsPaymentsSource).not.toContain('<h2>Pagamentos</h2>');
     expect(settingsPaymentsSource).not.toContain('Configure os provedores utilizados');
-    expect(settingsPaymentsSource).toContain("(['FASTFLOW', 'FASTPAY']");
+    expect(settingsPaymentsSource).toContain("(['FASTFLOW', 'FASTPIX', 'FASTPAY']");
     expect(settingsPaymentsSource).toContain('PaymentProviderCard');
     expect(settingsPaymentsSource).toContain('savePaymentProviderCredential(payload)');
     expect(settingsPaymentsSource).toContain('testPaymentProviderCredential(provider)');

@@ -11,6 +11,7 @@ import { FastDepixApiClient } from './payments/fastdepix-api.client';
 import {
   FastFlowPaymentProvider,
   FastPayPaymentProvider,
+  FastPixPaymentProvider,
 } from './payments/fastdepix-payment.provider';
 import { MockPaymentProvider } from './payments/mock-payment.provider';
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
@@ -24,6 +25,7 @@ import { PAYMENT_PROVIDER } from './payments/payment-provider';
     FinanceService,
     FastDepixApiClient,
     FastFlowPaymentProvider,
+    FastPixPaymentProvider,
     FastPayPaymentProvider,
     MockPaymentProvider,
     PaymentProviderCredentialsService,

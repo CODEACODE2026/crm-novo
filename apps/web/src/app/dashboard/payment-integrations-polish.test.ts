@@ -21,8 +21,8 @@ const paymentCardSource = dashboardSource.slice(
 
 describe('payment integrations workspace polish', () => {
   it('keeps the real providers and does not add unsupported providers', () => {
-    expect(settingsSource).toContain("(['FASTFLOW', 'FASTPAY']");
-    expect(settingsSource).toContain("provider === 'FASTFLOW' ? 'FastFlow' : 'FastPay'");
+    expect(settingsSource).toContain("(['FASTFLOW', 'FASTPIX', 'FASTPAY']");
+    expect(settingsSource).toContain("if (provider === 'FASTPIX') return 'FastPIX';");
     expect(settingsSource).not.toContain("'DEPIX'");
   });
 
@@ -93,6 +93,7 @@ describe('payment integrations workspace polish', () => {
     expect(paymentCardSource).toContain("label: configured ? 'Editar configuração' : 'Configurar'");
     expect(paymentCardSource).toContain("label: 'Ver webhook'");
     expect(paymentCardSource).toContain("label: 'Definir como padrão'");
+    expect(paymentCardSource).toContain("const canSetDefault = provider !== 'FASTPIX';");
     expect(paymentCardSource).toContain("label: 'Configurar webhook'");
     expect(paymentCardSource).toContain("label: 'Desativar'");
     expect(paymentCardSource).toContain('danger: true');

@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PaymentProviderCode, Prisma } from '@prisma/client';
-import { FastFlowPaymentProvider, FastPayPaymentProvider } from './fastdepix-payment.provider';
+import {
+  FastFlowPaymentProvider,
+  FastPayPaymentProvider,
+  FastPixPaymentProvider,
+} from './fastdepix-payment.provider';
 import { MockPaymentProvider } from './mock-payment.provider';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
 import type {
@@ -16,6 +20,7 @@ export class PaymentProviderRegistryService implements PaymentProvider {
   constructor(
     @Inject(MockPaymentProvider) private readonly mock: MockPaymentProvider,
     @Inject(FastFlowPaymentProvider) private readonly fastFlow: FastFlowPaymentProvider,
+    @Inject(FastPixPaymentProvider) private readonly fastPix: FastPixPaymentProvider,
     @Inject(FastPayPaymentProvider) private readonly fastPay: FastPayPaymentProvider,
     @Inject(PaymentProviderCredentialsService)
     private readonly credentials: PaymentProviderCredentialsService,
@@ -85,6 +90,7 @@ export class PaymentProviderRegistryService implements PaymentProvider {
 
   private byCode(provider: PaymentProviderCode) {
     if (provider === 'FASTFLOW') return this.fastFlow;
+    if (provider === 'FASTPIX') return this.fastPix;
     if (provider === 'FASTPAY') return this.fastPay;
     return this.mock;
   }

@@ -7,7 +7,7 @@ import {
 import { AsyncLocalStorage } from 'async_hooks';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
-import { Prisma } from '@prisma/client';
+import { PaymentProviderCode, Prisma } from '@prisma/client';
 import { createHmac } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { parseBusinessDate } from '../clients/utils/business-date';
@@ -177,11 +177,11 @@ function createFinancePrisma() {
     return 0;
   });
   const provider = {
-    createPix: vi.fn(() => {
+    createPix: vi.fn((input?: { provider?: PaymentProviderCode }) => {
       const providerTransactionId = `mock-provider-${paymentIntents.length + 1}`;
 
       return Promise.resolve({
-        provider: 'MOCK' as const,
+        provider: input?.provider ?? 'MOCK',
         providerTransactionId,
         externalStatus: 'pending',
         externalDepixId: null,
@@ -419,17 +419,33 @@ function createFinancePrisma() {
         where,
         data,
       }: {
-        where: { id: string; status?: { not: string } };
+        where: {
+          id?: string | { not: string };
+          receivableId?: string;
+          status?: { in?: string[]; not?: string };
+        };
         data: Record<string, unknown>;
       }) => {
-        const intent = paymentIntents.find((item) => item.id === where.id);
+        const matches = paymentIntents.filter((intent) => {
+          const idMatches =
+            where.id === undefined
+              ? true
+              : typeof where.id === 'string'
+                ? intent.id === where.id
+                : intent.id !== where.id.not;
 
-        if (!intent || (where.status?.not && intent.status === where.status.not)) {
-          return Promise.resolve({ count: 0 });
-        }
+          return (
+            idMatches &&
+            (where.receivableId === undefined || intent.receivableId === where.receivableId) &&
+            (where.status?.not === undefined || intent.status !== where.status.not) &&
+            (where.status?.in === undefined || where.status.in.includes(String(intent.status)))
+          );
+        });
 
-        Object.assign(intent, data, { updatedAt: new Date('2026-10-10T00:01:00.000Z') });
-        return Promise.resolve({ count: 1 });
+        matches.forEach((intent) => {
+          Object.assign(intent, data, { updatedAt: new Date('2026-10-10T00:01:00.000Z') });
+        });
+        return Promise.resolve({ count: matches.length });
       },
     },
     client: {
@@ -567,7 +583,7 @@ function createWebhookSignature(payload: string, secret = 'webhook-secret') {
 
 function reconciliationTransaction(
   overrides: Partial<{
-    provider: 'FASTFLOW' | 'FASTPAY' | 'MOCK';
+    provider: 'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'MOCK';
     providerTransactionId: string;
     externalStatus: string | null;
     status: 'WAITING_PAYMENT' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED' | 'REFUNDED';
@@ -4067,6 +4083,71 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(0);
   });
 
+  it('allows manual FastPIX replacement without creating another receivable', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const previous = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents[0]!, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-old-1',
+    });
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-new-1',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+      pixCopyPaste: 'fastpix-copy-paste',
+      qrCodeData: 'fastpix-qr-code',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    });
+
+    const preview = await service.previewReceivablePixReplacement(fake.receivable.id, {
+      provider: 'FASTPIX',
+    });
+    const next = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTPIX',
+        expectedCurrentIntentId: previous.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}:FASTPIX`,
+      },
+      actorUserId,
+    );
+
+    expect(preview).toMatchObject({
+      replaceable: true,
+      provider: 'FASTPIX',
+      currentIntent: { id: previous.id, provider: 'FASTFLOW' },
+    });
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'FASTPIX', receivableId: fake.receivable.id }),
+    );
+    expect(next).toMatchObject({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-new-1',
+      status: 'WAITING_PAYMENT',
+    });
+    expect(fake.receivable.id).toBe('77777777-7777-4777-8777-777777777777');
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(fake.paymentIntents[0]).toMatchObject({
+      id: previous.id,
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-old-1',
+      status: 'SUPERSEDED',
+    });
+    expect(fake.paymentIntents[1]).toMatchObject({
+      receivableId: fake.receivable.id,
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-new-1',
+      status: 'WAITING_PAYMENT',
+    });
+    expect(fake.transactions).toHaveLength(0);
+  });
+
   it('settles a superseded old PIX when the provider later reports it paid', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(
@@ -4187,6 +4268,348 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PAGO');
     expect(fake.transactions).toHaveLength(1);
     expect(fake.paymentIntents.map((intent) => intent.status)).toEqual(['PAID', 'PAID']);
+  });
+
+  it('keeps one financial transaction when FastPIX is paid before the old FastFlow intent', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents[0]!, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-old-late',
+    });
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-paid-first',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+      pixCopyPaste: 'fastpix-copy-paste',
+      qrCodeData: 'fastpix-qr-code',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    });
+    const fastPixIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTPIX',
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${oldIntent.id}:FASTPIX`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockImplementation(
+      (providerTransactionId: string, provider: 'FASTFLOW' | 'FASTPIX') =>
+        Promise.resolve({
+          provider,
+          providerTransactionId,
+          externalStatus: 'paid',
+          externalDepixId: null,
+          blockchainTxId: null,
+          status: 'PAID' as const,
+          paidAt: new Date('2026-10-10T12:00:00.000Z'),
+          failureCode: null,
+          failureMessage: null,
+        }),
+    );
+
+    await service.syncPaymentIntent(fastPixIntent.id, actorUserId);
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.paymentIntents[0]).toMatchObject({ provider: 'FASTFLOW', status: 'PAID' });
+    expect(fake.paymentIntents[1]).toMatchObject({ provider: 'FASTPIX', status: 'PAID' });
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(1);
+  });
+
+  it('settles a late superseded FastFlow payment and supersedes the open FastPIX sibling locally', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents[0]!, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-late-paid',
+    });
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-open-sibling',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+      pixCopyPaste: 'fastpix-copy-paste-history',
+      qrCodeData: 'fastpix-qr-code-history',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    });
+    const fastPixIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTPIX',
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${oldIntent.id}:FASTPIX`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-late-paid',
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-10T12:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ id: oldIntent.id, status: 'PAID' });
+    expect(fake.paymentIntents[1]).toMatchObject({
+      id: fastPixIntent.id,
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-open-sibling',
+      pixCopyPaste: 'fastpix-copy-paste-history',
+      qrCodeData: 'fastpix-qr-code-history',
+      status: 'SUPERSEDED',
+    });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(
+      fake.paymentIntents.filter((intent) => intent.status === 'WAITING_PAYMENT'),
+    ).toHaveLength(0);
+  });
+
+  it('keeps a normal paid FastPIX replacement and preserves the old FastFlow history', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents[0]!, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-history',
+    });
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-normal-paid',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: fake.receivable.amount,
+      pixCopyPaste: 'fastpix-copy-paste',
+      qrCodeData: 'fastpix-qr-code',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    });
+    const fastPixIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTPIX',
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${oldIntent.id}:FASTPIX`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-normal-paid',
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-10T12:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(fastPixIntent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({
+      id: oldIntent.id,
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-history',
+      status: 'SUPERSEDED',
+    });
+    expect(fake.paymentIntents[1]).toMatchObject({ id: fastPixIntent.id, status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('supersedes every open sibling when one of three intents pays', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const secondIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+    fake.paymentIntents.push({
+      ...fake.paymentIntents[1]!,
+      id: 'intent-3',
+      providerTransactionId: 'mock-provider-3',
+      pixCopyPaste: 'third-copy-paste',
+      qrCodeData: 'third-qr-code',
+      status: 'WAITING_PAYMENT',
+    });
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: secondIntent.provider,
+      providerTransactionId: secondIntent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-10T12:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(secondIntent.id, actorUserId);
+
+    expect(fake.paymentIntents.map((intent) => intent.status)).toEqual([
+      'SUPERSEDED',
+      'PAID',
+      'SUPERSEDED',
+    ]);
+    expect(fake.paymentIntents[2]).toMatchObject({
+      providerTransactionId: 'mock-provider-3',
+      pixCopyPaste: 'third-copy-paste',
+      qrCodeData: 'third-qr-code',
+    });
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('never downgrades a paid sibling when another intent pays later', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const newIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+    Object.assign(fake.paymentIntents[1]!, {
+      status: 'PAID',
+      paidAt: new Date('2026-10-10T12:00:00.000Z'),
+    });
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: oldIntent.provider,
+      providerTransactionId: oldIntent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-11T12:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.paymentIntents[0]).toMatchObject({ id: oldIntent.id, status: 'PAID' });
+    expect(fake.paymentIntents[1]).toMatchObject({ id: newIntent.id, status: 'PAID' });
+  });
+
+  it.each(['SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED'] as const)(
+    'preserves %s siblings when another intent pays',
+    async (siblingStatus) => {
+      const fake = createFinancePrisma();
+      const service = createFinanceService(fake);
+
+      const payingIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+      fake.paymentIntents.push({
+        ...fake.paymentIntents[0]!,
+        id: 'intent-terminal-sibling',
+        providerTransactionId: 'terminal-sibling-provider-id',
+        status: siblingStatus,
+      });
+      fake.provider.getPixStatus.mockResolvedValue({
+        provider: payingIntent.provider,
+        providerTransactionId: payingIntent.providerTransactionId,
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID',
+        paidAt: new Date('2026-10-10T12:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      });
+
+      await service.syncPaymentIntent(payingIntent.id, actorUserId);
+
+      expect(fake.paymentIntents[1]).toMatchObject({
+        id: 'intent-terminal-sibling',
+        status: siblingStatus,
+      });
+      expect(fake.transactions).toHaveLength(1);
+    },
+  );
+
+  it('keeps paidAt, event, transaction, and renewal cycle unique after a late secondary payment', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-10-10');
+    fake.clientReference.billingAnchorDay = 10;
+    fake.receivable.dueDate = parseBusinessDate('2026-10-10');
+    const { cycle } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    const oldIntent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const newIntent = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: oldIntent.provider,
+        expectedCurrentIntentId: oldIntent.id,
+        idempotencyKey: `pix-replace:${oldIntent.id}`,
+      },
+      actorUserId,
+    );
+    fake.provider.getPixStatus.mockImplementation((providerTransactionId: string) =>
+      Promise.resolve({
+        provider: oldIntent.provider,
+        providerTransactionId,
+        externalStatus: 'paid',
+        externalDepixId: null,
+        blockchainTxId: null,
+        status: 'PAID' as const,
+        paidAt:
+          providerTransactionId === newIntent.providerTransactionId
+            ? new Date('2026-10-10T12:00:00.000Z')
+            : new Date('2026-10-12T12:00:00.000Z'),
+        failureCode: null,
+        failureMessage: null,
+      }),
+    );
+
+    await service.syncPaymentIntent(newIntent.id, actorUserId);
+    const firstPaidAt = fake.receivable.paidAt;
+    await service.syncPaymentIntent(oldIntent.id, actorUserId);
+
+    expect(fake.receivable.paidAt).toBe(firstPaidAt);
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(1);
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the previous PIX intact when replacement provider creation fails', async () => {
@@ -6728,6 +7151,48 @@ describe('FinanceService', () => {
       providerTransactionId: '22116',
       status: 'paid',
     });
+  });
+
+  it('accepts FastPIX HMAC with FastPIX secret and rejects the FastFlow secret', async () => {
+    const fake = createFinancePrisma();
+    fake.credentials.getWebhookSecret.mockImplementation((provider: string) =>
+      Promise.resolve(provider === 'FASTPIX' ? 'fastpix-secret' : 'fastflow-secret'),
+    );
+    const service = createFinanceService(fake);
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents.at(0)!, {
+      provider: 'FASTPIX',
+      providerTransactionId: 'fastpix-tx-1',
+    });
+    const rawPayload = JSON.stringify({
+      event: 'transaction.paid',
+      transaction_id: 'fastpix-tx-1',
+      status: 'paid',
+      payment_provider: 'fastpix',
+    });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTPIX',
+        createWebhookSignature(rawPayload, 'fastflow-secret'),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Assinatura do webhook de pagamento invalida.');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+
+    const result = await service.processPaymentWebhook(
+      'FASTPIX',
+      createWebhookSignature(rawPayload, 'fastpix-secret'),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+
+    expect(result).toMatchObject({ id: intent.id, provider: 'FASTPIX', status: 'PAID' });
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookEvents).toHaveLength(1);
   });
 
   it('uses the webhook paid instant as Sao Paulo business date for late FastFlow renewal', async () => {

@@ -4239,6 +4239,20 @@ tbody tr:hover,
   accent-color: var(--accent);
 }
 
+.choice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.choice-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
 .initial-billing-choice {
   display: grid;
   gap: 10px;

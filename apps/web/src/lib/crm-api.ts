@@ -801,7 +801,8 @@ export interface LegacyPaymentPreview {
   rows: LegacyPaymentPreviewRow[];
 }
 
-export type LegacyCutoverPreviewClassification = 'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID';
+export type LegacyCutoverPreviewClassification =
+  'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID' | 'HISTORICAL_CANCELED' | 'SKIPPED_NOT_ACTIVE';
 
 export interface LegacyCutoverPreviewRow {
   legacyClientId: string;
@@ -841,6 +842,8 @@ export interface LegacyCutoverPreview {
     total: number;
     ready: number;
     unchanged: number;
+    historicalCanceled: number;
+    notActive: number;
     conflict: number;
     invalid: number;
     warnings: number;

@@ -135,6 +135,10 @@ describe('legacy import preview UI', () => {
     expect(importViewSource).toContain('Referências selecionadas');
     expect(importViewSource).toContain('MessageDispatches');
     expect(importViewSource).toContain('WhatsApp');
+    expect(importViewSource).toContain('Históricos cancelados');
+    expect(importViewSource).toContain('Não elegíveis');
+    expect(dashboardSource).toContain("HISTORICAL_CANCELED: 'Histórico cancelado'");
+    expect(dashboardSource).toContain("SKIPPED_NOT_ACTIVE: 'Não elegível'");
     expect(importViewSource).toContain('Nenhuma cobrança será');
     expect(importViewSource).toContain('Mantenha ambos');
     expect(importViewSource).toContain('desabilitados até a conferência final');

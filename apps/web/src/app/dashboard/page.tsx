@@ -991,15 +991,19 @@ const legacyPaymentFilters = [
 
 const legacyCutoverClassificationLabels = {
   CONFLICT: 'Conflito',
+  HISTORICAL_CANCELED: 'Histórico cancelado',
   INVALID: 'Inválido',
   READY: 'Pronta',
+  SKIPPED_NOT_ACTIVE: 'Não elegível',
   UNCHANGED: 'Sem alteração',
 } satisfies Record<LegacyCutoverPreviewClassification, string>;
 
 const legacyCutoverClassificationTone = {
   CONFLICT: 'danger',
+  HISTORICAL_CANCELED: 'muted',
   INVALID: 'danger',
   READY: 'success',
+  SKIPPED_NOT_ACTIVE: 'warning',
   UNCHANGED: 'muted',
 } satisfies Record<LegacyCutoverPreviewClassification, string>;
 
@@ -1007,6 +1011,8 @@ const legacyCutoverFilters = [
   { id: 'all', label: 'Todos' },
   { id: 'READY', label: 'Prontas' },
   { id: 'UNCHANGED', label: 'Sem alteração' },
+  { id: 'HISTORICAL_CANCELED', label: 'Históricos cancelados' },
+  { id: 'SKIPPED_NOT_ACTIVE', label: 'Não elegíveis' },
   { id: 'CONFLICT', label: 'Conflitos' },
   { id: 'INVALID', label: 'Inválidas' },
   { id: 'warnings', label: 'Com avisos' },
@@ -1335,6 +1341,12 @@ function LegacyCutoverPreviewView() {
             <StatCard label="Total referências" value={preview.summary.total} />
             <StatCard label="Prontas" tone="success" value={preview.summary.ready} />
             <StatCard label="Sem alteração" value={preview.summary.unchanged} />
+            <StatCard
+              label="Históricos cancelados"
+              tone="info"
+              value={preview.summary.historicalCanceled}
+            />
+            <StatCard label="Não elegíveis" tone="warning" value={preview.summary.notActive} />
             <StatCard label="Conflitos" tone="danger" value={preview.summary.conflict} />
             <StatCard label="Inválidas" tone="danger" value={preview.summary.invalid} />
             <StatCard label="Com avisos" tone="warning" value={preview.summary.warnings} />

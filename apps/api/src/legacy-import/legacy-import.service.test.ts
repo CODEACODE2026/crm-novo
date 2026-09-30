@@ -3655,23 +3655,107 @@ describe('LegacyImportService', () => {
     const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
 
     expect(preview.rows[0]).toMatchObject({
-      classification: 'INVALID',
+      classification: 'HISTORICAL_CANCELED',
       clientStatus: 'CANCELADO',
       amount: '0.00',
       referenceStatus: 'CANCELADO',
+      errors: [],
     });
-    expect(preview.rows[0]?.errors).toEqual(
-      expect.arrayContaining(['CLIENT_NOT_ACTIVE', 'REFERENCE_NOT_ACTIVE']),
-    );
+    expect(preview.rows[0]?.errors).not.toContain('INVALID_RECURRING_VALUE');
+    expect(preview.summary).toMatchObject({ historicalCanceled: 1, invalid: 0, ready: 0 });
     expect(result.summary).toMatchObject({ requested: 1, created: 0, skipped: 1 });
     expect(result.rows[0]).toMatchObject({
-      code: 'CLIENT_NOT_ACTIVE',
+      code: 'HISTORICAL_CANCELED',
       result: 'SKIPPED',
     });
     expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
     expectNoOperationalSideEffects(writes);
     vi.useRealTimers();
   });
+
+  it('keeps past-due historical canceled references out of operational cutover errors', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      clients: [cutoverClient({ status: 'CANCELADO' })],
+      references: [
+        cutoverReference({
+          dueDate: new Date('2026-09-26T00:00:00.000Z'),
+          recurringValue: new Prisma.Decimal('0.00'),
+          status: 'CANCELADO',
+        }),
+      ],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({
+      classification: 'HISTORICAL_CANCELED',
+      dueDate: '2026-09-26',
+      errors: [],
+    });
+    expect(result.rows[0]?.errors).not.toContain('CONFLICT_PAST_DUE_DATE');
+    expect(result.rows[0]?.errors).not.toContain('INVALID_RECURRING_VALUE');
+    expect(result.summary).toMatchObject({ historicalCanceled: 1, invalid: 0 });
+    vi.useRealTimers();
+  });
+
+  it('keeps historical canceled positive values inelegible without marking them invalid', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+    const { service } = createCutoverService({
+      clients: [cutoverClient({ status: 'CANCELADO' })],
+      references: [
+        cutoverReference({ recurringValue: new Prisma.Decimal('35.00'), status: 'CANCELADO' }),
+      ],
+    });
+
+    const result = await service.previewCutover();
+
+    expect(result.rows[0]).toMatchObject({
+      amount: '35.00',
+      classification: 'HISTORICAL_CANCELED',
+      errors: [],
+    });
+    expect(result.summary).toMatchObject({ historicalCanceled: 1, ready: 0 });
+    vi.useRealTimers();
+  });
+
+  it.each([
+    [
+      'canceled client with active reference',
+      { status: 'CANCELADO' },
+      { recurringValue: new Prisma.Decimal('0.00'), status: 'ATIVO' },
+      'CLIENT_NOT_ACTIVE',
+    ],
+    [
+      'active client with canceled reference',
+      { status: 'ATIVO' },
+      { recurringValue: new Prisma.Decimal('0.00'), status: 'CANCELADO' },
+      'REFERENCE_NOT_ACTIVE',
+    ],
+  ])(
+    'keeps mixed status out of cutover without validating operational amount: %s',
+    async (_, clientOverrides, referenceOverrides, code) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
+      const { receivableCycleService, service, writes } = createCutoverService({
+        clients: [cutoverClient(clientOverrides)],
+        references: [cutoverReference(referenceOverrides)],
+      });
+
+      const preview = await service.previewCutover();
+      const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
+
+      expect(preview.rows[0]).toMatchObject({ classification: 'SKIPPED_NOT_ACTIVE' });
+      expect(preview.rows[0]?.errors).toContain(code);
+      expect(preview.rows[0]?.errors).not.toContain('INVALID_RECURRING_VALUE');
+      expect(result.rows[0]).toMatchObject({ code, result: 'SKIPPED' });
+      expect(receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+      expectNoOperationalSideEffects(writes);
+      vi.useRealTimers();
+    },
+  );
 
   it('treats replayed cutover activation as UNCHANGED without another write request', async () => {
     vi.useFakeTimers();

@@ -78,7 +78,8 @@ type LegacyPaymentPreviewClassification =
   | 'INVALID';
 type LegacyPaymentImportResult = 'IMPORTED' | 'SKIPPED' | 'FAILED';
 type LegacyCutoverActivateResult = 'CREATED' | 'UNCHANGED' | 'SKIPPED' | 'FAILED';
-type LegacyCutoverPreviewClassification = 'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID';
+type LegacyCutoverPreviewClassification =
+  'READY' | 'UNCHANGED' | 'CONFLICT' | 'INVALID' | 'HISTORICAL_CANCELED' | 'SKIPPED_NOT_ACTIVE';
 
 type CandidateMatch = {
   field: 'reference' | 'phone' | 'email' | 'name';
@@ -1066,12 +1067,37 @@ export class LegacyImportService {
       errors.push('DUPLICATE_LEGACY_MAPPING');
     }
 
-    if (client && client.status !== 'ATIVO') {
-      errors.push('CLIENT_NOT_ACTIVE');
+    const structuralErrors = errors.length;
+    const isHistoricalCanceled =
+      client?.status === 'CANCELADO' && reference?.status === 'CANCELADO';
+    const isOperationalCandidate = client?.status === 'ATIVO' && reference?.status === 'ATIVO';
+
+    if (structuralErrors === 0 && isHistoricalCanceled) {
+      return this.buildIneligibleCutoverRow(record, {
+        classification: 'HISTORICAL_CANCELED',
+        client,
+        errors: [],
+        plan,
+        reference,
+      });
     }
 
-    if (reference && reference.status !== 'ATIVO') {
-      errors.push('REFERENCE_NOT_ACTIVE');
+    if (structuralErrors === 0 && client && reference && !isOperationalCandidate) {
+      if (client.status !== 'ATIVO') {
+        errors.push('CLIENT_NOT_ACTIVE');
+      }
+
+      if (reference.status !== 'ATIVO') {
+        errors.push('REFERENCE_NOT_ACTIVE');
+      }
+
+      return this.buildIneligibleCutoverRow(record, {
+        classification: 'SKIPPED_NOT_ACTIVE',
+        client,
+        errors,
+        plan,
+        reference,
+      });
     }
 
     if (reference && !plan) {
@@ -1245,6 +1271,44 @@ export class LegacyImportService {
     };
   }
 
+  private buildIneligibleCutoverRow(
+    record: CutoverImportRecord,
+    context: {
+      classification: Extract<
+        LegacyCutoverPreviewClassification,
+        'HISTORICAL_CANCELED' | 'SKIPPED_NOT_ACTIVE'
+      >;
+      client: CutoverClient;
+      errors: string[];
+      plan: PlanLookup | null;
+      reference: CutoverReference;
+    },
+  ): CutoverRow {
+    return {
+      amount: this.decimalToFixed(context.reference.recurringValue),
+      billingAnchorDay: context.reference.billingAnchorDay,
+      billingNoticeDays: context.reference.billingNoticeDays,
+      classification: context.classification,
+      clientName: context.client.name,
+      clientStatus: context.client.status,
+      crmClientId: record.crmClientId,
+      crmClientReferenceId: record.crmClientReferenceId,
+      dispatchReady: false,
+      dispatchWarnings: [],
+      dueDate: formatBusinessDate(context.reference.dueDate),
+      errors: this.unique(context.errors),
+      existingReceivable: null,
+      legacyClientId: record.legacyClientId,
+      planId: context.reference.planId,
+      planName: context.plan?.name ?? null,
+      purpose: 'RENEWAL',
+      reference: context.reference.reference,
+      referenceStatus: context.reference.status,
+      scheduledForEstimated: null,
+      warnings: [],
+    };
+  }
+
   private classifyCutoverRow(errors: string[], sameCyclePending: CutoverReceivable | null) {
     if (errors.some((error) => error.startsWith('INVALID_'))) {
       return 'INVALID' as const;
@@ -1268,6 +1332,8 @@ export class LegacyImportService {
       total: rows.length,
       ready: rows.filter((row) => row.classification === 'READY').length,
       unchanged: rows.filter((row) => row.classification === 'UNCHANGED').length,
+      historicalCanceled: rows.filter((row) => row.classification === 'HISTORICAL_CANCELED').length,
+      notActive: rows.filter((row) => row.classification === 'SKIPPED_NOT_ACTIVE').length,
       conflict: rows.filter((row) => row.classification === 'CONFLICT').length,
       invalid: rows.filter((row) => row.classification === 'INVALID').length,
       warnings,

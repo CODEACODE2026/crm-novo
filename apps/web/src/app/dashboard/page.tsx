@@ -12877,8 +12877,8 @@ function RenewalModal({
 
         {reference.status === 'CANCELADO' ? (
           <div className="notice warning">
-            Esta referência está CANCELADA. Ao confirmar a renovação, ela será reativada e voltará
-            para o status ATIVO.
+            Esta referência está CANCELADA. Renovação não reativa referências canceladas; use o
+            fluxo de reativação separado.
           </div>
         ) : null}
 

@@ -1271,6 +1271,7 @@ describe('ClientsService destructive client removal', () => {
       'paymentIntent.deleteMany',
       'paymentGroup.deleteMany',
       'renewalReversal.deleteMany',
+      'clientReferenceReactivation.deleteMany',
       'receivable.deleteMany',
       'renewal.deleteMany',
       'clientStatusHistory.deleteMany',
@@ -1659,6 +1660,10 @@ function createClientRemovalService({ failAt }: { failAt?: string } = {}) {
     renewalReversal: {
       count,
       deleteMany: record('renewalReversal.deleteMany'),
+    },
+    clientReferenceReactivation: {
+      count,
+      deleteMany: record('clientReferenceReactivation.deleteMany'),
     },
     paymentWebhookEvent: {
       count,

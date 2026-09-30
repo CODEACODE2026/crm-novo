@@ -161,6 +161,7 @@ export class RecoveryService {
     const overdueReceivables = await this.prisma.receivable.findMany({
       where: {
         status: 'PENDENTE',
+        purpose: { not: 'REACTIVATION' },
         dueDate: { lt: today },
         clientReference: { status: { in: ['ATIVO', 'INATIVO'] } },
       },
@@ -1215,7 +1216,7 @@ export class RecoveryService {
 
   private async findPrimaryReceivableId(tx: Transaction | PrismaService, clientId: string) {
     const receivable = await tx.receivable.findFirst({
-      where: { clientId, status: 'PENDENTE' },
+      where: { clientId, status: 'PENDENTE', purpose: { not: 'REACTIVATION' } },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
 

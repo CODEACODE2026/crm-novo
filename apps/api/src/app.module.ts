@@ -11,6 +11,7 @@ import { FinanceModule } from './finance/finance.module';
 import { HealthModule } from './health/health.module';
 import { LegacyImportModule } from './legacy-import/legacy-import.module';
 import { PlansModule } from './plans/plans.module';
+import { ReactivationsModule } from './reactivations/reactivations.module';
 import { RecoveryModule } from './recovery/recovery.module';
 import { ReferralsModule } from './referrals/referrals.module';
 import { ReportsModule } from './reports/reports.module';
@@ -28,6 +29,7 @@ import { rateLimitThrottlers } from './config/rate-limit';
     UsersModule,
     AuthModule,
     PlansModule,
+    ReactivationsModule,
     ClientsModule,
     RenewalsModule,
     FinanceModule,

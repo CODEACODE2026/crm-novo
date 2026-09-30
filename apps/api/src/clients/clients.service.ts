@@ -1012,6 +1012,7 @@ export class ClientsService {
     const [
       renewals,
       renewalReversals,
+      reactivations,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
@@ -1027,6 +1028,7 @@ export class ClientsService {
     ] = await this.prisma.$transaction([
       this.prisma.renewal.count({ where: { clientReferenceId } }),
       this.prisma.renewalReversal.count({ where: { clientReferenceId } }),
+      this.prisma.clientReferenceReactivation.count({ where: { clientReferenceId } }),
       this.prisma.receivable.count({ where: { clientReferenceId } }),
       this.prisma.paymentIntent.count({ where: { receivableId: { in: receivableIds } } }),
       this.prisma.paymentWebhookEvent.count({
@@ -1056,6 +1058,7 @@ export class ClientsService {
         1 +
         renewals +
         renewalReversals +
+        reactivations +
         receivables +
         paymentIntents +
         paymentWebhookEvents +
@@ -1071,6 +1074,7 @@ export class ClientsService {
       clientReferences: 1,
       renewals,
       renewalReversals,
+      reactivations,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
@@ -1099,6 +1103,7 @@ export class ClientsService {
       references,
       renewals,
       renewalReversals,
+      reactivations,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
@@ -1121,6 +1126,7 @@ export class ClientsService {
       this.prisma.clientReference.count({ where: { clientId } }),
       this.prisma.renewal.count({ where: { clientId } }),
       this.prisma.renewalReversal.count({ where: { clientId } }),
+      this.prisma.clientReferenceReactivation.count({ where: { clientId } }),
       this.prisma.receivable.count({ where: { clientId } }),
       this.prisma.paymentIntent.count({
         where: {
@@ -1187,6 +1193,7 @@ export class ClientsService {
         references +
         renewals +
         renewalReversals +
+        reactivations +
         receivables +
         paymentIntents +
         paymentWebhookEvents +
@@ -1209,6 +1216,7 @@ export class ClientsService {
       clientReferences: references,
       renewals,
       renewalReversals,
+      reactivations,
       receivables,
       paymentIntents,
       paymentWebhookEvents,
@@ -1260,6 +1268,7 @@ export class ClientsService {
       await tx.renewalReversal.deleteMany({
         where: { OR: [{ clientReferenceId }, { renewalId: { in: renewalIds } }] },
       });
+      await tx.clientReferenceReactivation.deleteMany({ where: { clientReferenceId } });
       await tx.receivable.deleteMany({ where: { clientReferenceId } });
       await tx.renewal.deleteMany({ where: { clientReferenceId } });
       await tx.clientStatusHistory.deleteMany({ where: { clientReferenceId } });
@@ -1341,6 +1350,7 @@ export class ClientsService {
       await tx.renewalReversal.deleteMany({
         where: { OR: [{ clientId }, { renewalId: { in: renewalIds } }] },
       });
+      await tx.clientReferenceReactivation.deleteMany({ where: { clientId } });
       await tx.receivable.deleteMany({ where: { clientId } });
       await tx.renewal.deleteMany({ where: { clientId } });
       await tx.clientStatusHistory.deleteMany({ where: { clientId } });

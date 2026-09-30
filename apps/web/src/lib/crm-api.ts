@@ -162,7 +162,7 @@ export interface ClientMessageDispatch {
 }
 
 export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
-export type ReceivablePurpose = 'RENEWAL' | 'INITIAL_ACTIVATION';
+export type ReceivablePurpose = 'RENEWAL' | 'INITIAL_ACTIVATION' | 'REACTIVATION';
 export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
 export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
 export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL' | 'LEGACY_IMPORT';
@@ -685,7 +685,7 @@ export interface ReceivableCycleIssue {
     dueDate: string;
     status: 'PENDENTE' | 'PAGO' | 'CANCELADO';
     amount: string;
-    purpose: 'RENEWAL' | 'INITIAL_ACTIVATION';
+    purpose: ReceivablePurpose;
   } | null;
 }
 
@@ -1304,6 +1304,33 @@ export interface RenewalResult {
   newDueDate: string;
 }
 
+export interface ReactivationResult {
+  id: string;
+  alreadyExisted: boolean;
+  clientId: string;
+  clientReferenceId: string;
+  receivableId: string;
+  status: 'PENDING' | 'PAID' | 'CANCELED';
+  activationDate: string;
+  billingAnchorDay: number;
+  recurringValue: string;
+  plan: Pick<Plan, 'id' | 'name' | 'durationMonths' | 'active'> & { defaultValue: string };
+  previous: {
+    planId: string | null;
+    planName: string | null;
+    amount: string | null;
+    dueDate: string | null;
+    billingAnchorDay: number | null;
+    status: ClientStatus | null;
+  };
+  client: Pick<Client, 'id' | 'name' | 'status'>;
+  clientReference: Pick<
+    ClientReference,
+    'id' | 'reference' | 'status' | 'planId' | 'recurringValue' | 'dueDate' | 'billingAnchorDay'
+  >;
+  receivable: Receivable;
+}
+
 export interface RenewalRevertPreview {
   reversible: boolean;
   renewal: {
@@ -1713,6 +1740,16 @@ export function confirmReferenceRenewal(
   payload: { planId: string; amount: number; idempotencyKey: string },
 ) {
   return apiFetch<RenewalResult>(`/client-references/${clientReferenceId}/renewals`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createReferenceReactivation(
+  clientReferenceId: string,
+  payload: { planId: string; amount: number; activationDate: string; idempotencyKey: string },
+) {
+  return apiFetch<ReactivationResult>(`/client-references/${clientReferenceId}/reactivations`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

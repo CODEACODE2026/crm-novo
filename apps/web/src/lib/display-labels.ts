@@ -5,6 +5,7 @@ const removalCountLabels: Record<string, string> = {
   receivables: 'Contas a receber',
   renewals: 'Renovações',
   renewalReversals: 'Reversões de renovação',
+  reactivations: 'Reativações',
   paymentIntents: 'Intenções de pagamento',
   paymentWebhookEvents: 'Eventos de pagamento',
   paymentGroups: 'Grupos de pagamento',

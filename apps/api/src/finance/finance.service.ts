@@ -2012,7 +2012,8 @@ export class FinanceService {
     tx: Prisma.TransactionClient | PrismaService,
     purpose: ReceivablePurpose,
   ) {
-    const categoryName = purpose === 'INITIAL_ACTIVATION' ? 'Ativação' : 'Renovação';
+    const categoryName =
+      purpose === 'INITIAL_ACTIVATION' || purpose === 'REACTIVATION' ? 'Ativação' : 'Renovação';
     const category = await this.findActiveEntryCategoryByName(tx, categoryName);
 
     if (!category) {
@@ -2106,6 +2107,12 @@ export class FinanceService {
     }
 
     await this.activateClientAfterInitialPayment(tx, receivableId, actorUserId);
+    await this.activateClientReferenceAfterReactivationPayment(
+      tx,
+      receivableId,
+      actorUserId,
+      options,
+    );
     await this.advanceClientReferenceAfterRenewalPayment(tx, receivableId, actorUserId, options);
   }
 
@@ -2414,6 +2421,132 @@ export class FinanceService {
       receivableId,
       actorUserId,
     );
+  }
+
+  private async activateClientReferenceAfterReactivationPayment(
+    tx: Prisma.TransactionClient,
+    receivableId: string,
+    actorUserId: string | null,
+    options: { receivableWasPending: boolean },
+  ) {
+    if (!options.receivableWasPending) {
+      return;
+    }
+
+    const receivable = await tx.receivable.findUnique({
+      where: { id: receivableId },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        reactivation: { include: { plan: true } },
+      },
+    });
+
+    if (
+      !receivable ||
+      receivable.purpose !== 'REACTIVATION' ||
+      receivable.status !== 'PAGO' ||
+      !receivable.clientReference ||
+      !receivable.reactivation
+    ) {
+      return;
+    }
+
+    const { reactivation } = receivable;
+
+    if (reactivation.status !== 'PENDING') {
+      return;
+    }
+
+    const reference = receivable.clientReference;
+    const previousReferenceStatus = reference.status;
+    const previousClientStatus = receivable.client.status;
+    const nextDueDate = addCalendarMonthsPreservingAnchor(
+      reactivation.activationDate,
+      reactivation.plan.durationMonths,
+      reactivation.billingAnchorDay,
+    );
+
+    await tx.clientReference.update({
+      where: { id: reference.id },
+      data: {
+        status: 'ATIVO',
+        planId: reactivation.planId,
+        recurringValue: reactivation.recurringValue,
+        dueDate: nextDueDate,
+        billingAnchorDay: reactivation.billingAnchorDay,
+      },
+    });
+
+    if (previousReferenceStatus !== 'ATIVO') {
+      await tx.clientStatusHistory.create({
+        data: {
+          clientId: receivable.clientId,
+          clientReferenceId: reference.id,
+          previousStatus: previousReferenceStatus,
+          newStatus: 'ATIVO',
+          reason: 'Reativacao apos pagamento confirmado.',
+          changedByUserId: actorUserId,
+        },
+      });
+    }
+
+    if (previousClientStatus !== 'ATIVO') {
+      await tx.client.update({
+        where: { id: receivable.clientId },
+        data: { status: 'ATIVO' },
+      });
+
+      await tx.clientStatusHistory.create({
+        data: {
+          clientId: receivable.clientId,
+          previousStatus: previousClientStatus,
+          newStatus: 'ATIVO',
+          reason: 'Cliente reativado apos pagamento de referencia.',
+          changedByUserId: actorUserId,
+        },
+      });
+    }
+
+    await tx.clientReferenceReactivation.update({
+      where: { id: reactivation.id },
+      data: { status: 'PAID', paidAt: receivable.paidAt ?? new Date() },
+    });
+
+    await this.receivableCycleService?.ensureCurrentCycleReceivable(reference.id, tx);
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: receivable.clientId,
+        type: 'CLIENT_REFERENCE_REACTIVATED',
+        title: `Referencia ${reference.reference} reativada.`,
+        description: `Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
+        metadata: {
+          reactivationId: reactivation.id,
+          receivableId,
+          clientReferenceId: reference.id,
+          reference: reference.reference,
+          previousClientStatus,
+          previousReferenceStatus,
+          newStatus: 'ATIVO',
+          previousPlanId: reactivation.previousPlanId,
+          previousPlanName: reactivation.previousPlanName,
+          previousAmount: reactivation.previousAmount?.toString() ?? null,
+          previousDueDate: reactivation.previousDueDate
+            ? formatBusinessDate(reactivation.previousDueDate)
+            : null,
+          previousBillingAnchorDay: reactivation.previousBillingAnchorDay,
+          planId: reactivation.planId,
+          planName: reactivation.plan.name,
+          amount: reactivation.recurringValue.toString(),
+          activationDate: formatBusinessDate(reactivation.activationDate),
+          nextDueDate: formatBusinessDate(nextDueDate),
+          billingAnchorDay: reactivation.billingAnchorDay,
+          durationMonths: reactivation.plan.durationMonths,
+        },
+        createdByUserId: actorUserId,
+      },
+    });
   }
 
   private async advanceClientReferenceAfterRenewalPayment(

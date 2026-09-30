@@ -1121,6 +1121,7 @@ export class BillingService {
 
     return (
       reference.status !== 'ATIVO' ||
+      receivable.purpose !== 'RENEWAL' ||
       receivable.status !== 'PENDENTE' ||
       formatBusinessDate(receivable.dueDate) !== formatBusinessDate(reference.dueDate) ||
       reference.billingNoticeDays < 0 ||

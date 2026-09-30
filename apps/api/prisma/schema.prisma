@@ -28,6 +28,8 @@ enum ClientEventType {
   CLIENT_UPDATED
   STATUS_CHANGED
   CLIENT_RENEWED
+  CLIENT_REFERENCE_REACTIVATION_REQUESTED
+  CLIENT_REFERENCE_REACTIVATED
   PAYMENT_REGISTERED
   PIX_PAYMENT_INTENT_CREATED
   PIX_PAYMENT_STATUS_UPDATED
@@ -71,6 +73,13 @@ enum ReceivableStatus {
 enum ReceivablePurpose {
   RENEWAL
   INITIAL_ACTIVATION
+  REACTIVATION
+}
+
+enum ClientReferenceReactivationStatus {
+  PENDING
+  PAID
+  CANCELED
 }
 
 enum FinancialTransactionType {
@@ -230,6 +239,7 @@ model User {
   canceledReferences    ClientReference[]      @relation("ClientReferenceCanceledBy")
   createdRenewals       Renewal[]              @relation("RenewalCreatedBy")
   createdRenewalReversals RenewalReversal[]     @relation("RenewalReversalCreatedBy")
+  createdReactivations  ClientReferenceReactivation[] @relation("ClientReferenceReactivationCreatedBy")
   createdTransactions   FinancialTransaction[] @relation("FinancialTransactionCreatedBy")
   createdReferrals      Referral[]             @relation("ReferralCreatedBy")
   createdPaymentGroups  PaymentGroup[]         @relation("PaymentGroupCreatedBy")
@@ -248,6 +258,7 @@ model Plan {
   clients          Client[]
   clientReferences ClientReference[]
   renewals         Renewal[]
+  reactivations    ClientReferenceReactivation[]
 
   @@map("plans")
 }
@@ -274,6 +285,7 @@ model Client {
   events                  ClientEvent[]
   renewals                Renewal[]
   renewalReversals        RenewalReversal[]
+  reactivations           ClientReferenceReactivation[]
   receivables             Receivable[]
   financialTransactions   FinancialTransaction[]
   paymentGroups           PaymentGroup[]
@@ -317,6 +329,7 @@ model ClientReference {
   canceledBy            User?                  @relation("ClientReferenceCanceledBy", fields: [canceledByUserId], references: [id], onDelete: SetNull)
   renewals              Renewal[]
   renewalReversals      RenewalReversal[]
+  reactivations         ClientReferenceReactivation[]
   receivables           Receivable[]
   recoveryCampaigns     RecoveryCampaign[]
   messageDispatches     MessageDispatch[]
@@ -724,6 +737,7 @@ model Receivable {
   clientReference    ClientReference       @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
   renewal            Renewal?              @relation(fields: [renewalId], references: [id], onDelete: Restrict)
   paymentTransaction FinancialTransaction?
+  reactivation       ClientReferenceReactivation?
   paymentGroupItems  PaymentGroupItem[]
   recoveryCampaigns  RecoveryCampaign[]
   messageDispatches  MessageDispatch[]
@@ -738,6 +752,43 @@ model Receivable {
   @@index([status])
   @@index([purpose])
   @@map("receivables")
+}
+
+model ClientReferenceReactivation {
+  id                       String                            @id @default(uuid()) @db.Uuid
+  clientId                 String                            @db.Uuid
+  clientReferenceId        String                            @db.Uuid
+  receivableId             String                            @unique @db.Uuid
+  planId                   String                            @db.Uuid
+  previousPlanId           String?                           @db.Uuid
+  previousPlanName         String?
+  previousAmount           Decimal?                          @db.Decimal(12, 2)
+  previousDueDate          DateTime?                         @db.Date
+  previousBillingAnchorDay Int?
+  previousStatus           ClientStatus?
+  activationDate           DateTime                          @db.Date
+  billingAnchorDay         Int
+  recurringValue           Decimal                           @db.Decimal(12, 2)
+  status                   ClientReferenceReactivationStatus @default(PENDING)
+  idempotencyKey           String
+  createdByUserId          String?                           @db.Uuid
+  paidAt                   DateTime?
+  canceledAt               DateTime?
+  cancelReason             String?
+  createdAt                DateTime                          @default(now())
+  updatedAt                DateTime                          @updatedAt
+  client                   Client                            @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientReference          ClientReference                   @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  receivable               Receivable                        @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  plan                     Plan                              @relation(fields: [planId], references: [id], onDelete: Restrict)
+  createdBy                User?                             @relation("ClientReferenceReactivationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([clientReferenceId, idempotencyKey])
+  @@index([clientId])
+  @@index([clientReferenceId])
+  @@index([planId])
+  @@index([status])
+  @@map("client_reference_reactivations")
 }
 
 model PaymentIntent {

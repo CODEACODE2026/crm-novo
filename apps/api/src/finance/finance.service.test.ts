@@ -154,7 +154,7 @@ function createFinancePrisma() {
     clientId: client.id,
     clientReferenceId: clientReference.id,
     renewalId: renewal.id as string | null,
-    purpose: 'RENEWAL' as 'RENEWAL' | 'INITIAL_ACTIVATION',
+    purpose: 'RENEWAL' as 'RENEWAL' | 'INITIAL_ACTIVATION' | 'REACTIVATION',
     description: 'Renovacao - Plano Mensal',
     amount: new Prisma.Decimal('50.00'),
     dueDate: parseBusinessDate('2026-10-10'),
@@ -170,6 +170,31 @@ function createFinancePrisma() {
   const events: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
   const webhookEvents: Array<Record<string, unknown>> = [];
+  const reactivation = {
+    id: 'abababab-abab-4bab-8bab-abababababab',
+    clientId: client.id,
+    clientReferenceId: clientReference.id,
+    receivableId: receivable.id,
+    planId: plan.id,
+    previousPlanId: clientReference.planId,
+    previousPlanName: 'Anual',
+    previousAmount: new Prisma.Decimal('0.00'),
+    previousDueDate: parseBusinessDate('2027-09-28'),
+    previousBillingAnchorDay: 28,
+    previousStatus: 'CANCELADO' as const,
+    activationDate: parseBusinessDate('2026-09-30'),
+    billingAnchorDay: 30,
+    recurringValue: new Prisma.Decimal('30.00'),
+    status: 'PENDING' as const,
+    idempotencyKey: 'reactivation-key',
+    createdByUserId: actorUserId,
+    paidAt: null as Date | null,
+    canceledAt: null as Date | null,
+    cancelReason: null as string | null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    plan,
+  };
   const acquireAdvisoryLock = createAdvisoryLockSimulator();
   const lockContext = new AsyncLocalStorage<Array<() => void>>();
   const executeRawUnsafe = vi.fn(async (_query: string, ...values: unknown[]) => {
@@ -338,6 +363,7 @@ function createFinancePrisma() {
           client: { ...client, plan },
           clientReference: { ...clientReference, plan },
           renewal,
+          reactivation: receivable.purpose === 'REACTIVATION' ? reactivation : null,
           paymentTransaction:
             transactions.find((transaction) => transaction.receivableId === receivable.id) ?? null,
           paymentIntents: allowedStatuses
@@ -352,6 +378,7 @@ function createFinancePrisma() {
           client: { ...client, plan },
           clientReference: { ...clientReference, plan },
           renewal,
+          reactivation: receivable.purpose === 'REACTIVATION' ? reactivation : null,
           paymentTransaction: null,
           paymentIntents,
         });
@@ -454,6 +481,12 @@ function createFinancePrisma() {
         return Promise.resolve(client);
       },
     },
+    clientReferenceReactivation: {
+      update: ({ data }: { data: Partial<typeof reactivation> }) => {
+        Object.assign(reactivation, data);
+        return Promise.resolve(reactivation);
+      },
+    },
     clientStatusHistory: {
       create: ({ data }: { data: Record<string, unknown> }) => {
         events.push({ type: 'CLIENT_STATUS_HISTORY', ...data });
@@ -518,6 +551,7 @@ function createFinancePrisma() {
     expenseCategory,
     client,
     clientReference,
+    reactivation,
     plan,
     receivable,
     paymentIntents,
@@ -535,6 +569,7 @@ function createFinancePrisma() {
         count: ({ where }: { where: { id: string } }) =>
           Promise.resolve(where.id === client.id ? 1 : 0),
       },
+      clientReferenceReactivation: tx.clientReferenceReactivation,
       clientStatusHistory: tx.clientStatusHistory,
       messageDispatch: tx.messageDispatch,
       receivable: tx.receivable,
@@ -546,6 +581,7 @@ function createFinancePrisma() {
           client: { ...client },
           clientReference: { ...clientReference },
           receivable: { ...receivable },
+          reactivation: { ...reactivation },
           transactions: transactions.map((transaction) => ({ ...transaction })),
           events: events.map((event) => ({ ...event })),
           paymentIntents: paymentIntents.map((intent) => ({ ...intent })),
@@ -558,6 +594,7 @@ function createFinancePrisma() {
             Object.assign(client, snapshots.client);
             Object.assign(clientReference, snapshots.clientReference);
             Object.assign(receivable, snapshots.receivable);
+            Object.assign(reactivation, snapshots.reactivation);
             transactions.splice(0, transactions.length, ...snapshots.transactions);
             events.splice(0, events.length, ...snapshots.events);
             paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
@@ -3084,6 +3121,62 @@ describe('FinanceService', () => {
 
     expect(fake.clientReference.status).toBe('ATIVO');
     expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.clientReference.id,
+      fake.tx,
+    );
+  });
+
+  it('reactivates Valeria reference only after paid reactivation receivable', async () => {
+    const fake = createFinancePrisma();
+    fake.client.name = 'Valeria';
+    fake.client.status = 'CANCELADO';
+    fake.clientReference.reference = 'valeria6523';
+    fake.clientReference.status = 'CANCELADO';
+    fake.clientReference.planId = 'plan-anual';
+    fake.clientReference.recurringValue = new Prisma.Decimal('0.00');
+    fake.clientReference.dueDate = parseBusinessDate('2027-09-28');
+    fake.clientReference.billingAnchorDay = 28;
+    fake.receivable.purpose = 'REACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.description = 'Reativacao - Plano Mensal';
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.receivable.dueDate = parseBusinessDate('2026-09-30');
+    fake.reactivation.planId = fake.plan.id;
+    fake.reactivation.recurringValue = new Prisma.Decimal('30.00');
+    fake.reactivation.activationDate = parseBusinessDate('2026-09-30');
+    fake.reactivation.billingAnchorDay = 30;
+    const cycle = {
+      ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-09-30', categoryId: fake.activationCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.client.status).toBe('ATIVO');
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.planId).toBe(fake.plan.id);
+    expect(fake.clientReference.recurringValue).toEqual(new Prisma.Decimal('30.00'));
+    expect(fake.clientReference.billingAnchorDay).toBe(30);
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-30'));
+    expect(fake.reactivation.status).toBe('PAID');
+    expect(fake.reactivation.paidAt).toEqual(parseBusinessDate('2026-09-30'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(
+      fake.events.filter((event) => event.type === 'CLIENT_REFERENCE_REACTIVATED'),
+    ).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(2);
     expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
       fake.clientReference.id,
       fake.tx,

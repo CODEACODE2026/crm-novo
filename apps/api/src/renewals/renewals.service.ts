@@ -575,6 +575,8 @@ export class RenewalsService {
           throw new NotFoundException('Referencia do cliente nao encontrada.');
         }
 
+        this.assertReferenceCanRenew(reference.status);
+
         const plan = await tx.plan.findFirst({ where: { id: dto.planId, active: true } });
 
         if (!plan) {
@@ -743,6 +745,8 @@ export class RenewalsService {
     if (!reference) {
       throw new NotFoundException('Referencia do cliente nao encontrada.');
     }
+
+    this.assertReferenceCanRenew(reference.status);
 
     if (!plan) {
       throw new NotFoundException('Plano ativo nao encontrado.');
@@ -1085,6 +1089,17 @@ export class RenewalsService {
     }
 
     return reference;
+  }
+
+  private assertReferenceCanRenew(status: ClientStatus) {
+    if (status !== 'CANCELADO') {
+      return;
+    }
+
+    throw new ConflictException({
+      code: 'CANCELED_REFERENCE_REQUIRES_REACTIVATION',
+      message: 'Referencia cancelada deve utilizar o fluxo de reativacao.',
+    });
   }
 
   private presentRenewalResult(result: RenewalResult, idempotentReplay: boolean) {

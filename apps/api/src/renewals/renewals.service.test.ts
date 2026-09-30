@@ -7,6 +7,8 @@ const userId = '22222222-2222-4222-8222-222222222222';
 
 type FakePrismaOptions = {
   failReceivableCreate?: boolean;
+  clientStatus?: 'ATIVO' | 'CANCELADO';
+  referenceStatus?: 'ATIVO' | 'CANCELADO';
   selectedPlan?: {
     id: string;
     name: string;
@@ -23,6 +25,8 @@ type FakeBillingDispatch = {
 };
 
 function createFakePrisma(options: FakePrismaOptions = {}) {
+  const clientStatus = options.clientStatus ?? 'ATIVO';
+  const referenceStatus = options.referenceStatus ?? clientStatus;
   const currentPlan = {
     id: '11111111-1111-4111-8111-111111111111',
     name: 'Mensal',
@@ -41,18 +45,18 @@ function createFakePrisma(options: FakePrismaOptions = {}) {
   };
   const client = {
     id: '33333333-3333-4333-8333-333333333333',
-    name: 'Cliente Cancelado',
+    name: 'Cliente Renovacao',
     phone: '(44) 99999-9999',
     phoneNormalized: '5544999999999',
     email: null,
-    reference: 'CANCELADO-RENOVACAO',
+    reference: 'ATIVO-RENOVACAO',
     planId: currentPlan.id,
     recurringValue: new Prisma.Decimal('150.00'),
     dueDate: parseBusinessDate('2026-01-31'),
     billingAnchorDay: 31,
     billingNoticeDays: 5,
     notes: null,
-    status: 'CANCELADO' as const,
+    status: clientStatus,
     createdAt: new Date(),
     updatedAt: new Date(),
     plan: currentPlan,
@@ -67,7 +71,7 @@ function createFakePrisma(options: FakePrismaOptions = {}) {
     billingAnchorDay: client.billingAnchorDay,
     billingNoticeDays: client.billingNoticeDays,
     notes: client.notes,
-    status: client.status,
+    status: referenceStatus,
     createdAt: client.createdAt,
     updatedAt: client.updatedAt,
     client,
@@ -195,7 +199,12 @@ function createFakePrisma(options: FakePrismaOptions = {}) {
         },
       },
       clientReference: {
+        findUnique: () => Promise.resolve({ ...clientReference, client, plan: currentPlan }),
         findFirst: () => Promise.resolve(clientReference),
+      },
+      plan: {
+        findFirst: ({ where }: { where: { id: string; active: boolean } }) =>
+          Promise.resolve(where.id === selectedPlan.id && where.active ? selectedPlan : null),
       },
       $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
         const clientSnapshot = { ...client };
@@ -566,6 +575,22 @@ function billingDispatch(id: string, status: string) {
   };
 }
 
+async function expectCanceledReferenceRenewalBlock(action: () => Promise<unknown>) {
+  try {
+    await action();
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const response = (error as { getResponse?: () => unknown }).getResponse?.();
+    expect(response).toMatchObject({
+      code: 'CANCELED_REFERENCE_REQUIRES_REACTIVATION',
+      message: 'Referencia cancelada deve utilizar o fluxo de reativacao.',
+    });
+    return;
+  }
+
+  throw new Error('Expected renewal action to reject a canceled reference.');
+}
+
 describe('RenewalsService', () => {
   it('exposes the structural fields required for renewal reversal execution', () => {
     const renewalReversalModel = Prisma.dmmf.datamodel.models.find(
@@ -585,65 +610,94 @@ describe('RenewalsService', () => {
     ]);
   });
 
-  it('reactivates a canceled client with explicit history and idempotent replay', async () => {
-    const fake = createFakePrisma();
+  it('blocks renewal creation for a canceled reference without creating side effects', async () => {
+    const fake = createFakePrisma({ clientStatus: 'CANCELADO', referenceStatus: 'CANCELADO' });
     const recoveryService = {
       handleClientReferenceStatusChange: vi.fn().mockResolvedValue(undefined),
       handleClientStatusChange: vi.fn().mockResolvedValue(undefined),
     };
     const service = new RenewalsService(fake.prisma as never, recoveryService as never);
 
-    const first = await service.create(
-      fake.client.id,
+    await expectCanceledReferenceRenewalBlock(() =>
+      service.createForReference(
+        fake.clientReference.id,
+        {
+          planId: fake.client.planId,
+          amount: 150,
+          idempotencyKey: 'cancelado-renovacao-123',
+        },
+        userId,
+      ),
+    );
+
+    expect(fake.renewals).toHaveLength(0);
+    expect(fake.receivables).toHaveLength(0);
+    expect(fake.statusHistory).toHaveLength(0);
+    expect(fake.events).toHaveLength(0);
+    expect(fake.operations).toEqual([]);
+    expect(recoveryService.handleClientReferenceStatusChange).not.toHaveBeenCalled();
+  });
+
+  it('blocks renewal preview for a canceled reference', async () => {
+    const fake = createFakePrisma({ clientStatus: 'CANCELADO', referenceStatus: 'CANCELADO' });
+    const service = new RenewalsService(
+      fake.prisma as never,
+      {
+        handleClientReferenceStatusChange: vi.fn().mockResolvedValue(undefined),
+        handleClientStatusChange: vi.fn().mockResolvedValue(undefined),
+      } as never,
+    );
+
+    await expectCanceledReferenceRenewalBlock(() =>
+      service.previewReference(fake.clientReference.id, {
+        planId: fake.plan.id,
+        amount: 150,
+      }),
+    );
+  });
+
+  it('renews an active reference normally with idempotent replay', async () => {
+    const fake = createFakePrisma({ clientStatus: 'ATIVO', referenceStatus: 'ATIVO' });
+    const recoveryService = {
+      handleClientReferenceStatusChange: vi.fn().mockResolvedValue(undefined),
+      handleClientStatusChange: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new RenewalsService(fake.prisma as never, recoveryService as never);
+
+    const first = await service.createForReference(
+      fake.clientReference.id,
       {
         planId: fake.client.planId,
         amount: 150,
-        idempotencyKey: 'cancelado-renovacao-123',
+        idempotencyKey: 'ativo-renovacao-123',
       },
       userId,
     );
 
     expect(first.idempotentReplay).toBe(false);
     expect(first.client.status).toBe('ATIVO');
-    expect(recoveryService.handleClientReferenceStatusChange).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ clientId: fake.client.id }),
-      'ATIVO',
-      expect.objectContaining({ actorUserId: userId }),
-    );
     expect(first.renewal.newDueDate).toBe('2026-02-28');
     expect(first.renewal.previousPlanId).toBe(fake.plan.id);
     expect(first.renewal.previousPlanName).toBe('Mensal');
     expect(first.renewal.previousAmount).toBe('150');
     expect(first.renewal.previousDueDate).toBe('2026-01-31');
     expect(first.renewal.previousBillingAnchorDay).toBe(31);
-    expect(first.renewal.previousStatus).toBe('CANCELADO');
+    expect(first.renewal.previousStatus).toBe('ATIVO');
     expect(first.renewal.newBillingAnchorDay).toBe(31);
     expect(first.renewal.newStatus).toBe('ATIVO');
     expect(first.renewal.status).toBe('ACTIVE');
     expect(first.receivable.renewalId).toBe(first.renewal.id);
     expect(fake.renewals).toHaveLength(1);
     expect(fake.receivables).toHaveLength(1);
-    expect(fake.statusHistory).toContainEqual(
-      expect.objectContaining({
-        clientReferenceId: '44444444-4444-4444-8444-444444444444',
-        previousStatus: 'CANCELADO',
-        newStatus: 'ATIVO',
-        reason: 'Referencia cancelada foi reativada atraves de renovacao.',
-      }),
-    );
-    const renewalEvent = fake.events.find((event) => event.type === 'CLIENT_RENEWED');
+    expect(fake.statusHistory).toHaveLength(0);
+    expect(recoveryService.handleClientReferenceStatusChange).not.toHaveBeenCalled();
 
-    expect(renewalEvent?.description).toEqual(
-      expect.stringContaining('Referencia cancelada foi reativada atraves de renovacao.'),
-    );
-
-    const replay = await service.create(
-      fake.client.id,
+    const replay = await service.createForReference(
+      fake.clientReference.id,
       {
         planId: fake.client.planId,
         amount: 150,
-        idempotencyKey: 'cancelado-renovacao-123',
+        idempotencyKey: 'ativo-renovacao-123',
       },
       userId,
     );
@@ -684,7 +738,6 @@ describe('RenewalsService', () => {
       'renewal.create',
       'receivable.create',
       'clientReference.update',
-      'clientStatusHistory.create',
       'clientEvent.create',
     ]);
     expect(fake.renewals[0]).toMatchObject({
@@ -693,7 +746,7 @@ describe('RenewalsService', () => {
       previousAmount: fake.plan.defaultValue,
       previousDueDate: parseBusinessDate('2026-01-31'),
       previousBillingAnchorDay: 31,
-      previousStatus: 'CANCELADO',
+      previousStatus: 'ATIVO',
       planId: fake.selectedPlan.id,
       planName: 'Trimestral',
       amount: 90,
@@ -708,7 +761,7 @@ describe('RenewalsService', () => {
       previousAmount: '150',
       previousDueDate: '2026-01-31',
       previousBillingAnchorDay: 31,
-      previousStatus: 'CANCELADO',
+      previousStatus: 'ATIVO',
       planId: fake.selectedPlan.id,
       planName: 'Trimestral',
       amount: '90',
@@ -760,7 +813,7 @@ describe('RenewalsService', () => {
       recurringValue: new Prisma.Decimal('150.00'),
       dueDate: parseBusinessDate('2026-01-31'),
       billingAnchorDay: 31,
-      status: 'CANCELADO',
+      status: 'ATIVO',
     });
   });
 

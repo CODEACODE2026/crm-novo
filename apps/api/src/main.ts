@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { legacyCutoverActivateBodyLimit } from './config/request-body-limits';
 import { createOriginProtectionMiddleware, parseCorsOrigins } from './config/security';
 
 async function bootstrap() {
@@ -30,7 +31,7 @@ async function bootstrap() {
   );
   app.use('/legacy-import/payments/preview', json({ limit: '8mb' }));
   app.use('/legacy-import/payments/import', json({ limit: '2mb' }));
-  app.use('/legacy-import/cutover/activate', json({ limit: '16kb' }));
+  app.use('/legacy-import/cutover/activate', json({ limit: legacyCutoverActivateBodyLimit }));
   app.use(json({ limit: '1mb' }));
   app.use(helmet());
   app.use(cookieParser());

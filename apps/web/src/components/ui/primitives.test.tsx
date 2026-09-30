@@ -61,6 +61,21 @@ describe('UI primitives', () => {
     expect(primitivesSource).toContain('item.onSelect()');
   });
 
+  it('keeps action menus open for pointer movement, menu scroll and modal-safe Escape', () => {
+    expect(primitivesSource).not.toContain('onBlur');
+    expect(primitivesSource).not.toContain('onMouseLeave');
+    expect(primitivesSource).toContain(
+      "document.addEventListener('pointerdown', closeOnPointerDown, true);",
+    );
+    expect(primitivesSource).toContain(
+      "document.addEventListener('keydown', closeOnKeyDown, true);",
+    );
+    expect(primitivesSource).toContain('event.stopImmediatePropagation();');
+    expect(primitivesSource).toContain("window.addEventListener('scroll', updatePosition, true);");
+    expect(primitivesSource).toContain("window.addEventListener('resize', updatePosition);");
+    expect(primitivesSource).not.toContain("window.addEventListener('scroll', closeMenu");
+  });
+
   it('positions the action menu below or above while keeping viewport margins', () => {
     const below = calculateActionMenuPosition({
       menuHeight: 120,

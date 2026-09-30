@@ -337,7 +337,10 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('const contextualActionItems = activeIntent');
     expect(pixModalSource).toContain("section: 'Ferramentas técnicas'");
     expect(pixModalSource).toContain('trigger="text"');
+    expect(pixModalSource).toContain('<ActionMenu items={contextualActionItems} trigger="text" />');
     expect(stylesSource).toContain('.action-menu-trigger');
+    expect(stylesSource).toContain('.action-menu-portal-modal');
+    expect(stylesSource).toContain('overflow-y: auto;');
     expect(stylesSource).toContain('.action-menu-section');
     expect(pixModalSource).toContain('setShowReplacement(false);');
     expect(pixModalSource).toContain('setShowReconciliation(false);');

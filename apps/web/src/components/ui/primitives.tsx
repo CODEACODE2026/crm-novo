@@ -233,26 +233,24 @@ export function ActionMenu({
 
     function closeOnKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         setOpen(false);
         triggerRef.current?.focus();
       }
     }
 
-    function closeMenu() {
-      setOpen(false);
-    }
-
     window.setTimeout(updatePosition, 0);
     document.addEventListener('pointerdown', closeOnPointerDown, true);
-    document.addEventListener('keydown', closeOnKeyDown);
-    window.addEventListener('scroll', closeMenu, true);
-    window.addEventListener('resize', closeMenu);
+    document.addEventListener('keydown', closeOnKeyDown, true);
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
 
     return () => {
       document.removeEventListener('pointerdown', closeOnPointerDown, true);
-      document.removeEventListener('keydown', closeOnKeyDown);
-      window.removeEventListener('scroll', closeMenu, true);
-      window.removeEventListener('resize', closeMenu);
+      document.removeEventListener('keydown', closeOnKeyDown, true);
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
     };
   }, [open]);
 

@@ -945,7 +945,12 @@ export class LegacyImportService {
     const dueDateText = this.optionalString(input.vencimento)?.trim() || null;
     const dueDate = this.normalizeDueDate(dueDateText, errors, warnings);
     const billingNoticeDays = this.normalizeBillingNoticeDays(input.avisar, errors);
-    const recurringValue = this.normalizeRecurringValue(input.value_mensalidade, errors);
+    const recurringValue = this.normalizeRecurringValue(
+      input.value_mensalidade,
+      status,
+      errors,
+      warnings,
+    );
     const planCycle = this.normalizeBillingCycle(input.type_cobranca, errors);
     const reference = this.optionalString(input.referencia)?.trim() || null;
     const notes = this.optionalString(input.observation)?.trim() || null;
@@ -1582,7 +1587,12 @@ export class LegacyImportService {
     return parsed;
   }
 
-  private normalizeRecurringValue(value: unknown, errors: string[]) {
+  private normalizeRecurringValue(
+    value: unknown,
+    status: ClientStatus | null,
+    errors: string[],
+    warnings: string[],
+  ) {
     const text =
       typeof value === 'number'
         ? value.toFixed(2)
@@ -1598,9 +1608,17 @@ export class LegacyImportService {
     const [whole = '0', decimal = ''] = text.split('.');
     const cents = BigInt(whole) * 100n + BigInt(decimal.padEnd(2, '0'));
 
-    if (cents <= 0n || cents > 999_999_999_999n) {
+    if (cents > 999_999_999_999n) {
       errors.push('INVALID_RECURRING_VALUE');
       return null;
+    }
+
+    if (cents === 0n) {
+      if (status === 'CANCELADO') {
+        warnings.push('WARNING_ZERO_RECURRING_VALUE_HISTORICAL');
+      } else {
+        errors.push('INVALID_RECURRING_VALUE');
+      }
     }
 
     return `${whole}.${decimal.padEnd(2, '0')}`;

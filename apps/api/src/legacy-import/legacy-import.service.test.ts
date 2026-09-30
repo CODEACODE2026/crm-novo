@@ -605,6 +605,131 @@ describe('LegacyImportService', () => {
     },
   );
 
+  it.each([
+    ['Ativo', '30.00', 'READY_CREATE', 'ATIVO', '30.00', []],
+    ['Ativo', '0', 'INVALID', 'ATIVO', '0.00', ['INVALID_RECURRING_VALUE']],
+    [
+      'Inativo',
+      '0',
+      'READY_CREATE',
+      'CANCELADO',
+      '0.00',
+      ['WARNING_ZERO_RECURRING_VALUE_HISTORICAL'],
+    ],
+    [
+      'Cancelado',
+      '0',
+      'READY_CREATE',
+      'CANCELADO',
+      '0.00',
+      ['WARNING_ZERO_RECURRING_VALUE_HISTORICAL'],
+    ],
+    ['Inativo', '35.00', 'READY_CREATE', 'CANCELADO', '35.00', []],
+    ['Cancelado', '35.00', 'READY_CREATE', 'CANCELADO', '35.00', []],
+    ['Ativo', '-1', 'INVALID', 'ATIVO', null, ['INVALID_RECURRING_VALUE']],
+    ['Ativo', 'abc', 'INVALID', 'ATIVO', null, ['INVALID_RECURRING_VALUE']],
+    ['Ativo', null, 'INVALID', 'ATIVO', null, ['INVALID_RECURRING_VALUE']],
+    ['Ativo', '', 'INVALID', 'ATIVO', null, ['INVALID_RECURRING_VALUE']],
+  ])(
+    'classifies %s with value_mensalidade %s according to historical zero rules',
+    async (legacyStatus, value, classification, normalizedStatus, recurringValue, codes) => {
+      const { service } = createService();
+
+      const result = await service.previewClients(
+        envelope([
+          {
+            ...baseClient,
+            id: 900,
+            referencia: `historical-zero-${legacyStatus}-${String(value)}`,
+            status: legacyStatus,
+            value_mensalidade: value,
+          },
+        ]),
+      );
+
+      expect(result.rows[0]).toMatchObject({
+        classification,
+        normalizedStatus,
+        recurringValue,
+      });
+      for (const code of codes) {
+        expect([...result.rows[0]!.errors, ...result.rows[0]!.warnings]).toContain(code);
+      }
+    },
+  );
+
+  it.each([0, 0.0, '0', '0.00', '0,00'])(
+    'accepts parser zero format %s only for historical canceled clients',
+    async (value) => {
+      const { service } = createService();
+
+      const historical = await service.previewClients(
+        envelope([
+          {
+            ...baseClient,
+            id: 910,
+            referencia: `historical-zero-format-${String(value)}`,
+            status: 'Cancelado',
+            value_mensalidade: value,
+          },
+        ]),
+      );
+      const active = await service.previewClients(
+        envelope([
+          {
+            ...baseClient,
+            id: 911,
+            referencia: `active-zero-format-${String(value)}`,
+            status: 'Ativo',
+            value_mensalidade: value,
+          },
+        ]),
+      );
+
+      expect(historical.rows[0]).toMatchObject({
+        classification: 'READY_CREATE',
+        normalizedStatus: 'CANCELADO',
+        recurringValue: '0.00',
+        warnings: ['WARNING_ZERO_RECURRING_VALUE_HISTORICAL'],
+      });
+      expect(active.rows[0]).toMatchObject({
+        classification: 'INVALID',
+        normalizedStatus: 'ATIVO',
+        recurringValue: '0.00',
+      });
+      expect(active.rows[0]?.errors).toContain('INVALID_RECURRING_VALUE');
+    },
+  );
+
+  it('imports historical canceled zero values through the transactional write path', async () => {
+    const { service, writes } = createService();
+
+    const result = await service.importClients(
+      envelope([
+        {
+          ...baseClient,
+          id: 920,
+          referencia: 'historical-canceled-zero-write',
+          status: 'Cancelado',
+          value_mensalidade: '0,00',
+        },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 1, skipped: 0 });
+    expect(result.rows[0]).toMatchObject({ code: 'IMPORTED', legacyClientId: '920' });
+    expect(writes.clientCreate.mock.calls[0]?.[0].data).toMatchObject({
+      recurringValue: '0.00',
+      status: 'CANCELADO',
+    });
+    expect(writes.clientReferenceCreate.mock.calls[0]?.[0].data).toMatchObject({
+      recurringValue: '0.00',
+      status: 'CANCELADO',
+    });
+    expect(writes.legacyImportRecordCreate).toHaveBeenCalledTimes(1);
+    expectNoOperationalSideEffects(writes);
+  });
+
   it.each(['Novo', 'Pendente'])(
     'classifies legacy status %s as SKIPPED_NOT_ACTIVE',
     async (legacyStatus) => {
@@ -2005,6 +2130,59 @@ describe('LegacyImportService', () => {
       source: 'legacy',
       status: 'IMPORTED',
     });
+  });
+
+  it('keeps replay idempotent while releasing historical zero rows that were previously invalid', async () => {
+    const importedPreview = await createService().service.previewClients(
+      envelope([{ ...baseClient, id: 123, referencia: 'already-imported' }]),
+    );
+    const importedHash = importedPreview.rows[0]?.payloadHash;
+    const { service, writes } = createService({
+      clients: [existingCrmClient],
+      references: [existingCrmReference],
+      importRecords: [
+        {
+          legacyClientId: '123',
+          payloadHash: importedHash,
+          source: 'legacy',
+          crmClientId: 'client-legacy',
+          crmClientReferenceId: 'reference-legacy',
+          status: 'IMPORTED',
+        },
+      ],
+    });
+
+    const result = await service.importClients(
+      envelope([
+        { ...baseClient, id: 123, referencia: 'already-imported' },
+        {
+          ...baseClient,
+          email: 'historical-zero@example.com',
+          id: 124,
+          name: 'Historical Zero',
+          phone: '44988887777',
+          referencia: 'previously-invalid-historical-zero',
+          status: 'Inativo',
+          value_mensalidade: '0.00',
+        },
+      ]),
+    );
+
+    expect(result.summary).toEqual({ failed: 0, imported: 1, requested: 2, skipped: 1 });
+    expect(result.rows[0]).toMatchObject({ code: 'UNCHANGED', result: 'SKIPPED' });
+    expect(result.rows[1]).toMatchObject({
+      code: 'IMPORTED',
+      legacyClientId: '124',
+      result: 'IMPORTED',
+    });
+    expect(writes.clientCreate).toHaveBeenCalledTimes(1);
+    expect(writes.clientReferenceCreate).toHaveBeenCalledTimes(1);
+    expect(writes.legacyImportRecordCreate).toHaveBeenCalledTimes(1);
+    expect(writes.clientReferenceCreate.mock.calls[0]?.[0].data).toMatchObject({
+      recurringValue: '0.00',
+      status: 'CANCELADO',
+    });
+    expectNoOperationalSideEffects(writes);
   });
 
   it('uses normalized payload hash for UNCHANGED and READY_UPDATE', async () => {
@@ -3468,15 +3646,18 @@ describe('LegacyImportService', () => {
     vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
     const { receivableCycleService, service, writes } = createCutoverService({
       clients: [cutoverClient({ status: 'CANCELADO' })],
-      references: [cutoverReference({ status: 'CANCELADO' })],
+      references: [
+        cutoverReference({ recurringValue: new Prisma.Decimal('0.00'), status: 'CANCELADO' }),
+      ],
     });
 
     const preview = await service.previewCutover();
     const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });
 
     expect(preview.rows[0]).toMatchObject({
-      classification: 'CONFLICT',
+      classification: 'INVALID',
       clientStatus: 'CANCELADO',
+      amount: '0.00',
       referenceStatus: 'CANCELADO',
     });
     expect(preview.rows[0]?.errors).toEqual(

@@ -101,7 +101,10 @@ describe('PIX reconciliation UI contract', () => {
   });
 
   it('keeps synced PIX visible while authoritative data reloads', () => {
-    expect(pixModalSource).toContain('async (fallbackIntent?: PaymentIntent)');
+    expect(pixModalSource).toContain('fallbackIntent?: PaymentIntent');
+    expect(pixModalSource).toContain(
+      'options: { refreshConnection?: boolean; silent?: boolean } = {}',
+    );
     expect(dashboardSource).toContain('function mergePaymentIntentsWithFallback(');
     expect(dashboardSource).toContain('function sortPaymentIntentsForDisplay');
     expect(dashboardSource).toContain('function isSelectablePixIntent');
@@ -118,6 +121,31 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain('visibleIntents.find(isSelectablePixIntent)');
     expect(pixModalSource).toContain('await loadIntents(intent);');
     expect(pixModalSource).toContain('(intent) => pixSyncNotice(intent)');
+  });
+
+  it('polls waiting PIX status and refreshes parent finance state once when it becomes paid', () => {
+    expect(pixModalSource).toContain(
+      'const paidIntentRefreshRef = useRef<Set<string>>(new Set());',
+    );
+    expect(pixModalSource).toContain("activeIntent?.status !== 'WAITING_PAYMENT'");
+    expect(pixModalSource).toContain('window.setInterval(() => {');
+    expect(pixModalSource).toContain(
+      'void loadIntents(activeIntent, { refreshConnection: false, silent: true });',
+    );
+    expect(pixModalSource).toContain('}, 10_000);');
+    expect(pixModalSource).toContain('window.clearInterval(intervalId);');
+    expect(pixModalSource).toContain("activeIntent?.status !== 'PAID'");
+    expect(pixModalSource).toContain("receivable.status === 'PAGO'");
+    expect(pixModalSource).toContain('paidIntentRefreshRef.current.has(activeIntent.id)');
+    expect(pixModalSource).toContain('paidIntentRefreshRef.current.add(activeIntent.id);');
+    expect(pixModalSource).toContain(
+      "if (intent.status === 'PAID') paidIntentRefreshRef.current.add(intent.id);",
+    );
+    expect(pixModalSource).toContain("void onChanged('Pagamento confirmado.').catch((err) => {");
+    expect(pixModalSource).toContain(
+      "'Pagamento confirmado, mas não foi possível atualizar os dados financeiros.'",
+    );
+    expect(pixModalSource).not.toContain('payReceivable(');
   });
 
   it('separates provider status from temporal PIX expiration in the UI', () => {

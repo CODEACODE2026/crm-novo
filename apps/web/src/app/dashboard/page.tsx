@@ -14830,15 +14830,22 @@ function PixReceivableModal({
   const previewActionRef = useRef(false);
   const replacePreviewActionRef = useRef(false);
   const recoveryPreviewActionRef = useRef(false);
+  const paidIntentRefreshRef = useRef<Set<string>>(new Set());
 
   const loadIntents = useCallback(
-    async (fallbackIntent?: PaymentIntent) => {
-      setLoading(true);
+    async (
+      fallbackIntent?: PaymentIntent,
+      options: { refreshConnection?: boolean; silent?: boolean } = {},
+    ) => {
+      const { refreshConnection = true, silent = false } = options;
+      if (!silent) setLoading(true);
       setError('');
 
       try {
         const nextIntents = await listPaymentIntents(receivable.id);
-        const nextWhatsAppConnection = await getWhatsAppConnection().catch(() => null);
+        const nextWhatsAppConnection = refreshConnection
+          ? await getWhatsAppConnection().catch(() => null)
+          : null;
         const visibleIntents = sortPaymentIntentsForDisplay(
           mergePaymentIntentsWithFallback(nextIntents, fallbackIntent, receivable.id),
         );
@@ -14854,11 +14861,11 @@ function PixReceivableModal({
                 visibleIntents.find(isSelectablePixIntent) ??
                 null),
         );
-        setWhatsAppConnection(nextWhatsAppConnection);
+        if (refreshConnection) setWhatsAppConnection(nextWhatsAppConnection);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Não foi possível carregar o PIX.');
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
     [receivable.id],
@@ -14867,6 +14874,30 @@ function PixReceivableModal({
   useEffect(() => {
     void loadIntents();
   }, [loadIntents]);
+
+  useEffect(() => {
+    if (activeIntent?.status !== 'WAITING_PAYMENT') return undefined;
+
+    const intervalId = window.setInterval(() => {
+      void loadIntents(activeIntent, { refreshConnection: false, silent: true });
+    }, 10_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeIntent, loadIntents]);
+
+  useEffect(() => {
+    if (activeIntent?.status !== 'PAID' || receivable.status === 'PAGO') return;
+    if (paidIntentRefreshRef.current.has(activeIntent.id)) return;
+
+    paidIntentRefreshRef.current.add(activeIntent.id);
+    void onChanged('Pagamento confirmado.').catch((err) => {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Pagamento confirmado, mas não foi possível atualizar os dados financeiros.',
+      );
+    });
+  }, [activeIntent?.id, activeIntent?.status, onChanged, receivable.status]);
 
   useEffect(() => {
     setShowPixData(activeIntent?.status === 'WAITING_PAYMENT');
@@ -14891,6 +14922,7 @@ function PixReceivableModal({
       setActiveIntent(intent);
       await loadIntents(intent);
       setNotice(successMessage);
+      if (intent.status === 'PAID') paidIntentRefreshRef.current.add(intent.id);
       await onChanged(successMessage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');

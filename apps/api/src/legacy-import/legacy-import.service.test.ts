@@ -2387,27 +2387,29 @@ describe('LegacyImportService', () => {
         { ...baseClient, id: 2, phone: '(44) 99999-9999', referencia: 'phone-2' },
         { ...baseClient, id: 3, phone: '+55 44 99999-9999', referencia: 'phone-3' },
         { ...baseClient, id: 4, phone: '5544999999999', referencia: 'phone-4' },
-        { ...baseClient, id: 5, phone: '123', referencia: 'phone-invalid' },
-        { ...baseClient, id: 6, value_mensalidade: '30,00', referencia: 'value-comma' },
-        { ...baseClient, id: 7, value_mensalidade: -1, referencia: 'value-negative' },
-        { ...baseClient, id: 8, value_mensalidade: null, referencia: 'value-null' },
+        { ...baseClient, id: 5, phone: '+55 (85) 9929-4022', referencia: 'phone-old-mobile' },
+        { ...baseClient, id: 6, phone: '123', referencia: 'phone-invalid' },
+        { ...baseClient, id: 7, value_mensalidade: '30,00', referencia: 'value-comma' },
+        { ...baseClient, id: 8, value_mensalidade: -1, referencia: 'value-negative' },
+        { ...baseClient, id: 9, value_mensalidade: null, referencia: 'value-null' },
       ]),
     );
 
-    expect(result.rows.slice(0, 4).map((row) => row.phoneNormalized)).toEqual([
+    expect(result.rows.slice(0, 5).map((row) => row.phoneNormalized)).toEqual([
       '5544999999999',
       '5544999999999',
       '5544999999999',
       '5544999999999',
+      '5585999294022',
     ]);
     expect(result.rows[0]).toMatchObject({ billingAnchorDay: 25, dueDate: '2026-10-25' });
-    expect(result.rows[4]?.errors).toContain('INVALID_PHONE');
-    expect(result.rows[5]).toMatchObject({
+    expect(result.rows[5]?.errors).toContain('INVALID_PHONE');
+    expect(result.rows[6]).toMatchObject({
       classification: 'READY_CREATE',
       recurringValue: '30.00',
     });
-    expect(result.rows[6]?.errors).toContain('INVALID_RECURRING_VALUE');
     expect(result.rows[7]?.errors).toContain('INVALID_RECURRING_VALUE');
+    expect(result.rows[8]?.errors).toContain('INVALID_RECURRING_VALUE');
   });
 
   it('previews Edilson payment 11670 as READY_PAID_HISTORY without writes when mapping exists', async () => {

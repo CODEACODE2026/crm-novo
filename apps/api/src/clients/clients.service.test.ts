@@ -505,6 +505,12 @@ describe('ClientsService options', () => {
     await expect(service.options({ search: '(44) 99821-2815' })).resolves.toEqual([optionAt(0)]);
   });
 
+  it('searches lightweight client options by old mobile format without the ninth digit', async () => {
+    const service = createService();
+
+    await expect(service.options({ search: '(44) 9821-2815' })).resolves.toEqual([optionAt(0)]);
+  });
+
   it('searches lightweight client options by normalized phone', async () => {
     const service = createService();
 
@@ -564,6 +570,16 @@ describe('ClientsService list search', () => {
     const fake = createClientListService(searchableClients);
 
     const result = await fake.service.list({ search: '(44) 99999-1234' });
+
+    expect(result.items.map((client) => client.id)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ]);
+  });
+
+  it('finds clients when searching with an old mobile format without the ninth digit', async () => {
+    const fake = createClientListService(searchableClients);
+
+    const result = await fake.service.list({ search: '(44) 9999-1234' });
 
     expect(result.items.map((client) => client.id)).toEqual([
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -931,6 +947,17 @@ describe('ClientsService manual client creation', () => {
       actorUserId: 'user-id',
     });
   });
+
+  it('stores manually created old-format mobile phones with the canonical ninth digit', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(manualClientDto({ phone: '+55 (85) 9929-4022' }), 'user-id');
+
+    expect(fake.clients[0]).toMatchObject({
+      phone: '+55 (85) 9929-4022',
+      phoneNormalized: '5585999294022',
+    });
+  });
 });
 
 describe('ClientsService legacy client updates', () => {
@@ -956,6 +983,18 @@ describe('ClientsService legacy client updates', () => {
     });
     expect(fake.prisma.clientReference.update).not.toHaveBeenCalled();
     expect(fake.prisma.clientReference.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('updates client phones from old mobile format to the canonical ninth digit', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+
+    await fake.service.update(fake.client.id, { phone: '+55 (85) 9929-4022' }, 'user-id');
+
+    expect(fake.client).toMatchObject({
+      phone: '+55 (85) 9929-4022',
+      phoneNormalized: '5585999294022',
+    });
+    expect(fake.prisma.clientReference.update).not.toHaveBeenCalled();
   });
 
   it('updates personal fields for a client with two references without changing any reference', async () => {

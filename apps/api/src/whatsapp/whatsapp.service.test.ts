@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
+import { KiragoWebhookNormalizer } from './kirago/kirago-webhook-normalizer';
 import { WhatsAppService } from './whatsapp.service';
 
 const now = new Date('2026-09-11T00:00:00.000Z');
@@ -34,13 +35,15 @@ function connection(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function client() {
+function client(overrides: Record<string, unknown> = {}) {
   return {
     id: '22222222-2222-4222-8222-222222222222',
     name: 'Cliente Teste',
     reference: 'CLI-1',
     phone: '(44) 99999-9999',
     phoneNormalized: '5544999999999',
+    status: 'ATIVO',
+    ...overrides,
   };
 }
 
@@ -380,9 +383,7 @@ function serviceFactory({
       return name === 'CRM_API_PUBLIC_URL' ? 'https://crm.example.com' : undefined;
     },
   };
-  const normalizer = {
-    normalize: vi.fn(),
-  };
+  const normalizer = { normalize: vi.fn() };
 
   return {
     service: new WhatsAppService(
@@ -978,6 +979,122 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
   });
 
+  it('matches GERGLAUCIO by canonical phone from a masked Kirago inbound and skips waitlist', async () => {
+    const realNormalizer = new KiragoWebhookNormalizer();
+    const gerglaucio = client({
+      id: '77777777-7777-4777-8777-777777777777',
+      name: 'GERGLAUCIO',
+      phone: '5585999294022',
+      phoneNormalized: '5585999294022',
+      reference: 'GERGLAUCIO',
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(gerglaucio),
+          findMany: vi.fn().mockResolvedValue([gerglaucio]),
+        },
+      },
+    });
+    normalizer.normalize.mockImplementation((payloadValue: unknown) =>
+      realNormalizer.normalize(payloadValue, now),
+    );
+
+    const result = await service.receiveWebhook({
+      type: 'Message',
+      instanceName: 'CRM Principal',
+      userID: 'kirago-user',
+      isGroup: false,
+      jid: {
+        contact: { pn: '+55 (85) 9929-4022' },
+        chat: { pn: '+55 (85) 9929-4022', raw: '558599294022@s.whatsapp.net' },
+        sender: { pn: '+55 (85) 9929-4022', raw: '558599294022@s.whatsapp.net' },
+      },
+      event: {
+        Info: {
+          ID: 'gerglaucio-msg-1',
+          PushName: 'Glaucio',
+          Timestamp: 1789088400,
+          IsFromMe: false,
+          IsGroup: false,
+          SenderAlt: '+55 (85) 9929-4022',
+          Chat: '558599294022@s.whatsapp.net',
+          Sender: '558599294022@s.whatsapp.net',
+          Type: 'text',
+        },
+        Message: { conversation: 'Está assim desde ontem.' },
+      },
+    });
+    const inboundCreateArgs = (prisma.whatsAppInboundMessage.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: { clientId?: string | null; phoneNormalized?: string | null } };
+
+    expect(result).toMatchObject({ action: 'client_exists', inboundMessageId: 'inbound-id' });
+    expect(prisma.client.findMany).toHaveBeenCalledWith({
+      where: { phoneNormalized: '5585999294022' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(inboundCreateArgs.data).toMatchObject({
+      whatsAppConnectionId: connection().id,
+      clientId: gerglaucio.id,
+      providerMessageId: 'gerglaucio-msg-1',
+      phoneNormalized: '5585999294022',
+    });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('matches by exact phone even when the inbound name differs from the client name', async () => {
+    const knownClient = client({ name: 'GERGLAUCIO', phoneNormalized: '5585999294022' });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(knownClient),
+          findMany: vi.fn().mockResolvedValue([knownClient]),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '5585999294022',
+        contactName: 'Glaucio',
+        messageId: 'msg-name-diff-phone-match',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'client_exists' });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not match by similar name when the inbound phone belongs to nobody', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        phone: '5585888888888',
+        contactName: 'GERGLAUCIO',
+        messageId: 'msg-name-only',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'pending_contact_upserted' });
+    expect(prisma.client.findMany).toHaveBeenCalledWith({
+      where: { phoneNormalized: '5585888888888' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalled();
+  });
+
   it.each(['sim', 'nao', 'quero saber o valor'])(
     'records known client inbound "%s" without billing decisions or financial effects',
     async (text) => {
@@ -1034,6 +1151,26 @@ describe('WhatsAppService', () => {
     const result = await service.receiveWebhook({ type: 'Message' });
 
     expect(result).toMatchObject({ action: 'ambiguous_client_phone', clientMatches: 2 });
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps current behavior and associates inbound when the only phone match is canceled', async () => {
+    const canceledClient = client({ status: 'CANCELADO' });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(canceledClient),
+          findMany: vi.fn().mockResolvedValue([canceledClient]),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', { messageId: 'msg-canceled-client' }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({ action: 'client_exists' });
     expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
   });
 

@@ -172,6 +172,35 @@ describe('KiragoWebhookNormalizer', () => {
     expect(lidOnly?.phone).toBeNull();
   });
 
+  it('normalizes observed masked Ceará mobile inbound phone to the client canonical value', () => {
+    const result = normalizer.normalize(
+      payload({
+        jid: {
+          contact: { pn: '+55 (85) 9929-4022' },
+          chat: { pn: '+55 (85) 9929-4022', raw: '558599294022@s.whatsapp.net' },
+          sender: { pn: '+55 (85) 9929-4022', raw: '558599294022@s.whatsapp.net' },
+        },
+        event: {
+          Info: {
+            ...payload().event.Info,
+            PushName: 'Glaucio',
+            SenderAlt: '+55 (85) 9929-4022',
+            Chat: '558599294022@s.whatsapp.net',
+            Sender: '558599294022@s.whatsapp.net',
+          },
+          Message: { conversation: 'Está assim desde ontem.' },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      phone: '5585999294022',
+      contactName: 'Glaucio',
+      text: 'Está assim desde ontem.',
+    });
+  });
+
   it('normalizes Kirago device-suffixed WhatsApp phone values from observed payloads', () => {
     const result = normalizer.normalize(
       payload({
@@ -193,6 +222,6 @@ describe('KiragoWebhookNormalizer', () => {
       receivedAt,
     );
 
-    expect(result?.phone).toBe('554498212815');
+    expect(result?.phone).toBe('5544998212815');
   });
 });

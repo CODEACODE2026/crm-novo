@@ -706,11 +706,13 @@ export class ClientsService {
 
     if (query.search) {
       const search = query.search.trim();
+      const normalizedPhone = this.tryNormalizePhone(search);
 
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { references: { some: { reference: { contains: search, mode: 'insensitive' } } } },
         ...this.buildPhoneSearchConditions(search),
+        ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
       ];
     }
 

@@ -7765,15 +7765,23 @@ function ClientsView({
   return (
     <>
       {!selectedClient ? (
-        <PageHeader
-          actions={
-            <Button icon={UserPlus} onClick={onNew} variant="primary">
-              Novo cliente
-            </Button>
-          }
-          subtitle="Base de clientes, referências e histórico"
-          title="Clientes"
-        />
+        <div className="clients-page-header">
+          <PageHeader
+            actions={
+              <Button
+                className="clients-new-button"
+                icon={UserPlus}
+                onClick={onNew}
+                variant="primary"
+              >
+                <span className="clients-new-desktop-label">Novo cliente</span>
+                <span className="clients-new-mobile-label">+ Cliente</span>
+              </Button>
+            }
+            subtitle="Base de clientes, referências e histórico"
+            title="Clientes"
+          />
+        </div>
       ) : null}
       <div className="clients-layout">
         {!selectedClient ? (
@@ -7847,10 +7855,40 @@ function ClientsView({
                             <span className="client-avatar" aria-hidden="true">
                               {clientInitial(client.name)}
                             </span>
-                            <span>
-                              <strong>{client.name}</strong>
+                            <span className="client-cell-copy">
+                              <span className="client-mobile-title-row">
+                                <strong>{client.name}</strong>
+                                <IconButton
+                                  className="client-mobile-whatsapp-action"
+                                  icon={MessageCircle}
+                                  label={`Enviar WhatsApp para ${client.name}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setWhatsAppClient(client);
+                                  }}
+                                />
+                              </span>
                               <small>{client.email ?? client.phoneNormalized}</small>
                             </span>
+                          </div>
+                          <div className="client-mobile-card-meta">
+                            <span className="client-mobile-phone">
+                              <MessageCircle aria-hidden="true" size={14} />
+                              {client.phoneNormalized}
+                            </span>
+                            <span>
+                              <strong>{clientReferenceSummary(references)}</strong>
+                              {singleReference ? ` · ${singleReference.plan.name}` : null}
+                            </span>
+                            <span>
+                              {clientPlanSummary(references)} ·{' '}
+                              {clientOperationalSummary(references)}
+                            </span>
+                            <span>Próx. vencimento: {clientNextDueSummary(references)}</span>
+                            <span>Cadastro: {formatDate(client.createdAt)}</span>
+                            <ClientReferenceStatusSummary
+                              items={clientReferenceStatusSummary(client)}
+                            />
                           </div>
                         </td>
                         <td>

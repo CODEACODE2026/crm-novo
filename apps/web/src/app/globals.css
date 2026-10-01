@@ -3643,6 +3643,12 @@ a {
   white-space: normal;
 }
 
+.clients-new-mobile-label,
+.client-mobile-card-meta,
+.client-mobile-whatsapp-action {
+  display: none;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -3691,10 +3697,23 @@ tbody tr:hover,
   min-width: 0;
 }
 
-.client-cell span:last-child {
+.client-cell .client-cell-copy {
   display: grid;
   min-width: 0;
   gap: 2px;
+}
+
+.client-mobile-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.client-mobile-title-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .client-cell small {
@@ -7597,36 +7616,51 @@ tbody tr:hover,
     padding-block: 6px;
   }
 
+  .app-shell[data-active-view='clients'] .topbar {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 8px;
+    min-height: 48px;
+    padding-block: 6px;
+  }
+
   .app-shell[data-active-view='dashboard'] .topbar-menu-button,
-  .app-shell[data-active-view='dashboard'] .topbar-user {
+  .app-shell[data-active-view='dashboard'] .topbar-user,
+  .app-shell[data-active-view='clients'] .topbar-menu-button,
+  .app-shell[data-active-view='clients'] .topbar-user {
     width: 34px;
     min-height: 34px;
   }
 
-  .app-shell[data-active-view='dashboard'] .breadcrumb {
+  .app-shell[data-active-view='dashboard'] .breadcrumb,
+  .app-shell[data-active-view='clients'] .breadcrumb {
     display: none;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar-context {
+  .app-shell[data-active-view='dashboard'] .topbar-context,
+  .app-shell[data-active-view='clients'] .topbar-context {
     gap: 1px;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar h1 {
+  .app-shell[data-active-view='dashboard'] .topbar h1,
+  .app-shell[data-active-view='clients'] .topbar h1 {
     font-size: 17px;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar p {
+  .app-shell[data-active-view='dashboard'] .topbar p,
+  .app-shell[data-active-view='clients'] .topbar p {
     margin-top: 1px;
     font-size: 11px;
     line-height: 1.25;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar-actions {
+  .app-shell[data-active-view='dashboard'] .topbar-actions,
+  .app-shell[data-active-view='clients'] .topbar-actions {
     grid-column: auto;
     justify-content: flex-end;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar-user {
+  .app-shell[data-active-view='dashboard'] .topbar-user,
+  .app-shell[data-active-view='clients'] .topbar-user {
     justify-content: center;
     gap: 0;
     border: 1px solid var(--border);
@@ -7637,8 +7671,184 @@ tbody tr:hover,
     padding: 0;
   }
 
-  .app-shell[data-active-view='dashboard'] .content {
+  .app-shell[data-active-view='dashboard'] .content,
+  .app-shell[data-active-view='clients'] .content {
     padding-top: 12px;
+  }
+
+  .clients-page-header .page-header {
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .clients-page-header .page-header > div:first-child {
+    display: none;
+  }
+
+  .clients-page-header .page-actions {
+    justify-content: flex-start;
+    width: auto;
+  }
+
+  .clients-new-button {
+    min-height: 36px;
+    padding-inline: 11px;
+  }
+
+  .clients-new-desktop-label {
+    display: none;
+  }
+
+  .clients-new-mobile-label {
+    display: inline;
+  }
+
+  .clients-list-view {
+    padding: 12px;
+  }
+
+  .clients-list-view .toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .clients-list-view .search-row {
+    grid-column: 1 / -1;
+    min-height: 38px;
+    padding-inline: 10px;
+  }
+
+  .clients-list-view .toolbar select {
+    min-height: 38px;
+    padding-inline: 9px;
+  }
+
+  .clients-list-view .toolbar .ui-button {
+    min-height: 38px;
+    padding-inline: 10px;
+  }
+
+  .clients-list-view .table-wrap {
+    overflow-x: visible;
+  }
+
+  .clients-table,
+  .clients-table tbody,
+  .clients-table tr,
+  .clients-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .clients-table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .clients-table thead,
+  .clients-table td:nth-child(n + 2):nth-child(-n + 7) {
+    display: none;
+  }
+
+  .clients-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .clients-table tbody tr {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-soft);
+    padding: 12px;
+  }
+
+  .clients-table tbody tr:hover,
+  .clients-table tbody tr:focus-visible {
+    background: rgb(38 198 163 / 8%);
+    outline: 2px solid rgb(38 198 163 / 28%);
+    outline-offset: 2px;
+  }
+
+  .clients-table td {
+    border-bottom: 0;
+    padding: 0;
+    white-space: normal;
+  }
+
+  .clients-table td:last-child {
+    padding-top: 10px;
+  }
+
+  .clients-table .client-cell {
+    align-items: flex-start;
+    gap: 9px;
+  }
+
+  .clients-table .client-avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .client-mobile-title-row {
+    margin: 0;
+  }
+
+  .client-mobile-title-row strong {
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  .client-mobile-whatsapp-action {
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    color: var(--accent-strong);
+  }
+
+  .clients-table .client-cell small {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .client-mobile-card-meta {
+    display: grid;
+    gap: 6px;
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .client-mobile-card-meta span {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .client-mobile-card-meta strong {
+    color: var(--text);
+  }
+
+  .client-mobile-phone {
+    color: var(--text) !important;
+  }
+
+  .client-mobile-card-meta .reference-status-summary {
+    margin-top: 2px;
+  }
+
+  .clients-table .table-actions {
+    display: flex;
+    justify-content: flex-end;
+    width: 100%;
   }
 
   .page-header {
@@ -8292,6 +8502,20 @@ tbody tr:hover,
   }
 }
 
+@media (max-width: 370px) {
+  .clients-list-view .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .clients-list-view .search-row {
+    grid-column: auto;
+  }
+
+  .clients-list-view .toolbar .ui-button {
+    justify-self: start;
+  }
+}
+
 @media (max-width: 480px) {
   .sidebar {
     width: min(92vw, 304px);
@@ -8310,17 +8534,27 @@ tbody tr:hover,
     padding-block: 5px;
   }
 
+  .app-shell[data-active-view='clients'] .topbar {
+    min-height: 44px;
+    gap: 7px;
+    padding-block: 5px;
+  }
+
   .app-shell[data-active-view='dashboard'] .topbar-menu-button,
-  .app-shell[data-active-view='dashboard'] .topbar-user {
+  .app-shell[data-active-view='dashboard'] .topbar-user,
+  .app-shell[data-active-view='clients'] .topbar-menu-button,
+  .app-shell[data-active-view='clients'] .topbar-user {
     width: 32px;
     min-height: 32px;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar h1 {
+  .app-shell[data-active-view='dashboard'] .topbar h1,
+  .app-shell[data-active-view='clients'] .topbar h1 {
     font-size: 16px;
   }
 
-  .app-shell[data-active-view='dashboard'] .topbar p {
+  .app-shell[data-active-view='dashboard'] .topbar p,
+  .app-shell[data-active-view='clients'] .topbar p {
     font-size: 10.5px;
   }
 
@@ -8330,6 +8564,38 @@ tbody tr:hover,
 
   .app-shell[data-active-view='dashboard'] .content {
     padding-top: 10px;
+  }
+
+  .app-shell[data-active-view='clients'] .content {
+    padding-top: 10px;
+  }
+
+  .clients-page-header .page-header {
+    margin-bottom: 6px;
+  }
+
+  .clients-list-view {
+    padding: 10px;
+  }
+
+  .clients-list-view .toolbar {
+    gap: 7px;
+    margin-bottom: 10px;
+  }
+
+  .clients-list-view .toolbar .ui-button,
+  .clients-list-view .toolbar .primary-button,
+  .clients-list-view .toolbar .secondary-button,
+  .clients-page-header .page-actions .ui-button {
+    width: auto;
+  }
+
+  .clients-table tbody {
+    gap: 8px;
+  }
+
+  .clients-table tbody tr {
+    padding: 10px;
   }
 
   .dashboard-compact-layout .page-header {

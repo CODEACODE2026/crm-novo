@@ -53,6 +53,32 @@ describe('MOBILE1 responsiveness guardrails', () => {
     expect(stylesSource).toContain('flex: 0 0 auto;');
   });
 
+  it('keeps the Clients module compact and card-based on mobile without changing desktop tables', () => {
+    expect(dashboardSource).toContain('className="clients-page-header"');
+    expect(dashboardSource).toContain('className="clients-new-mobile-label"');
+    expect(dashboardSource).toContain('className="client-mobile-card-meta"');
+    expect(dashboardSource).toContain('className="client-mobile-whatsapp-action"');
+    expect(dashboardSource).toContain('placeholder="Buscar por nome, referência ou telefone..."');
+    expect(dashboardSource).toContain('Todos os status');
+    expect(dashboardSource).toContain('Todos os planos');
+    expect(dashboardSource).toContain('onClick={() => void onSelect(client)}');
+    expect(dashboardSource).toContain('clientReferenceSummary(references)');
+    expect(dashboardSource).toContain('clientPlanSummary(references)');
+    expect(dashboardSource).toContain('{client.phoneNormalized}');
+    expect(dashboardSource).toContain('event.stopPropagation();');
+    expect(dashboardSource).toContain('setWhatsAppClient(client);');
+    expect(dashboardSource).toContain('pagination={clientsPagination}');
+    expect(dashboardSource).toContain("clients: 'Base de clientes, referências e histórico'");
+    expect(stylesSource).toContain(".app-shell[data-active-view='clients'] .topbar");
+    expect(stylesSource).toContain('.clients-page-header .page-header > div:first-child');
+    expect(stylesSource).toContain('.clients-list-view .toolbar');
+    expect(stylesSource).toContain('@media (max-width: 370px)');
+    expect(stylesSource).toContain('.clients-table thead,');
+    expect(stylesSource).toContain('.clients-table tbody tr');
+    expect(stylesSource).toContain('.client-mobile-card-meta');
+    expect(stylesSource).toContain('.client-mobile-whatsapp-action');
+  });
+
   it('uses mobile-safe modal sizing and PIX content wrapping', () => {
     expect(dashboardSource).toContain('function PixReceivableModal');
     expect(dashboardSource).toContain('function PixReceivablesModal');

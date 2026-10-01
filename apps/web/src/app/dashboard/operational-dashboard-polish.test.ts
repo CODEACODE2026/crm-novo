@@ -75,7 +75,7 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain('cashflow-svg-bar');
     expect(dashboardSource).toContain('cashflow-chart-legend');
     expect(dashboardSource).toContain(
-      'data-tooltip={`${formatPeriodLabel(point.period)} | Entradas',
+      'data-tooltip={`${formatTooltipPeriodLabel(point.period)} | Entradas',
     );
     expect(dashboardSource).not.toContain('cashflow-comparison');
     expect(dashboardSource).not.toContain('cashflow-comparison-row');
@@ -92,6 +92,26 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain('const shortMonthNamesPt = [');
     expect(dashboardSource).toContain('return `${monthLabel}/${year}`;');
     expect(dashboardSource).toContain('return day && month ? `${day}/${month}` : period;');
+    expect(dashboardSource).toContain('function formatTooltipPeriodLabel');
+    expect(dashboardSource).toContain('if (period.length === 10) return formatDate(period);');
+  });
+
+  it('reduces visible cashflow x-axis ticks without removing chart data', () => {
+    expect(dashboardSource).toContain('function cashflowTickInterval(total: number');
+    expect(dashboardSource).toContain('if (total <= 14) return 1;');
+    expect(dashboardSource).toContain('if (total <= 31) return compact ? 6 : 3;');
+    expect(dashboardSource).toContain('if (total <= 62) return compact ? 10 : 6;');
+    expect(dashboardSource).toContain('function shouldShowCashflowTick');
+    expect(dashboardSource).toContain(
+      'index === 0 || index === total - 1 || index % interval === 0',
+    );
+    expect(dashboardSource).toContain('{points.map((point, index) => {');
+    expect(dashboardSource).toContain('{points.map((point, index) => (');
+    expect(dashboardSource).toContain('shouldShowCashflowTick(index, points.length)');
+    expect(dashboardSource).toContain('shouldShowCashflowTick(index, points.length, true)');
+    expect(stylesSource).toContain('.cashflow-x-label-mobile {\n  display: none;');
+    expect(stylesSource).toContain('.cashflow-x-label-desktop {\n    display: none;');
+    expect(stylesSource).toContain('.cashflow-x-label-mobile {\n    display: block;');
   });
 
   it('renders financial summary with positive and negative balance tones', () => {

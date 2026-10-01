@@ -1401,6 +1401,10 @@ a {
   text-anchor: middle;
 }
 
+.cashflow-x-label-mobile {
+  display: none;
+}
+
 .cashflow-svg-bar {
   animation: cashflow-bar-rise 560ms ease-out both;
   transform-box: fill-box;
@@ -7433,6 +7437,14 @@ tbody tr:hover,
 
   .cashflow-axis-tick text {
     font-size: 10px;
+  }
+
+  .cashflow-x-label-desktop {
+    display: none;
+  }
+
+  .cashflow-x-label-mobile {
+    display: block;
   }
 
   .free-month-preview,

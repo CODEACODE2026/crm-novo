@@ -3214,9 +3214,24 @@ function CashflowTemporalChart({
                 x={expenseX}
                 y={toY(point.expenses)}
               />
-              <text className="cashflow-x-label" x={center} y={height - 18}>
-                {formatPeriodLabel(point.period)}
-              </text>
+              {shouldShowCashflowTick(index, points.length) ? (
+                <text
+                  className="cashflow-x-label cashflow-x-label-desktop"
+                  x={center}
+                  y={height - 18}
+                >
+                  {formatPeriodLabel(point.period)}
+                </text>
+              ) : null}
+              {shouldShowCashflowTick(index, points.length, true) ? (
+                <text
+                  className="cashflow-x-label cashflow-x-label-mobile"
+                  x={center}
+                  y={height - 18}
+                >
+                  {formatPeriodLabel(point.period)}
+                </text>
+              ) : null}
             </g>
           );
         })}
@@ -3224,9 +3239,9 @@ function CashflowTemporalChart({
       <div className="cashflow-chart-hotspots" aria-label="Detalhes do cashflow por período">
         {points.map((point, index) => (
           <button
-            aria-label={`${formatPeriodLabel(point.period)}. Entradas ${formatCurrency(point.entries)}. Saídas ${formatCurrency(point.expenses)}.`}
+            aria-label={`${formatTooltipPeriodLabel(point.period)}. Entradas ${formatCurrency(point.entries)}. Saídas ${formatCurrency(point.expenses)}.`}
             className="cashflow-chart-hotspot"
-            data-tooltip={`${formatPeriodLabel(point.period)} | Entradas ${formatCurrency(point.entries)} | Saídas ${formatCurrency(point.expenses)}`}
+            data-tooltip={`${formatTooltipPeriodLabel(point.period)} | Entradas ${formatCurrency(point.entries)} | Saídas ${formatCurrency(point.expenses)}`}
             key={point.period}
             style={
               {
@@ -3538,6 +3553,20 @@ function buildChartTicks(maxValue: number, steps: number) {
   return Array.from({ length: steps + 1 }, (_, index) => (maxValue / steps) * index).reverse();
 }
 
+function cashflowTickInterval(total: number, compact = false) {
+  if (total <= 14) return 1;
+  if (total <= 31) return compact ? 6 : 3;
+  if (total <= 62) return compact ? 10 : 6;
+  return compact ? 4 : 2;
+}
+
+function shouldShowCashflowTick(index: number, total: number, compact = false) {
+  if (total <= 1) return true;
+  const interval = cashflowTickInterval(total, compact);
+
+  return index === 0 || index === total - 1 || index % interval === 0;
+}
+
 function formatAxisCurrency(value: number) {
   if (value >= 1000) {
     return `R$ ${new Intl.NumberFormat('pt-BR', {
@@ -3562,6 +3591,12 @@ function formatPeriodLabel(period: string) {
   }
 
   return formatDate(period);
+}
+
+function formatTooltipPeriodLabel(period: string) {
+  if (period.length === 10) return formatDate(period);
+
+  return formatPeriodLabel(period);
 }
 
 type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;

@@ -78,9 +78,7 @@ describe('phase B server-side pagination wiring', () => {
     expect(financeSource).toContain('page: entriesPage');
     expect(financeSource).toContain('page: expensesPage');
     expect(financeSource).toContain('setSelectedReceivableIds([]);');
-    expect(financeSource).toContain(
-      '}, [financePeriod.startDate, financeSearch, receivableStatus, receivablesPage]);',
-    );
+    expect(financeSource).toContain('receivableDueDate,');
   });
 
   it('renders pagination for receivables, entries and expenses with current page reload semantics', () => {

@@ -69,6 +69,18 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('setPaymentReceivables(selectedReceivables)');
   });
 
+  it('adds the Hoje quick filter with Sao Paulo business date and operational due-date sorting', () => {
+    expect(financeViewSource).toContain('const [receivableDueDate, setReceivableDueDate]');
+    expect(financeViewSource).toContain("sort: 'dueDateAsc'");
+    expect(financeViewSource).toContain('function toggleTodayReceivablesFilter()');
+    expect(financeViewSource).toContain('const today = formatSaoPauloDateInput(new Date());');
+    expect(financeViewSource).toContain(
+      "setReceivableStatus(todayAlreadyActive ? '' : 'PENDENTE');",
+    );
+    expect(financeViewSource).toContain('dueDate: receivableDueDate');
+    expect(financeViewSource).toContain('Hoje');
+  });
+
   it('keeps semantic financial statuses and centered finance columns', () => {
     expect(dashboardSource).toContain('function financeReceivableTone');
     expect(dashboardSource).toContain("if (status === 'PENDENTE') return 'warning'");

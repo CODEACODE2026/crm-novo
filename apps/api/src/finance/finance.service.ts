@@ -24,6 +24,7 @@ import { ReferralsService } from '../referrals/referrals.service';
 import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
+  formatSaoPauloBusinessDate,
   parseBusinessDate,
   parseSaoPauloBusinessDate,
   getBusinessDateDay,
@@ -259,6 +260,8 @@ export class FinanceService {
     const legacyWhere = includeLegacyPaid ? this.buildLegacyImportPaidWhere(query) : null;
     const windowSize = (page - 1) * pageSize + pageSize;
     const useClientHistoryOrder = Boolean(query.clientId);
+    const useOperationalDueDateOrder = !useClientHistoryOrder && query.sort === 'dueDateAsc';
+    const fallbackDateSort = useOperationalDueDateOrder ? 'asc' : 'desc';
 
     const receivableListQuery = this.prisma.receivable.findMany({
       where,
@@ -276,7 +279,7 @@ export class FinanceService {
             { createdAt: 'desc' },
             { id: 'asc' },
           ]
-        : [{ dueDate: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
+        : [{ dueDate: fallbackDateSort }, { createdAt: fallbackDateSort }, { id: 'asc' }],
       take: windowSize,
     });
     const receivableCountQuery = this.prisma.receivable.count({ where });
@@ -293,7 +296,11 @@ export class FinanceService {
               clientReference: true,
               receivable: { include: { clientReference: true } },
             },
-            orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
+            orderBy: [
+              { transactionDate: fallbackDateSort },
+              { createdAt: fallbackDateSort },
+              { id: 'asc' },
+            ],
             take: windowSize,
           }),
           this.prisma.financialTransaction.count({ where: legacyWhere }),
@@ -330,9 +337,13 @@ export class FinanceService {
         }
       }
 
-      const dateDiff = b.date.getTime() - a.date.getTime();
+      const dateDiff = useOperationalDueDateOrder
+        ? a.date.getTime() - b.date.getTime()
+        : b.date.getTime() - a.date.getTime();
       if (dateDiff !== 0) return dateDiff;
-      const createdAtDiff = b.createdAt.getTime() - a.createdAt.getTime();
+      const createdAtDiff = useOperationalDueDateOrder
+        ? a.createdAt.getTime() - b.createdAt.getTime()
+        : b.createdAt.getTime() - a.createdAt.getTime();
       if (createdAtDiff !== 0) return createdAtDiff;
       return a.id.localeCompare(b.id);
     });
@@ -1915,7 +1926,7 @@ export class FinanceService {
 
     if (includeStatus && query.status === 'VENCIDO') {
       where.status = 'PENDENTE';
-      where.dueDate = { lt: parseBusinessDate(formatBusinessDate(new Date())) };
+      where.dueDate = { lt: parseBusinessDate(formatSaoPauloBusinessDate(new Date())) };
     } else if (includeStatus && query.status && query.status !== 'VENCIDO') {
       where.status = query.status;
     }

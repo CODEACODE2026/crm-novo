@@ -758,6 +758,40 @@ describe('CRM UI formatters', () => {
     );
   });
 
+  it('sends operational receivable due date and sort filters', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ items: [], pagination: {} }), {
+          status: 200,
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listReceivables({
+      dueDate: '2026-10-01',
+      page: 1,
+      pageSize: 20,
+      search: 'Cliente',
+      sort: 'dueDateAsc',
+      status: 'PENDENTE',
+    });
+    await getReceivablesSummary({ dueDate: '2026-10-01', search: 'Cliente' });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        '/receivables?status=PENDENTE&search=Cliente&dueDate=2026-10-01&page=1&pageSize=20&sort=dueDateAsc',
+      ),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/receivables/summary?search=Cliente&dueDate=2026-10-01'),
+      expect.any(Object),
+    );
+  });
+
   it('sends client finance filters to receivables endpoints', async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(

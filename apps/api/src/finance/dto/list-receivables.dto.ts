@@ -41,4 +41,8 @@ export class ListReceivablesDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @IsIn(['dueDateAsc'])
+  sort?: 'dueDateAsc';
 }

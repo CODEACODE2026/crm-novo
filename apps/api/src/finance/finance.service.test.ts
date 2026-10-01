@@ -931,12 +931,6 @@ function createListReceivablesPrisma(
       );
     }
 
-    if (Array.isArray(where.OR)) {
-      return where.OR.some((item) =>
-        matchesReceivableWhere(receivable, item as Record<string, unknown>),
-      );
-    }
-
     if (where.clientId && receivable.clientId !== where.clientId) return false;
     if (where.clientReferenceId && receivable.clientReferenceId !== where.clientReferenceId) {
       return false;
@@ -971,6 +965,11 @@ function createListReceivablesPrisma(
         return false;
       }
     }
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item) =>
+        matchesReceivableWhere(receivable, item as Record<string, unknown>),
+      );
+    }
 
     return true;
   };
@@ -1000,11 +999,6 @@ function createListReceivablesPrisma(
         return false;
       }
     }
-    if (Array.isArray(where.OR)) {
-      return where.OR.some((item) =>
-        matchesTransactionWhere(transaction, item as Record<string, unknown>),
-      );
-    }
     if (where.description) {
       const filter = where.description as { contains: string };
       if (!matchesStringFilter(transaction.description, filter)) return false;
@@ -1031,6 +1025,11 @@ function createListReceivablesPrisma(
       ) {
         return false;
       }
+    }
+    if (Array.isArray(where.OR)) {
+      return where.OR.some((item) =>
+        matchesTransactionWhere(transaction, item as Record<string, unknown>),
+      );
     }
 
     return true;
@@ -1088,46 +1087,84 @@ function createListReceivablesPrisma(
   const sortByDateCreatedId = <T extends { createdAt?: Date; id: string }>(
     items: T[],
     dateKey: keyof T,
+    direction: 'asc' | 'desc' = 'desc',
   ) =>
     [...items].sort((a, b) => {
-      const dateDiff = (b[dateKey] as Date).getTime() - (a[dateKey] as Date).getTime();
+      const dateDiff =
+        direction === 'asc'
+          ? (a[dateKey] as Date).getTime() - (b[dateKey] as Date).getTime()
+          : (b[dateKey] as Date).getTime() - (a[dateKey] as Date).getTime();
       if (dateDiff !== 0) return dateDiff;
       const createdAtDiff =
-        (b.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime() -
-        (a.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime();
+        direction === 'asc'
+          ? (a.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime() -
+            (b.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime()
+          : (b.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime() -
+            (a.createdAt ?? new Date('2026-09-01T00:00:00.000Z')).getTime();
       if (createdAtDiff !== 0) return createdAtDiff;
       return a.id.localeCompare(b.id);
     });
+
+  const dateSortDirection = (orderBy: unknown, key: string): 'asc' | 'desc' => {
+    if (!Array.isArray(orderBy)) return 'desc';
+
+    const dateOrder = orderBy.find(
+      (item): item is Record<string, 'asc' | 'desc'> =>
+        typeof item === 'object' && item !== null && key in item,
+    );
+
+    return dateOrder?.[key] === 'asc' ? 'asc' : 'desc';
+  };
 
   return {
     receivable: {
       count: vi.fn(({ where }: { where: Record<string, unknown> }) =>
         Promise.resolve(receivables.filter((item) => matchesReceivableWhere(item, where)).length),
       ),
-      findMany: vi.fn(({ where, take }: { take: number; where: Record<string, unknown> }) =>
-        Promise.resolve(
-          sortByDateCreatedId(
-            receivables.filter((item) => matchesReceivableWhere(item, where)),
-            'dueDate',
-          )
-            .slice(0, take)
-            .map(receivableWithRelations),
-        ),
+      findMany: vi.fn(
+        ({
+          orderBy,
+          where,
+          take,
+        }: {
+          orderBy?: unknown;
+          take: number;
+          where: Record<string, unknown>;
+        }) =>
+          Promise.resolve(
+            sortByDateCreatedId(
+              receivables.filter((item) => matchesReceivableWhere(item, where)),
+              'dueDate',
+              dateSortDirection(orderBy, 'dueDate'),
+            )
+              .slice(0, take)
+              .map(receivableWithRelations),
+          ),
       ),
     },
     financialTransaction: {
       count: vi.fn(({ where }: { where: Record<string, unknown> }) =>
         Promise.resolve(transactions.filter((item) => matchesTransactionWhere(item, where)).length),
       ),
-      findMany: vi.fn(({ where, take }: { take: number; where: Record<string, unknown> }) =>
-        Promise.resolve(
-          sortByDateCreatedId(
-            transactions.filter((item) => matchesTransactionWhere(item, where)),
-            'transactionDate',
-          )
-            .slice(0, take)
-            .map(transactionWithRelations),
-        ),
+      findMany: vi.fn(
+        ({
+          orderBy,
+          where,
+          take,
+        }: {
+          orderBy?: unknown;
+          take: number;
+          where: Record<string, unknown>;
+        }) =>
+          Promise.resolve(
+            sortByDateCreatedId(
+              transactions.filter((item) => matchesTransactionWhere(item, where)),
+              'transactionDate',
+              dateSortDirection(orderBy, 'transactionDate'),
+            )
+              .slice(0, take)
+              .map(transactionWithRelations),
+          ),
       ),
     },
     $transaction: <T>(items: Array<Promise<T>>) => Promise.all(items),
@@ -2200,6 +2237,142 @@ describe('FinanceService', () => {
     await expect(service.listReceivables({ page: 1, pageSize: 10 })).resolves.toMatchObject({
       items: [{ id: 'pending-new-due' }, { id: 'paid-recent-old-due' }],
       pagination: { total: 2 },
+    });
+  });
+
+  it('orders operational pending receivables by nearest due date with deterministic ties', async () => {
+    const sharedDueDate = parseBusinessDate('2026-10-01');
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'future-far',
+            createdAt: new Date('2026-09-01T12:00:00.000Z'),
+            dueDate: parseBusinessDate('2026-10-15'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'today-later-created',
+            createdAt: new Date('2026-09-02T12:00:00.000Z'),
+            dueDate: sharedDueDate,
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'today-earlier-created',
+            createdAt: new Date('2026-09-01T12:00:00.000Z'),
+            dueDate: sharedDueDate,
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'tomorrow',
+            createdAt: new Date('2026-09-01T12:00:00.000Z'),
+            dueDate: parseBusinessDate('2026-10-02'),
+            status: 'PENDENTE',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ page: 1, pageSize: 10, sort: 'dueDateAsc', status: 'PENDENTE' }),
+    ).resolves.toMatchObject({
+      items: [
+        { id: 'today-earlier-created' },
+        { id: 'today-later-created' },
+        { id: 'tomorrow' },
+        { id: 'future-far' },
+      ],
+      pagination: { total: 4 },
+    });
+  });
+
+  it('keeps due-date ascending pagination stable for operational receivables', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'day-03',
+            dueDate: parseBusinessDate('2026-10-03'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'day-01',
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'day-02',
+            dueDate: parseBusinessDate('2026-10-02'),
+            status: 'PENDENTE',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ page: 1, pageSize: 2, sort: 'dueDateAsc', status: 'PENDENTE' }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'day-01' }, { id: 'day-02' }],
+      pagination: { page: 1, pageSize: 2, total: 3, totalPages: 2 },
+    });
+    await expect(
+      service.listReceivables({ page: 2, pageSize: 2, sort: 'dueDateAsc', status: 'PENDENTE' }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'day-03' }],
+      pagination: { page: 2, pageSize: 2, total: 3, totalPages: 2 },
+    });
+  });
+
+  it('filters today receivables by exact due date with search and pending status', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'today-match',
+            client: { name: 'Cliente Hoje' },
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'tomorrow-match',
+            client: { name: 'Cliente Hoje' },
+            dueDate: parseBusinessDate('2026-10-02'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'today-paid',
+            client: { name: 'Cliente Hoje' },
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PAGO',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({
+        dueDate: '2026-10-01',
+        page: 1,
+        pageSize: 10,
+        search: 'Hoje',
+        sort: 'dueDateAsc',
+        status: 'PENDENTE',
+      }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'today-match' }],
+      pagination: { total: 1 },
     });
   });
 

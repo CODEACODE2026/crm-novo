@@ -13539,6 +13539,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     PaginatedClients['pagination'] | null
   >(null);
   const [receivableStatus, setReceivableStatus] = useState<ReceivableDisplayStatus | ''>('');
+  const [receivableDueDate, setReceivableDueDate] = useState('');
   const [financeSearch, setFinanceSearch] = useState('');
   const [receivablesPage, setReceivablesPage] = useState(1);
   const [entriesPage, setEntriesPage] = useState(1);
@@ -13563,22 +13564,24 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     setError('');
 
     try {
+      const trimmedSearch = financeSearch.trim();
+      const receivableDateFilters = receivableDueDate
+        ? { dueDate: receivableDueDate }
+        : { endDate: financePeriod.endDate, startDate: financePeriod.startDate };
       const receivableFilters: Parameters<typeof listReceivables>[0] = {
-        endDate: financePeriod.endDate,
+        ...receivableDateFilters,
         page: receivablesPage,
         pageSize: listPageSize,
-        startDate: financePeriod.startDate,
         status: receivableStatus,
+        sort: 'dueDateAsc',
       };
-      const trimmedSearch = financeSearch.trim();
 
       if (trimmedSearch) {
         receivableFilters.search = trimmedSearch;
       }
       const receivableSummaryFilters = {
-        endDate: financePeriod.endDate,
+        ...receivableDateFilters,
         ...(trimmedSearch ? { search: trimmedSearch } : {}),
-        startDate: financePeriod.startDate,
       };
 
       const [
@@ -13653,6 +13656,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     financePeriod.endDate,
     financePeriod.startDate,
     financeSearch,
+    receivableDueDate,
     receivableStatus,
     receivablesPage,
   ]);
@@ -13667,7 +13671,13 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
   useEffect(() => {
     setSelectedReceivableIds([]);
-  }, [financePeriod.startDate, financeSearch, receivableStatus, receivablesPage]);
+  }, [
+    financePeriod.startDate,
+    financeSearch,
+    receivableDueDate,
+    receivableStatus,
+    receivablesPage,
+  ]);
 
   async function reloadWithNotice(message: string) {
     setSelectedReceivableIds([]);
@@ -13677,9 +13687,19 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
   function changeFinanceMonth(months: number) {
     setFinancePeriod((current) => shiftFinancePeriod(current, months));
+    setReceivableDueDate('');
     setReceivablesPage(1);
     setEntriesPage(1);
     setExpensesPage(1);
+  }
+
+  function toggleTodayReceivablesFilter() {
+    const today = formatSaoPauloDateInput(new Date());
+    const todayAlreadyActive = receivableDueDate === today && receivableStatus === 'PENDENTE';
+
+    setReceivableDueDate(todayAlreadyActive ? '' : today);
+    setReceivableStatus(todayAlreadyActive ? '' : 'PENDENTE');
+    setReceivablesPage(1);
   }
 
   const entryCategories = categories.filter((category) => category.type === 'ENTRADA');
@@ -13932,6 +13952,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               value={receivableStatus}
               onChange={(event) => {
                 setReceivableStatus(event.target.value as ReceivableDisplayStatus | '');
+                setReceivableDueDate('');
                 setReceivablesPage(1);
               }}
             >
@@ -13941,6 +13962,13 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               <option value="PAGO">Pago</option>
               <option value="CANCELADO">Cancelado</option>
             </select>
+            <Button
+              icon={CalendarDays}
+              variant={receivableDueDate ? 'primary' : 'secondary'}
+              onClick={toggleTodayReceivablesFilter}
+            >
+              Hoje
+            </Button>
             <Button icon={Filter} variant="secondary" onClick={() => void loadFinance()}>
               Aplicar
             </Button>

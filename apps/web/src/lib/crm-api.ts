@@ -1919,10 +1919,12 @@ export function listReceivables(
     clientReferenceId?: string;
     status?: ReceivableDisplayStatus | '';
     search?: string;
+    dueDate?: string;
     startDate?: string;
     endDate?: string;
     page?: number;
     pageSize?: number;
+    sort?: 'dueDateAsc';
   } = {},
 ) {
   const params = new URLSearchParams();
@@ -1931,10 +1933,12 @@ export function listReceivables(
   if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
   if (filters.status) params.set('status', filters.status);
   if (filters.search) params.set('search', filters.search);
+  if (filters.dueDate) params.set('dueDate', filters.dueDate);
   if (filters.startDate) params.set('startDate', filters.startDate);
   if (filters.endDate) params.set('endDate', filters.endDate);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+  if (filters.sort) params.set('sort', filters.sort);
 
   const query = params.toString();
   return apiFetch<PaginatedReceivables>(`/receivables${query ? `?${query}` : ''}`);
@@ -1945,6 +1949,7 @@ export function getReceivablesSummary(
     clientId?: string;
     clientReferenceId?: string;
     search?: string;
+    dueDate?: string;
     startDate?: string;
     endDate?: string;
   } = {},
@@ -1954,6 +1959,7 @@ export function getReceivablesSummary(
   if (filters.clientId) params.set('clientId', filters.clientId);
   if (filters.clientReferenceId) params.set('clientReferenceId', filters.clientReferenceId);
   if (filters.search) params.set('search', filters.search);
+  if (filters.dueDate) params.set('dueDate', filters.dueDate);
   if (filters.startDate) params.set('startDate', filters.startDate);
   if (filters.endDate) params.set('endDate', filters.endDate);
 

@@ -118,6 +118,30 @@ function createDashboardPrisma() {
   ];
   const transactions = [
     {
+      transactionDate: parseBusinessDate('2026-05-20'),
+      type: 'ENTRADA' as const,
+      origin: 'MANUAL' as const,
+      amount: decimal('70.00'),
+    },
+    {
+      transactionDate: parseBusinessDate('2026-05-20'),
+      type: 'SAIDA' as const,
+      origin: 'MANUAL' as const,
+      amount: decimal('20.00'),
+    },
+    {
+      transactionDate: parseBusinessDate('2026-08-15'),
+      type: 'ENTRADA' as const,
+      origin: 'MANUAL' as const,
+      amount: decimal('90.00'),
+    },
+    {
+      transactionDate: parseBusinessDate('2026-08-15'),
+      type: 'SAIDA' as const,
+      origin: 'MANUAL' as const,
+      amount: decimal('30.00'),
+    },
+    {
       transactionDate: parseBusinessDate('2026-09-10'),
       type: 'ENTRADA' as const,
       origin: 'RECEIVABLE_PAYMENT' as const,
@@ -457,6 +481,62 @@ describe('DashboardService', () => {
     expect(summary.charts.received[0]).toMatchObject({ amount: '135.00' });
   });
 
+  it('uses the resolved current month range for financial charts without HTTP dates', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T15:00:00.000Z'));
+    const service = new DashboardService(createDashboardPrisma() as never);
+
+    const summary = await service.summary({});
+
+    expect(summary.period).toMatchObject({
+      startDate: '2026-09-01',
+      endDate: '2026-09-30',
+    });
+    expect(summary.charts.grouping).toBe('day');
+    expect(summary.finance.entries).toBe('185.00');
+    expect(summary.charts.cashflow.map((point) => point.period)).toEqual(['2026-09-10']);
+    expect(summary.charts.cashflow.reduce((sum, point) => sum + Number(point.entries), 0)).toBe(
+      Number(summary.finance.entries),
+    );
+  });
+
+  it('keeps today, previous month and last 30 days charts inside the selected range', async () => {
+    const service = new DashboardService(createDashboardPrisma() as never);
+
+    const today = await service.summary({ startDate: '2026-09-10', endDate: '2026-09-10' });
+    const previousMonth = await service.summary({
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+    });
+    const last30Days = await service.summary({ startDate: '2026-08-12', endDate: '2026-09-10' });
+
+    expect(today.charts.grouping).toBe('day');
+    expect(today.charts.cashflow.map((point) => point.period)).toEqual(['2026-09-10']);
+    expect(previousMonth.charts.grouping).toBe('day');
+    expect(previousMonth.charts.cashflow.map((point) => point.period)).toEqual(['2026-08-15']);
+    expect(last30Days.charts.grouping).toBe('day');
+    expect(last30Days.charts.cashflow.map((point) => point.period)).toEqual([
+      '2026-08-15',
+      '2026-09-10',
+    ]);
+  });
+
+  it('respects custom chart start and end dates and switches long periods to monthly grouping', async () => {
+    const service = new DashboardService(createDashboardPrisma() as never);
+
+    const shortCustom = await service.summary({ startDate: '2026-05-01', endDate: '2026-05-31' });
+    const longCustom = await service.summary({ startDate: '2026-05-01', endDate: '2026-09-30' });
+
+    expect(shortCustom.charts.grouping).toBe('day');
+    expect(shortCustom.charts.cashflow.map((point) => point.period)).toEqual(['2026-05-20']);
+    expect(longCustom.charts.grouping).toBe('month');
+    expect(longCustom.charts.cashflow.map((point) => point.period)).toEqual([
+      '2026-05',
+      '2026-08',
+      '2026-09',
+    ]);
+  });
+
   it('uses America/Sao_Paulo for today near UTC day boundaries', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-11T02:30:00.000Z'));
@@ -525,6 +605,8 @@ describe('DashboardService', () => {
     expect(summary.finance.expenses).toBe('0.00');
     expect(summary.finance.balance).toBe('0.00');
     expect(summary.renewals).toEqual({ count: 0, amount: '0.00' });
+    expect(summary.charts.cashflow).toEqual([]);
+    expect(summary.charts.received).toEqual([]);
     expect(summary.clients.active).toBe(3);
     expect(summary.clients.distribution).toContainEqual({ status: 'ATIVO', total: 3 });
     expect(summary.dueDates.dueToday).toBe(1);

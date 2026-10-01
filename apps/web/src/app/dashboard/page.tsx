@@ -371,6 +371,20 @@ const monthNamesPt = [
   'Novembro',
   'Dezembro',
 ];
+const shortMonthNamesPt = [
+  'Jan',
+  'Fev',
+  'Mar',
+  'Abr',
+  'Mai',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Set',
+  'Out',
+  'Nov',
+  'Dez',
+];
 
 type DashboardPeriodMode = 'today' | 'current' | 'previous' | 'last30' | 'custom';
 
@@ -3538,7 +3552,13 @@ function formatAxisCurrency(value: number) {
 function formatPeriodLabel(period: string) {
   if (period.length === 7) {
     const [year, month] = period.split('-');
-    return `${month}/${year}`;
+    const monthLabel = shortMonthNamesPt[Number(month) - 1] ?? month;
+    return `${monthLabel}/${year}`;
+  }
+
+  if (period.length === 10) {
+    const [, month, day] = period.split('-');
+    return day && month ? `${day}/${month}` : period;
   }
 
   return formatDate(period);

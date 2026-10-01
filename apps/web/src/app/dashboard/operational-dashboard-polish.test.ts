@@ -88,6 +88,12 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).not.toContain('.cashflow-comparison-row');
   });
 
+  it('formats cashflow period labels for daily and monthly grouping', () => {
+    expect(dashboardSource).toContain('const shortMonthNamesPt = [');
+    expect(dashboardSource).toContain('return `${monthLabel}/${year}`;');
+    expect(dashboardSource).toContain('return day && month ? `${day}/${month}` : period;');
+  });
+
   it('renders financial summary with positive and negative balance tones', () => {
     expect(dashboardSource).toContain("financeBalance < 0 ? 'is-negative'");
     expect(dashboardSource).toContain("financeBalance > 0 ? 'is-positive'");

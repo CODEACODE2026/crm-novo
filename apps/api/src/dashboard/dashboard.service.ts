@@ -28,8 +28,7 @@ export class DashboardService {
     const todayEnd = new Date(`${formatBusinessDate(today)}T23:59:59.999Z`);
     const tomorrow = this.addDays(today, 1);
     const nextSevenDays = this.addDays(today, 7);
-    const chartStart =
-      query.startDate || query.endDate ? range.startDate : this.addMonths(today, -5);
+    const chartStart = range.startDate;
     const chartGrouping = this.daysBetween(chartStart, range.endDate) > 62 ? 'month' : 'day';
 
     const [
@@ -400,10 +399,6 @@ export class DashboardService {
     );
 
     return zonedUtc - date.getTime();
-  }
-
-  private addMonths(date: Date, months: number) {
-    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
   }
 
   private daysBetween(startDate: Date, endDate: Date) {

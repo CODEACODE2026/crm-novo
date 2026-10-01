@@ -1,7 +1,15 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import { ChevronLeft, type LucideIcon, PanelLeftClose, PanelLeftOpen, User } from 'lucide-react';
+import React, { useEffect, useState, type ReactNode } from 'react';
+import {
+  ChevronLeft,
+  Menu,
+  type LucideIcon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  User,
+  X,
+} from 'lucide-react';
 
 export interface AdminNavItem<T extends string> {
   id: T;
@@ -34,8 +42,38 @@ export function AdminShell<T extends string>({
   title,
   userName,
 }: AdminShellProps<T>) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setMobileMenuOpen(false);
+      }
+    }
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMenuOpen]);
+
+  function handleNavigate(id: T) {
+    onNavigate(id);
+    setMobileMenuOpen(false);
+  }
+
   return (
-    <div className={`app-shell ${collapsed ? 'is-collapsed' : ''}`}>
+    <div
+      className={`app-shell ${collapsed ? 'is-collapsed' : ''} ${mobileMenuOpen ? 'mobile-menu-open' : ''}`}
+    >
+      <button
+        aria-hidden={!mobileMenuOpen}
+        aria-label="Fechar menu"
+        className="sidebar-backdrop"
+        tabIndex={mobileMenuOpen ? 0 : -1}
+        type="button"
+        onClick={() => setMobileMenuOpen(false)}
+      />
       <aside className="sidebar" aria-label="Navegação principal">
         <div className="sidebar-header">
           <div className="brand">
@@ -58,6 +96,14 @@ export function AdminShell<T extends string>({
               <PanelLeftClose aria-hidden="true" size={16} />
             )}
           </button>
+          <button
+            aria-label="Fechar menu"
+            className="icon-button sidebar-mobile-close"
+            type="button"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
         </div>
 
         <nav className="nav-list">
@@ -70,7 +116,7 @@ export function AdminShell<T extends string>({
                 key={item.id}
                 title={collapsed ? item.label : undefined}
                 type="button"
-                onClick={() => onNavigate(item.id)}
+                onClick={() => handleNavigate(item.id)}
               >
                 <Icon aria-hidden="true" size={18} />
                 <span>{item.label}</span>
@@ -105,6 +151,15 @@ export function AdminShell<T extends string>({
 
       <main className="main-area">
         <header className="topbar">
+          <button
+            aria-expanded={mobileMenuOpen}
+            aria-label="Abrir menu"
+            className="icon-button topbar-menu-button"
+            type="button"
+            onClick={() => setMobileMenuOpen(true)}
+          >
+            <Menu aria-hidden="true" size={18} />
+          </button>
           <div className="topbar-context">
             <span className="breadcrumb">
               <ChevronLeft aria-hidden="true" size={13} />

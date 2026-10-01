@@ -33,9 +33,16 @@
   box-sizing: border-box;
 }
 
+html {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
+  width: 100%;
   min-height: 100vh;
   margin: 0;
+  overflow-x: hidden;
   background: var(--background);
   color: var(--text);
   font-family:
@@ -285,6 +292,7 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -500,6 +508,7 @@ a {
 
 .sidebar {
   position: sticky;
+  z-index: 30;
   top: 0;
   display: grid;
   height: 100vh;
@@ -507,6 +516,16 @@ a {
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-sidebar) 92%, #000 8%);
   padding: 14px;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: none;
+  border: 0;
+  background: rgb(0 0 0 / 62%);
+  cursor: pointer;
 }
 
 .sidebar-header {
@@ -615,6 +634,11 @@ a {
   flex: 0 0 auto;
 }
 
+.sidebar-mobile-close,
+.topbar-menu-button {
+  display: none;
+}
+
 .app-shell.is-collapsed .brand-copy,
 .app-shell.is-collapsed .nav-item span,
 .app-shell.is-collapsed .profile-copy {
@@ -698,6 +722,18 @@ a {
 .topbar-context {
   display: grid;
   gap: 3px;
+  min-width: 0;
+}
+
+.topbar-context > div {
+  min-width: 0;
+}
+
+.topbar-context h1,
+.topbar-context p,
+.page-header h2,
+.page-header p {
+  overflow-wrap: anywhere;
 }
 
 .breadcrumb {
@@ -722,11 +758,13 @@ a {
 }
 
 .content {
+  min-width: 0;
   padding: 20px 22px 28px;
 }
 
 .page-header {
   display: flex;
+  min-width: 0;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
@@ -757,6 +795,7 @@ a {
 
 .page-actions {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
@@ -2726,6 +2765,7 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -3404,7 +3444,9 @@ a {
 }
 
 .table-wrap {
+  max-width: 100%;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .clients-table {
@@ -6933,6 +6975,7 @@ tbody tr:hover,
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+    min-height: 100dvh;
   }
 
   .app-shell.is-collapsed {
@@ -6940,11 +6983,17 @@ tbody tr:hover,
   }
 
   .sidebar {
-    position: static;
-    height: auto;
-    grid-template-rows: auto auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 35;
+    width: min(86vw, 320px);
+    height: 100dvh;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+    box-shadow: 22px 0 50px rgb(0 0 0 / 32%);
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
   }
 
   .app-shell.is-collapsed .brand-copy,
@@ -6962,12 +7011,35 @@ tbody tr:hover,
     position: static;
   }
 
-  .sidebar-footer {
+  .app-shell.mobile-menu-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .app-shell.mobile-menu-open .sidebar-backdrop {
+    display: block;
+  }
+
+  .sidebar-collapse {
     display: none;
   }
 
+  .sidebar-mobile-close,
+  .topbar-menu-button {
+    display: inline-flex;
+  }
+
+  .sidebar-footer {
+    display: flex;
+  }
+
   .nav-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: center;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .metric-grid {
@@ -7325,10 +7397,18 @@ tbody tr:hover,
 
   .topbar,
   .content {
-    padding-inline: 18px;
+    padding-inline: max(14px, env(safe-area-inset-left)) max(14px, env(safe-area-inset-right));
   }
 
-  .topbar,
+  .topbar {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .topbar-actions {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
   .page-header {
     align-items: stretch;
     flex-direction: column;
@@ -7359,7 +7439,7 @@ tbody tr:hover,
   }
 
   .period-controls button {
-    flex: 1 1 auto;
+    flex: 1 1 120px;
     padding-inline: 8px;
   }
 
@@ -7688,7 +7768,8 @@ tbody tr:hover,
 
   .modal-backdrop {
     align-items: end;
-    padding: 10px;
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+      max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
 
   .reference-form-modal {
@@ -7697,7 +7778,11 @@ tbody tr:hover,
 
   .modal {
     width: 100%;
-    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .modal-header {
+    align-items: flex-start;
   }
 
   .pix-data-panel,
@@ -7725,7 +7810,7 @@ tbody tr:hover,
 
   .client-create-modal {
     width: 100%;
-    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
   }
 
   .client-create-modal .client-form-body {
@@ -7752,7 +7837,7 @@ tbody tr:hover,
   }
 
   .deletion-modal {
-    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
   }
 
   .deletion-impact-grid {
@@ -7769,5 +7854,110 @@ tbody tr:hover,
 
   .plan-form-modal-body {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar {
+    width: min(92vw, 304px);
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .topbar {
+    min-height: auto;
+    gap: 10px;
+    padding-block: 10px;
+  }
+
+  .content {
+    padding-block: 14px 22px;
+  }
+
+  .workspace-main,
+  .detail-panel,
+  .panel,
+  .metric-card {
+    padding: 14px;
+  }
+
+  .page-header h2,
+  .client-detail-title h2 {
+    font-size: 19px;
+  }
+
+  .page-actions .ui-button,
+  .page-actions .primary-button,
+  .page-actions .secondary-button,
+  .toolbar .ui-button,
+  .toolbar .primary-button,
+  .toolbar .secondary-button,
+  .selection-bar .ui-button,
+  .selection-bar .primary-button,
+  .selection-bar .secondary-button,
+  .modal .ui-button,
+  .modal .primary-button,
+  .modal .secondary-button {
+    width: 100%;
+  }
+
+  .button-row,
+  .page-actions,
+  .selection-bar .button-row,
+  .pix-waiting-actions,
+  .modal-actions {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .topbar-user {
+    max-width: 100%;
+  }
+
+  .client-detail-header {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .client-detail-meta span,
+  .pix-copy-row input,
+  .settings-template-readonly-content pre,
+  .settings-template-modal pre {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .modal {
+    padding: 14px;
+  }
+
+  .modal .form-actions {
+    bottom: -14px;
+    margin: 14px -14px -14px;
+    padding: 12px 14px;
+  }
+
+  .pix-panel {
+    padding: 12px;
+  }
+
+  .pix-amount-row strong {
+    font-size: 20px;
+  }
+
+  .pix-qr img {
+    width: min(160px, 100%);
+  }
+
+  .pagination-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pagination-current {
+    grid-column: 1 / -1;
+    justify-content: center;
+    order: -1;
   }
 }

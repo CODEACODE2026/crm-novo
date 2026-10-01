@@ -82,6 +82,8 @@ const ignoredPaymentWebhookEvents = [
   'med.created',
 ];
 
+type ClientReceivableHistoryGroup = 'OPEN' | 'PAID' | 'CANCELED' | 'OTHER';
+
 type ReceivableWithRelations = Prisma.ReceivableGetPayload<{
   include: {
     client: true;
@@ -262,6 +264,20 @@ export class FinanceService {
     const useClientHistoryOrder = Boolean(query.clientId);
     const useOperationalDueDateOrder = !useClientHistoryOrder && query.sort === 'dueDateAsc';
     const fallbackDateSort = useOperationalDueDateOrder ? 'asc' : 'desc';
+    const listTake = useClientHistoryOrder ? undefined : windowSize;
+    const receivableOrderBy: Prisma.ReceivableOrderByWithRelationInput[] = useClientHistoryOrder
+      ? [
+          { paidAt: { sort: 'desc', nulls: 'last' } },
+          { dueDate: 'desc' },
+          { createdAt: 'desc' },
+          { id: 'asc' },
+        ]
+      : [{ dueDate: fallbackDateSort }, { createdAt: fallbackDateSort }, { id: 'asc' }];
+    const legacyOrderBy: Prisma.FinancialTransactionOrderByWithRelationInput[] = [
+      { transactionDate: fallbackDateSort },
+      { createdAt: fallbackDateSort },
+      { id: 'asc' },
+    ];
 
     const receivableListQuery = this.prisma.receivable.findMany({
       where,
@@ -272,15 +288,8 @@ export class FinanceService {
         paymentTransaction: true,
         paymentIntents: { orderBy: { createdAt: 'desc' } },
       },
-      orderBy: useClientHistoryOrder
-        ? [
-            { paidAt: { sort: 'desc', nulls: 'last' } },
-            { dueDate: 'desc' },
-            { createdAt: 'desc' },
-            { id: 'asc' },
-          ]
-        : [{ dueDate: fallbackDateSort }, { createdAt: fallbackDateSort }, { id: 'asc' }],
-      take: windowSize,
+      orderBy: receivableOrderBy,
+      ...(listTake ? { take: listTake } : {}),
     });
     const receivableCountQuery = this.prisma.receivable.count({ where });
 
@@ -296,12 +305,8 @@ export class FinanceService {
               clientReference: true,
               receivable: { include: { clientReference: true } },
             },
-            orderBy: [
-              { transactionDate: fallbackDateSort },
-              { createdAt: fallbackDateSort },
-              { id: 'asc' },
-            ],
-            take: windowSize,
+            orderBy: legacyOrderBy,
+            ...(listTake ? { take: listTake } : {}),
           }),
           this.prisma.financialTransaction.count({ where: legacyWhere }),
         ])
@@ -329,12 +334,7 @@ export class FinanceService {
 
     mergedItems.sort((a, b) => {
       if (useClientHistoryOrder) {
-        if (a.paidAt && b.paidAt) {
-          const paidAtDiff = b.paidAt.getTime() - a.paidAt.getTime();
-          if (paidAtDiff !== 0) return paidAtDiff;
-        } else if (a.paidAt || b.paidAt) {
-          return a.paidAt ? -1 : 1;
-        }
+        return this.compareClientReceivableHistoryItems(a, b);
       }
 
       const dateDiff = useOperationalDueDateOrder
@@ -359,6 +359,66 @@ export class FinanceService {
       ),
       pagination: this.presentPagination(page, pageSize, total),
     };
+  }
+
+  private compareClientReceivableHistoryItems(a: ReceivableListItem, b: ReceivableListItem) {
+    const groupRank = {
+      OPEN: 0,
+      PAID: 1,
+      CANCELED: 2,
+      OTHER: 3,
+    } satisfies Record<ClientReceivableHistoryGroup, number>;
+    const aGroup = this.clientReceivableHistoryGroup(a);
+    const bGroup = this.clientReceivableHistoryGroup(b);
+    const rankDiff = groupRank[aGroup] - groupRank[bGroup];
+
+    if (rankDiff !== 0) return rankDiff;
+
+    if (aGroup === 'OPEN') {
+      return this.compareDateCreatedId(a, b, 'asc');
+    }
+
+    if (aGroup === 'PAID') {
+      return this.comparePaidHistoryItems(a, b);
+    }
+
+    return this.compareDateCreatedId(a, b, 'desc');
+  }
+
+  private clientReceivableHistoryGroup(item: ReceivableListItem): ClientReceivableHistoryGroup {
+    if (item.kind === 'LEGACY_IMPORT') return 'PAID';
+    if (item.receivable.status === 'PENDENTE') return 'OPEN';
+    if (item.receivable.status === 'PAGO') return 'PAID';
+    if (item.receivable.status === 'CANCELADO') return 'CANCELED';
+
+    return 'OTHER';
+  }
+
+  private comparePaidHistoryItems(a: ReceivableListItem, b: ReceivableListItem) {
+    const aPaidDate = a.paidAt ?? a.date;
+    const bPaidDate = b.paidAt ?? b.date;
+    const paidDateDiff = bPaidDate.getTime() - aPaidDate.getTime();
+
+    if (paidDateDiff !== 0) return paidDateDiff;
+
+    return this.compareDateCreatedId(a, b, 'desc');
+  }
+
+  private compareDateCreatedId(
+    a: ReceivableListItem,
+    b: ReceivableListItem,
+    direction: 'asc' | 'desc',
+  ) {
+    const multiplier = direction === 'asc' ? 1 : -1;
+    const dateDiff = (a.date.getTime() - b.date.getTime()) * multiplier;
+
+    if (dateDiff !== 0) return dateDiff;
+
+    const createdAtDiff = (a.createdAt.getTime() - b.createdAt.getTime()) * multiplier;
+
+    if (createdAtDiff !== 0) return createdAtDiff;
+
+    return a.id.localeCompare(b.id);
   }
 
   async receivablesSummary(query: ListReceivablesDto) {

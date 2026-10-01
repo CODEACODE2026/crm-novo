@@ -1128,7 +1128,7 @@ function createListReceivablesPrisma(
           take,
         }: {
           orderBy?: unknown;
-          take: number;
+          take?: number;
           where: Record<string, unknown>;
         }) =>
           Promise.resolve(
@@ -1153,7 +1153,7 @@ function createListReceivablesPrisma(
           take,
         }: {
           orderBy?: unknown;
-          take: number;
+          take?: number;
           where: Record<string, unknown>;
         }) =>
           Promise.resolve(
@@ -2155,7 +2155,7 @@ describe('FinanceService', () => {
     });
   });
 
-  it('orders paid client history by payment date before unpaid receivable fallback dates', async () => {
+  it('prioritizes open client receivables before paid history and canceled records', async () => {
     const service = new FinanceService(
       createListReceivablesPrisma(
         [
@@ -2174,6 +2174,12 @@ describe('FinanceService', () => {
           receivableFixture({
             id: 'pending-future',
             dueDate: parseBusinessDate('2026-10-10'),
+            paidAt: null,
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'pending-overdue',
+            dueDate: parseBusinessDate('2026-09-01'),
             paidAt: null,
             status: 'PENDENTE',
           }),
@@ -2200,14 +2206,329 @@ describe('FinanceService', () => {
       service.listReceivables({ clientId: 'client-a', page: 1, pageSize: 10 }),
     ).resolves.toMatchObject({
       items: [
+        { id: 'pending-overdue', paidAt: null },
+        { id: 'pending-future', paidAt: null },
         { id: 'paid-recent', paidAt: '2026-09-30' },
         { id: 'legacy:legacy-between-payments', paidAt: '2026-09-20' },
         { id: 'paid-older', paidAt: '2026-09-15' },
-        { id: 'pending-future', paidAt: null },
         { id: 'canceled-fallback', paidAt: null },
+      ],
+      pagination: { total: 6 },
+    });
+  });
+
+  it('orders open client receivables by overdue, today and future due dates with deterministic ties', async () => {
+    const sharedDueDate = parseBusinessDate('2026-10-01');
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'future-far',
+            dueDate: parseBusinessDate('2026-10-20'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'today-later-created',
+            createdAt: new Date('2026-09-02T12:00:00.000Z'),
+            dueDate: sharedDueDate,
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'overdue',
+            dueDate: parseBusinessDate('2026-09-30'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'future-near',
+            dueDate: parseBusinessDate('2026-10-02'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'today-earlier-created',
+            createdAt: new Date('2026-09-01T12:00:00.000Z'),
+            dueDate: sharedDueDate,
+            status: 'PENDENTE',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [
+        { id: 'overdue' },
+        { id: 'today-earlier-created' },
+        { id: 'today-later-created' },
+        { id: 'future-near' },
+        { id: 'future-far' },
       ],
       pagination: { total: 5 },
     });
+  });
+
+  it('keeps paid client history ordered by paidAt and legacy transactionDate', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'paid-older',
+            dueDate: parseBusinessDate('2026-08-01'),
+            paidAt: parseBusinessDate('2026-09-12'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'paid-recent',
+            dueDate: parseBusinessDate('2026-08-15'),
+            paidAt: parseBusinessDate('2026-09-30'),
+            status: 'PAGO',
+          }),
+        ],
+        [
+          legacyTransactionFixture({
+            id: 'legacy-middle',
+            transactionDate: parseBusinessDate('2026-09-20'),
+          }),
+        ],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', status: 'PAGO', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'paid-recent' }, { id: 'legacy:legacy-middle' }, { id: 'paid-older' }],
+      pagination: { total: 3 },
+    });
+  });
+
+  it('keeps canceled client receivables after open and paid groups with deterministic recent-date order', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'canceled-newer',
+            dueDate: parseBusinessDate('2026-10-05'),
+            status: 'CANCELADO',
+          }),
+          receivableFixture({
+            id: 'paid-history',
+            paidAt: parseBusinessDate('2026-09-15'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'open-reactivation',
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'canceled-older',
+            dueDate: parseBusinessDate('2026-09-01'),
+            status: 'CANCELADO',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [
+        { id: 'open-reactivation' },
+        { id: 'paid-history' },
+        { id: 'canceled-newer' },
+        { id: 'canceled-older' },
+      ],
+      pagination: { total: 4 },
+    });
+  });
+
+  it('keeps client pagination after the prioritized open-paid-canceled ordering', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'paid-newer',
+            paidAt: parseBusinessDate('2026-09-30'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'open-02',
+            dueDate: parseBusinessDate('2026-10-02'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'canceled',
+            dueDate: parseBusinessDate('2026-10-03'),
+            status: 'CANCELADO',
+          }),
+          receivableFixture({
+            id: 'open-01',
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PENDENTE',
+          }),
+        ],
+        [
+          legacyTransactionFixture({
+            id: 'legacy-paid',
+            transactionDate: parseBusinessDate('2026-09-20'),
+          }),
+        ],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', page: 1, pageSize: 2 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'open-01' }, { id: 'open-02' }],
+      pagination: { page: 1, pageSize: 2, total: 5, totalPages: 3 },
+    });
+    await expect(
+      service.listReceivables({ clientId: 'client-a', page: 2, pageSize: 2 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'paid-newer' }, { id: 'legacy:legacy-paid' }],
+      pagination: { page: 2, pageSize: 2, total: 5, totalPages: 3 },
+    });
+  });
+
+  it('places pending reactivation receivables in the open client group without special purpose handling', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'paid-history',
+            paidAt: parseBusinessDate('2026-09-30'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'reactivation-pending',
+            description: 'Reativacao - Plano Mensal',
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PENDENTE',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [
+        { id: 'reactivation-pending', description: 'Reativacao - Plano Mensal' },
+        { id: 'paid-history' },
+      ],
+      pagination: { total: 2 },
+    });
+  });
+
+  it('keeps client status filters on their expected deterministic sort', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-01T14:00:00.000Z'));
+
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'pending-future',
+            dueDate: parseBusinessDate('2026-10-05'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'pending-today',
+            dueDate: parseBusinessDate('2026-10-01'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'overdue-oldest',
+            dueDate: parseBusinessDate('2026-09-20'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'overdue-newest',
+            dueDate: parseBusinessDate('2026-09-30'),
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'paid-recent',
+            paidAt: parseBusinessDate('2026-09-30'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'paid-older',
+            paidAt: parseBusinessDate('2026-09-15'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'canceled-newer',
+            dueDate: parseBusinessDate('2026-10-04'),
+            status: 'CANCELADO',
+          }),
+          receivableFixture({
+            id: 'canceled-older',
+            dueDate: parseBusinessDate('2026-09-01'),
+            status: 'CANCELADO',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', status: 'PENDENTE', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [
+        { id: 'overdue-oldest' },
+        { id: 'overdue-newest' },
+        { id: 'pending-today' },
+        { id: 'pending-future' },
+      ],
+      pagination: { total: 4 },
+    });
+    await expect(
+      service.listReceivables({ clientId: 'client-a', status: 'VENCIDO', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'overdue-oldest' }, { id: 'overdue-newest' }],
+      pagination: { total: 2 },
+    });
+    await expect(
+      service.listReceivables({ clientId: 'client-a', status: 'PAGO', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'paid-recent' }, { id: 'paid-older' }],
+      pagination: { total: 2 },
+    });
+    await expect(
+      service.listReceivables({
+        clientId: 'client-a',
+        status: 'CANCELADO',
+        page: 1,
+        pageSize: 10,
+      }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'canceled-newer' }, { id: 'canceled-older' }],
+      pagination: { total: 2 },
+    });
+
+    vi.useRealTimers();
   });
 
   it('keeps global receivable lists ordered by financial fallback date outside client history', async () => {

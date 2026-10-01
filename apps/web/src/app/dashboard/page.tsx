@@ -372,6 +372,24 @@ const monthNamesPt = [
   'Dezembro',
 ];
 
+type DashboardPeriodMode = 'today' | 'current' | 'previous' | 'last30' | 'custom';
+
+const dashboardPeriodOptions = [
+  { value: 'today', label: 'Hoje' },
+  { value: 'current', label: 'Mês atual' },
+  { value: 'previous', label: 'Mês anterior' },
+  { value: 'last30', label: 'Últimos 30 dias' },
+  { value: 'custom', label: 'Personalizado' },
+] satisfies Array<{ value: DashboardPeriodMode; label: string }>;
+
+const dashboardPeriodLabels: Record<string, string> = {
+  hoje: 'Hoje',
+  mes_atual: 'Mês atual',
+  mes_anterior: 'Mês anterior',
+  ultimos_30_dias: 'Últimos 30 dias',
+  periodo_personalizado: 'Período personalizado',
+};
+
 type FinancePeriod = {
   endDate: string;
   label: string;
@@ -2809,9 +2827,7 @@ function OperationalDashboard({
   onRenew: (id: string, clientReferenceId?: string) => Promise<void>;
 }) {
   const [summary, setSummary] = useState<DashboardSummaryPayload | null>(null);
-  const [periodMode, setPeriodMode] = useState<'current' | 'previous' | 'last30' | 'custom'>(
-    'current',
-  );
+  const [periodMode, setPeriodMode] = useState<DashboardPeriodMode>('current');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [loading, setLoading] = useState(false);
@@ -2857,13 +2873,21 @@ function OperationalDashboard({
     clientStatusDistribution.some((item) => item.status === 'ATIVO') &&
     clientStatusDistribution.some((item) => item.status === 'INATIVO') &&
     clientStatusDistribution.some((item) => item.status === 'CANCELADO');
+  const selectedPeriodLabel =
+    dashboardPeriodOptions.find((option) => option.value === periodMode)?.label ??
+    'Período selecionado';
+  const periodLabel = summary
+    ? periodMode === 'custom'
+      ? (dashboardPeriodLabels[summary.period.label] ?? selectedPeriodLabel)
+      : selectedPeriodLabel
+    : 'Indicadores reais do CRM, sem dados simulados.';
 
   return (
     <>
       <PageHeader
         eyebrow="CRM NOVO UI 2.0"
         title="Dashboard operacional"
-        subtitle={summary?.period.label ?? 'Indicadores reais do CRM, sem dados simulados.'}
+        subtitle={periodLabel}
         actions={
           <div className="quick-actions">
             <button className="primary-button" type="button" onClick={onNewClient}>
@@ -2891,17 +2915,12 @@ function OperationalDashboard({
 
       <div className="dashboard-toolbar">
         <div className="period-controls" aria-label="Período do dashboard">
-          {[
-            ['current', 'Mês atual'],
-            ['previous', 'Mês anterior'],
-            ['last30', 'Últimos 30 dias'],
-            ['custom', 'Personalizado'],
-          ].map(([value, label]) => (
+          {dashboardPeriodOptions.map(({ value, label }) => (
             <button
               className={periodMode === value ? 'active' : ''}
               key={value}
               type="button"
-              onClick={() => setPeriodMode(value as typeof periodMode)}
+              onClick={() => setPeriodMode(value)}
             >
               {label}
             </button>
@@ -3430,16 +3449,17 @@ function OverdueReceivablesTable({
   );
 }
 
-function buildDashboardPeriod(
-  mode: 'current' | 'previous' | 'last30' | 'custom',
-  customStart: string,
-  customEnd: string,
-) {
+function buildDashboardPeriod(mode: DashboardPeriodMode, customStart: string, customEnd: string) {
   const today = new Date();
   const toDateInput = (date: Date) => date.toISOString().slice(0, 10);
+  const todaySaoPaulo = formatSaoPauloDateInput(today);
 
   if (mode === 'custom') {
     return customStart && customEnd ? { startDate: customStart, endDate: customEnd } : {};
+  }
+
+  if (mode === 'today') {
+    return { startDate: todaySaoPaulo, endDate: todaySaoPaulo };
   }
 
   if (mode === 'current') {

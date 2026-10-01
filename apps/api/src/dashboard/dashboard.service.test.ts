@@ -468,6 +468,51 @@ describe('DashboardService', () => {
     expect(summary.dueDates.dueToday).toBe(1);
   });
 
+  it('uses America/Sao_Paulo day boundaries for createdAt period filters', async () => {
+    const prisma = createDashboardPrisma();
+    const originalClientCount = prisma.client.count;
+    const originalRenewalCount = prisma.renewal.count;
+    const originalRenewalAggregate = prisma.renewal.aggregate;
+    const createdAtRanges: Array<{ gte: Date; lte: Date }> = [];
+
+    prisma.client.count = (args: Parameters<typeof originalClientCount>[0]) => {
+      if (args.where.createdAt) createdAtRanges.push(args.where.createdAt);
+      return originalClientCount(args);
+    };
+    prisma.renewal.count = (args: Parameters<typeof originalRenewalCount>[0]) => {
+      createdAtRanges.push(args.where.createdAt);
+      return originalRenewalCount(args);
+    };
+    prisma.renewal.aggregate = (args: Parameters<typeof originalRenewalAggregate>[0]) => {
+      createdAtRanges.push(args.where.createdAt);
+      return originalRenewalAggregate(args);
+    };
+
+    const service = new DashboardService(prisma as never);
+
+    await service.summary({ startDate: '2026-09-10', endDate: '2026-09-10' });
+
+    expect(createdAtRanges).not.toHaveLength(0);
+    for (const range of createdAtRanges) {
+      expect(range.gte.toISOString()).toBe('2026-09-10T03:00:00.000Z');
+      expect(range.lte.toISOString()).toBe('2026-09-11T02:59:59.999Z');
+    }
+
+    const boundaryRecords = [
+      new Date('2026-09-10T02:59:59.999Z'),
+      new Date('2026-09-10T03:00:00.000Z'),
+      new Date('2026-09-11T02:59:59.999Z'),
+      new Date('2026-09-11T03:00:00.000Z'),
+    ];
+    const [range] = createdAtRanges;
+    if (!range) throw new Error('Expected createdAt range.');
+    const inRange = boundaryRecords.map(
+      (date) => date.getTime() >= range.gte.getTime() && date.getTime() <= range.lte.getTime(),
+    );
+
+    expect(inRange).toEqual([false, true, true, false]);
+  });
+
   it('returns zeroed dashboard data for periods without records', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-10T15:00:00.000Z'));
@@ -480,6 +525,10 @@ describe('DashboardService', () => {
     expect(summary.finance.expenses).toBe('0.00');
     expect(summary.finance.balance).toBe('0.00');
     expect(summary.renewals).toEqual({ count: 0, amount: '0.00' });
+    expect(summary.clients.active).toBe(3);
+    expect(summary.clients.distribution).toContainEqual({ status: 'ATIVO', total: 3 });
+    expect(summary.dueDates.dueToday).toBe(1);
+    expect(summary.pending.counts.waitingPix).toBe(1);
   });
 
   it('rejects incomplete or inverted custom periods', async () => {

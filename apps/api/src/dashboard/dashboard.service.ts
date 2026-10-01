@@ -316,8 +316,8 @@ export class DashboardService {
     return {
       startDate,
       endDate,
-      startDateTime: startDate,
-      endDateTime: new Date(`${formatBusinessDate(endDate)}T23:59:59.999Z`),
+      startDateTime: this.startOfSaoPauloBusinessDate(startDate),
+      endDateTime: this.endOfSaoPauloBusinessDate(endDate),
       label: query.startDate ? 'periodo_personalizado' : 'mes_atual',
     };
   }
@@ -343,6 +343,63 @@ export class DashboardService {
 
   private addDays(date: Date, days: number) {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days));
+  }
+
+  private startOfSaoPauloBusinessDate(date: Date) {
+    return this.saoPauloDateTimeToUtc(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+      0,
+      0,
+      0,
+      0,
+    );
+  }
+
+  private endOfSaoPauloBusinessDate(date: Date) {
+    return new Date(this.startOfSaoPauloBusinessDate(this.addDays(date, 1)).getTime() - 1);
+  }
+
+  private saoPauloDateTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    second: number,
+    millisecond: number,
+  ) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+    return new Date(utcGuess.getTime() - this.saoPauloOffsetMs(utcGuess));
+  }
+
+  private saoPauloOffsetMs(date: Date) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: operationalTimeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(date);
+    const value = (type: Intl.DateTimeFormatPartTypes) => {
+      const part = parts.find((item) => item.type === type)?.value;
+      if (!part) throw new BadRequestException('Data invalida.');
+      return Number(part);
+    };
+    const zonedUtc = Date.UTC(
+      value('year'),
+      value('month') - 1,
+      value('day'),
+      value('hour'),
+      value('minute'),
+      value('second'),
+    );
+
+    return zonedUtc - date.getTime();
   }
 
   private addMonths(date: Date, months: number) {

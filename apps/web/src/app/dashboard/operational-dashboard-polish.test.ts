@@ -28,17 +28,41 @@ describe('operational dashboard polish source', () => {
   });
 
   it('preserves period modes and quick actions', () => {
-    expect(dashboardSource).toContain("['current', 'Mês atual']");
-    expect(dashboardSource).toContain("['previous', 'Mês anterior']");
-    expect(dashboardSource).toContain("['last30', 'Últimos 30 dias']");
-    expect(dashboardSource).toContain("['custom', 'Personalizado']");
+    const optionsBlock = sourceBlock(
+      dashboardSource,
+      'const dashboardPeriodOptions = [',
+      '] satisfies Array<{ value: DashboardPeriodMode; label: string }>;',
+    );
+
+    expect(optionsBlock).toContain("{ value: 'today', label: 'Hoje' }");
+    expect(optionsBlock).toContain("{ value: 'current', label: 'Mês atual' }");
+    expect(optionsBlock).toContain("{ value: 'previous', label: 'Mês anterior' }");
+    expect(optionsBlock).toContain("{ value: 'last30', label: 'Últimos 30 dias' }");
+    expect(optionsBlock).toContain("{ value: 'custom', label: 'Personalizado' }");
+    expect(optionsBlock.indexOf("'today'")).toBeLessThan(optionsBlock.indexOf("'current'"));
+    expect(optionsBlock.indexOf("'current'")).toBeLessThan(optionsBlock.indexOf("'previous'"));
+    expect(optionsBlock.indexOf("'previous'")).toBeLessThan(optionsBlock.indexOf("'last30'"));
+    expect(optionsBlock.indexOf("'last30'")).toBeLessThan(optionsBlock.indexOf("'custom'"));
     expect(dashboardSource).toContain('const dashboardRequestRef = useRef(0);');
     expect(dashboardSource).toContain('setSummary(null);');
     expect(dashboardSource).toContain('dashboardRequestRef.current !== requestId');
     expect(dashboardSource).toContain('buildDashboardPeriod(periodMode, customStart, customEnd)');
+    expect(dashboardSource).toContain(
+      'return { startDate: todaySaoPaulo, endDate: todaySaoPaulo };',
+    );
+    expect(dashboardSource).toContain("timeZone: 'America/Sao_Paulo'");
     expect(dashboardSource).toContain('onClick={onNewClient}');
     expect(dashboardSource).toContain("onClick={() => onOpenFinance('entries')}");
     expect(dashboardSource).toContain("onClick={() => onOpenFinance('receivables')}");
+  });
+
+  it('maps dashboard period labels to friendly text', () => {
+    expect(dashboardSource).toContain("hoje: 'Hoje'");
+    expect(dashboardSource).toContain("mes_atual: 'Mês atual'");
+    expect(dashboardSource).toContain("mes_anterior: 'Mês anterior'");
+    expect(dashboardSource).toContain("ultimos_30_dias: 'Últimos 30 dias'");
+    expect(dashboardSource).toContain("periodo_personalizado: 'Período personalizado'");
+    expect(dashboardSource).toContain('subtitle={periodLabel}');
   });
 
   it('uses empty state for zero cashflow points and the temporal chart for 1, 2 or 6 points', () => {
@@ -108,6 +132,9 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('.dashboard-secondary-grid');
     expect(stylesSource).toContain('.dashboard-finance-body,');
     expect(stylesSource).toContain('grid-template-columns: 1fr;');
+    expect(stylesSource).toContain('.period-controls {\n  display: inline-flex;');
+    expect(stylesSource).toContain('.period-controls button.active');
+    expect(stylesSource).toContain('.period-controls button:focus-visible');
   });
 
   it('renders the status donut only from real reference status counts', () => {

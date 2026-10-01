@@ -3010,7 +3010,8 @@ function OperationalDashboard({
           <div className="quick-actions">
             <button className="primary-button" type="button" onClick={onNewClient}>
               <Plus aria-hidden="true" size={16} />
-              Novo cliente
+              <span className="quick-action-desktop-label">Novo cliente</span>
+              <span className="quick-action-mobile-label">Cliente</span>
             </button>
             <button
               className="secondary-button"
@@ -3018,14 +3019,15 @@ function OperationalDashboard({
               onClick={() => onOpenFinance('entries')}
             >
               <DollarSign aria-hidden="true" size={16} />
-              Entrada
+              <span>Entrada</span>
             </button>
             <button
               className="secondary-button"
               type="button"
               onClick={() => onOpenFinance('receivables')}
             >
-              Recebíveis
+              <Receipt aria-hidden="true" size={16} />
+              <span>Recebíveis</span>
             </button>
           </div>
         }

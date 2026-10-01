@@ -64,6 +64,7 @@ export function AdminShell<T extends string>({
 
   return (
     <div
+      data-active-view={activeId}
       className={`app-shell ${collapsed ? 'is-collapsed' : ''} ${mobileMenuOpen ? 'mobile-menu-open' : ''}`}
     >
       <button
@@ -171,7 +172,11 @@ export function AdminShell<T extends string>({
             </div>
           </div>
           <div className="topbar-actions">
-            <span className="topbar-user">
+            <span
+              aria-label={`Usuário ${userName || 'Admin'}`}
+              className="topbar-user"
+              title={userName || 'Admin'}
+            >
               <User aria-hidden="true" size={15} />
               {userName || 'Admin'}
             </span>

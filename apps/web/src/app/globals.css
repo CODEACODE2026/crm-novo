@@ -902,6 +902,10 @@ a {
   margin-bottom: 12px;
 }
 
+.quick-action-mobile-label {
+  display: none;
+}
+
 .period-controls {
   display: inline-flex;
   flex-wrap: wrap;
@@ -7586,6 +7590,57 @@ tbody tr:hover,
     min-width: 0;
   }
 
+  .app-shell[data-active-view='dashboard'] .topbar {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 8px;
+    min-height: 48px;
+    padding-block: 6px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar-menu-button,
+  .app-shell[data-active-view='dashboard'] .topbar-user {
+    width: 34px;
+    min-height: 34px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .breadcrumb {
+    display: none;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar-context {
+    gap: 1px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar h1 {
+    font-size: 17px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar p {
+    margin-top: 1px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar-actions {
+    grid-column: auto;
+    justify-content: flex-end;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar-user {
+    justify-content: center;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-strong);
+    color: var(--muted);
+    font-size: 0;
+    padding: 0;
+  }
+
+  .app-shell[data-active-view='dashboard'] .content {
+    padding-top: 12px;
+  }
+
   .page-header {
     align-items: stretch;
     flex-direction: column;
@@ -7607,8 +7662,55 @@ tbody tr:hover,
     min-width: 0;
   }
 
+  .dashboard-compact-layout .page-header {
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .dashboard-compact-layout .page-eyebrow,
+  .dashboard-compact-layout .page-header h2 {
+    display: none;
+  }
+
+  .dashboard-compact-layout .page-header p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .dashboard-compact-layout .page-actions {
+    width: 100%;
+  }
+
+  .dashboard-compact-layout .quick-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+  }
+
+  .dashboard-compact-layout .quick-actions .primary-button,
+  .dashboard-compact-layout .quick-actions .secondary-button {
+    gap: 5px;
+    min-height: 34px;
+    padding-inline: 7px;
+    font-size: 12px;
+  }
+
+  .dashboard-compact-layout .quick-action-desktop-label {
+    display: none;
+  }
+
+  .dashboard-compact-layout .quick-action-mobile-label {
+    display: inline;
+  }
+
   .dashboard-toolbar {
     align-items: stretch;
+  }
+
+  .dashboard-compact-layout .dashboard-toolbar {
+    margin-bottom: 7px;
   }
 
   .period-controls {
@@ -7621,9 +7723,23 @@ tbody tr:hover,
     padding-inline: 8px;
   }
 
-  .dashboard-compact-layout .quick-actions .primary-button,
-  .dashboard-compact-layout .quick-actions .secondary-button {
-    min-height: 38px;
+  .dashboard-compact-layout .period-controls {
+    flex-wrap: nowrap;
+    gap: 1px;
+    overflow-x: auto;
+    padding: 2px;
+    scrollbar-width: none;
+  }
+
+  .dashboard-compact-layout .period-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .dashboard-compact-layout .period-controls button {
+    flex: 0 0 auto;
+    min-height: 26px;
+    padding-inline: 8px;
+    font-size: 11px;
   }
 
   .dashboard-compact-layout .operational-list {
@@ -8188,8 +8304,56 @@ tbody tr:hover,
     padding-block: 10px;
   }
 
+  .app-shell[data-active-view='dashboard'] .topbar {
+    min-height: 44px;
+    gap: 7px;
+    padding-block: 5px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar-menu-button,
+  .app-shell[data-active-view='dashboard'] .topbar-user {
+    width: 32px;
+    min-height: 32px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar h1 {
+    font-size: 16px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .topbar p {
+    font-size: 10.5px;
+  }
+
   .content {
     padding-block: 14px 22px;
+  }
+
+  .app-shell[data-active-view='dashboard'] .content {
+    padding-top: 10px;
+  }
+
+  .dashboard-compact-layout .page-header {
+    margin-bottom: 5px;
+  }
+
+  .dashboard-compact-layout .page-header p {
+    font-size: 10.5px;
+  }
+
+  .dashboard-compact-layout .quick-actions {
+    gap: 5px;
+  }
+
+  .dashboard-compact-layout .quick-actions .primary-button,
+  .dashboard-compact-layout .quick-actions .secondary-button {
+    min-height: 32px;
+    padding-inline: 5px;
+    font-size: 11px;
+  }
+
+  .dashboard-compact-layout .period-controls button {
+    min-height: 25px;
+    padding-inline: 7px;
   }
 
   .dashboard-compact-layout .operational-list article {

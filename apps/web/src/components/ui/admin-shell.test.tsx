@@ -31,6 +31,7 @@ describe('AdminShell mobile navigation', () => {
 
     expect(html).toContain('aria-label="Navegação principal"');
     expect(html).toContain('aria-label="Abrir menu"');
+    expect(html).toContain('data-active-view="dashboard"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('Dashboard');
     expect(html).toContain('Clientes');
@@ -45,6 +46,8 @@ describe('AdminShell mobile navigation', () => {
     expect(shellSource).toContain('className="sidebar-backdrop"');
     expect(shellSource).toContain('className="icon-button topbar-menu-button"');
     expect(shellSource).toContain('className="icon-button sidebar-mobile-close"');
+    expect(shellSource).toContain('data-active-view={activeId}');
+    expect(shellSource).toContain('aria-label={`Usuário ${userName ||');
   });
 
   it('uses an off-canvas sidebar below the tablet breakpoint while preserving desktop columns', () => {

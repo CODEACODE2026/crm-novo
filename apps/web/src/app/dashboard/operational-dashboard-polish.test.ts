@@ -190,6 +190,56 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('min-height: 38px;');
   });
 
+  it('compacts the dashboard topbar on mobile while preserving the shell drawer controls', () => {
+    expect(stylesSource).toContain(".app-shell[data-active-view='dashboard'] .topbar");
+    expect(stylesSource).toContain('grid-template-columns: 34px minmax(0, 1fr) 34px;');
+    expect(stylesSource).toContain(".app-shell[data-active-view='dashboard'] .breadcrumb");
+    expect(stylesSource).toContain(".app-shell[data-active-view='dashboard'] .topbar-user");
+    expect(stylesSource).toContain('font-size: 0;');
+    expect(stylesSource).toContain('.topbar-menu-button');
+    expect(stylesSource).toContain('.app-shell.mobile-menu-open .sidebar');
+  });
+
+  it('keeps a single mobile dashboard title hierarchy and hides duplicate dashboard labels', () => {
+    const dashboardBlock = sourceBlock(
+      dashboardSource,
+      'function OperationalDashboard({',
+      'function CashflowTemporalChart({',
+    );
+
+    expect(dashboardSource).toContain("dashboard: 'Visão operacional do dia e do período'");
+    expect(dashboardBlock).toContain('eyebrow="CRM NOVO UI 2.0"');
+    expect(dashboardBlock).toContain('title="Dashboard operacional"');
+    expect(stylesSource).toContain('.dashboard-compact-layout .page-eyebrow,');
+    expect(stylesSource).toContain('.dashboard-compact-layout .page-header h2');
+    expect(stylesSource).toContain('display: none;');
+    expect(stylesSource).toContain(".app-shell[data-active-view='dashboard'] .topbar h1");
+    expect(stylesSource).toContain(".app-shell[data-active-view='dashboard'] .topbar p");
+  });
+
+  it('uses compact mobile primary actions and period filters before the KPI grid', () => {
+    const dashboardBlock = sourceBlock(
+      dashboardSource,
+      'function OperationalDashboard({',
+      'function CashflowTemporalChart({',
+    );
+
+    expect(dashboardBlock.indexOf('className="quick-actions"')).toBeLessThan(
+      dashboardBlock.indexOf('className="dashboard-toolbar"'),
+    );
+    expect(dashboardBlock.indexOf('className="dashboard-toolbar"')).toBeLessThan(
+      dashboardBlock.indexOf('className="metric-grid dashboard-kpis"'),
+    );
+    expect(dashboardBlock).toContain('className="quick-action-desktop-label"');
+    expect(dashboardBlock).toContain('className="quick-action-mobile-label"');
+    expect(dashboardBlock).toContain('<Receipt aria-hidden="true" size={16} />');
+    expect(stylesSource).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));');
+    expect(stylesSource).toContain('.dashboard-compact-layout .period-controls');
+    expect(stylesSource).toContain('flex-wrap: nowrap;');
+    expect(stylesSource).toContain('overflow-x: auto;');
+    expect(stylesSource).toContain('min-height: 26px;');
+  });
+
   it('uses dedicated mobile rows for due today without compressing data into desktop columns', () => {
     const dueTodayBlock = sourceBlock(
       dashboardSource,

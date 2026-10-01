@@ -163,6 +163,33 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('.period-controls button:focus-visible');
   });
 
+  it('uses a scoped compact dashboard layout without removing filters, KPIs or charts', () => {
+    const dashboardBlock = sourceBlock(
+      dashboardSource,
+      'function OperationalDashboard({',
+      'function CashflowTemporalChart({',
+    );
+
+    expect(dashboardBlock).toContain('className="dashboard-compact-layout"');
+    expect(dashboardBlock).toContain('className="dashboard-toolbar"');
+    expect(dashboardBlock).toContain('className="metric-grid dashboard-kpis"');
+    expect(dashboardBlock).toContain('className="dashboard-primary-grid"');
+    expect(dashboardBlock).toContain('CashflowTemporalChart');
+    expect(dashboardSource).toContain("label: 'Hoje'");
+    expect(dashboardSource).toContain("label: 'Mês atual'");
+    expect(dashboardSource).toContain("label: 'Mês anterior'");
+    expect(dashboardSource).toContain("label: 'Últimos 30 dias'");
+    expect(dashboardSource).toContain("label: 'Personalizado'");
+    expect(stylesSource).toContain('.dashboard-compact-layout .dashboard-kpis .stat-card');
+    expect(stylesSource).toContain('min-height: 82px;');
+    expect(stylesSource).toContain('.dashboard-compact-layout .cashflow-temporal-chart');
+    expect(stylesSource).toContain('min-height: 260px;');
+    expect(stylesSource).toContain('.dashboard-compact-layout .compact-table article');
+    expect(stylesSource).toContain('.dashboard-compact-layout .quick-actions .primary-button');
+    expect(stylesSource).toContain('@media (max-width: 620px)');
+    expect(stylesSource).toContain('min-height: 38px;');
+  });
+
   it('renders the status donut only from real reference status counts', () => {
     expect(dashboardSource).toContain('summary?.clients.distribution');
     expect(dashboardSource).toContain('function ClientStatusDonut');

@@ -1810,6 +1810,177 @@ a {
   white-space: nowrap;
 }
 
+.dashboard-compact-layout {
+  display: grid;
+  gap: 0;
+}
+
+.dashboard-compact-layout .page-header {
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dashboard-compact-layout .page-header h2 {
+  font-size: 21px;
+}
+
+.dashboard-compact-layout .page-header p {
+  margin-top: 3px;
+}
+
+.dashboard-compact-layout .quick-actions {
+  gap: 7px;
+  margin-bottom: 0;
+}
+
+.dashboard-compact-layout .quick-actions .primary-button,
+.dashboard-compact-layout .quick-actions .secondary-button {
+  min-height: 34px;
+  padding-inline: 11px;
+}
+
+.dashboard-compact-layout .dashboard-toolbar {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dashboard-compact-layout .period-controls {
+  gap: 1px;
+  padding: 2px;
+}
+
+.dashboard-compact-layout .period-controls button {
+  min-height: 28px;
+  padding-inline: 9px;
+}
+
+.dashboard-compact-layout .custom-period {
+  gap: 6px;
+}
+
+.dashboard-compact-layout .custom-period input {
+  min-height: 32px;
+  padding-inline: 10px;
+}
+
+.dashboard-compact-layout .dashboard-kpis {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.dashboard-compact-layout .dashboard-kpis .stat-card {
+  min-height: 82px;
+  padding: 10px 11px;
+}
+
+.dashboard-compact-layout .dashboard-kpis .stat-card-top {
+  gap: 6px;
+}
+
+.dashboard-compact-layout .dashboard-kpis .stat-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.dashboard-compact-layout .dashboard-kpis .metric-value {
+  font-size: 20px;
+}
+
+.dashboard-compact-layout .dashboard-primary-grid,
+.dashboard-compact-layout .dashboard-secondary-grid,
+.dashboard-compact-layout .dashboard-tertiary-grid {
+  gap: 10px;
+}
+
+.dashboard-compact-layout .dashboard-secondary-grid,
+.dashboard-compact-layout .dashboard-tertiary-grid {
+  margin-top: 10px;
+}
+
+.dashboard-compact-layout .panel {
+  padding: 12px;
+}
+
+.dashboard-compact-layout .panel-header {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dashboard-compact-layout .panel-header h2 {
+  font-size: 14px;
+}
+
+.dashboard-compact-layout .dashboard-panel-subtitle {
+  margin: -4px 0 8px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.dashboard-compact-layout .dashboard-cashflow-visual {
+  min-height: 278px;
+}
+
+.dashboard-compact-layout .cashflow-temporal-chart {
+  gap: 6px;
+  min-height: 260px;
+  padding: 8px 8px 5px;
+}
+
+.dashboard-compact-layout .cashflow-temporal-chart svg {
+  min-height: 218px;
+}
+
+.dashboard-compact-layout .cashflow-chart-legend {
+  gap: 10px;
+  min-height: 16px;
+  font-size: 11px;
+}
+
+.dashboard-compact-layout .finance-side-metrics {
+  gap: 6px;
+}
+
+.dashboard-compact-layout .finance-side-metrics div {
+  gap: 4px;
+  padding: 8px;
+}
+
+.dashboard-compact-layout .finance-side-metrics strong {
+  font-size: 15px;
+}
+
+.dashboard-compact-layout .client-status-donut {
+  gap: 10px;
+}
+
+.dashboard-compact-layout .compact-table {
+  gap: 6px;
+}
+
+.dashboard-compact-layout .compact-table article {
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.dashboard-compact-layout .pending-list {
+  gap: 6px;
+}
+
+.dashboard-compact-layout .pending-item {
+  gap: 8px;
+  padding: 7px 8px;
+}
+
+.dashboard-compact-layout .pending-item strong {
+  min-width: 30px;
+  min-height: 24px;
+}
+
+.dashboard-compact-layout .compact-empty-state {
+  padding: 11px;
+}
+
 .activity-item {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -7440,7 +7611,13 @@ tbody tr:hover,
 
   .period-controls button {
     flex: 1 1 120px;
+    min-height: 30px;
     padding-inline: 8px;
+  }
+
+  .dashboard-compact-layout .quick-actions .primary-button,
+  .dashboard-compact-layout .quick-actions .secondary-button {
+    min-height: 38px;
   }
 
   .finance-period-bar {

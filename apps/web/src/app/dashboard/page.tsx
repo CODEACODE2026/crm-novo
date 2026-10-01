@@ -3001,7 +3001,7 @@ function OperationalDashboard({
     : 'Indicadores reais do CRM, sem dados simulados.';
 
   return (
-    <>
+    <div className="dashboard-compact-layout">
       <PageHeader
         eyebrow="CRM NOVO UI 2.0"
         title="Dashboard operacional"
@@ -3238,7 +3238,7 @@ function OperationalDashboard({
           />
         </Card>
       </div>
-    </>
+    </div>
   );
 }
 

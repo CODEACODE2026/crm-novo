@@ -547,6 +547,30 @@ export default function DashboardPage() {
     setEditingPlan(null);
   }
 
+  function resetClientDetailState() {
+    setSelectedClient(null);
+    setEditingClient(null);
+    setClientFormOpen(false);
+    setRenewalTarget(null);
+    setReactivationTarget(null);
+    setRenewalReversalTarget(null);
+    setRenewalReversalPreviewLoadingId(null);
+    setDeletionTarget(null);
+    setRenewalNotice('');
+  }
+
+  function handlePrimaryNavigation(nextView: View) {
+    if (view === 'clients' && nextView !== 'clients') {
+      resetClientDetailState();
+    }
+
+    if (nextView === 'settings') {
+      setSettingsInitialSection('overview');
+    }
+
+    setView(nextView);
+  }
+
   async function handleReferenceStatusChange(
     reference: ClientReference,
     nextStatus: ClientStatus,
@@ -730,12 +754,7 @@ export default function DashboardPage() {
       subtitle={viewSubtitle(view)}
       title={viewTitle(view)}
       userName={user?.name}
-      onNavigate={(nextView) => {
-        if (nextView === 'settings') {
-          setSettingsInitialSection('overview');
-        }
-        setView(nextView);
-      }}
+      onNavigate={handlePrimaryNavigation}
       onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
     >
       {error ? <div className="notice danger">{error}</div> : null}

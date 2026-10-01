@@ -8755,3 +8755,174 @@ tbody tr:hover,
     order: -1;
   }
 }
+
+@media (max-width: 620px) {
+  .client-detail-view {
+    padding: 12px;
+  }
+
+  .client-detail-back-button {
+    justify-self: start;
+    min-height: 32px;
+    padding-inline: 8px;
+  }
+
+  .client-detail-header {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 10px;
+    margin-top: 8px;
+  }
+
+  .client-detail-header .client-avatar.large {
+    width: 36px;
+    height: 36px;
+    font-size: 13px;
+  }
+
+  .client-detail-title {
+    min-width: 0;
+  }
+
+  .client-detail-title h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .client-detail-meta {
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .client-detail-meta::-webkit-scrollbar {
+    display: none;
+  }
+
+  .client-detail-meta span {
+    flex: 0 0 auto;
+    max-width: min(58vw, 220px);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .client-detail-actions {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 38px 38px;
+    align-items: stretch;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .client-detail-actions .ui-button,
+  .client-detail-actions .ui-icon-button,
+  .client-detail-more-action,
+  .client-detail-more-action .action-menu {
+    width: 100%;
+  }
+
+  .client-detail-actions .ui-button,
+  .client-detail-actions .ui-icon-button {
+    min-height: 38px;
+  }
+
+  .client-detail-actions .ui-button {
+    padding-inline: 8px;
+  }
+
+  .client-detail-actions .ui-button span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .client-detail-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .client-detail-kpis .metric-card {
+    min-height: 74px;
+    padding: 10px;
+  }
+
+  .client-detail-kpis .metric-label {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .client-detail-kpis .metric-value {
+    font-size: 17px;
+    line-height: 1.1;
+  }
+
+  .client-detail-view .tabs {
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin: 12px 0 10px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scroll-padding-inline: 12px;
+    scrollbar-width: none;
+  }
+
+  .client-detail-view .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .client-detail-view .tabs button {
+    flex: 0 0 auto;
+    min-height: 32px;
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .client-detail-view {
+    padding: 10px;
+  }
+
+  .client-detail-header {
+    gap: 7px 9px;
+    margin-top: 6px;
+  }
+
+  .client-detail-title h2 {
+    font-size: 16px;
+  }
+
+  .client-detail-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) 36px 36px;
+  }
+
+  .client-detail-actions .ui-button,
+  .client-detail-actions .ui-icon-button {
+    min-height: 36px;
+  }
+
+  .client-detail-kpis {
+    gap: 7px;
+    margin-top: 8px;
+  }
+
+  .client-detail-kpis .metric-card {
+    min-height: 68px;
+    padding: 9px;
+  }
+
+  .client-detail-kpis .metric-value {
+    font-size: 15px;
+  }
+
+  .client-detail-view .tabs {
+    margin-block: 10px 8px;
+  }
+}

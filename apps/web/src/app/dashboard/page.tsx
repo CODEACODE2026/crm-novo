@@ -7978,7 +7978,13 @@ function ClientsView({
         {selectedClient ? (
           <section className="detail-panel client-detail-view" aria-label="Detalhe do cliente">
             <>
-              <Button icon={ArrowLeft} size="sm" variant="ghost" onClick={onClearSelection}>
+              <Button
+                className="client-detail-back-button"
+                icon={ArrowLeft}
+                size="sm"
+                variant="ghost"
+                onClick={onClearSelection}
+              >
                 Voltar para Clientes
               </Button>
               <div className="client-detail-header">
@@ -7996,6 +8002,7 @@ function ClientsView({
                 </div>
                 <div className="client-detail-actions">
                   <Button
+                    className="client-detail-renew-action"
                     icon={RefreshCw}
                     disabled={!uniqueSelectedReference}
                     size="sm"
@@ -8005,6 +8012,7 @@ function ClientsView({
                     {referenceLifecycleActionLabel(uniqueSelectedReference)}
                   </Button>
                   <Button
+                    className="client-detail-whatsapp-action"
                     icon={Send}
                     size="sm"
                     variant="secondary"
@@ -8013,25 +8021,29 @@ function ClientsView({
                     WhatsApp
                   </Button>
                   <IconButton
+                    className="client-detail-edit-action"
                     icon={Pencil}
                     label="Editar cliente"
                     onClick={() => onEdit(selectedClient)}
                   />
-                  <ActionMenu
-                    items={[
-                      {
-                        icon: Pencil,
-                        label: 'Editar',
-                        onSelect: () => onEdit(selectedClient),
-                      },
-                      {
-                        danger: true,
-                        icon: Trash2,
-                        label: 'Remover cliente',
-                        onSelect: () => onRemoveClient(selectedClient),
-                      },
-                    ]}
-                  />
+                  <span className="client-detail-more-action">
+                    <ActionMenu
+                      label="Mais"
+                      items={[
+                        {
+                          icon: Pencil,
+                          label: 'Editar',
+                          onSelect: () => onEdit(selectedClient),
+                        },
+                        {
+                          danger: true,
+                          icon: Trash2,
+                          label: 'Remover cliente',
+                          onSelect: () => onRemoveClient(selectedClient),
+                        },
+                      ]}
+                    />
+                  </span>
                 </div>
               </div>
 

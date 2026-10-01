@@ -79,6 +79,29 @@ describe('MOBILE1 responsiveness guardrails', () => {
     expect(stylesSource).toContain('.client-mobile-whatsapp-action');
   });
 
+  it('keeps the client detail compact on mobile while preserving renewal and reactivation actions', () => {
+    expect(dashboardSource).toContain('className="client-detail-back-button"');
+    expect(dashboardSource).toContain('className="client-detail-renew-action"');
+    expect(dashboardSource).toContain('className="client-detail-whatsapp-action"');
+    expect(dashboardSource).toContain('className="client-detail-edit-action"');
+    expect(dashboardSource).toContain('className="client-detail-more-action"');
+    expect(dashboardSource).toContain('referenceLifecycleActionLabel(uniqueSelectedReference)');
+    expect(dashboardSource).toContain(
+      "return isReactivationReference(reference) ? 'Reativar' : 'Renovar';",
+    );
+    expect(stylesSource).toContain('.client-detail-header .client-avatar.large');
+    expect(stylesSource).toContain('.client-detail-actions {');
+    expect(stylesSource).toContain(
+      'grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 38px 38px;',
+    );
+    expect(stylesSource).toContain('.client-detail-kpis {');
+    expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(stylesSource).toContain('.client-detail-view .tabs');
+    expect(stylesSource).toContain('flex-wrap: nowrap;');
+    expect(stylesSource).toContain('overflow-x: auto;');
+    expect(stylesSource).toContain('text-overflow: ellipsis;');
+  });
+
   it('uses mobile-safe modal sizing and PIX content wrapping', () => {
     expect(dashboardSource).toContain('function PixReceivableModal');
     expect(dashboardSource).toContain('function PixReceivablesModal');

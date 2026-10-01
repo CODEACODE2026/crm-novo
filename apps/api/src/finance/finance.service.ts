@@ -148,6 +148,30 @@ type GroupReceivable = Prisma.ReceivableGetPayload<{
   };
 }>;
 
+type ActivePixConflictIntent = Prisma.PaymentIntentGetPayload<{
+  include: {
+    receivable: {
+      include: {
+        clientReference: true;
+      };
+    };
+    paymentGroup: {
+      include: {
+        items: {
+          include: {
+            receivable: {
+              include: {
+                clientReference: true;
+              };
+            };
+          };
+          orderBy: { createdAt: 'asc' };
+        };
+      };
+    };
+  };
+}>;
+
 @Injectable()
 export class FinanceService {
   constructor(
@@ -3457,7 +3481,9 @@ export class FinanceService {
     const activeIntent = await this.findActivePixForReceivables(tx, receivableIds);
 
     if (activeIntent) {
-      throw new ConflictException('Ja existe um PIX ativo para uma das contas selecionadas.');
+      throw new ConflictException(
+        this.presentActivePixConflict(activeIntent, [...new Set(receivableIds)]),
+      );
     }
   }
 
@@ -3473,7 +3499,87 @@ export class FinanceService {
           { paymentGroup: { items: { some: { receivableId: { in: receivableIds } } } } },
         ],
       },
+      include: {
+        receivable: {
+          include: {
+            clientReference: true,
+          },
+        },
+        paymentGroup: {
+          include: {
+            items: {
+              include: {
+                receivable: {
+                  include: {
+                    clientReference: true,
+                  },
+                },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        },
+      },
     });
+  }
+
+  private presentActivePixConflict(
+    intent: ActivePixConflictIntent,
+    selectedReceivableIds: string[],
+  ) {
+    const paymentIntent = this.presentPaymentIntent(intent);
+
+    if (intent.receivable) {
+      return {
+        message: 'Ja existe um PIX ativo para uma das contas selecionadas.',
+        code: 'ACTIVE_PIX_CONFLICT',
+        activePix: {
+          type: 'INDIVIDUAL',
+          matchesSelectedGroup: false,
+          paymentIntent,
+          receivable: this.presentActivePixReceivable(intent.receivable),
+        },
+      };
+    }
+
+    const groupItems = intent.paymentGroup?.items ?? [];
+    const selected = [...selectedReceivableIds].sort();
+    const groupedReceivableIds = groupItems.map((item) => item.receivableId).sort();
+    const matchesSelectedGroup =
+      selected.length === groupedReceivableIds.length &&
+      selected.every((id, index) => id === groupedReceivableIds[index]);
+
+    return {
+      message: 'Ja existe um PIX ativo para uma das contas selecionadas.',
+      code: 'ACTIVE_PIX_CONFLICT',
+      activePix: {
+        type: 'GROUPED',
+        matchesSelectedGroup,
+        paymentIntent,
+        paymentGroup: intent.paymentGroup
+          ? {
+              id: intent.paymentGroup.id,
+              itemCount: groupItems.length,
+              totalAmount: intent.amount.toFixed(2),
+              items: groupItems.map((item) => this.presentActivePixReceivable(item.receivable)),
+            }
+          : null,
+      },
+    };
+  }
+
+  private presentActivePixReceivable(
+    receivable: Prisma.ReceivableGetPayload<{ include: { clientReference: true } }>,
+  ) {
+    return {
+      id: receivable.id,
+      description: receivable.description,
+      amount: receivable.amount.toFixed(2),
+      dueDate: formatBusinessDate(receivable.dueDate),
+      status: receivable.status,
+      clientReferenceId: receivable.clientReferenceId,
+      reference: receivable.clientReference.reference,
+    };
   }
 
   private sumReceivables(receivables: Pick<GroupReceivable, 'amount'>[]) {

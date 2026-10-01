@@ -296,7 +296,7 @@ describe('PIX reconciliation UI contract', () => {
 
   it('offers WhatsApp send for grouped WAITING_PAYMENT PIX through the shared endpoint', () => {
     expect(groupedPixModalSource).toContain('getWhatsAppConnection()');
-    expect(groupedPixModalSource).toContain('sendPaymentIntentWhatsApp(activeIntent.id)');
+    expect(groupedPixModalSource).toContain('sendPaymentIntentWhatsApp(intent.id)');
     expect(groupedPixModalSource).toContain(
       "const isWaitingPix = activeIntent?.status === 'WAITING_PAYMENT';",
     );
@@ -304,10 +304,37 @@ describe('PIX reconciliation UI contract', () => {
     expect(groupedPixModalSource).toContain(
       "{whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}",
     );
-    expect(groupedPixModalSource).toContain("setNotice('PIX agrupado enviado pelo WhatsApp.');");
+    expect(groupedPixModalSource).toContain('setNotice(successMessage)');
     expect(groupedPixModalSource).not.toContain(
       'receivables.map((receivable) => sendPaymentIntentWhatsApp',
     );
+  });
+
+  it('treats grouped PIX active conflicts as recoverable in the grouped modal', () => {
+    expect(groupedPixModalSource).toContain('activePixConflictPayloadFromError(err)');
+    expect(groupedPixModalSource).toContain('PIX ativo encontrado');
+    expect(groupedPixModalSource).toContain('Ver PIX ativo');
+    expect(groupedPixModalSource).toContain('Ver PIX');
+    expect(groupedPixModalSource).toContain(
+      'A referência ${activePixConflict.receivable.reference} já possui um PIX ativo.',
+    );
+    expect(groupedPixModalSource).toContain('sendPaymentIntentWhatsApp(intent.id)');
+    expect(groupedPixModalSource).toContain('activePixConflict.paymentIntent');
+    expect(groupedPixModalSource).toContain('activePixConflict.receivable?.reference');
+    expect(groupedPixModalSource).toContain('activePixConflict.paymentGroup?.items');
+    expect(groupedPixModalSource).toContain('matchesSelectedGroup');
+    expect(groupedPixModalSource).toContain(
+      'O PIX agrupado ativo não corresponde exatamente ao conjunto selecionado.',
+    );
+    expect(groupedPixModalSource).toContain(
+      'disabled={busy || Boolean(activeIntent) || Boolean(activePixConflict)}',
+    );
+  });
+
+  it('recognizes the active PIX conflict payload from API errors', () => {
+    expect(dashboardSource).toContain('function activePixConflictPayloadFromError');
+    expect(dashboardSource).toContain("candidate.code !== 'ACTIVE_PIX_CONFLICT'");
+    expect(dashboardSource).toContain('candidate.activePix?.paymentIntent');
   });
 
   it('keeps only the PIX copy-field copy CTA in WAITING_PAYMENT', () => {

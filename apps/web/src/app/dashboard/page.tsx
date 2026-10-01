@@ -230,6 +230,7 @@ import {
   type BillingSummary,
   type BillingDispatchSummary,
   type BillingAutomationSettings,
+  type ActivePixConflictPayload,
   type Client,
   type ClientEvent,
   type ClientPayload,
@@ -16543,6 +16544,20 @@ function PixReceivableModal({
   );
 }
 
+function activePixConflictPayloadFromError(error: unknown): ActivePixConflictPayload | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+
+  const payload = error.payload;
+  if (!payload || typeof payload !== 'object') return null;
+
+  const candidate = payload as Partial<ActivePixConflictPayload>;
+  if (candidate.code !== 'ACTIVE_PIX_CONFLICT' || !candidate.activePix?.paymentIntent) {
+    return null;
+  }
+
+  return candidate as ActivePixConflictPayload;
+}
+
 function PixReceivablesModal({
   receivables,
   onClose,
@@ -16558,10 +16573,20 @@ function PixReceivablesModal({
   const [error, setError] = useState('');
   const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [whatsAppSending, setWhatsAppSending] = useState(false);
+  const [activePixConflict, setActivePixConflict] = useState<
+    ActivePixConflictPayload['activePix'] | null
+  >(null);
+  const [showConflictPix, setShowConflictPix] = useState(false);
   const actionRef = useRef(false);
   const total = receivables.reduce((sum, receivable) => sum + Number(receivable.amount), 0);
   const isWaitingPix = activeIntent?.status === 'WAITING_PAYMENT';
   const canSendPixWhatsApp = Boolean(isWaitingPix && activeIntent?.pixCopyPaste);
+  const conflictIntent = activePixConflict?.paymentIntent ?? null;
+  const canSendConflictPixWhatsApp = Boolean(
+    conflictIntent?.status === 'WAITING_PAYMENT' &&
+    conflictIntent.pixCopyPaste &&
+    (activePixConflict?.type === 'INDIVIDUAL' || activePixConflict?.matchesSelectedGroup),
+  );
   const whatsAppUnavailableReason = !whatsAppConnection
     ? 'Configure a conexão em WhatsApp.'
     : whatsAppConnection.status !== 'CONNECTED'
@@ -16594,6 +16619,8 @@ function PixReceivablesModal({
       const intent = await action();
       const successMessage = typeof success === 'function' ? success(intent) : success;
       setActiveIntent(intent);
+      setActivePixConflict(null);
+      setShowConflictPix(false);
       setNotice(successMessage);
       await onChanged(successMessage);
     } catch (err) {
@@ -16610,8 +16637,11 @@ function PixReceivablesModal({
     setNotice('PIX copiado.');
   }
 
-  async function sendPixWhatsApp() {
-    if (!activeIntent || whatsAppSending || actionRef.current) return;
+  async function sendPixWhatsApp(
+    intent: PaymentIntent | null = activeIntent,
+    successMessage = 'PIX agrupado enviado pelo WhatsApp.',
+  ) {
+    if (!intent || whatsAppSending || actionRef.current) return;
 
     actionRef.current = true;
     setWhatsAppSending(true);
@@ -16620,18 +16650,48 @@ function PixReceivablesModal({
     setNotice('');
 
     try {
-      const result: PixWhatsAppSendResult = await sendPaymentIntentWhatsApp(activeIntent.id);
+      const result: PixWhatsAppSendResult = await sendPaymentIntentWhatsApp(intent.id);
       if (!result.success) {
         throw new Error(result.errorMessage ?? 'Não foi possível enviar o PIX pelo WhatsApp.');
       }
 
-      setNotice('PIX agrupado enviado pelo WhatsApp.');
-      await onChanged('PIX agrupado enviado pelo WhatsApp.');
+      setNotice(successMessage);
+      await onChanged(successMessage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível enviar o PIX pelo WhatsApp.');
     } finally {
       setBusy(false);
       setWhatsAppSending(false);
+      actionRef.current = false;
+    }
+  }
+
+  async function createGroupedPix() {
+    if (actionRef.current) return;
+
+    actionRef.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setActivePixConflict(null);
+    setShowConflictPix(false);
+
+    try {
+      const intent = await createReceivablesPix(receivables.map((receivable) => receivable.id));
+      setActiveIntent(intent);
+      setNotice('PIX agrupado gerado.');
+      await onChanged('PIX agrupado gerado.');
+    } catch (err) {
+      const conflict = activePixConflictPayloadFromError(err);
+      if (conflict) {
+        setActivePixConflict(conflict.activePix);
+        setNotice('PIX ativo encontrado.');
+        return;
+      }
+
+      setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
+    } finally {
+      setBusy(false);
       actionRef.current = false;
     }
   }
@@ -16679,6 +16739,134 @@ function PixReceivablesModal({
 
         {error ? <div className="notice danger">{error}</div> : null}
         {notice ? <div className="notice success">{notice}</div> : null}
+
+        {activePixConflict ? (
+          <div className="pix-panel pix-tool-panel">
+            <div className="pix-status-row">
+              <strong>PIX ativo encontrado</strong>
+              <span>
+                {activePixConflict.type === 'GROUPED'
+                  ? activePixConflict.matchesSelectedGroup
+                    ? 'Agrupado correspondente'
+                    : 'Agrupado relacionado'
+                  : 'Individual'}
+              </span>
+            </div>
+            <div className="notice warning">
+              {activePixConflict.type === 'INDIVIDUAL' && activePixConflict.receivable
+                ? `A referência ${activePixConflict.receivable.reference} já possui um PIX ativo.`
+                : 'Já existe um PIX ativo para uma das contas selecionadas.'}
+            </div>
+            <dl className="detail-list compact-detail-list">
+              <div>
+                <dt>Provider</dt>
+                <dd>{paymentProviderDisplay(activePixConflict.paymentIntent.provider)}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{paymentIntentStatusLabel(activePixConflict.paymentIntent.status)}</dd>
+              </div>
+              <div>
+                <dt>Valor</dt>
+                <dd>{formatCurrency(activePixConflict.paymentIntent.amount)}</dd>
+              </div>
+              <div>
+                <dt>Expiração</dt>
+                <dd>
+                  {activePixConflict.paymentIntent.expiresAt
+                    ? formatDateTime(activePixConflict.paymentIntent.expiresAt)
+                    : '-'}
+                </dd>
+              </div>
+              <div>
+                <dt>Referência</dt>
+                <dd>
+                  {activePixConflict.type === 'INDIVIDUAL'
+                    ? (activePixConflict.receivable?.reference ?? '-')
+                    : `${activePixConflict.paymentGroup?.itemCount ?? 0} contas`}
+                </dd>
+              </div>
+            </dl>
+            {activePixConflict.type === 'INDIVIDUAL' && activePixConflict.receivable ? (
+              <div className="mini-list">
+                <article>
+                  <strong>{activePixConflict.receivable.reference}</strong>
+                  <span>{formatDate(activePixConflict.receivable.dueDate)}</span>
+                  <p>{formatCurrency(activePixConflict.receivable.amount)}</p>
+                </article>
+              </div>
+            ) : null}
+            {activePixConflict.type === 'GROUPED' ? (
+              <div className="mini-list">
+                {(activePixConflict.paymentGroup?.items ?? []).map((item) => (
+                  <article key={item.id}>
+                    <strong>{item.reference}</strong>
+                    <span>{formatDate(item.dueDate)}</span>
+                    <p>{formatCurrency(item.amount)}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            {showConflictPix ? (
+              <label className="field">
+                <span>PIX copia e cola</span>
+                <textarea
+                  readOnly
+                  rows={4}
+                  value={activePixConflict.paymentIntent.pixCopyPaste ?? ''}
+                />
+              </label>
+            ) : null}
+            {conflictIntent?.status === 'WAITING_PAYMENT' && whatsAppUnavailableReason ? (
+              <div className="notice warning">{whatsAppUnavailableReason}</div>
+            ) : null}
+            {activePixConflict.type === 'GROUPED' && !activePixConflict.matchesSelectedGroup ? (
+              <div className="notice warning">
+                O PIX agrupado ativo não corresponde exatamente ao conjunto selecionado.
+              </div>
+            ) : null}
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={!activePixConflict.paymentIntent.pixCopyPaste}
+                type="button"
+                onClick={() => setShowConflictPix((value) => !value)}
+              >
+                <QrCode aria-hidden="true" size={16} />
+                {showConflictPix
+                  ? 'Ocultar PIX'
+                  : activePixConflict.type === 'GROUPED' && activePixConflict.matchesSelectedGroup
+                    ? 'Ver PIX'
+                    : 'Ver PIX ativo'}
+              </button>
+              <button
+                className="primary-button pix-whatsapp-send-button"
+                disabled={
+                  busy ||
+                  whatsAppSending ||
+                  !canSendConflictPixWhatsApp ||
+                  Boolean(whatsAppUnavailableReason)
+                }
+                title={whatsAppUnavailableReason || undefined}
+                type="button"
+                onClick={() =>
+                  void sendPixWhatsApp(
+                    activePixConflict.paymentIntent,
+                    activePixConflict.type === 'GROUPED'
+                      ? 'PIX agrupado enviado pelo WhatsApp.'
+                      : 'PIX ativo enviado pelo WhatsApp.',
+                  )
+                }
+              >
+                <Send aria-hidden="true" size={16} />
+                {whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}
+              </button>
+              <button className="secondary-button" type="button" onClick={onClose}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {activeIntent ? (
           <div className="pix-panel">
@@ -16792,14 +16980,9 @@ function PixReceivablesModal({
             </button>
             <button
               className="primary-button"
-              disabled={busy || Boolean(activeIntent)}
+              disabled={busy || Boolean(activeIntent) || Boolean(activePixConflict)}
               type="button"
-              onClick={() =>
-                void runAction(
-                  () => createReceivablesPix(receivables.map((receivable) => receivable.id)),
-                  'PIX agrupado gerado.',
-                )
-              }
+              onClick={() => void createGroupedPix()}
             >
               <QrCode aria-hidden="true" size={16} />
               Gerar PIX

@@ -248,6 +248,33 @@ export interface PaymentIntent {
   updatedAt: string;
 }
 
+export interface ActivePixConflictReceivable {
+  id: string;
+  description: string;
+  amount: string;
+  dueDate: string;
+  status: ReceivableStatus;
+  clientReferenceId: string;
+  reference: string;
+}
+
+export interface ActivePixConflictPayload {
+  message: string;
+  code: 'ACTIVE_PIX_CONFLICT';
+  activePix: {
+    type: 'INDIVIDUAL' | 'GROUPED';
+    matchesSelectedGroup: boolean;
+    paymentIntent: PaymentIntent;
+    receivable?: ActivePixConflictReceivable;
+    paymentGroup?: {
+      id: string;
+      itemCount: number;
+      totalAmount: string;
+      items: ActivePixConflictReceivable[];
+    } | null;
+  };
+}
+
 export interface PixWhatsAppSendResult {
   success: boolean;
   messageDispatchId: string;

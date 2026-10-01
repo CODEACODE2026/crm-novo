@@ -1546,22 +1546,46 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
         };
       }) => {
         const ids = where.OR?.[0]?.receivableId?.in ?? [];
-        return Promise.resolve(
-          paymentIntents.find((intent) => {
-            const status = String(intent.status);
-            const receivableId =
-              typeof intent.receivableId === 'string' ? intent.receivableId : null;
-            const paymentGroupId =
-              typeof intent.paymentGroupId === 'string' ? intent.paymentGroupId : null;
+        const found = paymentIntents.find((intent) => {
+          const status = String(intent.status);
+          const receivableId = typeof intent.receivableId === 'string' ? intent.receivableId : null;
+          const paymentGroupId =
+            typeof intent.paymentGroupId === 'string' ? intent.paymentGroupId : null;
 
-            if (!where.status.in.includes(status)) return false;
-            if (receivableId && ids.includes(receivableId)) return true;
-            const group = paymentGroups.find((item) => item.id === paymentGroupId);
-            return (group?.items as Array<Record<string, unknown>> | undefined)?.some(
-              (item) => typeof item.receivableId === 'string' && ids.includes(item.receivableId),
-            );
-          }) ?? null,
-        );
+          if (!where.status.in.includes(status)) return false;
+          if (receivableId && ids.includes(receivableId)) return true;
+          const group = paymentGroups.find((item) => item.id === paymentGroupId);
+          return (group?.items as Array<Record<string, unknown>> | undefined)?.some(
+            (item) => typeof item.receivableId === 'string' && ids.includes(item.receivableId),
+          );
+        });
+
+        if (!found) return Promise.resolve(null);
+
+        const receivable =
+          typeof found.receivableId === 'string'
+            ? receivables.find((item) => item.id === found.receivableId)
+            : null;
+        const group =
+          typeof found.paymentGroupId === 'string'
+            ? paymentGroups.find((item) => item.id === found.paymentGroupId)
+            : null;
+
+        return Promise.resolve({
+          ...found,
+          receivable: receivable ? decorateReceivable(receivable) : null,
+          paymentGroup: group
+            ? {
+                ...group,
+                items: (group.items as Array<Record<string, unknown>>).map((item) => ({
+                  ...item,
+                  receivable: decorateReceivable(
+                    receivables.find((receivable) => receivable.id === item.receivableId)!,
+                  ),
+                })),
+              }
+            : null,
+        });
       },
       findUnique: ({ where }: { where: { id: string } }) =>
         Promise.resolve(paymentIntents.find((intent) => intent.id === where.id) ?? null),
@@ -3398,6 +3422,93 @@ describe('FinanceService', () => {
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
     expect(fake.paymentIntents).toHaveLength(1);
     expect(fake.paymentGroups.length).toBeLessThanOrEqual(1);
+  });
+
+  it('returns active individual PIX conflict data without creating a grouped PIX', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+    const activeIntent = await service.createReceivablePix(ids[0]!, actorUserId);
+
+    let error: unknown;
+    try {
+      await service.createReceivablesPix({ receivableIds: ids }, actorUserId);
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'ACTIVE_PIX_CONFLICT',
+      activePix: {
+        type: 'INDIVIDUAL',
+        matchesSelectedGroup: false,
+        paymentIntent: {
+          id: activeIntent.id,
+          receivableId: ids[0],
+          paymentGroupId: null,
+          status: 'WAITING_PAYMENT',
+        },
+        receivable: {
+          id: ids[0],
+          reference: fake.references[0]!.reference,
+          amount: '30.00',
+        },
+      },
+    });
+    expect(fake.paymentGroups).toHaveLength(0);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns matching grouped PIX conflict data without duplicating group or intent', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+    const activeIntent = await service.createReceivablesPix({ receivableIds: ids }, actorUserId);
+
+    let error: unknown;
+    try {
+      await service.createReceivablesPix({ receivableIds: [...ids].reverse() }, actorUserId);
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'ACTIVE_PIX_CONFLICT',
+      activePix: {
+        type: 'GROUPED',
+        matchesSelectedGroup: true,
+        paymentIntent: {
+          id: activeIntent.id,
+          paymentGroupId: fake.paymentGroups[0]!.id,
+          status: 'WAITING_PAYMENT',
+        },
+        paymentGroup: {
+          id: fake.paymentGroups[0]!.id,
+          itemCount: 2,
+          totalAmount: '70.00',
+          items: [
+            { id: ids[0], reference: fake.references[0]!.reference, amount: '30.00' },
+            { id: ids[1], reference: fake.references[1]!.reference, amount: '40.00' },
+          ],
+        },
+      },
+    });
+    expect(fake.paymentGroups).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
   });
 
   it('keeps concurrent grouped paid sync to one effective write-off', async () => {

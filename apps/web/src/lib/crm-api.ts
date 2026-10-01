@@ -2120,6 +2120,19 @@ export function createReceivablesPix(
   });
 }
 
+export function replaceReceivablesPix(payload: {
+  receivableIds: string[];
+  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
+  expectedCurrentIntentId: string;
+  reason?: string;
+  idempotencyKey?: string;
+}) {
+  return apiFetch<PaymentIntent>('/receivables/pix/replace', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listPaymentIntents(receivableId: string) {
   return apiFetch<PaymentIntent[]>(`/receivables/${receivableId}/payment-intents`);
 }

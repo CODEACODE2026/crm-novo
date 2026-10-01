@@ -215,6 +215,7 @@ import {
   reconcileBilling,
   reconcileBillingReceivables,
   reconcileRecovery,
+  replaceReceivablesPix,
   replaceReceivablePix,
   sendBillingNow,
   sendPaymentIntentWhatsApp,
@@ -16575,6 +16576,9 @@ function PixReceivablesModal({
     PaymentProviderCredentialStatus[]
   >([]);
   const [selectedProvider, setSelectedProvider] = useState<ConfigurablePaymentProvider>('FASTFLOW');
+  const [replacementProvider, setReplacementProvider] =
+    useState<ConfigurablePaymentProvider>('FASTFLOW');
+  const [showReplacement, setShowReplacement] = useState(false);
   const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [whatsAppSending, setWhatsAppSending] = useState(false);
   const [activePixConflict, setActivePixConflict] = useState<
@@ -16622,6 +16626,15 @@ function PixReceivablesModal({
     null;
   const canUseSelectedProvider = eligiblePixProviders.includes(selectedProvider);
   const groupedPixProvider = canUseSelectedProvider ? selectedProvider : defaultPixProvider;
+  const canUseReplacementProvider = eligiblePixProviders.includes(replacementProvider);
+  const groupedReplacementProvider = canUseReplacementProvider
+    ? replacementProvider
+    : defaultPixProvider;
+  const canReplaceGroupedPix = Boolean(
+    activePixConflict?.type === 'GROUPED' &&
+    activePixConflict.matchesSelectedGroup &&
+    activePixConflict.paymentIntent.status === 'WAITING_PAYMENT',
+  );
 
   useEffect(() => {
     void Promise.all([getWhatsAppConnection().catch(() => null), listPaymentProviderCredentials()])
@@ -16639,6 +16652,11 @@ function PixReceivablesModal({
     if (!groupedPixProvider || groupedPixProvider === selectedProvider) return;
     setSelectedProvider(groupedPixProvider);
   }, [groupedPixProvider, selectedProvider]);
+
+  useEffect(() => {
+    if (!groupedReplacementProvider || groupedReplacementProvider === replacementProvider) return;
+    setReplacementProvider(groupedReplacementProvider);
+  }, [groupedReplacementProvider, replacementProvider]);
 
   async function runAction(
     action: () => Promise<PaymentIntent>,
@@ -16734,6 +16752,46 @@ function PixReceivablesModal({
       }
 
       setError(err instanceof Error ? err.message : 'Não foi possível atualizar o PIX.');
+    } finally {
+      setBusy(false);
+      actionRef.current = false;
+    }
+  }
+
+  async function replaceGroupedPix() {
+    if (!activePixConflict || actionRef.current) return;
+
+    if (!canReplaceGroupedPix) {
+      setError('A substituição vale apenas para PIX agrupado ativo correspondente.');
+      return;
+    }
+
+    if (!groupedReplacementProvider) {
+      setError('Nenhum provider PIX configurado para substituir o PIX agrupado.');
+      return;
+    }
+
+    actionRef.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const intent = await replaceReceivablesPix({
+        receivableIds: receivables.map((receivable) => receivable.id),
+        provider: groupedReplacementProvider,
+        expectedCurrentIntentId: activePixConflict.paymentIntent.id,
+        idempotencyKey: `grouped-pix-replace:${activePixConflict.paymentIntent.id}:${groupedReplacementProvider}`,
+        reason: 'Operador solicitou novo PIX agrupado para substituir a tentativa anterior.',
+      });
+      setActiveIntent(intent);
+      setActivePixConflict(null);
+      setShowConflictPix(false);
+      setShowReplacement(false);
+      setNotice('Novo PIX agrupado gerado.');
+      await onChanged('Novo PIX agrupado gerado.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível substituir o PIX agrupado.');
     } finally {
       setBusy(false);
       actionRef.current = false;
@@ -16929,10 +16987,73 @@ function PixReceivablesModal({
                 <Send aria-hidden="true" size={16} />
                 {whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}
               </button>
+              {canReplaceGroupedPix ? (
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  type="button"
+                  onClick={() => {
+                    setShowReplacement((value) => !value);
+                    setError('');
+                    setNotice('');
+                  }}
+                >
+                  <RefreshCcw aria-hidden="true" size={16} />
+                  Gerar novo PIX
+                </button>
+              ) : null}
               <button className="secondary-button" type="button" onClick={onClose}>
                 Fechar
               </button>
             </div>
+            {showReplacement && canReplaceGroupedPix ? (
+              <section className="pix-panel pix-tool-panel">
+                <div className="pix-status-row">
+                  <strong>Gerar novo PIX agrupado</strong>
+                  <span>
+                    {groupedReplacementProvider
+                      ? paymentProviderDisplay(groupedReplacementProvider)
+                      : 'Nenhum provider configurado'}
+                  </span>
+                </div>
+                <div className="notice warning">
+                  Ao gerar um novo PIX, o PIX agrupado anterior deixará de ser o ativo para este
+                  grupo.
+                </div>
+                <fieldset className="field">
+                  <span>Provider PIX</span>
+                  {eligiblePixProviders.length ? (
+                    eligiblePixProviders.map((provider) => (
+                      <label className="choice-row" key={provider}>
+                        <input
+                          checked={groupedReplacementProvider === provider}
+                          name="grouped-pix-replacement-provider"
+                          type="radio"
+                          value={provider}
+                          onChange={() => setReplacementProvider(provider)}
+                        />
+                        <span>{replacementProviderLabel(provider, defaultPixProvider)}</span>
+                      </label>
+                    ))
+                  ) : (
+                    <span className="field-hint">
+                      Configure ao menos um provider PIX ativo para substituir o PIX agrupado.
+                    </span>
+                  )}
+                </fieldset>
+                <div className="button-row">
+                  <button
+                    className="primary-button"
+                    disabled={busy || !groupedReplacementProvider}
+                    type="button"
+                    onClick={() => void replaceGroupedPix()}
+                  >
+                    <QrCode aria-hidden="true" size={16} />
+                    Confirmar novo PIX
+                  </button>
+                </div>
+              </section>
+            ) : null}
           </div>
         ) : null}
 

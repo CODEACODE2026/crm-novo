@@ -19,7 +19,10 @@ import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
-import { CreateReceivablesPixDto } from './dto/create-receivables-pix.dto';
+import {
+  CreateReceivablesPixDto,
+  ReplaceReceivablesPixDto,
+} from './dto/create-receivables-pix.dto';
 import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
@@ -169,6 +172,14 @@ export class FinanceController {
   @Post('receivables/pix')
   createReceivablesPix(@Body() dto: CreateReceivablesPixDto, @Req() request: AuthenticatedRequest) {
     return this.financeService.createReceivablesPix(dto, request.user.id);
+  }
+
+  @Post('receivables/pix/replace')
+  replaceReceivablesPix(
+    @Body() dto: ReplaceReceivablesPixDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.financeService.replaceReceivablesPix(dto, request.user.id);
   }
 
   @Get('receivables/:id/payment-intents')

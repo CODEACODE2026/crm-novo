@@ -1542,10 +1542,12 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
       }: {
         where: {
           status: { in: string[] };
+          receivableId?: { in: string[] };
           OR?: Array<{ receivableId?: { in: string[] } }>;
         };
       }) => {
-        const ids = where.OR?.[0]?.receivableId?.in ?? [];
+        const directIds = where.receivableId?.in ?? [];
+        const ids = directIds.length ? directIds : (where.OR?.[0]?.receivableId?.in ?? []);
         const found = paymentIntents.find((intent) => {
           const status = String(intent.status);
           const receivableId = typeof intent.receivableId === 'string' ? intent.receivableId : null;
@@ -1554,6 +1556,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
 
           if (!where.status.in.includes(status)) return false;
           if (receivableId && ids.includes(receivableId)) return true;
+          if (directIds.length) return false;
           const group = paymentGroups.find((item) => item.id === paymentGroupId);
           return (group?.items as Array<Record<string, unknown>> | undefined)?.some(
             (item) => typeof item.receivableId === 'string' && ids.includes(item.receivableId),
@@ -1648,6 +1651,27 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
       create: ({ data }: { data: Record<string, unknown> }) => {
         events.push(data);
         return Promise.resolve(data);
+      },
+      findFirst: ({
+        where,
+      }: {
+        where: { clientId: string; type: string; metadata?: { path: string[]; equals: unknown } };
+      }) => {
+        const metadataPath = where.metadata?.path[0];
+        return Promise.resolve(
+          events.find((event) => {
+            const metadata =
+              typeof event.metadata === 'object' && event.metadata !== null
+                ? (event.metadata as Record<string, unknown>)
+                : null;
+
+            return (
+              event.clientId === where.clientId &&
+              event.type === where.type &&
+              (!metadataPath || metadata?.[metadataPath] === where.metadata?.equals)
+            );
+          }) ?? null,
+        );
       },
     },
     messageDispatch: {
@@ -3566,6 +3590,220 @@ describe('FinanceService', () => {
     expect(fake.paymentGroups).toHaveLength(1);
     expect(fake.paymentIntents).toHaveLength(1);
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces a matching active grouped PIX with the selected provider without duplicating the group', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+    const previous = await service.createReceivablesPix({ receivableIds: ids }, actorUserId);
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-group-replacement-1',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('70.00'),
+      pixCopyPaste: 'FASTPAY-GROUP-REPLACEMENT',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+    } as never);
+
+    const next = await service.replaceReceivablesPix(
+      {
+        receivableIds: [...ids].reverse(),
+        provider: 'FASTPAY',
+        expectedCurrentIntentId: previous.id,
+        idempotencyKey: `grouped-pix-replace:${previous.id}:FASTPAY`,
+      },
+      actorUserId,
+    );
+
+    expect(fake.provider.createPix).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        provider: 'FASTPAY',
+        receivableId: fake.paymentGroups[0]!.id,
+        amount: new Prisma.Decimal('70.00'),
+      }),
+    );
+    expect(fake.paymentGroups).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(fake.paymentIntents[0]).toMatchObject({
+      id: previous.id,
+      paymentGroupId: fake.paymentGroups[0]!.id,
+      status: 'SUPERSEDED',
+    });
+    expect(fake.paymentIntents[1]).toMatchObject({
+      id: next.id,
+      paymentGroupId: fake.paymentGroups[0]!.id,
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-group-replacement-1',
+      status: 'WAITING_PAYMENT',
+    });
+    expect(fake.paymentGroups[0]).toMatchObject({ status: 'WAITING_PAYMENT' });
+    const latestEvent = fake.events.at(-1) as { metadata?: unknown; type?: unknown } | undefined;
+    expect(latestEvent).toMatchObject({ type: 'PIX_PAYMENT_INTENT_CREATED' });
+    expect(latestEvent?.metadata).toMatchObject({
+      paymentGroupId: fake.paymentGroups[0]!.id,
+      receivableIds: [...ids].reverse(),
+      previousPaymentIntentId: previous.id,
+      previousProvider: previous.provider,
+      paymentIntentId: next.id,
+      provider: 'FASTPAY',
+      replacement: true,
+      groupedReplacement: true,
+    });
+
+    let conflict: unknown;
+    try {
+      await service.createReceivablesPix({ receivableIds: ids }, actorUserId);
+    } catch (err) {
+      conflict = err;
+    }
+
+    expect(conflict).toBeInstanceOf(ConflictException);
+    expect((conflict as ConflictException).getResponse()).toMatchObject({
+      activePix: {
+        type: 'GROUPED',
+        matchesSelectedGroup: true,
+        paymentIntent: { id: next.id, provider: 'FASTPAY', status: 'WAITING_PAYMENT' },
+      },
+    });
+    expect(fake.paymentGroups).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+  });
+
+  it('keeps grouped replacement idempotent with the same key', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+    const previous = await service.createReceivablesPix({ receivableIds: ids }, actorUserId);
+    const idempotencyKey = `grouped-pix-replace:${previous.id}:FASTPAY`;
+    fake.provider.createPix.mockResolvedValue({
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-group-replacement-idempotent',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('70.00'),
+      pixCopyPaste: 'FASTPAY-GROUP-REPLACEMENT',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+    } as never);
+
+    const first = await service.replaceReceivablesPix(
+      {
+        receivableIds: ids,
+        provider: 'FASTPAY',
+        expectedCurrentIntentId: previous.id,
+        idempotencyKey,
+      },
+      actorUserId,
+    );
+    const second = await service.replaceReceivablesPix(
+      {
+        receivableIds: [...ids].reverse(),
+        provider: 'FASTPAY',
+        expectedCurrentIntentId: previous.id,
+        idempotencyKey,
+      },
+      actorUserId,
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(fake.paymentGroups).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(2);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks grouped replacement when the active conflict is an individual PIX', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+    const individual = await service.createReceivablePix(ids[0]!, actorUserId);
+    fake.provider.createPix.mockClear();
+
+    await expect(
+      service.replaceReceivablesPix(
+        {
+          receivableIds: ids,
+          provider: 'FASTPAY',
+          expectedCurrentIntentId: individual.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('PIX individual ativo');
+
+    expect(fake.paymentGroups).toHaveLength(0);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
+  it('blocks grouped replacement when an individual PIX is active even if a matching group exists', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+    const grouped = await service.createReceivablesPix({ receivableIds: ids }, actorUserId);
+    fake.paymentIntents.push({
+      id: 'intent-individual-conflict',
+      receivableId: ids[0],
+      paymentGroupId: null,
+      provider: 'FASTFLOW',
+      providerTransactionId: 'individual-provider-conflict',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: 'INDIVIDUAL-CONFLICT',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+      paidAt: null,
+      lastSyncAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: new Date('2026-09-20T00:00:01.000Z'),
+      updatedAt: new Date('2026-09-20T00:00:01.000Z'),
+    });
+    fake.provider.createPix.mockClear();
+
+    await expect(
+      service.replaceReceivablesPix(
+        {
+          receivableIds: ids,
+          provider: 'FASTPAY',
+          expectedCurrentIntentId: grouped.id,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('PIX individual ativo');
+
+    expect(fake.paymentIntents.find((intent) => intent.id === grouped.id)).toMatchObject({
+      status: 'WAITING_PAYMENT',
+    });
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
   });
 
   it('keeps concurrent grouped paid sync to one effective write-off', async () => {

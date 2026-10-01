@@ -344,6 +344,31 @@ describe('PIX reconciliation UI contract', () => {
     );
   });
 
+  it('offers explicit replacement only for a matching active grouped PIX', () => {
+    expect(groupedPixModalSource).toContain('const [showReplacement, setShowReplacement]');
+    expect(groupedPixModalSource).toContain('const canReplaceGroupedPix = Boolean(');
+    expect(groupedPixModalSource).toContain("activePixConflict?.type === 'GROUPED'");
+    expect(groupedPixModalSource).toContain('activePixConflict.matchesSelectedGroup');
+    expect(groupedPixModalSource).toContain(
+      "activePixConflict.paymentIntent.status === 'WAITING_PAYMENT'",
+    );
+    expect(groupedPixModalSource).toContain('Gerar novo PIX');
+    expect(groupedPixModalSource).toContain('Gerar novo PIX agrupado');
+    expect(groupedPixModalSource).toContain(
+      'Ao gerar um novo PIX, o PIX agrupado anterior deixará de ser o ativo para este',
+    );
+    expect(groupedPixModalSource).toContain('grouped-pix-replacement-provider');
+    expect(groupedPixModalSource).toContain('replaceReceivablesPix({');
+    expect(groupedPixModalSource).toContain(
+      'expectedCurrentIntentId: activePixConflict.paymentIntent.id',
+    );
+    expect(groupedPixModalSource).toContain(
+      'idempotencyKey: `grouped-pix-replace:${activePixConflict.paymentIntent.id}:${groupedReplacementProvider}`',
+    );
+    expect(groupedPixModalSource).toContain("setNotice('Novo PIX agrupado gerado.');");
+    expect(groupedPixModalSource).not.toContain('replaceReceivablePix(');
+  });
+
   it('treats grouped PIX active conflicts as recoverable in the grouped modal', () => {
     expect(groupedPixModalSource).toContain('activePixConflictPayloadFromError(err)');
     expect(groupedPixModalSource).toContain('PIX ativo encontrado');

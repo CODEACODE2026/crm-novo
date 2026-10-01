@@ -33,7 +33,10 @@ import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
-import { CreateReceivablesPixDto } from './dto/create-receivables-pix.dto';
+import {
+  CreateReceivablesPixDto,
+  ReplaceReceivablesPixDto,
+} from './dto/create-receivables-pix.dto';
 import { FinancialSummaryDto } from './dto/financial-summary.dto';
 import { ListFinancialTransactionsDto } from './dto/list-financial-transactions.dto';
 import { ListReceivablesDto } from './dto/list-receivables.dto';
@@ -937,6 +940,149 @@ export class FinanceService {
               amount: totalAmount.toString(),
               provider: created.provider,
               providerTransactionId: created.providerTransactionId,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+
+        return created;
+      });
+
+      return this.presentPaymentIntent(intent);
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        throw new ConflictException('Ja existe um PIX ativo ou conflito para este agrupamento.');
+      }
+
+      throw error;
+    }
+  }
+
+  async replaceReceivablesPix(dto: ReplaceReceivablesPixDto, actorUserId: string) {
+    const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
+
+    try {
+      const intent = await this.prisma.$transaction(async (tx) => {
+        await this.acquirePixCreationLocks(tx, receivableIds);
+
+        const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
+        const client = receivables[0]!.client;
+
+        if (dto.idempotencyKey) {
+          const existingPaymentIntentId = await this.findPaymentIntentIdByPixCreationEvent(
+            tx,
+            client.id,
+            'idempotencyKey',
+            dto.idempotencyKey,
+          );
+          if (existingPaymentIntentId) {
+            return tx.paymentIntent.findUniqueOrThrow({ where: { id: existingPaymentIntentId } });
+          }
+        }
+
+        const currentIntent = await this.findActivePixForReceivables(tx, receivableIds);
+        const activeIndividualIntent = await this.findActiveIndividualPixForReceivables(
+          tx,
+          receivableIds,
+        );
+
+        if (!currentIntent) {
+          throw new ConflictException('Nenhum PIX agrupado ativo elegivel para substituicao.');
+        }
+
+        if (activeIndividualIntent || currentIntent.receivableId) {
+          throw new ConflictException(
+            'Existe PIX individual ativo para uma das contas selecionadas. Substituicao agrupada bloqueada.',
+          );
+        }
+
+        if (!currentIntent.paymentGroupId || !currentIntent.paymentGroup) {
+          throw new ConflictException('Nenhum PIX agrupado ativo elegivel para substituicao.');
+        }
+
+        const selected = [...receivableIds].sort();
+        const grouped = currentIntent.paymentGroup.items.map((item) => item.receivableId).sort();
+        const matchesSelectedGroup =
+          selected.length === grouped.length &&
+          selected.every((id, index) => id === grouped[index]);
+
+        if (!matchesSelectedGroup) {
+          throw new ConflictException(
+            'PIX agrupado ativo nao corresponde exatamente ao conjunto selecionado.',
+          );
+        }
+
+        if (currentIntent.id !== dto.expectedCurrentIntentId) {
+          throw new ConflictException(
+            'PIX agrupado atual mudou. Abra novamente antes de substituir.',
+          );
+        }
+
+        if (currentIntent.status !== 'WAITING_PAYMENT') {
+          throw new ConflictException(
+            'Apenas PIX agrupado com status WAITING_PAYMENT pode ser substituido.',
+          );
+        }
+
+        const totalAmount = this.sumReceivables(receivables);
+        const description = this.buildPaymentGroupDescription(receivables);
+        const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const providerPix = await this.paymentProvider.createPix({
+          provider: dto.provider,
+          receivableId: currentIntent.paymentGroupId,
+          amount: totalAmount,
+          description,
+          expiresAt,
+          clientName: client.name,
+          payerPhone: client.phoneNormalized,
+          notificationUrl: this.getPaymentNotificationUrl(),
+        });
+
+        await tx.paymentIntent.update({
+          where: { id: currentIntent.id },
+          data: { status: 'SUPERSEDED' },
+        });
+
+        const created = await tx.paymentIntent.create({
+          data: {
+            paymentGroupId: currentIntent.paymentGroupId,
+            provider: providerPix.provider,
+            providerTransactionId: this.normalizeCreatedProviderTransactionId(
+              providerPix.providerTransactionId,
+            ),
+            externalStatus: providerPix.externalStatus,
+            externalDepixId: providerPix.externalDepixId,
+            blockchainTxId: providerPix.blockchainTxId,
+            status: providerPix.status,
+            amount: providerPix.amount,
+            pixCopyPaste: providerPix.pixCopyPaste,
+            qrCodeData: providerPix.qrCodeData,
+            expiresAt: providerPix.expiresAt,
+            lastSyncAt: new Date(),
+          },
+        });
+
+        await tx.clientEvent.create({
+          data: {
+            clientId: client.id,
+            type: 'PIX_PAYMENT_INTENT_CREATED',
+            title: 'Novo PIX agrupado gerado para substituir tentativa anterior.',
+            description:
+              dto.reason?.trim() ||
+              'Operador gerou nova tentativa de PIX agrupado sem cancelar a transacao anterior no provider.',
+            metadata: {
+              paymentGroupId: currentIntent.paymentGroupId,
+              receivableIds,
+              previousPaymentIntentId: currentIntent.id,
+              previousProvider: currentIntent.provider,
+              previousProviderTransactionId: currentIntent.providerTransactionId,
+              paymentIntentId: created.id,
+              provider: created.provider,
+              providerTransactionId: created.providerTransactionId,
+              amount: totalAmount.toString(),
+              replacement: true,
+              groupedReplacement: true,
+              idempotencyKey: dto.idempotencyKey ?? null,
             },
             createdByUserId: actorUserId,
           },
@@ -3520,6 +3666,18 @@ export class FinanceService {
             },
           },
         },
+      },
+    });
+  }
+
+  private findActiveIndividualPixForReceivables(
+    tx: Pick<Prisma.TransactionClient, 'paymentIntent'>,
+    receivableIds: string[],
+  ) {
+    return tx.paymentIntent.findFirst({
+      where: {
+        status: { in: [...activePixStatuses] },
+        receivableId: { in: receivableIds },
       },
     });
   }

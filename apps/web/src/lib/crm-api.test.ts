@@ -37,6 +37,7 @@ import {
   registerPaymentWebhook,
   recoverReceivablePixReplacement,
   replaceReceivablePix,
+  replaceReceivablesPix,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
   sendPaymentIntentWhatsApp,
@@ -249,6 +250,35 @@ describe('CRM UI formatters', () => {
     await createReceivablesPix(['receivable-1']);
 
     expect(latestJsonBody(fetchMock)).toEqual({ receivableIds: ['receivable-1'] });
+  });
+
+  it('posts grouped PIX replacement payload to the explicit replacement endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'intent-2', provider: 'FASTPAY' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await replaceReceivablesPix({
+      receivableIds: ['receivable-1', 'receivable-2'],
+      provider: 'FASTPAY',
+      expectedCurrentIntentId: 'intent-1',
+      idempotencyKey: 'grouped-pix-replace:intent-1:FASTPAY',
+      reason: 'Trocar provider',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/pix/replace'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toMatchObject({
+      receivableIds: ['receivable-1', 'receivable-2'],
+      provider: 'FASTPAY',
+      expectedCurrentIntentId: 'intent-1',
+      idempotencyKey: 'grouped-pix-replace:intent-1:FASTPAY',
+      reason: 'Trocar provider',
+    });
   });
 
   it('posts legacy client preview payload to the read-only import endpoint', async () => {

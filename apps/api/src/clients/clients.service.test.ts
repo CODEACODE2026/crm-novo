@@ -960,6 +960,59 @@ describe('ClientsService manual client creation', () => {
   });
 });
 
+describe('ClientsService manual reference creation', () => {
+  it('creates a pending reference with an initial activation receivable', async () => {
+    const fake = createClientCreationService();
+
+    const result = await fake.service.createReference(
+      'existing-client-id',
+      {
+        reference: 'NOVA-001',
+        planId: 'plan-id',
+        recurringValue: 30,
+        dueDate: '2026-10-01',
+        billingNoticeDays: 0,
+        notes: 'Primeira cobranca manual',
+      },
+      'user-id',
+    );
+
+    expect(result).toMatchObject({
+      clientId: 'existing-client-id',
+      reference: 'NOVA-001',
+      status: 'PENDENTE_PAGAMENTO',
+      dueDate: '2026-10-01',
+      billingNoticeDays: 0,
+      notes: 'Primeira cobranca manual',
+    });
+    expect(fake.receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.prisma.messageDispatch.create).not.toHaveBeenCalled();
+    expect(fake.prisma.paymentIntent.create).not.toHaveBeenCalled();
+    expect(fake.receivables).toHaveLength(1);
+    expect(fake.receivables[0]).toMatchObject({
+      clientId: 'existing-client-id',
+      clientReferenceId: fake.references[0]!.id,
+      purpose: 'INITIAL_ACTIVATION',
+      description: 'Cobranca inicial de ativacao - Mensal',
+      status: 'PENDENTE',
+    });
+    expect(fake.receivables.some((receivable) => receivable.purpose === 'RENEWAL')).toBe(false);
+    expect(fake.receivables[0]!.amount.toString()).toBe('30');
+    expect(fake.receivables[0]!.dueDate).toEqual(parseBusinessDate('2026-10-01'));
+    expect(fake.events[0]).toMatchObject({
+      clientId: 'existing-client-id',
+      type: 'CLIENT_UPDATED',
+      title: 'Referencia NOVA-001 adicionada aguardando pagamento.',
+      metadata: {
+        clientReferenceId: fake.references[0]!.id,
+        reference: 'NOVA-001',
+        referenceStatus: 'PENDENTE_PAGAMENTO',
+        initialReceivablePurpose: 'INITIAL_ACTIVATION',
+      },
+    });
+  });
+});
+
 describe('ClientsService legacy client updates', () => {
   it('updates personal fields for a client with one reference without changing the reference', async () => {
     const fake = createClientUpdateService({ references: [clientReference()] });
@@ -1328,6 +1381,7 @@ function createClientCreationService() {
   const events: Array<Record<string, unknown> & { id: string }> = [];
   const prisma = {
     client: {
+      count: vi.fn().mockResolvedValue(1),
       create: vi.fn(
         ({ data, include }: { data: Record<string, unknown>; include?: { plan?: boolean } }) => {
           const client = {
@@ -1366,19 +1420,21 @@ function createClientCreationService() {
       }),
     },
     clientReference: {
-      create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
-        const reference = {
-          id: 'created-reference-id',
-          ...data,
-          status: typeof data.status === 'string' ? data.status : 'ATIVO',
-          notes: data.notes ?? null,
-          createdAt: new Date('2026-09-17T00:00:00.000Z'),
-          updatedAt: new Date('2026-09-17T00:00:00.000Z'),
-        };
-        references.push(reference);
+      create: vi.fn(
+        ({ data, include }: { data: Record<string, unknown>; include?: { plan?: boolean } }) => {
+          const reference = {
+            id: 'created-reference-id',
+            ...data,
+            status: typeof data.status === 'string' ? data.status : 'ATIVO',
+            notes: data.notes ?? null,
+            createdAt: new Date('2026-09-17T00:00:00.000Z'),
+            updatedAt: new Date('2026-09-17T00:00:00.000Z'),
+          };
+          references.push(reference);
 
-        return Promise.resolve(reference);
-      }),
+          return Promise.resolve(include?.plan ? { ...reference, plan } : reference);
+        },
+      ),
     },
     receivable: {
       create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
@@ -1411,6 +1467,12 @@ function createClientCreationService() {
 
         return Promise.resolve(events.at(-1));
       }),
+    },
+    messageDispatch: {
+      create: vi.fn(),
+    },
+    paymentIntent: {
+      create: vi.fn(),
     },
     $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
   };

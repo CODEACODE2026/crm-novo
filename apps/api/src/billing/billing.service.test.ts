@@ -567,6 +567,33 @@ describe('BillingService', () => {
     );
   });
 
+  it('does not create billing dispatch for a manual reference awaiting initial activation payment', async () => {
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const initialReceivable = receivable({
+      id: 'initial-receivable-id',
+      purpose: 'INITIAL_ACTIVATION',
+      renewalId: null,
+      dueDate,
+      status: 'PENDENTE',
+    });
+    const pendingReference = clientReference({
+      status: 'PENDENTE_PAGAMENTO',
+      dueDate,
+      receivables: [initialReceivable],
+    });
+    const pendingClient = client({
+      references: [pendingReference],
+      receivables: [initialReceivable],
+    });
+    const { service } = serviceFactory({ clients: [pendingClient], createDispatch });
+
+    const result = await service.reconcile(now);
+
+    expect(result.created).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
   it('spreads three billing dispatches by the configured interval', async () => {
     const createDispatch = vi.fn().mockResolvedValue(dispatch());
     const { service } = serviceFactory({

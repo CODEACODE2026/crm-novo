@@ -137,6 +137,15 @@ function createFinancePrisma() {
     updatedAt: client.updatedAt,
     plan,
   };
+  const siblingReference = {
+    ...clientReference,
+    id: '88888888-8888-4888-8888-888888888888',
+    reference: 'IRMÃ-001',
+    status: 'ATIVO',
+    dueDate: parseBusinessDate('2026-12-15'),
+    billingAnchorDay: 15,
+    updatedAt: new Date(clientReference.updatedAt),
+  };
   const renewal = {
     id: '66666666-6666-4666-8666-666666666666',
     clientId: client.id,
@@ -345,11 +354,24 @@ function createFinancePrisma() {
     },
     clientReference: {
       findUnique: ({ where }: { where: { id: string } }) =>
-        Promise.resolve(where.id === clientReference.id ? clientReference : null),
-      update: ({ data }: { data: Partial<typeof clientReference> }) => {
-        Object.assign(clientReference, data);
-        Object.assign(client, data);
-        return Promise.resolve(clientReference);
+        Promise.resolve(
+          [clientReference, siblingReference].find((reference) => reference.id === where.id) ??
+            null,
+        ),
+      update: ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Partial<typeof clientReference>;
+      }) => {
+        const reference = [clientReference, siblingReference].find((item) => item.id === where.id);
+        if (!reference) throw new Error('Reference not found');
+        Object.assign(reference, data);
+        if (reference.id === clientReference.id) {
+          Object.assign(client, data);
+        }
+        return Promise.resolve(reference);
       },
     },
     receivable: {
@@ -551,6 +573,7 @@ function createFinancePrisma() {
     expenseCategory,
     client,
     clientReference,
+    siblingReference,
     reactivation,
     plan,
     receivable,
@@ -580,6 +603,7 @@ function createFinancePrisma() {
         const snapshots = {
           client: { ...client },
           clientReference: { ...clientReference },
+          siblingReference: { ...siblingReference },
           receivable: { ...receivable },
           reactivation: { ...reactivation },
           transactions: transactions.map((transaction) => ({ ...transaction })),
@@ -593,6 +617,7 @@ function createFinancePrisma() {
           } catch (error) {
             Object.assign(client, snapshots.client);
             Object.assign(clientReference, snapshots.clientReference);
+            Object.assign(siblingReference, snapshots.siblingReference);
             Object.assign(receivable, snapshots.receivable);
             Object.assign(reactivation, snapshots.reactivation);
             transactions.splice(0, transactions.length, ...snapshots.transactions);
@@ -3121,6 +3146,56 @@ describe('FinanceService', () => {
 
     expect(fake.clientReference.status).toBe('ATIVO');
     expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-10-10'));
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
+      fake.clientReference.id,
+      fake.tx,
+    );
+  });
+
+  it('activates the client after initial activation payment only when it was not active', async () => {
+    const fake = createFinancePrisma();
+    const siblingBefore = { ...fake.siblingReference };
+    fake.client.status = 'INATIVO';
+    fake.clientReference.status = 'PENDENTE_PAGAMENTO';
+    fake.clientReference.dueDate = parseBusinessDate('2026-10-01');
+    fake.clientReference.billingAnchorDay = 1;
+    fake.receivable.purpose = 'INITIAL_ACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.dueDate = parseBusinessDate('2026-10-01');
+    const cycle = {
+      ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const { referrals } = createReferralQualificationDouble();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      referrals as never,
+      cycle as never,
+    );
+
+    await service.payReceivable(
+      fake.receivable.id,
+      { paymentDate: '2026-10-01', categoryId: fake.entryCategory.id },
+      actorUserId,
+    );
+
+    expect(fake.client.status).toBe('ATIVO');
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-11-01'));
+    expect(fake.siblingReference).toMatchObject(siblingBefore);
+    expect(fake.events.filter((event) => event.type === 'CLIENT_STATUS_HISTORY')).toHaveLength(2);
+    expect(fake.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'CLIENT_STATUS_HISTORY',
+          previousStatus: 'INATIVO',
+          newStatus: 'ATIVO',
+          reason: 'Cliente ativado apos pagamento inicial.',
+        }),
+      ]),
+    );
     expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
       fake.clientReference.id,
       fake.tx,

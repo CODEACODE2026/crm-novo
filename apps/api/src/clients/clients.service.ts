@@ -403,19 +403,34 @@ export class ClientsService {
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
             notes: this.optionalTrim(dto.notes),
-            status: 'ATIVO',
+            status: 'PENDENTE_PAGAMENTO',
           },
           include: { plan: true },
         });
 
-        await this.currentCycle().ensureCurrentCycleReceivable(created.id, tx);
+        await tx.receivable.create({
+          data: {
+            clientId,
+            clientReferenceId: created.id,
+            purpose: 'INITIAL_ACTIVATION',
+            description: `Cobranca inicial de ativacao - ${created.plan.name}`,
+            amount: dto.recurringValue,
+            dueDate,
+            status: 'PENDENTE',
+          },
+        });
 
         await tx.clientEvent.create({
           data: {
             clientId,
             type: 'CLIENT_UPDATED',
-            title: `Referencia ${created.reference} adicionada.`,
-            metadata: { clientReferenceId: created.id, reference: created.reference },
+            title: `Referencia ${created.reference} adicionada aguardando pagamento.`,
+            metadata: {
+              clientReferenceId: created.id,
+              reference: created.reference,
+              referenceStatus: created.status,
+              initialReceivablePurpose: 'INITIAL_ACTIVATION',
+            },
             createdByUserId: actorUserId,
           },
         });

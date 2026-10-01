@@ -755,9 +755,12 @@ export default function DashboardPage() {
           onReferenceLifecycleAction={openReferenceLifecycleAction}
           onRevertRenewal={(client, renewal) => void openRenewalReversal(client, renewal)}
           onCreateReference={async (client, payload) => {
-            await createClientReference(client.id, payload);
+            const reference = await createClientReference(client.id, payload);
             const detailed = await getClient(client.id);
             setSelectedClient(detailed);
+            setRenewalNotice(
+              `Referência ${reference.reference} criada aguardando pagamento. Gere o PIX manualmente em Cobranças/PIX; o Billing automático começa somente no próximo ciclo após o pagamento.`,
+            );
             await loadData();
           }}
           onUpdateReference={async (reference, payload) => {
@@ -8990,7 +8993,7 @@ function ClientsView({
                   <p>
                     {editingReference
                       ? `Atualize os dados da referência para o cliente ${selectedClient.name}.`
-                      : `Crie uma nova referência para o cliente ${selectedClient.name}.`}
+                      : `Crie uma nova referência para o cliente ${selectedClient.name}. Ela ficará aguardando pagamento inicial.`}
                   </p>
                 </div>
                 <IconButton
@@ -12692,6 +12695,7 @@ function ClientReferenceForm({
   const [activeTab, setActiveTab] = useState<'data' | 'billing'>('data');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const creatingReference = !reference;
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -12751,6 +12755,12 @@ function ClientReferenceForm({
           Cobrança e notificações
         </button>
       </div>
+      {creatingReference ? (
+        <div className="notice">
+          A nova referência será criada como pendente de pagamento. Gere o PIX manualmente em
+          Cobranças/PIX; nenhum WhatsApp automático será enviado para essa primeira cobrança.
+        </div>
+      ) : null}
       {activeTab === 'data' ? (
         <div className="form-grid">
           <label className="field">
@@ -12811,7 +12821,8 @@ function ClientReferenceForm({
               onChange={(event) => setBillingNoticeDays(event.target.value)}
             />
             <small>
-              Define quantos dias antes do vencimento a cobrança automática será enviada.
+              A cobrança automática passa a usar este aviso somente depois do pagamento inicial e da
+              criação do próximo ciclo.
             </small>
           </label>
         </div>

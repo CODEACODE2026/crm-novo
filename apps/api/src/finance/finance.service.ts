@@ -2341,6 +2341,7 @@ export class FinanceService {
 
     if (reference.status === 'PENDENTE_PAGAMENTO') {
       const previousStatus = reference.status;
+      const previousClientStatus = receivable.client.status;
       const anchorDay = reference.billingAnchorDay;
       const nextDueDate = addCalendarMonthsPreservingAnchor(
         receivable.dueDate,
@@ -2362,6 +2363,23 @@ export class FinanceService {
           receivable.clientReferenceId,
           tx,
         );
+
+        if (previousClientStatus !== 'ATIVO') {
+          await tx.client.update({
+            where: { id: receivable.clientId },
+            data: { status: 'ATIVO' },
+          });
+
+          await tx.clientStatusHistory.create({
+            data: {
+              clientId: receivable.clientId,
+              previousStatus: previousClientStatus,
+              newStatus: 'ATIVO',
+              reason: 'Cliente ativado apos pagamento inicial.',
+              changedByUserId: actorUserId,
+            },
+          });
+        }
       } else {
         await tx.client.update({
           where: { id: receivable.clientId },

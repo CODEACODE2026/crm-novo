@@ -646,6 +646,31 @@ describe('RecoveryService', () => {
     vi.useRealTimers();
   });
 
+  it('does not start recovery for manual initial activation while reference awaits payment', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const pendingReference = reference({
+      id: 'ref-pending-initial',
+      reference: 'pending-initial',
+      status: 'PENDENTE_PAGAMENTO',
+    });
+    const { campaigns, dispatches, service } = createService({
+      receivables: [
+        receivable({
+          id: 'rec-pending-initial',
+          clientReference: pendingReference,
+          purpose: 'INITIAL_ACTIVATION',
+          dueDate: new Date('2026-09-10T00:00:00.000Z'),
+        }),
+      ],
+    });
+
+    await service.reconcile();
+
+    expect(campaigns).toHaveLength(0);
+    expect(dispatches).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
   it('keeps two references independent and reconciles idempotently per receivable', async () => {
     vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
     const overdueA = reference({ id: 'ref-a', reference: 'A' });

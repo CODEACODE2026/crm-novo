@@ -880,6 +880,7 @@ function createReceivablesSummaryPrisma(
 type ListReceivableFixture = SummaryReceivable & {
   createdAt?: Date;
   id: string;
+  paidAt?: Date | null;
 };
 
 type ListTransactionFixture = SummaryFinancialTransaction & {
@@ -1039,7 +1040,7 @@ function createListReceivablesPrisma(
     cancelReason: null,
     canceledAt: null,
     createdAt: receivable.createdAt ?? new Date('2026-09-01T00:00:00.000Z'),
-    paidAt: receivable.status === 'PAGO' ? receivable.dueDate : null,
+    paidAt: receivable.paidAt ?? (receivable.status === 'PAGO' ? receivable.dueDate : null),
     paymentIntents: [],
     paymentTransaction: null,
     purpose: 'RENEWAL',
@@ -2114,6 +2115,91 @@ describe('FinanceService', () => {
     await expect(service.listReceivables({ page: 2, pageSize: 3 })).resolves.toMatchObject({
       items: [{ id: 'legacy:l-15' }, { id: 'r-10' }, { id: 'legacy:l-05' }],
       pagination: { page: 2, pageSize: 3, total: 6, totalPages: 2 },
+    });
+  });
+
+  it('orders paid client history by payment date before unpaid receivable fallback dates', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'paid-recent',
+            dueDate: parseBusinessDate('2026-08-30'),
+            paidAt: parseBusinessDate('2026-09-30'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'paid-older',
+            dueDate: parseBusinessDate('2026-09-15'),
+            paidAt: parseBusinessDate('2026-09-15'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'pending-future',
+            dueDate: parseBusinessDate('2026-10-10'),
+            paidAt: null,
+            status: 'PENDENTE',
+          }),
+          receivableFixture({
+            id: 'canceled-fallback',
+            dueDate: parseBusinessDate('2026-09-20'),
+            paidAt: null,
+            status: 'CANCELADO',
+          }),
+        ],
+        [
+          legacyTransactionFixture({
+            id: 'legacy-between-payments',
+            transactionDate: parseBusinessDate('2026-09-20'),
+          }),
+        ],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listReceivables({ clientId: 'client-a', page: 1, pageSize: 10 }),
+    ).resolves.toMatchObject({
+      items: [
+        { id: 'paid-recent', paidAt: '2026-09-30' },
+        { id: 'legacy:legacy-between-payments', paidAt: '2026-09-20' },
+        { id: 'paid-older', paidAt: '2026-09-15' },
+        { id: 'pending-future', paidAt: null },
+        { id: 'canceled-fallback', paidAt: null },
+      ],
+      pagination: { total: 5 },
+    });
+  });
+
+  it('keeps global receivable lists ordered by financial fallback date outside client history', async () => {
+    const service = new FinanceService(
+      createListReceivablesPrisma(
+        [
+          receivableFixture({
+            id: 'paid-recent-old-due',
+            dueDate: parseBusinessDate('2026-08-30'),
+            paidAt: parseBusinessDate('2026-09-30'),
+            status: 'PAGO',
+          }),
+          receivableFixture({
+            id: 'pending-new-due',
+            dueDate: parseBusinessDate('2026-10-10'),
+            paidAt: null,
+            status: 'PENDENTE',
+          }),
+        ],
+        [],
+      ) as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.listReceivables({ page: 1, pageSize: 10 })).resolves.toMatchObject({
+      items: [{ id: 'pending-new-due' }, { id: 'paid-recent-old-due' }],
+      pagination: { total: 2 },
     });
   });
 

@@ -106,6 +106,7 @@ type ReceivableListItem =
       date: Date;
       id: string;
       kind: 'RECEIVABLE';
+      paidAt: Date | null;
       receivable: ReceivableWithRelations;
     }
   | {
@@ -113,6 +114,7 @@ type ReceivableListItem =
       date: Date;
       id: string;
       kind: 'LEGACY_IMPORT';
+      paidAt: Date;
       transaction: TransactionWithRelations;
     };
 
@@ -256,6 +258,7 @@ export class FinanceService {
     const includeLegacyPaid = !query.status || query.status === 'PAGO';
     const legacyWhere = includeLegacyPaid ? this.buildLegacyImportPaidWhere(query) : null;
     const windowSize = (page - 1) * pageSize + pageSize;
+    const useClientHistoryOrder = Boolean(query.clientId);
 
     const receivableListQuery = this.prisma.receivable.findMany({
       where,
@@ -266,7 +269,14 @@ export class FinanceService {
         paymentTransaction: true,
         paymentIntents: { orderBy: { createdAt: 'desc' } },
       },
-      orderBy: [{ dueDate: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
+      orderBy: useClientHistoryOrder
+        ? [
+            { paidAt: { sort: 'desc', nulls: 'last' } },
+            { dueDate: 'desc' },
+            { createdAt: 'desc' },
+            { id: 'asc' },
+          ]
+        : [{ dueDate: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
       take: windowSize,
     });
     const receivableCountQuery = this.prisma.receivable.count({ where });
@@ -297,6 +307,7 @@ export class FinanceService {
         date: receivable.dueDate,
         id: receivable.id,
         kind: 'RECEIVABLE' as const,
+        paidAt: receivable.paidAt,
         receivable,
       })),
       ...legacyItems.map((transaction) => ({
@@ -304,11 +315,21 @@ export class FinanceService {
         date: transaction.transactionDate,
         id: transaction.id,
         kind: 'LEGACY_IMPORT' as const,
+        paidAt: transaction.transactionDate,
         transaction,
       })),
     ];
 
     mergedItems.sort((a, b) => {
+      if (useClientHistoryOrder) {
+        if (a.paidAt && b.paidAt) {
+          const paidAtDiff = b.paidAt.getTime() - a.paidAt.getTime();
+          if (paidAtDiff !== 0) return paidAtDiff;
+        } else if (a.paidAt || b.paidAt) {
+          return a.paidAt ? -1 : 1;
+        }
+      }
+
       const dateDiff = b.date.getTime() - a.date.getTime();
       if (dateDiff !== 0) return dateDiff;
       const createdAtDiff = b.createdAt.getTime() - a.createdAt.getTime();

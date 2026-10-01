@@ -357,6 +357,7 @@ const navItems = [
 
 const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
 const listPageSize = 10;
+const clientFinancePageSize = 20;
 const monthNamesPt = [
   'Janeiro',
   'Fevereiro',
@@ -7283,9 +7284,6 @@ function ClientsView({
   } | null>(null);
   const [clientPixSummaryError, setClientPixSummaryError] = useState('');
   const [clientFinancePage, setClientFinancePage] = useState(1);
-  const [clientFinancePeriod, setClientFinancePeriod] = useState<FinancePeriod>(() =>
-    currentFinancePeriod(),
-  );
   const [clientFinanceReferenceId, setClientFinanceReferenceId] = useState('');
   const [clientFinanceStatus, setClientFinanceStatus] = useState<ReceivableDisplayStatus | ''>('');
   const [clientFinanceLoading, setClientFinanceLoading] = useState(false);
@@ -7408,8 +7406,6 @@ function ClientsView({
     const baseFilters = {
       clientId: selectedClientId,
       ...(clientFinanceReferenceId ? { clientReferenceId: clientFinanceReferenceId } : {}),
-      endDate: clientFinancePeriod.endDate,
-      startDate: clientFinancePeriod.startDate,
     };
 
     try {
@@ -7417,7 +7413,7 @@ function ClientsView({
         listReceivables({
           ...baseFilters,
           page: clientFinancePage,
-          pageSize: listPageSize,
+          pageSize: clientFinancePageSize,
           status: clientFinanceStatus,
         }),
         getReceivablesSummary(baseFilters),
@@ -7443,14 +7439,7 @@ function ClientsView({
     } finally {
       setClientFinanceLoading(false);
     }
-  }, [
-    clientFinancePage,
-    clientFinancePeriod.endDate,
-    clientFinancePeriod.startDate,
-    clientFinanceReferenceId,
-    clientFinanceStatus,
-    selectedClientId,
-  ]);
+  }, [clientFinancePage, clientFinanceReferenceId, clientFinanceStatus, selectedClientId]);
 
   const loadClientBillingDispatches = useCallback(
     async (pageOverride = clientBillingPage) => {
@@ -7545,7 +7534,6 @@ function ClientsView({
     setClientBillingLoading(false);
     setClientBillingError('');
     setClientFinancePage(1);
-    setClientFinancePeriod(currentFinancePeriod());
     setClientFinanceReferenceId('');
     setClientFinanceStatus('');
     setClientFinanceLoading(false);
@@ -7584,12 +7572,7 @@ function ClientsView({
 
   useEffect(() => {
     setSelectedReceivableIds([]);
-  }, [
-    clientFinancePage,
-    clientFinancePeriod.startDate,
-    clientFinanceReferenceId,
-    clientFinanceStatus,
-  ]);
+  }, [clientFinancePage, clientFinanceReferenceId, clientFinanceStatus]);
 
   useEffect(() => {
     setSelectedDispatch(null);
@@ -7673,11 +7656,6 @@ function ClientsView({
         ? [...new Set([...current, receivable.id])]
         : current.filter((id) => id !== receivable.id),
     );
-  }
-
-  function changeClientFinanceMonth(months: number) {
-    setClientFinancePeriod((current) => shiftFinancePeriod(current, months));
-    setClientFinancePage(1);
   }
 
   return (
@@ -8648,28 +8626,6 @@ function ClientsView({
                   {clientFinanceError ? (
                     <div className="notice danger">{clientFinanceError}</div>
                   ) : null}
-                  <div className="finance-period-bar" aria-label="Período financeiro do cliente">
-                    <CalendarDays aria-hidden="true" size={18} />
-                    <IconButton
-                      icon={ArrowLeft}
-                      label="Mês anterior"
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => changeClientFinanceMonth(-1)}
-                    />
-                    <strong>{clientFinancePeriod.label}</strong>
-                    <IconButton
-                      icon={ArrowRight}
-                      label="Próximo mês"
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => changeClientFinanceMonth(1)}
-                    />
-                    <span>
-                      {formatDate(clientFinancePeriod.startDate)} até{' '}
-                      {formatDate(clientFinancePeriod.endDate)}
-                    </span>
-                  </div>
                   <div className="client-tab-summary">
                     <StatCard
                       label="A receber"

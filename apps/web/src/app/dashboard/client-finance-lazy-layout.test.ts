@@ -45,16 +45,18 @@ describe('phase E2A client finance lazy loading source', () => {
     expect(clientFinanceSource).not.toContain('receivableTotals.pending');
   });
 
-  it('uses server-side client filters, monthly period and page size ten', () => {
+  it('uses full-history client filters and page size twenty', () => {
     expect(clientsSource).toContain('clientId: selectedClientId');
     expect(clientsSource).toContain('clientReferenceId: clientFinanceReferenceId');
-    expect(clientsSource).toContain('startDate: clientFinancePeriod.startDate');
-    expect(clientsSource).toContain('endDate: clientFinancePeriod.endDate');
+    expect(clientsSource).not.toContain('startDate: clientFinancePeriod.startDate');
+    expect(clientsSource).not.toContain('endDate: clientFinancePeriod.endDate');
     expect(clientsSource).toContain('page: clientFinancePage');
-    expect(clientsSource).toContain('pageSize: listPageSize');
+    expect(clientsSource).toContain('pageSize: clientFinancePageSize');
     expect(clientFinanceSource).toContain('Todas as referências');
     expect(clientFinanceSource).toContain('Todas as situações');
-    expect(clientFinanceSource).toContain('finance-period-bar');
+    expect(clientFinanceSource).not.toContain('finance-period-bar');
+    expect(clientFinanceSource).not.toContain('Mês anterior');
+    expect(clientFinanceSource).not.toContain('Próximo mês');
   });
 
   it('keeps summary independent from table status and pagination', () => {
@@ -84,7 +86,7 @@ describe('phase E2A client finance lazy loading source', () => {
     expect(clientsSource).not.toContain('setClientFinancialHistoryItems([]);');
     expect(clientsSource).not.toContain('setClientFinancialHistoryPagination(null);');
     expect(clientsSource).toContain('setClientFinanceSummary(null);');
-    expect(clientsSource).toContain('setClientFinancePeriod(currentFinancePeriod());');
+    expect(clientsSource).not.toContain('setClientFinancePeriod(currentFinancePeriod());');
     expect(clientsSource).toContain('setClientFinanceReferenceId');
     expect(clientsSource).toContain('setClientFinanceStatus');
     expect(clientsSource).toContain('setSelectedReceivableIds([]);');

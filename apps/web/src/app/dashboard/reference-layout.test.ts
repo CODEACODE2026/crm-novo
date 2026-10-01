@@ -82,6 +82,16 @@ describe('client reference presentation source', () => {
     expect(dashboardSource).toContain('gere o PIX manualmente em Cobranças/PIX');
   });
 
+  it('recovers pending reactivation conflicts without creating another charge', () => {
+    expect(dashboardSource).toContain('pendingReactivationFromError(err)');
+    expect(dashboardSource).toContain("payload.code !== 'PENDING_REACTIVATION_EXISTS'");
+    expect(dashboardSource).toContain('Já existe reativação aguardando pagamento.');
+    expect(dashboardSource).toContain('Nenhuma nova reativação ou conta a receber foi criada.');
+    expect(dashboardSource).toContain('Ir para Cobranças/PIX');
+    expect(dashboardSource).toContain('Ver ou gerar PIX');
+    expect(dashboardSource).toContain('setPixReceivable(detailTabRequest.receivable)');
+  });
+
   it('keeps semantic status badge tones available', () => {
     expect(stylesSource).toContain('.status-ativo');
     expect(stylesSource).toContain('.status-pendente_pagamento');

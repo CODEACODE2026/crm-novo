@@ -4,6 +4,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly payload?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -1456,8 +1457,12 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   if (!response.ok) {
-    const body = await parseJsonResponse<{ message?: string }>(response);
-    throw new ApiError(body?.message ?? 'Não foi possível concluir a operação.', response.status);
+    const body = await parseJsonResponse<{ message?: string } & Record<string, unknown>>(response);
+    throw new ApiError(
+      body?.message ?? 'Não foi possível concluir a operação.',
+      response.status,
+      body,
+    );
   }
 
   return (await parseJsonResponse<T>(response)) as T;

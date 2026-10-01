@@ -115,6 +115,7 @@ import {
   StatCard,
 } from '../../components/ui/primitives';
 import {
+  ApiError,
   activateLegacyCutover,
   cancelReceivable,
   cancelPaymentIntent,
@@ -270,6 +271,7 @@ import {
   type Receivable,
   type ReceivableDisplayStatus,
   type ReceivablesSummary,
+  type ReactivationResult,
   type OperationalReport,
   type Plan,
   type ReportFilters,
@@ -338,7 +340,39 @@ type View =
   | 'reports'
   | 'imports'
   | 'settings';
+
+type ClientDetailTab = 'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more';
+
+type ClientDetailTabRequest = {
+  tab: ClientDetailTab;
+  receivable?: Receivable;
+  sequence: number;
+};
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses';
+
+function pendingReactivationFromError(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  if (typeof error.payload !== 'object' || error.payload === null || Array.isArray(error.payload)) {
+    return null;
+  }
+
+  const payload = error.payload as { code?: unknown; reactivation?: unknown };
+
+  if (payload.code !== 'PENDING_REACTIVATION_EXISTS') return null;
+  if (
+    typeof payload.reactivation !== 'object' ||
+    payload.reactivation === null ||
+    Array.isArray(payload.reactivation)
+  ) {
+    return null;
+  }
+
+  return payload.reactivation as ReactivationResult;
+}
+
+function shortEntityId(id: string) {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -457,6 +491,8 @@ export default function DashboardPage() {
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('overview');
   const [settingsInitialBillingTab, setSettingsInitialBillingTab] =
     useState<SettingsBillingTab>('rules');
+  const [clientDetailTabRequest, setClientDetailTabRequest] =
+    useState<ClientDetailTabRequest | null>(null);
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
   const [reactivationTarget, setReactivationTarget] = useState<ReactivationTarget | null>(null);
   const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
@@ -557,6 +593,7 @@ export default function DashboardPage() {
     setRenewalReversalTarget(null);
     setRenewalReversalPreviewLoadingId(null);
     setDeletionTarget(null);
+    setClientDetailTabRequest(null);
     setRenewalNotice('');
   }
 
@@ -692,6 +729,34 @@ export default function DashboardPage() {
     );
   }
 
+  async function openPendingReactivationBilling(reactivation: ReactivationResult) {
+    await loadData();
+    const detailed = await getClient(reactivation.clientId);
+    setSelectedClient(detailed);
+    setView('clients');
+    setReactivationTarget(null);
+    setClientDetailTabRequest({ tab: 'messages', sequence: Date.now() });
+    setRenewalNotice(
+      `Reativação aguardando pagamento para ${reactivation.clientReference.reference}. Cobrança existente: ${formatCurrency(reactivation.receivable.amount)} com vencimento em ${formatDate(reactivation.receivable.dueDate)}.`,
+    );
+  }
+
+  async function openPendingReactivationPix(reactivation: ReactivationResult) {
+    await loadData();
+    const detailed = await getClient(reactivation.clientId);
+    setSelectedClient(detailed);
+    setView('clients');
+    setReactivationTarget(null);
+    setClientDetailTabRequest({
+      receivable: reactivation.receivable,
+      sequence: Date.now(),
+      tab: 'receivables',
+    });
+    setRenewalNotice(
+      `Reutilizando a cobrança existente da reativação ${reactivation.clientReference.reference}. Nenhuma nova reativação ou conta a receber foi criada.`,
+    );
+  }
+
   async function openRenewalReversal(client: Client, renewal: Renewal) {
     if (!renewal.clientReferenceId) {
       setRenewalNotice('Renovação sem referência vinculada para reversão.');
@@ -789,6 +854,7 @@ export default function DashboardPage() {
           clients={clients}
           clientsPagination={clientsPayload?.pagination ?? null}
           dataLoading={dataLoading}
+          detailTabRequest={clientDetailTabRequest}
           editingClient={editingClient}
           onApplyFilters={() => void loadData()}
           onCreate={async (payload) => {
@@ -952,6 +1018,8 @@ export default function DashboardPage() {
           plans={plans.filter((plan) => plan.active)}
           onClose={() => setReactivationTarget(null)}
           onConfirm={async (payload) => handleReactivationConfirm(reactivationTarget, payload)}
+          onGeneratePix={openPendingReactivationPix}
+          onGoToBilling={openPendingReactivationBilling}
         />
       ) : null}
       {renewalReversalTarget ? (
@@ -7174,6 +7242,7 @@ function ClientsView({
   clients,
   clientsPagination,
   dataLoading,
+  detailTabRequest,
   editingClient,
   onApplyFilters,
   onCreate,
@@ -7208,6 +7277,7 @@ function ClientsView({
   clients: Client[];
   clientsPagination: PaginatedClients['pagination'] | null;
   dataLoading: boolean;
+  detailTabRequest: ClientDetailTabRequest | null;
   editingClient: Client | null;
   onApplyFilters: () => void;
   onCreate: (payload: ClientPayload) => Promise<void>;
@@ -7252,9 +7322,7 @@ function ClientsView({
   const selectableClientPlans = sortPlansByDuration(
     plans.filter((plan) => plan.active || plan.id === editingClient?.planId),
   );
-  const [detailTab, setDetailTab] = useState<
-    'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more'
-  >('overview');
+  const [detailTab, setDetailTab] = useState<ClientDetailTab>('overview');
   const [whatsAppClient, setWhatsAppClient] = useState<Client | null>(null);
   const [referenceFormOpen, setReferenceFormOpen] = useState(false);
   const [editingReference, setEditingReference] = useState<ClientReference | null>(null);
@@ -7544,6 +7612,19 @@ function ClientsView({
     setTimelineLoading(false);
     setTimelineError('');
   }, [selectedClientId]);
+
+  useEffect(() => {
+    if (!selectedClientId || !detailTabRequest) return;
+
+    setDetailTab(detailTabRequest.tab);
+
+    if (detailTabRequest.receivable) {
+      setClientFinanceReferenceId(detailTabRequest.receivable.clientReferenceId ?? '');
+      setClientFinanceStatus('');
+      setClientFinancePage(1);
+      setPixReceivable(detailTabRequest.receivable);
+    }
+  }, [detailTabRequest, selectedClientId]);
 
   useEffect(() => {
     if (!selectedClientId) return;
@@ -13069,6 +13150,8 @@ function ReactivationModal({
   plans,
   onClose,
   onConfirm,
+  onGeneratePix,
+  onGoToBilling,
 }: {
   target: ReactivationTarget;
   plans: Plan[];
@@ -13079,6 +13162,8 @@ function ReactivationModal({
     activationDate: string;
     idempotencyKey: string;
   }) => Promise<void>;
+  onGeneratePix: (reactivation: ReactivationResult) => Promise<void>;
+  onGoToBilling: (reactivation: ReactivationResult) => Promise<void>;
 }) {
   const { client, reference } = target;
   const reactivationPlans = sortPlansByDuration(plans);
@@ -13093,6 +13178,7 @@ function ReactivationModal({
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingReactivation, setPendingReactivation] = useState<ReactivationResult | null>(null);
   const selectedPlan = reactivationPlans.find((plan) => plan.id === planId) ?? null;
   const parsedAmount = Number(amount);
   const reactivationPreview = useMemo(() => {
@@ -13136,7 +13222,28 @@ function ReactivationModal({
         idempotencyKey,
       });
     } catch (err) {
+      const existingReactivation = pendingReactivationFromError(err);
+      if (existingReactivation) {
+        setPendingReactivation(existingReactivation);
+        return;
+      }
+
       setError(err instanceof Error ? err.message : 'Não foi possível criar a reativação.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handlePendingAction(action: (reactivation: ReactivationResult) => Promise<void>) {
+    if (!pendingReactivation) return;
+
+    setSaving(true);
+    setError('');
+
+    try {
+      await action(pendingReactivation);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível abrir a cobrança existente.');
     } finally {
       setSaving(false);
     }
@@ -13178,57 +13285,80 @@ function ReactivationModal({
           ser confirmado.
         </div>
 
-        <div className="form-grid">
-          <label className="field">
-            <span>Plano</span>
-            <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
-              {reactivationPlans.map((plan) => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Valor</span>
-            <input
-              min="0.01"
-              step="0.01"
-              type="number"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Data de ativação</span>
-            <input
-              type="date"
-              value={activationDate}
-              onChange={(event) => setActivationDate(event.target.value)}
-            />
-          </label>
-        </div>
+        {pendingReactivation ? (
+          <section className="preview-box">
+            <strong>Já existe reativação aguardando pagamento.</strong>
+            <span>Nenhuma nova reativação ou conta a receber foi criada.</span>
+            <span>
+              Cobrança {shortEntityId(pendingReactivation.receivable.id)} ·{' '}
+              {formatCurrency(pendingReactivation.receivable.amount)} · vence em{' '}
+              {formatDate(pendingReactivation.receivable.dueDate)}.
+            </span>
+            <span>
+              Status da cobrança: {receivableVisualStatus(pendingReactivation.receivable)}.
+            </span>
+            <span>
+              PIX vinculados: {pendingReactivation.receivable.paymentIntents?.length ?? 0}.
+            </span>
+            <span>A referência permanece CANCELADA até o pagamento ser confirmado.</span>
+          </section>
+        ) : (
+          <>
+            <div className="form-grid">
+              <label className="field">
+                <span>Plano</span>
+                <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
+                  {reactivationPlans.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Valor</span>
+                <input
+                  min="0.01"
+                  step="0.01"
+                  type="number"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Data de ativação</span>
+                <input
+                  type="date"
+                  value={activationDate}
+                  onChange={(event) => setActivationDate(event.target.value)}
+                />
+              </label>
+            </div>
 
-        <section className="preview-box">
-          {reactivationPreview && selectedPlan ? (
-            <>
-              <strong>Cobrança de reativação: {formatCurrency(parsedAmount)}</strong>
-              <span>Vencimento da reativação: {formatDate(activationDate)}.</span>
-              <span>
-                Após o pagamento, próximo ciclo em {formatDate(reactivationPreview.nextDueDate)}.
-              </span>
-              <span>
-                Plano {selectedPlan.name}; anchor {reactivationPreview.anchorDay}.
-              </span>
-            </>
-          ) : (
-            <span>Preencha os dados para visualizar o próximo ciclo.</span>
-          )}
-        </section>
+            <section className="preview-box">
+              {reactivationPreview && selectedPlan ? (
+                <>
+                  <strong>Cobrança de reativação: {formatCurrency(parsedAmount)}</strong>
+                  <span>Vencimento da reativação: {formatDate(activationDate)}.</span>
+                  <span>
+                    Após o pagamento, próximo ciclo em {formatDate(reactivationPreview.nextDueDate)}
+                    .
+                  </span>
+                  <span>
+                    Plano {selectedPlan.name}; anchor {reactivationPreview.anchorDay}.
+                  </span>
+                </>
+              ) : (
+                <span>Preencha os dados para visualizar o próximo ciclo.</span>
+              )}
+            </section>
 
-        <div className="notice">
-          Nenhum PIX ou WhatsApp será gerado automaticamente. Use Cobranças/PIX depois da criação.
-        </div>
+            <div className="notice">
+              Nenhum PIX ou WhatsApp será gerado automaticamente. Use Cobranças/PIX depois da
+              criação.
+            </div>
+          </>
+        )}
 
         <div className="form-actions">
           <span className="error-message">{error}</span>
@@ -13236,15 +13366,38 @@ function ReactivationModal({
             <Button icon={X} variant="secondary" onClick={onClose}>
               Cancelar
             </Button>
-            <Button
-              disabled={saving || !canSubmit}
-              icon={RefreshCw}
-              loading={saving}
-              variant="primary"
-              onClick={() => void handleConfirm()}
-            >
-              Criar reativação
-            </Button>
+            {pendingReactivation ? (
+              <>
+                <Button
+                  disabled={saving}
+                  icon={Bell}
+                  loading={saving}
+                  variant="secondary"
+                  onClick={() => void handlePendingAction(onGoToBilling)}
+                >
+                  Ir para Cobranças/PIX
+                </Button>
+                <Button
+                  disabled={saving}
+                  icon={QrCode}
+                  loading={saving}
+                  variant="primary"
+                  onClick={() => void handlePendingAction(onGeneratePix)}
+                >
+                  Ver ou gerar PIX
+                </Button>
+              </>
+            ) : (
+              <Button
+                disabled={saving || !canSubmit}
+                icon={RefreshCw}
+                loading={saving}
+                variant="primary"
+                onClick={() => void handleConfirm()}
+              >
+                Criar reativação
+              </Button>
+            )}
           </div>
         </div>
       </section>

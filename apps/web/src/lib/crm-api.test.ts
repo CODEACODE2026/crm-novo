@@ -90,6 +90,29 @@ describe('CRM UI formatters', () => {
     } satisfies Partial<ApiError>);
   });
 
+  it('preserves structured API error payloads for recoverable conflicts', async () => {
+    const payload = {
+      code: 'PENDING_REACTIVATION_EXISTS',
+      message: 'Referencia ja possui reativacao pendente.',
+      reactivation: {
+        id: 'reactivation-1',
+        receivable: { id: 'receivable-1', amount: '150.00' },
+      },
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 409 })),
+    );
+
+    await expect(apiFetch('/client-references/ref-1/reactivations')).rejects.toMatchObject({
+      name: 'ApiError',
+      message: payload.message,
+      status: 409,
+      payload,
+    } satisfies Partial<ApiError>);
+  });
+
   it('redirects to login when the API returns 401', async () => {
     const assign = vi.fn();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));

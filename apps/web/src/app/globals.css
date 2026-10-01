@@ -1963,6 +1963,12 @@ a {
   padding: 6px 0;
 }
 
+.dashboard-compact-layout .operational-list-main,
+.dashboard-compact-layout .operational-list-status,
+.dashboard-compact-layout .operational-list-actions {
+  min-width: 0;
+}
+
 .dashboard-compact-layout .pending-list {
   gap: 6px;
 }
@@ -7620,6 +7626,142 @@ tbody tr:hover,
     min-height: 38px;
   }
 
+  .dashboard-compact-layout .operational-list {
+    gap: 8px;
+  }
+
+  .dashboard-compact-layout .operational-list article {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-soft);
+    padding: 10px;
+  }
+
+  .dashboard-compact-layout .due-today-list article {
+    grid-template-areas:
+      'main status'
+      'value date'
+      'actions actions';
+  }
+
+  .dashboard-compact-layout .overdue-list article {
+    grid-template-areas:
+      'main value'
+      'date days'
+      'actions actions';
+  }
+
+  .dashboard-compact-layout .operational-list-main {
+    display: grid;
+    grid-area: main;
+    gap: 3px;
+  }
+
+  .dashboard-compact-layout .operational-list-title {
+    overflow: visible;
+    font-size: 13px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .dashboard-compact-layout .operational-list-reference {
+    max-width: 100%;
+    font-size: 11px;
+  }
+
+  .dashboard-compact-layout .operational-list-value {
+    grid-area: value;
+    align-self: center;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .dashboard-compact-layout .operational-list-date {
+    grid-area: date;
+    align-self: center;
+    font-size: 11px;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .dashboard-compact-layout .due-today-list .operational-list-date::before {
+    content: 'Vence: ';
+  }
+
+  .dashboard-compact-layout .overdue-list .operational-list-date {
+    text-align: left;
+  }
+
+  .dashboard-compact-layout .overdue-list .operational-list-date::before {
+    content: 'Vencimento ';
+  }
+
+  .dashboard-compact-layout .operational-list-overdue-days {
+    grid-area: days;
+    align-self: center;
+    font-size: 11px;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .dashboard-compact-layout .operational-list-status {
+    grid-area: status;
+    align-self: start;
+    justify-self: end;
+  }
+
+  .dashboard-compact-layout .operational-list-status .status-badge {
+    max-width: 92px;
+    justify-content: center;
+    padding-inline: 7px;
+    white-space: nowrap;
+  }
+
+  .dashboard-compact-layout .operational-list-actions {
+    grid-area: actions;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    width: auto;
+  }
+
+  .dashboard-compact-layout .due-today-list .operational-list-actions {
+    justify-content: flex-start;
+  }
+
+  .dashboard-compact-layout .operational-list-actions .icon-button,
+  .dashboard-compact-layout .overdue-list .operational-list-actions {
+    min-width: 38px;
+    min-height: 38px;
+  }
+
+  .dashboard-compact-layout .pending-list {
+    gap: 6px;
+  }
+
+  .dashboard-compact-layout .pending-item {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 7px;
+    min-height: 42px;
+    padding: 6px 8px;
+  }
+
+  .dashboard-compact-layout .pending-item span {
+    line-height: 1.25;
+    overflow-wrap: normal;
+  }
+
+  .dashboard-compact-layout .pending-item strong {
+    min-width: 28px;
+    min-height: 24px;
+  }
+
   .finance-period-bar {
     width: 100%;
     justify-content: space-between;
@@ -8048,6 +8190,51 @@ tbody tr:hover,
 
   .content {
     padding-block: 14px 22px;
+  }
+
+  .dashboard-compact-layout .operational-list article {
+    gap: 6px 8px;
+    padding: 9px;
+  }
+
+  .dashboard-compact-layout .due-today-list article {
+    grid-template-areas:
+      'main status'
+      'value value'
+      'date actions';
+  }
+
+  .dashboard-compact-layout .overdue-list article {
+    grid-template-areas:
+      'main main'
+      'value value'
+      'date date'
+      'days actions';
+  }
+
+  .dashboard-compact-layout .operational-list-date,
+  .dashboard-compact-layout .operational-list-overdue-days {
+    text-align: left;
+  }
+
+  .dashboard-compact-layout .operational-list-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 7px;
+    width: auto;
+  }
+
+  .dashboard-compact-layout .due-today-list .operational-list-actions {
+    justify-content: flex-end;
+  }
+
+  .dashboard-compact-layout .pending-item {
+    gap: 6px;
+    padding-block: 6px;
+  }
+
+  .dashboard-compact-layout .pending-item span {
+    font-size: 12px;
   }
 
   .workspace-main,

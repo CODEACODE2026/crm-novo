@@ -190,6 +190,73 @@ describe('operational dashboard polish source', () => {
     expect(stylesSource).toContain('min-height: 38px;');
   });
 
+  it('uses dedicated mobile rows for due today without compressing data into desktop columns', () => {
+    const dueTodayBlock = sourceBlock(
+      dashboardSource,
+      'function CompactClientDueTable({',
+      'function OverdueReceivablesTable({',
+    );
+
+    expect(dueTodayBlock).toContain('className="compact-table operational-list due-today-list"');
+    expect(dueTodayBlock).toContain('className="operational-list-title"');
+    expect(dueTodayBlock).toContain('className="operational-list-reference"');
+    expect(dueTodayBlock).toContain('className="operational-list-value"');
+    expect(dueTodayBlock).toContain('className="operational-list-date"');
+    expect(dueTodayBlock).toContain('className="operational-list-status"');
+    expect(dueTodayBlock).toContain('className="button-row operational-list-actions"');
+    expect(dueTodayBlock).toContain('<StatusBadge status={client.status} />');
+    expect(dueTodayBlock).toContain('formatCurrency(client.recurringValue)');
+    expect(dueTodayBlock).toContain('formatDate(client.dueDate)');
+    expect(dueTodayBlock).toContain('aria-label={`Abrir cliente ${client.name}`}');
+    expect(dueTodayBlock).toContain('aria-label={`Renovar ${client.reference}`}');
+    expect(stylesSource).toContain('.dashboard-compact-layout .due-today-list article');
+    expect(stylesSource).toContain("'main status'");
+    expect(stylesSource).toContain("'value date'");
+    expect(stylesSource).toContain("'actions actions'");
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .due-today-list .operational-list-date::before',
+    );
+  });
+
+  it('uses readable mobile rows for overdue accounts while keeping amount, date, days and action', () => {
+    const overdueBlock = sourceBlock(
+      dashboardSource,
+      'function OverdueReceivablesTable({',
+      'function buildDashboardPeriod(',
+    );
+
+    expect(overdueBlock).toContain('className="compact-table operational-list overdue-list"');
+    expect(overdueBlock).toContain('className="operational-list-title"');
+    expect(overdueBlock).toContain('className="operational-list-reference"');
+    expect(overdueBlock).toContain('className="operational-list-value"');
+    expect(overdueBlock).toContain('className="operational-list-date"');
+    expect(overdueBlock).toContain('className="operational-list-overdue-days"');
+    expect(overdueBlock).toContain('className="icon-button operational-list-actions"');
+    expect(overdueBlock).toContain('formatCurrency(receivable.amount)');
+    expect(overdueBlock).toContain('formatDate(receivable.dueDate)');
+    expect(overdueBlock).toContain('receivable.daysOverdue');
+    expect(overdueBlock).toContain('<CreditCard aria-hidden="true" size={16} />');
+    expect(stylesSource).toContain('.dashboard-compact-layout .overdue-list article');
+    expect(stylesSource).toContain("'main value'");
+    expect(stylesSource).toContain("'date days'");
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .overdue-list .operational-list-date::before',
+    );
+  });
+
+  it('keeps mobile operational actions horizontal and pending items clickable but compact', () => {
+    expect(stylesSource).toContain('.dashboard-compact-layout .operational-list-actions');
+    expect(stylesSource).toContain('justify-content: flex-end;');
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .operational-list-actions .icon-button,',
+    );
+    expect(stylesSource).toContain('.dashboard-compact-layout .pending-item');
+    expect(stylesSource).toContain('min-height: 42px;');
+    expect(stylesSource).toContain('grid-template-columns: auto minmax(0, 1fr) auto auto;');
+    expect(stylesSource).toContain('@media (max-width: 480px)');
+    expect(stylesSource).toContain('.dashboard-compact-layout .pending-item span');
+  });
+
   it('renders the status donut only from real reference status counts', () => {
     expect(dashboardSource).toContain('summary?.clients.distribution');
     expect(dashboardSource).toContain('function ClientStatusDonut');

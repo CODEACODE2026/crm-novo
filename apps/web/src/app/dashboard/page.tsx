@@ -3500,19 +3500,21 @@ function CompactClientDueTable({
   }
 
   return (
-    <div className="compact-table">
+    <div className="compact-table operational-list due-today-list">
       {items.map((client) => (
         <article key={client.id}>
-          <div>
-            <strong>{client.name}</strong>
-            <span>
+          <div className="operational-list-main">
+            <strong className="operational-list-title">{client.name}</strong>
+            <span className="operational-list-reference">
               {client.reference} | {client.planName}
             </span>
           </div>
-          <span>{formatCurrency(client.recurringValue)}</span>
-          <span>{formatDate(client.dueDate)}</span>
-          <StatusBadge status={client.status} />
-          <div className="button-row">
+          <span className="operational-list-value">{formatCurrency(client.recurringValue)}</span>
+          <span className="operational-list-date">{formatDate(client.dueDate)}</span>
+          <div className="operational-list-status">
+            <StatusBadge status={client.status} />
+          </div>
+          <div className="button-row operational-list-actions">
             <button
               aria-label={`Abrir cliente ${client.name}`}
               className="icon-button"
@@ -3556,20 +3558,22 @@ function OverdueReceivablesTable({
   }
 
   return (
-    <div className="compact-table">
+    <div className="compact-table operational-list overdue-list">
       {items.map((receivable) => (
         <article key={receivable.id}>
-          <div>
-            <strong>{receivable.clientName}</strong>
-            <span>
+          <div className="operational-list-main">
+            <strong className="operational-list-title">{receivable.clientName}</strong>
+            <span className="operational-list-reference">
               {receivable.clientReference} | {receivable.description}
             </span>
           </div>
-          <span>{formatCurrency(receivable.amount)}</span>
-          <span>{formatDate(receivable.dueDate)}</span>
-          <span>{receivable.daysOverdue} dias</span>
+          <span className="operational-list-value">{formatCurrency(receivable.amount)}</span>
+          <span className="operational-list-date">{formatDate(receivable.dueDate)}</span>
+          <span className="operational-list-overdue-days">
+            {receivable.daysOverdue} {receivable.daysOverdue === 1 ? 'dia' : 'dias'}
+          </span>
           <button
-            className="icon-button"
+            className="icon-button operational-list-actions"
             title="Abrir financeiro"
             type="button"
             onClick={onOpenFinance}

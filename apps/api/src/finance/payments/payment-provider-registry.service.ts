@@ -28,6 +28,7 @@ export class PaymentProviderRegistryService implements PaymentProvider {
 
   async createPix(input: CreatePixInput): Promise<PaymentProviderPix> {
     if (input.provider) {
+      await this.credentials.ensureEligiblePixCreationProvider(input.provider);
       return this.byCode(input.provider).createPix(input);
     }
 

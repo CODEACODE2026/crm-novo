@@ -37,7 +37,7 @@ describe('buildPixWhatsAppTemplate', () => {
     });
   });
 
-  it('builds a grouped PIX message with one total and item references', () => {
+  it('builds a grouped PIX message with one total without item references', () => {
     const template = buildPixWhatsAppTemplate({
       context: 'GROUPED',
       amount: new Prisma.Decimal('75.00'),
@@ -53,10 +53,16 @@ describe('buildPixWhatsAppTemplate', () => {
     expect(template.body).toContain('Segue um único PIX referente às suas cobranças.');
     expect(template.body).toContain('3 contas');
     expect(template.body).toContain('💰 Total: R$ 75,00');
-    expect(template.body).toContain('Referências:');
-    expect(template.body).toContain('- robertoserour333 — R$ 25,00');
-    expect(template.body).toContain('- Zm4Bc1 — R$ 25,00');
-    expect(template.body).toContain('- robertoserour — R$ 25,00');
+    expect(template.body).toContain(
+      'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
+    );
+    expect(template.body).toContain('Caso a chave esteja expirada, solicite uma nova.');
+    expect(template.body).not.toContain('Referências:');
+    expect(template.body).not.toContain('robertoserour333');
+    expect(template.body).not.toContain('Zm4Bc1');
+    expect(template.body).not.toContain('robertoserour');
+    expect(template.body).not.toContain('25,00');
     expect(template.button.buttonParamsJson.copy_code).toBe('GROUPED-PIX-COPY-CODE');
+    expect(template.button.buttonParamsJson.display_text).toBe('Copiar Chave PIX');
   });
 });

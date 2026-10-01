@@ -59,22 +59,12 @@ function buildIndividualPixBody(amount: string) {
 function buildGroupedPixBody(input: PixWhatsAppTemplateInput, amount: string) {
   const itemCount = input.itemCount ?? input.items?.length ?? 0;
   const countLabel = itemCount === 1 ? '1 conta' : `${itemCount} contas`;
-  const itemLines =
-    input.items?.map((item) => {
-      const itemAmount = new Intl.NumberFormat('pt-BR', {
-        style: 'currency',
-        currency: 'BRL',
-      }).format(Number(item.amount));
-
-      return `- ${item.reference} — ${itemAmount}`;
-    }) ?? [];
 
   return [
     'Segue um único PIX referente às suas cobranças.',
     '',
     `${countLabel}`,
     `💰 Total: ${amount}`,
-    ...(itemLines.length ? ['', 'Referências:', ...itemLines] : []),
     '',
     'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
     '',

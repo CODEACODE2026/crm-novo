@@ -2110,10 +2110,13 @@ export function reconcileReceivablePix(
   });
 }
 
-export function createReceivablesPix(receivableIds: string[]) {
+export function createReceivablesPix(
+  receivableIds: string[],
+  provider?: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
+) {
   return apiFetch<PaymentIntent>('/receivables/pix', {
     method: 'POST',
-    body: JSON.stringify({ receivableIds }),
+    body: JSON.stringify({ receivableIds, ...(provider ? { provider } : {}) }),
   });
 }
 

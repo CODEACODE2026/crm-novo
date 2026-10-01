@@ -310,6 +310,40 @@ describe('PIX reconciliation UI contract', () => {
     );
   });
 
+  it('derives grouped PIX providers from configured active credentials before creation', () => {
+    expect(groupedPixModalSource).toContain(
+      'const [paymentProviderCredentials, setPaymentProviderCredentials]',
+    );
+    expect(groupedPixModalSource).toContain('const [selectedProvider, setSelectedProvider] =');
+    expect(groupedPixModalSource).toContain('listPaymentProviderCredentials()');
+    expect(groupedPixModalSource).toContain('const eligiblePixProviders = useMemo(');
+    expect(groupedPixModalSource).toContain('configurablePaymentProviders.filter((provider)');
+    expect(groupedPixModalSource).toContain('isOperationalPixProviderCredential(credential)');
+    expect(groupedPixModalSource).toContain('const defaultPixProvider =');
+    expect(groupedPixModalSource).toContain('credential.defaultForPix');
+    expect(groupedPixModalSource).toContain('const groupedPixProvider =');
+    expect(groupedPixModalSource).toContain('<span>Provider PIX</span>');
+    expect(groupedPixModalSource).toContain(
+      'replacementProviderLabel(provider, defaultPixProvider)',
+    );
+    expect(groupedPixModalSource).toContain(
+      'Configure ao menos um provider PIX ativo para gerar PIX agrupado.',
+    );
+    expect(groupedPixModalSource).not.toContain('<option value="FASTPIX">FastPIX</option>');
+  });
+
+  it('sends the selected grouped PIX provider only when creating a new grouped PIX', () => {
+    expect(groupedPixModalSource).toContain('const intent = await createReceivablesPix(');
+    expect(groupedPixModalSource).toContain('groupedPixProvider');
+    expect(groupedPixModalSource).toContain(
+      'busy || Boolean(activeIntent) || Boolean(activePixConflict) || !groupedPixProvider',
+    );
+    expect(groupedPixModalSource).toContain('paymentProviderDisplay(activeIntent.provider)');
+    expect(groupedPixModalSource).toContain(
+      'paymentProviderDisplay(activePixConflict.paymentIntent.provider)',
+    );
+  });
+
   it('treats grouped PIX active conflicts as recoverable in the grouped modal', () => {
     expect(groupedPixModalSource).toContain('activePixConflictPayloadFromError(err)');
     expect(groupedPixModalSource).toContain('PIX ativo encontrado');
@@ -326,9 +360,8 @@ describe('PIX reconciliation UI contract', () => {
     expect(groupedPixModalSource).toContain(
       'O PIX agrupado ativo não corresponde exatamente ao conjunto selecionado.',
     );
-    expect(groupedPixModalSource).toContain(
-      'disabled={busy || Boolean(activeIntent) || Boolean(activePixConflict)}',
-    );
+    expect(groupedPixModalSource).toContain('Boolean(activePixConflict) ||');
+    expect(groupedPixModalSource).toContain('!groupedPixProvider');
   });
 
   it('recognizes the active PIX conflict payload from API errors', () => {

@@ -16571,6 +16571,10 @@ function PixReceivablesModal({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [paymentProviderCredentials, setPaymentProviderCredentials] = useState<
+    PaymentProviderCredentialStatus[]
+  >([]);
+  const [selectedProvider, setSelectedProvider] = useState<ConfigurablePaymentProvider>('FASTFLOW');
   const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [whatsAppSending, setWhatsAppSending] = useState(false);
   const [activePixConflict, setActivePixConflict] = useState<
@@ -16597,12 +16601,44 @@ function PixReceivablesModal({
     !['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
   const canRenderQrImage =
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
+  const eligiblePixProviders = useMemo(
+    () =>
+      configurablePaymentProviders.filter((provider) => {
+        const credential = paymentProviderCredentials.find((item) => item.provider === provider);
+        return credential ? isOperationalPixProviderCredential(credential) : false;
+      }),
+    [paymentProviderCredentials],
+  );
+  const defaultPixProvider =
+    eligiblePixProviders.find((provider) =>
+      paymentProviderCredentials.some(
+        (credential) =>
+          credential.provider === provider &&
+          credential.defaultForPix &&
+          isOperationalPixProviderCredential(credential),
+      ),
+    ) ??
+    eligiblePixProviders[0] ??
+    null;
+  const canUseSelectedProvider = eligiblePixProviders.includes(selectedProvider);
+  const groupedPixProvider = canUseSelectedProvider ? selectedProvider : defaultPixProvider;
 
   useEffect(() => {
-    void getWhatsAppConnection()
-      .then(setWhatsAppConnection)
-      .catch(() => setWhatsAppConnection(null));
+    void Promise.all([getWhatsAppConnection().catch(() => null), listPaymentProviderCredentials()])
+      .then(([nextWhatsAppConnection, nextCredentials]) => {
+        setWhatsAppConnection(nextWhatsAppConnection);
+        setPaymentProviderCredentials(nextCredentials);
+      })
+      .catch(() => {
+        setWhatsAppConnection(null);
+        setPaymentProviderCredentials([]);
+      });
   }, []);
+
+  useEffect(() => {
+    if (!groupedPixProvider || groupedPixProvider === selectedProvider) return;
+    setSelectedProvider(groupedPixProvider);
+  }, [groupedPixProvider, selectedProvider]);
 
   async function runAction(
     action: () => Promise<PaymentIntent>,
@@ -16669,6 +16705,11 @@ function PixReceivablesModal({
   async function createGroupedPix() {
     if (actionRef.current) return;
 
+    if (!groupedPixProvider) {
+      setError('Nenhum provider PIX configurado para gerar PIX agrupado.');
+      return;
+    }
+
     actionRef.current = true;
     setBusy(true);
     setError('');
@@ -16677,7 +16718,10 @@ function PixReceivablesModal({
     setShowConflictPix(false);
 
     try {
-      const intent = await createReceivablesPix(receivables.map((receivable) => receivable.id));
+      const intent = await createReceivablesPix(
+        receivables.map((receivable) => receivable.id),
+        groupedPixProvider,
+      );
       setActiveIntent(intent);
       setNotice('PIX agrupado gerado.');
       await onChanged('PIX agrupado gerado.');
@@ -16739,6 +16783,30 @@ function PixReceivablesModal({
 
         {error ? <div className="notice danger">{error}</div> : null}
         {notice ? <div className="notice success">{notice}</div> : null}
+
+        {!activeIntent && !activePixConflict ? (
+          <fieldset className="field">
+            <span>Provider PIX</span>
+            {eligiblePixProviders.length ? (
+              eligiblePixProviders.map((provider) => (
+                <label className="choice-row" key={provider}>
+                  <input
+                    checked={groupedPixProvider === provider}
+                    name="grouped-pix-provider"
+                    type="radio"
+                    value={provider}
+                    onChange={() => setSelectedProvider(provider)}
+                  />
+                  <span>{replacementProviderLabel(provider, defaultPixProvider)}</span>
+                </label>
+              ))
+            ) : (
+              <span className="field-hint">
+                Configure ao menos um provider PIX ativo para gerar PIX agrupado.
+              </span>
+            )}
+          </fieldset>
+        ) : null}
 
         {activePixConflict ? (
           <div className="pix-panel pix-tool-panel">
@@ -16872,8 +16940,14 @@ function PixReceivablesModal({
           <div className="pix-panel">
             <div className="pix-status-row">
               <strong>{activeIntent.status}</strong>
-              <span>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</span>
+              <span>{paymentProviderDisplay(activeIntent.provider)}</span>
             </div>
+            <dl className="detail-list compact-detail-list">
+              <div>
+                <dt>Expiração</dt>
+                <dd>{activeIntent.expiresAt ? formatDateTime(activeIntent.expiresAt) : '-'}</dd>
+              </div>
+            </dl>
             <label className="field">
               <span>PIX copia e cola</span>
               <textarea readOnly rows={4} value={activeIntent.pixCopyPaste ?? ''} />
@@ -16980,7 +17054,9 @@ function PixReceivablesModal({
             </button>
             <button
               className="primary-button"
-              disabled={busy || Boolean(activeIntent) || Boolean(activePixConflict)}
+              disabled={
+                busy || Boolean(activeIntent) || Boolean(activePixConflict) || !groupedPixProvider
+              }
               type="button"
               onClick={() => void createGroupedPix()}
             >

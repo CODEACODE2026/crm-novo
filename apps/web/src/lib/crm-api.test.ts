@@ -8,6 +8,7 @@ import {
   confirmRenewalReversal,
   createReferenceReactivation,
   createClient,
+  createReceivablesPix,
   deleteClient,
   formatCurrency,
   formatDate,
@@ -215,6 +216,39 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/payment-intents/intent-1/send-whatsapp'),
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('posts selected provider when creating grouped PIX', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'intent-1', provider: 'FASTPAY' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createReceivablesPix(['receivable-1', 'receivable-2'], 'FASTPAY');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/pix'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toMatchObject({
+      receivableIds: ['receivable-1', 'receivable-2'],
+      provider: 'FASTPAY',
+    });
+  });
+
+  it('omits provider when grouped PIX creation relies on backend default', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'intent-1', provider: 'FASTFLOW' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createReceivablesPix(['receivable-1']);
+
+    expect(latestJsonBody(fetchMock)).toEqual({ receivableIds: ['receivable-1'] });
   });
 
   it('posts legacy client preview payload to the read-only import endpoint', async () => {

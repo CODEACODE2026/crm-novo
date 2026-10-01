@@ -3324,6 +3324,63 @@ describe('FinanceService', () => {
     expect(fake.recovery.cancelActiveForReceivable).toHaveBeenCalledTimes(3);
   });
 
+  it('passes the selected provider when creating a new grouped PIX', async () => {
+    const fake = createGroupedFinancePrisma();
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-group-1',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('70.00'),
+      pixCopyPaste: 'FASTPAY-GROUP-PIX',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+    } as never);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.createReceivablesPix(
+      {
+        receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id],
+        provider: 'FASTPAY',
+      },
+      actorUserId,
+    );
+
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'FASTPAY', amount: new Prisma.Decimal('70.00') }),
+    );
+    expect(intent).toMatchObject({
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-group-1',
+      pixCopyPaste: 'FASTPAY-GROUP-PIX',
+    });
+  });
+
+  it('keeps default provider selection when grouped PIX is created without an explicit provider', async () => {
+    const fake = createGroupedFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    await service.createReceivablesPix(
+      { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+      actorUserId,
+    );
+
+    const input = fake.provider.createPix.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(input).not.toHaveProperty('provider');
+  });
+
   it('persists a grouped PIX when the provider result has a normalized numeric transaction ID', async () => {
     const fake = createGroupedFinancePrisma();
     fake.provider.createPix.mockResolvedValueOnce({

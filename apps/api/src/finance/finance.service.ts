@@ -895,6 +895,7 @@ export class FinanceService {
         });
 
         const providerPix = await this.paymentProvider.createPix({
+          ...(dto.provider ? { provider: dto.provider } : {}),
           receivableId: paymentGroup.id,
           amount: totalAmount,
           description,

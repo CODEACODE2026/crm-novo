@@ -1,4 +1,4 @@
-import { Module, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Module, NotFoundException } from '@nestjs/common';
 import { SELF_DECLARED_DEPS_METADATA } from '@nestjs/common/constants';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -363,6 +363,31 @@ describe('Payment provider DI pipeline', () => {
     await expect(provider.createPix(pixInput())).resolves.toMatchObject({
       providerTransactionId: 'abc-123',
     });
+  });
+
+  it('rejects an explicit provider that is not configured for PIX creation', async () => {
+    credentialActive = false;
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(PaymentProviderRegistryService);
+
+    await expect(
+      provider.createPix({ ...pixInput('FASTPAY'), provider: 'FASTPAY' }),
+    ).rejects.toThrow(NotFoundException);
+    expect(apiClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported explicit PIX providers without falling back to mock', async () => {
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(PaymentProviderRegistryService);
+
+    await expect(provider.createPix({ ...pixInput(), provider: 'DEPIX' })).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(apiClient.createTransaction).not.toHaveBeenCalled();
   });
 
   it.each([undefined, null, '', ' '])(

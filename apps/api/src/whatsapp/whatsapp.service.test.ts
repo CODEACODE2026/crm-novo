@@ -902,8 +902,11 @@ describe('WhatsAppService', () => {
     expect(sendButtonsPayload.body).toContain('Segue um único PIX referente às suas cobranças.');
     expect(sendButtonsPayload.body).toContain('2 contas');
     expect(sendButtonsPayload.body).toContain('Total: R$');
-    expect(sendButtonsPayload.body).toContain('- robertoserour333');
-    expect(sendButtonsPayload.body).toContain('- Zm4Bc1');
+    expect(sendButtonsPayload.body).not.toContain('Referências:');
+    expect(sendButtonsPayload.body).not.toContain('robertoserour333');
+    expect(sendButtonsPayload.body).not.toContain('Zm4Bc1');
+    expect(sendButtonsPayload.body).not.toContain('Mensalidade A');
+    expect(sendButtonsPayload.body).not.toContain('Mensalidade B');
     expect(sendButtonsPayload.buttons[0]?.buttonParamsJson.copy_code).toBe(
       'GROUPED-PIX-COPY-PASTE',
     );

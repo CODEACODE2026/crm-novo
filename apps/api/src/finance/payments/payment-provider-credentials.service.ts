@@ -197,6 +197,11 @@ export class PaymentProviderCredentialsService {
     return credential?.provider ?? null;
   }
 
+  async ensureEligiblePixCreationProvider(provider: PaymentProviderCode) {
+    this.ensureConfigurableProvider(provider);
+    await this.getActiveCredential(provider);
+  }
+
   async getWebhookSecret(provider: PaymentProviderCode) {
     this.ensureConfigurableProvider(provider);
     const credential = await this.getActiveCredential(provider);

@@ -30,7 +30,8 @@ describe('phase B server-side pagination wiring', () => {
     expect(clientsSource).toContain('pageSize: listPageSize');
     expect(clientsSource).toContain('clientsPagination={clientsPayload?.pagination ?? null}');
     expect(clientsSource).toContain('onClientsPageChange={setClientsPage}');
-    expect(clientsSource.match(/setClientsPage\(1\);/g)).toHaveLength(3);
+    expect(clientsSource.match(/setClientsPage\(1\);/g)).toHaveLength(4);
+    expect(clientsSource).toContain('function resetClientListState()');
     expect(dashboardSource).toContain('itemLabel="clientes"');
     expect(dashboardSource).toContain(
       'setClientsPage(Math.max(1, nextClients.pagination.totalPages))',

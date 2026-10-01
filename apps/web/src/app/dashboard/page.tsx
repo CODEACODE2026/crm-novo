@@ -597,8 +597,22 @@ export default function DashboardPage() {
     setRenewalNotice('');
   }
 
+  function resetClientListState() {
+    setSearch('');
+    setStatus('');
+    setPlanId('');
+    setClientsPage(1);
+  }
+
+  function resetClientModuleState() {
+    resetClientDetailState();
+    resetClientListState();
+  }
+
   function handlePrimaryNavigation(nextView: View) {
-    if (view === 'clients' && nextView !== 'clients') {
+    if (nextView === 'clients') {
+      resetClientModuleState();
+    } else if (view === 'clients') {
       resetClientDetailState();
     }
 
@@ -7575,6 +7589,7 @@ function ClientsView({
   }, [clientBillingReferenceId, selectedClientId]);
 
   useEffect(() => {
+    setDetailTab('overview');
     setSelectedReceivableIds([]);
     setSelectedDispatch(null);
     setReferenceStatusModal(null);

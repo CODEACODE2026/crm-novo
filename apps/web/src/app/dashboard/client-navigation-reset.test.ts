@@ -22,15 +22,17 @@ const clientsViewSource = dashboardSource.slice(
   dashboardSource.indexOf('function ReferenceStatusConfirmationModal'),
 );
 
-describe('NAVIGATION1 client detail reset', () => {
-  it('routes main menu navigation through the client reset boundary', () => {
+describe('NAVIGATION2 client module reset', () => {
+  it('routes main menu navigation through the client reset boundaries', () => {
     expect(dashboardPageSource).toContain('onNavigate={handlePrimaryNavigation}');
-    expect(primaryNavigationSource).toContain("if (view === 'clients' && nextView !== 'clients')");
+    expect(primaryNavigationSource).toContain("if (nextView === 'clients')");
+    expect(primaryNavigationSource).toContain('resetClientModuleState();');
+    expect(primaryNavigationSource).toContain("} else if (view === 'clients') {");
     expect(primaryNavigationSource).toContain('resetClientDetailState();');
     expect(primaryNavigationSource).toContain('setView(nextView);');
   });
 
-  it('clears client detail state without resetting client list filters', () => {
+  it('clears client detail state for module exits and direct client module resets', () => {
     expect(clientResetSource).toContain('setSelectedClient(null);');
     expect(clientResetSource).toContain('setEditingClient(null);');
     expect(clientResetSource).toContain('setClientFormOpen(false);');
@@ -40,17 +42,36 @@ describe('NAVIGATION1 client detail reset', () => {
     expect(clientResetSource).toContain('setRenewalReversalPreviewLoadingId(null);');
     expect(clientResetSource).toContain('setDeletionTarget(null);');
     expect(clientResetSource).toContain("setRenewalNotice('');");
-    expect(clientResetSource).not.toContain('setSearch');
-    expect(clientResetSource).not.toContain('setStatus');
-    expect(clientResetSource).not.toContain('setPlanId');
-    expect(clientResetSource).not.toContain('setClientsPage');
+    expect(clientResetSource).toContain('setClientDetailTabRequest(null);');
   });
 
-  it('keeps client detail tabs as internal state that does not use primary navigation', () => {
+  it('resets client list search filters and pagination to project defaults', () => {
+    expect(clientResetSource).toContain('function resetClientListState()');
+    expect(clientResetSource).toContain("setSearch('');");
+    expect(clientResetSource).toContain("setStatus('');");
+    expect(clientResetSource).toContain("setPlanId('');");
+    expect(clientResetSource).toContain('setClientsPage(1);');
+    expect(clientResetSource).toContain('function resetClientModuleState()');
+    expect(clientResetSource).toContain('resetClientDetailState();');
+    expect(clientResetSource).toContain('resetClientListState();');
+  });
+
+  it('keeps NAVIGATION1 behavior when leaving clients for another module', () => {
+    expect(primaryNavigationSource).toContain("} else if (view === 'clients') {");
+    expect(primaryNavigationSource).toContain('resetClientDetailState();');
+    expect(primaryNavigationSource).toContain('setView(nextView);');
+  });
+
+  it('resets newly opened clients to overview without hijacking same-client tab navigation', () => {
     expect(clientsViewSource).toContain('const [detailTab, setDetailTab] = useState<');
+    expect(clientsViewSource).toContain("setDetailTab('overview');");
+    expect(clientsViewSource).toContain('}, [selectedClientId]);');
+    expect(clientsViewSource).toContain("onClick={() => setDetailTab('overview')}");
     expect(clientsViewSource).toContain("onClick={() => setDetailTab('references')}");
     expect(clientsViewSource).toContain("onClick={() => setDetailTab('receivables')}");
+    expect(clientsViewSource).toContain("onClick={() => setDetailTab('messages')}");
     expect(clientsViewSource).toContain("onClick={() => setDetailTab('timeline')}");
+    expect(clientsViewSource).toContain("onClick={() => setDetailTab('more')}");
     expect(clientsViewSource).not.toContain('handlePrimaryNavigation');
   });
 

@@ -36,4 +36,27 @@ describe('buildPixWhatsAppTemplate', () => {
       },
     });
   });
+
+  it('builds a grouped PIX message with one total and item references', () => {
+    const template = buildPixWhatsAppTemplate({
+      context: 'GROUPED',
+      amount: new Prisma.Decimal('75.00'),
+      pixCopyPaste: 'GROUPED-PIX-COPY-CODE',
+      itemCount: 3,
+      items: [
+        { reference: 'robertoserour333', amount: new Prisma.Decimal('25.00') },
+        { reference: 'Zm4Bc1', amount: new Prisma.Decimal('25.00') },
+        { reference: 'robertoserour', amount: new Prisma.Decimal('25.00') },
+      ],
+    });
+
+    expect(template.body).toContain('Segue um único PIX referente às suas cobranças.');
+    expect(template.body).toContain('3 contas');
+    expect(template.body).toContain('💰 Total: R$ 75,00');
+    expect(template.body).toContain('Referências:');
+    expect(template.body).toContain('- robertoserour333 — R$ 25,00');
+    expect(template.body).toContain('- Zm4Bc1 — R$ 25,00');
+    expect(template.body).toContain('- robertoserour — R$ 25,00');
+    expect(template.button.buttonParamsJson.copy_code).toBe('GROUPED-PIX-COPY-CODE');
+  });
 });

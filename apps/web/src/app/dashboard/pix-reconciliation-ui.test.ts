@@ -10,6 +10,10 @@ const pixModalSource = dashboardSource.slice(
   dashboardSource.indexOf('function PixReceivableModal'),
   dashboardSource.indexOf('function PixReceivablesModal'),
 );
+const groupedPixModalSource = dashboardSource.slice(
+  dashboardSource.indexOf('function PixReceivablesModal'),
+  dashboardSource.indexOf('function PayReceivableModal'),
+);
 
 describe('PIX reconciliation UI contract', () => {
   it('keeps reconciliation behind the PIX action menu and starts with empty operator inputs', () => {
@@ -288,6 +292,22 @@ describe('PIX reconciliation UI contract', () => {
     expect(waitingActionsSource).not.toContain("activeStatus === 'CANCELED'");
     expect(waitingActionsSource).not.toContain("activeStatus === 'FAILED'");
     expect(waitingActionsSource).not.toContain("activeStatus === 'EXPIRED'");
+  });
+
+  it('offers WhatsApp send for grouped WAITING_PAYMENT PIX through the shared endpoint', () => {
+    expect(groupedPixModalSource).toContain('getWhatsAppConnection()');
+    expect(groupedPixModalSource).toContain('sendPaymentIntentWhatsApp(activeIntent.id)');
+    expect(groupedPixModalSource).toContain(
+      "const isWaitingPix = activeIntent?.status === 'WAITING_PAYMENT';",
+    );
+    expect(groupedPixModalSource).toContain('Enviar no WhatsApp');
+    expect(groupedPixModalSource).toContain(
+      "{whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}",
+    );
+    expect(groupedPixModalSource).toContain("setNotice('PIX agrupado enviado pelo WhatsApp.');");
+    expect(groupedPixModalSource).not.toContain(
+      'receivables.map((receivable) => sendPaymentIntentWhatsApp',
+    );
   });
 
   it('keeps only the PIX copy-field copy CTA in WAITING_PAYMENT', () => {

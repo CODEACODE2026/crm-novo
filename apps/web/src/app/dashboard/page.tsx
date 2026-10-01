@@ -16556,13 +16556,28 @@ function PixReceivablesModal({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
+  const [whatsAppSending, setWhatsAppSending] = useState(false);
   const actionRef = useRef(false);
   const total = receivables.reduce((sum, receivable) => sum + Number(receivable.amount), 0);
+  const isWaitingPix = activeIntent?.status === 'WAITING_PAYMENT';
+  const canSendPixWhatsApp = Boolean(isWaitingPix && activeIntent?.pixCopyPaste);
+  const whatsAppUnavailableReason = !whatsAppConnection
+    ? 'Configure a conexão em WhatsApp.'
+    : whatsAppConnection.status !== 'CONNECTED'
+      ? 'Conexão Kirago não está operacional.'
+      : '';
   const canCancel =
     activeIntent &&
     !['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED'].includes(activeIntent.status);
   const canRenderQrImage =
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
+
+  useEffect(() => {
+    void getWhatsAppConnection()
+      .then(setWhatsAppConnection)
+      .catch(() => setWhatsAppConnection(null));
+  }, []);
 
   async function runAction(
     action: () => Promise<PaymentIntent>,
@@ -16593,6 +16608,32 @@ function PixReceivablesModal({
     if (!activeIntent?.pixCopyPaste) return;
     await navigator.clipboard.writeText(activeIntent.pixCopyPaste);
     setNotice('PIX copiado.');
+  }
+
+  async function sendPixWhatsApp() {
+    if (!activeIntent || whatsAppSending || actionRef.current) return;
+
+    actionRef.current = true;
+    setWhatsAppSending(true);
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const result: PixWhatsAppSendResult = await sendPaymentIntentWhatsApp(activeIntent.id);
+      if (!result.success) {
+        throw new Error(result.errorMessage ?? 'Não foi possível enviar o PIX pelo WhatsApp.');
+      }
+
+      setNotice('PIX agrupado enviado pelo WhatsApp.');
+      await onChanged('PIX agrupado enviado pelo WhatsApp.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível enviar o PIX pelo WhatsApp.');
+    } finally {
+      setBusy(false);
+      setWhatsAppSending(false);
+      actionRef.current = false;
+    }
   }
 
   return (
@@ -16661,6 +16702,9 @@ function PixReceivablesModal({
                 )}
               </div>
             ) : null}
+            {isWaitingPix && whatsAppUnavailableReason ? (
+              <div className="notice warning">{whatsAppUnavailableReason}</div>
+            ) : null}
             <div className="button-row">
               <button
                 className="secondary-button"
@@ -16685,6 +16729,23 @@ function PixReceivablesModal({
                 <RefreshCcw aria-hidden="true" size={16} />
                 Sincronizar
               </button>
+              {isWaitingPix ? (
+                <button
+                  className="primary-button pix-whatsapp-send-button"
+                  disabled={
+                    busy ||
+                    whatsAppSending ||
+                    !canSendPixWhatsApp ||
+                    Boolean(whatsAppUnavailableReason)
+                  }
+                  title={whatsAppUnavailableReason || undefined}
+                  type="button"
+                  onClick={() => void sendPixWhatsApp()}
+                >
+                  <Send aria-hidden="true" size={16} />
+                  {whatsAppSending ? 'Enviando...' : 'Enviar no WhatsApp'}
+                </button>
+              ) : null}
               {activeIntent.provider === 'MOCK' ? (
                 <button
                   className="primary-button"

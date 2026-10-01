@@ -12,6 +12,7 @@ import {
   MessageDispatch,
   MessageDispatchOrigin,
   Prisma,
+  ReceivableStatus,
   WhatsAppInboundMessageType,
   WhatsAppConnection,
   WhatsAppConnectionStatus,
@@ -64,8 +65,54 @@ type PixPaymentIntentForWhatsApp = Prisma.PaymentIntentGetPayload<{
         clientReference: true;
       };
     };
+    paymentGroup: {
+      include: {
+        client: true;
+        items: {
+          include: {
+            receivable: {
+              include: {
+                clientReference: true;
+              };
+            };
+          };
+          orderBy: { createdAt: 'asc' };
+        };
+      };
+    };
   };
 }>;
+
+type PixWhatsAppDispatchItem = {
+  receivableId: string;
+  clientReferenceId: string;
+  amount: Prisma.Decimal;
+  dueDate: Date;
+  referenceSnapshot: string;
+  statusSnapshot: ReceivableStatus;
+};
+
+type PixWhatsAppContext =
+  | {
+      kind: 'INDIVIDUAL';
+      client: NonNullable<PixPaymentIntentForWhatsApp['receivable']>['client'];
+      receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
+      phone: string;
+      dispatchItems: [];
+      description: string;
+      metadata: Record<string, unknown>;
+      templateItems?: never;
+    }
+  | {
+      kind: 'GROUPED';
+      client: NonNullable<PixPaymentIntentForWhatsApp['paymentGroup']>['client'];
+      paymentGroup: NonNullable<PixPaymentIntentForWhatsApp['paymentGroup']>;
+      phone: string;
+      dispatchItems: PixWhatsAppDispatchItem[];
+      description: string;
+      metadata: Record<string, unknown>;
+      templateItems: Array<{ reference: string; amount: Prisma.Decimal }>;
+    };
 
 @Injectable()
 export class WhatsAppService {
@@ -367,42 +414,50 @@ export class WhatsAppService {
             clientReference: true,
           },
         },
+        paymentGroup: {
+          include: {
+            client: true,
+            items: {
+              include: {
+                receivable: {
+                  include: {
+                    clientReference: true,
+                  },
+                },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        },
       },
     });
 
     this.validatePixIntentForWhatsApp(intent);
-
-    const receivable = intent.receivable;
-    const client = receivable.client;
-    const currentIntent = await this.prisma.paymentIntent.findFirst({
-      where: {
-        receivableId: receivable.id,
-        paymentGroupId: null,
-        status: 'WAITING_PAYMENT',
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    });
-
-    if (currentIntent?.id !== intent.id) {
-      throw new ConflictException('Somente o PIX atual aguardando pagamento pode ser enviado.');
-    }
-
-    const phone = normalizeBrazilPhone(client.phoneNormalized);
+    const context = await this.buildPixWhatsAppContext(intent);
     const template = buildPixWhatsAppTemplate({
       amount: intent.amount,
       pixCopyPaste: intent.pixCopyPaste ?? '',
+      context: context.kind,
+      ...(context.kind === 'GROUPED'
+        ? { itemCount: context.dispatchItems.length, items: context.templateItems }
+        : {}),
     });
     const requestId = randomUUID();
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
     const { dispatch, created } = await this.createPendingDispatch({
-      clientId: client.id,
-      clientReferenceId: receivable.clientReferenceId,
+      clientId: context.client.id,
       connectionId: connection.id,
-      receivableId: receivable.id,
-      phone,
+      phone: context.phone,
       body: template.body,
       requestId,
       origin: 'MANUAL',
+      dispatchItems: context.dispatchItems,
+      ...(context.kind === 'INDIVIDUAL'
+        ? {
+            clientReferenceId: context.receivable.clientReferenceId,
+            receivableId: context.receivable.id,
+          }
+        : {}),
     });
 
     if (!created || dispatch.status === 'SENT') {
@@ -412,7 +467,7 @@ export class WhatsAppService {
     try {
       const result = await this.mapProviderError(() =>
         this.provider.sendButtons(instanceToken, {
-          phone,
+          phone: context.phone,
           title: template.title,
           body: template.body,
           buttons: [template.button],
@@ -434,20 +489,22 @@ export class WhatsAppService {
 
         await tx.clientEvent.create({
           data: {
-            clientId: client.id,
+            clientId: context.client.id,
             type: 'WHATSAPP_MESSAGE_SENT',
-            title: 'PIX enviado pelo WhatsApp.',
-            description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
+            title:
+              context.kind === 'GROUPED'
+                ? 'PIX agrupado enviado pelo WhatsApp.'
+                : 'PIX enviado pelo WhatsApp.',
+            description: context.description,
             metadata: {
               messageDispatchId: sent.id,
-              receivableId: receivable.id,
               paymentIntentId: intent.id,
               provider: intent.provider,
               providerTransactionId: intent.providerTransactionId,
-              phoneMasked: this.maskPhone(phone),
+              phoneMasked: this.maskPhone(context.phone),
               amount: intent.amount.toString(),
               channel: 'WHATSAPP',
-              origin: 'MANUAL_PIX',
+              ...context.metadata,
             },
             createdByUserId: actorUserId,
           },
@@ -1166,6 +1223,7 @@ export class WhatsAppService {
     requestId: string;
     origin?: MessageDispatchOrigin;
     idempotencyKey?: string;
+    dispatchItems?: PixWhatsAppDispatchItem[];
   }) {
     try {
       const dispatch = await this.prisma.messageDispatch.create({
@@ -1181,6 +1239,13 @@ export class WhatsAppService {
           ...(input.receivableId ? { receivableId: input.receivableId } : {}),
           ...(input.templateId ? { templateId: input.templateId } : {}),
           ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+          ...(input.dispatchItems?.length
+            ? {
+                items: {
+                  create: input.dispatchItems,
+                },
+              }
+            : {}),
         },
         include: { client: true, whatsAppConnection: true },
       });
@@ -1199,33 +1264,139 @@ export class WhatsAppService {
     }
   }
 
+  private async buildPixWhatsAppContext(
+    intent: PixPaymentIntentForWhatsApp,
+  ): Promise<PixWhatsAppContext> {
+    if (intent.receivable) {
+      const receivable = intent.receivable;
+      const currentIntent = await this.prisma.paymentIntent.findFirst({
+        where: {
+          receivableId: receivable.id,
+          paymentGroupId: null,
+          status: 'WAITING_PAYMENT',
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+
+      if (currentIntent?.id !== intent.id) {
+        throw new ConflictException('Somente o PIX atual aguardando pagamento pode ser enviado.');
+      }
+
+      const phone = normalizeBrazilPhone(receivable.client.phoneNormalized);
+
+      return {
+        kind: 'INDIVIDUAL',
+        client: receivable.client,
+        receivable,
+        phone,
+        dispatchItems: [],
+        description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
+        metadata: {
+          receivableId: receivable.id,
+          origin: 'MANUAL_PIX',
+        },
+      };
+    }
+
+    const paymentGroup = intent.paymentGroup;
+    if (!paymentGroup) {
+      throw new ConflictException('PIX sem contexto de cobranca valido.');
+    }
+    const currentIntent = await this.prisma.paymentIntent.findFirst({
+      where: {
+        paymentGroupId: paymentGroup.id,
+        receivableId: null,
+        status: 'WAITING_PAYMENT',
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+
+    if (currentIntent?.id !== intent.id) {
+      throw new ConflictException(
+        'Somente o PIX agrupado atual aguardando pagamento pode ser enviado.',
+      );
+    }
+
+    const phone = normalizeBrazilPhone(paymentGroup.client.phoneNormalized);
+    const dispatchItems = paymentGroup.items.map((item) => ({
+      receivableId: item.receivableId,
+      clientReferenceId: item.receivable.clientReferenceId,
+      amount: item.amount,
+      dueDate: item.receivable.dueDate,
+      referenceSnapshot: item.receivable.clientReference.reference,
+      statusSnapshot: item.receivable.status,
+    }));
+
+    return {
+      kind: 'GROUPED',
+      client: paymentGroup.client,
+      paymentGroup,
+      phone,
+      dispatchItems,
+      description: `${paymentGroup.items.length} contas. Total: ${this.formatCurrency(intent.amount)}.`,
+      metadata: {
+        paymentGroupId: paymentGroup.id,
+        receivableIds: paymentGroup.items.map((item) => item.receivableId),
+        itemCount: paymentGroup.items.length,
+        origin: 'GROUPED_PIX',
+      },
+      templateItems: paymentGroup.items.map((item) => ({
+        reference: item.receivable.clientReference.reference,
+        amount: item.amount,
+      })),
+    };
+  }
+
   private validatePixIntentForWhatsApp(
     intent: PixPaymentIntentForWhatsApp | null,
-  ): asserts intent is PixPaymentIntentForWhatsApp & {
-    receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
-  } {
+  ): asserts intent is PixPaymentIntentForWhatsApp {
     if (!intent) {
       throw new NotFoundException('Intencao de pagamento nao encontrada.');
     }
 
-    if (!intent.receivable || intent.paymentGroupId) {
-      throw new ConflictException('PIX sem conta a receber individual vinculada.');
+    if (Boolean(intent.receivable) === Boolean(intent.paymentGroup)) {
+      throw new ConflictException('PIX sem contexto de cobranca valido.');
     }
 
     if (intent.status !== 'WAITING_PAYMENT') {
       throw new ConflictException('Somente PIX aguardando pagamento pode ser enviado.');
     }
 
-    if (intent.receivable.status !== 'PENDENTE') {
-      throw new ConflictException('Somente contas pendentes podem receber envio de PIX.');
-    }
-
     if (!intent.pixCopyPaste) {
       throw new ConflictException('PIX sem copia e cola disponivel.');
     }
 
-    if (!intent.receivable.client?.phoneNormalized) {
+    if (intent.receivable) {
+      if (intent.receivable.status !== 'PENDENTE') {
+        throw new ConflictException('Somente contas pendentes podem receber envio de PIX.');
+      }
+
+      if (!intent.receivable.client?.phoneNormalized) {
+        throw new BadRequestException('Cliente sem WhatsApp cadastrado.');
+      }
+
+      return;
+    }
+
+    const paymentGroup = intent.paymentGroup;
+    if (!paymentGroup) {
+      throw new ConflictException('PIX sem contexto de cobranca valido.');
+    }
+
+    if (paymentGroup.status !== 'WAITING_PAYMENT') {
+      throw new ConflictException('Somente agrupamentos aguardando pagamento podem receber PIX.');
+    }
+
+    if (!paymentGroup.client?.phoneNormalized) {
       throw new BadRequestException('Cliente sem WhatsApp cadastrado.');
+    }
+
+    if (paymentGroup.items.length === 0) {
+      throw new ConflictException('PIX agrupado sem contas vinculadas.');
+    }
+
+    if (paymentGroup.items.some((item) => item.receivable.status !== 'PENDENTE')) {
+      throw new ConflictException('Somente contas pendentes podem receber envio de PIX.');
     }
   }
 

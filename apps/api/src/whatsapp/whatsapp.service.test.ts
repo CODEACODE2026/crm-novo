@@ -785,6 +785,147 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('sends grouped WAITING_PAYMENT PIX once and records grouped dispatch items', async () => {
+    const groupedItems = [
+      {
+        id: 'group-item-1',
+        paymentGroupId: 'payment-group-id',
+        receivableId: 'receivable-a',
+        amount: new Prisma.Decimal(25),
+        createdAt: now,
+        receivable: {
+          id: 'receivable-a',
+          clientId: client().id,
+          clientReferenceId: 'reference-a',
+          purpose: 'MONTHLY',
+          renewalId: null,
+          description: 'Mensalidade A',
+          amount: new Prisma.Decimal(25),
+          dueDate: now,
+          status: 'PENDENTE',
+          paidAt: null,
+          canceledAt: null,
+          cancelReason: null,
+          createdAt: now,
+          updatedAt: now,
+          clientReference: {
+            ...clientReference(),
+            id: 'reference-a',
+            reference: 'robertoserour333',
+          },
+        },
+      },
+      {
+        id: 'group-item-2',
+        paymentGroupId: 'payment-group-id',
+        receivableId: 'receivable-b',
+        amount: new Prisma.Decimal(50),
+        createdAt: now,
+        receivable: {
+          id: 'receivable-b',
+          clientId: client().id,
+          clientReferenceId: 'reference-b',
+          purpose: 'MONTHLY',
+          renewalId: null,
+          description: 'Mensalidade B',
+          amount: new Prisma.Decimal(50),
+          dueDate: now,
+          status: 'PENDENTE',
+          paidAt: null,
+          canceledAt: null,
+          cancelReason: null,
+          createdAt: now,
+          updatedAt: now,
+          clientReference: { ...clientReference(), id: 'reference-b', reference: 'Zm4Bc1' },
+        },
+      },
+    ];
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'grouped-payment-intent-id',
+            receivableId: null,
+            paymentGroupId: 'payment-group-id',
+            provider: 'FASTFLOW',
+            providerTransactionId: 'group-provider-transaction-id',
+            externalStatus: 'WAITING_PAYMENT',
+            externalDepixId: null,
+            blockchainTxId: null,
+            status: 'WAITING_PAYMENT',
+            amount: new Prisma.Decimal(75),
+            pixCopyPaste: 'GROUPED-PIX-COPY-PASTE',
+            qrCodeData: 'data:image/png;base64,grouped',
+            expiresAt: new Date('2026-09-12T00:00:00.000Z'),
+            paidAt: null,
+            lastSyncAt: now,
+            failureCode: null,
+            failureMessage: null,
+            createdAt: now,
+            updatedAt: now,
+            receivable: null,
+            paymentGroup: {
+              id: 'payment-group-id',
+              clientId: client().id,
+              status: 'WAITING_PAYMENT',
+              totalAmount: new Prisma.Decimal(75),
+              paidAt: null,
+              createdByUserId: 'user-id',
+              createdAt: now,
+              updatedAt: now,
+              client: client(),
+              items: groupedItems,
+            },
+          }),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'grouped-payment-intent-id',
+            receivableId: null,
+            paymentGroupId: 'payment-group-id',
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('grouped-payment-intent-id', 'user-id');
+    const sendButtonsPayload = (provider.sendButtons as MockWithCalls).mock.calls[0]?.[1] as {
+      body: string;
+      buttons: Array<{ buttonParamsJson: { copy_code: string } }>;
+    };
+    const dispatchCreate = (prisma.messageDispatch.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: { receivableId?: string; items?: { create?: unknown[] } };
+    };
+
+    expect(provider.sendButtons).toHaveBeenCalledTimes(1);
+    expect(sendButtonsPayload.body).toContain('Segue um único PIX referente às suas cobranças.');
+    expect(sendButtonsPayload.body).toContain('2 contas');
+    expect(sendButtonsPayload.body).toContain('Total: R$');
+    expect(sendButtonsPayload.body).toContain('- robertoserour333');
+    expect(sendButtonsPayload.body).toContain('- Zm4Bc1');
+    expect(sendButtonsPayload.buttons[0]?.buttonParamsJson.copy_code).toBe(
+      'GROUPED-PIX-COPY-PASTE',
+    );
+    expect(dispatchCreate?.data?.receivableId).toBeUndefined();
+    expect(dispatchCreate?.data?.items?.create).toHaveLength(2);
+    expect(result).toMatchObject({
+      success: true,
+      messageDispatchId: dispatch().id,
+      destinationMasked: '5544*****9999',
+      providerMessageId: 'provider-button-id',
+    });
+    expect(prisma.paymentIntent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          paymentGroupId: 'payment-group-id',
+          receivableId: null,
+          status: 'WAITING_PAYMENT',
+        },
+      }),
+    );
+  });
+
   it('records a controlled failed dispatch when Kirago rate-limits PIX send without changing finance state', async () => {
     const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),

@@ -181,13 +181,36 @@ describe('operational dashboard polish source', () => {
     expect(dashboardSource).toContain("label: 'Últimos 30 dias'");
     expect(dashboardSource).toContain("label: 'Personalizado'");
     expect(stylesSource).toContain('.dashboard-compact-layout .dashboard-kpis .stat-card');
-    expect(stylesSource).toContain('min-height: 82px;');
+    expect(stylesSource).toContain('min-height: 66px;');
     expect(stylesSource).toContain('.dashboard-compact-layout .cashflow-temporal-chart');
-    expect(stylesSource).toContain('min-height: 260px;');
+    expect(stylesSource).toContain('min-height: 204px;');
     expect(stylesSource).toContain('.dashboard-compact-layout .compact-table article');
     expect(stylesSource).toContain('.dashboard-compact-layout .quick-actions .primary-button');
     expect(stylesSource).toContain('@media (max-width: 620px)');
     expect(stylesSource).toContain('min-height: 38px;');
+  });
+
+  it('keeps the operational dashboard dense on narrow mobile screens', () => {
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .dashboard-kpis {\n    grid-template-columns: repeat(2, minmax(0, 1fr));',
+    );
+    expect(stylesSource).toContain('.dashboard-compact-layout .dashboard-kpis .stat-icon svg');
+    expect(stylesSource).toContain('width: 14px;');
+    expect(stylesSource).toContain('.dashboard-compact-layout .dashboard-finance-panel');
+    expect(stylesSource).toContain('padding: 10px;');
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .dashboard-cashflow-visual {\n    min-height: 214px;',
+    );
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .cashflow-temporal-chart svg {\n    min-height: 168px;',
+    );
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .finance-side-metrics {\n    grid-template-columns: repeat(2, minmax(0, 1fr));',
+    );
+    expect(stylesSource).toContain(
+      '.dashboard-compact-layout .finance-side-metrics div {\n    gap: 3px;',
+    );
+    expect(stylesSource).toContain('min-height: 54px;');
   });
 
   it('compacts the dashboard topbar on mobile while preserving the shell drawer controls', () => {

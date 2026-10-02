@@ -9030,7 +9030,8 @@ tbody tr:hover,
   }
 
   .dashboard-compact-layout .dashboard-toolbar {
-    margin-bottom: 7px;
+    gap: 6px;
+    margin-bottom: 6px;
   }
 
   .period-controls {
@@ -9047,7 +9048,7 @@ tbody tr:hover,
     flex-wrap: nowrap;
     gap: 1px;
     overflow-x: auto;
-    padding: 2px;
+    padding: 1px;
     scrollbar-width: none;
   }
 
@@ -9057,8 +9058,8 @@ tbody tr:hover,
 
   .dashboard-compact-layout .period-controls button {
     flex: 0 0 auto;
-    min-height: 26px;
-    padding-inline: 8px;
+    min-height: 24px;
+    padding-inline: 7px;
     font-size: 11px;
   }
 
@@ -9212,7 +9213,6 @@ tbody tr:hover,
   }
 
   .metric-grid,
-  .dashboard-kpis,
   .referrals-kpis,
   .plans-kpis,
   .plans-grid,
@@ -9248,9 +9248,87 @@ tbody tr:hover,
     grid-template-columns: 1fr;
   }
 
-  .finance-side-metrics,
   .client-status-donut {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .stat-card {
+    min-height: 66px;
+    gap: 5px;
+    padding: 8px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .stat-card-top {
+    gap: 5px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .stat-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .stat-icon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .metric-label {
+    font-size: 11px;
+    line-height: 1.15;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .metric-value {
+    font-size: 17px;
+    line-height: 1.05;
+  }
+
+  .dashboard-compact-layout .dashboard-primary-grid {
+    gap: 8px;
+  }
+
+  .dashboard-compact-layout .dashboard-finance-panel {
+    padding: 10px;
+  }
+
+  .dashboard-compact-layout .dashboard-panel-subtitle {
+    margin: -3px 0 6px;
+  }
+
+  .dashboard-compact-layout .dashboard-finance-body {
+    gap: 7px;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics div {
+    gap: 3px;
+    min-height: 54px;
+    padding: 7px;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics span {
+    gap: 4px;
+    font-size: 10px;
+    line-height: 1.15;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics span svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics strong {
+    font-size: 13px;
+    line-height: 1.1;
   }
 
   .client-status-donut {
@@ -9264,6 +9342,26 @@ tbody tr:hover,
   .dashboard-cashflow-visual,
   .cashflow-temporal-chart {
     min-height: 340px;
+  }
+
+  .dashboard-compact-layout .dashboard-cashflow-visual {
+    min-height: 214px;
+  }
+
+  .dashboard-compact-layout .cashflow-temporal-chart {
+    gap: 4px;
+    min-height: 204px;
+    padding: 6px 6px 4px;
+  }
+
+  .dashboard-compact-layout .cashflow-temporal-chart svg {
+    min-height: 168px;
+  }
+
+  .dashboard-compact-layout .cashflow-chart-legend {
+    gap: 9px;
+    min-height: 14px;
+    font-size: 10.5px;
   }
 
   .cashflow-chart-legend {
@@ -9946,8 +10044,53 @@ tbody tr:hover,
   }
 
   .dashboard-compact-layout .period-controls button {
-    min-height: 25px;
-    padding-inline: 7px;
+    min-height: 23px;
+    padding-inline: 6px;
+    font-size: 10.5px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis {
+    gap: 5px;
+    margin-bottom: 7px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .stat-card {
+    min-height: 62px;
+    padding: 7px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .stat-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .dashboard-compact-layout .dashboard-kpis .metric-value {
+    font-size: 16px;
+  }
+
+  .dashboard-compact-layout .dashboard-finance-panel {
+    padding: 9px;
+  }
+
+  .dashboard-compact-layout .dashboard-cashflow-visual {
+    min-height: 198px;
+  }
+
+  .dashboard-compact-layout .cashflow-temporal-chart {
+    min-height: 190px;
+  }
+
+  .dashboard-compact-layout .cashflow-temporal-chart svg {
+    min-height: 156px;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics {
+    gap: 5px;
+  }
+
+  .dashboard-compact-layout .finance-side-metrics div {
+    min-height: 50px;
+    padding: 6px;
   }
 
   .dashboard-compact-layout .operational-list article {

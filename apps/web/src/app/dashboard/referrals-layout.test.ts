@@ -7,6 +7,11 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const apiSource = readFileSync(join(currentDir, '../../lib/crm-api.ts'), 'utf8');
+const referralsMobileSource = stylesSource.slice(
+  stylesSource.indexOf('@media (width <= 620px)'),
+  stylesSource.indexOf('@media (width <= 480px)'),
+);
+const referralsCompactSource = stylesSource.slice(stylesSource.indexOf('@media (width <= 480px)'));
 
 describe('referrals UI 2.0 presentation source', () => {
   it('renders the referrals header, approved KPIs, and compact workspace', () => {
@@ -94,6 +99,10 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('Indicador');
     expect(dashboardSource).toContain('Indicado');
     expect(dashboardSource).toContain('Data da indicação');
+    expect(dashboardSource).toContain('Status');
+    expect(dashboardSource).toContain('Tipo de benefício');
+    expect(dashboardSource).toContain('Qualificada em');
+    expect(dashboardSource).toContain('Benefício aplicado em');
     expect(dashboardSource).toContain('Motivo do cancelamento');
     expect(dashboardSource).toContain('function ReferralProgress');
     expect(dashboardSource).toContain('Indicação criada');
@@ -110,6 +119,8 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.referral-progress-icon.state-current');
     expect(stylesSource).toContain('.referral-progress-icon.state-future');
     expect(stylesSource).toContain('.referral-progress-icon.state-canceled');
+    expect(dashboardSource).toContain('referral-detail-status');
+    expect(dashboardSource).toContain('referral-detail-date');
   });
 
   it('keeps apply reward behind the modal submit action only', () => {
@@ -190,5 +201,35 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.referrals-table');
     expect(stylesSource).toContain('@media (max-width: 620px)');
     expect(stylesSource).toContain('.free-month-preview > svg');
+  });
+
+  it('compacts the referrals page on mobile without changing desktop source', () => {
+    expect(referralsMobileSource).toContain(".app-shell[data-active-view='referrals'] .topbar");
+    expect(referralsMobileSource).toContain('.referrals-view .page-header');
+    expect(referralsMobileSource).toContain('display: none;');
+    expect(referralsMobileSource).toContain('.referrals-kpis {');
+    expect(referralsMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(referralsMobileSource).toContain('.referrals-kpis .metric-card');
+    expect(referralsMobileSource).toContain('min-height: 64px;');
+    expect(referralsMobileSource).toContain('.referrals-workspace');
+    expect(referralsMobileSource).toContain('.referrals-toolbar');
+    expect(referralsMobileSource).toContain('.referrals-table thead');
+    expect(referralsMobileSource).toContain('.referrals-table td:nth-child(8)::before');
+  });
+
+  it('compacts referral details modal and timeline on mobile breakpoints', () => {
+    expect(referralsMobileSource).toContain('.referral-detail-modal .modal-header-with-icon');
+    expect(referralsMobileSource).toContain('.referral-detail-grid {');
+    expect(referralsMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(referralsMobileSource).toContain('.referral-detail-grid .referral-detail-status');
+    expect(referralsMobileSource).toContain('.referral-detail-date strong');
+    expect(referralsMobileSource).toContain('.referral-progress {');
+    expect(referralsMobileSource).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));');
+    expect(referralsMobileSource).toContain('.referral-progress-icon {');
+    expect(referralsMobileSource).toContain('width: 22px;');
+    expect(referralsCompactSource).toContain('.referral-detail-grid .referral-detail-date');
+    expect(referralsCompactSource).toContain('grid-column: 1 / -1;');
+    expect(referralsCompactSource).toContain('.referral-progress small');
+    expect(referralsCompactSource).toContain('font-size: 9.5px;');
   });
 });

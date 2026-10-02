@@ -9462,3 +9462,457 @@ tbody tr:hover,
     margin-block: 10px 8px;
   }
 }
+
+@media (width <= 620px) {
+  .app-shell[data-active-view='referrals'] .topbar {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 8px;
+    min-height: 48px;
+    padding-block: 6px;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar-menu-button,
+  .app-shell[data-active-view='referrals'] .topbar-user {
+    width: 34px;
+    min-height: 34px;
+  }
+
+  .app-shell[data-active-view='referrals'] .breadcrumb {
+    display: none;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar-context {
+    gap: 1px;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar h1 {
+    font-size: 17px;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar p {
+    margin-top: 1px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar-actions {
+    grid-column: auto;
+    justify-content: flex-end;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar-user {
+    justify-content: center;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-strong);
+    color: var(--muted);
+    font-size: 0;
+    padding: 0;
+  }
+
+  .app-shell[data-active-view='referrals'] .content {
+    padding-top: 12px;
+  }
+
+  .referrals-view {
+    gap: 8px;
+  }
+
+  .referrals-view .page-header {
+    display: none;
+  }
+
+  .referrals-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .referrals-kpis .metric-card {
+    min-height: 64px;
+    gap: 5px;
+    padding: 8px;
+  }
+
+  .referrals-kpis .metric-card:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .referrals-kpis .stat-card-top {
+    gap: 5px;
+  }
+
+  .referrals-kpis .stat-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .referrals-kpis .metric-label {
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+
+  .referrals-kpis .metric-value {
+    font-size: 17px;
+  }
+
+  .referrals-workspace {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .referrals-workspace .panel-header {
+    gap: 2px;
+  }
+
+  .referrals-workspace .panel-header h2 {
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  .referrals-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .referrals-toolbar .search-row {
+    grid-column: 1 / -1;
+    min-height: 36px;
+    padding-inline: 10px;
+  }
+
+  .referrals-toolbar select,
+  .referrals-toolbar .ui-button {
+    min-height: 36px;
+    padding-inline: 9px;
+  }
+
+  .referrals-table-wrap {
+    overflow-x: visible;
+  }
+
+  .referrals-table,
+  .referrals-table tbody,
+  .referrals-table tr,
+  .referrals-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .referrals-table {
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .referrals-table thead {
+    display: none;
+  }
+
+  .referrals-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .referrals-table tbody tr {
+    display: grid;
+    gap: 7px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-soft);
+    padding: 9px;
+  }
+
+  .referrals-table td {
+    display: grid;
+    grid-template-columns: minmax(88px, 0.42fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    border-bottom: 0;
+    padding: 0;
+    white-space: normal;
+  }
+
+  .referrals-table td::before {
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+    content: '';
+  }
+
+  .referrals-table td:nth-child(1)::before {
+    content: 'Indicado';
+  }
+
+  .referrals-table td:nth-child(2)::before {
+    content: 'Indicador';
+  }
+
+  .referrals-table td:nth-child(3)::before {
+    content: 'Data';
+  }
+
+  .referrals-table td:nth-child(4)::before {
+    content: 'Status';
+  }
+
+  .referrals-table td:nth-child(5)::before {
+    content: 'Benefício';
+  }
+
+  .referrals-table td:nth-child(6)::before {
+    content: 'Qualificação';
+  }
+
+  .referrals-table td:nth-child(7)::before {
+    content: 'Aplicação';
+  }
+
+  .referrals-table td:nth-child(8)::before {
+    content: 'Ações';
+  }
+
+  .referrals-table td[colspan] {
+    display: block;
+  }
+
+  .referrals-table td[colspan]::before {
+    content: none;
+  }
+
+  .referral-client-cell strong {
+    max-width: 100%;
+    font-size: 13px;
+    white-space: normal;
+  }
+
+  .referral-client-cell span,
+  .referrals-table .date-column,
+  .referrals-table td > span {
+    overflow-wrap: anywhere;
+    font-size: 11.5px;
+  }
+
+  .referrals-table .table-actions {
+    justify-content: flex-start;
+  }
+
+  .referral-detail-modal .modal-header-with-icon {
+    grid-template-columns: 26px minmax(0, 1fr) 30px;
+  }
+
+  .referral-detail-modal .modal-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .referral-detail-modal .modal-header h2 {
+    font-size: 16px;
+  }
+
+  .referral-detail-modal .modal-header p {
+    font-size: 11.5px;
+    line-height: 1.3;
+  }
+
+  .referral-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 10px;
+    margin-block: 10px;
+  }
+
+  .referral-detail-grid div {
+    gap: 1px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    padding: 5px 0;
+  }
+
+  .referral-detail-grid span {
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+
+  .referral-detail-grid strong {
+    min-width: 0;
+    font-size: 12.5px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .referral-detail-grid .referral-detail-status {
+    align-content: center;
+    border: 1px solid rgb(38 198 163 / 28%);
+    border-radius: var(--radius-sm);
+    background: rgb(38 198 163 / 8%);
+    padding: 6px 8px;
+  }
+
+  .referral-detail-status strong {
+    color: var(--accent-strong);
+  }
+
+  .referral-detail-date strong {
+    font-size: 11.5px;
+  }
+
+  .referral-progress {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .referral-progress article {
+    position: relative;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 5px;
+    padding: 7px;
+  }
+
+  .referral-progress-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .referral-progress-icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .referral-progress article > svg {
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 12px;
+    height: 12px;
+  }
+
+  .referral-progress article strong {
+    font-size: 11.5px;
+    line-height: 1.2;
+  }
+
+  .referral-progress small {
+    margin-top: 1px;
+    font-size: 10.5px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (width <= 480px) {
+  .app-shell[data-active-view='referrals'] .topbar {
+    min-height: 44px;
+    gap: 7px;
+    padding-block: 5px;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar-menu-button,
+  .app-shell[data-active-view='referrals'] .topbar-user {
+    width: 32px;
+    min-height: 32px;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar h1 {
+    font-size: 16px;
+  }
+
+  .app-shell[data-active-view='referrals'] .topbar p {
+    font-size: 10.5px;
+  }
+
+  .app-shell[data-active-view='referrals'] .content {
+    padding-top: 10px;
+  }
+
+  .referrals-view {
+    gap: 7px;
+  }
+
+  .referrals-kpis {
+    gap: 6px;
+  }
+
+  .referrals-kpis .metric-card {
+    min-height: 58px;
+    padding: 7px;
+  }
+
+  .referrals-kpis .metric-label {
+    font-size: 10px;
+  }
+
+  .referrals-kpis .metric-value {
+    font-size: 15px;
+  }
+
+  .referrals-workspace {
+    padding: 9px;
+  }
+
+  .referrals-workspace .panel-header h2 {
+    font-size: 13px;
+  }
+
+  .referrals-toolbar {
+    gap: 6px;
+  }
+
+  .referrals-table tbody {
+    gap: 7px;
+  }
+
+  .referrals-table tbody tr {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .referrals-table td {
+    grid-template-columns: minmax(76px, 0.38fr) minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .referral-detail-grid {
+    gap: 5px 8px;
+  }
+
+  .referral-detail-grid .referral-detail-date {
+    grid-column: 1 / -1;
+  }
+
+  .referral-detail-grid strong {
+    font-size: 12px;
+  }
+
+  .referral-detail-date strong {
+    font-size: 11px;
+  }
+
+  .referral-progress {
+    gap: 5px;
+  }
+
+  .referral-progress article {
+    grid-template-columns: 20px minmax(0, 1fr);
+    gap: 4px;
+    padding: 6px;
+  }
+
+  .referral-progress-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .referral-progress article strong {
+    font-size: 10.5px;
+  }
+
+  .referral-progress small {
+    font-size: 9.5px;
+  }
+}

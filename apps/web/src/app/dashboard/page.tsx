@@ -4166,12 +4166,26 @@ function ReferralDetailModal({
             ['Motivo do cancelamento', referral.cancellationReason],
           ]
             .filter(([, value]) => Boolean(value))
-            .map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
+            .map(([label, value]) => {
+              const labelText = String(label);
+
+              return (
+                <div
+                  className={[
+                    labelText === 'Status' ? 'referral-detail-status' : '',
+                    labelText.includes('em') || labelText.includes('Data')
+                      ? 'referral-detail-date'
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  key={labelText}
+                >
+                  <span>{labelText}</span>
+                  <strong>{value}</strong>
+                </div>
+              );
+            })}
         </div>
 
         <ReferralProgress referral={referral} />

@@ -275,6 +275,13 @@ describe('global finance presentation source', () => {
   });
 
   it('keeps mobile selection, status badges, actions and pagination accessible', () => {
+    expect(financeMobileSource).toContain('.finance-selection-bar {');
+    expect(financeMobileSource).toContain('align-items: stretch;');
+    expect(financeMobileSource).toContain('overflow: hidden;');
+    expect(financeMobileSource).toContain('.finance-selection-bar > strong,');
+    expect(financeMobileSource).toContain('.finance-selection-bar .button-row');
+    expect(financeMobileSource).toContain('grid-template-columns: 1fr;');
+    expect(financeMobileSource).toContain('white-space: normal;');
     expect(financeMobileSource).toContain(
       ".finance-receivables-table tbody tr:has(input[type='checkbox']:checked)",
     );

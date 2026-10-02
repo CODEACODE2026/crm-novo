@@ -10139,20 +10139,34 @@ tbody tr:hover,
   }
 
   .finance-selection-bar {
+    align-items: stretch;
     gap: 6px;
+    max-width: 100%;
+    overflow: hidden;
     padding: 8px;
+  }
+
+  .finance-selection-bar > strong,
+  .finance-selection-bar > span {
+    max-width: 100%;
+    min-width: 0;
   }
 
   .finance-selection-bar .button-row {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
     gap: 6px;
+    grid-template-columns: 1fr;
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
   }
 
   .finance-selection-bar .ui-button {
     min-height: 34px;
+    min-width: 0;
     padding-inline: 8px;
+    white-space: normal;
+    width: 100%;
   }
 
   .finance-table-wrap {

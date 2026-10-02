@@ -3673,6 +3673,464 @@ a {
   white-space: nowrap;
 }
 
+@media (max-width: 620px) {
+  .automations-view,
+  .automations-workspace,
+  .automation-tab-panel {
+    gap: 10px;
+  }
+
+  .automations-workspace {
+    padding: 10px;
+  }
+
+  .automations-view .billing-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .automations-view .billing-kpis .metric-card {
+    min-height: 74px;
+    padding: 10px;
+  }
+
+  .automations-view .automation-tabs {
+    display: flex;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    padding-bottom: 5px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .automations-view .automation-tabs button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding-inline: 10px;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .automations-view .automation-tabs button.active {
+    border-color: rgb(38 198 163 / 58%);
+    background: rgb(38 198 163 / 14%);
+    color: var(--text-primary);
+    box-shadow: inset 0 -2px 0 rgb(38 198 163 / 64%);
+  }
+
+  .automations-view .automation-section {
+    padding: 10px;
+  }
+
+  .automations-view .automation-section-heading {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .automations-view .automation-section-heading .section-icon {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-copy {
+    min-height: 28px;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-copy h3 {
+    font-size: 15px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-copy p {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-action {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-action .ui-button,
+  .automations-view .automation-section-heading .client-overview-heading-action .secondary-button,
+  .automations-view .automation-section-heading .client-overview-heading-action .primary-button {
+    width: 100%;
+    min-height: 34px;
+    justify-content: center;
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+
+  .automations-view .finance-status-pill {
+    width: fit-content;
+    max-width: 100%;
+    padding: 4px 7px;
+    font-size: 10px;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .automations-view .automation-config-grid,
+  .automations-view .automation-billing-operation-grid,
+  .automations-view .automation-template-summary,
+  .automations-view .recovery-steps-timeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .automations-view .automation-config-card,
+  .automations-view .automation-billing-operation-grid article,
+  .automations-view .automation-template-summary article,
+  .automations-view .recovery-steps-timeline article {
+    min-height: 0;
+    padding: 9px;
+  }
+
+  .automations-view .automation-config-card {
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .automations-view .automation-config-card .automation-config-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+  }
+
+  .automations-view .automation-config-card .automation-config-icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .automations-view .automation-config-card span,
+  .automations-view .automation-billing-operation-grid span,
+  .automations-view .automation-template-summary span,
+  .automations-view .recovery-step-body span,
+  .automations-view .recovery-step-body small {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .automations-view .automation-config-card strong,
+  .automations-view .automation-billing-operation-grid strong {
+    font-size: 14px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .automations-view .automation-config-card.readonly {
+    grid-column: 1 / -1;
+  }
+
+  .automations-view .settings-billing-note {
+    align-items: flex-start;
+    gap: 7px;
+    padding: 9px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .automations-view .recovery-step-marker {
+    min-width: 38px;
+    min-height: 24px;
+    font-size: 11px;
+  }
+
+  .automations-view .recovery-step-body {
+    gap: 4px;
+  }
+
+  .automations-view .recovery-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .automations-view .recovery-toolbar .search-row {
+    grid-column: 1 / -1;
+    min-height: 36px;
+  }
+
+  .automations-view .recovery-toolbar select {
+    grid-column: 1 / -1;
+    min-height: 36px;
+  }
+
+  .automations-view .recovery-toolbar .secondary-button,
+  .automations-view .recovery-toolbar .primary-button {
+    width: 100%;
+    min-height: 36px;
+    justify-content: center;
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+
+  .automation-schedule-wrap,
+  .automation-issues-wrap,
+  .recovery-campaign-wrap {
+    overflow-x: visible;
+  }
+
+  .automation-schedule-table,
+  .automation-schedule-table tbody,
+  .automation-schedule-table tr,
+  .automation-schedule-table td,
+  .automation-issues-table,
+  .automation-issues-table tbody,
+  .automation-issues-table tr,
+  .automation-issues-table td,
+  .recovery-campaign-table,
+  .recovery-campaign-table tbody,
+  .recovery-campaign-table tr,
+  .recovery-campaign-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .automation-schedule-table,
+  .automation-issues-table,
+  .recovery-campaign-table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .automation-schedule-table thead,
+  .automation-issues-table thead,
+  .recovery-campaign-table thead {
+    display: none;
+  }
+
+  .automation-schedule-table tbody,
+  .automation-issues-table tbody,
+  .recovery-campaign-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .automation-schedule-table tbody tr,
+  .automation-issues-table tbody tr,
+  .recovery-campaign-table tbody tr {
+    display: grid;
+    gap: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-soft);
+    padding: 9px;
+  }
+
+  .automation-schedule-table tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'client status'
+      'reference reference'
+      'due scheduled'
+      'notice actions';
+  }
+
+  .automation-issues-table tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'client actions'
+      'reference plan'
+      'amount due'
+      'reason reason';
+  }
+
+  .recovery-campaign-table tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'client status'
+      'reference step'
+      'receivable overdue'
+      'due next'
+      'started actions';
+  }
+
+  .automation-schedule-table td,
+  .automation-issues-table td,
+  .recovery-campaign-table td {
+    display: grid;
+    gap: 3px;
+    border-bottom: 0;
+    padding: 0;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .automation-schedule-table td::before,
+  .automation-issues-table td::before,
+  .recovery-campaign-table td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.1;
+    text-transform: uppercase;
+  }
+
+  .automation-schedule-table td:nth-child(1),
+  .automation-issues-table td:nth-child(1),
+  .recovery-campaign-table td:nth-child(1) {
+    grid-area: client;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .automation-schedule-table td:nth-child(2) {
+    grid-area: reference;
+  }
+
+  .automation-schedule-table td:nth-child(3) {
+    grid-area: due;
+  }
+
+  .automation-schedule-table td:nth-child(4) {
+    grid-area: notice;
+  }
+
+  .automation-schedule-table td:nth-child(5) {
+    grid-area: scheduled;
+  }
+
+  .automation-schedule-table .finance-status-column {
+    grid-area: status;
+    justify-items: end;
+  }
+
+  .automation-schedule-table .finance-actions-column {
+    grid-area: actions;
+  }
+
+  .automation-issues-table td:nth-child(2) {
+    grid-area: reference;
+  }
+
+  .automation-issues-table td:nth-child(3) {
+    grid-area: plan;
+  }
+
+  .automation-issues-table td:nth-child(4) {
+    grid-area: amount;
+    color: var(--accent-strong);
+    font-weight: 800;
+  }
+
+  .automation-issues-table td:nth-child(5) {
+    grid-area: due;
+  }
+
+  .automation-issues-table td:nth-child(6) {
+    grid-area: reason;
+  }
+
+  .automation-issues-table td:nth-child(7) {
+    grid-area: actions;
+  }
+
+  .recovery-campaign-table td:nth-child(2) {
+    grid-area: reference;
+  }
+
+  .recovery-campaign-table td:nth-child(3) {
+    grid-area: receivable;
+  }
+
+  .recovery-campaign-table td:nth-child(4) {
+    grid-area: due;
+  }
+
+  .recovery-campaign-table td:nth-child(5) {
+    grid-area: overdue;
+  }
+
+  .recovery-campaign-table .finance-status-column {
+    grid-area: status;
+    justify-items: end;
+  }
+
+  .recovery-campaign-table td:nth-child(7) {
+    grid-area: step;
+    justify-items: end;
+    text-align: right;
+  }
+
+  .recovery-campaign-table td:nth-child(8) {
+    grid-area: next;
+  }
+
+  .recovery-campaign-table td:nth-child(9) {
+    grid-area: started;
+  }
+
+  .recovery-campaign-table .finance-actions-column {
+    grid-area: actions;
+  }
+
+  .automation-schedule-table .finance-actions-column,
+  .automation-issues-table td:nth-child(7),
+  .recovery-campaign-table .finance-actions-column {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .automation-schedule-table .finance-actions-column::before,
+  .automation-issues-table td:nth-child(7)::before,
+  .recovery-campaign-table .finance-actions-column::before {
+    display: none;
+  }
+
+  .automation-schedule-table .finance-actions-column .ui-icon-button,
+  .automation-issues-table .secondary-button,
+  .recovery-campaign-table .finance-actions-column .ui-icon-button {
+    min-height: 34px;
+  }
+
+  .automation-issues-table .secondary-button {
+    width: auto;
+    min-width: 0;
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+
+  .recovery-campaign-table td:first-child span {
+    display: block;
+    max-width: min(52vw, 188px);
+    overflow: hidden;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .automations-view .empty-state {
+    min-height: 72px;
+    align-content: center;
+    padding: 12px;
+    text-align: center;
+  }
+}
+
 .form-actions {
   display: flex;
   align-items: center;
@@ -11378,5 +11836,146 @@ tbody tr:hover,
 
   .finance-workspace .finance-actions-column .ui-button {
     justify-content: center;
+  }
+}
+
+@media (width < 481px) {
+  .automations-workspace {
+    padding: 9px;
+  }
+
+  .automations-view,
+  .automations-workspace,
+  .automation-tab-panel {
+    gap: 8px;
+  }
+
+  .automations-view .automation-section {
+    padding: 9px;
+  }
+
+  .automations-view .billing-kpis,
+  .automations-view .automation-config-grid,
+  .automations-view .automation-billing-operation-grid,
+  .automations-view .automation-template-summary,
+  .automations-view .recovery-steps-timeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .automations-view .automation-config-card.readonly {
+    grid-column: 1 / -1;
+  }
+
+  .automations-view .automation-section-heading {
+    gap: 7px;
+    margin-bottom: 8px;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-copy h3 {
+    font-size: 14px;
+  }
+
+  .automations-view .automation-section-heading .client-overview-heading-copy p {
+    font-size: 10.5px;
+  }
+
+  .automations-view .automation-tabs {
+    gap: 5px;
+    margin-block: 8px;
+  }
+
+  .automations-view .automation-tabs button {
+    min-height: 32px;
+    padding-inline: 9px;
+    font-size: 11px;
+  }
+
+  .automations-view .automation-config-card,
+  .automations-view .automation-billing-operation-grid article,
+  .automations-view .automation-template-summary article,
+  .automations-view .recovery-steps-timeline article {
+    gap: 5px;
+    padding: 8px;
+  }
+
+  .automations-view .automation-template-summary strong {
+    font-size: 15px;
+    line-height: 1.12;
+    overflow-wrap: anywhere;
+  }
+
+  .automations-view .recovery-toolbar {
+    gap: 7px;
+  }
+
+  .automations-view .recovery-toolbar .secondary-button,
+  .automations-view .recovery-toolbar .primary-button,
+  .automations-view .automation-section-heading .client-overview-heading-action .ui-button,
+  .automations-view .automation-section-heading .client-overview-heading-action .secondary-button,
+  .automations-view .automation-section-heading .client-overview-heading-action .primary-button {
+    min-height: 32px;
+    font-size: 11px;
+  }
+
+  .automation-schedule-table tbody,
+  .automation-issues-table tbody,
+  .recovery-campaign-table tbody {
+    gap: 7px;
+  }
+
+  .automation-schedule-table tbody tr,
+  .automation-issues-table tbody tr,
+  .recovery-campaign-table tbody tr {
+    gap: 6px 8px;
+    padding: 8px;
+  }
+
+  .automation-schedule-table td,
+  .automation-issues-table td,
+  .recovery-campaign-table td {
+    font-size: 11.5px;
+  }
+
+  .automation-schedule-table td::before,
+  .automation-issues-table td::before,
+  .recovery-campaign-table td::before {
+    font-size: 9.5px;
+  }
+}
+
+@media (max-width: 360px) {
+  .automations-view .recovery-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .automations-view .recovery-toolbar .search-row,
+  .automations-view .recovery-toolbar select {
+    grid-column: auto;
+  }
+
+  .automation-schedule-table tbody tr,
+  .automation-issues-table tbody tr,
+  .recovery-campaign-table tbody tr {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .automation-schedule-table td,
+  .automation-issues-table td,
+  .recovery-campaign-table td,
+  .automation-schedule-table .finance-status-column,
+  .automation-schedule-table .finance-actions-column,
+  .recovery-campaign-table .finance-status-column,
+  .recovery-campaign-table .finance-actions-column {
+    grid-area: auto;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .automation-schedule-table .finance-actions-column,
+  .automation-issues-table td:nth-child(7),
+  .recovery-campaign-table .finance-actions-column {
+    justify-content: flex-start;
   }
 }

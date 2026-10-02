@@ -214,4 +214,62 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.billing-toolbar,');
     expect(stylesSource).toContain('.recovery-toolbar,');
   });
+
+  it('adds mobile guardrails for automation tabs, headers, and configuration actions', () => {
+    expect(stylesSource).toContain('.automations-view .automation-tabs');
+    expect(stylesSource).toContain('overscroll-behavior-x: contain;');
+    expect(stylesSource).toContain('white-space: nowrap;');
+    expect(stylesSource).toContain('.automations-view .automation-section-heading');
+    expect(stylesSource).toContain('grid-template-columns: 1fr;');
+    expect(stylesSource).toContain('.client-overview-heading-action .ui-button');
+    expect(stylesSource).toContain('width: 100%;');
+    expect(stylesSource).toContain('@media (max-width: 480px)');
+    expect(stylesSource).toContain('@media (max-width: 360px)');
+  });
+
+  it('keeps recovery and automatic billing summaries compact on mobile', () => {
+    expect(dashboardSource).toContain('automation-config-grid');
+    expect(dashboardSource).toContain('Horário de recuperação');
+    expect(dashboardSource).toContain('Intervalo entre mensagens');
+    expect(dashboardSource).toContain('America/Sao_Paulo');
+    expect(stylesSource).toContain('.automations-view .automation-config-grid');
+    expect(stylesSource).toContain('.automations-view .automation-config-card.readonly');
+    expect(stylesSource).toContain('grid-column: 1 / -1;');
+    expect(stylesSource).toContain('.automations-view .automation-billing-operation-grid');
+    expect(stylesSource).toContain('repeat(2, minmax(0, 1fr))');
+    expect(stylesSource).toContain('.automations-view .settings-billing-note');
+  });
+
+  it('renders automation monitoring tables as mobile cards with preserved labels and actions', () => {
+    expect(dashboardSource).toContain(
+      'className="table-wrap compact-table automation-issues-wrap"',
+    );
+    expect(dashboardSource).toContain('className="automation-issues-table"');
+    expect(dashboardSource).toContain('data-label="Cliente">{issue.clientName}');
+    expect(dashboardSource).toContain('data-label="Referência">{issue.reference}');
+    expect(dashboardSource).toContain('data-label="Plano">{issue.planName}');
+    expect(dashboardSource).toContain('data-label="Motivo">{issue.reason}');
+    expect(dashboardSource).toContain('Gerar conta');
+    expect(stylesSource).toContain('.automation-issues-wrap');
+    expect(stylesSource).toContain('.automation-issues-table thead');
+    expect(stylesSource).toContain('.automation-issues-table td::before');
+    expect(stylesSource).toContain('content: attr(data-label)');
+  });
+
+  it('keeps recovery campaigns and upcoming sends readable as mobile cards', () => {
+    expect(dashboardSource).toContain('className="table-wrap automation-schedule-wrap"');
+    expect(dashboardSource).toContain('data-label="Agendado para"');
+    expect(dashboardSource).toContain('data-label="Status"');
+    expect(dashboardSource).toContain('label="Ver detalhes"');
+    expect(dashboardSource).toContain('className="table-wrap recovery-campaign-wrap"');
+    expect(dashboardSource).toContain('data-label="Receivable"');
+    expect(dashboardSource).toContain('data-label="Etapa atual/próxima"');
+    expect(dashboardSource).toContain('data-label="Próxima data"');
+    expect(dashboardSource).toContain('label="Ver etapas"');
+    expect(dashboardSource).toContain('PaginationControls pagination={campaignPagination}');
+    expect(stylesSource).toContain('.automation-schedule-table tbody tr');
+    expect(stylesSource).toContain('.recovery-campaign-table tbody tr');
+    expect(stylesSource).toContain("'client status'");
+    expect(stylesSource).toContain("'started actions'");
+  });
 });

@@ -10384,7 +10384,7 @@ function AutomationsView({
                 title="Próximos envios"
                 description="Comunicações programadas da cobrança automática."
               />
-              <div className="table-wrap">
+              <div className="table-wrap automation-schedule-wrap">
                 <table className="billing-table automation-schedule-table">
                   <thead>
                     <tr>
@@ -10400,18 +10400,18 @@ function AutomationsView({
                   <tbody>
                     {(billingSummary?.next ?? []).map((dispatch) => (
                       <tr key={dispatch.id}>
-                        <td>{dispatch.client?.name ?? '-'}</td>
-                        <td>{billingDispatchReferenceLabel(dispatch)}</td>
-                        <td>{billingDispatchDueDateLabel(dispatch)}</td>
-                        <td>
+                        <td data-label="Cliente">{dispatch.client?.name ?? '-'}</td>
+                        <td data-label="Referência">{billingDispatchReferenceLabel(dispatch)}</td>
+                        <td data-label="Vencimento">{billingDispatchDueDateLabel(dispatch)}</td>
+                        <td data-label="Aviso">
                           {dispatch.idempotencyKey?.startsWith('billing-group')
                             ? '-'
                             : `${dispatch.idempotencyKey?.split(':').at(4) ?? '-'} dias`}
                         </td>
-                        <td>
+                        <td data-label="Agendado para">
                           {dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}
                         </td>
-                        <td className="finance-status-column">
+                        <td className="finance-status-column" data-label="Status">
                           <span
                             className={`finance-status-pill tone-${billingDispatchStatusTone(
                               dispatch.status,
@@ -10420,7 +10420,7 @@ function AutomationsView({
                             {billingStatusLabel(dispatch.status)}
                           </span>
                         </td>
-                        <td className="finance-actions-column">
+                        <td className="finance-actions-column" data-label="Ações">
                           <IconButton
                             icon={Eye}
                             label="Ver detalhes"
@@ -10582,8 +10582,8 @@ function AutomationsView({
                 title="Pendências operacionais"
                 description="Ciclos financeiros que exigem conferência antes da automação."
               />
-              <div className="table-wrap compact-table">
-                <table>
+              <div className="table-wrap compact-table automation-issues-wrap">
+                <table className="automation-issues-table">
                   <thead>
                     <tr>
                       <th>Cliente</th>
@@ -10598,13 +10598,13 @@ function AutomationsView({
                   <tbody>
                     {(billingSummary?.cycleIssues ?? []).map((issue) => (
                       <tr key={issue.clientReferenceId}>
-                        <td>{issue.clientName}</td>
-                        <td>{issue.reference}</td>
-                        <td>{issue.planName}</td>
-                        <td>{formatCurrency(issue.amount)}</td>
-                        <td>{formatDate(issue.dueDate)}</td>
-                        <td>{issue.reason}</td>
-                        <td>
+                        <td data-label="Cliente">{issue.clientName}</td>
+                        <td data-label="Referência">{issue.reference}</td>
+                        <td data-label="Plano">{issue.planName}</td>
+                        <td data-label="Valor">{formatCurrency(issue.amount)}</td>
+                        <td data-label="Vencimento">{formatDate(issue.dueDate)}</td>
+                        <td data-label="Motivo">{issue.reason}</td>
+                        <td data-label="Ações">
                           <button
                             className="secondary-button"
                             disabled={
@@ -10679,7 +10679,7 @@ function AutomationsView({
                 </button>
               </div>
 
-              <div className="table-wrap">
+              <div className="table-wrap recovery-campaign-wrap">
                 <table className="recovery-campaign-table">
                   <thead>
                     <tr>
@@ -10704,27 +10704,27 @@ function AutomationsView({
                         ) ?? campaign.steps.at(-1);
                       return (
                         <tr key={campaign.id}>
-                          <td>
+                          <td data-label="Cliente">
                             <strong>{campaign.client?.name ?? 'Cliente'}</strong>
                             <span>{campaign.client?.reference ?? campaign.clientId}</span>
                           </td>
-                          <td>
+                          <td data-label="Referência">
                             {campaign.clientReference?.reference ??
                               campaign.client?.reference ??
                               '-'}
                           </td>
-                          <td>
+                          <td data-label="Receivable">
                             <span className="technical-id" title={receivableId ?? undefined}>
                               {shortUuid(receivableId)}
                             </span>
                           </td>
-                          <td>
+                          <td data-label="Vencimento">
                             {campaign.receivable ? formatDate(campaign.receivable.dueDate) : '-'}
                           </td>
-                          <td>
+                          <td data-label="Atraso">
                             {campaign.receivable ? `${campaign.receivable.daysOverdue} dias` : '-'}
                           </td>
-                          <td className="finance-status-column">
+                          <td className="finance-status-column" data-label="Status">
                             <span
                               className={`finance-status-pill tone-${recoveryCampaignStatusTone(
                                 campaign.status,
@@ -10733,10 +10733,14 @@ function AutomationsView({
                               {recoveryCampaignStatusLabel(campaign.status)}
                             </span>
                           </td>
-                          <td>{nextStep ? `D+${nextStep.delayDays}` : '-'}</td>
-                          <td>{nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}</td>
-                          <td>{formatDateTime(campaign.startedAt)}</td>
-                          <td className="finance-actions-column">
+                          <td data-label="Etapa atual/próxima">
+                            {nextStep ? `D+${nextStep.delayDays}` : '-'}
+                          </td>
+                          <td data-label="Próxima data">
+                            {nextStep ? formatDateTime(nextStep.scheduledFor) : '-'}
+                          </td>
+                          <td data-label="Início">{formatDateTime(campaign.startedAt)}</td>
+                          <td className="finance-actions-column" data-label="Ações">
                             <IconButton
                               icon={Eye}
                               label="Ver etapas"

@@ -10,6 +10,13 @@ const financeViewSource = dashboardSource.slice(
   dashboardSource.indexOf('function FinanceView'),
   dashboardSource.indexOf('function TransactionSection'),
 );
+const financeMobileSource = stylesSource.slice(
+  stylesSource.lastIndexOf('@media (width <= 620px)'),
+  stylesSource.lastIndexOf('@media (width <= 480px)'),
+);
+const financeCompactSource = stylesSource.slice(
+  stylesSource.lastIndexOf('@media (width <= 480px)'),
+);
 
 describe('global finance presentation source', () => {
   it('keeps the Financeiro page header and actions bound to existing tabs', () => {
@@ -183,11 +190,78 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('className="tabs finance-tabs"');
     expect(dashboardSource).toContain('finance-panel');
     expect(dashboardSource).toContain('finance-global-table');
+    expect(dashboardSource).toContain('finance-global-table finance-receivables-table');
+    expect(dashboardSource).toContain('finance-global-table finance-transactions-table');
     expect(dashboardSource).toContain('finance-status-pill');
     expect(stylesSource).toContain('.finance-workspace');
     expect(stylesSource).toContain('.finance-tabs button.active');
     expect(stylesSource).toContain('.finance-summary-panel,');
     expect(stylesSource).toContain('.finance-receivable-kpis');
     expect(stylesSource).toContain('.finance-global-table');
+  });
+
+  it('compacts the global finance header, actions, month navigation and tabs on mobile', () => {
+    expect(financeMobileSource).toContain('.finance-workspace .page-header');
+    expect(financeMobileSource).toContain('.finance-workspace .page-actions');
+    expect(financeMobileSource).toContain('.finance-workspace .quick-actions');
+    expect(financeMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(financeMobileSource).toContain('.finance-period-bar');
+    expect(financeMobileSource).toContain('grid-template-columns: 28px 30px minmax(0, 1fr) 30px;');
+    expect(financeMobileSource).toContain('.finance-tabs');
+    expect(financeMobileSource).toContain('overflow-x: auto;');
+    expect(financeMobileSource).toContain('white-space: nowrap;');
+  });
+
+  it('keeps overview and receivable KPI grids compact on mobile', () => {
+    expect(financeMobileSource).toContain('.finance-kpis,');
+    expect(financeMobileSource).toContain('.finance-receivable-kpis');
+    expect(financeMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(financeMobileSource).toContain('.finance-kpis .metric-card:last-child');
+    expect(financeMobileSource).toContain('grid-column: 1 / -1;');
+    expect(financeMobileSource).toContain('min-height: 66px;');
+    expect(financeCompactSource).toContain('min-height: 58px;');
+  });
+
+  it('compacts receivable filters while preserving Hoje, grouped PIX and pagination hooks', () => {
+    expect(financeMobileSource).toContain('.finance-toolbar {');
+    expect(financeMobileSource).toContain('.finance-toolbar .search-row');
+    expect(financeMobileSource).toContain('.finance-toolbar .ui-button:last-child');
+    expect(financeViewSource).toContain('toggleTodayReceivablesFilter');
+    expect(financeViewSource).toContain('setPixReceivables(selectedReceivables)');
+    expect(financeViewSource).toContain('pagination={receivablesPagination}');
+    expect(financeViewSource).toContain('onPageChange={setReceivablesPage}');
+  });
+
+  it('renders receivables and transactions as mobile cards without removing data columns', () => {
+    expect(financeMobileSource).toContain('.finance-workspace .finance-global-table thead');
+    expect(financeMobileSource).toContain('.finance-workspace .finance-global-table tbody tr');
+    expect(financeMobileSource).toContain('.finance-receivables-table td:nth-child(1)::before');
+    expect(financeMobileSource).toContain("content: 'Selecionar';");
+    expect(financeMobileSource).toContain("content: 'Cliente';");
+    expect(financeMobileSource).toContain("content: 'Referência';");
+    expect(financeMobileSource).toContain("content: 'Descrição';");
+    expect(financeMobileSource).toContain("content: 'Vencimento';");
+    expect(financeMobileSource).toContain("content: 'Valor';");
+    expect(financeMobileSource).toContain("content: 'Status';");
+    expect(financeMobileSource).toContain("content: 'Ações';");
+    expect(financeMobileSource).toContain('.finance-transactions-table td:nth-child(1)::before');
+  });
+
+  it('keeps mobile selection, status badges, actions and pagination accessible', () => {
+    expect(financeMobileSource).toContain(
+      ".finance-receivables-table tbody tr:has(input[type='checkbox']:checked)",
+    );
+    expect(financeMobileSource).toContain(
+      ".finance-workspace .finance-select-column input[type='checkbox']",
+    );
+    expect(financeMobileSource).toContain('.finance-workspace .finance-status-pill');
+    expect(financeMobileSource).toContain(
+      '.finance-workspace .finance-actions-column .table-actions',
+    );
+    expect(financeMobileSource).toContain('.finance-workspace .pagination');
+    expect(financeMobileSource).toContain('.finance-workspace .pagination-current');
+    expect(financeCompactSource).toContain(
+      '.finance-workspace .finance-actions-column .button-row',
+    );
   });
 });

@@ -9916,3 +9916,479 @@ tbody tr:hover,
     font-size: 9.5px;
   }
 }
+
+@media (width <= 620px) {
+  .finance-workspace {
+    gap: 8px;
+  }
+
+  .finance-workspace .page-header {
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+
+  .finance-workspace .page-header h2 {
+    font-size: 17px;
+    line-height: 1.18;
+  }
+
+  .finance-workspace .page-header p {
+    margin-top: 2px;
+    font-size: 11.5px;
+    line-height: 1.3;
+  }
+
+  .finance-workspace .page-actions,
+  .finance-workspace .quick-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .finance-workspace .page-actions .ui-button,
+  .finance-workspace .quick-actions .ui-button {
+    min-height: 36px;
+    justify-content: center;
+    padding-inline: 9px;
+  }
+
+  .finance-period-bar {
+    display: grid;
+    grid-template-columns: 28px 30px minmax(0, 1fr) 30px;
+    gap: 6px;
+    width: 100%;
+    padding: 6px;
+  }
+
+  .finance-period-bar > svg {
+    width: 16px;
+    height: 16px;
+    justify-self: center;
+  }
+
+  .finance-period-bar .ui-icon-button {
+    width: 30px;
+    min-height: 30px;
+  }
+
+  .finance-period-bar strong {
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .finance-period-bar span {
+    display: none;
+  }
+
+  .finance-tabs {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding: 4px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .finance-tabs button {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 6px 10px;
+    white-space: nowrap;
+  }
+
+  .finance-kpis,
+  .finance-receivable-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    margin-bottom: 0;
+  }
+
+  .finance-kpis .metric-card,
+  .finance-receivable-kpis .metric-card {
+    min-height: 66px;
+    gap: 5px;
+    padding: 8px;
+  }
+
+  .finance-kpis .metric-card:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .finance-kpis .stat-icon,
+  .finance-receivable-kpis .stat-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .finance-kpis .metric-label,
+  .finance-receivable-kpis .metric-label {
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+
+  .finance-kpis .metric-value,
+  .finance-receivable-kpis .metric-value {
+    font-size: 16px;
+    line-height: 1.15;
+  }
+
+  .finance-summary-panel,
+  .finance-panel {
+    gap: 9px;
+    padding: 10px;
+  }
+
+  .finance-summary-grid {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+
+  .finance-summary-grid div {
+    padding: 8px;
+  }
+
+  .finance-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .finance-toolbar .search-row {
+    grid-column: 1 / -1;
+    min-height: 36px;
+    padding-inline: 10px;
+  }
+
+  .finance-toolbar select,
+  .finance-toolbar .ui-button {
+    min-height: 36px;
+    padding-inline: 9px;
+  }
+
+  .finance-toolbar .ui-button:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .finance-selection-bar {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .finance-selection-bar .button-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 6px;
+  }
+
+  .finance-selection-bar .ui-button {
+    min-height: 34px;
+    padding-inline: 8px;
+  }
+
+  .finance-table-wrap {
+    overflow-x: visible;
+  }
+
+  .finance-workspace .finance-global-table,
+  .finance-workspace .finance-global-table tbody,
+  .finance-workspace .finance-global-table tr,
+  .finance-workspace .finance-global-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .finance-workspace .finance-global-table {
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .finance-workspace .finance-global-table thead {
+    display: none;
+  }
+
+  .finance-workspace .finance-global-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .finance-workspace .finance-global-table tbody tr {
+    display: grid;
+    gap: 7px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-soft);
+    padding: 9px;
+  }
+
+  .finance-receivables-table tbody tr:has(input[type='checkbox']:checked) {
+    border-color: rgb(38 198 163 / 48%);
+    background: rgb(38 198 163 / 7%);
+  }
+
+  .finance-workspace .finance-global-table td {
+    display: grid;
+    grid-template-columns: minmax(86px, 0.38fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 7px;
+    border-bottom: 0;
+    padding: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .finance-workspace .finance-global-table td::before {
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+    content: '';
+  }
+
+  .finance-receivables-table td:nth-child(1)::before {
+    content: 'Selecionar';
+  }
+
+  .finance-receivables-table td:nth-child(2)::before {
+    content: 'Cliente';
+  }
+
+  .finance-receivables-table td:nth-child(3)::before {
+    content: 'Referência';
+  }
+
+  .finance-receivables-table td:nth-child(4)::before {
+    content: 'Descrição';
+  }
+
+  .finance-receivables-table td:nth-child(5)::before {
+    content: 'Vencimento';
+  }
+
+  .finance-receivables-table td:nth-child(6)::before {
+    content: 'Valor';
+  }
+
+  .finance-receivables-table td:nth-child(7)::before {
+    content: 'Status';
+  }
+
+  .finance-receivables-table td:nth-child(8)::before {
+    content: 'Ações';
+  }
+
+  .finance-transactions-table td:nth-child(1)::before {
+    content: 'Data';
+  }
+
+  .finance-transactions-table td:nth-child(2)::before {
+    content: 'Descrição';
+  }
+
+  .finance-transactions-table td:nth-child(3)::before {
+    content: 'Categoria';
+  }
+
+  .finance-transactions-table td:nth-child(4)::before {
+    content: 'Cliente';
+  }
+
+  .finance-transactions-table td:nth-child(5)::before {
+    content: 'Valor';
+  }
+
+  .finance-transactions-table td:nth-child(6)::before {
+    content: 'Origem';
+  }
+
+  .finance-transactions-table td:nth-child(7)::before {
+    content: 'Ações';
+  }
+
+  .finance-workspace .finance-select-column {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .finance-workspace .finance-select-column::before {
+    flex: 0 0 auto;
+  }
+
+  .finance-workspace .finance-select-column input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+  }
+
+  .finance-workspace .finance-amount-column {
+    font-size: 14px;
+    text-align: left;
+  }
+
+  .finance-workspace .finance-status-column {
+    text-align: left;
+  }
+
+  .finance-workspace .finance-status-pill {
+    width: fit-content;
+    max-width: 100%;
+    padding: 4px 7px;
+    font-size: 10.5px;
+    white-space: normal;
+  }
+
+  .finance-workspace .finance-actions-column .table-actions,
+  .finance-workspace .finance-actions-column .button-row {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .finance-workspace .finance-actions-column .ui-icon-button {
+    width: 32px;
+    min-height: 32px;
+  }
+
+  .finance-workspace .finance-actions-column .ui-button {
+    min-height: 32px;
+    padding-inline: 8px;
+  }
+
+  .finance-workspace .pagination {
+    gap: 7px;
+    margin-top: 8px;
+  }
+
+  .finance-workspace .pagination-summary {
+    font-size: 11.5px;
+  }
+
+  .finance-workspace .pagination-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .finance-workspace .pagination-button,
+  .finance-workspace .pagination-page-button {
+    min-height: 30px;
+    padding-inline: 8px;
+  }
+
+  .finance-workspace .pagination-current {
+    width: 100%;
+    font-size: 11px;
+    text-align: center;
+  }
+}
+
+@media (width <= 480px) {
+  .finance-workspace {
+    gap: 7px;
+  }
+
+  .finance-workspace .page-header {
+    gap: 7px;
+  }
+
+  .finance-workspace .page-header h2 {
+    font-size: 16px;
+  }
+
+  .finance-workspace .page-header p {
+    font-size: 10.5px;
+  }
+
+  .finance-workspace .page-actions,
+  .finance-workspace .quick-actions {
+    gap: 6px;
+  }
+
+  .finance-workspace .page-actions .ui-button,
+  .finance-workspace .quick-actions .ui-button {
+    min-height: 34px;
+    padding-inline: 7px;
+  }
+
+  .finance-period-bar {
+    grid-template-columns: 24px 28px minmax(0, 1fr) 28px;
+    gap: 5px;
+    padding: 5px;
+  }
+
+  .finance-period-bar .ui-icon-button {
+    width: 28px;
+    min-height: 28px;
+  }
+
+  .finance-period-bar strong {
+    font-size: 12px;
+  }
+
+  .finance-tabs button {
+    min-height: 28px;
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
+  .finance-kpis,
+  .finance-receivable-kpis {
+    gap: 6px;
+  }
+
+  .finance-kpis .metric-card,
+  .finance-receivable-kpis .metric-card {
+    min-height: 58px;
+    padding: 7px;
+  }
+
+  .finance-kpis .metric-label,
+  .finance-receivable-kpis .metric-label {
+    font-size: 10px;
+  }
+
+  .finance-kpis .metric-value,
+  .finance-receivable-kpis .metric-value {
+    font-size: 14px;
+  }
+
+  .finance-summary-panel,
+  .finance-panel {
+    padding: 9px;
+  }
+
+  .finance-toolbar {
+    gap: 6px;
+  }
+
+  .finance-workspace .finance-global-table tbody {
+    gap: 7px;
+  }
+
+  .finance-workspace .finance-global-table tbody tr {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .finance-workspace .finance-global-table td {
+    grid-template-columns: minmax(74px, 0.34fr) minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .finance-workspace .finance-global-table td::before {
+    font-size: 10px;
+  }
+
+  .finance-workspace .finance-actions-column .button-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .finance-workspace .finance-actions-column .ui-button {
+    justify-content: center;
+  }
+}

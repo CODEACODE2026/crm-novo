@@ -14239,7 +14239,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             </div>
           ) : null}
           <div className="table-wrap finance-table-wrap">
-            <table className="finance-global-table">
+            <table className="finance-global-table finance-receivables-table">
               <thead>
                 <tr>
                   <th className="finance-select-column">Selecionar</th>
@@ -14535,7 +14535,7 @@ function TransactionSection({
       />
 
       <div className="table-wrap finance-table-wrap">
-        <table className="finance-global-table">
+        <table className="finance-global-table finance-transactions-table">
           <thead>
             <tr>
               <th>Data</th>

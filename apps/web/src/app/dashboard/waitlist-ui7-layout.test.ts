@@ -187,4 +187,62 @@ describe('waitlist UI 7 presentation source', () => {
     expect(stylesSource).toContain('.waitlist-approval-summary');
     expect(stylesSource).toContain('@media (max-width: 620px)');
   });
+
+  it('keeps waitlist mobile KPIs as a compact 2x2 grid with all four metrics', () => {
+    expect(waitlistViewSource).toContain("label: 'Pendentes'");
+    expect(waitlistViewSource).toContain("label: 'Aprovados hoje'");
+    expect(waitlistViewSource).toContain("label: 'Ignorados'");
+    expect(waitlistViewSource).toContain("label: 'Total filtrado'");
+    expect(stylesSource).toContain('.waitlist-kpis');
+    expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(stylesSource).toContain('.waitlist-kpis .stat-card');
+    expect(stylesSource).toContain('.waitlist-kpis .stat-icon');
+  });
+
+  it('keeps waitlist mobile filters compact without changing search, status, or refresh', () => {
+    expect(waitlistViewSource).toContain('placeholder="Buscar por nome ou telefone..."');
+    expect(waitlistViewSource).toContain('<option value="">Todos os status</option>');
+    expect(waitlistViewSource).toContain('<option value="PENDENTE">Pendentes</option>');
+    expect(waitlistViewSource).toContain('<option value="APROVADO">Aprovados</option>');
+    expect(waitlistViewSource).toContain('<option value="IGNORADO">Ignorados</option>');
+    expect(waitlistViewSource).toContain('onClick={() => void loadWaitlist()}');
+    expect(stylesSource).toContain('.waitlist-toolbar .search-row');
+    expect(stylesSource).toContain('grid-column: 1 / -1;');
+    expect(stylesSource).toContain('.waitlist-toolbar select,');
+  });
+
+  it('renders waitlist rows as mobile cards while preserving data, statuses, actions, and pagination', () => {
+    expect(waitlistViewSource).toContain('className="table-wrap waitlist-table-wrap"');
+    expect(waitlistViewSource).toContain('className="waitlist-table"');
+    expect(waitlistViewSource).toContain('data-label="Contato"');
+    expect(waitlistViewSource).toContain('className="waitlist-phone-cell" data-label="WhatsApp"');
+    expect(waitlistViewSource).toContain('data-label="Ultima mensagem"');
+    expect(waitlistViewSource).toContain('data-label="Mensagens"');
+    expect(waitlistViewSource).toContain('data-label="Ultima interação"');
+    expect(waitlistViewSource).toContain('data-label="Status"');
+    expect(waitlistViewSource).toContain('data-label="Ações"');
+    expect(waitlistViewSource).toContain('contact.connection.name');
+    expect(waitlistViewSource).toContain('formatWaitlistPhone(contact.phoneNormalized)');
+    expect(waitlistViewSource).toContain('WaitlistStatusBadge status={contact.status}');
+    expect(waitlistViewSource).toContain('label="Visualizar contato"');
+    expect(waitlistViewSource).toContain('setApproveContact(contact)');
+    expect(waitlistViewSource).toContain("label: 'Ignorar'");
+    expect(waitlistViewSource).toContain('label="Reabrir contato"');
+    expect(waitlistViewSource).toContain('PaginationControls itemLabel="contatos"');
+    expect(stylesSource).toContain('.waitlist-table thead');
+    expect(stylesSource).toContain('.waitlist-table tbody tr');
+    expect(stylesSource).toContain("'contact status'");
+    expect(stylesSource).toContain('.waitlist-table td::before');
+  });
+
+  it('protects long names, emails, phones, source metadata, and mobile status badges from overflow', () => {
+    expect(stylesSource).toContain('.waitlist-contact-cell strong');
+    expect(stylesSource).toContain('overflow-wrap: anywhere;');
+    expect(stylesSource).toContain('text-overflow: ellipsis;');
+    expect(stylesSource).toContain('.waitlist-contact-cell span');
+    expect(stylesSource).toContain('.waitlist-phone-cell');
+    expect(stylesSource).toContain('white-space: nowrap;');
+    expect(stylesSource).toContain('.waitlist-table .pill');
+    expect(stylesSource).toContain('font-size: 10px;');
+  });
 });

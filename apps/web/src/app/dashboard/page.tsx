@@ -11899,7 +11899,7 @@ function WaitlistView({
             <tbody>
               {contacts.map((contact) => (
                 <tr key={contact.id}>
-                  <td>
+                  <td data-label="Contato">
                     <div className="waitlist-contact-cell">
                       <WaitlistContactAvatar contact={contact} />
                       <div>
@@ -11908,23 +11908,25 @@ function WaitlistView({
                       </div>
                     </div>
                   </td>
-                  <td>{formatWaitlistPhone(contact.phoneNormalized)}</td>
-                  <td>
+                  <td className="waitlist-phone-cell" data-label="WhatsApp">
+                    {formatWaitlistPhone(contact.phoneNormalized)}
+                  </td>
+                  <td data-label="Ultima mensagem">
                     <span className="waitlist-message-preview" title={waitlistFullMessage(contact)}>
                       {waitlistFullMessage(contact)}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Mensagens">
                     <span className="waitlist-message-count">
                       <MessageCircle aria-hidden="true" size={15} />
                       {contact.messageCount}
                     </span>
                   </td>
-                  <td>{formatDateTime(contact.lastContactAt)}</td>
-                  <td className="finance-status-column">
+                  <td data-label="Ultima interação">{formatDateTime(contact.lastContactAt)}</td>
+                  <td className="finance-status-column" data-label="Status">
                     <WaitlistStatusBadge status={contact.status} />
                   </td>
-                  <td className="finance-actions-column">
+                  <td className="finance-actions-column" data-label="Ações">
                     <div className="button-row waitlist-row-actions">
                       <IconButton
                         icon={Eye}

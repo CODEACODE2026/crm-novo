@@ -11979,3 +11979,442 @@ tbody tr:hover,
     justify-content: flex-start;
   }
 }
+
+@media (width < 621px) {
+  .app-shell[data-active-view='waitlist'] .topbar {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 8px;
+    min-height: 48px;
+    padding-block: 6px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar-menu-button,
+  .app-shell[data-active-view='waitlist'] .topbar-user {
+    width: 34px;
+    min-height: 34px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .breadcrumb {
+    display: none;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar-context {
+    gap: 1px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar h1 {
+    font-size: 17px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar p {
+    margin-top: 1px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar-actions {
+    grid-column: auto;
+    justify-content: flex-end;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar-user {
+    justify-content: center;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-strong);
+    color: var(--muted);
+    font-size: 0;
+    padding: 0;
+  }
+
+  .app-shell[data-active-view='waitlist'] .content {
+    padding-top: 12px;
+  }
+
+  .waitlist-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .waitlist-kpis .stat-card {
+    min-height: 74px;
+    padding: 10px;
+  }
+
+  .waitlist-kpis .stat-card-top {
+    gap: 6px;
+  }
+
+  .waitlist-kpis .stat-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .waitlist-kpis .metric-label {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .waitlist-kpis .metric-value {
+    font-size: 18px;
+    line-height: 1.1;
+  }
+
+  .waitlist-kpi-helper {
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+
+  .waitlist-workspace {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .waitlist-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 9px;
+  }
+
+  .waitlist-toolbar .search-row {
+    grid-column: 1 / -1;
+    min-height: 36px;
+    padding-inline: 9px;
+  }
+
+  .waitlist-toolbar .search-row input {
+    min-height: 32px;
+  }
+
+  .waitlist-toolbar select,
+  .waitlist-toolbar .ui-button {
+    min-height: 36px;
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+
+  .waitlist-toolbar .ui-button {
+    justify-content: center;
+  }
+
+  .waitlist-table-wrap {
+    overflow-x: visible;
+  }
+
+  .waitlist-table,
+  .waitlist-table tbody,
+  .waitlist-table tr,
+  .waitlist-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .waitlist-table {
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .waitlist-table thead {
+    display: none;
+  }
+
+  .waitlist-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .waitlist-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'contact status'
+      'phone phone'
+      'message message'
+      'count date'
+      'actions actions';
+    gap: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-soft);
+    padding: 9px;
+  }
+
+  .waitlist-table td {
+    display: grid;
+    gap: 3px;
+    border-bottom: 0;
+    padding: 0;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .waitlist-table td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.1;
+    text-transform: uppercase;
+  }
+
+  .waitlist-table td:nth-child(1) {
+    grid-area: contact;
+  }
+
+  .waitlist-phone-cell {
+    grid-area: phone;
+    font-weight: 700;
+  }
+
+  .waitlist-table td:nth-child(3) {
+    grid-area: message;
+  }
+
+  .waitlist-table td:nth-child(4) {
+    grid-area: count;
+  }
+
+  .waitlist-table td:nth-child(5) {
+    grid-area: date;
+    justify-items: end;
+    text-align: right;
+  }
+
+  .waitlist-table .finance-status-column {
+    grid-area: status;
+    justify-items: end;
+  }
+
+  .waitlist-table .finance-actions-column {
+    grid-area: actions;
+  }
+
+  .waitlist-contact-cell {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .waitlist-contact-cell strong {
+    max-width: min(52vw, 220px);
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .waitlist-contact-cell span {
+    display: block;
+    max-width: min(52vw, 220px);
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .waitlist-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+  }
+
+  .waitlist-phone-cell {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .waitlist-message-preview {
+    -webkit-line-clamp: 1;
+    font-size: 11.5px;
+    line-height: 1.25;
+  }
+
+  .waitlist-message-count {
+    gap: 5px;
+    font-size: 11.5px;
+  }
+
+  .waitlist-table .finance-status-column::before,
+  .waitlist-table .finance-actions-column::before {
+    display: none;
+  }
+
+  .waitlist-table .pill {
+    min-height: 22px;
+    padding: 3px 7px;
+    font-size: 10px;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .waitlist-row-actions,
+  .button-row.waitlist-row-actions {
+    display: flex;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .waitlist-row-actions .ui-icon-button,
+  .waitlist-row-actions .ui-button,
+  .waitlist-row-actions .action-menu .ui-icon-button {
+    min-height: 34px;
+  }
+
+  .waitlist-row-actions .ui-button {
+    width: auto;
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+
+  .waitlist-empty-state {
+    min-height: 72px;
+    align-content: center;
+    padding: 12px;
+    text-align: center;
+  }
+
+  .waitlist-table-wrap .pagination-row {
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .waitlist-table-wrap .pagination-summary,
+  .waitlist-table-wrap .pagination-actions {
+    width: 100%;
+  }
+
+  .waitlist-table-wrap .pagination-actions {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
+
+@media (width < 481px) {
+  .app-shell[data-active-view='waitlist'] .topbar {
+    min-height: 44px;
+    gap: 7px;
+    padding-block: 5px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar-menu-button,
+  .app-shell[data-active-view='waitlist'] .topbar-user {
+    width: 32px;
+    min-height: 32px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar h1 {
+    font-size: 16px;
+  }
+
+  .app-shell[data-active-view='waitlist'] .topbar p {
+    font-size: 10.5px;
+  }
+
+  .waitlist-kpis {
+    gap: 7px;
+  }
+
+  .waitlist-kpis .stat-card {
+    min-height: 66px;
+    padding: 8px;
+  }
+
+  .waitlist-kpis .metric-value {
+    font-size: 16px;
+  }
+
+  .waitlist-kpi-helper {
+    display: none;
+  }
+
+  .waitlist-workspace {
+    padding: 9px;
+  }
+
+  .waitlist-toolbar {
+    gap: 7px;
+    padding: 8px;
+  }
+
+  .waitlist-table tbody {
+    gap: 7px;
+  }
+
+  .waitlist-table tbody tr {
+    gap: 6px 8px;
+    padding: 8px;
+  }
+
+  .waitlist-table td {
+    font-size: 11.5px;
+  }
+
+  .waitlist-table td::before {
+    font-size: 9.5px;
+  }
+
+  .waitlist-contact-cell strong,
+  .waitlist-contact-cell span {
+    max-width: min(50vw, 180px);
+  }
+
+  .waitlist-row-actions .ui-icon-button,
+  .waitlist-row-actions .ui-button,
+  .waitlist-row-actions .action-menu .ui-icon-button {
+    min-height: 32px;
+  }
+
+  .waitlist-row-actions .ui-button {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 360px) {
+  .waitlist-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .waitlist-toolbar .search-row {
+    grid-column: auto;
+  }
+
+  .waitlist-table tbody tr {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .waitlist-table td,
+  .waitlist-table td:nth-child(5),
+  .waitlist-table .finance-status-column,
+  .waitlist-table .finance-actions-column {
+    grid-area: auto;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .waitlist-contact-cell strong,
+  .waitlist-contact-cell span {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .waitlist-phone-cell {
+    white-space: normal;
+  }
+}

@@ -62,6 +62,7 @@ describe('global finance presentation source', () => {
   it('renders receivable status KPIs and preserves grouped selection actions', () => {
     expect(dashboardSource).toContain('const [receivablesSummary, setReceivablesSummary]');
     expect(dashboardSource).toContain('getReceivablesSummary(receivableSummaryFilters)');
+    expect(dashboardSource).toContain('...(receivableStatus ? { status: receivableStatus } : {})');
     expect(dashboardSource).toContain("value: receivablesSummary?.pendingAmount ?? '0.00'");
     expect(dashboardSource).toContain("value: receivablesSummary?.paidAmount ?? '0.00'");
     expect(dashboardSource).toContain("value: receivablesSummary?.overdueAmount ?? '0.00'");
@@ -219,8 +220,15 @@ describe('global finance presentation source', () => {
     expect(financeMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
     expect(financeViewSource).toContain('finance-action-label-full');
     expect(financeViewSource).toContain('finance-action-label-compact');
-    expect(financeMobileSource).toContain('.finance-action-label-full,');
-    expect(financeMobileSource).toContain('.finance-action-label-compact,');
+    expect(stylesSource).toContain(
+      '.finance-workspace .quick-actions .ui-button .finance-action-label-compact',
+    );
+    expect(financeMobileSource).toContain(
+      '.finance-workspace .quick-actions .ui-button .finance-action-label-full,',
+    );
+    expect(financeMobileSource).toContain(
+      '.finance-workspace .quick-actions .ui-button .finance-action-label-compact,',
+    );
     expect(financeMobileSource).toContain('.finance-period-bar');
     expect(financeMobileSource).toContain('grid-template-columns: 28px 30px minmax(0, 1fr) 30px;');
     expect(financeMobileSource).toContain('.finance-quick-filters');

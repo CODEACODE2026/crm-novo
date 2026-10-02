@@ -1001,7 +1001,7 @@ a {
   margin-bottom: 0;
 }
 
-.finance-action-label-compact,
+.finance-workspace .quick-actions .ui-button .finance-action-label-compact,
 .finance-quick-label-compact {
   display: none;
 }
@@ -10001,12 +10001,12 @@ tbody tr:hover,
     overflow: hidden;
   }
 
-  .finance-action-label-full,
+  .finance-workspace .quick-actions .ui-button .finance-action-label-full,
   .finance-quick-label-full {
     display: none;
   }
 
-  .finance-action-label-compact,
+  .finance-workspace .quick-actions .ui-button .finance-action-label-compact,
   .finance-quick-label-compact {
     display: inline;
   }

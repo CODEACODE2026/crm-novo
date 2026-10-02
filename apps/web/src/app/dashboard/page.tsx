@@ -13848,6 +13848,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       }
       const receivableSummaryFilters = {
         ...receivableDateFilters,
+        ...(receivableStatus ? { status: receivableStatus } : {}),
         ...(trimmedSearch ? { search: trimmedSearch } : {}),
       };
 
@@ -13991,6 +13992,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     if (filter === 'today') {
       setFinancePeriod(buildCustomFinancePeriod('Hoje', today));
       setReceivableDueDate(tab === 'receivables' ? today : '');
+      setReceivableStatus('');
       resetFinancePages();
       return;
     }
@@ -14008,12 +14010,14 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       setTab('summary');
       setFinancePeriod(buildCustomFinancePeriod('Recebidos hoje', today));
       setReceivableDueDate('');
+      setReceivableStatus('');
       resetFinancePages();
       return;
     }
 
     if (filter === 'overdue') {
       setTab('receivables');
+      setFinancePeriod(currentFinancePeriod());
       setReceivableDueDate('');
       setReceivableStatus('VENCIDO');
       resetFinancePages();

@@ -2045,6 +2045,73 @@ describe('FinanceService', () => {
     vi.useRealTimers();
   });
 
+  it('summarizes overdue status as only pending receivables before the Sao Paulo business date', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-01T15:00:00.000Z'));
+    const prisma = createReceivablesSummaryPrisma([
+      {
+        amount: new Prisma.Decimal('100.00'),
+        client: { name: 'Cliente Vencido' },
+        clientId: 'client-overdue',
+        clientReference: { reference: 'A' },
+        clientReferenceId: 'ref-overdue',
+        description: 'A - vencido operacional',
+        dueDate: parseBusinessDate('2026-09-30'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('200.00'),
+        client: { name: 'Cliente Hoje' },
+        clientId: 'client-today',
+        clientReference: { reference: 'B' },
+        clientReferenceId: 'ref-today',
+        description: 'B - pendente hoje',
+        dueDate: parseBusinessDate('2026-10-01'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('300.00'),
+        client: { name: 'Cliente Futuro' },
+        clientId: 'client-future',
+        clientReference: { reference: 'C' },
+        clientReferenceId: 'ref-future',
+        description: 'C - pendente futuro',
+        dueDate: parseBusinessDate('2026-10-02'),
+        status: 'PENDENTE',
+      },
+      {
+        amount: new Prisma.Decimal('400.00'),
+        client: { name: 'Cliente Pago' },
+        clientId: 'client-paid',
+        clientReference: { reference: 'D' },
+        clientReferenceId: 'ref-paid',
+        description: 'D - pago antigo',
+        dueDate: parseBusinessDate('2026-09-30'),
+        status: 'PAGO',
+      },
+      {
+        amount: new Prisma.Decimal('500.00'),
+        client: { name: 'Cliente Cancelado' },
+        clientId: 'client-canceled',
+        clientReference: { reference: 'E' },
+        clientReferenceId: 'ref-canceled',
+        description: 'E - cancelado antigo',
+        dueDate: parseBusinessDate('2026-09-30'),
+        status: 'CANCELADO',
+      },
+    ]);
+    const service = new FinanceService(prisma as never, {} as never, {} as never, {} as never);
+
+    await expect(service.receivablesSummary({ status: 'VENCIDO' })).resolves.toEqual({
+      canceledAmount: '0.00',
+      overdueAmount: '100.00',
+      paidAmount: '0.00',
+      pendingAmount: '0.00',
+    });
+
+    vi.useRealTimers();
+  });
+
   it('keeps receivables summary independent from pagination and table status filters', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-19T12:00:00.000Z'));

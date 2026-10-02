@@ -449,21 +449,16 @@ export class FinanceService {
   }
 
   async receivablesSummary(query: ListReceivablesDto) {
-    const baseWhere = this.buildReceivableWhere(query, { includeStatus: false });
-    const today = parseBusinessDate(formatBusinessDate(new Date()));
+    const baseWhere = this.buildReceivableWhere(query, { includeStatus: Boolean(query.status) });
+    const today = parseBusinessDate(formatSaoPauloBusinessDate(new Date()));
 
-    const legacyPaidWhere = this.buildLegacyImportPaidWhere(query);
-    const [pending, paid, legacyPaid, overdue, canceled] = await this.prisma.$transaction([
+    const summaryQueries = [
       this.prisma.receivable.aggregate({
         where: { AND: [baseWhere, { status: 'PENDENTE' }, { dueDate: { gte: today } }] },
         _sum: { amount: true },
       }),
       this.prisma.receivable.aggregate({
         where: { AND: [baseWhere, { status: 'PAGO' }] },
-        _sum: { amount: true },
-      }),
-      this.prisma.financialTransaction.aggregate({
-        where: legacyPaidWhere,
         _sum: { amount: true },
       }),
       this.prisma.receivable.aggregate({
@@ -474,17 +469,30 @@ export class FinanceService {
         where: { AND: [baseWhere, { status: 'CANCELADO' }] },
         _sum: { amount: true },
       }),
-    ]);
+    ];
+    const includeLegacyPaid = !query.status || query.status === 'PAGO';
+    const [pending, paid, overdue, canceled, legacyPaid] = includeLegacyPaid
+      ? await this.prisma.$transaction([
+          ...summaryQueries,
+          this.prisma.financialTransaction.aggregate({
+            where: this.buildLegacyImportPaidWhere(query),
+            _sum: { amount: true },
+          }),
+        ])
+      : [
+          ...(await this.prisma.$transaction(summaryQueries)),
+          { _sum: { amount: new Prisma.Decimal(0) } },
+        ];
 
     return {
       pendingAmount: this.formatDecimal(pending._sum.amount),
       paidAmount: this.formatDecimal(
-        (paid._sum.amount ?? new Prisma.Decimal(0)).plus(
-          legacyPaid._sum.amount ?? new Prisma.Decimal(0),
+        (paid!._sum.amount ?? new Prisma.Decimal(0)).plus(
+          legacyPaid!._sum.amount ?? new Prisma.Decimal(0),
         ),
       ),
-      overdueAmount: this.formatDecimal(overdue._sum.amount),
-      canceledAmount: this.formatDecimal(canceled._sum.amount),
+      overdueAmount: this.formatDecimal(overdue!._sum.amount),
+      canceledAmount: this.formatDecimal(canceled!._sum.amount),
     };
   }
 

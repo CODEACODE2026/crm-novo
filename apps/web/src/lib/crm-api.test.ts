@@ -879,6 +879,27 @@ describe('CRM UI formatters', () => {
     );
   });
 
+  it('sends receivable status to summary when cards must match operational filters', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({}), {
+          status: 200,
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getReceivablesSummary({
+      search: 'Cliente',
+      status: 'VENCIDO',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/summary?status=VENCIDO&search=Cliente'),
+      expect.any(Object),
+    );
+  });
+
   it('sends client finance filters to receivables endpoints', async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(

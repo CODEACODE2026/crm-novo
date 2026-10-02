@@ -12202,9 +12202,9 @@ tbody tr:hover,
   }
 
   .waitlist-contact-cell {
-    grid-template-columns: 30px minmax(0, 1fr);
-    align-items: start;
-    gap: 8px;
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
   }
 
   .waitlist-contact-cell strong {
@@ -12229,10 +12229,11 @@ tbody tr:hover,
   }
 
   .waitlist-avatar {
-    width: 30px;
-    height: 30px;
-    margin-top: 1px;
-    font-size: 12px;
+    width: 44px;
+    height: 44px;
+    margin-top: 0;
+    font-size: 14px;
+    line-height: 1;
   }
 
   .waitlist-phone-cell {
@@ -12301,10 +12302,10 @@ tbody tr:hover,
   .waitlist-row-actions,
   .button-row.waitlist-row-actions {
     display: grid;
-    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
     align-items: center;
     justify-content: stretch;
-    gap: 7px;
+    gap: 8px;
     width: 100%;
     white-space: normal;
   }
@@ -12314,24 +12315,28 @@ tbody tr:hover,
   .waitlist-row-actions .action-menu .ui-icon-button {
     width: 100%;
     min-width: 0;
-    min-height: 34px;
-    height: 34px;
+    min-height: 44px;
+    height: 44px;
   }
 
-  .waitlist-row-actions .ui-button {
+  .waitlist-row-actions .waitlist-approve-button {
     justify-content: center;
+    gap: 6px;
     padding-inline: 10px;
     font-size: 12px;
     font-weight: 800;
+    line-height: 1;
   }
 
   .waitlist-row-actions .action-menu {
     width: 100%;
   }
 
+  .waitlist-row-actions .ui-icon-button,
   .waitlist-row-actions .action-menu .ui-icon-button {
     border-color: var(--border);
     background: var(--surface-strong);
+    padding: 0;
   }
 
   .waitlist-empty-state {
@@ -12426,14 +12431,31 @@ tbody tr:hover,
     max-width: min(50vw, 180px);
   }
 
+  .waitlist-contact-cell {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .waitlist-avatar {
+    width: 40px;
+    height: 40px;
+    font-size: 13px;
+  }
+
+  .waitlist-row-actions,
+  .button-row.waitlist-row-actions {
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+    gap: 7px;
+  }
+
   .waitlist-row-actions .ui-icon-button,
   .waitlist-row-actions .ui-button,
   .waitlist-row-actions .action-menu .ui-icon-button {
-    min-height: 32px;
-    height: 32px;
+    min-height: 42px;
+    height: 42px;
   }
 
-  .waitlist-row-actions .ui-button {
+  .waitlist-row-actions .waitlist-approve-button {
     padding-inline: 8px;
     font-size: 11px;
   }
@@ -12460,7 +12482,7 @@ tbody tr:hover,
 
   .waitlist-row-actions,
   .button-row.waitlist-row-actions {
-    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
     gap: 6px;
   }
 

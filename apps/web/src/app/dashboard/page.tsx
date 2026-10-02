@@ -11938,6 +11938,7 @@ function WaitlistView({
                       {contact.status === 'PENDENTE' ? (
                         <>
                           <Button
+                            className="waitlist-approve-button"
                             icon={UserPlus}
                             onClick={() => setApproveContact(contact)}
                             size="sm"

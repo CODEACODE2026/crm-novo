@@ -244,10 +244,17 @@ describe('waitlist UI 7 presentation source', () => {
     expect(stylesSource).toContain("'actions actions'");
     expect(stylesSource).toContain('.waitlist-message-count svg');
     expect(stylesSource).toContain('grid-auto-flow: column;');
-    expect(stylesSource).toContain('grid-template-columns: 34px minmax(0, 1fr) 34px;');
+    expect(stylesSource).toContain('grid-template-columns: 44px minmax(0, 1fr) 44px;');
+    expect(stylesSource).toContain('grid-template-columns: 42px minmax(0, 1fr) 42px;');
+    expect(stylesSource).toContain('grid-template-columns: 40px minmax(0, 1fr) 40px;');
     expect(stylesSource).toContain('.waitlist-row-actions .action-menu');
     expect(waitlistViewSource).toContain('setApproveContact(contact)');
+    expect(waitlistViewSource).toContain('className="waitlist-approve-button"');
     expect(waitlistViewSource).toContain('label="Mais ações do contato"');
+    expect(stylesSource).toContain('.waitlist-row-actions .waitlist-approve-button');
+    expect(stylesSource).toContain('grid-template-columns: 44px minmax(0, 1fr);');
+    expect(stylesSource).toContain('width: 44px;');
+    expect(stylesSource).toContain('height: 44px;');
   });
 
   it('protects long names, emails, phones, source metadata, and mobile status badges from overflow', () => {

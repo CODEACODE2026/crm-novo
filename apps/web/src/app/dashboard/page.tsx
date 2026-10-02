@@ -9868,7 +9868,7 @@ function BillingView() {
           </button>
         </div>
 
-        <div className="table-wrap">
+        <div className="table-wrap billing-table-wrap">
           <table className="billing-table">
             <thead>
               <tr>
@@ -9889,13 +9889,23 @@ function BillingView() {
                   className={selected?.id === dispatch.id ? 'selected-row' : ''}
                   key={dispatch.id}
                 >
-                  <td>{dispatch.client?.name ?? 'Cliente não vinculado'}</td>
-                  <td>{billingDispatchReferenceLabel(dispatch)}</td>
-                  <td className="billing-amount-column">{billingDispatchAmountLabel(dispatch)}</td>
-                  <td>{billingDispatchDueDateLabel(dispatch)}</td>
-                  <td>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</td>
-                  <td>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</td>
-                  <td className="finance-status-column">
+                  <td className="billing-client-column" data-label="Cliente">
+                    {dispatch.client?.name ?? 'Cliente não vinculado'}
+                  </td>
+                  <td data-label="Referência/Referências">
+                    {billingDispatchReferenceLabel(dispatch)}
+                  </td>
+                  <td className="billing-amount-column" data-label="Valor">
+                    {billingDispatchAmountLabel(dispatch)}
+                  </td>
+                  <td data-label="Vencimento">{billingDispatchDueDateLabel(dispatch)}</td>
+                  <td className="billing-scheduled-column" data-label="Agendada">
+                    {dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}
+                  </td>
+                  <td className="billing-sent-column" data-label="Enviada">
+                    {dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}
+                  </td>
+                  <td className="finance-status-column" data-label="Status">
                     <span
                       className={`finance-status-pill tone-${billingDispatchStatusTone(
                         dispatch.status,
@@ -9903,9 +9913,15 @@ function BillingView() {
                     >
                       {billingStatusLabel(dispatch.status)}
                     </span>
+                    <span className="billing-mobile-origin">
+                      {messageDispatchOriginLabel(dispatch.origin)}
+                      {dispatch.connection ? ` · ${dispatch.connection.name}` : ''}
+                    </span>
                   </td>
-                  <td className="finance-attempts-column">{dispatch.attempts ?? 0}/3</td>
-                  <td className="finance-actions-column">
+                  <td className="finance-attempts-column" data-label="Tentativas">
+                    {dispatch.attempts ?? 0}/3
+                  </td>
+                  <td className="finance-actions-column" data-label="Ações">
                     <IconButton
                       icon={Eye}
                       label="Ver detalhes"

@@ -6,6 +6,10 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
+const billingViewSource = dashboardSource.slice(
+  dashboardSource.indexOf('function BillingView'),
+  dashboardSource.indexOf('function BillingDispatchDetailModal'),
+);
 
 describe('billing and automations UI 2.0 presentation source', () => {
   it('renders the billing header, semantic KPIs, and compact toolbar', () => {
@@ -19,6 +23,30 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('placeholder="Buscar cliente/referência"');
     expect(dashboardSource).toContain('await reconcileBilling();');
     expect(stylesSource).toContain('.billing-toolbar');
+  });
+
+  it('keeps all four billing KPIs present and compact as a mobile 2x2 grid', () => {
+    expect(billingViewSource).toContain("label: 'Agendadas'");
+    expect(billingViewSource).toContain("label: 'Enviadas'");
+    expect(billingViewSource).toContain("label: 'Falhas'");
+    expect(billingViewSource).toContain("label: 'Ignoradas/Canceladas'");
+    expect(stylesSource).toContain(".app-shell[data-active-view='billing'] .billing-kpis");
+    expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(stylesSource).toContain('.billing-kpis .metric-card');
+    expect(stylesSource).toContain('.billing-kpis .stat-icon');
+  });
+
+  it('keeps billing mobile filters and primary actions compact without changing handlers', () => {
+    expect(billingViewSource).toContain('placeholder="Buscar cliente/referência"');
+    expect(billingViewSource).toContain('aria-label="Vencimento"');
+    expect(billingViewSource).toContain('Todos os status');
+    expect(billingViewSource).toContain('onClick={() => void loadBilling()}');
+    expect(billingViewSource).toContain('onClick={() => void runReconcile()}');
+    expect(billingViewSource).toContain("disabled={working === 'reconcile'}");
+    expect(stylesSource).toContain(".app-shell[data-active-view='billing'] .billing-toolbar");
+    expect(stylesSource).toContain(".billing-toolbar input[type='date']");
+    expect(stylesSource).toContain('.billing-toolbar .secondary-button');
+    expect(stylesSource).toContain('.billing-toolbar .primary-button');
   });
 
   it('keeps billing template administration out of the operational billing screen', () => {
@@ -38,6 +66,28 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('billingDispatchStatusTone');
     expect(stylesSource).toContain('.billing-amount-column');
     expect(stylesSource).toContain('text-align: right;');
+  });
+
+  it('renders billing rows as mobile cards while preserving desktop table data and actions', () => {
+    expect(billingViewSource).toContain('className="table-wrap billing-table-wrap"');
+    expect(billingViewSource).toContain('className="billing-table"');
+    expect(billingViewSource).toContain('data-label="Cliente"');
+    expect(billingViewSource).toContain('data-label="Referência/Referências"');
+    expect(billingViewSource).toContain('data-label="Valor"');
+    expect(billingViewSource).toContain('data-label="Vencimento"');
+    expect(billingViewSource).toContain('data-label="Agendada"');
+    expect(billingViewSource).toContain('data-label="Status"');
+    expect(billingViewSource).toContain('messageDispatchOriginLabel(dispatch.origin)');
+    expect(billingViewSource).toContain('dispatch.connection ?');
+    expect(billingViewSource).toContain('label="Ver detalhes"');
+    expect(billingViewSource).toContain('void runSendNow(dispatch);');
+    expect(billingViewSource).toContain('PaginationControls');
+    expect(stylesSource).toContain('.billing-table-wrap');
+    expect(stylesSource).toContain('.billing-table thead');
+    expect(stylesSource).toContain('.billing-table tbody tr');
+    expect(stylesSource).toContain('grid-template-areas:');
+    expect(stylesSource).toContain('.billing-mobile-origin');
+    expect(stylesSource).toContain('.billing-table .finance-actions-column');
   });
 
   it('opens billing details in a central modal and preserves send-now handler', () => {

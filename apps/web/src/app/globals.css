@@ -8901,6 +8901,201 @@ tbody tr:hover,
     margin-bottom: 0;
   }
 
+  .references-section {
+    gap: 9px;
+  }
+
+  .references-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .references-title {
+    grid-template-columns: 28px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .references-title .section-icon {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+  }
+
+  .references-title h3 {
+    font-size: 16px;
+    line-height: 1.15;
+  }
+
+  .references-title p {
+    display: -webkit-box;
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+
+  .references-header .ui-button {
+    min-height: 34px;
+    padding-inline: 9px;
+  }
+
+  .reference-toolbar {
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scroll-padding-inline: 12px;
+    scrollbar-width: none;
+  }
+
+  .reference-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .reference-toolbar button {
+    flex: 0 0 auto;
+    min-height: 28px;
+    gap: 5px;
+    padding-inline: 8px;
+    white-space: nowrap;
+  }
+
+  .reference-controls {
+    grid-template-columns: minmax(0, 1fr) minmax(126px, 0.44fr);
+    gap: 7px;
+  }
+
+  .reference-search {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .reference-search input,
+  .reference-controls select {
+    min-height: 32px;
+    font-size: 13px;
+  }
+
+  .reference-controls select {
+    padding-inline: 8px 28px;
+  }
+
+  .reference-grid {
+    gap: 8px;
+  }
+
+  .reference-card {
+    gap: 7px;
+    min-height: auto;
+    padding: 9px;
+  }
+
+  .reference-card header {
+    align-items: center;
+    gap: 8px;
+  }
+
+  .reference-card header > div {
+    min-width: 0;
+  }
+
+  .reference-card header strong {
+    display: block;
+    overflow: hidden;
+    font-size: 14px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .reference-card header span {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .reference-card .status-badge {
+    flex: 0 0 auto;
+  }
+
+  .reference-price {
+    gap: 4px;
+  }
+
+  .reference-price strong {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .reference-price span {
+    font-size: 11px;
+  }
+
+  .reference-card-divider {
+    margin-block: 1px;
+  }
+
+  .reference-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .reference-metrics div {
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 1px 5px;
+  }
+
+  .reference-metrics svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .reference-metrics span,
+  .reference-created {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .reference-metrics strong {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .reference-card > p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .reference-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .reference-actions .ui-button {
+    min-height: 32px;
+    padding-inline: 8px;
+  }
+
+  .reference-actions .ui-icon-button,
+  .reference-actions .action-menu-trigger {
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+  }
+
   .client-detail-view .tabs {
     flex-wrap: nowrap;
     gap: 6px;
@@ -8975,6 +9170,54 @@ tbody tr:hover,
 
   .client-tab-summary .metric-value {
     font-size: clamp(13px, 4.4vw, 15px);
+  }
+
+  .references-section {
+    gap: 8px;
+  }
+
+  .references-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px;
+  }
+
+  .references-title p + p {
+    display: none;
+  }
+
+  .references-header .ui-button {
+    min-height: 32px;
+    padding-inline: 8px;
+  }
+
+  .reference-controls {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .reference-controls select {
+    width: min(100%, 172px);
+  }
+
+  .reference-card {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .reference-price strong {
+    font-size: 15px;
+  }
+
+  .reference-metrics {
+    gap: 5px;
+  }
+
+  .reference-actions {
+    gap: 5px;
+  }
+
+  .reference-actions .ui-button {
+    padding-inline: 7px;
   }
 
   .client-detail-view .tabs {

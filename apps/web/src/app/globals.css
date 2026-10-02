@@ -8414,6 +8414,7 @@ tbody tr:hover,
 
   .modal-backdrop {
     align-items: end;
+    overflow: hidden;
     padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
       max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
@@ -8423,12 +8424,142 @@ tbody tr:hover,
   }
 
   .modal {
-    width: 100%;
+    width: min(100%, calc(100vw - 20px));
+    max-width: 100%;
     max-height: calc(100dvh - 20px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   .modal-header {
     align-items: flex-start;
+    gap: 8px;
+  }
+
+  .modal-header-with-icon {
+    grid-template-columns: 28px minmax(0, 1fr) 32px;
+    gap: 8px;
+  }
+
+  .modal-header h2 {
+    font-size: 17px;
+    line-height: 1.2;
+  }
+
+  .modal-header p {
+    margin-top: 3px;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .modal-header .section-eyebrow,
+  .modal .section-eyebrow {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .modal-header .ui-icon-button,
+  .modal .ui-icon-button {
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+  }
+
+  .modal-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .modal .entity-form,
+  .modal .compact-form {
+    gap: 12px;
+  }
+
+  .modal .form-grid,
+  .modal .finance-transaction-modal-form,
+  .modal .plan-form-modal-body {
+    grid-template-columns: 1fr;
+  }
+
+  .modal .field {
+    gap: 5px;
+  }
+
+  .modal .field span,
+  .modal .toggle-field span {
+    font-size: 12px;
+  }
+
+  .modal .field input,
+  .modal .field select,
+  .modal .field textarea {
+    min-height: 36px;
+    padding: 8px 10px;
+  }
+
+  .modal .field small {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .modal .form-section {
+    gap: 9px;
+  }
+
+  .modal .form-section-title {
+    gap: 1px;
+    padding-bottom: 6px;
+  }
+
+  .modal .form-section h2 {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  .modal .notice,
+  .modal .preview-box,
+  .modal .pix-panel,
+  .modal .initial-billing-choice,
+  .modal .renewal-reversal-panel,
+  .modal .renewal-reversal-impacts,
+  .modal .renewal-reversal-messages {
+    gap: 8px;
+    margin-block: 10px;
+    padding: 10px;
+    line-height: 1.35;
+  }
+
+  .modal .notice {
+    font-size: 12px;
+  }
+
+  .modal .form-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .modal .form-tabs button {
+    justify-content: center;
+    min-height: 32px;
+    gap: 5px;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: normal;
+  }
+
+  .modal .form-tabs button.active {
+    box-shadow: inset 0 0 0 1px rgb(38 198 163 / 24%);
+  }
+
+  .modal .form-actions {
+    bottom: 0;
+    gap: 8px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 
   .pix-data-panel,
@@ -8455,17 +8586,19 @@ tbody tr:hover,
   }
 
   .client-create-modal {
-    width: 100%;
+    width: min(100%, calc(100vw - 20px));
+    max-width: 100%;
     max-height: calc(100dvh - 20px);
   }
 
   .client-create-modal .client-form-body {
     grid-template-columns: 1fr;
-    padding: 14px;
+    gap: 10px;
+    padding: 12px;
   }
 
   .client-create-modal .client-form-actions {
-    padding: 12px 14px;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom));
   }
 
   .client-form-actions {
@@ -8733,8 +8866,113 @@ tbody tr:hover,
     padding: 12px 14px;
   }
 
-  .pix-panel {
+  .modal-backdrop {
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
+  .modal {
+    width: min(100%, calc(100vw - 16px));
+    max-height: calc(100dvh - 16px);
     padding: 12px;
+  }
+
+  .modal-header,
+  .modal-header-with-icon {
+    gap: 7px;
+  }
+
+  .modal-header-with-icon {
+    grid-template-columns: 26px minmax(0, 1fr) 30px;
+  }
+
+  .modal-header h2 {
+    font-size: 16px;
+  }
+
+  .modal-header p {
+    font-size: 11.5px;
+    line-height: 1.3;
+  }
+
+  .modal-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .modal .ui-icon-button {
+    width: 30px;
+    height: 30px;
+    min-height: 30px;
+  }
+
+  .modal .entity-form,
+  .modal .compact-form {
+    gap: 10px;
+  }
+
+  .modal .form-grid {
+    gap: 9px;
+  }
+
+  .modal .field input,
+  .modal .field select,
+  .modal .field textarea {
+    min-height: 34px;
+    padding: 7px 9px;
+  }
+
+  .modal .field textarea {
+    min-height: 72px;
+  }
+
+  .modal .notice,
+  .modal .preview-box,
+  .modal .pix-panel,
+  .modal .initial-billing-choice {
+    margin-block: 8px;
+    padding: 9px;
+    font-size: 11.5px;
+    line-height: 1.32;
+  }
+
+  .modal .form-tabs {
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+
+  .modal .form-tabs button {
+    min-height: 30px;
+    padding: 5px 6px;
+    font-size: 10.5px;
+  }
+
+  .modal .form-actions {
+    bottom: 0;
+    margin: 12px -12px -12px;
+    padding: 9px 12px max(9px, env(safe-area-inset-bottom));
+  }
+
+  .client-create-modal {
+    width: min(100%, calc(100vw - 16px));
+    max-height: calc(100dvh - 16px);
+  }
+
+  .client-create-modal .modal-header {
+    padding: 10px 12px;
+  }
+
+  .client-create-modal .client-form-body {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .client-create-modal .client-form-actions {
+    padding: 9px 10px max(9px, env(safe-area-inset-bottom));
+  }
+
+  .pix-panel {
+    padding: 9px;
   }
 
   .pix-amount-row strong {

@@ -21,6 +21,29 @@ const clientDetailMobileSource = stylesSource.slice(
 const clientDetailCompactSource = stylesSource.slice(
   stylesSource.lastIndexOf('@media (max-width: 480px)'),
 );
+const modalDesktopSource = stylesSource.slice(
+  stylesSource.indexOf('.modal-backdrop {'),
+  stylesSource.indexOf('@media (max-width: 980px)'),
+);
+const modalMobileSource = stylesSource.slice(
+  stylesSource.indexOf('@media (max-width: 620px)'),
+  stylesSource.indexOf('@media (max-width: 370px)'),
+);
+const modalCompactSource = stylesSource.slice(
+  stylesSource.indexOf('@media (max-width: 480px)'),
+  stylesSource.indexOf(
+    '@media (max-width: 620px)',
+    stylesSource.indexOf('@media (max-width: 480px)'),
+  ),
+);
+const clientFormSource = readFileSync(
+  join(currentDir, '../../components/clients/client-form.tsx'),
+  'utf8',
+);
+const referenceFormSource = dashboardSource.slice(
+  dashboardSource.indexOf('function ClientReferenceForm'),
+  dashboardSource.indexOf('function RenewalModal'),
+);
 
 describe('MOBILE1 responsiveness guardrails', () => {
   it('keeps the responsive strategy consolidated around tablet, mobile and compact mobile', () => {
@@ -178,5 +201,71 @@ describe('MOBILE1 responsiveness guardrails', () => {
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
     expect(stylesSource).toContain('.pix-qr img');
     expect(stylesSource).toContain('width: min(160px, 100%);');
+  });
+
+  it('keeps global mobile modals compact, scrollable and safe under 620px', () => {
+    expect(modalDesktopSource).toContain('max-height: min(820px, calc(100vh - 36px));');
+    expect(modalDesktopSource).toContain('padding: 18px;');
+    expect(modalMobileSource).toContain('width: min(100%, calc(100vw - 20px));');
+    expect(modalMobileSource).toContain('max-width: 100%;');
+    expect(modalMobileSource).toContain('max-height: calc(100dvh - 20px);');
+    expect(modalMobileSource).toContain('overflow-x: hidden;');
+    expect(modalMobileSource).toContain('overflow-y: auto;');
+    expect(modalMobileSource).toContain('overscroll-behavior: contain;');
+    expect(modalMobileSource).toContain('-webkit-overflow-scrolling: touch;');
+    expect(modalMobileSource).toContain('grid-template-columns: 28px minmax(0, 1fr) 32px;');
+    expect(modalMobileSource).toContain('.modal .field input,');
+    expect(modalMobileSource).toContain('min-height: 36px;');
+    expect(modalMobileSource).toContain('.modal .form-tabs {');
+    expect(modalMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(modalMobileSource).toContain('.modal .notice,');
+    expect(modalMobileSource).toContain('padding-bottom: max(12px, env(safe-area-inset-bottom));');
+  });
+
+  it('keeps compact mobile modal refinements under 480px', () => {
+    expect(modalCompactSource).toContain('width: min(100%, calc(100vw - 16px));');
+    expect(modalCompactSource).toContain('max-height: calc(100dvh - 16px);');
+    expect(modalCompactSource).toContain('grid-template-columns: 26px minmax(0, 1fr) 30px;');
+    expect(modalCompactSource).toContain('min-height: 34px;');
+    expect(modalCompactSource).toContain('min-height: 72px;');
+    expect(modalCompactSource).toContain('font-size: 10.5px;');
+    expect(modalCompactSource).toContain('padding: 9px;');
+    expect(modalCompactSource).toContain(
+      'padding: 9px 10px max(9px, env(safe-area-inset-bottom));',
+    );
+  });
+
+  it('preserves new client and new reference modal fields while compacting only layout', () => {
+    expect(clientFormSource).toContain('Nome');
+    expect(clientFormSource).toContain('WhatsApp');
+    expect(clientFormSource).toContain('E-mail');
+    expect(clientFormSource).toContain('Referência');
+    expect(clientFormSource).toContain('Plano');
+    expect(clientFormSource).toContain('Valor');
+    expect(clientFormSource).toContain('Vencimento');
+    expect(clientFormSource).toContain('Antecedência da cobrança');
+    expect(clientFormSource).toContain('Aguardar pagamento para ativar este serviço');
+    expect(clientFormSource).toContain('Pendente de pagamento');
+    expect(clientFormSource).toContain('Indicado por (opcional)');
+
+    expect(referenceFormSource).toContain('Dados da referência');
+    expect(referenceFormSource).toContain('Cobrança e notificações');
+    expect(referenceFormSource).toContain('pendente de pagamento');
+    expect(referenceFormSource).toContain('Nome da referência');
+    expect(referenceFormSource).toContain('Avisar cobrança (dias antes)');
+    expect(referenceFormSource).toContain('Salvar referência');
+  });
+
+  it('keeps PIX modal behavior source intact while applying modal compaction globally', () => {
+    expect(dashboardSource).toContain('previewReceivablePixReplacement(receivable.id');
+    expect(dashboardSource).toContain('replaceReceivablePix(receivable.id');
+    expect(dashboardSource).toContain('previewReceivablePixReplacementRecovery(receivable.id');
+    expect(dashboardSource).toContain('recoverReceivablePixReplacement(receivable.id');
+    expect(dashboardSource).toContain('const intent = await createReceivablesPix(');
+    expect(dashboardSource).toContain('receivables.map((receivable) => receivable.id)');
+    expect(dashboardSource).toContain('groupedPixProvider');
+    expect(modalMobileSource).toContain('.pix-data-panel,');
+    expect(modalMobileSource).toContain('.pix-copy-row {');
+    expect(modalMobileSource).toContain('.pix-copy-row .secondary-button,');
   });
 });

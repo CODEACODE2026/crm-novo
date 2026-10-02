@@ -235,6 +235,21 @@ describe('waitlist UI 7 presentation source', () => {
     expect(stylesSource).toContain('.waitlist-table td::before');
   });
 
+  it('keeps polished waitlist mobile cards with aligned message meta and action grid', () => {
+    expect(waitlistViewSource).toContain('className="waitlist-message-count"');
+    expect(waitlistViewSource).toContain('<MessageCircle aria-hidden="true" size={15} />');
+    expect(stylesSource).toContain('grid-template-areas:');
+    expect(stylesSource).toContain("'contact status'");
+    expect(stylesSource).toContain("'count date'");
+    expect(stylesSource).toContain("'actions actions'");
+    expect(stylesSource).toContain('.waitlist-message-count svg');
+    expect(stylesSource).toContain('grid-auto-flow: column;');
+    expect(stylesSource).toContain('grid-template-columns: 34px minmax(0, 1fr) 34px;');
+    expect(stylesSource).toContain('.waitlist-row-actions .action-menu');
+    expect(waitlistViewSource).toContain('setApproveContact(contact)');
+    expect(waitlistViewSource).toContain('label="Mais ações do contato"');
+  });
+
   it('protects long names, emails, phones, source metadata, and mobile status badges from overflow', () => {
     expect(stylesSource).toContain('.waitlist-contact-cell strong');
     expect(stylesSource).toContain('overflow-wrap: anywhere;');

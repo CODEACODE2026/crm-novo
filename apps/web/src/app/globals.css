@@ -12138,11 +12138,11 @@ tbody tr:hover,
       'message message'
       'count date'
       'actions actions';
-    gap: 7px 10px;
+    gap: 8px 10px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-soft);
-    padding: 9px;
+    padding: 10px;
   }
 
   .waitlist-table td {
@@ -12181,15 +12181,18 @@ tbody tr:hover,
 
   .waitlist-table td:nth-child(4) {
     grid-area: count;
+    align-self: stretch;
   }
 
   .waitlist-table td:nth-child(5) {
     grid-area: date;
+    align-self: stretch;
     justify-items: end;
     text-align: right;
   }
 
   .waitlist-table .finance-status-column {
+    align-self: start;
     grid-area: status;
     justify-items: end;
   }
@@ -12200,6 +12203,7 @@ tbody tr:hover,
 
   .waitlist-contact-cell {
     grid-template-columns: 30px minmax(0, 1fr);
+    align-items: start;
     gap: 8px;
   }
 
@@ -12227,6 +12231,7 @@ tbody tr:hover,
   .waitlist-avatar {
     width: 30px;
     height: 30px;
+    margin-top: 1px;
     font-size: 12px;
   }
 
@@ -12244,8 +12249,40 @@ tbody tr:hover,
   }
 
   .waitlist-message-count {
+    display: inline-grid;
+    grid-auto-flow: column;
+    align-items: center;
+    justify-content: start;
+    width: fit-content;
+    min-height: 26px;
     gap: 5px;
+    border: 1px solid rgb(148 163 184 / 20%);
+    border-radius: var(--radius-sm);
+    background: rgb(255 255 255 / 4%);
+    padding: 4px 7px;
     font-size: 11.5px;
+    line-height: 1;
+  }
+
+  .waitlist-message-count svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    color: var(--muted);
+  }
+
+  .waitlist-table td:nth-child(5)::before {
+    margin-bottom: 1px;
+  }
+
+  .waitlist-table td:nth-child(5) {
+    min-width: 0;
+    color: var(--text);
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: normal;
+    word-break: keep-all;
   }
 
   .waitlist-table .finance-status-column::before,
@@ -12263,9 +12300,11 @@ tbody tr:hover,
 
   .waitlist-row-actions,
   .button-row.waitlist-row-actions {
-    display: flex;
-    justify-content: flex-start;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    align-items: center;
+    justify-content: stretch;
+    gap: 7px;
     width: 100%;
     white-space: normal;
   }
@@ -12273,13 +12312,26 @@ tbody tr:hover,
   .waitlist-row-actions .ui-icon-button,
   .waitlist-row-actions .ui-button,
   .waitlist-row-actions .action-menu .ui-icon-button {
+    width: 100%;
+    min-width: 0;
     min-height: 34px;
+    height: 34px;
   }
 
   .waitlist-row-actions .ui-button {
-    width: auto;
-    padding-inline: 9px;
+    justify-content: center;
+    padding-inline: 10px;
     font-size: 12px;
+    font-weight: 800;
+  }
+
+  .waitlist-row-actions .action-menu {
+    width: 100%;
+  }
+
+  .waitlist-row-actions .action-menu .ui-icon-button {
+    border-color: var(--border);
+    background: var(--surface-strong);
   }
 
   .waitlist-empty-state {
@@ -12357,7 +12409,7 @@ tbody tr:hover,
   }
 
   .waitlist-table tbody tr {
-    gap: 6px 8px;
+    gap: 7px 8px;
     padding: 8px;
   }
 
@@ -12378,9 +12430,11 @@ tbody tr:hover,
   .waitlist-row-actions .ui-button,
   .waitlist-row-actions .action-menu .ui-icon-button {
     min-height: 32px;
+    height: 32px;
   }
 
   .waitlist-row-actions .ui-button {
+    padding-inline: 8px;
     font-size: 11px;
   }
 }
@@ -12394,20 +12448,6 @@ tbody tr:hover,
     grid-column: auto;
   }
 
-  .waitlist-table tbody tr {
-    grid-template-columns: 1fr;
-    grid-template-areas: none;
-  }
-
-  .waitlist-table td,
-  .waitlist-table td:nth-child(5),
-  .waitlist-table .finance-status-column,
-  .waitlist-table .finance-actions-column {
-    grid-area: auto;
-    justify-items: start;
-    text-align: left;
-  }
-
   .waitlist-contact-cell strong,
   .waitlist-contact-cell span {
     max-width: 100%;
@@ -12416,5 +12456,52 @@ tbody tr:hover,
 
   .waitlist-phone-cell {
     white-space: normal;
+  }
+
+  .waitlist-row-actions,
+  .button-row.waitlist-row-actions {
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    gap: 6px;
+  }
+
+  .waitlist-table tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'contact status'
+      'phone phone'
+      'message message'
+      'count date'
+      'actions actions';
+  }
+
+  .waitlist-table td:nth-child(1) {
+    grid-area: contact;
+  }
+
+  .waitlist-phone-cell {
+    grid-area: phone;
+  }
+
+  .waitlist-table td:nth-child(3) {
+    grid-area: message;
+  }
+
+  .waitlist-table td:nth-child(4) {
+    grid-area: count;
+  }
+
+  .waitlist-table td:nth-child(5) {
+    grid-area: date;
+    justify-items: end;
+    text-align: right;
+  }
+
+  .waitlist-table .finance-status-column {
+    grid-area: status;
+    justify-items: end;
+  }
+
+  .waitlist-table .finance-actions-column {
+    grid-area: actions;
   }
 }

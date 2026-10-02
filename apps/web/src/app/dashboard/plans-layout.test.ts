@@ -35,6 +35,18 @@ describe('plans UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.plans-grid');
   });
 
+  it('keeps the plans mobile header and new action compact without changing desktop copy', () => {
+    expect(dashboardSource).toContain('className="primary-button plans-new-button"');
+    expect(dashboardSource).toContain('className="plans-new-desktop-label"');
+    expect(dashboardSource).toContain('className="plans-new-mobile-label"');
+    expect(dashboardSource).toContain('+ Novo plano');
+    expect(stylesSource).toContain(
+      ".app-shell[data-active-view='plans'] .page-header > div:first-child",
+    );
+    expect(stylesSource).toContain('.plans-new-button');
+    expect(stylesSource).toContain('.plans-new-mobile-label');
+  });
+
   it('keeps plan cards bound to existing Plan fields only', () => {
     expect(dashboardSource).toContain('plan.name');
     expect(dashboardSource).toContain('plan.durationMonths');
@@ -42,6 +54,12 @@ describe('plans UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('plan.active');
     expect(dashboardSource).toContain('formatCurrency(plan.defaultValue)');
     expect(dashboardSource).toContain('formatPlanDuration(plan.durationMonths)');
+    expect(dashboardSource).toContain('className="plan-card-body"');
+    expect(dashboardSource).toContain('className="plan-card-value"');
+    expect(dashboardSource).toContain('className="plan-card-meta"');
+    expect(dashboardSource).toContain('status-badge status-');
+    expect(dashboardSource).toContain('Pencil aria-hidden="true"');
+    expect(dashboardSource).toContain('<ActionMenu');
     expect(dashboardSource).not.toContain('plan.mrr');
     expect(dashboardSource).not.toContain('plan.clientsCount');
   });
@@ -88,8 +106,29 @@ describe('plans UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.plan-form-modal-body');
     expect(stylesSource).toContain('.plans-kpis,');
     expect(stylesSource).toContain('.plans-grid {');
+    expect(stylesSource).toContain(".app-shell[data-active-view='plans'] .plans-kpis");
+    expect(stylesSource).toContain('.plans-kpis .metric-card:last-child');
+    expect(stylesSource).toContain('.plan-card-body');
+    expect(stylesSource).toContain('.plan-card-meta div');
+    expect(stylesSource).toContain('.plan-card-actions .action-menu-trigger');
     expect(stylesSource).toContain('@media (max-width: 620px)');
+    expect(stylesSource).toContain('@media (max-width: 480px)');
+    expect(stylesSource).toContain('@media (max-width: 360px)');
     expect(stylesSource).toContain('.plan-form-modal-body {');
+  });
+
+  it('preserves all plan modal fields and the active checkbox controls', () => {
+    expect(planFormSource).toContain('<span>Nome</span>');
+    expect(planFormSource).toContain('<span>Meses</span>');
+    expect(planFormSource).toContain('<span>Valor padrão</span>');
+    expect(planFormSource).toContain('className="toggle-field"');
+    expect(planFormSource).toContain('type="checkbox"');
+    expect(planFormSource).toContain('<span>Ativo</span>');
+    expect(planFormSource).toContain('Cancelar');
+    expect(planFormSource).toContain('submitLabel');
+    expect(stylesSource).toContain('.plan-form-modal .modal-header p');
+    expect(stylesSource).toContain('.plan-form-modal-body .toggle-field input');
+    expect(stylesSource).toContain('.plan-form-modal-body .form-actions');
   });
 
   it('uses the shared duration ordering helper for cards and plan selects', () => {

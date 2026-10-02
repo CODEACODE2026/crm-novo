@@ -3067,6 +3067,10 @@ a {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.plans-new-mobile-label {
+  display: none;
+}
+
 .plans-workspace {
   display: grid;
   gap: 16px;
@@ -3124,6 +3128,11 @@ a {
   font-size: 28px;
   font-weight: 700;
   line-height: 1;
+}
+
+.plan-card-body {
+  display: grid;
+  gap: 12px;
 }
 
 .plan-card-meta {
@@ -7720,6 +7729,283 @@ tbody tr:hover,
     padding-top: 12px;
   }
 
+  .app-shell[data-active-view='plans'] .topbar {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 8px;
+    min-height: 48px;
+    padding-block: 6px;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar-menu-button,
+  .app-shell[data-active-view='plans'] .topbar-user {
+    width: 34px;
+    min-height: 34px;
+  }
+
+  .app-shell[data-active-view='plans'] .breadcrumb {
+    display: none;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar-context {
+    gap: 1px;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar h1 {
+    font-size: 17px;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar p {
+    margin-top: 1px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar-actions {
+    grid-column: auto;
+    justify-content: flex-end;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar-user {
+    justify-content: center;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-strong);
+    color: var(--muted);
+    font-size: 0;
+    padding: 0;
+  }
+
+  .app-shell[data-active-view='plans'] .content {
+    padding-top: 10px;
+  }
+
+  .app-shell[data-active-view='plans'] .page-header {
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .app-shell[data-active-view='plans'] .page-header > div:first-child {
+    display: none;
+  }
+
+  .app-shell[data-active-view='plans'] .page-actions {
+    justify-content: flex-start;
+    width: auto;
+  }
+
+  .plans-new-button {
+    min-height: 36px;
+    padding-inline: 11px;
+  }
+
+  .plans-new-desktop-label {
+    display: none;
+  }
+
+  .plans-new-mobile-label {
+    display: inline;
+  }
+
+  .plans-view {
+    gap: 10px;
+  }
+
+  .plans-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .plans-kpis .metric-card {
+    min-height: 74px;
+    padding: 10px;
+  }
+
+  .plans-kpis .metric-card:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .plans-kpis .stat-card-top {
+    gap: 6px;
+  }
+
+  .plans-kpis .stat-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .plans-kpis .metric-label {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .plans-kpis .metric-value {
+    font-size: 18px;
+    line-height: 1.1;
+  }
+
+  .plans-workspace {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .plans-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .plan-card {
+    gap: 9px;
+    padding: 10px;
+  }
+
+  .plan-card-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+  }
+
+  .plan-card-icon {
+    display: none;
+  }
+
+  .plan-card h3 {
+    font-size: 14px;
+    line-height: 1.18;
+  }
+
+  .plan-card-header span:not(.status-badge) {
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .plan-card .status-badge {
+    align-self: start;
+    max-width: 88px;
+    padding: 4px 7px;
+    font-size: 10px;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .plan-card-body {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .plan-card-value {
+    min-width: 0;
+    font-size: 21px;
+    line-height: 1.05;
+  }
+
+  .plan-card-meta {
+    flex: 0 0 auto;
+  }
+
+  .plan-card-meta div {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 0;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 4%);
+    padding: 5px 8px;
+  }
+
+  .plan-card-meta dt {
+    gap: 4px;
+    font-size: 0;
+  }
+
+  .plan-card-meta dt svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .plan-card-meta dd {
+    font-size: 12px;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+
+  .plan-card-actions {
+    justify-content: flex-start;
+    gap: 7px;
+  }
+
+  .plan-card-actions .secondary-button,
+  .plan-card-actions .action-menu-trigger {
+    width: auto;
+    min-height: 36px;
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+
+  .plan-card-actions .action-menu-trigger {
+    min-width: 38px;
+  }
+
+  .plan-form-modal {
+    align-self: end;
+  }
+
+  .plan-form-modal .modal-header {
+    gap: 7px;
+    padding-bottom: 2px;
+  }
+
+  .plan-form-modal .modal-header p {
+    display: none;
+  }
+
+  .plan-form-modal .metric-label {
+    font-size: 10px;
+    line-height: 1.1;
+  }
+
+  .plan-form-modal-body {
+    gap: 9px;
+    margin-top: 10px;
+  }
+
+  .plan-form-modal-body .field {
+    gap: 4px;
+  }
+
+  .plan-form-modal-body .field input {
+    min-height: 34px;
+    padding: 7px 9px;
+  }
+
+  .plan-form-modal-body .toggle-field {
+    min-height: 34px;
+    gap: 7px;
+  }
+
+  .plan-form-modal-body .toggle-field input {
+    width: 16px;
+    height: 16px;
+  }
+
+  .plan-form-modal-body .form-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  .plan-form-modal-body .form-actions .secondary-button,
+  .plan-form-modal-body .form-actions .primary-button {
+    width: auto;
+    min-height: 36px;
+    padding-inline: 11px;
+  }
+
   .clients-page-header .page-header {
     gap: 8px;
     margin-bottom: 8px;
@@ -8677,6 +8963,22 @@ tbody tr:hover,
   .plan-form-modal-body {
     grid-template-columns: 1fr;
   }
+
+  .app-shell[data-active-view='plans'] .plans-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-shell[data-active-view='plans'] .plans-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app-shell[data-active-view='plans'] .page-actions .primary-button,
+  .app-shell[data-active-view='plans'] .plan-card-actions .secondary-button,
+  .app-shell[data-active-view='plans'] .plan-card-actions .action-menu-trigger,
+  .plan-form-modal-body .form-actions .secondary-button,
+  .plan-form-modal-body .form-actions .primary-button {
+    width: auto;
+  }
 }
 
 @media (max-width: 370px) {
@@ -8690,6 +8992,29 @@ tbody tr:hover,
 
   .clients-list-view .toolbar .ui-button {
     justify-self: start;
+  }
+
+  .app-shell[data-active-view='plans'] .plans-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .app-shell[data-active-view='plans'] .plans-kpis .metric-card:last-child {
+    grid-column: auto;
+  }
+
+  .plan-card-body {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plan-form-modal-body .form-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-form-modal-body .form-actions .error-message,
+  .plan-form-modal-body .form-actions .secondary-button,
+  .plan-form-modal-body .form-actions .primary-button {
+    width: 100%;
   }
 }
 
@@ -9035,6 +9360,136 @@ tbody tr:hover,
     grid-column: 1 / -1;
     justify-content: center;
     order: -1;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar {
+    min-height: 44px;
+    gap: 7px;
+    padding-block: 5px;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar-menu-button,
+  .app-shell[data-active-view='plans'] .topbar-user {
+    width: 32px;
+    min-height: 32px;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar h1 {
+    font-size: 16px;
+  }
+
+  .app-shell[data-active-view='plans'] .topbar p {
+    font-size: 10.5px;
+  }
+
+  .app-shell[data-active-view='plans'] .page-header {
+    margin-bottom: 6px;
+  }
+
+  .plans-new-button {
+    min-height: 34px;
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+
+  .plans-view {
+    gap: 8px;
+  }
+
+  .plans-kpis {
+    gap: 7px;
+  }
+
+  .plans-kpis .metric-card {
+    min-height: 66px;
+    padding: 8px;
+  }
+
+  .plans-kpis .stat-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .plans-kpis .metric-value {
+    font-size: 16px;
+  }
+
+  .plans-workspace {
+    padding: 9px;
+  }
+
+  .plan-card {
+    gap: 8px;
+    padding: 9px;
+  }
+
+  .plan-card-body {
+    gap: 8px;
+  }
+
+  .plan-card-value {
+    font-size: 19px;
+  }
+
+  .plan-card-actions .secondary-button,
+  .plan-card-actions .action-menu-trigger {
+    min-height: 34px;
+    padding-inline: 9px;
+  }
+
+  .plan-form-modal .modal-header {
+    grid-template-columns: 26px minmax(0, 1fr) 30px;
+  }
+
+  .plan-form-modal .modal-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .plan-form-modal .modal-header h2 {
+    font-size: 16px;
+  }
+
+  .plan-form-modal-body {
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .plan-form-modal-body .form-actions {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 7px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  .plan-form-modal-body .form-actions .secondary-button,
+  .plan-form-modal-body .form-actions .primary-button {
+    min-height: 34px;
+    padding-inline: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .app-shell[data-active-view='plans'] .plans-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .app-shell[data-active-view='plans'] .plans-kpis .metric-card:last-child {
+    grid-column: auto;
+  }
+
+  .plan-card-body {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plan-form-modal-body .form-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-form-modal-body .form-actions .error-message,
+  .plan-form-modal-body .form-actions .secondary-button,
+  .plan-form-modal-body .form-actions .primary-button {
+    width: 100%;
   }
 }
 

@@ -17674,9 +17674,10 @@ function PlansView({
         title="Planos"
         subtitle="Gerencie os planos utilizados nas referências dos clientes."
         actions={
-          <button className="primary-button" type="button" onClick={onNew}>
+          <button className="primary-button plans-new-button" type="button" onClick={onNew}>
             <Plus aria-hidden="true" size={17} />
-            Novo plano
+            <span className="plans-new-desktop-label">Novo plano</span>
+            <span className="plans-new-mobile-label">+ Novo plano</span>
           </button>
         }
       />
@@ -17734,17 +17735,19 @@ function PlansView({
                     </span>
                   </div>
 
-                  <strong className="plan-card-value">{formatCurrency(plan.defaultValue)}</strong>
+                  <div className="plan-card-body">
+                    <strong className="plan-card-value">{formatCurrency(plan.defaultValue)}</strong>
 
-                  <dl className="plan-card-meta">
-                    <div>
-                      <dt>
-                        <Clock aria-hidden="true" size={14} />
-                        Duração
-                      </dt>
-                      <dd>{formatPlanDuration(plan.durationMonths)}</dd>
-                    </div>
-                  </dl>
+                    <dl className="plan-card-meta">
+                      <div>
+                        <dt>
+                          <Clock aria-hidden="true" size={14} />
+                          Duração
+                        </dt>
+                        <dd>{formatPlanDuration(plan.durationMonths)}</dd>
+                      </div>
+                    </dl>
+                  </div>
 
                   <div className="plan-card-actions">
                     <button

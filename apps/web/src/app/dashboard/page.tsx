@@ -351,6 +351,8 @@ type ClientDetailTabRequest = {
   sequence: number;
 };
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses';
+type FinanceQuickFilterId =
+  'today' | 'pendingToday' | 'receivedToday' | 'overdue' | 'nextSevenDays';
 
 function pendingReactivationFromError(error: unknown) {
   if (!(error instanceof ApiError) || error.status !== 409) return null;
@@ -3632,6 +3634,21 @@ function buildFinancePeriod(monthStart: Date): FinancePeriod {
   };
 }
 
+function buildCustomFinancePeriod(
+  label: string,
+  startDate: string,
+  endDate = startDate,
+): FinancePeriod {
+  const start = parseBusinessDate(startDate);
+
+  return {
+    endDate,
+    label,
+    monthStart: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)),
+    startDate,
+  };
+}
+
 function currentFinancePeriod() {
   return buildFinancePeriod(new Date());
 }
@@ -3642,6 +3659,13 @@ function shiftFinancePeriod(period: FinancePeriod, months: number) {
       Date.UTC(period.monthStart.getUTCFullYear(), period.monthStart.getUTCMonth() + months, 1),
     ),
   );
+}
+
+function addBusinessDaysInput(dateInput: string, days: number) {
+  const date = parseBusinessDate(dateInput);
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return formatBusinessDate(date);
 }
 
 function maxChartValue(values: string[]) {
@@ -13780,6 +13804,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
   >(null);
   const [receivableStatus, setReceivableStatus] = useState<ReceivableDisplayStatus | ''>('');
   const [receivableDueDate, setReceivableDueDate] = useState('');
+  const [activeQuickFilter, setActiveQuickFilter] = useState<FinanceQuickFilterId | null>(null);
   const [financeSearch, setFinanceSearch] = useState('');
   const [receivablesPage, setReceivablesPage] = useState(1);
   const [entriesPage, setEntriesPage] = useState(1);
@@ -13807,7 +13832,9 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       const trimmedSearch = financeSearch.trim();
       const receivableDateFilters = receivableDueDate
         ? { dueDate: receivableDueDate }
-        : { endDate: financePeriod.endDate, startDate: financePeriod.startDate };
+        : activeQuickFilter === 'overdue'
+          ? {}
+          : { endDate: financePeriod.endDate, startDate: financePeriod.startDate };
       const receivableFilters: Parameters<typeof listReceivables>[0] = {
         ...receivableDateFilters,
         page: receivablesPage,
@@ -13891,6 +13918,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
       setLoading(false);
     }
   }, [
+    activeQuickFilter,
     entriesPage,
     expensesPage,
     financePeriod.endDate,
@@ -13927,20 +13955,90 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
 
   function changeFinanceMonth(months: number) {
     setFinancePeriod((current) => shiftFinancePeriod(current, months));
+    setActiveQuickFilter(null);
     setReceivableDueDate('');
     setReceivablesPage(1);
     setEntriesPage(1);
     setExpensesPage(1);
   }
 
-  function toggleTodayReceivablesFilter() {
-    const today = formatSaoPauloDateInput(new Date());
-    const todayAlreadyActive = receivableDueDate === today && receivableStatus === 'PENDENTE';
-
-    setReceivableDueDate(todayAlreadyActive ? '' : today);
-    setReceivableStatus(todayAlreadyActive ? '' : 'PENDENTE');
+  function resetFinancePages() {
     setReceivablesPage(1);
+    setEntriesPage(1);
+    setExpensesPage(1);
   }
+
+  function applyQuickFilter(filter: FinanceQuickFilterId | null) {
+    const today = formatSaoPauloDateInput(new Date());
+    const nextSevenDays = addBusinessDaysInput(today, 7);
+
+    setActiveQuickFilter(filter);
+
+    if (!filter) {
+      if (
+        activeQuickFilter === 'pendingToday' ||
+        activeQuickFilter === 'overdue' ||
+        activeQuickFilter === 'nextSevenDays'
+      ) {
+        setReceivableStatus('');
+      }
+      setFinancePeriod(currentFinancePeriod());
+      setReceivableDueDate('');
+      resetFinancePages();
+      return;
+    }
+
+    if (filter === 'today') {
+      setFinancePeriod(buildCustomFinancePeriod('Hoje', today));
+      setReceivableDueDate(tab === 'receivables' ? today : '');
+      resetFinancePages();
+      return;
+    }
+
+    if (filter === 'pendingToday') {
+      setTab('receivables');
+      setFinancePeriod(buildCustomFinancePeriod('Pendentes hoje', today));
+      setReceivableDueDate(today);
+      setReceivableStatus('PENDENTE');
+      resetFinancePages();
+      return;
+    }
+
+    if (filter === 'receivedToday') {
+      setTab('summary');
+      setFinancePeriod(buildCustomFinancePeriod('Recebidos hoje', today));
+      setReceivableDueDate('');
+      resetFinancePages();
+      return;
+    }
+
+    if (filter === 'overdue') {
+      setTab('receivables');
+      setReceivableDueDate('');
+      setReceivableStatus('VENCIDO');
+      resetFinancePages();
+      return;
+    }
+
+    setTab('receivables');
+    setFinancePeriod(buildCustomFinancePeriod('Próximos 7 dias', today, nextSevenDays));
+    setReceivableDueDate('');
+    setReceivableStatus('PENDENTE');
+    resetFinancePages();
+  }
+
+  const quickFilters = [
+    { id: null, label: 'Todos', mobileLabel: 'Todos' },
+    { id: 'today', label: 'Hoje', mobileLabel: 'Hoje' },
+    { id: 'pendingToday', label: 'Pendentes hoje', mobileLabel: 'Pendentes hoje' },
+    { id: 'receivedToday', label: 'Recebidos hoje', mobileLabel: 'Recebidos hoje' },
+    { id: 'overdue', label: 'Vencidos', mobileLabel: 'Vencidos' },
+    { id: 'nextSevenDays', label: 'Próximos 7 dias', mobileLabel: '7 dias' },
+  ] satisfies Array<{
+    id: FinanceQuickFilterId | null;
+    label: string;
+    mobileLabel: string;
+  }>;
 
   const entryCategories = categories.filter((category) => category.type === 'ENTRADA');
   const expenseCategories = categories.filter((category) => category.type === 'SAIDA');
@@ -14061,10 +14159,12 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
         actions={
           <div className="quick-actions">
             <Button icon={Plus} variant="primary" onClick={() => openTransactionModal('ENTRADA')}>
-              Nova entrada
+              <span className="finance-action-label-full">Nova entrada</span>
+              <span className="finance-action-label-compact">Entrada</span>
             </Button>
             <Button icon={Minus} variant="secondary" onClick={() => openTransactionModal('SAIDA')}>
-              Nova saída
+              <span className="finance-action-label-full">Nova saída</span>
+              <span className="finance-action-label-compact">Saída</span>
             </Button>
           </div>
         }
@@ -14093,6 +14193,25 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
         <span>
           {formatDate(financePeriod.startDate)} até {formatDate(financePeriod.endDate)}
         </span>
+      </div>
+
+      <div className="finance-quick-filters" aria-label="Filtros rápidos do financeiro">
+        {quickFilters.map((filter) => {
+          const active = activeQuickFilter === filter.id;
+
+          return (
+            <button
+              aria-pressed={active}
+              className={active ? 'active' : ''}
+              key={filter.id ?? 'all'}
+              type="button"
+              onClick={() => applyQuickFilter(filter.id)}
+            >
+              <span className="finance-quick-label-full">{filter.label}</span>
+              <span className="finance-quick-label-compact">{filter.mobileLabel}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="tabs finance-tabs">
@@ -14193,6 +14312,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               onChange={(event) => {
                 setReceivableStatus(event.target.value as ReceivableDisplayStatus | '');
                 setReceivableDueDate('');
+                setActiveQuickFilter(null);
                 setReceivablesPage(1);
               }}
             >
@@ -14202,13 +14322,6 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
               <option value="PAGO">Pago</option>
               <option value="CANCELADO">Cancelado</option>
             </select>
-            <Button
-              icon={CalendarDays}
-              variant={receivableDueDate ? 'primary' : 'secondary'}
-              onClick={toggleTodayReceivablesFilter}
-            >
-              Hoje
-            </Button>
             <Button icon={Filter} variant="secondary" onClick={() => void loadFinance()}>
               Aplicar
             </Button>

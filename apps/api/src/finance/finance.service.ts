@@ -2013,7 +2013,7 @@ export class FinanceService {
 
   async summary(query: FinancialSummaryDto) {
     const { startDate, endDate } = this.getSummaryRange(query);
-    const today = parseBusinessDate(formatBusinessDate(new Date()));
+    const today = parseBusinessDate(formatSaoPauloBusinessDate(new Date()));
 
     const [received, entries, expenses, pendingReceivables, overdueReceivables] =
       await this.prisma.$transaction([

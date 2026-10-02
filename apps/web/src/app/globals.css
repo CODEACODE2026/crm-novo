@@ -1001,6 +1001,11 @@ a {
   margin-bottom: 0;
 }
 
+.finance-action-label-compact,
+.finance-quick-label-compact {
+  display: none;
+}
+
 .finance-tabs {
   margin: 0;
   border: 1px solid var(--border);
@@ -1044,6 +1049,44 @@ a {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.finance-quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 5px;
+}
+
+.finance-quick-filters button {
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.finance-quick-filters button:hover {
+  border-color: rgb(38 198 163 / 24%);
+  background: rgb(38 198 163 / 8%);
+  color: var(--text);
+}
+
+.finance-quick-filters button.active {
+  border-color: rgb(38 198 163 / 45%);
+  background: rgb(38 198 163 / 14%);
+  color: var(--accent-strong);
 }
 
 .finance-summary-panel,
@@ -9952,6 +9995,20 @@ tbody tr:hover,
     min-height: 36px;
     justify-content: center;
     padding-inline: 9px;
+    width: 100%;
+    gap: 6px;
+    font-size: 12px;
+    overflow: hidden;
+  }
+
+  .finance-action-label-full,
+  .finance-quick-label-full {
+    display: none;
+  }
+
+  .finance-action-label-compact,
+  .finance-quick-label-compact {
+    display: inline;
   }
 
   .finance-period-bar {
@@ -9980,6 +10037,21 @@ tbody tr:hover,
 
   .finance-period-bar span {
     display: none;
+  }
+
+  .finance-quick-filters {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 4px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .finance-quick-filters button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 10px;
   }
 
   .finance-tabs {
@@ -10050,7 +10122,7 @@ tbody tr:hover,
   }
 
   .finance-toolbar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 7px;
   }
 
@@ -10064,10 +10136,6 @@ tbody tr:hover,
   .finance-toolbar .ui-button {
     min-height: 36px;
     padding-inline: 9px;
-  }
-
-  .finance-toolbar .ui-button:last-child {
-    grid-column: 1 / -1;
   }
 
   .finance-selection-bar {
@@ -10311,6 +10379,7 @@ tbody tr:hover,
   .finance-workspace .quick-actions .ui-button {
     min-height: 34px;
     padding-inline: 7px;
+    font-size: 11.5px;
   }
 
   .finance-period-bar {
@@ -10331,6 +10400,12 @@ tbody tr:hover,
   .finance-tabs button {
     min-height: 28px;
     padding: 5px 8px;
+    font-size: 11px;
+  }
+
+  .finance-quick-filters button {
+    min-height: 32px;
+    padding-inline: 9px;
     font-size: 11px;
   }
 

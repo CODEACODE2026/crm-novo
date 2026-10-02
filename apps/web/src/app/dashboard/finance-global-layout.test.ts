@@ -76,16 +76,28 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('setPaymentReceivables(selectedReceivables)');
   });
 
-  it('adds the Hoje quick filter with Sao Paulo business date and operational due-date sorting', () => {
+  it('adds operational quick filters with Sao Paulo business date and due-date sorting', () => {
     expect(financeViewSource).toContain('const [receivableDueDate, setReceivableDueDate]');
+    expect(financeViewSource).toContain('const [activeQuickFilter, setActiveQuickFilter]');
     expect(financeViewSource).toContain("sort: 'dueDateAsc'");
-    expect(financeViewSource).toContain('function toggleTodayReceivablesFilter()');
+    expect(financeViewSource).toContain('function applyQuickFilter');
     expect(financeViewSource).toContain('const today = formatSaoPauloDateInput(new Date());');
-    expect(financeViewSource).toContain(
-      "setReceivableStatus(todayAlreadyActive ? '' : 'PENDENTE');",
-    );
+    expect(financeViewSource).toContain('const nextSevenDays = addBusinessDaysInput(today, 7);');
+    expect(financeViewSource).toContain("setReceivableStatus('PENDENTE');");
+    expect(financeViewSource).toContain("setReceivableStatus('VENCIDO');");
     expect(financeViewSource).toContain('dueDate: receivableDueDate');
+    expect(financeViewSource).toContain("activeQuickFilter === 'overdue'");
+    expect(financeViewSource).toContain(
+      "setFinancePeriod(buildCustomFinancePeriod('Hoje', today));",
+    );
+    expect(financeViewSource).toContain(
+      "setFinancePeriod(buildCustomFinancePeriod('Próximos 7 dias', today, nextSevenDays));",
+    );
     expect(financeViewSource).toContain('Hoje');
+    expect(financeViewSource).toContain('Pendentes hoje');
+    expect(financeViewSource).toContain('Recebidos hoje');
+    expect(financeViewSource).toContain('Vencidos');
+    expect(financeViewSource).toContain('Próximos 7 dias');
   });
 
   it('keeps semantic financial statuses and centered finance columns', () => {
@@ -205,8 +217,14 @@ describe('global finance presentation source', () => {
     expect(financeMobileSource).toContain('.finance-workspace .page-actions');
     expect(financeMobileSource).toContain('.finance-workspace .quick-actions');
     expect(financeMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(financeViewSource).toContain('finance-action-label-full');
+    expect(financeViewSource).toContain('finance-action-label-compact');
+    expect(financeMobileSource).toContain('.finance-action-label-full,');
+    expect(financeMobileSource).toContain('.finance-action-label-compact,');
     expect(financeMobileSource).toContain('.finance-period-bar');
     expect(financeMobileSource).toContain('grid-template-columns: 28px 30px minmax(0, 1fr) 30px;');
+    expect(financeMobileSource).toContain('.finance-quick-filters');
+    expect(financeMobileSource).toContain('overscroll-behavior-x: contain;');
     expect(financeMobileSource).toContain('.finance-tabs');
     expect(financeMobileSource).toContain('overflow-x: auto;');
     expect(financeMobileSource).toContain('white-space: nowrap;');
@@ -222,11 +240,12 @@ describe('global finance presentation source', () => {
     expect(financeCompactSource).toContain('min-height: 58px;');
   });
 
-  it('compacts receivable filters while preserving Hoje, grouped PIX and pagination hooks', () => {
+  it('compacts receivable filters while preserving quick filters, grouped PIX and pagination hooks', () => {
     expect(financeMobileSource).toContain('.finance-toolbar {');
     expect(financeMobileSource).toContain('.finance-toolbar .search-row');
-    expect(financeMobileSource).toContain('.finance-toolbar .ui-button:last-child');
-    expect(financeViewSource).toContain('toggleTodayReceivablesFilter');
+    expect(financeMobileSource).toContain('grid-template-columns: minmax(0, 1fr) auto;');
+    expect(financeViewSource).toContain('aria-label="Filtros rápidos do financeiro"');
+    expect(financeViewSource).not.toContain('toggleTodayReceivablesFilter');
     expect(financeViewSource).toContain('setPixReceivables(selectedReceivables)');
     expect(financeViewSource).toContain('pagination={receivablesPagination}');
     expect(financeViewSource).toContain('onPageChange={setReceivablesPage}');

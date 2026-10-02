@@ -253,8 +253,14 @@ describe('waitlist UI 7 presentation source', () => {
     expect(waitlistViewSource).toContain('label="Mais ações do contato"');
     expect(stylesSource).toContain('.waitlist-row-actions .waitlist-approve-button');
     expect(stylesSource).toContain('grid-template-columns: 44px minmax(0, 1fr);');
+    expect(stylesSource).toContain('.waitlist-contact-cell > div');
+    expect(stylesSource).toContain('align-content: center;');
+    expect(stylesSource).toContain('align-self: center;');
+    expect(stylesSource).toContain('place-content: center;');
+    expect(stylesSource).toContain('place-items: center;');
     expect(stylesSource).toContain('width: 44px;');
     expect(stylesSource).toContain('height: 44px;');
+    expect(stylesSource).toContain('vertical-align: middle;');
   });
 
   it('protects long names, emails, phones, source metadata, and mobile status badges from overflow', () => {

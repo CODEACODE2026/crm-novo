@@ -12192,7 +12192,7 @@ tbody tr:hover,
   }
 
   .waitlist-table .finance-status-column {
-    align-self: start;
+    align-self: center;
     grid-area: status;
     justify-items: end;
   }
@@ -12205,6 +12205,13 @@ tbody tr:hover,
     grid-template-columns: 44px minmax(0, 1fr);
     align-items: center;
     gap: 9px;
+  }
+
+  .waitlist-contact-cell > div {
+    display: grid;
+    min-width: 0;
+    align-content: center;
+    gap: 2px;
   }
 
   .waitlist-contact-cell strong {
@@ -12229,11 +12236,17 @@ tbody tr:hover,
   }
 
   .waitlist-avatar {
+    display: inline-grid;
+    place-content: center;
+    place-items: center;
     width: 44px;
     height: 44px;
     margin-top: 0;
+    padding: 0;
     font-size: 14px;
     line-height: 1;
+    text-align: center;
+    vertical-align: middle;
   }
 
   .waitlist-phone-cell {
@@ -12337,6 +12350,17 @@ tbody tr:hover,
     border-color: var(--border);
     background: var(--surface-strong);
     padding: 0;
+  }
+
+  .waitlist-row-actions .ui-icon-button svg,
+  .waitlist-row-actions .waitlist-approve-button svg,
+  .waitlist-row-actions .action-menu .ui-icon-button svg {
+    display: block;
+    flex: 0 0 auto;
+  }
+
+  .waitlist-row-actions .waitlist-approve-button span {
+    line-height: 1;
   }
 
   .waitlist-empty-state {

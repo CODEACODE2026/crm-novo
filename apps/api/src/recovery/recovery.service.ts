@@ -161,7 +161,7 @@ export class RecoveryService {
     const overdueReceivables = await this.prisma.receivable.findMany({
       where: {
         status: 'PENDENTE',
-        purpose: { not: 'REACTIVATION' },
+        purpose: 'RENEWAL',
         dueDate: { lt: today },
         clientReference: { status: { in: ['ATIVO', 'INATIVO'] } },
       },
@@ -569,10 +569,14 @@ export class RecoveryService {
   private async startCampaignForReceivable(
     tx: Transaction | PrismaService,
     receivable: Receivable & {
-      client: RecoveryClient;
-      clientReference: RecoveryReference;
+      client: RecoveryClient | null;
+      clientReference: RecoveryReference | null;
     },
   ) {
+    if (!receivable.client || !receivable.clientReference) {
+      return null;
+    }
+
     if (receivable.clientReference.status === 'CANCELADO' || receivable.status !== 'PENDENTE') {
       return null;
     }
@@ -586,7 +590,7 @@ export class RecoveryService {
       },
       receivable.dueDate,
       undefined,
-      receivable.clientReferenceId,
+      receivable.clientReferenceId ?? undefined,
       receivable.id,
     );
   }
@@ -1216,7 +1220,7 @@ export class RecoveryService {
 
   private async findPrimaryReceivableId(tx: Transaction | PrismaService, clientId: string) {
     const receivable = await tx.receivable.findFirst({
-      where: { clientId, status: 'PENDENTE', purpose: { not: 'REACTIVATION' } },
+      where: { clientId, status: 'PENDENTE', purpose: 'RENEWAL' },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
 

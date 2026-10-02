@@ -241,6 +241,7 @@ function createService(
         receivables.filter((item) => {
           if (where?.status && item.status !== where.status) return false;
           if (where?.clientId && item.clientId !== where.clientId) return false;
+          if (where?.purpose && item.purpose !== where.purpose) return false;
           if (where?.dueDate?.lt && !(item.dueDate < where.dueDate.lt)) return false;
           const statuses = where?.clientReference?.status?.in as string[] | undefined;
           if (statuses && !statuses.includes(item.clientReference.status)) return false;
@@ -252,6 +253,7 @@ function createService(
           receivables.find(
             (item) =>
               (!where.clientId || item.clientId === where.clientId) &&
+              (!where.purpose || item.purpose === where.purpose) &&
               (!where.status || item.status === where.status),
           ) ?? null,
       ),
@@ -659,6 +661,29 @@ describe('RecoveryService', () => {
           id: 'rec-pending-initial',
           clientReference: pendingReference,
           purpose: 'INITIAL_ACTIVATION',
+          dueDate: new Date('2026-09-10T00:00:00.000Z'),
+        }),
+      ],
+    });
+
+    await service.reconcile();
+
+    expect(campaigns).toHaveLength(0);
+    expect(dispatches).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  it('does not start recovery for manual charge receivables', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const { campaigns, dispatches, service } = createService({
+      receivables: [
+        receivable({
+          id: 'rec-manual-charge',
+          clientId: null,
+          clientReferenceId: null,
+          client: null,
+          clientReference: null,
+          purpose: 'MANUAL_CHARGE',
           dueDate: new Date('2026-09-10T00:00:00.000Z'),
         }),
       ],

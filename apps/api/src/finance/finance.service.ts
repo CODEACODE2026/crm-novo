@@ -29,9 +29,11 @@ import {
   parseSaoPauloBusinessDate,
   getBusinessDateDay,
 } from '../clients/utils/business-date';
+import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
+import { CreateManualChargeDto, ManualChargePayerType } from './dto/create-manual-charge.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
 import {
   CreateReceivablesPixDto,
@@ -91,6 +93,7 @@ type ReceivableWithRelations = Prisma.ReceivableGetPayload<{
   include: {
     client: true;
     clientReference: { include: { plan: true } };
+    financialCategory: true;
     renewal: true;
     paymentTransaction: true;
     paymentIntents: { orderBy: { createdAt: 'desc' } };
@@ -311,6 +314,7 @@ export class FinanceService {
       include: {
         client: true,
         clientReference: { include: { plan: true } },
+        financialCategory: true,
         renewal: true,
         paymentTransaction: true,
         paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -502,6 +506,7 @@ export class FinanceService {
       include: {
         client: true,
         clientReference: { include: { plan: true } },
+        financialCategory: true,
         renewal: true,
         paymentTransaction: true,
         paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -515,7 +520,88 @@ export class FinanceService {
     return this.presentReceivable(receivable);
   }
 
-  async createReceivablePix(id: string, actorUserId: string) {
+  async createManualCharge(dto: CreateManualChargeDto, actorUserId: string) {
+    const description = dto.description.trim();
+    const idempotencyKey = dto.idempotencyKey.trim();
+
+    if (!description) {
+      throw new BadRequestException('Descricao obrigatoria para cobranca avulsa.');
+    }
+
+    if (!idempotencyKey) {
+      throw new BadRequestException('Chave de idempotencia obrigatoria.');
+    }
+
+    const dueDate = parseBusinessDate(dto.dueDate);
+    const receivableId = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.receivable.findFirst({
+        where: {
+          purpose: 'MANUAL_CHARGE',
+          manualChargeIdempotencyKey: idempotencyKey,
+        },
+      });
+
+      if (existing) {
+        return existing.id;
+      }
+
+      const category = await this.ensureActiveCategory(tx, dto.categoryId, 'ENTRADA');
+      const payer = await this.resolveManualChargePayer(tx, dto);
+
+      const created = await tx.receivable.create({
+        data: {
+          purpose: 'MANUAL_CHARGE',
+          status: 'PENDENTE',
+          description,
+          amount: dto.amount,
+          dueDate,
+          clientId: payer.clientId,
+          clientReferenceId: null,
+          payerName: payer.payerName,
+          payerPhone: payer.payerPhone,
+          payerPhoneNormalized: payer.payerPhoneNormalized,
+          financialCategoryId: category.id,
+          manualChargeIdempotencyKey: idempotencyKey,
+        },
+      });
+
+      await this.createReceivableAuditEvent(tx, {
+        receivableId: created.id,
+        eventType: 'MANUAL_CHARGE_CREATED',
+        actorUserId,
+        payerNameSnapshot: payer.payerName,
+        payerPhoneMasked: this.maskPhone(payer.payerPhoneNormalized),
+        metadata: {
+          amount: dto.amount.toFixed(2),
+          dueDate: formatBusinessDate(dueDate),
+          categoryId: category.id,
+          payerType: dto.payerType,
+        },
+      });
+
+      return created.id;
+    });
+
+    const receivable = await this.prisma.receivable.findUniqueOrThrow({
+      where: { id: receivableId },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        financialCategory: true,
+        renewal: true,
+        paymentTransaction: true,
+        paymentIntents: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    return this.presentReceivable(receivable);
+  }
+
+  async createReceivablePix(
+    id: string,
+    actorUserId: string,
+    dto: { provider?: PaymentProviderCode } = {},
+  ) {
     try {
       const intent = await this.prisma.$transaction(async (tx) => {
         await this.acquirePixCreationLocks(tx, [id]);
@@ -525,6 +611,7 @@ export class FinanceService {
           include: {
             client: true,
             clientReference: { include: { plan: true } },
+            financialCategory: true,
             renewal: true,
             paymentTransaction: true,
             paymentIntents: {
@@ -549,13 +636,15 @@ export class FinanceService {
         }
 
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const pixPayer = this.resolveReceivablePixPayer(receivable);
         const providerPix = await this.paymentProvider.createPix({
+          ...(dto.provider ? { provider: dto.provider } : {}),
           receivableId: receivable.id,
           amount: receivable.amount,
           description: receivable.description,
           expiresAt,
-          clientName: receivable.client.name,
-          payerPhone: receivable.client.phoneNormalized,
+          clientName: pixPayer.name,
+          payerPhone: pixPayer.phoneNormalized,
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -578,21 +667,45 @@ export class FinanceService {
           },
         });
 
-        await tx.clientEvent.create({
-          data: {
-            clientId: receivable.clientId,
-            type: 'PIX_PAYMENT_INTENT_CREATED',
-            title: 'PIX gerado.',
-            description: `${this.formatCurrency(receivable.amount)} referente a ${receivable.description}.`,
-            metadata: {
-              receivableId: receivable.id,
-              paymentIntentId: created.id,
-              provider: created.provider,
-              providerTransactionId: created.providerTransactionId,
-            },
-            createdByUserId: actorUserId,
+        await this.createReceivableAuditEvent(tx, {
+          receivableId: receivable.id,
+          paymentIntentId: created.id,
+          eventType: 'PIX_CREATED',
+          actorUserId,
+          provider: created.provider,
+          providerTransactionId: created.providerTransactionId,
+          payerNameSnapshot: receivable.payerName ?? receivable.client?.name ?? null,
+          payerPhoneMasked: this.maskPhone(
+            receivable.payerPhoneNormalized ?? pixPayer.phoneNormalized,
+          ),
+          metadata: {
+            paymentIntentId: created.id,
+            amount: receivable.amount.toString(),
+            purpose: receivable.purpose,
           },
         });
+
+        if (receivable.clientId) {
+          await tx.clientEvent.create({
+            data: {
+              clientId: receivable.clientId,
+              type: 'PIX_PAYMENT_INTENT_CREATED',
+              title:
+                receivable.purpose === 'MANUAL_CHARGE'
+                  ? 'PIX de cobranca avulsa gerado.'
+                  : 'PIX gerado.',
+              description: `${this.formatCurrency(receivable.amount)} referente a ${receivable.description}.`,
+              metadata: {
+                receivableId: receivable.id,
+                paymentIntentId: created.id,
+                provider: created.provider,
+                providerTransactionId: created.providerTransactionId,
+                purpose: receivable.purpose,
+              },
+              createdByUserId: actorUserId,
+            },
+          });
+        }
 
         return created;
       });
@@ -634,12 +747,21 @@ export class FinanceService {
 
         const { receivable, currentIntent } = inspection;
         if (dto.idempotencyKey) {
-          const existingPaymentIntentId = await this.findPaymentIntentIdByPixCreationEvent(
-            tx,
-            receivable.clientId,
-            'idempotencyKey',
-            dto.idempotencyKey,
-          );
+          const existingPaymentIntentId =
+            receivable.purpose === 'MANUAL_CHARGE'
+              ? await this.findPaymentIntentIdByReceivableAuditEvent(
+                  tx,
+                  receivable.id,
+                  'PIX_REPLACED',
+                  'idempotencyKey',
+                  dto.idempotencyKey,
+                )
+              : await this.findPaymentIntentIdByPixCreationEvent(
+                  tx,
+                  receivable.clientId!,
+                  'idempotencyKey',
+                  dto.idempotencyKey,
+                );
           if (existingPaymentIntentId) {
             return tx.paymentIntent.findUniqueOrThrow({ where: { id: existingPaymentIntentId } });
           }
@@ -652,14 +774,15 @@ export class FinanceService {
         this.throwPixReplacementBlockers(inspection.blockers);
 
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const pixPayer = this.resolveReceivablePixPayer(receivable);
         const providerPix = await this.paymentProvider.createPix({
           provider: dto.provider,
           receivableId: receivable.id,
           amount: receivable.amount,
           description: receivable.description,
           expiresAt,
-          clientName: receivable.client.name,
-          payerPhone: receivable.client.phoneNormalized,
+          clientName: pixPayer.name,
+          payerPhone: pixPayer.phoneNormalized,
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -687,28 +810,52 @@ export class FinanceService {
           },
         });
 
-        await tx.clientEvent.create({
-          data: {
-            clientId: receivable.clientId,
-            type: 'PIX_PAYMENT_INTENT_CREATED',
-            title: 'Novo PIX gerado para substituir tentativa anterior.',
-            description:
-              dto.reason?.trim() ||
-              'Operador gerou nova tentativa de PIX sem cancelar a transacao anterior no provider.',
-            metadata: {
-              receivableId: receivable.id,
-              previousPaymentIntentId: currentIntent.id,
-              previousProvider: currentIntent.provider,
-              previousProviderTransactionId: currentIntent.providerTransactionId,
-              paymentIntentId: created.id,
-              provider: created.provider,
-              providerTransactionId: created.providerTransactionId,
-              replacement: true,
-              idempotencyKey: dto.idempotencyKey ?? null,
-            },
-            createdByUserId: actorUserId,
+        await this.createReceivableAuditEvent(tx, {
+          receivableId: receivable.id,
+          paymentIntentId: created.id,
+          eventType: 'PIX_REPLACED',
+          actorUserId,
+          provider: created.provider,
+          providerTransactionId: created.providerTransactionId,
+          payerNameSnapshot: receivable.payerName ?? receivable.client?.name ?? null,
+          payerPhoneMasked: this.maskPhone(
+            receivable.payerPhoneNormalized ?? pixPayer.phoneNormalized,
+          ),
+          metadata: {
+            paymentIntentId: created.id,
+            previousPaymentIntentId: currentIntent.id,
+            previousProvider: currentIntent.provider,
+            previousProviderTransactionId: currentIntent.providerTransactionId,
+            replacement: true,
+            idempotencyKey: dto.idempotencyKey ?? null,
           },
         });
+
+        if (receivable.clientId) {
+          await tx.clientEvent.create({
+            data: {
+              clientId: receivable.clientId,
+              type: 'PIX_PAYMENT_INTENT_CREATED',
+              title: 'Novo PIX gerado para substituir tentativa anterior.',
+              description:
+                dto.reason?.trim() ||
+                'Operador gerou nova tentativa de PIX sem cancelar a transacao anterior no provider.',
+              metadata: {
+                receivableId: receivable.id,
+                previousPaymentIntentId: currentIntent.id,
+                previousProvider: currentIntent.provider,
+                previousProviderTransactionId: currentIntent.providerTransactionId,
+                paymentIntentId: created.id,
+                provider: created.provider,
+                providerTransactionId: created.providerTransactionId,
+                replacement: true,
+                idempotencyKey: dto.idempotencyKey ?? null,
+                purpose: receivable.purpose,
+              },
+              createdByUserId: actorUserId,
+            },
+          });
+        }
 
         return created;
       });
@@ -839,7 +986,7 @@ export class FinanceService {
 
       await tx.clientEvent.create({
         data: {
-          clientId: inspection.receivable.clientId,
+          clientId: inspection.receivable.clientId!,
           type: 'PIX_PAYMENT_INTENT_CREATED',
           title: 'PIX de substituicao recuperado.',
           description:
@@ -886,6 +1033,9 @@ export class FinanceService {
         await this.ensureNoActivePixForReceivables(tx, receivableIds);
 
         const client = receivables[0]!.client;
+        if (!client) {
+          throw new ConflictException('Contas agrupadas exigem cliente cadastrado.');
+        }
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
@@ -975,6 +1125,9 @@ export class FinanceService {
 
         const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
         const client = receivables[0]!.client;
+        if (!client) {
+          throw new ConflictException('Contas agrupadas exigem cliente cadastrado.');
+        }
 
         if (dto.idempotencyKey) {
           const existingPaymentIntentId = await this.findPaymentIntentIdByPixCreationEvent(
@@ -1119,7 +1272,7 @@ export class FinanceService {
 
       const paymentGroup = await tx.paymentGroup.create({
         data: {
-          clientId: receivables[0]!.clientId,
+          clientId: receivables[0]!.clientId!,
           status: 'PAID',
           totalAmount,
           paidAt: paymentDate,
@@ -1144,8 +1297,8 @@ export class FinanceService {
             type: 'ENTRADA',
             origin: 'RECEIVABLE_PAYMENT',
             categoryId: category.id,
-            clientId: receivable.clientId,
-            clientReferenceId: receivable.clientReferenceId,
+            clientId: receivable.clientId!,
+            clientReferenceId: receivable.clientReferenceId!,
             receivableId: receivable.id,
             paymentGroupId: paymentGroup.id,
             description: `Recebimento agrupado: ${receivable.description}`,
@@ -1164,7 +1317,7 @@ export class FinanceService {
 
         await tx.clientEvent.create({
           data: {
-            clientId: receivable.clientId,
+            clientId: receivable.clientId!,
             type: 'PAYMENT_REGISTERED',
             title: 'Pagamento agrupado registrado.',
             description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
@@ -1325,7 +1478,7 @@ export class FinanceService {
 
       await tx.clientEvent.create({
         data: {
-          clientId: local.receivable.clientId,
+          clientId: local.receivable.clientId!,
           type: 'PIX_PAYMENT_INTENT_CREATED',
           title: 'PIX reconciliado.',
           description:
@@ -1508,6 +1661,7 @@ export class FinanceService {
           include: {
             client: true,
             clientReference: { include: { plan: true } },
+            financialCategory: true,
             renewal: true,
             paymentTransaction: true,
             paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -1526,10 +1680,15 @@ export class FinanceService {
           throw new ConflictException('Esta conta a receber ja possui baixa financeira.');
         }
 
-        const category = dto.categoryId
-          ? await this.ensureActiveCategory(tx, dto.categoryId, 'ENTRADA')
-          : await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
-        const description = `Recebimento: ${receivable.description}`;
+        const category = await this.resolveReceivableSettlementCategory(
+          tx,
+          receivable,
+          dto.categoryId,
+        );
+        const description =
+          receivable.purpose === 'MANUAL_CHARGE'
+            ? receivable.description
+            : `Recebimento: ${receivable.description}`;
 
         const createdTransaction = await tx.financialTransaction.create({
           data: {
@@ -1537,7 +1696,8 @@ export class FinanceService {
             origin: 'RECEIVABLE_PAYMENT',
             categoryId: category.id,
             clientId: receivable.clientId,
-            clientReferenceId: receivable.clientReferenceId,
+            clientReferenceId:
+              receivable.purpose === 'MANUAL_CHARGE' ? null : receivable.clientReferenceId,
             receivableId: receivable.id,
             description,
             amount: receivable.amount,
@@ -1555,21 +1715,44 @@ export class FinanceService {
           },
         });
 
-        await tx.clientEvent.create({
-          data: {
-            clientId: receivable.clientId,
-            type: 'PAYMENT_REGISTERED',
-            title: 'Pagamento registrado.',
-            description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
+        if (receivable.purpose === 'MANUAL_CHARGE') {
+          await this.createReceivableAuditEvent(tx, {
+            receivableId: receivable.id,
+            eventType: 'PAID',
+            actorUserId,
+            payerNameSnapshot: receivable.payerName,
+            payerPhoneMasked: this.maskPhone(receivable.payerPhoneNormalized),
             metadata: {
-              receivableId: receivable.id,
               financialTransactionId: createdTransaction.id,
               amount: receivable.amount.toString(),
               paymentDate: formatBusinessDate(paymentDate),
+              categoryId: category.id,
+              source: 'manual_payment',
             },
-            createdByUserId: actorUserId,
-          },
-        });
+          });
+        }
+
+        if (receivable.clientId) {
+          await tx.clientEvent.create({
+            data: {
+              clientId: receivable.clientId,
+              type: 'PAYMENT_REGISTERED',
+              title:
+                receivable.purpose === 'MANUAL_CHARGE'
+                  ? 'Pagamento de cobranca avulsa registrado.'
+                  : 'Pagamento registrado.',
+              description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
+              metadata: {
+                receivableId: receivable.id,
+                financialTransactionId: createdTransaction.id,
+                amount: receivable.amount.toString(),
+                paymentDate: formatBusinessDate(paymentDate),
+                purpose: receivable.purpose,
+              },
+              createdByUserId: actorUserId,
+            },
+          });
+        }
 
         await this.processPaidReceivableCycle(tx, receivable.id, actorUserId, {
           receivableWasPending: true,
@@ -1609,6 +1792,7 @@ export class FinanceService {
         include: {
           client: true,
           clientReference: { include: { plan: true } },
+          financialCategory: true,
           renewal: true,
           paymentTransaction: true,
           paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -1633,39 +1817,62 @@ export class FinanceService {
         include: {
           client: true,
           clientReference: { include: { plan: true } },
+          financialCategory: true,
           renewal: true,
           paymentTransaction: true,
           paymentIntents: { orderBy: { createdAt: 'desc' } },
         },
       });
 
-      await tx.clientEvent.create({
-        data: {
-          clientId: existing.clientId,
-          type: 'RECEIVABLE_CANCELED',
-          title: 'Conta a receber cancelada.',
-          description: `Motivo: ${reason}`,
+      if (existing.purpose === 'MANUAL_CHARGE') {
+        await this.createReceivableAuditEvent(tx, {
+          receivableId: existing.id,
+          eventType: 'CANCELED',
+          actorUserId,
+          payerNameSnapshot: existing.payerName,
+          payerPhoneMasked: this.maskPhone(existing.payerPhoneNormalized),
           metadata: {
-            receivableId: existing.id,
             reason,
+            canceledAt: new Date().toISOString(),
           },
-          createdByUserId: actorUserId,
-        },
-      });
+        });
+      }
 
-      await this.recoveryService?.cancelActiveForReceivable(
-        tx,
-        existing.id,
-        'RECEIVABLE_CANCELED',
-        'Conta a receber cancelada durante campanha de recuperacao.',
-      );
+      if (existing.clientId) {
+        await tx.clientEvent.create({
+          data: {
+            clientId: existing.clientId,
+            type: 'RECEIVABLE_CANCELED',
+            title:
+              existing.purpose === 'MANUAL_CHARGE'
+                ? 'Cobranca avulsa cancelada.'
+                : 'Conta a receber cancelada.',
+            description: `Motivo: ${reason}`,
+            metadata: {
+              receivableId: existing.id,
+              reason,
+              purpose: existing.purpose,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+      }
 
-      await this.cancelFutureBillingDispatchesForReceivable(
-        tx,
-        existing.id,
-        'RECEIVABLE_CANCELED',
-        'Cobranca futura cancelada porque a conta a receber foi cancelada.',
-      );
+      if (existing.purpose !== 'MANUAL_CHARGE') {
+        await this.recoveryService?.cancelActiveForReceivable(
+          tx,
+          existing.id,
+          'RECEIVABLE_CANCELED',
+          'Conta a receber cancelada durante campanha de recuperacao.',
+        );
+
+        await this.cancelFutureBillingDispatchesForReceivable(
+          tx,
+          existing.id,
+          'RECEIVABLE_CANCELED',
+          'Cobranca futura cancelada porque a conta a receber foi cancelada.',
+        );
+      }
 
       return updated;
     });
@@ -1725,7 +1932,7 @@ export class FinanceService {
           if (receivable) {
             const existingEvent = await tx.clientEvent.findFirst({
               where: {
-                clientId: receivable.clientId,
+                clientId: receivable.clientId!,
                 type: 'PIX_PAYMENT_STATUS_UPDATED',
                 metadata: { path: ['paymentIntentId'], equals: id },
               },
@@ -1734,7 +1941,7 @@ export class FinanceService {
             if (!existingEvent) {
               await tx.clientEvent.create({
                 data: {
-                  clientId: receivable.clientId,
+                  clientId: receivable.clientId!,
                   type: 'PIX_PAYMENT_STATUS_UPDATED',
                   title: 'PIX estornado no provider.',
                   description:
@@ -1822,6 +2029,18 @@ export class FinanceService {
 
       await this.supersedeOpenSiblingPaymentIntents(tx, receivable.id, current.id);
 
+      if (receivable.purpose === 'MANUAL_CHARGE') {
+        await this.settleManualChargePayment(
+          tx,
+          receivable,
+          current,
+          paidBusinessDate,
+          actorUserId,
+        );
+
+        return tx.paymentIntent.findUniqueOrThrow({ where: { id } });
+      }
+
       if (!receivable.paymentTransaction) {
         const category = await this.ensureReceivablePaymentCategory(tx, receivable.purpose);
         const createdTransaction = await tx.financialTransaction.create({
@@ -1829,8 +2048,8 @@ export class FinanceService {
             type: 'ENTRADA',
             origin: 'RECEIVABLE_PAYMENT',
             categoryId: category.id,
-            clientId: receivable.clientId,
-            clientReferenceId: receivable.clientReferenceId,
+            clientId: receivable.clientId!,
+            clientReferenceId: receivable.clientReferenceId!,
             receivableId: receivable.id,
             description: `Recebimento PIX: ${receivable.description}`,
             amount: receivable.amount,
@@ -1842,7 +2061,7 @@ export class FinanceService {
 
         const existingEvent = await tx.clientEvent.findFirst({
           where: {
-            clientId: receivable.clientId,
+            clientId: receivable.clientId!,
             type: 'PAYMENT_REGISTERED',
             metadata: { path: ['paymentIntentId'], equals: id },
           },
@@ -1851,7 +2070,7 @@ export class FinanceService {
         if (!existingEvent) {
           await tx.clientEvent.create({
             data: {
-              clientId: receivable.clientId,
+              clientId: receivable.clientId!,
               type: 'PAYMENT_REGISTERED',
               title: 'Pagamento PIX confirmado.',
               description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
@@ -1878,6 +2097,100 @@ export class FinanceService {
     });
 
     return this.presentPaymentIntent(synced);
+  }
+
+  private async settleManualChargePayment(
+    tx: Prisma.TransactionClient,
+    receivable: Prisma.ReceivableGetPayload<{ include: { paymentTransaction: true } }>,
+    intent: Prisma.PaymentIntentGetPayload<object>,
+    paidBusinessDate: Date,
+    actorUserId: string | null,
+  ) {
+    if (!receivable.financialCategoryId) {
+      throw new ConflictException('Cobranca avulsa sem categoria financeira persistida.');
+    }
+
+    let financialTransactionId =
+      typeof receivable.paymentTransaction?.id === 'string'
+        ? receivable.paymentTransaction.id
+        : null;
+
+    if (!financialTransactionId) {
+      const createdTransaction = await tx.financialTransaction.create({
+        data: {
+          type: 'ENTRADA',
+          origin: 'RECEIVABLE_PAYMENT',
+          categoryId: receivable.financialCategoryId,
+          clientId: receivable.clientId,
+          clientReferenceId: null,
+          receivableId: receivable.id,
+          description: receivable.description,
+          amount: receivable.amount,
+          transactionDate: paidBusinessDate,
+          notes: `PIX ${intent.provider}`,
+          createdByUserId: actorUserId,
+        },
+      });
+      financialTransactionId = createdTransaction.id;
+    }
+
+    const paidAudit = await tx.receivableAuditEvent.findFirst({
+      where: {
+        receivableId: receivable.id,
+        eventType: 'PAID',
+      },
+    });
+
+    if (!paidAudit) {
+      await this.createReceivableAuditEvent(tx, {
+        receivableId: receivable.id,
+        paymentIntentId: intent.id,
+        eventType: 'PAID',
+        actorUserId,
+        provider: intent.provider,
+        providerTransactionId: intent.providerTransactionId,
+        payerNameSnapshot: receivable.payerName,
+        payerPhoneMasked: this.maskPhone(receivable.payerPhoneNormalized),
+        metadata: {
+          amount: receivable.amount.toString(),
+          paymentDate: formatBusinessDate(paidBusinessDate),
+          categoryId: receivable.financialCategoryId,
+          financialTransactionId,
+        },
+      });
+    }
+
+    if (receivable.clientId) {
+      const existingEvent = await tx.clientEvent.findFirst({
+        where: {
+          clientId: receivable.clientId,
+          type: 'PAYMENT_REGISTERED',
+          metadata: { path: ['paymentIntentId'], equals: intent.id },
+        },
+      });
+
+      if (!existingEvent) {
+        await tx.clientEvent.create({
+          data: {
+            clientId: receivable.clientId,
+            type: 'PAYMENT_REGISTERED',
+            title: 'Pagamento de cobranca avulsa confirmado.',
+            description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
+            metadata: {
+              receivableId: receivable.id,
+              paymentIntentId: intent.id,
+              financialTransactionId,
+              amount: receivable.amount.toString(),
+              paymentDate: formatBusinessDate(paidBusinessDate),
+              provider: intent.provider,
+              providerTransactionId: intent.providerTransactionId,
+              purpose: receivable.purpose,
+            },
+            createdByUserId: actorUserId,
+          },
+        });
+      }
+    }
   }
 
   private async supersedeOpenSiblingPaymentIntents(
@@ -2188,11 +2501,16 @@ export class FinanceService {
       const search = query.search.trim();
 
       if (search) {
+        const digits = search.replace(/\D/g, '');
         where.OR = [
           { description: { contains: search, mode: 'insensitive' } },
+          { payerName: { contains: search, mode: 'insensitive' } },
           { client: { name: { contains: search, mode: 'insensitive' } } },
           { clientReference: { reference: { contains: search, mode: 'insensitive' } } },
         ];
+        if (digits) {
+          where.OR.push({ payerPhoneNormalized: { contains: digits } });
+        }
       }
     }
 
@@ -2294,6 +2612,26 @@ export class FinanceService {
     return category;
   }
 
+  private async resolveReceivableSettlementCategory(
+    tx: Prisma.TransactionClient | PrismaService,
+    receivable: Pick<ReceivableWithRelations, 'financialCategoryId' | 'purpose'>,
+    overrideCategoryId?: string,
+  ) {
+    if (receivable.purpose === 'MANUAL_CHARGE') {
+      const categoryId = overrideCategoryId ?? receivable.financialCategoryId;
+
+      if (!categoryId) {
+        throw new ConflictException('Cobranca avulsa sem categoria financeira persistida.');
+      }
+
+      return this.ensureActiveCategory(tx, categoryId, 'ENTRADA');
+    }
+
+    return overrideCategoryId
+      ? this.ensureActiveCategory(tx, overrideCategoryId, 'ENTRADA')
+      : this.ensureReceivablePaymentCategory(tx, receivable.purpose);
+  }
+
   private async ensureRenewalCategory(tx: Prisma.TransactionClient | PrismaService) {
     const category = await this.findActiveEntryCategoryByName(tx, 'Renovação');
 
@@ -2355,12 +2693,139 @@ export class FinanceService {
     return reference;
   }
 
+  private async resolveManualChargePayer(tx: Prisma.TransactionClient, dto: CreateManualChargeDto) {
+    if (dto.payerType === ManualChargePayerType.REGISTERED_CLIENT) {
+      if (!dto.clientId) {
+        throw new BadRequestException('Cliente obrigatorio para cobranca avulsa cadastrada.');
+      }
+
+      const client = await tx.client.findUnique({ where: { id: dto.clientId } });
+
+      if (!client) {
+        throw new NotFoundException('Cliente nao encontrado.');
+      }
+
+      return {
+        clientId: client.id,
+        payerName: client.name,
+        payerPhone: client.phone,
+        payerPhoneNormalized: client.phoneNormalized,
+      };
+    }
+
+    if (dto.clientId) {
+      throw new BadRequestException('Pagador avulso nao deve informar cliente.');
+    }
+
+    const payerName = dto.payerName?.trim();
+    const payerPhone = dto.payerPhone?.trim();
+
+    if (!payerName) {
+      throw new BadRequestException('Nome do pagador obrigatorio.');
+    }
+
+    if (!payerPhone) {
+      throw new BadRequestException('Telefone do pagador obrigatorio.');
+    }
+
+    let payerPhoneNormalized: string;
+    try {
+      payerPhoneNormalized = normalizeBrazilPhone(payerPhone);
+    } catch {
+      throw new BadRequestException('Telefone do pagador invalido.');
+    }
+
+    return {
+      clientId: null,
+      payerName,
+      payerPhone,
+      payerPhoneNormalized,
+    };
+  }
+
+  private maskPhone(value: string | null | undefined) {
+    const digits = value?.replace(/\D/g, '') ?? '';
+
+    if (digits.length <= 4) {
+      return digits ? '*'.repeat(digits.length) : null;
+    }
+
+    return `${'*'.repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+  }
+
+  private resolveReceivablePixPayer(
+    receivable: Prisma.ReceivableGetPayload<{ include: { client: true } }>,
+  ) {
+    if (receivable.purpose === 'MANUAL_CHARGE') {
+      if (!receivable.payerName || !receivable.payerPhoneNormalized) {
+        throw new ConflictException('Cobranca avulsa sem snapshot de pagador.');
+      }
+
+      return {
+        name: receivable.payerName,
+        phoneNormalized: receivable.payerPhoneNormalized,
+      };
+    }
+
+    if (!receivable.client?.name || !receivable.client.phoneNormalized) {
+      throw new ConflictException('Conta a receber sem cliente valido para gerar PIX.');
+    }
+
+    return {
+      name: receivable.client.name,
+      phoneNormalized: receivable.client.phoneNormalized,
+    };
+  }
+
+  private async createReceivableAuditEvent(
+    tx: Prisma.TransactionClient,
+    data: {
+      actorUserId?: string | null;
+      eventType: Prisma.ReceivableAuditEventCreateInput['eventType'];
+      metadata?: Prisma.InputJsonValue;
+      messageDispatchId?: string | null;
+      payerNameSnapshot?: string | null;
+      payerPhoneMasked?: string | null;
+      paymentIntentId?: string | null;
+      provider?: PaymentProviderCode | null;
+      providerTransactionId?: string | null;
+      receivableId: string;
+    },
+  ) {
+    const createData: Prisma.ReceivableAuditEventUncheckedCreateInput = {
+      receivableId: data.receivableId,
+      eventType: data.eventType,
+      actorUserId: data.actorUserId ?? null,
+      paymentIntentId: data.paymentIntentId ?? null,
+      messageDispatchId: data.messageDispatchId ?? null,
+      provider: data.provider ?? null,
+      providerTransactionId: data.providerTransactionId ?? null,
+      payerNameSnapshot: data.payerNameSnapshot ?? null,
+      payerPhoneMasked: data.payerPhoneMasked ?? null,
+    };
+
+    if (data.metadata !== undefined) {
+      createData.metadata = data.metadata;
+    }
+
+    return tx.receivableAuditEvent.create({ data: createData });
+  }
+
   private async processPaidReceivableCycle(
     tx: Prisma.TransactionClient,
     receivableId: string,
     actorUserId: string | null,
     options: { receivableWasPending: boolean },
   ) {
+    const receivable = await tx.receivable.findUnique({
+      where: { id: receivableId },
+      select: { purpose: true },
+    });
+
+    if (!receivable || receivable.purpose === 'MANUAL_CHARGE') {
+      return;
+    }
+
     if (options.receivableWasPending) {
       await this.cancelFutureBillingDispatchesForReceivable(
         tx,
@@ -2486,8 +2951,8 @@ export class FinanceService {
           type: 'ENTRADA',
           origin: 'RECEIVABLE_PAYMENT',
           categoryId: category.id,
-          clientId: receivable.clientId,
-          clientReferenceId: receivable.clientReferenceId,
+          clientId: receivable.clientId!,
+          clientReferenceId: receivable.clientReferenceId!,
           receivableId: receivable.id,
           paymentGroupId: group.id,
           description: `Recebimento PIX agrupado: ${receivable.description}`,
@@ -2505,7 +2970,7 @@ export class FinanceService {
 
       await tx.clientEvent.create({
         data: {
-          clientId: receivable.clientId,
+          clientId: receivable.clientId!,
           type: 'PAYMENT_REGISTERED',
           title: 'Pagamento PIX agrupado confirmado.',
           description: `${this.formatCurrency(receivable.amount)} recebido referente a ${receivable.description}.`,
@@ -2601,6 +3066,9 @@ export class FinanceService {
     }
 
     const reference = receivable.clientReference ?? receivable.client;
+    if (!reference) {
+      return;
+    }
 
     if (receivable.status !== 'PAGO') {
       return;
@@ -2612,17 +3080,19 @@ export class FinanceService {
 
     if (reference.status === 'PENDENTE_PAGAMENTO') {
       const previousStatus = reference.status;
-      const previousClientStatus = receivable.client.status;
+      const previousClientStatus = receivable.client!.status;
       const anchorDay = reference.billingAnchorDay;
       const nextDueDate = addCalendarMonthsPreservingAnchor(
         receivable.dueDate,
-        'plan' in reference ? reference.plan.durationMonths : receivable.client.plan.durationMonths,
+        'plan' in reference
+          ? reference.plan.durationMonths
+          : receivable.client!.plan.durationMonths,
         anchorDay,
       );
 
       if (tx.clientReference) {
         await tx.clientReference.update({
-          where: { id: receivable.clientReferenceId },
+          where: { id: receivable.clientReferenceId! },
           data: {
             status: 'ATIVO',
             dueDate: nextDueDate,
@@ -2631,19 +3101,19 @@ export class FinanceService {
         });
 
         await this.receivableCycleService?.ensureCurrentCycleReceivable(
-          receivable.clientReferenceId,
+          receivable.clientReferenceId!,
           tx,
         );
 
         if (previousClientStatus !== 'ATIVO') {
           await tx.client.update({
-            where: { id: receivable.clientId },
+            where: { id: receivable.clientId! },
             data: { status: 'ATIVO' },
           });
 
           await tx.clientStatusHistory.create({
             data: {
-              clientId: receivable.clientId,
+              clientId: receivable.clientId!,
               previousStatus: previousClientStatus,
               newStatus: 'ATIVO',
               reason: 'Cliente ativado apos pagamento inicial.',
@@ -2653,7 +3123,7 @@ export class FinanceService {
         }
       } else {
         await tx.client.update({
-          where: { id: receivable.clientId },
+          where: { id: receivable.clientId! },
           data: {
             status: 'ATIVO',
             dueDate: nextDueDate,
@@ -2664,7 +3134,7 @@ export class FinanceService {
 
       await tx.clientStatusHistory.create({
         data: {
-          clientId: receivable.clientId,
+          clientId: receivable.clientId!,
           ...(receivable.clientReferenceId
             ? { clientReferenceId: receivable.clientReferenceId }
             : {}),
@@ -2677,13 +3147,13 @@ export class FinanceService {
 
       await tx.clientEvent.create({
         data: {
-          clientId: receivable.clientId,
+          clientId: receivable.clientId!,
           type: 'STATUS_CHANGED',
           title: 'Referencia ativada pelo primeiro pagamento.',
           description: `Status alterado de ${previousStatus} para ATIVO. Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
           metadata: {
             receivableId,
-            clientReferenceId: receivable.clientReferenceId,
+            clientReferenceId: receivable.clientReferenceId!,
             previousStatus,
             newStatus: 'ATIVO',
             originalDueDate: formatBusinessDate(receivable.dueDate),
@@ -2693,7 +3163,7 @@ export class FinanceService {
             durationMonths:
               'plan' in reference
                 ? reference.plan.durationMonths
-                : receivable.client.plan.durationMonths,
+                : receivable.client!.plan.durationMonths,
           },
           createdByUserId: actorUserId,
         },
@@ -2706,7 +3176,7 @@ export class FinanceService {
 
     await this.referralsService.qualifyAfterInitialActivation(
       tx,
-      receivable.clientId,
+      receivable.clientId!,
       receivableId,
       actorUserId,
     );
@@ -2749,7 +3219,7 @@ export class FinanceService {
 
     const reference = receivable.clientReference;
     const previousReferenceStatus = reference.status;
-    const previousClientStatus = receivable.client.status;
+    const previousClientStatus = receivable.client!.status;
     const nextDueDate = addCalendarMonthsPreservingAnchor(
       reactivation.activationDate,
       reactivation.plan.durationMonths,
@@ -2770,7 +3240,7 @@ export class FinanceService {
     if (previousReferenceStatus !== 'ATIVO') {
       await tx.clientStatusHistory.create({
         data: {
-          clientId: receivable.clientId,
+          clientId: receivable.clientId!,
           clientReferenceId: reference.id,
           previousStatus: previousReferenceStatus,
           newStatus: 'ATIVO',
@@ -2782,13 +3252,13 @@ export class FinanceService {
 
     if (previousClientStatus !== 'ATIVO') {
       await tx.client.update({
-        where: { id: receivable.clientId },
+        where: { id: receivable.clientId! },
         data: { status: 'ATIVO' },
       });
 
       await tx.clientStatusHistory.create({
         data: {
-          clientId: receivable.clientId,
+          clientId: receivable.clientId!,
           previousStatus: previousClientStatus,
           newStatus: 'ATIVO',
           reason: 'Cliente reativado apos pagamento de referencia.',
@@ -2806,7 +3276,7 @@ export class FinanceService {
 
     await tx.clientEvent.create({
       data: {
-        clientId: receivable.clientId,
+        clientId: receivable.clientId!,
         type: 'CLIENT_REFERENCE_REACTIVATED',
         title: `Referencia ${reference.reference} reativada.`,
         description: `Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
@@ -2899,7 +3369,7 @@ export class FinanceService {
 
     await tx.clientEvent.create({
       data: {
-        clientId: receivable.clientId,
+        clientId: receivable.clientId!,
         type: 'CLIENT_RENEWED',
         title: 'Ciclo renovado apos pagamento.',
         description: `Proximo vencimento: ${formatBusinessDate(nextDueDate)}.`,
@@ -2945,6 +3415,7 @@ export class FinanceService {
       include: {
         client: true,
         clientReference: { include: { plan: true } },
+        financialCategory: true,
         renewal: true,
         paymentTransaction: true,
         paymentIntents: { orderBy: { createdAt: 'desc' } },
@@ -3089,6 +3560,28 @@ export class FinanceService {
     return typeof metadata?.paymentIntentId === 'string' ? metadata.paymentIntentId : null;
   }
 
+  private async findPaymentIntentIdByReceivableAuditEvent(
+    tx: Pick<Prisma.TransactionClient, 'receivableAuditEvent'>,
+    receivableId: string,
+    eventType: 'PIX_CREATED' | 'PIX_REPLACED',
+    metadataKey: 'idempotencyKey' | 'paymentIntentId',
+    metadataValue: string,
+  ) {
+    const event = await tx.receivableAuditEvent.findFirst({
+      where: {
+        receivableId,
+        eventType,
+        metadata: { path: [metadataKey], equals: metadataValue },
+      },
+    });
+    const metadata =
+      typeof event?.metadata === 'object' && event.metadata !== null
+        ? (event.metadata as Record<string, unknown>)
+        : null;
+
+    return typeof metadata?.paymentIntentId === 'string' ? metadata.paymentIntentId : null;
+  }
+
   private findCurrentReceivablePixIntent(intents: Array<Prisma.PaymentIntentGetPayload<object>>) {
     return (
       [...intents]
@@ -3117,7 +3610,7 @@ export class FinanceService {
       receivable: {
         id: receivable.id,
         clientId: receivable.clientId,
-        clientName: receivable.client.name,
+        clientName: receivable.client?.name ?? receivable.payerName ?? '',
         status: receivable.status,
         amount: receivable.amount.toFixed(2),
         paidAt: receivable.paidAt ? formatBusinessDate(receivable.paidAt) : null,
@@ -3212,8 +3705,8 @@ export class FinanceService {
       providerTransactionId: input.providerTransactionId,
       receivable: {
         id: inspection.receivable.id,
-        clientId: inspection.receivable.clientId,
-        clientName: inspection.receivable.client.name,
+        clientId: inspection.receivable.clientId!,
+        clientName: inspection.receivable.client!.name,
         status: inspection.receivable.status,
         amount: this.formatDecimal(inspection.receivable.amount),
         paidAt: inspection.receivable.paidAt?.toISOString() ?? null,
@@ -3331,8 +3824,8 @@ export class FinanceService {
       providerTransactionId: input.providerTransactionId,
       receivable: {
         id: input.receivable.id,
-        clientId: input.receivable.clientId,
-        clientName: input.receivable.client.name,
+        clientId: input.receivable.clientId!,
+        clientName: input.receivable.client!.name,
         status: input.receivable.status,
         amount: this.formatDecimal(input.receivable.amount),
         paidAt: input.receivable.paidAt?.toISOString() ?? null,
@@ -3593,7 +4086,7 @@ export class FinanceService {
     );
     const clientId = ordered[0]!.clientId;
 
-    if (ordered.some((receivable) => receivable.clientId !== clientId)) {
+    if (ordered.some((receivable) => receivable.clientId! !== clientId)) {
       throw new ConflictException('Pagamento agrupado permite somente contas do mesmo cliente.');
     }
 
@@ -3745,7 +4238,9 @@ export class FinanceService {
       dueDate: formatBusinessDate(receivable.dueDate),
       status: receivable.status,
       clientReferenceId: receivable.clientReferenceId,
-      reference: receivable.clientReference.reference,
+      reference:
+        receivable.clientReference?.reference ??
+        (receivable.purpose === 'MANUAL_CHARGE' ? 'Cobranca avulsa' : ''),
     };
   }
 
@@ -3785,11 +4280,30 @@ export class FinanceService {
       paymentIntents: receivable.paymentIntents.map((intent) => this.presentPaymentIntent(intent)),
       createdAt: receivable.createdAt,
       updatedAt: receivable.updatedAt,
-      client: {
-        id: receivable.client.id,
-        name: receivable.client.name,
-        reference: receivable.clientReference?.reference ?? receivable.client.reference,
-      },
+      payerName: receivable.payerName,
+      payerPhone: receivable.payerPhone,
+      payerPhoneMasked: this.maskPhone(receivable.payerPhoneNormalized),
+      payerPhoneNormalized: receivable.payerPhoneNormalized,
+      financialCategoryId: receivable.financialCategoryId,
+      category: receivable.financialCategory
+        ? {
+            id: receivable.financialCategory.id,
+            name: receivable.financialCategory.name,
+            type: receivable.financialCategory.type,
+          }
+        : null,
+      manualChargeIdempotencyKey: receivable.manualChargeIdempotencyKey,
+      activePix:
+        receivable.paymentIntents
+          .filter((intent) => activePixStatuses.includes(intent.status))
+          .map((intent) => this.presentPaymentIntent(intent))[0] ?? null,
+      client: receivable.client
+        ? {
+            id: receivable.client.id,
+            name: receivable.client.name,
+            reference: receivable.clientReference?.reference ?? receivable.client.reference,
+          }
+        : null,
       clientReference: receivable.clientReference
         ? {
             id: receivable.clientReference.id,

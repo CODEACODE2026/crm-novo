@@ -907,6 +907,7 @@ export class BillingService {
       .map((item) => {
         const receivable = currentById.get(item.receivable.id);
         if (!receivable || receivable.status !== 'PENDENTE') return null;
+        if (!receivable.clientReference) return null;
         if (receivable.clientReference.status !== 'ATIVO') return null;
 
         return {
@@ -922,7 +923,7 @@ export class BillingService {
         ? currentReceivables.every(
             (receivable) =>
               receivable.status === 'CANCELADO' ||
-              receivable.clientReference.status === 'CANCELADO',
+              receivable.clientReference?.status === 'CANCELADO',
           )
         : false;
 

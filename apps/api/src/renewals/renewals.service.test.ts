@@ -379,6 +379,7 @@ function createPreviewFake(overrides: Record<string, unknown> = {}) {
       },
     },
     receivable: {
+      findFirst: () => Promise.resolve(state.previousCycleReceivable),
       findUnique: () => Promise.resolve(state.previousCycleReceivable),
       update: ({ data }: { data: Record<string, unknown> }) => {
         recordMutation('receivable.update');
@@ -496,6 +497,7 @@ function createPreviewFake(overrides: Record<string, unknown> = {}) {
         update: tx.renewal.update,
       },
       receivable: {
+        findFirst: () => Promise.resolve(state.previousCycleReceivable),
         findUnique: () => Promise.resolve(state.previousCycleReceivable),
         create: () => {
           recordMutation('receivable.create');

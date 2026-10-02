@@ -12,6 +12,7 @@ import { createHmac } from 'crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
+import { ManualChargePayerType } from './dto/create-manual-charge.dto';
 import { FinanceService } from './finance.service';
 
 const actorUserId = '22222222-2222-4222-8222-222222222222';
@@ -163,7 +164,7 @@ function createFinancePrisma() {
     clientId: client.id,
     clientReferenceId: clientReference.id,
     renewalId: renewal.id as string | null,
-    purpose: 'RENEWAL' as 'RENEWAL' | 'INITIAL_ACTIVATION' | 'REACTIVATION',
+    purpose: 'RENEWAL' as 'RENEWAL' | 'INITIAL_ACTIVATION' | 'REACTIVATION' | 'MANUAL_CHARGE',
     description: 'Renovacao - Plano Mensal',
     amount: new Prisma.Decimal('50.00'),
     dueDate: parseBusinessDate('2026-10-10'),
@@ -171,12 +172,18 @@ function createFinancePrisma() {
     paidAt: null as Date | null,
     canceledAt: null as Date | null,
     cancelReason: null as string | null,
+    payerName: null as string | null,
+    payerPhone: null as string | null,
+    payerPhoneNormalized: null as string | null,
+    financialCategoryId: null as string | null,
+    manualChargeIdempotencyKey: null as string | null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
   const categories = [entryCategory, activationCategory, expenseCategory];
   const transactions: Array<Record<string, unknown>> = [];
   const events: Array<Record<string, unknown>> = [];
+  const auditEvents: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
   const webhookEvents: Array<Record<string, unknown>> = [];
   const reactivation = {
@@ -375,6 +382,14 @@ function createFinancePrisma() {
       },
     },
     receivable: {
+      findFirst: ({ where }: { where: Record<string, unknown> }) => {
+        const matchesManualKey =
+          where.purpose === 'MANUAL_CHARGE' &&
+          receivable.purpose === 'MANUAL_CHARGE' &&
+          where.manualChargeIdempotencyKey === receivable.manualChargeIdempotencyKey;
+
+        return Promise.resolve(matchesManualKey ? { ...receivable } : null);
+      },
       findUnique: (args?: {
         include?: { paymentIntents?: { where?: { status?: { in: string[] } } } };
       }) => {
@@ -382,8 +397,12 @@ function createFinancePrisma() {
 
         return Promise.resolve({
           ...receivable,
-          client: { ...client, plan },
-          clientReference: { ...clientReference, plan },
+          client: receivable.clientId ? { ...client, plan } : null,
+          clientReference: receivable.clientReferenceId ? { ...clientReference, plan } : null,
+          financialCategory: receivable.financialCategoryId
+            ? (categories.find((category) => category.id === receivable.financialCategoryId) ??
+              null)
+            : null,
           renewal,
           reactivation: receivable.purpose === 'REACTIVATION' ? reactivation : null,
           paymentTransaction:
@@ -393,12 +412,47 @@ function createFinancePrisma() {
             : paymentIntents,
         });
       },
+      findUniqueOrThrow: ({ where }: { where: { id: string } }) => {
+        if (where.id !== receivable.id) {
+          throw new Error('Receivable not found');
+        }
+
+        return Promise.resolve({
+          ...receivable,
+          client: receivable.clientId ? { ...client, plan } : null,
+          clientReference: receivable.clientReferenceId ? { ...clientReference, plan } : null,
+          financialCategory: receivable.financialCategoryId
+            ? (categories.find((category) => category.id === receivable.financialCategoryId) ??
+              null)
+            : null,
+          renewal,
+          reactivation: receivable.purpose === 'REACTIVATION' ? reactivation : null,
+          paymentTransaction:
+            transactions.find((transaction) => transaction.receivableId === receivable.id) ?? null,
+          paymentIntents,
+        });
+      },
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        Object.assign(receivable, {
+          id: `manual-receivable-${String(Date.now())}`,
+          renewalId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+          amount: new Prisma.Decimal(String(data.amount)),
+        });
+        return Promise.resolve({ ...receivable });
+      },
       update: ({ data }: { data: Partial<typeof receivable> }) => {
         Object.assign(receivable, data);
         return Promise.resolve({
           ...receivable,
-          client: { ...client, plan },
-          clientReference: { ...clientReference, plan },
+          client: receivable.clientId ? { ...client, plan } : null,
+          clientReference: receivable.clientReferenceId ? { ...clientReference, plan } : null,
+          financialCategory: receivable.financialCategoryId
+            ? (categories.find((category) => category.id === receivable.financialCategoryId) ??
+              null)
+            : null,
           renewal,
           reactivation: receivable.purpose === 'REACTIVATION' ? reactivation : null,
           paymentTransaction: null,
@@ -498,6 +552,8 @@ function createFinancePrisma() {
       },
     },
     client: {
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(where.id === client.id ? { ...client } : null),
       update: ({ data }: { data: Partial<typeof client> }) => {
         Object.assign(client, data);
         return Promise.resolve(client);
@@ -565,6 +621,42 @@ function createFinancePrisma() {
         return Promise.resolve(data);
       },
     },
+    receivableAuditEvent: {
+      findFirst: ({
+        where,
+      }: {
+        where: {
+          eventType?: string;
+          metadata?: { path: string[]; equals: string };
+          receivableId?: string;
+        };
+      }) =>
+        Promise.resolve(
+          auditEvents.find((event) => {
+            const metadataKey = where.metadata?.path[0];
+
+            return (
+              (where.receivableId === undefined || event.receivableId === where.receivableId) &&
+              (where.eventType === undefined || event.eventType === where.eventType) &&
+              (metadataKey === undefined ||
+                (typeof event.metadata === 'object' &&
+                  event.metadata !== null &&
+                  metadataKey in event.metadata &&
+                  (event.metadata as Record<string, unknown>)[metadataKey] ===
+                    where.metadata?.equals))
+            );
+          }) ?? null,
+        ),
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        const event = {
+          id: `audit-${auditEvents.length + 1}`,
+          createdAt: new Date(),
+          ...data,
+        };
+        auditEvents.push(event);
+        return Promise.resolve(event);
+      },
+    },
   };
 
   return {
@@ -580,6 +672,7 @@ function createFinancePrisma() {
     paymentIntents,
     transactions,
     events,
+    auditEvents,
     prisma: {
       financialCategory: tx.financialCategory,
       financialTransaction: {
@@ -588,6 +681,7 @@ function createFinancePrisma() {
           tx.financialTransaction.findUniqueOrThrow({ where }).catch(() => null),
       },
       client: {
+        findUnique: tx.client.findUnique,
         update: tx.client.update,
         count: ({ where }: { where: { id: string } }) =>
           Promise.resolve(where.id === client.id ? 1 : 0),
@@ -598,6 +692,7 @@ function createFinancePrisma() {
       receivable: tx.receivable,
       paymentIntent: tx.paymentIntent,
       paymentWebhookEvent: tx.paymentWebhookEvent,
+      receivableAuditEvent: tx.receivableAuditEvent,
       $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
         const releaseLocks: Array<() => void> = [];
         const snapshots = {
@@ -608,6 +703,7 @@ function createFinancePrisma() {
           reactivation: { ...reactivation },
           transactions: transactions.map((transaction) => ({ ...transaction })),
           events: events.map((event) => ({ ...event })),
+          auditEvents: auditEvents.map((event) => ({ ...event })),
           paymentIntents: paymentIntents.map((intent) => ({ ...intent })),
           webhookEvents: webhookEvents.map((event) => ({ ...event })),
         };
@@ -622,6 +718,7 @@ function createFinancePrisma() {
             Object.assign(reactivation, snapshots.reactivation);
             transactions.splice(0, transactions.length, ...snapshots.transactions);
             events.splice(0, events.length, ...snapshots.events);
+            auditEvents.splice(0, auditEvents.length, ...snapshots.auditEvents);
             paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
             webhookEvents.splice(0, webhookEvents.length, ...snapshots.webhookEvents);
             throw error;
@@ -706,6 +803,28 @@ function createFinanceService(fake: ReturnType<typeof createFinancePrisma>) {
   );
 }
 
+function makeManualCharge(fake: ReturnType<typeof createFinancePrisma>, registered = false) {
+  Object.assign(fake.receivable, {
+    id: 'manual-charge-id',
+    clientId: registered ? fake.client.id : null,
+    clientReferenceId: null,
+    renewalId: null,
+    purpose: 'MANUAL_CHARGE',
+    description: 'Cobranca avulsa de setup',
+    amount: new Prisma.Decimal('75.50'),
+    dueDate: parseBusinessDate('2026-10-20'),
+    status: 'PENDENTE',
+    payerName: registered ? fake.client.name : 'Pagador Avulso',
+    payerPhone: registered ? fake.client.phone : '(11) 98888-7777',
+    payerPhoneNormalized: registered ? fake.client.phoneNormalized : '5511988887777',
+    financialCategoryId: fake.entryCategory.id,
+    manualChargeIdempotencyKey: 'manual-key-1',
+    paidAt: null,
+    canceledAt: null,
+    cancelReason: null,
+  });
+}
+
 type SummaryReceivable = {
   amount: Prisma.Decimal;
   client: { name: string };
@@ -714,6 +833,8 @@ type SummaryReceivable = {
   clientReferenceId: string;
   description: string;
   dueDate: Date;
+  payerName?: string | null;
+  payerPhoneNormalized?: string | null;
   status: 'PENDENTE' | 'PAGO' | 'CANCELADO';
 };
 
@@ -771,6 +892,14 @@ function createReceivablesSummaryPrisma(
     if (where.description) {
       const filter = where.description as { contains: string };
       if (!matchesStringFilter(receivable.description, filter)) return false;
+    }
+    if (where.payerName) {
+      const filter = where.payerName as { contains: string };
+      if (!matchesStringFilter(receivable.payerName ?? '', filter)) return false;
+    }
+    if (where.payerPhoneNormalized) {
+      const filter = where.payerPhoneNormalized as { contains: string };
+      if (!matchesStringFilter(receivable.payerPhoneNormalized ?? '', filter)) return false;
     }
     if (where.client) {
       const clientWhere = where.client as { name?: { contains: string } };
@@ -1410,6 +1539,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
   }));
   const transactions: Array<Record<string, unknown>> = [];
   const events: Array<Record<string, unknown>> = [];
+  const auditEvents: Array<Record<string, unknown>> = [];
   const paymentGroups: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
   const acquireAdvisoryLock = createAdvisoryLockSimulator();
@@ -1677,6 +1807,42 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     messageDispatch: {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
+    receivableAuditEvent: {
+      findFirst: ({
+        where,
+      }: {
+        where: {
+          eventType?: string;
+          metadata?: { path: string[]; equals: unknown };
+          receivableId?: string;
+        };
+      }) => {
+        const metadataKey = where.metadata?.path[0];
+        return Promise.resolve(
+          auditEvents.find((event) => {
+            const metadata =
+              typeof event.metadata === 'object' && event.metadata !== null
+                ? (event.metadata as Record<string, unknown>)
+                : null;
+
+            return (
+              (where.receivableId === undefined || event.receivableId === where.receivableId) &&
+              (where.eventType === undefined || event.eventType === where.eventType) &&
+              (!metadataKey || metadata?.[metadataKey] === where.metadata?.equals)
+            );
+          }) ?? null,
+        );
+      },
+      create: ({ data }: { data: Record<string, unknown> }) => {
+        const event = {
+          id: `audit-${auditEvents.length + 1}`,
+          createdAt: new Date('2026-09-20T00:00:00.000Z'),
+          ...data,
+        };
+        auditEvents.push(event);
+        return Promise.resolve(event);
+      },
+    },
   };
   const prisma = {
     ...tx,
@@ -1687,6 +1853,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
         references: references.map((reference) => ({ ...reference })),
         transactions: transactions.map((transaction) => ({ ...transaction })),
         events: events.map((event) => ({ ...event })),
+        auditEvents: auditEvents.map((event) => ({ ...event })),
         paymentGroups: paymentGroups.map((group) => ({
           ...group,
           items: Array.isArray(group.items)
@@ -1708,6 +1875,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
             references.splice(0, references.length, ...(snapshots.references as typeof references));
             transactions.splice(0, transactions.length, ...snapshots.transactions);
             events.splice(0, events.length, ...snapshots.events);
+            auditEvents.splice(0, auditEvents.length, ...snapshots.auditEvents);
             paymentGroups.splice(0, paymentGroups.length, ...snapshots.paymentGroups);
             paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
           }
@@ -1764,6 +1932,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     receivables,
     transactions,
     events,
+    auditEvents,
     paymentGroups,
     paymentIntents,
     nextReceivables,
@@ -8984,5 +9153,291 @@ describe('FinanceService', () => {
       status: 'REFUNDED',
       externalStatus: 'refunded',
     });
+  });
+
+  it('creates a registered-client manual charge with payer snapshot and no financial transaction', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    const created = await service.createManualCharge(
+      {
+        description: 'Setup premium',
+        categoryId: fake.entryCategory.id,
+        amount: 75.5,
+        dueDate: '2026-10-20',
+        payerType: ManualChargePayerType.REGISTERED_CLIENT,
+        clientId: fake.client.id,
+        idempotencyKey: 'manual-key-registered',
+      },
+      actorUserId,
+    );
+
+    expect(created).toMatchObject({
+      purpose: 'MANUAL_CHARGE',
+      status: 'PENDENTE',
+      clientId: fake.client.id,
+      clientReferenceId: null,
+      payerName: fake.client.name,
+      payerPhoneNormalized: fake.client.phoneNormalized,
+      financialCategoryId: fake.entryCategory.id,
+    });
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.auditEvents).toContainEqual(
+      expect.objectContaining({ eventType: 'MANUAL_CHARGE_CREATED' }),
+    );
+  });
+
+  it('creates a guest manual charge, normalizes phone, and returns idempotently', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    const dto = {
+      description: 'Cobranca avulsa guest',
+      categoryId: fake.entryCategory.id,
+      amount: 88.75,
+      dueDate: '2026-10-21',
+      payerType: ManualChargePayerType.GUEST,
+      payerName: 'Cliente Avulso',
+      payerPhone: '(11) 98888-7777',
+      idempotencyKey: 'manual-key-guest',
+    };
+
+    const first = await service.createManualCharge(dto, actorUserId);
+    const second = await service.createManualCharge(dto, actorUserId);
+
+    expect(first.id).toBe(second.id);
+    expect(first).toMatchObject({
+      purpose: 'MANUAL_CHARGE',
+      clientId: null,
+      clientReferenceId: null,
+      payerName: 'Cliente Avulso',
+      payerPhoneNormalized: '5511988887777',
+    });
+    expect(
+      fake.auditEvents.filter((event) => event.eventType === 'MANUAL_CHARGE_CREATED'),
+    ).toHaveLength(1);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      'registered client inexistente',
+      { payerType: ManualChargePayerType.REGISTERED_CLIENT, clientId: 'missing-client' },
+    ],
+    [
+      'guest sem nome',
+      {
+        payerType: ManualChargePayerType.GUEST,
+        payerName: ' ',
+        payerPhone: '(11) 98888-7777',
+      },
+    ],
+    [
+      'guest sem telefone',
+      {
+        payerType: ManualChargePayerType.GUEST,
+        payerName: 'Cliente Avulso',
+        payerPhone: undefined,
+      },
+    ],
+    [
+      'telefone invalido',
+      {
+        payerType: ManualChargePayerType.GUEST,
+        payerName: 'Cliente Avulso',
+        payerPhone: '123',
+      },
+    ],
+  ])('rejects manual charge creation for %s', async (_label, overrides) => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.createManualCharge(
+        {
+          description: 'Cobranca avulsa invalida',
+          categoryId: fake.entryCategory.id,
+          amount: 50,
+          dueDate: '2026-10-21',
+          payerName: 'Cliente Avulso',
+          payerPhone: '(11) 98888-7777',
+          idempotencyKey: `manual-key-${_label}`,
+          ...overrides,
+        } as never,
+        actorUserId,
+      ),
+    ).rejects.toThrow();
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.auditEvents).toHaveLength(0);
+  });
+
+  it.each([
+    ['categoria inexistente', 'missing-category'],
+    ['categoria SAIDA', '33333333-3333-4333-8333-333333333333'],
+    ['categoria inativa', '11111111-1111-4111-8111-111111111111'],
+  ])('rejects manual charge creation with %s', async (_label, categoryId) => {
+    const fake = createFinancePrisma();
+    if (_label === 'categoria inativa') fake.entryCategory.active = false;
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.createManualCharge(
+        {
+          description: 'Cobranca avulsa categoria invalida',
+          categoryId,
+          amount: 50,
+          dueDate: '2026-10-21',
+          payerType: ManualChargePayerType.GUEST,
+          payerName: 'Cliente Avulso',
+          payerPhone: '(11) 98888-7777',
+          idempotencyKey: `manual-key-${_label}`,
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('generates default and explicit-provider PIX for manual charges without requiring Client', async () => {
+    const fake = createFinancePrisma();
+    makeManualCharge(fake);
+    const service = createFinanceService(fake);
+
+    const first = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    const second = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    expect(first.id).toBe(second.id);
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientName: 'Pagador Avulso',
+        payerPhone: '5511988887777',
+      }),
+    );
+    expect(fake.auditEvents).toContainEqual(expect.objectContaining({ eventType: 'PIX_CREATED' }));
+
+    fake.paymentIntents[0]!.status = 'EXPIRED';
+    const fastPay = await service.createReceivablePix(fake.receivable.id, actorUserId, {
+      provider: 'FASTPAY',
+    });
+    expect(fastPay.provider).toBe('FASTPAY');
+  });
+
+  it('settles manual charge PIX with persisted category and no cycle side effects', async () => {
+    const fake = createFinancePrisma();
+    makeManualCharge(fake);
+    const { cycle } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: intent.provider,
+      providerTransactionId: intent.providerTransactionId,
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-20T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+
+    await service.syncPaymentIntent(intent.id, actorUserId);
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.receivable.paidAt).toEqual(parseBusinessDate('2026-10-20'));
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.transactions[0]).toMatchObject({
+      type: 'ENTRADA',
+      origin: 'RECEIVABLE_PAYMENT',
+      receivableId: fake.receivable.id,
+      categoryId: fake.entryCategory.id,
+      clientId: null,
+      clientReferenceId: null,
+      amount: new Prisma.Decimal('75.50'),
+      description: fake.receivable.description,
+    });
+    expect(fake.auditEvents.filter((event) => event.eventType === 'PAID')).toHaveLength(1);
+    expect(cycle.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(0);
+  });
+
+  it('settles paid manual charge webhook once and keeps sync replay idempotent', async () => {
+    const fake = createFinancePrisma();
+    makeManualCharge(fake, true);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId, {
+      provider: 'FASTFLOW',
+    });
+    fake.paymentIntents[0]!.providerTransactionId = 'manual-webhook-tx';
+    fake.provider.getPixStatus.mockResolvedValue({
+      provider: 'FASTFLOW',
+      providerTransactionId: 'manual-webhook-tx',
+      externalStatus: 'paid',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'PAID',
+      paidAt: new Date('2026-10-20T15:00:00.000Z'),
+      failureCode: null,
+      failureMessage: null,
+    });
+    const rawPayload = JSON.stringify({
+      event: 'transaction.paid',
+      transaction_id: 'manual-webhook-tx',
+      status: 'paid',
+      payment_provider: 'fastflow',
+    });
+
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+    await service.processPaymentWebhook(
+      'FASTFLOW',
+      createWebhookSignature(rawPayload),
+      Buffer.from(rawPayload),
+      JSON.parse(rawPayload),
+    );
+    await service.syncPaymentIntent(intent.id, actorUserId);
+
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.auditEvents.filter((event) => event.eventType === 'PAID')).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(1);
+    expect(fake.transactions[0]).toMatchObject({
+      categoryId: fake.entryCategory.id,
+      clientId: fake.client.id,
+      clientReferenceId: null,
+    });
+  });
+
+  it('cancels pending manual charge with audit event and without financial transaction', async () => {
+    const fake = createFinancePrisma();
+    makeManualCharge(fake);
+    const service = createFinanceService(fake);
+
+    const canceled = await service.cancelReceivable(
+      fake.receivable.id,
+      { reason: 'Solicitacao do pagador' },
+      actorUserId,
+    );
+
+    expect(canceled).toMatchObject({ status: 'CANCELADO', cancelReason: 'Solicitacao do pagador' });
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.auditEvents).toContainEqual(expect.objectContaining({ eventType: 'CANCELED' }));
+    expect(fake.events).toHaveLength(0);
+    expect(fake.tx.messageDispatch.updateMany).not.toHaveBeenCalled();
   });
 });

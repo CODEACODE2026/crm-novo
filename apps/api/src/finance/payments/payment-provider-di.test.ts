@@ -71,6 +71,10 @@ const prisma = {
   clientEvent: {
     create: vi.fn(),
   },
+  receivableAuditEvent: {
+    create: vi.fn(),
+    findFirst: vi.fn(),
+  },
 };
 
 @Module({
@@ -156,7 +160,7 @@ function mockReceivable() {
     clientId: 'client-1',
     clientReferenceId: 'reference-1',
     renewalId: null,
-    purpose: 'MENSALIDADE',
+    purpose: 'RENEWAL',
     description: 'Mensalidade setembro',
     amount: new Prisma.Decimal('123.45'),
     dueDate: new Date('2026-09-24T00:00:00.000Z'),
@@ -164,6 +168,11 @@ function mockReceivable() {
     paidAt: null,
     canceledAt: null,
     cancelReason: null,
+    payerName: null,
+    payerPhone: null,
+    payerPhoneNormalized: null,
+    financialCategoryId: null,
+    manualChargeIdempotencyKey: null,
     createdAt: fixedNow,
     updatedAt: fixedNow,
     client: {
@@ -222,6 +231,8 @@ describe('Payment provider DI pipeline', () => {
     prisma.paymentProviderCredential.findFirst.mockImplementation(findCredential);
     prisma.paymentIntent.findFirst.mockResolvedValue(null);
     prisma.clientEvent.create.mockResolvedValue({ id: 'event-1' });
+    prisma.receivableAuditEvent.create.mockResolvedValue({ id: 'audit-event-1' });
+    prisma.receivableAuditEvent.findFirst.mockResolvedValue(null);
     mockProviderPixResponse();
     mockReceivable();
     mockCreatedIntent();

@@ -476,8 +476,10 @@ export class DashboardService {
     return {
       id: receivable.id,
       clientId: receivable.clientId,
-      clientName: receivable.client.name,
-      clientReference: receivable.clientReference.reference,
+      clientName: receivable.client?.name ?? receivable.payerName ?? '',
+      clientReference:
+        receivable.clientReference?.reference ??
+        (receivable.purpose === 'MANUAL_CHARGE' ? 'Cobranca avulsa' : ''),
       description: receivable.description,
       dueDate: formatBusinessDate(receivable.dueDate),
       amount: receivable.amount.toFixed(2),

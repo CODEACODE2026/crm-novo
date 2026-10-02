@@ -95,7 +95,7 @@ type PixWhatsAppDispatchItem = {
 type PixWhatsAppContext =
   | {
       kind: 'INDIVIDUAL';
-      client: NonNullable<PixPaymentIntentForWhatsApp['receivable']>['client'];
+      client: NonNullable<NonNullable<PixPaymentIntentForWhatsApp['receivable']>['client']>;
       receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
       phone: string;
       dispatchItems: [];
@@ -454,8 +454,10 @@ export class WhatsAppService {
       dispatchItems: context.dispatchItems,
       ...(context.kind === 'INDIVIDUAL'
         ? {
-            clientReferenceId: context.receivable.clientReferenceId,
             receivableId: context.receivable.id,
+            ...(context.receivable.clientReferenceId
+              ? { clientReferenceId: context.receivable.clientReferenceId }
+              : {}),
           }
         : {}),
     });
@@ -888,14 +890,14 @@ export class WhatsAppService {
       throw new ConflictException('Conexao WhatsApp nao esta operacional.');
     }
 
-    const phone = normalizeBrazilPhone(receivable.client.phoneNormalized);
+    const phone = normalizeBrazilPhone(receivable.client!.phoneNormalized);
     const body = this.renderInitialActivationTemplate(template.content, {
-      nome: receivable.client.name,
-      primeiroNome: this.firstName(receivable.client.name),
+      nome: receivable.client!.name,
+      primeiroNome: this.firstName(receivable.client!.name),
       valor: this.formatCurrency(receivable.amount),
       vencimento: this.formatDisplayDate(receivable.dueDate),
-      plano: receivable.clientReference.plan.name,
-      referencia: receivable.clientReference.reference,
+      plano: receivable.clientReference!.plan.name,
+      referencia: receivable.clientReference!.reference,
       pix: intent.pixCopyPaste,
     });
     const requestId = `initial-activation:${clientId}:${receivableId}`;
@@ -903,7 +905,7 @@ export class WhatsAppService {
 
     const { dispatch, created } = await this.createPendingDispatch({
       clientId,
-      clientReferenceId: receivable.clientReferenceId,
+      clientReferenceId: receivable.clientReferenceId!,
       connectionId: connection.id,
       receivableId,
       templateId: template.id,
@@ -1282,11 +1284,12 @@ export class WhatsAppService {
         throw new ConflictException('Somente o PIX atual aguardando pagamento pode ser enviado.');
       }
 
-      const phone = normalizeBrazilPhone(receivable.client.phoneNormalized);
+      const client = receivable.client!;
+      const phone = normalizeBrazilPhone(client.phoneNormalized);
 
       return {
         kind: 'INDIVIDUAL',
-        client: receivable.client,
+        client,
         receivable,
         phone,
         dispatchItems: [],
@@ -1320,10 +1323,10 @@ export class WhatsAppService {
     const phone = normalizeBrazilPhone(paymentGroup.client.phoneNormalized);
     const dispatchItems = paymentGroup.items.map((item) => ({
       receivableId: item.receivableId,
-      clientReferenceId: item.receivable.clientReferenceId,
+      clientReferenceId: item.receivable.clientReferenceId!,
       amount: item.amount,
       dueDate: item.receivable.dueDate,
-      referenceSnapshot: item.receivable.clientReference.reference,
+      referenceSnapshot: item.receivable.clientReference!.reference,
       statusSnapshot: item.receivable.status,
     }));
 
@@ -1341,7 +1344,7 @@ export class WhatsAppService {
         origin: 'GROUPED_PIX',
       },
       templateItems: paymentGroup.items.map((item) => ({
-        reference: item.receivable.clientReference.reference,
+        reference: item.receivable.clientReference!.reference,
         amount: item.amount,
       })),
     };

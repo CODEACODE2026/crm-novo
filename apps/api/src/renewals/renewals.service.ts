@@ -517,13 +517,11 @@ export class RenewalsService {
         where: { clientReferenceId },
         orderBy: [{ createdAt: 'desc' }],
       }),
-      client.receivable.findUnique({
+      client.receivable.findFirst({
         where: {
-          clientReferenceId_purpose_dueDate: {
-            clientReferenceId,
-            purpose: 'RENEWAL',
-            dueDate: renewal.previousDueDate,
-          },
+          clientReferenceId,
+          purpose: 'RENEWAL',
+          dueDate: renewal.previousDueDate,
         },
         include: {
           paymentTransaction: true,

@@ -248,8 +248,10 @@ export class ReportsService {
     }
     if (query.search) {
       const search = query.search.trim();
+      const digits = search.replace(/\D/g, '');
       where.OR = [
         { description: { contains: search, mode: 'insensitive' } },
+        { payerName: { contains: search, mode: 'insensitive' } },
         {
           client: {
             OR: [
@@ -259,6 +261,9 @@ export class ReportsService {
           },
         },
       ];
+      if (digits) {
+        where.OR.push({ payerPhoneNormalized: { contains: digits } });
+      }
     }
 
     const [items, total, amount] = await this.prisma.$transaction([
@@ -275,8 +280,10 @@ export class ReportsService {
     return {
       columns: ['Cliente', 'Referencia', 'Descricao', 'Valor', 'Vencimento', 'Situacao', 'Pago em'],
       rows: items.map((receivable) => ({
-        Cliente: receivable.client.name,
-        Referencia: receivable.clientReference.reference,
+        Cliente: receivable.client?.name ?? receivable.payerName ?? '',
+        Referencia:
+          receivable.clientReference?.reference ??
+          (receivable.purpose === 'MANUAL_CHARGE' ? 'Cobranca avulsa' : ''),
         Descricao: receivable.description,
         Valor: receivable.amount.toFixed(2),
         Vencimento: formatBusinessDate(receivable.dueDate),
@@ -299,10 +306,15 @@ export class ReportsService {
     if (query.categoryId) where.categoryId = query.categoryId;
     if (query.search) {
       const search = query.search.trim();
+      const digits = search.replace(/\D/g, '');
       where.OR = [
         { description: { contains: search, mode: 'insensitive' } },
         { client: { name: { contains: search, mode: 'insensitive' } } },
+        { receivable: { payerName: { contains: search, mode: 'insensitive' } } },
       ];
+      if (digits) {
+        where.OR.push({ receivable: { payerPhoneNormalized: { contains: digits } } });
+      }
     }
 
     const [items, total, entries, expenses] = await this.prisma.$transaction([
@@ -349,11 +361,11 @@ export class ReportsService {
         Origem: transaction.origin,
         Metodo: transaction.paymentMethod ?? '',
         Categoria: transaction.category.name,
-        Cliente: transaction.client?.name ?? '',
+        Cliente: transaction.client?.name ?? transaction.receivable?.payerName ?? '',
         Referencia:
           transaction.clientReference?.reference ??
-          transaction.receivable?.clientReference.reference ??
-          '',
+          transaction.receivable?.clientReference?.reference ??
+          (transaction.receivable?.purpose === 'MANUAL_CHARGE' ? 'Cobranca avulsa' : ''),
         Descricao: transaction.description,
         Valor: transaction.amount.toFixed(2),
       })),
@@ -433,7 +445,7 @@ export class ReportsService {
             ? `${dispatch.items.length} referencias`
             : (dispatch.items[0]?.clientReference.reference ??
               dispatch.clientReference?.reference ??
-              dispatch.receivable?.clientReference.reference ??
+              dispatch.receivable?.clientReference?.reference ??
               ''),
         Telefone: dispatch.phone,
         Vencimento:

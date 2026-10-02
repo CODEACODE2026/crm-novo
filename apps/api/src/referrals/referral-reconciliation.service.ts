@@ -220,10 +220,10 @@ export class ReferralReconciliationService {
       };
     }
 
-    if (receivable.clientReference.status !== 'ATIVO') {
+    if (receivable.clientReference!.status !== 'ATIVO') {
       return {
         eligible: false,
-        reason: `ClientReference ${receivable.clientReference.status}; status ATIVO exigido.`,
+        reason: `ClientReference ${receivable.clientReference!.status}; status ATIVO exigido.`,
       };
     }
 

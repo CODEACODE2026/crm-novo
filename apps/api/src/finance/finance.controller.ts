@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
+import { CreateManualChargeDto } from './dto/create-manual-charge.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
 import {
   CreateReceivablesPixDto,
@@ -94,6 +95,11 @@ export class FinanceController {
     return this.financeService.receivablesSummary(query);
   }
 
+  @Post('receivables/manual-charges')
+  createManualCharge(@Body() dto: CreateManualChargeDto, @Req() request: AuthenticatedRequest) {
+    return this.financeService.createManualCharge(dto, request.user.id);
+  }
+
   @Get('receivables/:id')
   getReceivable(@Param('id') id: string) {
     return this.financeService.getReceivable(id);
@@ -114,8 +120,12 @@ export class FinanceController {
   }
 
   @Post('receivables/:id/pix')
-  createReceivablePix(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
-    return this.financeService.createReceivablePix(id, request.user.id);
+  createReceivablePix(
+    @Param('id') id: string,
+    @Body() dto: { provider?: PaymentProviderCode },
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.financeService.createReceivablePix(id, request.user.id, dto);
   }
 
   @Get('receivables/:id/pix/replace-preview')

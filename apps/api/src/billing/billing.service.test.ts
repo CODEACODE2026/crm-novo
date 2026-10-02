@@ -594,6 +594,33 @@ describe('BillingService', () => {
     expect(createDispatch).not.toHaveBeenCalled();
   });
 
+  it('does not create billing dispatch for manual charge receivables', async () => {
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const manualCharge = receivable({
+      id: 'manual-charge-id',
+      purpose: 'MANUAL_CHARGE',
+      renewalId: null,
+      dueDate,
+      status: 'PENDENTE',
+    });
+    const activeReference = clientReference({
+      status: 'ATIVO',
+      dueDate,
+      receivables: [manualCharge],
+    });
+    const activeClient = client({
+      references: [activeReference],
+      receivables: [manualCharge],
+    });
+    const { service } = serviceFactory({ clients: [activeClient], createDispatch });
+
+    const result = await service.reconcile(now);
+
+    expect(result.created).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
   it('spreads three billing dispatches by the configured interval', async () => {
     const createDispatch = vi.fn().mockResolvedValue(dispatch());
     const { service } = serviceFactory({

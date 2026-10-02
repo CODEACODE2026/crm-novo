@@ -6,6 +6,21 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
+const clientFinanceTabSource = dashboardSource.slice(
+  dashboardSource.indexOf("{detailTab === 'receivables' ? ("),
+  dashboardSource.indexOf("{detailTab === 'messages' ? ("),
+);
+const clientBillingTabSource = dashboardSource.slice(
+  dashboardSource.indexOf("{detailTab === 'messages' ? ("),
+  dashboardSource.indexOf('{selectedDispatch ? ('),
+);
+const clientDetailMobileSource = stylesSource.slice(
+  stylesSource.lastIndexOf('@media (max-width: 620px)'),
+  stylesSource.lastIndexOf('@media (max-width: 480px)'),
+);
+const clientDetailCompactSource = stylesSource.slice(
+  stylesSource.lastIndexOf('@media (max-width: 480px)'),
+);
 
 describe('MOBILE1 responsiveness guardrails', () => {
   it('keeps the responsive strategy consolidated around tablet, mobile and compact mobile', () => {
@@ -100,6 +115,57 @@ describe('MOBILE1 responsiveness guardrails', () => {
     expect(stylesSource).toContain('flex-wrap: nowrap;');
     expect(stylesSource).toContain('overflow-x: auto;');
     expect(stylesSource).toContain('text-overflow: ellipsis;');
+  });
+
+  it('keeps client finance and billing KPIs as compact 2x2 grids on mobile', () => {
+    expect(clientFinanceTabSource).toContain('className="client-tab-summary"');
+    expect(clientFinanceTabSource).toContain('label="A receber"');
+    expect(clientFinanceTabSource).toContain("clientFinanceSummary?.pendingAmount ?? '0.00'");
+    expect(clientFinanceTabSource).toContain('label="Pago"');
+    expect(clientFinanceTabSource).toContain("clientFinanceSummary?.paidAmount ?? '0.00'");
+    expect(clientFinanceTabSource).toContain('label="Vencido"');
+    expect(clientFinanceTabSource).toContain("clientFinanceSummary?.overdueAmount ?? '0.00'");
+    expect(clientFinanceTabSource).toContain('label="Cancelado"');
+    expect(clientFinanceTabSource).toContain("clientFinanceSummary?.canceledAmount ?? '0.00'");
+    expect(clientFinanceTabSource).toContain('className="toolbar finance-toolbar"');
+    expect(clientFinanceTabSource.indexOf('className="client-tab-summary"')).toBeLessThan(
+      clientFinanceTabSource.indexOf('className="toolbar finance-toolbar"'),
+    );
+    expect(clientFinanceTabSource).toContain('Todas as referências');
+    expect(clientFinanceTabSource).toContain('Todas as situações');
+    expect(clientFinanceTabSource).toContain('pagination={clientFinancePagination}');
+
+    expect(clientBillingTabSource).toContain('className="client-tab-summary"');
+    expect(clientBillingTabSource).toContain('label="Agendadas"');
+    expect(clientBillingTabSource).toContain('clientBillingSummary?.scheduled ?? 0');
+    expect(clientBillingTabSource).toContain('label="Enviadas"');
+    expect(clientBillingTabSource).toContain('clientBillingSummary?.sent ?? 0');
+    expect(clientBillingTabSource).toContain('label="Falhas"');
+    expect(clientBillingTabSource).toContain('clientBillingSummary?.failed ?? 0');
+    expect(clientBillingTabSource).toContain('label="PIX vinculados"');
+    expect(clientBillingTabSource).toContain('clientPixSummary.summary.total');
+    expect(clientBillingTabSource).toContain('className="toolbar finance-toolbar"');
+    expect(clientBillingTabSource.indexOf('className="client-tab-summary"')).toBeLessThan(
+      clientBillingTabSource.indexOf('className="toolbar finance-toolbar"'),
+    );
+    expect(clientBillingTabSource).toContain('Todas as referências');
+    expect(clientBillingTabSource).toContain('Todos os status');
+    expect(clientBillingTabSource).toContain('pagination={clientBillingPagination}');
+
+    expect(clientDetailMobileSource).toContain('.client-tab-summary {');
+    expect(clientDetailMobileSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(clientDetailMobileSource).toContain('.client-tab-summary .metric-card');
+    expect(clientDetailMobileSource).toContain('min-width: 0;');
+    expect(clientDetailMobileSource).toContain('min-height: 72px;');
+    expect(clientDetailMobileSource).toContain('padding: 10px;');
+    expect(clientDetailMobileSource).toContain('.client-tab-panel .finance-toolbar');
+    expect(clientDetailMobileSource).toContain('margin-bottom: 0;');
+    expect(clientDetailCompactSource).toContain('.client-tab-summary {');
+    expect(clientDetailCompactSource).toContain('gap: 7px;');
+    expect(clientDetailCompactSource).toContain('font-size: clamp(13px, 4.4vw, 15px);');
+    expect(clientDetailCompactSource).not.toContain(
+      '.client-tab-summary {\n    grid-template-columns: 1fr;',
+    );
   });
 
   it('uses mobile-safe modal sizing and PIX content wrapping', () => {

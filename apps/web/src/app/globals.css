@@ -7320,6 +7320,7 @@ tbody tr:hover,
 
   .client-tab-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .toolbar,
@@ -8863,6 +8864,43 @@ tbody tr:hover,
     line-height: 1.1;
   }
 
+  .client-tab-panel {
+    gap: 10px;
+  }
+
+  .client-tab-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .client-tab-summary .metric-card {
+    min-width: 0;
+    min-height: 72px;
+    padding: 10px;
+  }
+
+  .client-tab-summary .stat-card-top {
+    min-width: 0;
+  }
+
+  .client-tab-summary .metric-label {
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .client-tab-summary .metric-value {
+    min-width: 0;
+    font-size: 17px;
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+  }
+
+  .client-tab-panel .finance-toolbar {
+    gap: 8px;
+    margin-bottom: 0;
+  }
+
   .client-detail-view .tabs {
     flex-wrap: nowrap;
     gap: 6px;
@@ -8920,6 +8958,23 @@ tbody tr:hover,
 
   .client-detail-kpis .metric-value {
     font-size: 15px;
+  }
+
+  .client-tab-panel {
+    gap: 8px;
+  }
+
+  .client-tab-summary {
+    gap: 7px;
+  }
+
+  .client-tab-summary .metric-card {
+    min-height: 66px;
+    padding: 9px;
+  }
+
+  .client-tab-summary .metric-value {
+    font-size: clamp(13px, 4.4vw, 15px);
   }
 
   .client-detail-view .tabs {

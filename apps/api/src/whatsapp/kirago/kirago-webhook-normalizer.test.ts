@@ -146,12 +146,42 @@ describe('KiragoWebhookNormalizer', () => {
     expect(group?.phone).toBeNull();
   });
 
+  it('uses the remote Chat phone for outgoing messages when SenderAlt is the instance phone', () => {
+    const result = normalizer.normalize(
+      payload({
+        jid: { contact: {}, chat: {}, sender: { pn: '5544000000000' } },
+        event: {
+          Info: {
+            ...payload().event.Info,
+            IsFromMe: true,
+            SenderAlt: '5544000000000@s.whatsapp.net',
+            Sender: '5544000000000@s.whatsapp.net',
+            Chat: '5544888888888@s.whatsapp.net',
+          },
+          Message: { conversation: 'Mensagem enviada fora do CRM' },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      direction: 'OUTGOING',
+      phone: '5544888888888',
+      text: 'Mensagem enviada fora do CRM',
+    });
+  });
+
   it('uses SenderAlt as phone fallback and refuses pure LID', () => {
     const fromSenderAlt = normalizer.normalize(
       payload({
         jid: { contact: {}, chat: {}, sender: {} },
         event: {
-          Info: { ...payload().event.Info, SenderAlt: '5544888888888@s.whatsapp.net' },
+          Info: {
+            ...payload().event.Info,
+            Chat: undefined,
+            Sender: undefined,
+            SenderAlt: '5544888888888@s.whatsapp.net',
+          },
           Message: { conversation: 'Oi' },
         },
       }),
@@ -161,7 +191,12 @@ describe('KiragoWebhookNormalizer', () => {
       payload({
         jid: { contact: { pn: '12345@lid' }, chat: {}, sender: {} },
         event: {
-          Info: { ...payload().event.Info, SenderAlt: undefined },
+          Info: {
+            ...payload().event.Info,
+            Chat: undefined,
+            Sender: undefined,
+            SenderAlt: undefined,
+          },
           Message: { conversation: 'Oi' },
         },
       }),

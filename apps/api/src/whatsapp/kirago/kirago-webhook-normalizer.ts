@@ -92,8 +92,10 @@ export class KiragoWebhookNormalizer {
     const candidates = [
       asRecord(jid?.contact)?.pn,
       asRecord(jid?.chat)?.pn,
-      asRecord(jid?.sender)?.pn,
+      info?.Chat,
       info?.SenderAlt,
+      asRecord(jid?.sender)?.pn,
+      info?.Sender,
     ];
 
     for (const candidate of candidates) {

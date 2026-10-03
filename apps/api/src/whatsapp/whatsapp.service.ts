@@ -47,6 +47,7 @@ import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-c
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
 import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
+import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
@@ -681,6 +682,91 @@ export class WhatsAppService {
     };
   }
 
+  async sendConversationTextMessage(id: string, dto: SendWhatsAppConversationMessageDto) {
+    const body = dto.body.trim();
+
+    if (!body) {
+      throw new BadRequestException('Mensagem obrigatoria.');
+    }
+
+    const requestId = dto.requestId?.trim() || randomUUID();
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      include: { whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const connection = conversation.whatsAppConnection;
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const existing = await this.findConversationMessageByRequestId(connection.id, requestId);
+
+    if (existing) {
+      this.assertMessageBelongsToConversation(existing, conversation.id);
+      return this.presentConversationMessage(existing);
+    }
+
+    const pending = await this.createPendingConversationTextMessage(conversation, {
+      body,
+      requestId,
+    });
+
+    try {
+      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+      const result = await this.mapConnectionProviderError(connection, () =>
+        this.provider.sendText(instanceToken, {
+          phone: conversation.phoneNormalized,
+          body,
+          requestId,
+        }),
+      );
+      const sentAt = new Date();
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const message = await tx.whatsAppMessage.update({
+          where: { id: pending.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: result.providerMessageId,
+            sentAt,
+            failedAt: null,
+          },
+        });
+
+        await tx.whatsAppConversation.update({
+          where: { id: conversation.id },
+          data: {
+            lastMessageAt: sentAt,
+            lastMessagePreview: this.conversationLastMessagePreview('TEXT', { text: body }),
+          },
+        });
+
+        return message;
+      });
+
+      return this.presentConversationMessage(updated);
+    } catch (error) {
+      const failed = await this.prisma.whatsAppMessage.update({
+        where: { id: pending.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          rawMetadata: {
+            source: 'manual_outbound_send',
+            errorMessage: this.sanitizeError(error),
+          },
+        },
+      });
+
+      return this.presentConversationMessage(failed);
+    }
+  }
+
   async markConversationAsRead(id: string) {
     await this.ensureConversationExists(id);
     const conversation = await this.prisma.whatsAppConversation.update({
@@ -1307,10 +1393,25 @@ export class WhatsAppService {
     return this.prisma.$transaction(async (tx) => {
       const existingMessage = await this.findExistingConversationMessage(tx, connection.id, {
         providerMessageId: normalized.messageId,
-        requestId: null,
+        requestId: this.webhookRequestIdCandidate(normalized),
       });
 
       if (existingMessage) {
+        if (normalized.direction === 'OUTGOING') {
+          const reconciled = await this.reconcileOutgoingConversationMessage(
+            tx,
+            existingMessage,
+            normalized,
+          );
+
+          return {
+            processed: true,
+            action: 'outgoing_conversation_message_reconciled',
+            conversationId: reconciled.conversationId,
+            messageId: reconciled.id,
+          };
+        }
+
         return {
           processed: true,
           action: 'duplicate_conversation_message',
@@ -1420,7 +1521,7 @@ export class WhatsAppService {
         input.conversation.whatsAppConnectionId,
         {
           providerMessageId: input.normalized.messageId,
-          requestId: null,
+          requestId: this.webhookRequestIdCandidate(input.normalized),
         },
       );
 
@@ -1444,7 +1545,6 @@ export class WhatsAppService {
           whatsAppConnectionId,
           providerMessageId: input.providerMessageId,
         },
-        select: { id: true, conversationId: true },
       });
 
       if (byProviderMessageId) {
@@ -1458,8 +1558,56 @@ export class WhatsAppService {
 
     return tx.whatsAppMessage.findFirst({
       where: { whatsAppConnectionId, requestId: input.requestId },
-      select: { id: true, conversationId: true },
     });
+  }
+
+  private webhookRequestIdCandidate(normalized: NormalizedWhatsAppMessage) {
+    return normalized.direction === 'OUTGOING' ? normalized.messageId : null;
+  }
+
+  private async reconcileOutgoingConversationMessage(
+    tx: Prisma.TransactionClient,
+    existing: WhatsAppMessage,
+    normalized: NormalizedWhatsAppMessage & { phone: string },
+  ) {
+    const messageType = this.toConversationMessageType(normalized.messageType);
+    const media = this.conversationMediaFields(normalized.mediaMetadata);
+    const sentAt = normalized.messageTimestamp ?? normalized.receivedAt ?? new Date();
+    const updated = await tx.whatsAppMessage.update({
+      where: { id: existing.id },
+      data: {
+        providerMessageId: existing.providerMessageId ?? normalized.messageId,
+        status: 'SENT',
+        sentAt: existing.sentAt ?? sentAt,
+        failedAt: null,
+        type: messageType,
+        ...(existing.text === null
+          ? { text: this.conversationMessageText(messageType, normalized.text) }
+          : {}),
+        ...(existing.mediaMimeType === null ? { mediaMimeType: media.mediaMimeType } : {}),
+        ...(existing.mediaFileName === null ? { mediaFileName: media.mediaFileName } : {}),
+        ...(existing.mediaSizeBytes === null ? { mediaSizeBytes: media.mediaSizeBytes } : {}),
+        ...(existing.mediaDurationSeconds === null
+          ? { mediaDurationSeconds: media.mediaDurationSeconds }
+          : {}),
+        ...(existing.rawMetadata === null
+          ? { rawMetadata: this.buildConversationRawMetadata(normalized) }
+          : {}),
+      },
+    });
+
+    await tx.whatsAppConversation.update({
+      where: { id: existing.conversationId },
+      data: {
+        lastMessageAt: updated.sentAt ?? sentAt,
+        lastMessagePreview: this.conversationLastMessagePreview(messageType, {
+          text: updated.text,
+          mediaFileName: updated.mediaFileName,
+        }),
+      },
+    });
+
+    return updated;
   }
 
   private async upsertWebhookConversation(
@@ -1590,6 +1738,69 @@ export class WhatsAppService {
 
     if (!exists) {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+  }
+
+  private async findConversationMessageByRequestId(
+    whatsAppConnectionId: string,
+    requestId: string,
+  ) {
+    return this.prisma.whatsAppMessage.findFirst({
+      where: { whatsAppConnectionId, requestId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private assertMessageBelongsToConversation(
+    message: Pick<WhatsAppMessage, 'conversationId'>,
+    conversationId: string,
+  ) {
+    if (message.conversationId !== conversationId) {
+      throw new ConflictException('requestId ja foi usado em outra conversa desta conexao.');
+    }
+  }
+
+  private async createPendingConversationTextMessage(
+    conversation: WhatsAppConversation,
+    input: { body: string; requestId: string },
+  ) {
+    try {
+      return await this.prisma.whatsAppMessage.create({
+        data: buildWhatsAppMessageCreateDataForConversation(conversation, {
+          provider: 'KIRAGO',
+          providerMessageId: null,
+          requestId: input.requestId,
+          messageDispatchId: null,
+          direction: 'OUTBOUND',
+          type: 'TEXT',
+          text: input.body,
+          status: 'PENDING',
+          sentAt: null,
+          failedAt: null,
+          isFromMe: true,
+          rawMetadata: Prisma.JsonNull,
+          mediaMimeType: null,
+          mediaFileName: null,
+          mediaSizeBytes: null,
+          mediaDurationSeconds: null,
+        }),
+      });
+    } catch (error) {
+      if (!this.isDuplicateConversationMessage(error)) {
+        throw error;
+      }
+
+      const existing = await this.findConversationMessageByRequestId(
+        conversation.whatsAppConnectionId,
+        input.requestId,
+      );
+
+      if (existing) {
+        this.assertMessageBelongsToConversation(existing, conversation.id);
+        return existing;
+      }
+
+      throw error;
     }
   }
 
@@ -2293,6 +2504,7 @@ export class WhatsAppService {
       sentAt: message.sentAt,
       failedAt: message.failedAt,
       isFromMe: message.isFromMe,
+      providerMessageId: message.providerMessageId,
       mediaMimeType: message.mediaMimeType,
       mediaFileName: message.mediaFileName,
       mediaSizeBytes: message.mediaSizeBytes,
@@ -2434,7 +2646,11 @@ export class WhatsAppService {
 
   private sanitizeError(error: unknown) {
     if (error instanceof Error) {
-      return error.message.slice(0, 240);
+      return error.message
+        .replace(/authorization\s*[:=]\s*bearer\s+[^\s"',;}]+/gi, 'Authorization: [redacted]')
+        .replace(/(token|secret|api[_-]?key)\s*[:=]\s*["']?[^"',;}\s]+/gi, '$1=[redacted]')
+        .replace(/([?&](?:token|secret|api[_-]?key)=)[^&\s"']+/gi, '$1[redacted]')
+        .slice(0, 240);
     }
 
     return 'Falha ao enviar mensagem WhatsApp.';

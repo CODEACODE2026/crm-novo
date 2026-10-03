@@ -61,6 +61,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       listConversations: vi.fn().mockResolvedValue({ items: [] }),
       getConversation: vi.fn().mockResolvedValue({ id: 'conversation-id' }),
       listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
+      sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
       markConversationAsRead: vi.fn().mockResolvedValue({ unreadCount: 0 }),
       resolveConversation: vi.fn().mockResolvedValue({ status: 'RESOLVED' }),
     };
@@ -75,6 +76,12 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(
       subject.listConversationMessages('conversation-id', { page: 1, limit: 20 }),
     ).resolves.toEqual({ items: [] });
+    await expect(
+      subject.sendConversationMessage('conversation-id', {
+        body: 'Ola',
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      }),
+    ).resolves.toEqual({ id: 'message-id' });
     await expect(subject.markConversationAsRead('conversation-id')).resolves.toEqual({
       unreadCount: 0,
     });
@@ -87,6 +94,10 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     expect(service.listConversationMessages).toHaveBeenCalledWith('conversation-id', {
       page: 1,
       limit: 20,
+    });
+    expect(service.sendConversationTextMessage).toHaveBeenCalledWith('conversation-id', {
+      body: 'Ola',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
     });
     expect(service.markConversationAsRead).toHaveBeenCalledWith('conversation-id');
     expect(service.resolveConversation).toHaveBeenCalledWith('conversation-id');

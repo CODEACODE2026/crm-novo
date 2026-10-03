@@ -23,6 +23,7 @@ import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-c
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
 import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
+import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { WhatsAppService } from './whatsapp.service';
 
@@ -99,6 +100,14 @@ export class WhatsAppController {
     @Query() query: ListWhatsAppConversationMessagesDto,
   ) {
     return this.whatsAppService.listConversationMessages(id, query);
+  }
+
+  @Post('conversations/:id/messages')
+  sendConversationMessage(
+    @Param('id') id: string,
+    @Body() dto: SendWhatsAppConversationMessageDto,
+  ) {
+    return this.whatsAppService.sendConversationTextMessage(id, dto);
   }
 
   @Get('conversations/:id')

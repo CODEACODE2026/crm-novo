@@ -159,6 +159,7 @@ export class ClientsService {
     const items = await this.prisma.client.findMany({
       where: this.buildOptionWhere(search, normalizedPhone),
       select: {
+        email: true,
         id: true,
         name: true,
         phoneNormalized: true,
@@ -170,6 +171,7 @@ export class ClientsService {
 
     return items.map((client) => ({
       id: client.id,
+      email: client.email,
       name: client.name,
       reference: this.referenceSummary(client.references),
       phoneNormalized: client.phoneNormalized,
@@ -768,6 +770,7 @@ export class ClientsService {
   ): Prisma.ClientWhereInput {
     return {
       OR: [
+        { email: { contains: search, mode: 'insensitive' } },
         { name: { contains: search, mode: 'insensitive' } },
         { references: { some: { reference: { contains: search, mode: 'insensitive' } } } },
         ...this.buildPhoneSearchConditions(search),

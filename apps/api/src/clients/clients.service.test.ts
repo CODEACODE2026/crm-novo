@@ -11,6 +11,7 @@ import { parseBusinessDate } from './utils/business-date';
 const clients = [
   {
     id: '11111111-1111-4111-8111-111111111111',
+    email: 'bruno@example.com',
     name: 'Bruno Silva',
     references: [{ reference: 'bruno1499' }],
     phone: '(44) 99821-2815',
@@ -18,6 +19,7 @@ const clients = [
   },
   {
     id: '22222222-2222-4222-8222-222222222222',
+    email: 'joao@example.com',
     name: 'Joao Souza',
     references: [{ reference: 'joao2044' }],
     phone: '(44) 99999-1111',
@@ -30,6 +32,7 @@ function optionAt(index: number) {
 
   return {
     id: client.id,
+    email: client.email,
     name: client.name,
     reference: client.references.map((reference) => reference.reference).join(', '),
     phoneNormalized: client.phoneNormalized,
@@ -43,6 +46,7 @@ function createService() {
         const terms = (where?.OR ?? [])
           .flatMap((condition) => [
             getContains(condition.name),
+            getContains(condition.email),
             getReferenceContains(condition),
             getContains(condition.phone),
             getContains(condition.phoneNormalized),
@@ -57,6 +61,7 @@ function createService() {
 
                 return (
                   client.name.toLowerCase().includes(normalizedTerm) ||
+                  client.email.toLowerCase().includes(normalizedTerm) ||
                   client.references.some((reference) =>
                     reference.reference.toLowerCase().includes(normalizedTerm),
                   ) ||
@@ -66,7 +71,8 @@ function createService() {
               }),
             )
             .slice(0, take)
-            .map(({ id, name, references, phoneNormalized }) => ({
+            .map(({ email, id, name, references, phoneNormalized }) => ({
+              email,
               id,
               name,
               references,
@@ -515,6 +521,12 @@ describe('ClientsService options', () => {
     const service = createService();
 
     await expect(service.options({ search: '5544999991111' })).resolves.toEqual([optionAt(1)]);
+  });
+
+  it('searches lightweight client options by email', async () => {
+    const service = createService();
+
+    await expect(service.options({ search: 'joao@example.com' })).resolves.toEqual([optionAt(1)]);
   });
 
   it('returns no options without results or search text', async () => {

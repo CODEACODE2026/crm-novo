@@ -661,6 +661,18 @@ describe('CRM UI formatters', () => {
     );
   });
 
+  it('fetches lightweight client options with an autocomplete limit', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('[]', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listClientOptions('ana@email.com', { limit: 15 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/clients/options?search=ana%40email.com&limit=15'),
+      expect.any(Object),
+    );
+  });
+
   it('posts the unchanged new-client payload contract', async () => {
     const fetchMock = vi
       .fn()

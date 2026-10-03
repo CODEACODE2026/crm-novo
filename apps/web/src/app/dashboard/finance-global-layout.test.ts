@@ -224,6 +224,39 @@ describe('global finance presentation source', () => {
     );
   });
 
+  it('uses remote client autocomplete for finance client selection', () => {
+    expect(dashboardSource).toContain('function FinanceClientAutocomplete');
+    expect(dashboardSource).toContain("placeholder = 'Buscar por nome, telefone ou e-mail...'");
+    expect(dashboardSource).toContain('(term) => listClientOptions(term, { limit: 15 })');
+    expect(dashboardSource).toContain('scheduleClientReferralSearch(');
+    expect(dashboardSource).toContain('Carregando...');
+    expect(dashboardSource).toContain('Nenhum cliente encontrado');
+    expect(dashboardSource).toContain('financeClientOptionDetails(option)');
+    expect(dashboardSource).toContain('selectClient(options[activeIndex]');
+    expect(dashboardSource).toContain("onChange('', null);");
+    expect(dashboardSource).toContain('aria-label="Limpar cliente"');
+    expect(dashboardSource).toContain('setForm({ ...form, clientId });');
+    expect(stylesSource).toContain('.finance-client-autocomplete');
+    expect(stylesSource).toContain('.finance-client-autocomplete .autocomplete-option span,');
+    expect(stylesSource).toContain('overflow-wrap: anywhere;');
+  });
+
+  it('keeps manual entry client optional and manual PIX registered clients required', () => {
+    expect(dashboardSource).toContain('<FinanceClientAutocomplete');
+    expect(dashboardSource).toContain('selectedClient={selectedEntryClient}');
+    expect(dashboardSource).toContain('setSelectedEntryClient(client);');
+    expect(dashboardSource).toContain('required');
+    expect(dashboardSource).toContain('selectedClient={selectedClient}');
+    expect(dashboardSource).toContain('onSelectClient={setSelectedManualChargeClient}');
+    expect(dashboardSource).toContain(
+      "if (manualChargeForm.payerType === 'REGISTERED_CLIENT' && !manualChargeForm.clientId)",
+    );
+    expect(dashboardSource).toContain('Selecione um cliente cadastrado para continuar.');
+    expect(dashboardSource).toContain(
+      "onUpdateForm({ ...form, clientId: '', payerType: 'GUEST' });",
+    );
+  });
+
   it('keeps manual PIX errors friendly and accessible', () => {
     expect(dashboardSource).toContain('function manualPixFriendlyError');
     expect(dashboardSource).toContain('function manualPixKnownErrorMessage');

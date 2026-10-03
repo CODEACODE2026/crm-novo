@@ -1271,6 +1271,7 @@ export interface RemovalPreview<TTarget> {
 }
 
 export interface ClientOption {
+  email: string | null;
   id: string;
   name: string;
   reference: string;
@@ -1601,11 +1602,12 @@ export function listClients(filters: ClientListFilters = {}) {
   return apiFetch<PaginatedClients>(`/clients${query ? `?${query}` : ''}`);
 }
 
-export function listClientOptions(search: string) {
+export function listClientOptions(search: string, options: { limit?: number } = {}) {
   const params = new URLSearchParams();
   const trimmedSearch = search.trim();
 
   if (trimmedSearch) params.set('search', trimmedSearch);
+  if (options.limit) params.set('limit', String(options.limit));
 
   const query = params.toString();
   return apiFetch<ClientOption[]>(`/clients/options${query ? `?${query}` : ''}`);

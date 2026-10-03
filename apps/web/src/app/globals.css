@@ -241,7 +241,8 @@ a {
 }
 
 .autocomplete-option:hover,
-.autocomplete-option:focus-visible {
+.autocomplete-option:focus-visible,
+.autocomplete-option.active {
   background: var(--surface-soft);
 }
 
@@ -255,6 +256,19 @@ a {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.3;
+}
+
+.finance-client-autocomplete {
+  min-width: 0;
+}
+
+.finance-client-autocomplete .autocomplete-menu {
+  max-width: 100%;
+}
+
+.finance-client-autocomplete .autocomplete-option span,
+.finance-selected-client span {
+  overflow-wrap: anywhere;
 }
 
 .field textarea {
@@ -9940,6 +9954,15 @@ tbody tr:hover,
   .modal .field textarea {
     min-height: 36px;
     padding: 8px 10px;
+  }
+
+  .modal .finance-client-autocomplete .autocomplete-menu {
+    max-height: min(220px, 42vh);
+  }
+
+  .modal .finance-client-autocomplete .autocomplete-control input {
+    min-height: 0;
+    padding: 8px 0;
   }
 
   .modal .field small {

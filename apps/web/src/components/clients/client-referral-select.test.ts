@@ -9,6 +9,7 @@ import {
 import type { ClientOption } from '../../lib/crm-api';
 
 const bruno: ClientOption = {
+  email: 'bruno@example.com',
   id: 'client-1',
   name: 'Bruno Silva',
   reference: 'bruno1499',

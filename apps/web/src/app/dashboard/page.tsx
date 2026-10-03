@@ -86,7 +86,11 @@ import {
 } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
-import { ClientReferralSelect } from '../../components/clients/client-referral-select';
+import {
+  ClientReferralSelect,
+  formatNormalizedBrazilPhone,
+  scheduleClientReferralSearch,
+} from '../../components/clients/client-referral-select';
 import { StatusBadge } from '../../components/clients/status-badge';
 import {
   clientInitial,
@@ -154,6 +158,7 @@ import {
   getWhatsAppWebhook,
   ignoreWhatsAppPendingContact,
   listFinancialCategories,
+  listClientOptions,
   listClients,
   listFinancialTransactions,
   listPaymentProviderCredentials,
@@ -235,6 +240,7 @@ import {
   type ActivePixConflictPayload,
   type Client,
   type ClientEvent,
+  type ClientOption,
   type ClientPayload,
   type ClientReference,
   type ClientStatus,
@@ -14680,6 +14686,214 @@ function transactionFormFromRecord(transaction: FinancialTransaction): Transacti
   };
 }
 
+function clientOptionFromClient(
+  client: Pick<Client, 'email' | 'id' | 'name' | 'phoneNormalized' | 'reference'>,
+): ClientOption {
+  return {
+    email: client.email,
+    id: client.id,
+    name: client.name,
+    phoneNormalized: client.phoneNormalized,
+    reference: client.reference,
+  };
+}
+
+function clientOptionFromTransactionClient(
+  client: FinancialTransaction['client'],
+): ClientOption | null {
+  if (!client) return null;
+
+  return {
+    email: null,
+    id: client.id,
+    name: client.name,
+    phoneNormalized: '',
+    reference: client.reference,
+  };
+}
+
+function financeClientOptionDetails(option: ClientOption) {
+  const phone = option.phoneNormalized ? formatNormalizedBrazilPhone(option.phoneNormalized) : '';
+  return [phone, option.email].filter(Boolean).join(' • ');
+}
+
+function FinanceClientAutocomplete({
+  disabled = false,
+  label = 'Cliente',
+  placeholder = 'Buscar por nome, telefone ou e-mail...',
+  required = false,
+  selectedClient,
+  value,
+  onChange,
+}: {
+  disabled?: boolean;
+  label?: string;
+  placeholder?: string;
+  required?: boolean;
+  selectedClient: ClientOption | null;
+  value: string;
+  onChange: (clientId: string, client: ClientOption | null) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [options, setOptions] = useState<ClientOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const requestIdRef = useRef(0);
+  const trimmedSearch = search.trim();
+
+  useEffect(() => {
+    if (!trimmedSearch) {
+      setOptions([]);
+      setLoading(false);
+      setActiveIndex(0);
+      return undefined;
+    }
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setLoading(true);
+
+    return scheduleClientReferralSearch(
+      trimmedSearch,
+      (term) => listClientOptions(term, { limit: 15 }),
+      (items) => {
+        if (requestIdRef.current === requestId) {
+          setOptions(items);
+          setActiveIndex(0);
+        }
+      },
+      () => {
+        if (requestIdRef.current === requestId) {
+          setLoading(false);
+        }
+      },
+    );
+  }, [trimmedSearch]);
+
+  function selectClient(option: ClientOption | null) {
+    onChange(option?.id ?? '', option);
+    setSearch('');
+    setOptions([]);
+    setOpen(false);
+    setActiveIndex(0);
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (!open && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+      setOpen(true);
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex((current) => Math.min(Math.max(0, options.length - 1), current + 1));
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(0, current - 1));
+    }
+
+    if (event.key === 'Enter' && open && options.length) {
+      event.preventDefault();
+      selectClient(options[activeIndex] ?? options[0] ?? null);
+    }
+
+    if (event.key === 'Escape') {
+      setOpen(false);
+    }
+  }
+
+  const showMenu = open && trimmedSearch.length > 0;
+  const selectedDetails = selectedClient ? financeClientOptionDetails(selectedClient) : '';
+
+  return (
+    <div className="field finance-client-autocomplete">
+      <span>{label}</span>
+      <div className="autocomplete-search-box">
+        <div className="autocomplete-control">
+          <Search aria-hidden="true" size={16} />
+          <input
+            aria-expanded={showMenu}
+            aria-label={label}
+            aria-required={required}
+            autoComplete="off"
+            disabled={disabled}
+            placeholder={selectedClient ? selectedClient.name : placeholder}
+            role="combobox"
+            value={search}
+            onBlur={() => {
+              window.setTimeout(() => setOpen(false), 120);
+            }}
+            onChange={(event) => {
+              if (value) {
+                onChange('', null);
+              }
+              setSearch(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => {
+              if (trimmedSearch) setOpen(true);
+            }}
+            onKeyDown={handleKeyDown}
+          />
+          {value ? (
+            <button
+              aria-label="Limpar cliente"
+              className="inline-icon-button"
+              disabled={disabled}
+              type="button"
+              onClick={() => selectClient(null)}
+            >
+              <X aria-hidden="true" size={15} />
+            </button>
+          ) : null}
+        </div>
+
+        {showMenu ? (
+          <div className="autocomplete-menu" role="listbox">
+            {loading ? <div className="autocomplete-status">Carregando...</div> : null}
+
+            {!loading && !options.length ? (
+              <div className="autocomplete-status">Nenhum cliente encontrado</div>
+            ) : null}
+
+            {!loading
+              ? options.map((option, index) => (
+                  <button
+                    aria-selected={index === activeIndex}
+                    className={`autocomplete-option${index === activeIndex ? ' active' : ''}`}
+                    key={option.id}
+                    role="option"
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectClient(option)}
+                  >
+                    <strong>{option.name}</strong>
+                    {financeClientOptionDetails(option) ? (
+                      <span>{financeClientOptionDetails(option)}</span>
+                    ) : null}
+                  </button>
+                ))
+              : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="selected-referral finance-selected-client">
+        {selectedClient ? (
+          <>
+            <strong>{selectedClient.name}</strong>
+            {selectedDetails ? <span>{selectedDetails}</span> : null}
+          </>
+        ) : (
+          <span>Sem cliente</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TransactionSection({
   items,
   kind,
@@ -14818,6 +15032,13 @@ function TransactionModal({
   const [manualChargeForm, setManualChargeForm] = useState<ManualChargeFormState>(() =>
     manualChargeInitialForm(categories),
   );
+  const [selectedEntryClient, setSelectedEntryClient] = useState<ClientOption | null>(() => {
+    if (!transaction?.client) return null;
+    return clientOptionFromTransactionClient(transaction.client);
+  });
+  const [selectedManualChargeClient, setSelectedManualChargeClient] = useState<ClientOption | null>(
+    null,
+  );
   const [manualChargeStep, setManualChargeStep] = useState<ManualChargeStep>('FORM');
   const [manualCharge, setManualCharge] = useState<Receivable | null>(null);
   const [manualPixIntent, setManualPixIntent] = useState<PaymentIntent | null>(null);
@@ -14859,7 +15080,6 @@ function TransactionModal({
     manualChargeForm.provider && eligiblePixProviders.includes(manualChargeForm.provider)
       ? manualChargeForm.provider
       : defaultPixProvider;
-  const selectedClient = clients.find((client) => client.id === manualChargeForm.clientId) ?? null;
   const manualPixBusy = manualPixWorkingAction !== null;
 
   useEffect(() => {
@@ -14872,6 +15092,8 @@ function TransactionModal({
         ? transactionFormFromRecord(transaction)
         : transactionInitialForm(categoriesRef.current),
     );
+    setSelectedEntryClient(clientOptionFromTransactionClient(transaction?.client ?? null));
+    setSelectedManualChargeClient(null);
     setMode('MANUAL_ENTRY');
     setManualChargeForm(manualChargeInitialForm(categoriesRef.current));
     setManualChargeStep('FORM');
@@ -14896,6 +15118,18 @@ function TransactionModal({
   }, [categories]);
 
   useEffect(() => {
+    if (!form.clientId) return;
+    const client = clients.find((item) => item.id === form.clientId);
+    if (client) setSelectedEntryClient(clientOptionFromClient(client));
+  }, [clients, form.clientId]);
+
+  useEffect(() => {
+    if (!manualChargeForm.clientId) return;
+    const client = clients.find((item) => item.id === manualChargeForm.clientId);
+    if (client) setSelectedManualChargeClient(clientOptionFromClient(client));
+  }, [clients, manualChargeForm.clientId]);
+
+  useEffect(() => {
     if (!manualChargeEntryMode || mode !== 'MANUAL_PIX') return;
 
     void listPaymentProviderCredentials()
@@ -14916,6 +15150,8 @@ function TransactionModal({
 
   function closeAndReset() {
     setForm(transactionInitialForm(categories));
+    setSelectedEntryClient(null);
+    setSelectedManualChargeClient(null);
     setMode('MANUAL_ENTRY');
     setManualChargeForm(manualChargeInitialForm(categories));
     setManualChargeStep('FORM');
@@ -15295,20 +15531,14 @@ function TransactionModal({
                   onChange={(event) => setForm({ ...form, transactionDate: event.target.value })}
                 />
               </label>
-              <label className="field">
-                <span>Cliente</span>
-                <select
-                  value={form.clientId}
-                  onChange={(event) => setForm({ ...form, clientId: event.target.value })}
-                >
-                  <option value="">Sem cliente</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <FinanceClientAutocomplete
+                selectedClient={selectedEntryClient}
+                value={form.clientId}
+                onChange={(clientId, client) => {
+                  setForm({ ...form, clientId });
+                  setSelectedEntryClient(client);
+                }}
+              />
               <label className="field">
                 <span>Observação</span>
                 <input
@@ -15322,7 +15552,6 @@ function TransactionModal({
           {manualChargeEntryMode && mode === 'MANUAL_PIX' ? (
             <ManualPixChargeContent
               categories={activeEntryCategories}
-              clients={clients}
               defaultPixProvider={defaultPixProvider}
               eligiblePixProviders={eligiblePixProviders}
               form={manualChargeForm}
@@ -15330,7 +15559,7 @@ function TransactionModal({
               pixIntent={manualPixIntent}
               pixNotice={pixNotice}
               pixWhatsAppFailed={pixWhatsAppFailed}
-              selectedClient={selectedClient}
+              selectedClient={selectedManualChargeClient}
               selectedPixProvider={selectedManualPixProvider}
               step={manualChargeStep}
               workingAction={manualPixWorkingAction}
@@ -15340,6 +15569,7 @@ function TransactionModal({
               onGeneratePix={() => void generateManualPix()}
               onReplaceProvider={() => void replaceManualPixProvider()}
               onSendWhatsApp={() => void sendManualPixWhatsApp()}
+              onSelectClient={setSelectedManualChargeClient}
               onUpdateForm={setManualChargeForm}
             />
           ) : null}
@@ -15375,7 +15605,6 @@ function TransactionModal({
 
 function ManualPixChargeContent({
   categories,
-  clients,
   defaultPixProvider,
   eligiblePixProviders,
   form,
@@ -15393,10 +15622,10 @@ function ManualPixChargeContent({
   onGeneratePix,
   onReplaceProvider,
   onSendWhatsApp,
+  onSelectClient,
   onUpdateForm,
 }: {
   categories: FinancialCategory[];
-  clients: Client[];
   defaultPixProvider: ConfigurablePaymentProvider | null;
   eligiblePixProviders: ConfigurablePaymentProvider[];
   form: ManualChargeFormState;
@@ -15404,7 +15633,7 @@ function ManualPixChargeContent({
   pixIntent: PaymentIntent | null;
   pixNotice: string;
   pixWhatsAppFailed: boolean;
-  selectedClient: Client | null;
+  selectedClient: ClientOption | null;
   selectedPixProvider: ConfigurablePaymentProvider | null;
   step: ManualChargeStep;
   workingAction: ManualPixWorkingAction;
@@ -15414,6 +15643,7 @@ function ManualPixChargeContent({
   onGeneratePix: () => void;
   onReplaceProvider: () => void;
   onSendWhatsApp: () => void;
+  onSelectClient: (client: ClientOption | null) => void;
   onUpdateForm: (form: ManualChargeFormState) => void;
 }) {
   const canUsePixActions = Boolean(manualCharge && manualCharge.status === 'PENDENTE');
@@ -15480,7 +15710,10 @@ function ManualPixChargeContent({
                 name="manual-charge-payer"
                 type="radio"
                 value="GUEST"
-                onChange={() => onUpdateForm({ ...form, payerType: 'GUEST' })}
+                onChange={() => {
+                  onUpdateForm({ ...form, clientId: '', payerType: 'GUEST' });
+                  onSelectClient(null);
+                }}
               />
               <span>
                 <strong>Pagador avulso</strong>
@@ -15490,28 +15723,17 @@ function ManualPixChargeContent({
           </fieldset>
 
           {form.payerType === 'REGISTERED_CLIENT' ? (
-            <label className="field manual-pix-client-field manual-pix-full">
-              <span>Cliente</span>
-              <select
+            <div className="manual-pix-client-field manual-pix-full">
+              <FinanceClientAutocomplete
                 required
+                selectedClient={selectedClient}
                 value={form.clientId}
-                onChange={(event) => onUpdateForm({ ...form, clientId: event.target.value })}
-              >
-                <option value="">Selecione um cliente</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
-              {selectedClient ? (
-                <small>
-                  {selectedClient.name} ·{' '}
-                  {normalizeWhatsAppDisplayPhone(selectedClient.phoneNormalized) ??
-                    selectedClient.phoneNormalized}
-                </small>
-              ) : null}
-            </label>
+                onChange={(clientId, client) => {
+                  onUpdateForm({ ...form, clientId });
+                  onSelectClient(client);
+                }}
+              />
+            </div>
           ) : (
             <>
               <label className="field manual-pix-payer-name-field">

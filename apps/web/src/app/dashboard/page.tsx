@@ -245,6 +245,7 @@ import {
   type ClientReference,
   type ClientStatus,
   type ClientUpdatePayload,
+  type ConfigurablePaymentProvider,
   type DashboardSummary as DashboardSummaryPayload,
   type FinancialCategory,
   type FinancialPaymentMethod,
@@ -3740,12 +3741,10 @@ function formatTooltipPeriodLabel(period: string) {
   return formatPeriodLabel(period);
 }
 
-type ConfigurablePaymentProvider = Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
-
 const configurablePaymentProviders = [
   'FASTFLOW',
-  'FASTPIX',
   'FASTPAY',
+  'FASTPIX',
 ] satisfies ConfigurablePaymentProvider[];
 
 function ReferralsView({ clients }: { clients: Client[] }) {
@@ -8189,6 +8188,14 @@ function ClientsView({
                           label: 'Cliente desde',
                           muted: false,
                           value: formatDate(selectedClient.createdAt),
+                        },
+                        {
+                          icon: CreditCard,
+                          label: 'Provider PIX',
+                          muted: !selectedClient.preferredPixProvider,
+                          value: selectedClient.preferredPixProvider
+                            ? paymentProviderDisplay(selectedClient.preferredPixProvider)
+                            : 'Padrão do sistema',
                         },
                       ].map((item) => {
                         const Icon = item.icon;
@@ -12750,6 +12757,10 @@ function paymentProviderDisplay(provider: PaymentProviderCode) {
   return labels[provider];
 }
 
+function isConfigurablePixProvider(provider: unknown): provider is ConfigurablePaymentProvider {
+  return configurablePaymentProviders.includes(provider as ConfigurablePaymentProvider);
+}
+
 function isOperationalPixProviderCredential(credential: PaymentProviderCredentialStatus) {
   return (
     credential.configured &&
@@ -12764,6 +12775,21 @@ function replacementProviderLabel(
 ) {
   const label = paymentProviderDisplay(provider);
   return provider === defaultProvider ? `${label} - padrão` : label;
+}
+
+function pixProviderSelectionLabel(
+  source: PixProviderSelectionSource,
+  provider: ConfigurablePaymentProvider,
+  defaultProvider: ConfigurablePaymentProvider | null,
+) {
+  if (source === 'USER_SELECTED') return `${paymentProviderDisplay(provider)} - selecionado`;
+  if (source === 'CLIENT_PREFERENCE') {
+    return `${paymentProviderDisplay(provider)} - preferência do cliente`;
+  }
+
+  return provider === defaultProvider
+    ? `${paymentProviderDisplay(provider)} - padrão do sistema`
+    : paymentProviderDisplay(provider);
 }
 
 function paymentIntentStatusLabel(status: PaymentIntentStatus) {
@@ -14637,6 +14663,7 @@ type TransactionModalMode = 'MANUAL_ENTRY' | 'MANUAL_PIX';
 type ManualChargePayerMode = 'REGISTERED_CLIENT' | 'GUEST';
 type ManualChargeStep = 'FORM' | 'SUMMARY' | 'PIX';
 type ManualPixWorkingAction = 'create' | 'generate' | 'whatsapp' | 'replace' | 'cancel' | null;
+type PixProviderSelectionSource = 'SYSTEM_DEFAULT' | 'CLIENT_PREFERENCE' | 'USER_SELECTED';
 
 type ManualChargeFormState = {
   description: string;
@@ -14687,13 +14714,17 @@ function transactionFormFromRecord(transaction: FinancialTransaction): Transacti
 }
 
 function clientOptionFromClient(
-  client: Pick<Client, 'email' | 'id' | 'name' | 'phoneNormalized' | 'reference'>,
+  client: Pick<
+    Client,
+    'email' | 'id' | 'name' | 'phoneNormalized' | 'preferredPixProvider' | 'reference'
+  >,
 ): ClientOption {
   return {
     email: client.email,
     id: client.id,
     name: client.name,
     phoneNormalized: client.phoneNormalized,
+    preferredPixProvider: client.preferredPixProvider,
     reference: client.reference,
   };
 }
@@ -14708,6 +14739,7 @@ function clientOptionFromTransactionClient(
     id: client.id,
     name: client.name,
     phoneNormalized: '',
+    preferredPixProvider: null,
     reference: client.reference,
   };
 }
@@ -15039,6 +15071,8 @@ function TransactionModal({
   const [selectedManualChargeClient, setSelectedManualChargeClient] = useState<ClientOption | null>(
     null,
   );
+  const [manualPixProviderSelectionSource, setManualPixProviderSelectionSource] =
+    useState<PixProviderSelectionSource>('SYSTEM_DEFAULT');
   const [manualChargeStep, setManualChargeStep] = useState<ManualChargeStep>('FORM');
   const [manualCharge, setManualCharge] = useState<Receivable | null>(null);
   const [manualPixIntent, setManualPixIntent] = useState<PaymentIntent | null>(null);
@@ -15054,6 +15088,7 @@ function TransactionModal({
   const [formError, setFormError] = useState('');
   const manualChargeIdempotencyKeyRef = useRef(createFrontendIdempotencyKey('manual-charge'));
   const manualPixActionRef = useRef(false);
+  const manualChargeClientRequestRef = useRef(0);
   const categoriesRef = useRef(categories);
   const manualChargeEntryMode = kind === 'ENTRADA' && !editing;
   const activeEntryCategories = categories.filter((category) => category.active !== false);
@@ -15076,10 +15111,25 @@ function TransactionModal({
     ) ??
     eligiblePixProviders[0] ??
     null;
+  const selectedManualChargePreferredProvider =
+    selectedManualChargeClient?.preferredPixProvider &&
+    isConfigurablePixProvider(selectedManualChargeClient.preferredPixProvider) &&
+    eligiblePixProviders.includes(selectedManualChargeClient.preferredPixProvider)
+      ? selectedManualChargeClient.preferredPixProvider
+      : null;
+  const unavailableManualChargePreferredProvider =
+    selectedManualChargeClient?.preferredPixProvider &&
+    (!isConfigurablePixProvider(selectedManualChargeClient.preferredPixProvider) ||
+      !eligiblePixProviders.includes(selectedManualChargeClient.preferredPixProvider))
+      ? selectedManualChargeClient.preferredPixProvider
+      : null;
   const selectedManualPixProvider =
-    manualChargeForm.provider && eligiblePixProviders.includes(manualChargeForm.provider)
-      ? manualChargeForm.provider
-      : defaultPixProvider;
+    manualPixProviderSelectionSource === 'USER_SELECTED'
+      ? manualChargeForm.provider && eligiblePixProviders.includes(manualChargeForm.provider)
+        ? manualChargeForm.provider
+        : null
+      : (selectedManualChargePreferredProvider ??
+        (manualPixProviderSelectionSource === 'CLIENT_PREFERENCE' ? null : defaultPixProvider));
   const manualPixBusy = manualPixWorkingAction !== null;
 
   useEffect(() => {
@@ -15094,6 +15144,7 @@ function TransactionModal({
     );
     setSelectedEntryClient(clientOptionFromTransactionClient(transaction?.client ?? null));
     setSelectedManualChargeClient(null);
+    setManualPixProviderSelectionSource('SYSTEM_DEFAULT');
     setMode('MANUAL_ENTRY');
     setManualChargeForm(manualChargeInitialForm(categoriesRef.current));
     setManualChargeStep('FORM');
@@ -15126,7 +15177,7 @@ function TransactionModal({
   useEffect(() => {
     if (!manualChargeForm.clientId) return;
     const client = clients.find((item) => item.id === manualChargeForm.clientId);
-    if (client) setSelectedManualChargeClient(clientOptionFromClient(client));
+    if (client) void applyManualChargeSelectedClient(clientOptionFromClient(client));
   }, [clients, manualChargeForm.clientId]);
 
   useEffect(() => {
@@ -15138,20 +15189,61 @@ function TransactionModal({
   }, [manualChargeEntryMode, mode]);
 
   useEffect(() => {
-    if (!defaultPixProvider) return;
+    if (manualPixProviderSelectionSource === 'USER_SELECTED') return;
+
+    setManualChargeForm((current) => ({
+      ...current,
+      provider: selectedManualPixProvider ?? '',
+    }));
+  }, [manualPixProviderSelectionSource, selectedManualPixProvider]);
+
+  async function applyManualChargeSelectedClient(client: ClientOption | null) {
+    const requestId = manualChargeClientRequestRef.current + 1;
+    manualChargeClientRequestRef.current = requestId;
+
+    if (!client) {
+      setSelectedManualChargeClient(null);
+      setManualPixProviderSelectionSource('SYSTEM_DEFAULT');
+      setManualChargeForm((current) => ({ ...current, provider: defaultPixProvider ?? '' }));
+      return;
+    }
+
+    let nextClient = client;
+    if (nextClient.preferredPixProvider === undefined) {
+      try {
+        const detailedClient = await getClient(nextClient.id);
+        if (manualChargeClientRequestRef.current !== requestId) return;
+        nextClient = clientOptionFromClient(detailedClient);
+      } catch {
+        if (manualChargeClientRequestRef.current !== requestId) return;
+        nextClient = { ...nextClient, preferredPixProvider: null };
+      }
+    }
+
+    if (manualChargeClientRequestRef.current !== requestId) return;
+
+    setSelectedManualChargeClient(nextClient);
+    setManualPixProviderSelectionSource(
+      nextClient.preferredPixProvider ? 'CLIENT_PREFERENCE' : 'SYSTEM_DEFAULT',
+    );
     setManualChargeForm((current) => ({
       ...current,
       provider:
-        current.provider && eligiblePixProviders.includes(current.provider)
-          ? current.provider
-          : defaultPixProvider,
+        nextClient.preferredPixProvider &&
+        isConfigurablePixProvider(nextClient.preferredPixProvider) &&
+        eligiblePixProviders.includes(nextClient.preferredPixProvider)
+          ? nextClient.preferredPixProvider
+          : nextClient.preferredPixProvider
+            ? ''
+            : (defaultPixProvider ?? ''),
     }));
-  }, [defaultPixProvider, eligiblePixProviders]);
+  }
 
   function closeAndReset() {
     setForm(transactionInitialForm(categories));
     setSelectedEntryClient(null);
     setSelectedManualChargeClient(null);
+    setManualPixProviderSelectionSource('SYSTEM_DEFAULT');
     setMode('MANUAL_ENTRY');
     setManualChargeForm(manualChargeInitialForm(categories));
     setManualChargeStep('FORM');
@@ -15277,7 +15369,12 @@ function TransactionModal({
     setPixNotice('');
 
     try {
-      const intent = await createReceivablePix(manualCharge.id, selectedManualPixProvider);
+      const intent = await createReceivablePix(
+        manualCharge.id,
+        manualPixProviderSelectionSource === 'USER_SELECTED'
+          ? (selectedManualPixProvider ?? undefined)
+          : undefined,
+      );
       setManualPixIntent(intent);
       setManualChargeStep('PIX');
       setPixNotice('PIX gerado.');
@@ -15560,8 +15657,10 @@ function TransactionModal({
               pixNotice={pixNotice}
               pixWhatsAppFailed={pixWhatsAppFailed}
               selectedClient={selectedManualChargeClient}
+              selectionSource={manualPixProviderSelectionSource}
               selectedPixProvider={selectedManualPixProvider}
               step={manualChargeStep}
+              unavailablePreferredProvider={unavailableManualChargePreferredProvider}
               workingAction={manualPixWorkingAction}
               whatsAppSending={pixSendingWhatsApp}
               onCancelCharge={() => void cancelManualCharge()}
@@ -15569,7 +15668,11 @@ function TransactionModal({
               onGeneratePix={() => void generateManualPix()}
               onReplaceProvider={() => void replaceManualPixProvider()}
               onSendWhatsApp={() => void sendManualPixWhatsApp()}
-              onSelectClient={setSelectedManualChargeClient}
+              onSelectClient={(client) => void applyManualChargeSelectedClient(client)}
+              onSelectProvider={(provider) => {
+                setManualPixProviderSelectionSource('USER_SELECTED');
+                setManualChargeForm((current) => ({ ...current, provider }));
+              }}
               onUpdateForm={setManualChargeForm}
             />
           ) : null}
@@ -15613,8 +15716,10 @@ function ManualPixChargeContent({
   pixNotice,
   pixWhatsAppFailed,
   selectedClient,
+  selectionSource,
   selectedPixProvider,
   step,
+  unavailablePreferredProvider,
   workingAction,
   whatsAppSending,
   onCancelCharge,
@@ -15623,6 +15728,7 @@ function ManualPixChargeContent({
   onReplaceProvider,
   onSendWhatsApp,
   onSelectClient,
+  onSelectProvider,
   onUpdateForm,
 }: {
   categories: FinancialCategory[];
@@ -15634,8 +15740,10 @@ function ManualPixChargeContent({
   pixNotice: string;
   pixWhatsAppFailed: boolean;
   selectedClient: ClientOption | null;
+  selectionSource: PixProviderSelectionSource;
   selectedPixProvider: ConfigurablePaymentProvider | null;
   step: ManualChargeStep;
+  unavailablePreferredProvider: PaymentProviderCode | null;
   workingAction: ManualPixWorkingAction;
   whatsAppSending: boolean;
   onCancelCharge: () => void;
@@ -15644,6 +15752,7 @@ function ManualPixChargeContent({
   onReplaceProvider: () => void;
   onSendWhatsApp: () => void;
   onSelectClient: (client: ClientOption | null) => void;
+  onSelectProvider: (provider: ConfigurablePaymentProvider) => void;
   onUpdateForm: (form: ManualChargeFormState) => void;
 }) {
   const canUsePixActions = Boolean(manualCharge && manualCharge.status === 'PENDENTE');
@@ -15663,6 +15772,9 @@ function ManualPixChargeContent({
   const canCancel = Boolean(manualCharge?.status === 'PENDENTE');
   const payerLabel = manualCharge ? receivablePayerLabel(manualCharge) : '';
   const chargeCategory = manualCharge?.category?.name ?? '-';
+  const providerSelectionText = selectedPixProvider
+    ? pixProviderSelectionLabel(selectionSource, selectedPixProvider, defaultPixProvider)
+    : 'Nenhum provider ativo';
   const canRenderQrImage =
     pixIntent?.qrCodeData?.startsWith('data:') || pixIntent?.qrCodeData?.startsWith('http');
 
@@ -15806,14 +15918,14 @@ function ManualPixChargeContent({
               disabled={!eligiblePixProviders.length}
               value={selectedPixProvider ?? ''}
               onChange={(event) =>
-                onUpdateForm({
-                  ...form,
-                  provider: event.target.value as ConfigurablePaymentProvider,
-                })
+                onSelectProvider(event.target.value as ConfigurablePaymentProvider)
               }
             >
               {!eligiblePixProviders.length ? (
                 <option value="">Nenhum provider ativo</option>
+              ) : null}
+              {eligiblePixProviders.length && !selectedPixProvider ? (
+                <option value="">Escolha um provider</option>
               ) : null}
               {eligiblePixProviders.map((provider) => (
                 <option key={provider} value={provider}>
@@ -15821,7 +15933,14 @@ function ManualPixChargeContent({
                 </option>
               ))}
             </select>
+            <small>{providerSelectionText}</small>
           </label>
+          {unavailablePreferredProvider ? (
+            <div className="notice warning compact-notice manual-pix-full">
+              Provider PIX preferido do cliente está indisponível:{' '}
+              {paymentProviderDisplay(unavailablePreferredProvider)}.
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -15954,10 +16073,7 @@ function ManualPixChargeContent({
                 <select
                   value={selectedPixProvider ?? ''}
                   onChange={(event) =>
-                    onUpdateForm({
-                      ...form,
-                      provider: event.target.value as ConfigurablePaymentProvider,
-                    })
+                    onSelectProvider(event.target.value as ConfigurablePaymentProvider)
                   }
                 >
                   {eligiblePixProviders.map((provider) => (
@@ -17930,6 +18046,8 @@ function PixReceivablesModal({
     PaymentProviderCredentialStatus[]
   >([]);
   const [selectedProvider, setSelectedProvider] = useState<ConfigurablePaymentProvider>('FASTFLOW');
+  const [providerSelectionSource, setProviderSelectionSource] =
+    useState<PixProviderSelectionSource>('SYSTEM_DEFAULT');
   const [replacementProvider, setReplacementProvider] =
     useState<ConfigurablePaymentProvider>('FASTFLOW');
   const [showReplacement, setShowReplacement] = useState(false);
@@ -17978,8 +18096,26 @@ function PixReceivablesModal({
     ) ??
     eligiblePixProviders[0] ??
     null;
+  const groupedPreferredProvider =
+    receivables[0]?.client?.preferredPixProvider &&
+    isConfigurablePixProvider(receivables[0].client.preferredPixProvider) &&
+    eligiblePixProviders.includes(receivables[0].client.preferredPixProvider)
+      ? receivables[0].client.preferredPixProvider
+      : null;
+  const unavailableGroupedPreferredProvider =
+    receivables[0]?.client?.preferredPixProvider &&
+    (!isConfigurablePixProvider(receivables[0].client.preferredPixProvider) ||
+      !eligiblePixProviders.includes(receivables[0].client.preferredPixProvider))
+      ? receivables[0].client.preferredPixProvider
+      : null;
   const canUseSelectedProvider = eligiblePixProviders.includes(selectedProvider);
-  const groupedPixProvider = canUseSelectedProvider ? selectedProvider : defaultPixProvider;
+  const groupedPixProvider =
+    providerSelectionSource === 'USER_SELECTED'
+      ? canUseSelectedProvider
+        ? selectedProvider
+        : null
+      : (groupedPreferredProvider ??
+        (providerSelectionSource === 'CLIENT_PREFERENCE' ? null : defaultPixProvider));
   const canUseReplacementProvider = eligiblePixProviders.includes(replacementProvider);
   const groupedReplacementProvider = canUseReplacementProvider
     ? replacementProvider
@@ -18003,9 +18139,17 @@ function PixReceivablesModal({
   }, []);
 
   useEffect(() => {
+    const source = receivables[0]?.client?.preferredPixProvider
+      ? 'CLIENT_PREFERENCE'
+      : 'SYSTEM_DEFAULT';
+    setProviderSelectionSource(source);
+  }, [receivables]);
+
+  useEffect(() => {
+    if (providerSelectionSource === 'USER_SELECTED') return;
     if (!groupedPixProvider || groupedPixProvider === selectedProvider) return;
     setSelectedProvider(groupedPixProvider);
-  }, [groupedPixProvider, selectedProvider]);
+  }, [groupedPixProvider, providerSelectionSource, selectedProvider]);
 
   useEffect(() => {
     if (!groupedReplacementProvider || groupedReplacementProvider === replacementProvider) return;
@@ -18092,7 +18236,7 @@ function PixReceivablesModal({
     try {
       const intent = await createReceivablesPix(
         receivables.map((receivable) => receivable.id),
-        groupedPixProvider,
+        providerSelectionSource === 'USER_SELECTED' ? groupedPixProvider : undefined,
       );
       setActiveIntent(intent);
       setNotice('PIX agrupado gerado.');
@@ -18199,6 +18343,15 @@ function PixReceivablesModal({
         {!activeIntent && !activePixConflict ? (
           <fieldset className="field">
             <span>Provider PIX</span>
+            {groupedPixProvider ? (
+              <span className="field-hint">
+                {pixProviderSelectionLabel(
+                  providerSelectionSource,
+                  groupedPixProvider,
+                  defaultPixProvider,
+                )}
+              </span>
+            ) : null}
             {eligiblePixProviders.length ? (
               eligiblePixProviders.map((provider) => (
                 <label className="choice-row" key={provider}>
@@ -18207,7 +18360,10 @@ function PixReceivablesModal({
                     name="grouped-pix-provider"
                     type="radio"
                     value={provider}
-                    onChange={() => setSelectedProvider(provider)}
+                    onChange={() => {
+                      setProviderSelectionSource('USER_SELECTED');
+                      setSelectedProvider(provider);
+                    }}
                   />
                   <span>{replacementProviderLabel(provider, defaultPixProvider)}</span>
                 </label>
@@ -18217,6 +18373,12 @@ function PixReceivablesModal({
                 Configure ao menos um provider PIX ativo para gerar PIX agrupado.
               </span>
             )}
+            {unavailableGroupedPreferredProvider ? (
+              <span className="field-hint warning-text">
+                Provider PIX preferido do cliente está indisponível:{' '}
+                {paymentProviderDisplay(unavailableGroupedPreferredProvider)}.
+              </span>
+            ) : null}
           </fieldset>
         ) : null}
 

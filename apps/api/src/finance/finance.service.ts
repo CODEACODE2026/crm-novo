@@ -63,6 +63,7 @@ import {
   type PaymentProviderStatus,
   type PaymentProviderTransaction,
 } from './payments/payment-provider';
+import { paymentProviderDisplayName } from './payments/client-pix-provider-preference';
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 
 const pageSizeLimit = 100;
@@ -637,8 +638,12 @@ export class FinanceService {
 
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
         const pixPayer = this.resolveReceivablePixPayer(receivable);
+        const provider = await this.resolvePixProvider({
+          explicitProvider: dto.provider,
+          client: receivable.client,
+        });
         const providerPix = await this.paymentProvider.createPix({
-          ...(dto.provider ? { provider: dto.provider } : {}),
+          ...(provider ? { provider } : {}),
           receivableId: receivable.id,
           amount: receivable.amount,
           description: receivable.description,
@@ -1039,6 +1044,10 @@ export class FinanceService {
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const provider = await this.resolvePixProvider({
+          explicitProvider: dto.provider,
+          client,
+        });
 
         const paymentGroup = await tx.paymentGroup.create({
           data: {
@@ -1056,7 +1065,7 @@ export class FinanceService {
         });
 
         const providerPix = await this.paymentProvider.createPix({
-          ...(dto.provider ? { provider: dto.provider } : {}),
+          ...(provider ? { provider } : {}),
           receivableId: paymentGroup.id,
           amount: totalAmount,
           description,
@@ -2775,6 +2784,28 @@ export class FinanceService {
       name: receivable.client.name,
       phoneNormalized: receivable.client.phoneNormalized,
     };
+  }
+
+  private async resolvePixProvider(input: {
+    client: { preferredPixProvider: PaymentProviderCode | null } | null;
+    explicitProvider: PaymentProviderCode | undefined;
+  }) {
+    if (input.explicitProvider) return input.explicitProvider;
+
+    const preferredProvider = input.client?.preferredPixProvider;
+    if (!preferredProvider) return undefined;
+
+    try {
+      await this.paymentCredentials.ensureEligiblePixCreationProvider(preferredProvider);
+    } catch {
+      throw new ConflictException(
+        `Provider PIX preferido do cliente indisponivel ou nao configurado: ${paymentProviderDisplayName(
+          preferredProvider,
+        )}.`,
+      );
+    }
+
+    return preferredProvider;
   }
 
   private async createReceivableAuditEvent(

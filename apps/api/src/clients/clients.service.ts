@@ -6,8 +6,12 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { ClientStatus, Prisma } from '@prisma/client';
+import { ClientStatus, PaymentProviderCode, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  isClientPreferredPixProvider,
+  paymentProviderDisplayName,
+} from '../finance/payments/client-pix-provider-preference';
 import { PlansService } from '../plans/plans.service';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { RecoveryService } from '../recovery/recovery.service';
@@ -163,6 +167,7 @@ export class ClientsService {
         id: true,
         name: true,
         phoneNormalized: true,
+        preferredPixProvider: true,
         references: { select: { reference: true }, orderBy: { createdAt: 'asc' } },
       },
       orderBy: { name: 'asc' },
@@ -175,6 +180,7 @@ export class ClientsService {
       name: client.name,
       reference: this.referenceSummary(client.references),
       phoneNormalized: client.phoneNormalized,
+      preferredPixProvider: client.preferredPixProvider,
     }));
   }
 
@@ -256,6 +262,7 @@ export class ClientsService {
             dueDate,
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
+            preferredPixProvider: this.resolvePreferredPixProvider(dto.preferredPixProvider),
             notes: this.optionalTrim(dto.notes),
           },
           include: { plan: true },
@@ -343,6 +350,10 @@ export class ClientsService {
 
     if (dto.notes !== undefined) {
       data.notes = this.optionalTrim(dto.notes);
+    }
+
+    if (dto.preferredPixProvider !== undefined) {
+      data.preferredPixProvider = this.resolvePreferredPixProvider(dto.preferredPixProvider);
     }
 
     try {
@@ -1532,6 +1543,20 @@ export class ClientsService {
   private optionalTrim(value: string | undefined) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
+  }
+
+  private resolvePreferredPixProvider(provider?: PaymentProviderCode | null) {
+    if (!provider) return null;
+
+    if (!isClientPreferredPixProvider(provider)) {
+      throw new BadRequestException(
+        `Provider PIX nao permitido para preferencia do cliente: ${paymentProviderDisplayName(
+          provider,
+        )}.`,
+      );
+    }
+
+    return provider;
   }
 
   private tryNormalizePhone(value: string) {

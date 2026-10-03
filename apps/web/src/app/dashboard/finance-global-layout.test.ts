@@ -176,9 +176,8 @@ describe('global finance presentation source', () => {
   });
 
   it('keeps manual PIX actions on existing endpoints and providers', () => {
-    expect(dashboardSource).toContain(
-      'createReceivablePix(manualCharge.id, selectedManualPixProvider)',
-    );
+    expect(dashboardSource).toContain("manualPixProviderSelectionSource === 'USER_SELECTED'");
+    expect(dashboardSource).toContain('createReceivablePix(');
     expect(dashboardSource).toContain('sendPaymentIntentWhatsApp(manualPixIntent.id)');
     expect(dashboardSource).toContain('replaceReceivablePix(manualCharge.id');
     expect(dashboardSource).toContain('cancelReceivable(manualCharge.id');
@@ -202,6 +201,8 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('listPaymentProviderCredentials()');
     expect(dashboardSource).toContain('isOperationalPixProviderCredential(credential)');
     expect(dashboardSource).toContain('replacementProviderLabel(provider, defaultPixProvider)');
+    expect(dashboardSource).toContain('Provider PIX preferido do cliente está indisponível');
+    expect(dashboardSource).toContain('pixProviderSelectionLabel(');
     expect(dashboardSource).not.toContain('/manual-charges/whatsapp');
   });
 
@@ -247,7 +248,9 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('setSelectedEntryClient(client);');
     expect(dashboardSource).toContain('required');
     expect(dashboardSource).toContain('selectedClient={selectedClient}');
-    expect(dashboardSource).toContain('onSelectClient={setSelectedManualChargeClient}');
+    expect(dashboardSource).toContain(
+      'onSelectClient={(client) => void applyManualChargeSelectedClient(client)}',
+    );
     expect(dashboardSource).toContain(
       "if (manualChargeForm.payerType === 'REGISTERED_CLIENT' && !manualChargeForm.clientId)",
     );

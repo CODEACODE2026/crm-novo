@@ -286,6 +286,7 @@ model Client {
   dueDate                 DateTime                      @db.Date
   billingAnchorDay        Int
   billingNoticeDays       Int
+  preferredPixProvider    PaymentProviderCode?
   notes                   String?
   status                  ClientStatus                  @default(ATIVO)
   createdAt               DateTime                      @default(now())

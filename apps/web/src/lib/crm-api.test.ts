@@ -44,6 +44,7 @@ import {
   savePaymentProviderCredential,
   sendPaymentIntentWhatsApp,
   testPaymentProviderCredential,
+  updateClient,
   updateMessageTemplate,
 } from './crm-api';
 
@@ -687,6 +688,7 @@ describe('CRM UI formatters', () => {
       recurringValue: 150,
       dueDate: '2026-10-20',
       billingNoticeDays: 3,
+      preferredPixProvider: null,
       generateInitialReceivable: true,
       notes: 'Observação',
       referrerClientId: 'referrer-1',
@@ -700,6 +702,21 @@ describe('CRM UI formatters', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     expect(latestJsonBody(fetchMock)).toEqual(payload);
+  });
+
+  it('posts client preferred PIX provider updates without enum leakage workarounds', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: 'client-1' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateClient('client-1', { preferredPixProvider: 'FASTPAY' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/clients/client-1'),
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+    expect(latestJsonBody(fetchMock)).toEqual({ preferredPixProvider: 'FASTPAY' });
   });
 
   it('sends client list pagination parameters to the API', async () => {

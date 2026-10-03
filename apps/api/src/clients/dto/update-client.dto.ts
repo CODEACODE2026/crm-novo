@@ -1,4 +1,5 @@
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { PaymentProviderCode } from '@prisma/client';
+import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateClientDto {
   @IsOptional()
@@ -18,4 +19,8 @@ export class UpdateClientDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsEnum(PaymentProviderCode)
+  preferredPixProvider?: PaymentProviderCode | null;
 }

@@ -43,9 +43,23 @@ describe('ClientForm manual initial billing source', () => {
     expect(clientFormSource).toContain('recurringValue: Number(recurringValue)');
     expect(clientFormSource).toContain('dueDate,');
     expect(clientFormSource).toContain('billingNoticeDays: Number(billingNoticeDays)');
+    expect(clientFormSource).toContain('preferredPixProvider:');
+    expect(clientFormSource).toContain('preferredPixProvider !== unavailableProviderValue');
     expect(clientFormSource).toContain('generateInitialReceivable,');
     expect(clientFormSource).toContain('payload.referrerClientId = referrerClientId');
     expect(clientFormSource).toContain("payload.referralRewardType = 'FREE_MONTH'");
+  });
+
+  it('supports the client preferred PIX provider without exposing enum labels', () => {
+    expect(clientFormSource).toContain('Provider PIX padrão');
+    expect(clientFormSource).toContain('Padrão do sistema');
+    expect(clientFormSource).toContain('Se não definido, será usado o provider padrão do sistema.');
+    expect(clientFormSource).toContain('listPaymentProviderCredentials()');
+    expect(clientFormSource).toContain('isOperationalPixProviderCredential(credential)');
+    expect(clientFormSource).toContain('paymentProviderLabel(provider)');
+    expect(clientFormSource).toContain('payload.preferredPixProvider = nextPreferredPixProvider');
+    expect(clientFormSource).toContain('Provider PIX preferido atual indisponível');
+    expect(clientFormSource).not.toContain('<option value="FASTPAY">FASTPAY</option>');
   });
 
   it('keeps cancel, enter, textarea and double-submit safeguards local to the form', () => {

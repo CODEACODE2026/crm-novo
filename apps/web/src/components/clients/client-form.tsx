@@ -1,8 +1,17 @@
 'use client';
 
-import { type FormEvent, type KeyboardEvent, useMemo, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Save } from 'lucide-react';
-import type { Client, ClientPayload, ClientUpdatePayload, Plan } from '../../lib/crm-api';
+import {
+  listPaymentProviderCredentials,
+  type Client,
+  type ClientPayload,
+  type ClientUpdatePayload,
+  type ConfigurablePaymentProvider,
+  type PaymentProviderCode,
+  type PaymentProviderCredentialStatus,
+  type Plan,
+} from '../../lib/crm-api';
 import { sortPlansByDuration } from '../../lib/plan-utils';
 import { Button } from '../ui/primitives';
 import { ClientReferralSelect } from './client-referral-select';
@@ -14,6 +23,16 @@ interface ClientFormProps {
   onCancel?: () => void;
   onSubmit: (payload: ClientPayload | ClientUpdatePayload) => Promise<void>;
 }
+
+const clientPreferredPixProviders = [
+  'FASTFLOW',
+  'FASTPAY',
+  'FASTPIX',
+] satisfies ConfigurablePaymentProvider[];
+const unavailableProviderValue = '__UNAVAILABLE__';
+
+type PreferredPixProviderFormValue =
+  ConfigurablePaymentProvider | '' | typeof unavailableProviderValue;
 
 export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: ClientFormProps) {
   const sortedPlans = useMemo(() => sortPlansByDuration(plans), [plans]);
@@ -34,6 +53,19 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
   const [billingNoticeDays, setBillingNoticeDays] = useState(
     String(client?.billingNoticeDays ?? 0),
   );
+  const initialPreferredPixProvider = client?.preferredPixProvider ?? null;
+  const [preferredPixProvider, setPreferredPixProvider] = useState<PreferredPixProviderFormValue>(
+    initialPreferredPixProvider && isConfigurablePixProvider(initialPreferredPixProvider)
+      ? initialPreferredPixProvider
+      : initialPreferredPixProvider
+        ? unavailableProviderValue
+        : '',
+  );
+  const [preferredPixProviderTouched, setPreferredPixProviderTouched] = useState(false);
+  const [paymentProviderCredentials, setPaymentProviderCredentials] = useState<
+    PaymentProviderCredentialStatus[]
+  >([]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [notes, setNotes] = useState(client?.notes ?? '');
   const [generateInitialReceivable, setGenerateInitialReceivable] = useState(false);
   const [referrerClientId, setReferrerClientId] = useState('');
@@ -41,6 +73,45 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
   const [loading, setLoading] = useState(false);
   const loadingRef = useRef(false);
   const editing = Boolean(client);
+  const eligiblePixProviders = useMemo(
+    () =>
+      clientPreferredPixProviders.filter((provider) => {
+        const credential = paymentProviderCredentials.find((item) => item.provider === provider);
+        return credential ? isOperationalPixProviderCredential(credential) : false;
+      }),
+    [paymentProviderCredentials],
+  );
+  const providerValueAvailable =
+    isConfigurablePixProvider(preferredPixProvider) &&
+    eligiblePixProviders.includes(preferredPixProvider);
+  const unavailablePreferredProvider =
+    providersLoaded &&
+    initialPreferredPixProvider &&
+    (!isConfigurablePixProvider(initialPreferredPixProvider) ||
+      !eligiblePixProviders.includes(initialPreferredPixProvider))
+      ? initialPreferredPixProvider
+      : null;
+
+  useEffect(() => {
+    let active = true;
+
+    void listPaymentProviderCredentials()
+      .then((credentials) => {
+        if (!active) return;
+        setPaymentProviderCredentials(credentials);
+      })
+      .catch(() => {
+        if (!active) return;
+        setPaymentProviderCredentials([]);
+      })
+      .finally(() => {
+        if (active) setProvidersLoaded(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -65,9 +136,19 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
     try {
       if (editing) {
         const payload: ClientUpdatePayload = { name, phone };
+        const nextPreferredPixProvider =
+          preferredPixProvider && preferredPixProvider !== unavailableProviderValue
+            ? preferredPixProvider
+            : null;
 
         if (email) payload.email = email;
         if (notes) payload.notes = notes;
+        if (
+          preferredPixProviderTouched &&
+          nextPreferredPixProvider !== initialPreferredPixProvider
+        ) {
+          payload.preferredPixProvider = nextPreferredPixProvider;
+        }
 
         await onSubmit(payload);
         return;
@@ -81,6 +162,10 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
         recurringValue: Number(recurringValue),
         dueDate,
         billingNoticeDays: Number(billingNoticeDays),
+        preferredPixProvider:
+          preferredPixProvider && preferredPixProvider !== unavailableProviderValue
+            ? preferredPixProvider
+            : null,
         generateInitialReceivable,
       };
 
@@ -233,6 +318,48 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
           </section>
         ) : null}
 
+        <section className="form-section client-pix-section">
+          <div className="form-section-title">
+            <span className="section-eyebrow">PIX</span>
+            <h2>Cobrança PIX</h2>
+          </div>
+          <label className="field form-grid-full">
+            <span>Provider PIX padrão</span>
+            <select
+              value={
+                providerValueAvailable
+                  ? preferredPixProvider
+                  : unavailablePreferredProvider
+                    ? unavailableProviderValue
+                    : ''
+              }
+              onChange={(event) => {
+                setPreferredPixProvider(event.target.value as PreferredPixProviderFormValue);
+                setPreferredPixProviderTouched(true);
+              }}
+            >
+              <option value="">Padrão do sistema</option>
+              {unavailablePreferredProvider ? (
+                <option value={unavailableProviderValue}>
+                  {paymentProviderLabel(unavailablePreferredProvider)} indisponível
+                </option>
+              ) : null}
+              {eligiblePixProviders.map((provider) => (
+                <option key={provider} value={provider}>
+                  {paymentProviderLabel(provider)}
+                </option>
+              ))}
+            </select>
+            <small>Se não definido, será usado o provider padrão do sistema.</small>
+          </label>
+          {unavailablePreferredProvider ? (
+            <div className="notice warning compact-notice form-grid-full">
+              Provider PIX preferido atual indisponível:{' '}
+              {paymentProviderLabel(unavailablePreferredProvider)}.
+            </div>
+          ) : null}
+        </section>
+
         <section className="form-section client-contact-section">
           <div className="form-section-title">
             <span className="section-eyebrow">Contato e observações</span>
@@ -272,4 +399,23 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
       </div>
     </form>
   );
+}
+
+function isOperationalPixProviderCredential(credential: PaymentProviderCredentialStatus) {
+  return (
+    credential.configured &&
+    credential.active !== false &&
+    (credential.status === 'CONFIGURADO' || credential.status === 'VALIDO')
+  );
+}
+
+function isConfigurablePixProvider(provider: unknown): provider is ConfigurablePaymentProvider {
+  return clientPreferredPixProviders.includes(provider as ConfigurablePaymentProvider);
+}
+
+function paymentProviderLabel(provider: PaymentProviderCode) {
+  if (provider === 'FASTFLOW') return 'FastFlow';
+  if (provider === 'FASTPAY') return 'FastPay';
+  if (provider === 'FASTPIX') return 'FastPIX';
+  return provider;
 }

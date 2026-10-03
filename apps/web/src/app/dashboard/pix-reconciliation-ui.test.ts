@@ -321,11 +321,16 @@ describe('PIX reconciliation UI contract', () => {
     expect(groupedPixModalSource).toContain('isOperationalPixProviderCredential(credential)');
     expect(groupedPixModalSource).toContain('const defaultPixProvider =');
     expect(groupedPixModalSource).toContain('credential.defaultForPix');
+    expect(groupedPixModalSource).toContain('const groupedPreferredProvider =');
+    expect(groupedPixModalSource).toContain('const unavailableGroupedPreferredProvider =');
+    expect(groupedPixModalSource).toContain('providerSelectionSource');
     expect(groupedPixModalSource).toContain('const groupedPixProvider =');
     expect(groupedPixModalSource).toContain('<span>Provider PIX</span>');
+    expect(groupedPixModalSource).toContain('pixProviderSelectionLabel(');
     expect(groupedPixModalSource).toContain(
       'replacementProviderLabel(provider, defaultPixProvider)',
     );
+    expect(groupedPixModalSource).toContain('Provider PIX preferido do cliente está indisponível');
     expect(groupedPixModalSource).toContain(
       'Configure ao menos um provider PIX ativo para gerar PIX agrupado.',
     );
@@ -334,7 +339,9 @@ describe('PIX reconciliation UI contract', () => {
 
   it('sends the selected grouped PIX provider only when creating a new grouped PIX', () => {
     expect(groupedPixModalSource).toContain('const intent = await createReceivablesPix(');
-    expect(groupedPixModalSource).toContain('groupedPixProvider');
+    expect(groupedPixModalSource).toContain(
+      "providerSelectionSource === 'USER_SELECTED' ? groupedPixProvider : undefined",
+    );
     expect(groupedPixModalSource).toContain(
       'busy || Boolean(activeIntent) || Boolean(activePixConflict) || !groupedPixProvider',
     );

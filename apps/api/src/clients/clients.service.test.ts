@@ -16,6 +16,7 @@ const clients = [
     references: [{ reference: 'bruno1499' }],
     phone: '(44) 99821-2815',
     phoneNormalized: '5544998212815',
+    preferredPixProvider: 'FASTPAY',
   },
   {
     id: '22222222-2222-4222-8222-222222222222',
@@ -24,6 +25,25 @@ const clients = [
     references: [{ reference: 'joao2044' }],
     phone: '(44) 99999-1111',
     phoneNormalized: '5544999991111',
+    preferredPixProvider: null,
+  },
+  {
+    id: '33333333-3333-4333-8333-333333333333',
+    email: 'fastflow@example.com',
+    name: 'FastFlow Cliente',
+    references: [{ reference: 'fastflow3333' }],
+    phone: '(44) 97777-3333',
+    phoneNormalized: '5544977773333',
+    preferredPixProvider: 'FASTFLOW',
+  },
+  {
+    id: '44444444-4444-4444-8444-444444444444',
+    email: 'fastpix@example.com',
+    name: 'FastPIX Cliente',
+    references: [{ reference: 'fastpix4444' }],
+    phone: '(44) 96666-4444',
+    phoneNormalized: '5544966664444',
+    preferredPixProvider: 'FASTPIX',
   },
 ];
 
@@ -36,6 +56,7 @@ function optionAt(index: number) {
     name: client.name,
     reference: client.references.map((reference) => reference.reference).join(', '),
     phoneNormalized: client.phoneNormalized,
+    preferredPixProvider: client.preferredPixProvider,
   };
 }
 
@@ -71,10 +92,11 @@ function createService() {
               }),
             )
             .slice(0, take)
-            .map(({ email, id, name, references, phoneNormalized }) => ({
+            .map(({ email, id, name, preferredPixProvider, references, phoneNormalized }) => ({
               email,
               id,
               name,
+              preferredPixProvider,
               references,
               phoneNormalized,
             })),
@@ -266,6 +288,7 @@ type TestClientListItem = {
   dueDate: Date;
   billingAnchorDay: number;
   billingNoticeDays: number;
+  preferredPixProvider: 'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | null;
   status: 'ATIVO' | 'INATIVO' | 'CANCELADO' | 'PENDENTE_PAGAMENTO';
   notes: string | null;
   createdAt: Date;
@@ -313,6 +336,7 @@ function clientListReference(
     dueDate: new Date('2026-10-20T00:00:00.000Z'),
     billingAnchorDay: 20,
     billingNoticeDays: 0,
+    preferredPixProvider: null,
     status: 'ATIVO',
     notes: null,
     inactivatedAt: null,
@@ -347,6 +371,7 @@ function clientListItem(overrides: Partial<TestClientListItem>): TestClientListI
     dueDate: new Date('2026-10-20T00:00:00.000Z'),
     billingAnchorDay: 20,
     billingNoticeDays: 0,
+    preferredPixProvider: null,
     status: 'ATIVO',
     notes: null,
     createdAt: new Date('2026-09-01T12:00:00.000Z'),
@@ -497,6 +522,28 @@ describe('ClientsService options', () => {
     const service = createService();
 
     await expect(service.options({ search: 'bruno' })).resolves.toEqual([optionAt(0)]);
+  });
+
+  it.each([
+    ['FASTPAY', 'bruno', 0],
+    ['FASTFLOW', 'fastflow', 2],
+    ['FASTPIX', 'fastpix', 3],
+  ] as const)(
+    'returns preferred PIX provider %s in lightweight client options',
+    async (_, search, index) => {
+      const service = createService();
+
+      await expect(service.options({ search })).resolves.toEqual([optionAt(index)]);
+    },
+  );
+
+  it('returns preferredPixProvider null for clients without a preference', async () => {
+    const service = createService();
+
+    await expect(service.options({ search: 'joao2044' })).resolves.toEqual([optionAt(1)]);
+    await expect(service.options({ search: 'joao2044' })).resolves.toEqual([
+      expect.objectContaining({ preferredPixProvider: null }),
+    ]);
   });
 
   it('searches lightweight client options by reference', async () => {
@@ -782,6 +829,7 @@ describe('ClientsService client detail payload', () => {
       dueDate: parseBusinessDate('2026-10-10'),
       billingAnchorDay: 10,
       billingNoticeDays: 3,
+      preferredPixProvider: null,
       notes: null,
       status: 'ATIVO',
       createdAt: new Date('2026-09-01T00:00:00.000Z'),
@@ -970,6 +1018,39 @@ describe('ClientsService manual client creation', () => {
       phoneNormalized: '5585999294022',
     });
   });
+
+  it('persists a supported preferred PIX provider on manual client creation', async () => {
+    const fake = createClientCreationService();
+
+    const created = await fake.service.create(
+      manualClientDto({ preferredPixProvider: 'FASTPAY' }),
+      'user-id',
+    );
+
+    expect(fake.clients[0]).toMatchObject({ preferredPixProvider: 'FASTPAY' });
+    expect(created).toMatchObject({ preferredPixProvider: 'FASTPAY' });
+  });
+
+  it('persists null when manual client creation uses the system PIX provider default', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(manualClientDto({ preferredPixProvider: null }), 'user-id');
+
+    expect(fake.clients[0]).toMatchObject({ preferredPixProvider: null });
+  });
+
+  it.each(['MOCK', 'DEPIX'] as const)(
+    'rejects %s as a preferred PIX provider for manual client creation',
+    async (provider) => {
+      const fake = createClientCreationService();
+
+      await expect(
+        fake.service.create(manualClientDto({ preferredPixProvider: provider }), 'user-id'),
+      ).rejects.toThrow('Provider PIX nao permitido');
+
+      expect(fake.clients).toHaveLength(0);
+    },
+  );
 });
 
 describe('ClientsService manual reference creation', () => {
@@ -1077,6 +1158,37 @@ describe('ClientsService legacy client updates', () => {
     expect(fake.prisma.clientReference.update).not.toHaveBeenCalled();
     expect(fake.prisma.clientReference.findFirst).not.toHaveBeenCalled();
   });
+
+  it('updates the preferred PIX provider without changing references', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+
+    await fake.service.update(fake.client.id, { preferredPixProvider: 'FASTPIX' }, 'user-id');
+
+    expect(fake.client.preferredPixProvider).toBe('FASTPIX');
+    expect(fake.prisma.clientReference.update).not.toHaveBeenCalled();
+  });
+
+  it('clears the preferred PIX provider when update receives null', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.client.preferredPixProvider = 'FASTPAY';
+
+    await fake.service.update(fake.client.id, { preferredPixProvider: null }, 'user-id');
+
+    expect(fake.client.preferredPixProvider).toBeNull();
+  });
+
+  it.each(['MOCK', 'DEPIX'] as const)(
+    'rejects %s as a preferred PIX provider on client update',
+    async (provider) => {
+      const fake = createClientUpdateService({ references: [clientReference()] });
+
+      await expect(
+        fake.service.update(fake.client.id, { preferredPixProvider: provider }, 'user-id'),
+      ).rejects.toThrow('Provider PIX nao permitido');
+
+      expect(fake.prisma.client.update).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects operational fields on PATCH /clients/:id without touching references', async () => {
     const fake = createClientUpdateService({ references: [clientReference()] });
@@ -1544,6 +1656,7 @@ function createClientUpdateService({
     dueDate: parseBusinessDate('2026-10-10'),
     billingAnchorDay: 10,
     billingNoticeDays: 3,
+    preferredPixProvider: null as 'FASTFLOW' | 'FASTPAY' | 'FASTPIX' | null,
     notes: null as string | null,
     status: 'ATIVO' as const,
     createdAt: new Date('2026-09-01T00:00:00.000Z'),

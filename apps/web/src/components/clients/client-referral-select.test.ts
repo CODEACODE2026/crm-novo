@@ -14,6 +14,7 @@ const bruno: ClientOption = {
   name: 'Bruno Silva',
   reference: 'bruno1499',
   phoneNormalized: '5544998212815',
+  preferredPixProvider: null,
 };
 
 describe('ClientReferralSelect helpers', () => {

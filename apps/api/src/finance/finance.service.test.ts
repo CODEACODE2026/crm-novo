@@ -109,6 +109,7 @@ function createFinancePrisma() {
     dueDate: parseBusinessDate('2026-10-10'),
     billingAnchorDay: 10,
     billingNoticeDays: 5,
+    preferredPixProvider: null as PaymentProviderCode | null,
     notes: null,
     status: 'ATIVO' as 'PENDENTE_PAGAMENTO' | 'ATIVO' | 'INATIVO' | 'CANCELADO',
     createdAt: new Date(),
@@ -729,7 +730,10 @@ function createFinancePrisma() {
       },
     },
     provider,
-    credentials: { getWebhookSecret: vi.fn().mockResolvedValue('webhook-secret') },
+    credentials: {
+      ensureEligiblePixCreationProvider: vi.fn().mockResolvedValue(undefined),
+      getWebhookSecret: vi.fn().mockResolvedValue('webhook-secret'),
+    },
     config: { get: () => undefined },
     webhookEvents,
     tx,
@@ -1457,6 +1461,7 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     dueDate: parseBusinessDate('2026-09-20'),
     billingAnchorDay: 20,
     billingNoticeDays: 5,
+    preferredPixProvider: null as PaymentProviderCode | null,
     notes: null,
     status: 'ATIVO' as const,
     createdAt: new Date(),
@@ -1938,6 +1943,9 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     nextReceivables,
     prisma,
     provider,
+    credentials: {
+      ensureEligiblePixCreationProvider: vi.fn().mockResolvedValue(undefined),
+    },
     config: { get: () => undefined },
     cycle,
     recovery,
@@ -3623,6 +3631,79 @@ describe('FinanceService', () => {
     });
   });
 
+  it('uses client preference when grouped PIX is created without an explicit provider', async () => {
+    const fake = createGroupedFinancePrisma();
+    fake.client.preferredPixProvider = 'FASTPAY';
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTPAY',
+      providerTransactionId: 'fastpay-group-preferred',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('70.00'),
+      pixCopyPaste: 'FASTPAY-GROUP-PREFERRED',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+    } as never);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+
+    const intent = await service.createReceivablesPix(
+      {
+        receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id],
+      },
+      actorUserId,
+    );
+
+    expect(fake.credentials.ensureEligiblePixCreationProvider).toHaveBeenCalledWith('FASTPAY');
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'FASTPAY', amount: new Prisma.Decimal('70.00') }),
+    );
+    expect(intent.provider).toBe('FASTPAY');
+  });
+
+  it('lets explicit grouped provider win over client preference', async () => {
+    const fake = createGroupedFinancePrisma();
+    fake.client.preferredPixProvider = 'FASTPAY';
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'FASTFLOW',
+      providerTransactionId: 'fastflow-group-explicit',
+      externalStatus: 'pending',
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('70.00'),
+      pixCopyPaste: 'FASTFLOW-GROUP-EXPLICIT',
+      qrCodeData: null,
+      expiresAt: new Date('2026-09-20T00:30:00.000Z'),
+    } as never);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+
+    const intent = await service.createReceivablesPix(
+      {
+        receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id],
+        provider: 'FASTFLOW',
+      },
+      actorUserId,
+    );
+
+    expect(fake.credentials.ensureEligiblePixCreationProvider).not.toHaveBeenCalled();
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'FASTFLOW' }),
+    );
+    expect(intent.provider).toBe('FASTFLOW');
+  });
+
   it('keeps default provider selection when grouped PIX is created without an explicit provider', async () => {
     const fake = createGroupedFinancePrisma();
     const service = new FinanceService(
@@ -5244,6 +5325,93 @@ describe('FinanceService', () => {
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       `pix:receivable:${fake.receivable.id}`,
     );
+  });
+
+  it.each(['FASTFLOW', 'FASTPAY', 'FASTPIX'] as const)(
+    'uses client preferred provider %s for individual PIX without explicit provider',
+    async (preferredProvider) => {
+      const fake = createFinancePrisma();
+      fake.client.preferredPixProvider = preferredProvider;
+      const service = createFinanceService(fake);
+
+      const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+      expect(fake.credentials.ensureEligiblePixCreationProvider).toHaveBeenCalledWith(
+        preferredProvider,
+      );
+      expect(fake.provider.createPix).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: preferredProvider }),
+      );
+      expect(intent.provider).toBe(preferredProvider);
+    },
+  );
+
+  it.each([
+    ['FASTPAY' as const, 'FASTFLOW' as const],
+    ['FASTFLOW' as const, 'FASTPAY' as const],
+  ])('lets explicit provider %s win over client preference %s', async (explicit, preferred) => {
+    const fake = createFinancePrisma();
+    fake.client.preferredPixProvider = preferred;
+    const service = createFinanceService(fake);
+
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId, {
+      provider: explicit,
+    });
+
+    expect(fake.credentials.ensureEligiblePixCreationProvider).not.toHaveBeenCalled();
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: explicit }),
+    );
+    expect(intent.provider).toBe(explicit);
+  });
+
+  it('returns a clear error when the preferred provider is unavailable', async () => {
+    const fake = createFinancePrisma();
+    fake.client.preferredPixProvider = 'FASTPAY';
+    fake.credentials.ensureEligiblePixCreationProvider.mockRejectedValueOnce(
+      new NotFoundException('Credencial de pagamento nao configurada.'),
+    );
+    const service = createFinanceService(fake);
+
+    await expect(service.createReceivablePix(fake.receivable.id, actorUserId)).rejects.toThrow(
+      'Provider PIX preferido do cliente indisponivel ou nao configurado: FastPay.',
+    );
+
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(0);
+  });
+
+  it.each(['RENEWAL', 'INITIAL_ACTIVATION', 'REACTIVATION'] as const)(
+    'uses client preference for %s receivable PIX',
+    async (purpose) => {
+      const fake = createFinancePrisma();
+      fake.client.preferredPixProvider = 'FASTPIX';
+      fake.receivable.purpose = purpose;
+      if (purpose !== 'RENEWAL') fake.receivable.renewalId = null;
+      const service = createFinanceService(fake);
+
+      const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+      expect(intent.provider).toBe('FASTPIX');
+      expect(fake.provider.createPix).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'FASTPIX' }),
+      );
+    },
+  );
+
+  it('keeps existing PaymentIntent provider when client preference changes later', async () => {
+    const fake = createFinancePrisma();
+    fake.client.preferredPixProvider = 'FASTPAY';
+    const service = createFinanceService(fake);
+
+    const first = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    fake.paymentIntents[0]!.status = 'EXPIRED';
+    fake.client.preferredPixProvider = 'FASTFLOW';
+    const second = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    expect(first.provider).toBe('FASTPAY');
+    expect(second.provider).toBe('FASTFLOW');
+    expect(fake.paymentIntents.map((intent) => intent.provider)).toEqual(['FASTPAY', 'FASTFLOW']);
   });
 
   it('persists an individual PIX when the provider returns a string transaction ID', async () => {
@@ -9320,6 +9488,24 @@ describe('FinanceService', () => {
       provider: 'FASTPAY',
     });
     expect(fastPay.provider).toBe('FASTPAY');
+  });
+
+  it('uses client preference for registered-client manual charge PIX without explicit provider', async () => {
+    const fake = createFinancePrisma();
+    fake.client.preferredPixProvider = 'FASTPAY';
+    makeManualCharge(fake, true);
+    const service = createFinanceService(fake);
+
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+
+    expect(intent.provider).toBe('FASTPAY');
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'FASTPAY',
+        clientName: fake.client.name,
+        payerPhone: fake.client.phoneNormalized,
+      }),
+    );
   });
 
   it('settles manual charge PIX with persisted category and no cycle side effects', async () => {

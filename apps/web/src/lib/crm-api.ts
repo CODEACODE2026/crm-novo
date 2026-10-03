@@ -47,6 +47,7 @@ export interface Client {
   recurringValue: string;
   dueDate: string;
   billingNoticeDays: number;
+  preferredPixProvider: PaymentProviderCode | null;
   notes: string | null;
   status: ClientStatus;
   createdAt: string;
@@ -178,6 +179,10 @@ export type PaymentIntentStatus =
   | 'FAILED'
   | 'REFUNDED';
 export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'DEPIX';
+export type ConfigurablePaymentProvider = Extract<
+  PaymentProviderCode,
+  'FASTFLOW' | 'FASTPIX' | 'FASTPAY'
+>;
 export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
 export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
 export type RenewalStatus = 'ACTIVE' | 'REVERTED';
@@ -229,7 +234,7 @@ export interface Receivable {
   manualChargeIdempotencyKey?: string | null;
   createdAt: string;
   updatedAt: string;
-  client?: Pick<Client, 'id' | 'name' | 'reference'> | null;
+  client?: Pick<Client, 'id' | 'name' | 'reference' | 'preferredPixProvider'> | null;
   clientReference?:
     | (Pick<ClientReference, 'id' | 'reference' | 'status'> & {
         planName?: string;
@@ -454,7 +459,7 @@ export interface ReferralSummary {
 
 export interface PaymentProviderCredentialStatus {
   id?: string;
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
+  provider: ConfigurablePaymentProvider;
   name?: string;
   configured: boolean;
   active?: boolean;
@@ -1276,6 +1281,7 @@ export interface ClientOption {
   name: string;
   reference: string;
   phoneNormalized: string;
+  preferredPixProvider: PaymentProviderCode | null;
 }
 
 export interface PaginatedReferrals {
@@ -1292,6 +1298,7 @@ export interface ClientPayload {
   recurringValue: number;
   dueDate: string;
   billingNoticeDays: number;
+  preferredPixProvider?: PaymentProviderCode | null | undefined;
   notes?: string | undefined;
   referrerClientId?: string | undefined;
   referralRewardType?: ReferralRewardType | undefined;
@@ -1305,6 +1312,7 @@ export interface ClientUpdatePayload {
   phone?: string | undefined;
   email?: string | undefined;
   notes?: string | undefined;
+  preferredPixProvider?: PaymentProviderCode | null | undefined;
 }
 
 export interface ApproveWhatsAppPendingContactPayload {
@@ -2150,7 +2158,7 @@ export function reconcileReceivablePix(
 
 export function createReceivablesPix(
   receivableIds: string[],
-  provider?: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
+  provider?: ConfigurablePaymentProvider,
 ) {
   return apiFetch<PaymentIntent>('/receivables/pix', {
     method: 'POST',
@@ -2160,7 +2168,7 @@ export function createReceivablesPix(
 
 export function replaceReceivablesPix(payload: {
   receivableIds: string[];
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
+  provider: ConfigurablePaymentProvider;
   expectedCurrentIntentId: string;
   reason?: string;
   idempotencyKey?: string;
@@ -2206,7 +2214,7 @@ export function listPaymentProviderCredentials() {
 }
 
 export function savePaymentProviderCredential(payload: {
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>;
+  provider: ConfigurablePaymentProvider;
   name: string;
   token: string;
 }) {
@@ -2216,37 +2224,28 @@ export function savePaymentProviderCredential(payload: {
   });
 }
 
-export function testPaymentProviderCredential(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
-) {
+export function testPaymentProviderCredential(provider: ConfigurablePaymentProvider) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/test`,
     { method: 'POST' },
   );
 }
 
-export function deactivatePaymentProviderCredential(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
-) {
+export function deactivatePaymentProviderCredential(provider: ConfigurablePaymentProvider) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/deactivate`,
     { method: 'POST' },
   );
 }
 
-export function setDefaultPaymentProvider(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
-) {
+export function setDefaultPaymentProvider(provider: ConfigurablePaymentProvider) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/default`,
     { method: 'POST' },
   );
 }
 
-export function savePaymentWebhookSecret(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
-  secret: string,
-) {
+export function savePaymentWebhookSecret(provider: ConfigurablePaymentProvider, secret: string) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/webhook-secret`,
     {
@@ -2256,9 +2255,7 @@ export function savePaymentWebhookSecret(
   );
 }
 
-export function registerPaymentWebhook(
-  provider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'>,
-) {
+export function registerPaymentWebhook(provider: ConfigurablePaymentProvider) {
   return apiFetch<PaymentProviderCredentialStatus>(
     `/payment-provider-credentials/${provider}/webhook/register`,
     { method: 'POST' },

@@ -11,7 +11,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { ReferralRewardType } from '@prisma/client';
+import { PaymentProviderCode, ReferralRewardType } from '@prisma/client';
 
 export class CreateClientDto {
   @IsString()
@@ -49,6 +49,10 @@ export class CreateClientDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsEnum(PaymentProviderCode)
+  preferredPixProvider?: PaymentProviderCode | null;
 
   @IsOptional()
   @IsUUID()

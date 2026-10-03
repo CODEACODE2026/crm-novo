@@ -64,6 +64,7 @@ function client(references: ClientReference[] = []): Client {
     notes: null,
     phone: '554491665359',
     phoneNormalized: '554491665359',
+    preferredPixProvider: null,
     plan,
     planId: plan.id,
     recurringValue: '100.00',

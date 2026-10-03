@@ -96,6 +96,18 @@ type PixWhatsAppContext =
   | {
       kind: 'INDIVIDUAL';
       client: NonNullable<NonNullable<PixPaymentIntentForWhatsApp['receivable']>['client']>;
+      clientEventClientId: string;
+      receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
+      phone: string;
+      dispatchItems: [];
+      description: string;
+      metadata: Record<string, unknown>;
+      templateItems?: never;
+    }
+  | {
+      kind: 'MANUAL_CHARGE';
+      client: NonNullable<NonNullable<PixPaymentIntentForWhatsApp['receivable']>['client']> | null;
+      clientEventClientId: string | null;
       receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
       phone: string;
       dispatchItems: [];
@@ -106,6 +118,7 @@ type PixWhatsAppContext =
   | {
       kind: 'GROUPED';
       client: NonNullable<PixPaymentIntentForWhatsApp['paymentGroup']>['client'];
+      clientEventClientId: string;
       paymentGroup: NonNullable<PixPaymentIntentForWhatsApp['paymentGroup']>;
       phone: string;
       dispatchItems: PixWhatsAppDispatchItem[];
@@ -438,19 +451,29 @@ export class WhatsAppService {
       amount: intent.amount,
       pixCopyPaste: intent.pixCopyPaste ?? '',
       context: context.kind,
+      ...(context.kind === 'MANUAL_CHARGE'
+        ? {
+            payerName: context.receivable.payerName ?? undefined,
+            description: context.receivable.description,
+            dueDate: this.formatDisplayDate(context.receivable.dueDate),
+            expiresAt: intent.expiresAt ? this.formatDisplayDate(intent.expiresAt) : null,
+          }
+        : {}),
       ...(context.kind === 'GROUPED'
         ? { itemCount: context.dispatchItems.length, items: context.templateItems }
         : {}),
     });
-    const requestId = randomUUID();
+    const requestId =
+      context.kind === 'MANUAL_CHARGE' ? `manual-charge-pix:${intent.id}` : randomUUID();
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
     const { dispatch, created } = await this.createPendingDispatch({
-      clientId: context.client.id,
+      clientId: context.client?.id ?? null,
       connectionId: connection.id,
       phone: context.phone,
       body: template.body,
       requestId,
       origin: 'MANUAL',
+      ...(context.kind === 'MANUAL_CHARGE' ? { idempotencyKey: requestId } : {}),
       dispatchItems: context.dispatchItems,
       ...(context.kind === 'INDIVIDUAL'
         ? {
@@ -460,10 +483,15 @@ export class WhatsAppService {
               : {}),
           }
         : {}),
+      ...(context.kind === 'MANUAL_CHARGE'
+        ? {
+            receivableId: context.receivable.id,
+          }
+        : {}),
     });
 
-    if (!created || dispatch.status === 'SENT') {
-      return this.presentPixSendResult(dispatch, true);
+    if ((!created && dispatch.status !== 'FAILED') || dispatch.status === 'SENT') {
+      return this.presentPixSendResult(dispatch, true, true);
     }
 
     try {
@@ -489,33 +517,47 @@ export class WhatsAppService {
           include: { client: true, whatsAppConnection: true },
         });
 
-        await tx.clientEvent.create({
-          data: {
-            clientId: context.client.id,
-            type: 'WHATSAPP_MESSAGE_SENT',
-            title:
-              context.kind === 'GROUPED'
-                ? 'PIX agrupado enviado pelo WhatsApp.'
-                : 'PIX enviado pelo WhatsApp.',
-            description: context.description,
-            metadata: {
-              messageDispatchId: sent.id,
-              paymentIntentId: intent.id,
-              provider: intent.provider,
-              providerTransactionId: intent.providerTransactionId,
-              phoneMasked: this.maskPhone(context.phone),
-              amount: intent.amount.toString(),
-              channel: 'WHATSAPP',
-              ...context.metadata,
+        if (context.clientEventClientId) {
+          await tx.clientEvent.create({
+            data: {
+              clientId: context.clientEventClientId,
+              type: 'WHATSAPP_MESSAGE_SENT',
+              title:
+                context.kind === 'GROUPED'
+                  ? 'PIX agrupado enviado pelo WhatsApp.'
+                  : context.kind === 'MANUAL_CHARGE'
+                    ? 'PIX de cobranca avulsa enviado pelo WhatsApp.'
+                    : 'PIX enviado pelo WhatsApp.',
+              description: context.description,
+              metadata: {
+                messageDispatchId: sent.id,
+                paymentIntentId: intent.id,
+                provider: intent.provider,
+                providerTransactionId: intent.providerTransactionId,
+                phoneMasked: this.maskPhone(context.phone),
+                amount: intent.amount.toString(),
+                channel: 'WHATSAPP',
+                ...context.metadata,
+              },
+              createdByUserId: actorUserId,
             },
-            createdByUserId: actorUserId,
-          },
-        });
+          });
+        }
+
+        if (context.kind === 'MANUAL_CHARGE') {
+          await this.createManualChargeWhatsAppAuditEvent(tx, {
+            actorUserId,
+            dispatchId: sent.id,
+            intent,
+            phone: context.phone,
+            receivable: context.receivable,
+          });
+        }
 
         return sent;
       });
 
-      return this.presentPixSendResult(updated, true);
+      return this.presentPixSendResult(updated, true, false);
     } catch (error) {
       const updated = await this.prisma.messageDispatch.update({
         where: { id: dispatch.id },
@@ -1215,7 +1257,7 @@ export class WhatsAppService {
   }
 
   private async createPendingDispatch(input: {
-    clientId: string;
+    clientId: string | null;
     clientReferenceId?: string;
     connectionId: string;
     receivableId?: string;
@@ -1284,12 +1326,35 @@ export class WhatsAppService {
         throw new ConflictException('Somente o PIX atual aguardando pagamento pode ser enviado.');
       }
 
+      if (receivable.purpose === 'MANUAL_CHARGE') {
+        if (!receivable.payerName || !receivable.payerPhoneNormalized) {
+          throw new BadRequestException('Cobranca avulsa sem pagador valido para WhatsApp.');
+        }
+
+        const phone = normalizeBrazilPhone(receivable.payerPhoneNormalized);
+
+        return {
+          kind: 'MANUAL_CHARGE',
+          client: receivable.client,
+          clientEventClientId: receivable.clientId ?? null,
+          receivable,
+          phone,
+          dispatchItems: [],
+          description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
+          metadata: {
+            receivableId: receivable.id,
+            origin: 'MANUAL_CHARGE_PIX',
+          },
+        };
+      }
+
       const client = receivable.client!;
       const phone = normalizeBrazilPhone(client.phoneNormalized);
 
       return {
         kind: 'INDIVIDUAL',
         client,
+        clientEventClientId: client.id,
         receivable,
         phone,
         dispatchItems: [],
@@ -1333,6 +1398,7 @@ export class WhatsAppService {
     return {
       kind: 'GROUPED',
       client: paymentGroup.client,
+      clientEventClientId: paymentGroup.client.id,
       paymentGroup,
       phone,
       dispatchItems,
@@ -1374,6 +1440,20 @@ export class WhatsAppService {
         throw new ConflictException('Somente contas pendentes podem receber envio de PIX.');
       }
 
+      if (intent.receivable.purpose === 'MANUAL_CHARGE') {
+        if (!intent.receivable.payerPhoneNormalized) {
+          throw new BadRequestException('Cobranca avulsa sem telefone valido para WhatsApp.');
+        }
+
+        normalizeBrazilPhone(intent.receivable.payerPhoneNormalized);
+
+        if (!intent.receivable.payerName) {
+          throw new BadRequestException('Cobranca avulsa sem pagador valido para WhatsApp.');
+        }
+
+        return;
+      }
+
       if (!intent.receivable.client?.phoneNormalized) {
         throw new BadRequestException('Cliente sem WhatsApp cadastrado.');
       }
@@ -1401,6 +1481,51 @@ export class WhatsAppService {
     if (paymentGroup.items.some((item) => item.receivable.status !== 'PENDENTE')) {
       throw new ConflictException('Somente contas pendentes podem receber envio de PIX.');
     }
+  }
+
+  private async createManualChargeWhatsAppAuditEvent(
+    tx: Prisma.TransactionClient,
+    input: {
+      actorUserId: string;
+      dispatchId: string;
+      intent: PixPaymentIntentForWhatsApp;
+      phone: string;
+      receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
+    },
+  ) {
+    const existing = await tx.receivableAuditEvent.findFirst({
+      where: {
+        receivableId: input.receivable.id,
+        paymentIntentId: input.intent.id,
+        messageDispatchId: input.dispatchId,
+        eventType: 'WHATSAPP_SENT',
+      },
+      select: { id: true },
+    });
+
+    if (existing) {
+      return existing;
+    }
+
+    return tx.receivableAuditEvent.create({
+      data: {
+        receivableId: input.receivable.id,
+        paymentIntentId: input.intent.id,
+        messageDispatchId: input.dispatchId,
+        eventType: 'WHATSAPP_SENT',
+        actorUserId: input.actorUserId,
+        provider: input.intent.provider,
+        providerTransactionId: input.intent.providerTransactionId,
+        payerNameSnapshot: input.receivable.payerName,
+        payerPhoneMasked: this.maskPhone(input.phone),
+        metadata: {
+          channel: 'WHATSAPP',
+          amount: input.intent.amount.toString(),
+          dueDate: formatBusinessDate(input.receivable.dueDate),
+          origin: 'MANUAL_CHARGE_PIX',
+        },
+      },
+    });
   }
 
   private async findPrimaryConnection() {
@@ -1677,11 +1802,18 @@ export class WhatsAppService {
       whatsAppConnection?: { id: string; name: string; provider: string } | null;
     },
     success: boolean,
+    reused = false,
   ) {
     return {
       success,
+      dispatchId: dispatch.id,
       messageDispatchId: dispatch.id,
+      status: dispatch.status,
+      phoneMasked: this.maskPhone(dispatch.phone),
       sentAt: dispatch.sentAt?.toISOString() ?? null,
+      createdAt: dispatch.createdAt.toISOString(),
+      reused,
+      idempotent: reused,
       destinationMasked: this.maskPhone(dispatch.phone),
       providerMessageId: dispatch.providerMessageId,
       errorMessage: dispatch.errorMessage,

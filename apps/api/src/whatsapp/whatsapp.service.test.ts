@@ -134,6 +134,63 @@ function pendingContact(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function manualChargeReceivable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'manual-receivable-id',
+    clientId: client().id,
+    clientReferenceId: null,
+    purpose: 'MANUAL_CHARGE',
+    renewalId: null,
+    description: 'Manutencao do equipamento',
+    amount: new Prisma.Decimal(80),
+    dueDate: new Date('2026-10-10T00:00:00.000Z'),
+    status: 'PENDENTE',
+    paidAt: null,
+    canceledAt: null,
+    cancelReason: null,
+    payerName: 'Pagador Snapshot',
+    payerPhone: '(11) 98888-7777',
+    payerPhoneNormalized: '5511988887777',
+    financialCategoryId: 'category-id',
+    manualChargeIdempotencyKey: 'manual-key',
+    createdAt: now,
+    updatedAt: now,
+    client: client({
+      name: 'Cliente Alterado Depois',
+      phoneNormalized: '5544000000000',
+    }),
+    clientReference: null,
+    ...overrides,
+  };
+}
+
+function manualChargePaymentIntent(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'manual-payment-intent-id',
+    receivableId: 'manual-receivable-id',
+    paymentGroupId: null,
+    provider: 'FASTFLOW',
+    providerTransactionId: 'manual-provider-transaction-id',
+    externalStatus: 'WAITING_PAYMENT',
+    externalDepixId: null,
+    blockchainTxId: null,
+    status: 'WAITING_PAYMENT',
+    amount: new Prisma.Decimal(80),
+    pixCopyPaste: 'MANUAL-PIX-COPY-PASTE-CURRENT',
+    qrCodeData: 'data:image/png;base64,manual',
+    expiresAt: new Date('2026-10-11T00:00:00.000Z'),
+    paidAt: null,
+    lastSyncAt: now,
+    failureCode: null,
+    failureMessage: null,
+    createdAt: now,
+    updatedAt: now,
+    receivable: manualChargeReceivable(),
+    paymentGroup: null,
+    ...overrides,
+  };
+}
+
 function serviceFactory({
   currentConnection = connection(),
   providerOverrides = {},
@@ -274,6 +331,10 @@ function serviceFactory({
     financialTransaction: {
       create: vi.fn(),
     },
+    receivableAuditEvent: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'audit-event-id' }),
+    },
     whatsAppInboundMessage: {
       create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
       update: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
@@ -329,6 +390,7 @@ function serviceFactory({
             ),
           ),
         },
+        receivableAuditEvent: prisma.receivableAuditEvent,
         clientEvent: {
           create: vi.fn().mockResolvedValue({}),
         },
@@ -785,6 +847,147 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('sends MANUAL_CHARGE for a registered client using payer snapshots instead of edited client data', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(manualChargePaymentIntent()),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id');
+    const sendButtonsPayload = (provider.sendButtons as MockWithCalls).mock.calls[0]?.[1] as {
+      body: string;
+      buttons: Array<{ buttonParamsJson: { copy_code: string; display_text: string } }>;
+      phone: string;
+    };
+    const dispatchCreate = (prisma.messageDispatch.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: {
+        clientId?: string | null;
+        clientReferenceId?: string | null;
+        idempotencyKey?: string;
+        receivableId?: string;
+        requestId?: string;
+        phone?: string;
+        items?: unknown;
+      };
+    };
+
+    expect(sendButtonsPayload.phone).toBe('5511988887777');
+    expect(sendButtonsPayload.body).toContain('Ola, Pagador Snapshot.');
+    expect(sendButtonsPayload.body).toContain('Manutencao do equipamento');
+    expect(sendButtonsPayload.body).toContain('Valor: R$');
+    expect(sendButtonsPayload.body).toContain('80,00');
+    expect(sendButtonsPayload.body).toContain('Vencimento: 10/10/2026');
+    expect(sendButtonsPayload.body).toContain('Esta chave PIX possui validade ate 11/10/2026.');
+    expect(sendButtonsPayload.body).not.toContain('Cliente Alterado Depois');
+    expect(sendButtonsPayload.body).not.toContain('MANUAL_CHARGE');
+    expect(sendButtonsPayload.buttons[0]?.buttonParamsJson).toEqual({
+      display_text: 'Copiar Chave PIX',
+      copy_code: 'MANUAL-PIX-COPY-PASTE-CURRENT',
+    });
+    expect(dispatchCreate?.data).toMatchObject({
+      clientId: client().id,
+      receivableId: 'manual-receivable-id',
+      phone: '5511988887777',
+      requestId: 'manual-charge-pix:manual-payment-intent-id',
+      idempotencyKey: 'manual-charge-pix:manual-payment-intent-id',
+    });
+    expect(dispatchCreate?.data?.clientReferenceId).toBeUndefined();
+    expect(dispatchCreate?.data?.items).toBeUndefined();
+    const auditCreate = (prisma.receivableAuditEvent.create as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      data?: {
+        actorUserId?: string;
+        eventType?: string;
+        messageDispatchId?: string;
+        paymentIntentId?: string;
+        provider?: string;
+        providerTransactionId?: string;
+        payerNameSnapshot?: string;
+        receivableId?: string;
+      };
+    };
+    expect(auditCreate?.data).toMatchObject({
+      eventType: 'WHATSAPP_SENT',
+      receivableId: 'manual-receivable-id',
+      paymentIntentId: 'manual-payment-intent-id',
+      messageDispatchId: dispatch().id,
+      actorUserId: 'user-id',
+      provider: 'FASTFLOW',
+      providerTransactionId: 'manual-provider-transaction-id',
+      payerNameSnapshot: 'Pagador Snapshot',
+    });
+    expect(result).toMatchObject({
+      success: true,
+      dispatchId: dispatch().id,
+      status: 'SENT',
+      reused: false,
+    });
+  });
+
+  it('sends MANUAL_CHARGE to a guest without requiring Client or ClientEvent', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(
+            manualChargePaymentIntent({
+              receivable: manualChargeReceivable({
+                clientId: null,
+                client: null,
+                payerName: 'Visitante Avulso',
+                payerPhoneNormalized: '5511977776666',
+              }),
+            }),
+          ),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id');
+    const sendButtonsPayload = (provider.sendButtons as MockWithCalls).mock.calls[0]?.[1] as {
+      body: string;
+      phone: string;
+    };
+    const dispatchCreate = (prisma.messageDispatch.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: { clientId?: string | null; clientReferenceId?: string | null; receivableId?: string };
+    };
+    const transactionCallback = (prisma.$transaction as MockWithCalls).mock.calls[0]?.[0] as
+      ((tx: unknown) => Promise<unknown>) | undefined;
+
+    expect(sendButtonsPayload.phone).toBe('5511977776666');
+    expect(sendButtonsPayload.body).toContain('Ola, Visitante Avulso.');
+    expect(dispatchCreate?.data).toMatchObject({
+      clientId: null,
+      receivableId: 'manual-receivable-id',
+    });
+    expect(dispatchCreate?.data?.clientReferenceId).toBeUndefined();
+    expect(JSON.stringify((provider.sendButtons as MockWithCalls).mock.calls)).not.toContain(
+      'Cliente Teste',
+    );
+    expect(JSON.stringify((prisma.$transaction as MockWithCalls).mock.calls)).not.toContain(
+      'CLIENT_CREATED',
+    );
+    expect(transactionCallback).toBeTypeOf('function');
+  });
+
   it('sends grouped WAITING_PAYMENT PIX once and records grouped dispatch items', async () => {
     const groupedItems = [
       {
@@ -1034,6 +1237,242 @@ describe('WhatsAppService', () => {
       ConflictException,
     );
     expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
+  it('reuses an already SENT MANUAL_CHARGE dispatch without duplicate provider send or audit', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(manualChargePaymentIntent()),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+        messageDispatch: {
+          create: vi.fn().mockRejectedValue(duplicateError),
+          update: vi.fn(),
+          findMany: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(
+            dispatch({
+              status: 'SENT',
+              requestId: 'manual-charge-pix:manual-payment-intent-id',
+              idempotencyKey: 'manual-charge-pix:manual-payment-intent-id',
+              sentAt: now,
+            }),
+          ),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id');
+
+    expect(result).toMatchObject({ status: 'SENT', reused: true, idempotent: true });
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+    expect(prisma.receivableAuditEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('reuses a pending MANUAL_CHARGE dispatch without creating a second send', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(manualChargePaymentIntent()),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+        messageDispatch: {
+          create: vi.fn().mockRejectedValue(duplicateError),
+          update: vi.fn(),
+          findMany: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(
+            dispatch({
+              status: 'PENDING',
+              requestId: 'manual-charge-pix:manual-payment-intent-id',
+              idempotencyKey: 'manual-charge-pix:manual-payment-intent-id',
+            }),
+          ),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id');
+
+    expect(result).toMatchObject({ status: 'PENDING', reused: true });
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed MANUAL_CHARGE dispatch without generating another PIX', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const { service, provider, prisma, finance } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(manualChargePaymentIntent()),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+        messageDispatch: {
+          create: vi.fn().mockRejectedValue(duplicateError),
+          update: vi.fn(),
+          findMany: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(
+            dispatch({
+              status: 'FAILED',
+              requestId: 'manual-charge-pix:manual-payment-intent-id',
+              idempotencyKey: 'manual-charge-pix:manual-payment-intent-id',
+            }),
+          ),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id');
+
+    expect(result).toMatchObject({ success: true, reused: false });
+    expect(provider.sendButtons).toHaveBeenCalledTimes(1);
+    expect(finance.createReceivablePix).not.toHaveBeenCalled();
+    expect(prisma.paymentIntent.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.receivableAuditEvent.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not duplicate WHATSAPP_SENT audit when retrying an already audited dispatch', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(manualChargePaymentIntent()),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+        receivableAuditEvent: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'audit-event-id' }),
+          create: vi.fn(),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id');
+
+    expect(provider.sendButtons).toHaveBeenCalledTimes(1);
+    const auditFind = (prisma.receivableAuditEvent.findFirst as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      where?: { eventType?: string; paymentIntentId?: string };
+    };
+    expect(auditFind?.where).toMatchObject({
+      eventType: 'WHATSAPP_SENT',
+      paymentIntentId: 'manual-payment-intent-id',
+    });
+    expect(prisma.receivableAuditEvent.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['CANCELADO', 'charge cancelada'],
+    ['PAGO', 'charge paga'],
+  ])('blocks MANUAL_CHARGE WhatsApp send when receivable is %s', async (status) => {
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(
+            manualChargePaymentIntent({
+              receivable: manualChargeReceivable({ status }),
+            }),
+          ),
+          findFirst: vi.fn(),
+        },
+      },
+    });
+
+    await expect(
+      service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id'),
+    ).rejects.toThrow(ConflictException);
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
+  it('blocks MANUAL_CHARGE WhatsApp send for a superseded intent', async () => {
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(
+            manualChargePaymentIntent({
+              status: 'SUPERSEDED',
+              pixCopyPaste: 'OLD-MANUAL-PIX-CODE',
+            }),
+          ),
+          findFirst: vi.fn(),
+        },
+      },
+    });
+
+    await expect(
+      service.sendPixPaymentIntent('manual-payment-intent-id', 'user-id'),
+    ).rejects.toThrow(ConflictException);
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
+  it('sends only the active replaced MANUAL_CHARGE PIX copy code', async () => {
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(
+            manualChargePaymentIntent({
+              id: 'new-manual-payment-intent-id',
+              pixCopyPaste: 'NEW-MANUAL-PIX-CODE',
+            }),
+          ),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'new-manual-payment-intent-id',
+            receivableId: 'manual-receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('new-manual-payment-intent-id', 'user-id');
+    const sendButtonsPayload = (provider.sendButtons as MockWithCalls).mock.calls[0]?.[1] as {
+      buttons: Array<{ buttonParamsJson: { copy_code: string } }>;
+    };
+
+    expect(sendButtonsPayload.buttons[0]?.buttonParamsJson.copy_code).toBe('NEW-MANUAL-PIX-CODE');
+    expect(JSON.stringify((provider.sendButtons as MockWithCalls).mock.calls)).not.toContain(
+      'OLD-MANUAL-PIX-CODE',
+    );
   });
 
   it('creates a pending contact from an unknown incoming webhook', async () => {

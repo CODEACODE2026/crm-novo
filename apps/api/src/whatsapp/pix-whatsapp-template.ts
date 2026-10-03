@@ -3,7 +3,11 @@ import { Prisma } from '@prisma/client';
 export type PixWhatsAppTemplateInput = {
   amount: Prisma.Decimal | number | string;
   pixCopyPaste: string;
-  context?: 'INDIVIDUAL' | 'GROUPED';
+  context?: 'INDIVIDUAL' | 'GROUPED' | 'MANUAL_CHARGE';
+  payerName?: string | undefined;
+  description?: string | undefined;
+  dueDate?: string | undefined;
+  expiresAt?: string | null | undefined;
   itemCount?: number;
   items?: Array<{
     reference: string;
@@ -31,7 +35,9 @@ export function buildPixWhatsAppTemplate(input: PixWhatsAppTemplateInput): PixWh
   const body =
     input.context === 'GROUPED'
       ? buildGroupedPixBody(input, amount)
-      : buildIndividualPixBody(amount);
+      : input.context === 'MANUAL_CHARGE'
+        ? buildManualChargePixBody(input, amount)
+        : buildIndividualPixBody(amount);
 
   return {
     title: 'PIX',
@@ -44,6 +50,27 @@ export function buildPixWhatsAppTemplate(input: PixWhatsAppTemplateInput): PixWh
       },
     },
   };
+}
+
+function buildManualChargePixBody(input: PixWhatsAppTemplateInput, amount: string) {
+  const lines = [
+    `Ola, ${input.payerName ?? 'tudo bem'}.`,
+    '',
+    'Segue sua cobranca:',
+    '',
+    input.description?.trim() ?? 'Cobranca',
+    '',
+    `Valor: ${amount}`,
+    input.dueDate ? `Vencimento: ${input.dueDate}` : null,
+    '',
+    'Use o botao abaixo para copiar a chave PIX e realizar o pagamento.',
+  ].filter((line): line is string => line !== null);
+
+  if (input.expiresAt) {
+    lines.push('', `Esta chave PIX possui validade ate ${input.expiresAt}.`);
+  }
+
+  return lines.join('\n');
 }
 
 function buildIndividualPixBody(amount: string) {

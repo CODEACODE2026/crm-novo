@@ -8,6 +8,8 @@ import {
   confirmRenewalReversal,
   createReferenceReactivation,
   createClient,
+  createManualCharge,
+  createReceivablePix,
   createReceivablesPix,
   deleteClient,
   formatCurrency,
@@ -217,6 +219,58 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/payment-intents/intent-1/send-whatsapp'),
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('posts manual charge creation to the receivables endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'receivable-1', purpose: 'MANUAL_CHARGE' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createManualCharge({
+      amount: 80,
+      categoryId: '550e8400-e29b-41d4-a716-446655440000',
+      description: 'Manutenção do equipamento',
+      dueDate: '2026-10-10',
+      idempotencyKey: 'manual-charge:test-key',
+      payerPhone: '(11) 99999-9999',
+      payerName: 'João',
+      payerType: 'GUEST',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/manual-charges'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toMatchObject({
+      amount: 80,
+      categoryId: '550e8400-e29b-41d4-a716-446655440000',
+      description: 'Manutenção do equipamento',
+      dueDate: '2026-10-10',
+      idempotencyKey: 'manual-charge:test-key',
+      payerPhone: '(11) 99999-9999',
+      payerName: 'João',
+      payerType: 'GUEST',
+    });
+  });
+
+  it('posts selected provider when creating an individual receivable PIX', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'intent-1', provider: 'FASTPAY' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createReceivablePix('receivable-1', 'FASTPAY');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/receivable-1/pix'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(latestJsonBody(fetchMock)).toEqual({ provider: 'FASTPAY' });
   });
 
   it('posts selected provider when creating grouped PIX', async () => {

@@ -163,7 +163,7 @@ export interface ClientMessageDispatch {
 }
 
 export type ReceivableStatus = 'PENDENTE' | 'PAGO' | 'CANCELADO';
-export type ReceivablePurpose = 'RENEWAL' | 'INITIAL_ACTIVATION' | 'REACTIVATION';
+export type ReceivablePurpose = 'RENEWAL' | 'INITIAL_ACTIVATION' | 'REACTIVATION' | 'MANUAL_CHARGE';
 export type ReceivableDisplayStatus = ReceivableStatus | 'VENCIDO';
 export type FinancialTransactionType = 'ENTRADA' | 'SAIDA';
 export type FinancialTransactionOrigin = 'RECEIVABLE_PAYMENT' | 'MANUAL' | 'LEGACY_IMPORT';
@@ -201,8 +201,8 @@ export interface Receivable {
   sourceKind?: 'RECEIVABLE' | 'LEGACY_IMPORT';
   sourceId?: string;
   id: string;
-  clientId: string;
-  clientReferenceId?: string;
+  clientId: string | null;
+  clientReferenceId?: string | null;
   renewalId: string | null;
   purpose: ReceivablePurpose;
   description: string;
@@ -215,15 +215,26 @@ export interface Receivable {
   cancelReason?: string | null;
   paymentTransactionId?: string | null;
   paymentIntents?: PaymentIntent[];
+  activePix?: PaymentIntent | null;
   paymentMethod?: FinancialPaymentMethod | null;
   origin?: FinancialTransactionOrigin;
-  category?: FinancialCategory;
+  category?: FinancialCategory | null;
   originalDescription?: string;
   notes?: string | null;
+  payerName?: string | null;
+  payerPhone?: string | null;
+  payerPhoneMasked?: string | null;
+  payerPhoneNormalized?: string | null;
+  financialCategoryId?: string | null;
+  manualChargeIdempotencyKey?: string | null;
   createdAt: string;
   updatedAt: string;
-  client?: Pick<Client, 'id' | 'name' | 'reference'>;
-  clientReference?: Pick<ClientReference, 'id' | 'reference' | 'status'> & { planName?: string };
+  client?: Pick<Client, 'id' | 'name' | 'reference'> | null;
+  clientReference?:
+    | (Pick<ClientReference, 'id' | 'reference' | 'status'> & {
+        planName?: string;
+      })
+    | null;
 }
 
 export interface PaymentIntent {
@@ -278,10 +289,16 @@ export interface ActivePixConflictPayload {
 export interface PixWhatsAppSendResult {
   success: boolean;
   messageDispatchId: string;
+  dispatchId?: string;
+  status?: ClientMessageDispatch['status'];
+  phoneMasked?: string;
+  createdAt?: string;
   sentAt: string | null;
   destinationMasked: string;
   providerMessageId: string | null;
   errorMessage: string | null;
+  reused?: boolean;
+  idempotent?: boolean;
 }
 
 export interface PixReconciliationPreview {
@@ -1219,6 +1236,20 @@ export interface FinancialTransactionPayload {
   notes?: string | undefined;
 }
 
+export type ManualChargePayerType = 'REGISTERED_CLIENT' | 'GUEST';
+
+export interface ManualChargePayload {
+  description: string;
+  categoryId: string;
+  amount: number;
+  dueDate: string;
+  payerType: ManualChargePayerType;
+  idempotencyKey: string;
+  clientId?: string;
+  payerName?: string;
+  payerPhone?: string;
+}
+
 export interface PaginatedClients {
   items: Client[];
   pagination: {
@@ -2026,8 +2057,11 @@ export function payReceivables(payload: {
   });
 }
 
-export function createReceivablePix(id: string) {
-  return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, { method: 'POST' });
+export function createReceivablePix(id: string, provider?: PaymentProviderCode) {
+  return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, {
+    method: 'POST',
+    ...(provider ? { body: JSON.stringify({ provider }) } : {}),
+  });
 }
 
 export function previewReceivablePixReplacement(
@@ -2269,6 +2303,13 @@ export function listFinancialTransactions(
 
 export function createManualEntry(payload: FinancialTransactionPayload) {
   return apiFetch<FinancialTransaction>('/financial-transactions/entries', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createManualCharge(payload: ManualChargePayload) {
+  return apiFetch<Receivable>('/receivables/manual-charges', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

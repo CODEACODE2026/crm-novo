@@ -165,6 +165,83 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).toContain('Salvar saída');
   });
 
+  it('adds the manual PIX charge mode without removing the manual entry path', () => {
+    expect(dashboardSource).toContain("type TransactionModalMode = 'MANUAL_ENTRY' | 'MANUAL_PIX'");
+    expect(dashboardSource).toContain('<strong>Entrada manual</strong>');
+    expect(dashboardSource).toContain('<strong>Cobrança PIX</strong>');
+    expect(dashboardSource).toContain('await createManualEntry(payload);');
+    expect(dashboardSource).toContain('await createManualCharge({');
+    expect(dashboardSource).toContain("payerType: 'REGISTERED_CLIENT'");
+    expect(dashboardSource).toContain("payerType: 'GUEST'");
+  });
+
+  it('keeps manual PIX actions on existing endpoints and providers', () => {
+    expect(dashboardSource).toContain(
+      'createReceivablePix(manualCharge.id, selectedManualPixProvider)',
+    );
+    expect(dashboardSource).toContain('sendPaymentIntentWhatsApp(manualPixIntent.id)');
+    expect(dashboardSource).toContain('replaceReceivablePix(manualCharge.id');
+    expect(dashboardSource).toContain('cancelReceivable(manualCharge.id');
+    expect(dashboardSource).toContain('activePixConflictPayloadFromError(err)');
+    expect(dashboardSource).toContain("setPixNotice('PIX ativo encontrado.')");
+    expect(dashboardSource).toContain("'Tentar novamente' : 'Enviar no WhatsApp'");
+    expect(dashboardSource).toContain(
+      "type ManualPixWorkingAction = 'create' | 'generate' | 'whatsapp' | 'replace' | 'cancel' | null;",
+    );
+    expect(dashboardSource).toContain("setManualPixWorkingAction('create')");
+    expect(dashboardSource).toContain("setManualPixWorkingAction('generate')");
+    expect(dashboardSource).toContain("setManualPixWorkingAction('whatsapp')");
+    expect(dashboardSource).toContain("setManualPixWorkingAction('replace')");
+    expect(dashboardSource).toContain("setManualPixWorkingAction('cancel')");
+    expect(dashboardSource).toContain(
+      'disabled={busy || !selectedPixProvider || !canUsePixActions || hasActivePixIntent}',
+    );
+    expect(dashboardSource).toContain(
+      "manualCharge.status === 'CANCELADO' ? 'CANCELADO' : 'PENDENTE'",
+    );
+    expect(dashboardSource).toContain('listPaymentProviderCredentials()');
+    expect(dashboardSource).toContain('isOperationalPixProviderCredential(credential)');
+    expect(dashboardSource).toContain('replacementProviderLabel(provider, defaultPixProvider)');
+    expect(dashboardSource).not.toContain('/manual-charges/whatsapp');
+  });
+
+  it('keeps manual PIX errors friendly and accessible', () => {
+    expect(dashboardSource).toContain('function manualPixFriendlyError');
+    expect(dashboardSource).toContain('function manualPixKnownErrorMessage');
+    expect(dashboardSource).toContain('Categoria inválida ou indisponível.');
+    expect(dashboardSource).toContain('Telefone inválido para envio pelo WhatsApp.');
+    expect(dashboardSource).toContain('Provider PIX indisponível no momento.');
+    expect(dashboardSource).toContain('Este PIX foi substituído por uma tentativa mais recente.');
+    expect(dashboardSource).toContain('id="transaction-form-error" role="alert"');
+    expect(dashboardSource).toContain(
+      "aria-describedby={formError ? 'transaction-form-error' : undefined}",
+    );
+  });
+
+  it('presents manual charge receivables with user-facing labels', () => {
+    expect(dashboardSource).toContain("return receivable.purpose === 'MANUAL_CHARGE';");
+    expect(dashboardSource).toContain(
+      "if (isManualChargeReceivable(receivable)) return 'Cobrança avulsa';",
+    );
+    expect(dashboardSource).toContain(
+      "return isManualChargeReceivable(receivable) ? 'Cobrança PIX' : 'Cobrança recorrente';",
+    );
+    expect(dashboardSource).toContain('receivablePayerLabel(receivable)');
+    expect(dashboardSource).toContain('receivableReferenceLabel(receivable)');
+    expect(dashboardSource).toContain('isManualChargeReceivable(receivable) ||');
+    expect(dashboardSource).not.toContain('>MANUAL_CHARGE<');
+  });
+
+  it('keeps manual PIX modal controls mobile-aware', () => {
+    expect(stylesSource).toContain('.manual-charge-choice');
+    expect(stylesSource).toContain('.manual-pix-stepper');
+    expect(stylesSource).toContain('.manual-pix-provider-swap');
+    expect(stylesSource).toContain('.manual-pix-actions .ui-button');
+    expect(stylesSource).toContain('.manual-charge-choice,');
+    expect(stylesSource).toContain('.manual-pix-stepper,');
+    expect(stylesSource).toContain('.manual-pix-provider-swap');
+  });
+
   it('validates required transaction fields before hitting the API', () => {
     expect(dashboardSource).toContain(
       'if (!form.description.trim() || !form.categoryId || !form.transactionDate || amount <= 0)',

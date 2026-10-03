@@ -125,6 +125,7 @@ import {
   createClient,
   createClientReference,
   createFinancialCategory,
+  createManualCharge,
   createManualEntry,
   createManualExpense,
   createReferenceReactivation,
@@ -14067,8 +14068,12 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
     mobileLabel: string;
   }>;
 
-  const entryCategories = categories.filter((category) => category.type === 'ENTRADA');
-  const expenseCategories = categories.filter((category) => category.type === 'SAIDA');
+  const entryCategories = categories.filter(
+    (category) => category.type === 'ENTRADA' && category.active !== false,
+  );
+  const expenseCategories = categories.filter(
+    (category) => category.type === 'SAIDA' && category.active !== false,
+  );
   const selectedReceivables = selectedReceivableIds
     .map((id) => receivables.find((receivable) => receivable.id === id))
     .filter((receivable): receivable is Receivable => Boolean(receivable));
@@ -14326,7 +14331,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             <div className="search-row">
               <Search aria-hidden="true" size={18} />
               <input
-                placeholder="Buscar cliente, referência ou descrição"
+                placeholder="Buscar cliente, pagador, telefone ou descrição"
                 value={financeSearch}
                 onChange={(event) => {
                   setFinanceSearch(event.target.value);
@@ -14405,18 +14410,20 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
                           disabled={
                             legacyImport ||
                             receivable.status !== 'PENDENTE' ||
+                            isManualChargeReceivable(receivable) ||
                             Boolean(selectedClientId && selectedClientId !== receivable.clientId)
                           }
                           type="checkbox"
                           onChange={() => toggleReceivableSelection(receivable)}
                         />
                       </td>
-                      <td>{receivable.client?.name ?? '-'}</td>
                       <td>
-                        {receivable.clientReference?.reference ??
-                          receivable.client?.reference ??
-                          '-'}
+                        {receivablePayerLabel(receivable)}
+                        {isManualChargeReceivable(receivable) ? (
+                          <span>{receivablePurposeLabel(receivable)}</span>
+                        ) : null}
                       </td>
+                      <td>{receivableReferenceLabel(receivable)}</td>
                       <td>{receivable.description}</td>
                       <td>{formatDate(receivable.dueDate)}</td>
                       <td className="finance-amount-column">{formatCurrency(receivable.amount)}</td>
@@ -14598,6 +14605,7 @@ function FinanceView({ clients, initialTab }: { clients: Client[]; initialTab: F
             await createManualExpense(payload);
             await reloadWithNotice('Saida registrada.');
           }}
+          onManualChargeChanged={reloadWithNotice}
           onUpdate={async (id, payload) => {
             await updateFinancialTransaction(id, payload);
             await reloadWithNotice(
@@ -14618,6 +14626,37 @@ type TransactionFormState = {
   clientId: string;
   notes: string;
 };
+
+type TransactionModalMode = 'MANUAL_ENTRY' | 'MANUAL_PIX';
+type ManualChargePayerMode = 'REGISTERED_CLIENT' | 'GUEST';
+type ManualChargeStep = 'FORM' | 'SUMMARY' | 'PIX';
+type ManualPixWorkingAction = 'create' | 'generate' | 'whatsapp' | 'replace' | 'cancel' | null;
+
+type ManualChargeFormState = {
+  description: string;
+  categoryId: string;
+  amount: string;
+  dueDate: string;
+  payerType: ManualChargePayerMode;
+  clientId: string;
+  payerName: string;
+  payerPhone: string;
+  provider: ConfigurablePaymentProvider | '';
+};
+
+function manualChargeInitialForm(categories: FinancialCategory[]): ManualChargeFormState {
+  return {
+    description: '',
+    categoryId: categories[0]?.id ?? '',
+    amount: '',
+    dueDate: formatSaoPauloDateInput(new Date()),
+    payerType: 'REGISTERED_CLIENT',
+    clientId: '',
+    payerName: '',
+    payerPhone: '',
+    provider: '',
+  };
+}
 
 function transactionInitialForm(categories: FinancialCategory[]): TransactionFormState {
   return {
@@ -14759,6 +14798,7 @@ function TransactionModal({
   transaction,
   onClose,
   onCreate,
+  onManualChargeChanged,
   onUpdate,
 }: {
   categories: FinancialCategory[];
@@ -14767,19 +14807,73 @@ function TransactionModal({
   transaction: FinancialTransaction | undefined;
   onClose: () => void;
   onCreate: (payload: FinancialTransactionPayload) => Promise<void>;
+  onManualChargeChanged: (message: string) => Promise<void>;
   onUpdate: (id: string, payload: Partial<FinancialTransactionPayload>) => Promise<void>;
 }) {
   const editing = Boolean(transaction);
   const [form, setForm] = useState<TransactionFormState>(() =>
     transaction ? transactionFormFromRecord(transaction) : transactionInitialForm(categories),
   );
+  const [mode, setMode] = useState<TransactionModalMode>('MANUAL_ENTRY');
+  const [manualChargeForm, setManualChargeForm] = useState<ManualChargeFormState>(() =>
+    manualChargeInitialForm(categories),
+  );
+  const [manualChargeStep, setManualChargeStep] = useState<ManualChargeStep>('FORM');
+  const [manualCharge, setManualCharge] = useState<Receivable | null>(null);
+  const [manualPixIntent, setManualPixIntent] = useState<PaymentIntent | null>(null);
+  const [paymentProviderCredentials, setPaymentProviderCredentials] = useState<
+    PaymentProviderCredentialStatus[]
+  >([]);
+  const [pixNotice, setPixNotice] = useState('');
+  const [pixSendingWhatsApp, setPixSendingWhatsApp] = useState(false);
+  const [pixWhatsAppFailed, setPixWhatsAppFailed] = useState(false);
+  const [manualPixWorkingAction, setManualPixWorkingAction] =
+    useState<ManualPixWorkingAction>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+  const manualChargeIdempotencyKeyRef = useRef(createFrontendIdempotencyKey('manual-charge'));
+  const manualPixActionRef = useRef(false);
+  const manualChargeEntryMode = kind === 'ENTRADA' && !editing;
+  const activeEntryCategories = categories.filter((category) => category.active !== false);
+  const eligiblePixProviders = useMemo(
+    () =>
+      configurablePaymentProviders.filter((provider) => {
+        const credential = paymentProviderCredentials.find((item) => item.provider === provider);
+        return credential ? isOperationalPixProviderCredential(credential) : false;
+      }),
+    [paymentProviderCredentials],
+  );
+  const defaultPixProvider =
+    eligiblePixProviders.find((provider) =>
+      paymentProviderCredentials.some(
+        (credential) =>
+          credential.provider === provider &&
+          credential.defaultForPix &&
+          isOperationalPixProviderCredential(credential),
+      ),
+    ) ??
+    eligiblePixProviders[0] ??
+    null;
+  const selectedManualPixProvider =
+    manualChargeForm.provider && eligiblePixProviders.includes(manualChargeForm.provider)
+      ? manualChargeForm.provider
+      : defaultPixProvider;
+  const selectedClient = clients.find((client) => client.id === manualChargeForm.clientId) ?? null;
+  const manualPixBusy = manualPixWorkingAction !== null;
 
   useEffect(() => {
     setForm(
       transaction ? transactionFormFromRecord(transaction) : transactionInitialForm(categories),
     );
+    setMode('MANUAL_ENTRY');
+    setManualChargeForm(manualChargeInitialForm(categories));
+    setManualChargeStep('FORM');
+    setManualCharge(null);
+    setManualPixIntent(null);
+    setPixNotice('');
+    setPixWhatsAppFailed(false);
+    setManualPixWorkingAction(null);
+    manualChargeIdempotencyKeyRef.current = createFrontendIdempotencyKey('manual-charge');
     setFormError('');
   }, [categories, transaction]);
 
@@ -14788,10 +14882,41 @@ function TransactionModal({
       ...current,
       categoryId: current.categoryId || categories[0]?.id || '',
     }));
+    setManualChargeForm((current) => ({
+      ...current,
+      categoryId: current.categoryId || categories[0]?.id || '',
+    }));
   }, [categories]);
+
+  useEffect(() => {
+    if (!manualChargeEntryMode || mode !== 'MANUAL_PIX') return;
+
+    void listPaymentProviderCredentials()
+      .then((credentials) => setPaymentProviderCredentials(credentials))
+      .catch(() => setPaymentProviderCredentials([]));
+  }, [manualChargeEntryMode, mode]);
+
+  useEffect(() => {
+    if (!defaultPixProvider) return;
+    setManualChargeForm((current) => ({
+      ...current,
+      provider:
+        current.provider && eligiblePixProviders.includes(current.provider)
+          ? current.provider
+          : defaultPixProvider,
+    }));
+  }, [defaultPixProvider, eligiblePixProviders]);
 
   function closeAndReset() {
     setForm(transactionInitialForm(categories));
+    setMode('MANUAL_ENTRY');
+    setManualChargeForm(manualChargeInitialForm(categories));
+    setManualChargeStep('FORM');
+    setManualCharge(null);
+    setManualPixIntent(null);
+    setPixNotice('');
+    setPixWhatsAppFailed(false);
+    setManualPixWorkingAction(null);
     setFormError('');
     onClose();
   }
@@ -14799,6 +14924,11 @@ function TransactionModal({
   async function submitForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError('');
+
+    if (manualChargeEntryMode && mode === 'MANUAL_PIX') {
+      await submitManualCharge();
+      return;
+    }
 
     const amount = Number(form.amount);
     if (!form.description.trim() || !form.categoryId || !form.transactionDate || amount <= 0) {
@@ -14827,6 +14957,205 @@ function TransactionModal({
       setFormError(err instanceof Error ? err.message : 'Não foi possível salvar movimentação.');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function submitManualCharge() {
+    if (manualPixBusy || manualPixActionRef.current) return;
+
+    const amount = Number(manualChargeForm.amount);
+    const description = manualChargeForm.description.trim();
+
+    if (!description || !manualChargeForm.categoryId || !manualChargeForm.dueDate || amount <= 0) {
+      setFormError('Preencha descrição, categoria, valor e vencimento antes de criar.');
+      return;
+    }
+
+    if (manualChargeForm.payerType === 'REGISTERED_CLIENT' && !manualChargeForm.clientId) {
+      setFormError('Selecione um cliente cadastrado para continuar.');
+      return;
+    }
+
+    if (manualChargeForm.payerType === 'GUEST') {
+      if (!manualChargeForm.payerName.trim()) {
+        setFormError('Informe o nome do pagador avulso.');
+        return;
+      }
+
+      if (
+        !manualChargeForm.payerPhone.trim() ||
+        onlyDigits(manualChargeForm.payerPhone).length < 10
+      ) {
+        setFormError('Informe um WhatsApp válido para o pagador.');
+        return;
+      }
+    }
+
+    manualPixActionRef.current = true;
+    setManualPixWorkingAction('create');
+    setFormError('');
+
+    try {
+      const receivable = await createManualCharge({
+        amount,
+        categoryId: manualChargeForm.categoryId,
+        description,
+        dueDate: manualChargeForm.dueDate,
+        idempotencyKey: manualChargeIdempotencyKeyRef.current,
+        payerType: manualChargeForm.payerType,
+        ...(manualChargeForm.payerType === 'REGISTERED_CLIENT'
+          ? { clientId: manualChargeForm.clientId }
+          : {
+              payerName: manualChargeForm.payerName.trim(),
+              payerPhone: manualChargeForm.payerPhone.trim(),
+            }),
+      });
+
+      setManualCharge(receivable);
+      setManualPixIntent(receivable.activePix ?? receivable.paymentIntents?.[0] ?? null);
+      setManualChargeStep(receivable.activePix ? 'PIX' : 'SUMMARY');
+      setPixNotice(receivable.activePix ? 'Cobrança encontrada com PIX ativo.' : '');
+      setPixWhatsAppFailed(false);
+      await onManualChargeChanged('Cobrança PIX criada.');
+    } catch (err) {
+      setFormError(manualPixFriendlyError(err, 'Não foi possível criar a cobrança PIX.'));
+    } finally {
+      setManualPixWorkingAction(null);
+      manualPixActionRef.current = false;
+    }
+  }
+
+  async function generateManualPix() {
+    if (!manualCharge || manualPixActionRef.current || !selectedManualPixProvider) return;
+
+    manualPixActionRef.current = true;
+    setManualPixWorkingAction('generate');
+    setFormError('');
+    setPixNotice('');
+
+    try {
+      const intent = await createReceivablePix(manualCharge.id, selectedManualPixProvider);
+      setManualPixIntent(intent);
+      setManualChargeStep('PIX');
+      setPixNotice('PIX gerado.');
+      setPixWhatsAppFailed(false);
+      await onManualChargeChanged('PIX gerado.');
+    } catch (err) {
+      const conflict = activePixConflictPayloadFromError(err);
+      if (conflict?.activePix.type === 'INDIVIDUAL') {
+        setManualPixIntent(conflict.activePix.paymentIntent);
+        setManualChargeStep('PIX');
+        setPixNotice('PIX ativo encontrado.');
+        setPixWhatsAppFailed(false);
+        return;
+      }
+
+      setFormError(manualPixFriendlyError(err, 'Não foi possível gerar o PIX.'));
+    } finally {
+      setManualPixWorkingAction(null);
+      manualPixActionRef.current = false;
+    }
+  }
+
+  async function copyManualPix() {
+    if (!manualPixIntent?.pixCopyPaste) return;
+
+    try {
+      await navigator.clipboard.writeText(manualPixIntent.pixCopyPaste);
+      setPixNotice('PIX copiado.');
+    } catch {
+      setFormError('Não foi possível copiar o PIX. Copie o código manualmente.');
+    }
+  }
+
+  async function sendManualPixWhatsApp() {
+    if (!manualPixIntent || manualPixActionRef.current || pixSendingWhatsApp) return;
+
+    manualPixActionRef.current = true;
+    setPixSendingWhatsApp(true);
+    setManualPixWorkingAction('whatsapp');
+    setFormError('');
+    setPixNotice('');
+    setPixWhatsAppFailed(false);
+
+    try {
+      const result = await sendPaymentIntentWhatsApp(manualPixIntent.id);
+      if (!result.success) {
+        throw new Error(result.errorMessage ?? 'Não foi possível enviar pelo WhatsApp.');
+      }
+
+      setPixNotice(
+        result.reused || result.idempotent
+          ? 'Cobrança já estava enviada pelo WhatsApp.'
+          : 'Cobrança enviada pelo WhatsApp.',
+      );
+      setPixWhatsAppFailed(false);
+    } catch (err) {
+      setFormError(manualPixFriendlyError(err, 'Não foi possível enviar pelo WhatsApp.'));
+      setPixWhatsAppFailed(true);
+    } finally {
+      setManualPixWorkingAction(null);
+      setPixSendingWhatsApp(false);
+      manualPixActionRef.current = false;
+    }
+  }
+
+  async function replaceManualPixProvider() {
+    if (
+      !manualCharge ||
+      !manualPixIntent ||
+      !selectedManualPixProvider ||
+      manualPixActionRef.current
+    ) {
+      return;
+    }
+
+    manualPixActionRef.current = true;
+    setManualPixWorkingAction('replace');
+    setFormError('');
+    setPixNotice('');
+
+    try {
+      const intent = await replaceReceivablePix(manualCharge.id, {
+        expectedCurrentIntentId: manualPixIntent.id,
+        idempotencyKey: `manual-pix-replace:${manualCharge.id}:${manualPixIntent.id}:${selectedManualPixProvider}`,
+        provider: selectedManualPixProvider,
+        reason: 'Troca de provider pela cobrança PIX manual',
+      });
+      setManualPixIntent(intent);
+      setPixNotice('Provider trocado e novo PIX gerado.');
+      setPixWhatsAppFailed(false);
+      await onManualChargeChanged('PIX substituído.');
+    } catch (err) {
+      setFormError(manualPixFriendlyError(err, 'Não foi possível trocar o provider.'));
+    } finally {
+      setManualPixWorkingAction(null);
+      manualPixActionRef.current = false;
+    }
+  }
+
+  async function cancelManualCharge() {
+    if (!manualCharge || manualCharge.status !== 'PENDENTE' || manualPixActionRef.current) return;
+    if (!window.confirm('Cancelar esta cobrança PIX?')) return;
+
+    manualPixActionRef.current = true;
+    setManualPixWorkingAction('cancel');
+    setFormError('');
+    setPixNotice('');
+
+    try {
+      const canceled = await cancelReceivable(manualCharge.id, {
+        reason: 'Cancelada pelo financeiro',
+      });
+      setManualCharge(canceled);
+      setPixNotice('Cobrança cancelada.');
+      setPixWhatsAppFailed(false);
+      await onManualChargeChanged('Cobrança cancelada.');
+    } catch (err) {
+      setFormError(manualPixFriendlyError(err, 'Não foi possível cancelar a cobrança.'));
+    } finally {
+      setManualPixWorkingAction(null);
+      manualPixActionRef.current = false;
     }
   }
 
@@ -14862,18 +15191,345 @@ function TransactionModal({
           <IconButton icon={X} label="Fechar" onClick={closeAndReset} />
         </header>
 
-        {formError ? <div className="notice danger">{formError}</div> : null}
+        {formError ? (
+          <div className="notice danger" id="transaction-form-error" role="alert">
+            {formError}
+          </div>
+        ) : null}
 
         <form
+          aria-describedby={formError ? 'transaction-form-error' : undefined}
           className="entity-form finance-transaction-modal-form"
           onSubmit={(event) => void submitForm(event)}
         >
+          {manualChargeEntryMode ? (
+            <fieldset className="manual-charge-choice">
+              <legend>Tipo</legend>
+              <label className={mode === 'MANUAL_ENTRY' ? 'active' : ''}>
+                <input
+                  checked={mode === 'MANUAL_ENTRY'}
+                  name="transaction-mode"
+                  type="radio"
+                  value="MANUAL_ENTRY"
+                  onChange={() => {
+                    setMode('MANUAL_ENTRY');
+                    setFormError('');
+                  }}
+                />
+                <span>
+                  <strong>Entrada manual</strong>
+                  <small>Lança a entrada imediatamente.</small>
+                </span>
+              </label>
+              <label className={mode === 'MANUAL_PIX' ? 'active' : ''}>
+                <input
+                  checked={mode === 'MANUAL_PIX'}
+                  name="transaction-mode"
+                  type="radio"
+                  value="MANUAL_PIX"
+                  onChange={() => {
+                    setMode('MANUAL_PIX');
+                    setFormError('');
+                  }}
+                />
+                <span>
+                  <strong>Cobrança PIX</strong>
+                  <small>Cria uma conta a receber para gerar PIX.</small>
+                </span>
+              </label>
+            </fieldset>
+          ) : null}
+
+          {mode === 'MANUAL_ENTRY' || !manualChargeEntryMode ? (
+            <>
+              <label className="field">
+                <span>Descrição</span>
+                <input
+                  required
+                  value={form.description}
+                  onChange={(event) => setForm({ ...form, description: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>Categoria</span>
+                <select
+                  required
+                  value={form.categoryId}
+                  onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
+                >
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Valor</span>
+                <input
+                  min="0.01"
+                  required
+                  step="0.01"
+                  type="number"
+                  value={form.amount}
+                  onChange={(event) => setForm({ ...form, amount: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>Data</span>
+                <input
+                  required
+                  type="date"
+                  value={form.transactionDate}
+                  onChange={(event) => setForm({ ...form, transactionDate: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>Cliente</span>
+                <select
+                  value={form.clientId}
+                  onChange={(event) => setForm({ ...form, clientId: event.target.value })}
+                >
+                  <option value="">Sem cliente</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Observação</span>
+                <input
+                  value={form.notes}
+                  onChange={(event) => setForm({ ...form, notes: event.target.value })}
+                />
+              </label>
+            </>
+          ) : null}
+
+          {manualChargeEntryMode && mode === 'MANUAL_PIX' ? (
+            <ManualPixChargeContent
+              categories={activeEntryCategories}
+              clients={clients}
+              defaultPixProvider={defaultPixProvider}
+              eligiblePixProviders={eligiblePixProviders}
+              form={manualChargeForm}
+              manualCharge={manualCharge}
+              pixIntent={manualPixIntent}
+              pixNotice={pixNotice}
+              pixWhatsAppFailed={pixWhatsAppFailed}
+              selectedClient={selectedClient}
+              selectedPixProvider={selectedManualPixProvider}
+              step={manualChargeStep}
+              workingAction={manualPixWorkingAction}
+              whatsAppSending={pixSendingWhatsApp}
+              onCancelCharge={() => void cancelManualCharge()}
+              onCopyPix={() => void copyManualPix()}
+              onGeneratePix={() => void generateManualPix()}
+              onReplaceProvider={() => void replaceManualPixProvider()}
+              onSendWhatsApp={() => void sendManualPixWhatsApp()}
+              onUpdateForm={setManualChargeForm}
+            />
+          ) : null}
+          <div className="form-actions">
+            <Button icon={X} variant="secondary" onClick={closeAndReset}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={manualChargeEntryMode && mode === 'MANUAL_PIX' && Boolean(manualCharge)}
+              icon={Save}
+              loading={
+                manualChargeEntryMode && mode === 'MANUAL_PIX'
+                  ? manualPixWorkingAction === 'create'
+                  : submitting
+              }
+              type="submit"
+              variant="primary"
+            >
+              {manualChargeEntryMode && mode === 'MANUAL_PIX'
+                ? manualCharge
+                  ? 'Cobrança criada'
+                  : 'Criar cobrança'
+                : kind === 'ENTRADA'
+                  ? 'Salvar entrada'
+                  : 'Salvar saída'}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function ManualPixChargeContent({
+  categories,
+  clients,
+  defaultPixProvider,
+  eligiblePixProviders,
+  form,
+  manualCharge,
+  pixIntent,
+  pixNotice,
+  pixWhatsAppFailed,
+  selectedClient,
+  selectedPixProvider,
+  step,
+  workingAction,
+  whatsAppSending,
+  onCancelCharge,
+  onCopyPix,
+  onGeneratePix,
+  onReplaceProvider,
+  onSendWhatsApp,
+  onUpdateForm,
+}: {
+  categories: FinancialCategory[];
+  clients: Client[];
+  defaultPixProvider: ConfigurablePaymentProvider | null;
+  eligiblePixProviders: ConfigurablePaymentProvider[];
+  form: ManualChargeFormState;
+  manualCharge: Receivable | null;
+  pixIntent: PaymentIntent | null;
+  pixNotice: string;
+  pixWhatsAppFailed: boolean;
+  selectedClient: Client | null;
+  selectedPixProvider: ConfigurablePaymentProvider | null;
+  step: ManualChargeStep;
+  workingAction: ManualPixWorkingAction;
+  whatsAppSending: boolean;
+  onCancelCharge: () => void;
+  onCopyPix: () => void;
+  onGeneratePix: () => void;
+  onReplaceProvider: () => void;
+  onSendWhatsApp: () => void;
+  onUpdateForm: (form: ManualChargeFormState) => void;
+}) {
+  const canUsePixActions = Boolean(manualCharge && manualCharge.status === 'PENDENTE');
+  const busy = workingAction !== null;
+  const hasActivePixIntent = Boolean(
+    pixIntent && ['CREATED', 'WAITING_PAYMENT'].includes(pixIntent.status),
+  );
+  const canSendWhatsApp = Boolean(
+    canUsePixActions && pixIntent?.status === 'WAITING_PAYMENT' && pixIntent.pixCopyPaste,
+  );
+  const canReplaceProvider = Boolean(
+    canUsePixActions &&
+    pixIntent?.status === 'WAITING_PAYMENT' &&
+    selectedPixProvider &&
+    selectedPixProvider !== pixIntent.provider,
+  );
+  const canCancel = Boolean(manualCharge?.status === 'PENDENTE');
+  const payerLabel = manualCharge ? receivablePayerLabel(manualCharge) : '';
+  const chargeCategory = manualCharge?.category?.name ?? '-';
+  const canRenderQrImage =
+    pixIntent?.qrCodeData?.startsWith('data:') || pixIntent?.qrCodeData?.startsWith('http');
+
+  return (
+    <div className="manual-pix-flow">
+      <div className="manual-pix-stepper" aria-label="Etapas da cobrança PIX">
+        {[
+          ['FORM', 'Dados'],
+          ['SUMMARY', 'Cobrança'],
+          ['PIX', 'PIX'],
+        ].map(([id, label], index) => {
+          const currentIndex = ['FORM', 'SUMMARY', 'PIX'].indexOf(step);
+          return (
+            <span
+              className={index <= currentIndex ? 'active' : ''}
+              key={id}
+              aria-current={step === id ? 'step' : undefined}
+            >
+              {label}
+            </span>
+          );
+        })}
+      </div>
+
+      {step === 'FORM' ? (
+        <>
+          <fieldset className="manual-charge-choice compact">
+            <legend>Pagador</legend>
+            <label className={form.payerType === 'REGISTERED_CLIENT' ? 'active' : ''}>
+              <input
+                checked={form.payerType === 'REGISTERED_CLIENT'}
+                name="manual-charge-payer"
+                type="radio"
+                value="REGISTERED_CLIENT"
+                onChange={() => onUpdateForm({ ...form, payerType: 'REGISTERED_CLIENT' })}
+              />
+              <span>
+                <strong>Cliente cadastrado</strong>
+                <small>Usa o cadastro como origem do snapshot.</small>
+              </span>
+            </label>
+            <label className={form.payerType === 'GUEST' ? 'active' : ''}>
+              <input
+                checked={form.payerType === 'GUEST'}
+                name="manual-charge-payer"
+                type="radio"
+                value="GUEST"
+                onChange={() => onUpdateForm({ ...form, payerType: 'GUEST' })}
+              />
+              <span>
+                <strong>Pagador avulso</strong>
+                <small>Não cria cliente automaticamente.</small>
+              </span>
+            </label>
+          </fieldset>
+
+          {form.payerType === 'REGISTERED_CLIENT' ? (
+            <label className="field manual-pix-full">
+              <span>Cliente</span>
+              <select
+                required
+                value={form.clientId}
+                onChange={(event) => onUpdateForm({ ...form, clientId: event.target.value })}
+              >
+                <option value="">Selecione um cliente</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name}
+                  </option>
+                ))}
+              </select>
+              {selectedClient ? (
+                <small>
+                  {selectedClient.name} ·{' '}
+                  {normalizeWhatsAppDisplayPhone(selectedClient.phoneNormalized) ??
+                    selectedClient.phoneNormalized}
+                </small>
+              ) : null}
+            </label>
+          ) : (
+            <>
+              <label className="field">
+                <span>Nome</span>
+                <input
+                  required
+                  value={form.payerName}
+                  onChange={(event) => onUpdateForm({ ...form, payerName: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>WhatsApp</span>
+                <input
+                  inputMode="tel"
+                  placeholder="(11) 99999-9999"
+                  required
+                  value={form.payerPhone}
+                  onChange={(event) => onUpdateForm({ ...form, payerPhone: event.target.value })}
+                />
+              </label>
+            </>
+          )}
+
           <label className="field">
             <span>Descrição</span>
             <input
               required
               value={form.description}
-              onChange={(event) => setForm({ ...form, description: event.target.value })}
+              onChange={(event) => onUpdateForm({ ...form, description: event.target.value })}
             />
           </label>
           <label className="field">
@@ -14881,8 +15537,9 @@ function TransactionModal({
             <select
               required
               value={form.categoryId}
-              onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
+              onChange={(event) => onUpdateForm({ ...form, categoryId: event.target.value })}
             >
+              <option value="">Selecione</option>
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
@@ -14898,49 +15555,198 @@ function TransactionModal({
               step="0.01"
               type="number"
               value={form.amount}
-              onChange={(event) => setForm({ ...form, amount: event.target.value })}
+              onChange={(event) => onUpdateForm({ ...form, amount: event.target.value })}
             />
           </label>
           <label className="field">
-            <span>Data</span>
+            <span>Vencimento</span>
             <input
               required
               type="date"
-              value={form.transactionDate}
-              onChange={(event) => setForm({ ...form, transactionDate: event.target.value })}
+              value={form.dueDate}
+              onChange={(event) => onUpdateForm({ ...form, dueDate: event.target.value })}
             />
           </label>
-          <label className="field">
-            <span>Cliente</span>
+          <label className="field manual-pix-full">
+            <span>Provider PIX</span>
             <select
-              value={form.clientId}
-              onChange={(event) => setForm({ ...form, clientId: event.target.value })}
+              disabled={!eligiblePixProviders.length}
+              value={selectedPixProvider ?? ''}
+              onChange={(event) =>
+                onUpdateForm({
+                  ...form,
+                  provider: event.target.value as ConfigurablePaymentProvider,
+                })
+              }
             >
-              <option value="">Sem cliente</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.name}
+              {!eligiblePixProviders.length ? (
+                <option value="">Nenhum provider ativo</option>
+              ) : null}
+              {eligiblePixProviders.map((provider) => (
+                <option key={provider} value={provider}>
+                  {replacementProviderLabel(provider, defaultPixProvider)}
                 </option>
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>Observação</span>
-            <input
-              value={form.notes}
-              onChange={(event) => setForm({ ...form, notes: event.target.value })}
-            />
-          </label>
-          <div className="form-actions">
-            <Button icon={X} variant="secondary" onClick={closeAndReset}>
-              Cancelar
+        </>
+      ) : null}
+
+      {manualCharge ? (
+        <section className="manual-pix-summary manual-pix-full">
+          <div className="pix-status-row">
+            <strong>{manualCharge.status === 'CANCELADO' ? 'CANCELADO' : 'PENDENTE'}</strong>
+            <span>{receivablePurposeLabel(manualCharge)}</span>
+          </div>
+          <dl className="detail-list compact-detail-list">
+            <div>
+              <dt>Pagador</dt>
+              <dd>{payerLabel}</dd>
+            </div>
+            <div>
+              <dt>Descrição</dt>
+              <dd>{manualCharge.description}</dd>
+            </div>
+            <div>
+              <dt>Categoria</dt>
+              <dd>{chargeCategory}</dd>
+            </div>
+            <div>
+              <dt>Valor</dt>
+              <dd>{formatCurrency(manualCharge.amount)}</dd>
+            </div>
+            <div>
+              <dt>Vencimento</dt>
+              <dd>{formatDate(manualCharge.dueDate)}</dd>
+            </div>
+            <div>
+              <dt>WhatsApp</dt>
+              <dd>{manualCharge.payerPhoneMasked ?? '-'}</dd>
+            </div>
+          </dl>
+          {pixNotice ? <div className="notice success">{pixNotice}</div> : null}
+          <div className="button-row manual-pix-actions">
+            <Button
+              disabled={busy || !selectedPixProvider || !canUsePixActions || hasActivePixIntent}
+              icon={QrCode}
+              loading={workingAction === 'generate'}
+              variant="primary"
+              onClick={onGeneratePix}
+            >
+              Gerar PIX
             </Button>
-            <Button icon={Save} loading={submitting} type="submit" variant="primary">
-              {kind === 'ENTRADA' ? 'Salvar entrada' : 'Salvar saída'}
+            <Button
+              disabled={busy || !canCancel}
+              icon={XCircle}
+              loading={workingAction === 'cancel'}
+              variant="danger"
+              onClick={onCancelCharge}
+            >
+              Cancelar cobrança
             </Button>
           </div>
-        </form>
-      </section>
+        </section>
+      ) : null}
+
+      {pixIntent ? (
+        <section className="pix-panel manual-pix-result manual-pix-full">
+          <div className="pix-status-row">
+            <strong>{paymentIntentStatusLabel(pixIntent.status)}</strong>
+            <span>{paymentProviderDisplay(pixIntent.provider)}</span>
+          </div>
+          <dl className="detail-list compact-detail-list pix-current-details">
+            <div>
+              <dt>Valor</dt>
+              <dd>{formatCurrency(pixIntent.amount)}</dd>
+            </div>
+            <div>
+              <dt>Transação</dt>
+              <dd>{paymentIntentDisplayTransactionId(pixIntent)}</dd>
+            </div>
+            <div>
+              <dt>Expiração</dt>
+              <dd>{pixIntent.expiresAt ? formatDateTime(pixIntent.expiresAt) : '-'}</dd>
+            </div>
+          </dl>
+          <label className="field pix-copy-field">
+            <span>PIX copia e cola</span>
+            <div className="pix-copy-row">
+              <input readOnly value={pixIntent.pixCopyPaste ?? ''} />
+              <button
+                className="secondary-button compact"
+                disabled={!pixIntent.pixCopyPaste}
+                type="button"
+                onClick={onCopyPix}
+              >
+                <Copy aria-hidden="true" size={16} />
+                {pixNotice === 'PIX copiado.' ? 'Copiado' : 'Copiar PIX'}
+              </button>
+            </div>
+          </label>
+          {pixIntent.qrCodeData ? (
+            <div className="pix-qr" aria-label="QR Code PIX">
+              {canRenderQrImage ? (
+                <img alt="QR Code PIX" src={pixIntent.qrCodeData} />
+              ) : (
+                <>
+                  <QrCode aria-hidden="true" size={92} />
+                  <span>{pixIntent.qrCodeData}</span>
+                </>
+              )}
+            </div>
+          ) : null}
+          <div className="button-row manual-pix-actions">
+            <Button
+              disabled={!pixIntent.pixCopyPaste}
+              icon={Copy}
+              variant="secondary"
+              onClick={onCopyPix}
+            >
+              Copiar PIX
+            </Button>
+            <Button
+              disabled={!canSendWhatsApp || busy || whatsAppSending}
+              icon={MessageCircle}
+              loading={whatsAppSending}
+              variant="primary"
+              onClick={onSendWhatsApp}
+            >
+              {pixWhatsAppFailed && !whatsAppSending ? 'Tentar novamente' : 'Enviar no WhatsApp'}
+            </Button>
+          </div>
+          {eligiblePixProviders.length ? (
+            <div className="manual-pix-provider-swap">
+              <label className="field">
+                <span>Trocar provider</span>
+                <select
+                  value={selectedPixProvider ?? ''}
+                  onChange={(event) =>
+                    onUpdateForm({
+                      ...form,
+                      provider: event.target.value as ConfigurablePaymentProvider,
+                    })
+                  }
+                >
+                  {eligiblePixProviders.map((provider) => (
+                    <option key={provider} value={provider}>
+                      {replacementProviderLabel(provider, defaultPixProvider)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button
+                disabled={!canReplaceProvider || busy}
+                icon={RefreshCcw}
+                loading={workingAction === 'replace'}
+                variant="secondary"
+                onClick={onReplaceProvider}
+              >
+                Trocar provider
+              </Button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -15479,6 +16285,111 @@ function financialPaymentMethodLabel(method: FinancialPaymentMethod | null) {
 
 function isLegacyImportReceivable(receivable: Receivable) {
   return receivable.sourceKind === 'LEGACY_IMPORT' || receivable.origin === 'LEGACY_IMPORT';
+}
+
+function isManualChargeReceivable(receivable: Pick<Receivable, 'purpose'>) {
+  return receivable.purpose === 'MANUAL_CHARGE';
+}
+
+function receivablePayerLabel(receivable: Pick<Receivable, 'client' | 'payerName'>) {
+  return receivable.client?.name ?? receivable.payerName ?? '-';
+}
+
+function receivableReferenceLabel(
+  receivable: Pick<Receivable, 'client' | 'clientReference' | 'purpose'>,
+) {
+  if (receivable.clientReference?.reference) return receivable.clientReference.reference;
+  if (isManualChargeReceivable(receivable)) return 'Cobrança avulsa';
+  return receivable.client?.reference ?? '-';
+}
+
+function receivablePurposeLabel(receivable: Pick<Receivable, 'purpose'>) {
+  return isManualChargeReceivable(receivable) ? 'Cobrança PIX' : 'Cobrança recorrente';
+}
+
+function manualPixFriendlyError(error: unknown, fallback: string) {
+  const rawPayload =
+    error instanceof ApiError && error.payload && typeof error.payload === 'object'
+      ? (error.payload as { code?: unknown; message?: unknown })
+      : null;
+  const candidates = [
+    typeof rawPayload?.code === 'string' ? rawPayload.code : '',
+    typeof rawPayload?.message === 'string' ? rawPayload.message : '',
+    error instanceof Error ? error.message : '',
+  ].filter(Boolean);
+  const knownMessage = candidates
+    .map((candidate) => manualPixKnownErrorMessage(candidate))
+    .find(Boolean);
+
+  if (knownMessage) return knownMessage;
+
+  const message = candidates.find((candidate) => !manualPixLooksTechnical(candidate));
+  return message || fallback;
+}
+
+function manualPixKnownErrorMessage(value: string) {
+  const normalized = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  if (normalized.includes('active_pix_conflict') || normalized.includes('active intent')) {
+    return 'Já existe um PIX ativo para esta cobrança.';
+  }
+  if (normalized.includes('client') && normalized.includes('not found')) {
+    return 'Cliente não encontrado. Atualize a lista e tente novamente.';
+  }
+  if (normalized.includes('cliente inexistente')) {
+    return 'Cliente não encontrado. Atualize a lista e tente novamente.';
+  }
+  if (normalized.includes('categor') && normalized.includes('invalid')) {
+    return 'Categoria inválida ou indisponível.';
+  }
+  if (normalized.includes('categoria') && normalized.includes('inval')) {
+    return 'Categoria inválida ou indisponível.';
+  }
+  if (normalized.includes('telefone') || normalized.includes('phone')) {
+    return 'Telefone inválido para envio pelo WhatsApp.';
+  }
+  if (normalized.includes('provider') && normalized.includes('unavailable')) {
+    return 'Provider PIX indisponível no momento.';
+  }
+  if (normalized.includes('provider') && normalized.includes('indispon')) {
+    return 'Provider PIX indisponível no momento.';
+  }
+  if (normalized.includes('canceled') || normalized.includes('cancelad')) {
+    return 'Esta cobrança está cancelada.';
+  }
+  if (normalized.includes('expired') || normalized.includes('expirad')) {
+    return 'Este PIX expirou. Gere uma nova tentativa quando permitido.';
+  }
+  if (normalized.includes('superseded')) {
+    return 'Este PIX foi substituído por uma tentativa mais recente.';
+  }
+  if (normalized.includes('whatsapp')) {
+    return 'Não foi possível enviar pelo WhatsApp. Tente novamente.';
+  }
+  if (normalized.includes('idempot')) {
+    return 'Esta operação já foi processada. O estado atual foi preservado.';
+  }
+
+  return '';
+}
+
+function manualPixLooksTechnical(value: string) {
+  return /prisma|stack|exception|trace|p20\d{2}|at\s+\w|\{|\}/i.test(value);
+}
+
+function onlyDigits(value: string) {
+  return value.replace(/\D/g, '');
+}
+
+function createFrontendIdempotencyKey(prefix: string) {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `${prefix}:${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 function LegacyPaymentDetailModal({

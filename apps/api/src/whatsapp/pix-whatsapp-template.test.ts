@@ -66,23 +66,38 @@ describe('buildPixWhatsAppTemplate', () => {
     expect(template.button.buttonParamsJson.display_text).toBe('Copiar Chave PIX');
   });
 
-  it('builds a manual charge PIX message with payer, description, due date, and optional expiration', () => {
+  it('builds a manual charge PIX message with direct description and no payer/date/expiration copy', () => {
     const template = buildPixWhatsAppTemplate({
       context: 'MANUAL_CHARGE',
       payerName: 'Joao',
-      description: 'Manutencao do equipamento',
-      amount: new Prisma.Decimal('80.00'),
+      description: 'Teste',
+      amount: new Prisma.Decimal('10.00'),
       dueDate: '10/10/2026',
       expiresAt: '11/10/2026',
       pixCopyPaste: 'MANUAL-PIX-COPY-CODE',
     });
 
-    expect(template.body).toContain('Ola, Joao.');
-    expect(template.body).toContain('Segue sua cobranca:');
-    expect(template.body).toContain('Manutencao do equipamento');
-    expect(template.body).toContain('Valor: R$ 80,00');
-    expect(template.body).toContain('Vencimento: 10/10/2026');
-    expect(template.body).toContain('Esta chave PIX possui validade ate 11/10/2026.');
+    expect(template.title).toBe('PIX');
+    expect(template.body).toBe(
+      [
+        'Teste',
+        '',
+        'Valor: R$ 10,00',
+        '',
+        'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
+      ].join('\n'),
+    );
+    expect(template.body).not.toContain('Ola');
+    expect(template.body).not.toContain('Olá');
+    expect(template.body).not.toContain('Joao');
+    expect(template.body).not.toContain('Segue sua cobranca');
+    expect(template.body).not.toContain('Segue sua cobrança');
+    expect(template.body).not.toContain('Descrição:');
+    expect(template.body).not.toContain('Vencimento');
+    expect(template.body).not.toContain('10/10/2026');
+    expect(template.body).not.toContain('validade');
+    expect(template.body).not.toContain('expira');
+    expect(template.body).not.toContain('11/10/2026');
     expect(template.body).not.toContain('MANUAL_CHARGE');
     expect(template.body).not.toContain('RENEWAL');
     expect(template.body).not.toContain('Renovação');
@@ -92,16 +107,20 @@ describe('buildPixWhatsAppTemplate', () => {
     });
   });
 
-  it('omits manual charge expiration when the payment intent has no expiration', () => {
+  it('keeps manual charge fallback copy free of greeting and expiration', () => {
     const template = buildPixWhatsAppTemplate({
       context: 'MANUAL_CHARGE',
       payerName: 'Joao',
-      description: 'Manutencao do equipamento',
+      description: '',
       amount: new Prisma.Decimal('80.00'),
       dueDate: '10/10/2026',
       pixCopyPaste: 'MANUAL-PIX-COPY-CODE',
     });
 
+    expect(template.body).toContain('Cobranca');
+    expect(template.body).not.toContain('Ola');
+    expect(template.body).not.toContain('Joao');
+    expect(template.body).not.toContain('Vencimento');
     expect(template.body).not.toContain('validade');
     expect(template.body).not.toContain('expirada');
   });

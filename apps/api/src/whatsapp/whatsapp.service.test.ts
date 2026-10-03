@@ -883,12 +883,19 @@ describe('WhatsAppService', () => {
     };
 
     expect(sendButtonsPayload.phone).toBe('5511988887777');
-    expect(sendButtonsPayload.body).toContain('Ola, Pagador Snapshot.');
+    expect(sendButtonsPayload.body).not.toContain('Ola');
+    expect(sendButtonsPayload.body).not.toContain('Pagador Snapshot');
+    expect(sendButtonsPayload.body).not.toContain('Segue sua cobranca');
     expect(sendButtonsPayload.body).toContain('Manutencao do equipamento');
     expect(sendButtonsPayload.body).toContain('Valor: R$');
     expect(sendButtonsPayload.body).toContain('80,00');
-    expect(sendButtonsPayload.body).toContain('Vencimento: 10/10/2026');
-    expect(sendButtonsPayload.body).toContain('Esta chave PIX possui validade ate 11/10/2026.');
+    expect(sendButtonsPayload.body).not.toContain('Vencimento');
+    expect(sendButtonsPayload.body).not.toContain('10/10/2026');
+    expect(sendButtonsPayload.body).toContain(
+      'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
+    );
+    expect(sendButtonsPayload.body).not.toContain('validade');
+    expect(sendButtonsPayload.body).not.toContain('11/10/2026');
     expect(sendButtonsPayload.body).not.toContain('Cliente Alterado Depois');
     expect(sendButtonsPayload.body).not.toContain('MANUAL_CHARGE');
     expect(sendButtonsPayload.buttons[0]?.buttonParamsJson).toEqual({
@@ -973,7 +980,8 @@ describe('WhatsAppService', () => {
       ((tx: unknown) => Promise<unknown>) | undefined;
 
     expect(sendButtonsPayload.phone).toBe('5511977776666');
-    expect(sendButtonsPayload.body).toContain('Ola, Visitante Avulso.');
+    expect(sendButtonsPayload.body).not.toContain('Ola');
+    expect(sendButtonsPayload.body).not.toContain('Visitante Avulso');
     expect(dispatchCreate?.data).toMatchObject({
       clientId: null,
       receivableId: 'manual-receivable-id',

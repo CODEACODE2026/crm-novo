@@ -53,24 +53,13 @@ export function buildPixWhatsAppTemplate(input: PixWhatsAppTemplateInput): PixWh
 }
 
 function buildManualChargePixBody(input: PixWhatsAppTemplateInput, amount: string) {
-  const lines = [
-    `Ola, ${input.payerName ?? 'tudo bem'}.`,
-    '',
-    'Segue sua cobranca:',
-    '',
-    input.description?.trim() ?? 'Cobranca',
+  return [
+    input.description?.trim() || 'Cobranca',
     '',
     `Valor: ${amount}`,
-    input.dueDate ? `Vencimento: ${input.dueDate}` : null,
     '',
-    'Use o botao abaixo para copiar a chave PIX e realizar o pagamento.',
-  ].filter((line): line is string => line !== null);
-
-  if (input.expiresAt) {
-    lines.push('', `Esta chave PIX possui validade ate ${input.expiresAt}.`);
-  }
-
-  return lines.join('\n');
+    'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
+  ].join('\n');
 }
 
 function buildIndividualPixBody(amount: string) {

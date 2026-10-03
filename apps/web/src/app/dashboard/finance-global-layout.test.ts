@@ -205,6 +205,25 @@ describe('global finance presentation source', () => {
     expect(dashboardSource).not.toContain('/manual-charges/whatsapp');
   });
 
+  it('keeps the manual PIX modal in the post-create state after finance data reloads', () => {
+    expect(dashboardSource).toContain('const categoriesRef = useRef(categories);');
+    expect(dashboardSource).toContain('categoriesRef.current = categories;');
+    expect(dashboardSource).toContain('transactionInitialForm(categoriesRef.current)');
+    expect(dashboardSource).toContain(
+      'setManualChargeForm(manualChargeInitialForm(categoriesRef.current));',
+    );
+    expect(dashboardSource).toContain('}, [kind, transaction]);');
+    expect(dashboardSource).toContain('setManualCharge(receivable);');
+    expect(dashboardSource).toContain(
+      "setManualChargeStep(receivable.activePix ? 'PIX' : 'SUMMARY');",
+    );
+    expect(dashboardSource).toContain("? 'Cobrança criada'");
+    expect(dashboardSource).toContain(": 'Criar cobrança'");
+    expect(dashboardSource).toContain(
+      "disabled={manualChargeEntryMode && mode === 'MANUAL_PIX' && Boolean(manualCharge)}",
+    );
+  });
+
   it('keeps manual PIX errors friendly and accessible', () => {
     expect(dashboardSource).toContain('function manualPixFriendlyError');
     expect(dashboardSource).toContain('function manualPixKnownErrorMessage');
@@ -233,10 +252,15 @@ describe('global finance presentation source', () => {
   });
 
   it('keeps manual PIX modal controls mobile-aware', () => {
+    expect(dashboardSource).toContain("' manual-pix-modal-form'");
     expect(stylesSource).toContain('.manual-charge-choice');
     expect(stylesSource).toContain('.manual-pix-stepper');
     expect(stylesSource).toContain('.manual-pix-provider-swap');
     expect(stylesSource).toContain('.manual-pix-actions .ui-button');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-actions,');
+    expect(stylesSource).toContain('.modal .manual-pix-modal-form .form-actions');
+    expect(stylesSource).toContain('position: static;');
+    expect(stylesSource).toContain('overflow-wrap: anywhere;');
     expect(stylesSource).toContain('.manual-charge-choice,');
     expect(stylesSource).toContain('.manual-pix-stepper,');
     expect(stylesSource).toContain('.manual-pix-provider-swap');

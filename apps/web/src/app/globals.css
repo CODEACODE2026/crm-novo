@@ -9825,6 +9825,34 @@ tbody tr:hover,
     width: 100%;
   }
 
+  .manual-pix-modal-form .manual-pix-actions,
+  .manual-pix-modal-form .manual-pix-provider-swap {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .manual-pix-modal-form .manual-pix-actions .ui-button,
+  .manual-pix-modal-form .manual-pix-provider-swap .ui-button,
+  .modal .manual-pix-modal-form .form-actions .ui-button {
+    min-width: 0;
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .manual-pix-modal-form .pix-copy-row {
+    grid-template-columns: 1fr;
+  }
+
+  .modal .manual-pix-modal-form .form-actions {
+    position: static;
+    bottom: auto;
+    margin: 12px 0 0;
+    padding: 12px 0 0;
+  }
+
   .modal .field {
     gap: 5px;
   }

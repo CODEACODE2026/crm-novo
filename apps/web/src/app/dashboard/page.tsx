@@ -14833,6 +14833,7 @@ function TransactionModal({
   const [formError, setFormError] = useState('');
   const manualChargeIdempotencyKeyRef = useRef(createFrontendIdempotencyKey('manual-charge'));
   const manualPixActionRef = useRef(false);
+  const categoriesRef = useRef(categories);
   const manualChargeEntryMode = kind === 'ENTRADA' && !editing;
   const activeEntryCategories = categories.filter((category) => category.active !== false);
   const eligiblePixProviders = useMemo(
@@ -14862,11 +14863,17 @@ function TransactionModal({
   const manualPixBusy = manualPixWorkingAction !== null;
 
   useEffect(() => {
+    categoriesRef.current = categories;
+  }, [categories]);
+
+  useEffect(() => {
     setForm(
-      transaction ? transactionFormFromRecord(transaction) : transactionInitialForm(categories),
+      transaction
+        ? transactionFormFromRecord(transaction)
+        : transactionInitialForm(categoriesRef.current),
     );
     setMode('MANUAL_ENTRY');
-    setManualChargeForm(manualChargeInitialForm(categories));
+    setManualChargeForm(manualChargeInitialForm(categoriesRef.current));
     setManualChargeStep('FORM');
     setManualCharge(null);
     setManualPixIntent(null);
@@ -14875,7 +14882,7 @@ function TransactionModal({
     setManualPixWorkingAction(null);
     manualChargeIdempotencyKeyRef.current = createFrontendIdempotencyKey('manual-charge');
     setFormError('');
-  }, [categories, transaction]);
+  }, [kind, transaction]);
 
   useEffect(() => {
     setForm((current) => ({
@@ -15199,7 +15206,9 @@ function TransactionModal({
 
         <form
           aria-describedby={formError ? 'transaction-form-error' : undefined}
-          className="entity-form finance-transaction-modal-form"
+          className={`entity-form finance-transaction-modal-form${
+            manualChargeEntryMode && mode === 'MANUAL_PIX' ? ' manual-pix-modal-form' : ''
+          }`}
           onSubmit={(event) => void submitForm(event)}
         >
           {manualChargeEntryMode ? (

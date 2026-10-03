@@ -2,6 +2,7 @@
 import {
   BadRequestException,
   ConflictException,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -397,11 +398,16 @@ function serviceFactory({
     },
     whatsAppConversation: {
       findUnique: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
       create: vi.fn().mockResolvedValue(conversation()),
       update: vi.fn().mockResolvedValue(conversation()),
     },
     whatsAppMessage: {
       findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn().mockResolvedValue(conversationMessage()),
     },
     $transaction: vi.fn(async (input: unknown) => {
@@ -2735,6 +2741,287 @@ describe('WhatsAppService', () => {
         { contactName: { contains: '(44) 99999-9999', mode: 'insensitive' } },
         { phoneNormalized: { contains: '5544999999999' } },
       ]),
+    );
+  });
+
+  it('lists conversations with search, filters, pagination, summary and display names', async () => {
+    const linkedConversation = conversation({
+      id: 'conversation-linked',
+      clientId: client().id,
+      contactName: 'Contato Antigo',
+      lastMessageAt: new Date('2026-10-03T12:00:00.000Z'),
+      lastMessagePreview: 'Preview',
+      unreadCount: 3,
+      client: client({ name: 'Cliente Preferido', phone: '(44) 90000-0001' }),
+    });
+    const contactConversation = conversation({
+      id: 'conversation-contact',
+      client: null,
+      contactName: 'Contato Direto',
+      unreadCount: 1,
+    });
+    const phoneConversation = conversation({
+      id: 'conversation-phone',
+      client: null,
+      contactName: null,
+      unreadCount: 0,
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi
+            .fn()
+            .mockResolvedValue([linkedConversation, contactConversation, phoneConversation]),
+          count: vi.fn().mockResolvedValueOnce(3).mockResolvedValueOnce(2),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 4 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    const result = await service.listConversations({
+      page: 2,
+      limit: 10,
+      search: '(44) 99999-9999',
+      status: 'OPEN',
+      whatsAppConnectionId: connection().id,
+      clientId: client().id,
+      unreadOnly: true,
+    });
+    const findManyArgs = (prisma.whatsAppConversation.findMany as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+      include?: unknown;
+      orderBy?: unknown;
+      skip?: number;
+      take?: number;
+    };
+
+    expect(result.pagination).toEqual({ page: 2, limit: 10, total: 3, totalPages: 1 });
+    expect(result.summary).toEqual({ totalUnreadConversations: 2, totalUnreadMessages: 4 });
+    expect(result.items.map((item: { displayName: string }) => item.displayName)).toEqual([
+      'Cliente Preferido',
+      'Contato Direto',
+      '5544999999999',
+    ]);
+    expect(findManyArgs).toMatchObject({
+      where: {
+        status: 'OPEN',
+        whatsAppConnectionId: connection().id,
+        clientId: client().id,
+        unreadCount: { gt: 0 },
+      },
+      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+      skip: 10,
+      take: 10,
+    });
+    expect(findManyArgs.include).toEqual({
+      client: { select: { id: true, name: true, phone: true } },
+    });
+    expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
+      expect.arrayContaining([
+        { contactName: { contains: '(44) 99999-9999', mode: 'insensitive' } },
+        { phone: { contains: '(44) 99999-9999', mode: 'insensitive' } },
+        { phoneNormalized: { contains: '5544999999999' } },
+        { client: { name: { contains: '(44) 99999-9999', mode: 'insensitive' } } },
+      ]),
+    );
+  });
+
+  it('filters resolved conversations independently from open conversations', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listConversations({ status: 'RESOLVED' });
+    const findManyArgs = (prisma.whatsAppConversation.findMany as MockWithCalls).mock
+      .calls[0]?.[0] as { where?: Record<string, unknown> };
+
+    expect(findManyArgs.where).toMatchObject({ status: 'RESOLVED' });
+  });
+
+  it('returns conversation detail without loading full messages and handles not found', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ client: client() }))
+            .mockResolvedValueOnce(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    const detail = await service.getConversation(conversation().id);
+    const findUniqueArgs = (prisma.whatsAppConversation.findUnique as MockWithCalls).mock
+      .calls[0]?.[0] as { include?: Record<string, unknown> };
+
+    expect(detail).toMatchObject({ id: conversation().id, displayName: 'Cliente Teste' });
+    expect(detail).not.toHaveProperty('messages');
+    expect(findUniqueArgs.include).not.toHaveProperty('messages');
+    await expect(service.getConversation('missing-conversation')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('lists conversation messages by conversation with newest-page pagination and ASC presentation', async () => {
+    const older = conversationMessage({
+      id: 'message-older',
+      direction: 'INBOUND',
+      type: 'IMAGE',
+      text: 'Legenda',
+      mediaMimeType: 'image/jpeg',
+      rawMetadata: { secret: 'hidden' },
+      createdAt: new Date('2026-10-03T10:00:00.000Z'),
+    });
+    const newer = conversationMessage({
+      id: 'message-newer',
+      direction: 'OUTBOUND',
+      type: 'DOCUMENT',
+      text: 'Contrato',
+      mediaMimeType: 'application/pdf',
+      mediaFileName: 'contrato.pdf',
+      mediaSizeBytes: 2048,
+      messageDispatchId: dispatch().id,
+      createdAt: new Date('2026-10-03T10:05:00.000Z'),
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: conversation().id }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([newer, older]),
+          count: vi.fn().mockResolvedValue(2),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const result = await service.listConversationMessages(conversation().id, { page: 1, limit: 2 });
+    const findManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+      orderBy?: unknown;
+      skip?: number;
+      take?: number;
+    };
+
+    expect(findManyArgs).toMatchObject({
+      where: { conversationId: conversation().id },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: 0,
+      take: 2,
+    });
+    expect(result.items.map((item: { id: string }) => item.id)).toEqual([
+      'message-older',
+      'message-newer',
+    ]);
+    expect(result.items[0]).toMatchObject({
+      direction: 'INBOUND',
+      type: 'IMAGE',
+      text: 'Legenda',
+      mediaMimeType: 'image/jpeg',
+    });
+    expect(result.items[1]).toMatchObject({
+      direction: 'OUTBOUND',
+      type: 'DOCUMENT',
+      mediaFileName: 'contrato.pdf',
+      mediaSizeBytes: 2048,
+      messageDispatchId: dispatch().id,
+    });
+    expect(result.items[0]).not.toHaveProperty('rawMetadata');
+    expect(result.pagination).toEqual({ page: 1, limit: 2, total: 2, totalPages: 1 });
+  });
+
+  it('returns 404 when listing messages for a missing conversation', async () => {
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    await expect(service.listConversationMessages('missing-conversation', {})).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('marks conversations as read idempotently without changing status', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ unreadCount: 0, status: 'OPEN' }))
+            .mockResolvedValueOnce(conversation({ unreadCount: 0, status: 'RESOLVED' })),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 0,
+      status: 'OPEN',
+    });
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 0,
+      status: 'RESOLVED',
+    });
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ data: { unreadCount: 0 } }),
+    );
+  });
+
+  it('resolves conversations idempotently without clearing unread count', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ status: 'RESOLVED', unreadCount: 2 }))
+            .mockResolvedValueOnce(conversation({ status: 'RESOLVED', unreadCount: 2 })),
+        },
+      },
+    });
+
+    await expect(service.resolveConversation(conversation().id)).resolves.toMatchObject({
+      status: 'RESOLVED',
+      unreadCount: 2,
+    });
+    await expect(service.resolveConversation(conversation().id)).resolves.toMatchObject({
+      status: 'RESOLVED',
+      unreadCount: 2,
+    });
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ data: { status: 'RESOLVED' } }),
     );
   });
 

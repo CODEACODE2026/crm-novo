@@ -19,6 +19,7 @@ import {
   WhatsAppInboundMessageType,
   WhatsAppConnection,
   WhatsAppConnectionStatus,
+  WhatsAppMessage,
 } from '@prisma/client';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -43,6 +44,8 @@ import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
+import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
+import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
@@ -130,6 +133,20 @@ type PixWhatsAppContext =
       metadata: Record<string, unknown>;
       templateItems: Array<{ reference: string; amount: Prisma.Decimal }>;
     };
+
+type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
+  include: {
+    client: {
+      select: {
+        id: true;
+        name: true;
+        phone: true;
+      };
+    };
+  };
+}>;
+
+type WhatsAppConversationMessageForPresenter = WhatsAppMessage;
 
 @Injectable()
 export class WhatsAppService {
@@ -586,6 +603,104 @@ export class WhatsAppService {
     });
 
     return messages.map((message) => this.presentDispatch(message));
+  }
+
+  async listConversations(query: ListWhatsAppConversationsDto) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, pageSizeLimit);
+    const where = this.buildConversationWhere(query);
+
+    const [items, total, totalUnreadConversations, unreadMessages] = await this.prisma.$transaction(
+      [
+        this.prisma.whatsAppConversation.findMany({
+          where,
+          include: {
+            client: { select: { id: true, name: true, phone: true } },
+          },
+          orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.prisma.whatsAppConversation.count({ where }),
+        this.prisma.whatsAppConversation.count({
+          where: { ...where, unreadCount: { gt: 0 } },
+        }),
+        this.prisma.whatsAppConversation.aggregate({
+          where,
+          _sum: { unreadCount: true },
+        }),
+      ],
+    );
+
+    return {
+      items: items.map((conversation) => this.presentConversation(conversation)),
+      pagination: this.presentLimitPagination(page, limit, total),
+      summary: {
+        totalUnreadConversations,
+        totalUnreadMessages: unreadMessages._sum.unreadCount ?? 0,
+      },
+    };
+  }
+
+  async getConversation(id: string) {
+    const conversation = await this.findConversationForRead(id);
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    return this.presentConversation(conversation);
+  }
+
+  async listConversationMessages(id: string, query: ListWhatsAppConversationMessagesDto) {
+    const exists = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!exists) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, pageSizeLimit);
+    const where: Prisma.WhatsAppMessageWhereInput = { conversationId: id };
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.whatsAppMessage.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.whatsAppMessage.count({ where }),
+    ]);
+
+    return {
+      items: [...items].reverse().map((message) => this.presentConversationMessage(message)),
+      pagination: this.presentLimitPagination(page, limit, total),
+    };
+  }
+
+  async markConversationAsRead(id: string) {
+    await this.ensureConversationExists(id);
+    const conversation = await this.prisma.whatsAppConversation.update({
+      where: { id },
+      data: { unreadCount: 0 },
+      include: { client: { select: { id: true, name: true, phone: true } } },
+    });
+
+    return this.presentConversation(conversation);
+  }
+
+  async resolveConversation(id: string) {
+    await this.ensureConversationExists(id);
+    const conversation = await this.prisma.whatsAppConversation.update({
+      where: { id },
+      data: { status: 'RESOLVED' },
+      include: { client: { select: { id: true, name: true, phone: true } } },
+    });
+
+    return this.presentConversation(conversation);
   }
 
   async providerHealth() {
@@ -1423,6 +1538,61 @@ export class WhatsAppService {
     });
   }
 
+  private buildConversationWhere(
+    query: ListWhatsAppConversationsDto,
+  ): Prisma.WhatsAppConversationWhereInput {
+    const where: Prisma.WhatsAppConversationWhereInput = {};
+
+    if (query.status) {
+      where.status = query.status;
+    }
+
+    if (query.whatsAppConnectionId) {
+      where.whatsAppConnectionId = query.whatsAppConnectionId;
+    }
+
+    if (query.clientId) {
+      where.clientId = query.clientId;
+    }
+
+    if (query.unreadOnly) {
+      where.unreadCount = { gt: 0 };
+    }
+
+    if (query.search) {
+      const search = query.search.trim();
+      if (!search) {
+        return where;
+      }
+
+      const normalizedPhone = this.tryNormalizePhone(search);
+      where.OR = [
+        { contactName: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { lastMessagePreview: { contains: search, mode: 'insensitive' } },
+        { client: { name: { contains: search, mode: 'insensitive' } } },
+        ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
+      ];
+    }
+
+    return where;
+  }
+
+  private async findConversationForRead(id: string) {
+    return this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      include: { client: { select: { id: true, name: true, phone: true } } },
+    });
+  }
+
+  private async ensureConversationExists(id: string) {
+    const exists = await this.prisma.whatsAppConversation.count({ where: { id } });
+
+    if (!exists) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+  }
+
   private buildPendingContactWhere(
     query: ListWhatsAppPendingContactsDto,
   ): Prisma.WhatsAppPendingContactWhereInput {
@@ -2081,6 +2251,63 @@ export class WhatsAppService {
       destinationMasked: this.maskPhone(dispatch.phone),
       providerMessageId: dispatch.providerMessageId,
       errorMessage: dispatch.errorMessage,
+    };
+  }
+
+  private presentConversation(conversation: WhatsAppConversationForPresenter) {
+    const client = conversation.client
+      ? {
+          id: conversation.client.id,
+          name: conversation.client.name,
+          phone: conversation.client.phone,
+        }
+      : null;
+
+    return {
+      id: conversation.id,
+      whatsAppConnectionId: conversation.whatsAppConnectionId,
+      instanceName: conversation.instanceName,
+      provider: conversation.provider,
+      externalInstanceId: conversation.externalInstanceId,
+      client,
+      displayName: client?.name ?? conversation.contactName ?? conversation.phone,
+      contactName: conversation.contactName,
+      phone: conversation.phone,
+      phoneNormalized: conversation.phoneNormalized,
+      status: conversation.status,
+      lastMessageAt: conversation.lastMessageAt,
+      lastMessagePreview: conversation.lastMessagePreview,
+      unreadCount: conversation.unreadCount,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+    };
+  }
+
+  private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {
+    return {
+      id: message.id,
+      direction: message.direction,
+      type: message.type,
+      text: message.text,
+      status: message.status,
+      sentAt: message.sentAt,
+      failedAt: message.failedAt,
+      isFromMe: message.isFromMe,
+      mediaMimeType: message.mediaMimeType,
+      mediaFileName: message.mediaFileName,
+      mediaSizeBytes: message.mediaSizeBytes,
+      mediaDurationSeconds: message.mediaDurationSeconds,
+      messageDispatchId: message.messageDispatchId,
+      createdAt: message.createdAt,
+    };
+  }
+
+  private presentLimitPagination(page: number, limit: number, total: number) {
+    return {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
     };
   }
 

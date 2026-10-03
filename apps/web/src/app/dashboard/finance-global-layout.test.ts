@@ -266,6 +266,32 @@ describe('global finance presentation source', () => {
     expect(stylesSource).toContain('.manual-pix-provider-swap');
   });
 
+  it('keeps manual PIX desktop and tablet layout scoped to the PIX modal', () => {
+    expect(dashboardSource).toContain("' manual-pix-transaction-modal'");
+    expect(dashboardSource).toContain('manual-pix-client-field manual-pix-full');
+    expect(dashboardSource).toContain('manual-pix-payer-name-field');
+    expect(dashboardSource).toContain('manual-pix-payer-phone-field');
+    expect(dashboardSource).toContain('manual-pix-description-field');
+    expect(dashboardSource).toContain('manual-pix-category-field');
+    expect(dashboardSource).toContain('manual-pix-amount-field');
+    expect(dashboardSource).toContain('manual-pix-due-date-field');
+    expect(dashboardSource).toContain('manual-pix-provider-field manual-pix-full');
+    expect(stylesSource).toContain('.manual-pix-transaction-modal');
+    expect(stylesSource).toContain('width: min(100%, 880px);');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-flow');
+    expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-charge-choice.compact');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-client-field,');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-provider-field');
+    expect(stylesSource).toContain('.manual-pix-modal-form .form-actions');
+    expect(stylesSource).toContain('justify-content: flex-end;');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-result');
+    expect(stylesSource).toContain('minmax(220px, 280px)');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-flow,');
+    expect(stylesSource).toContain('.manual-pix-modal-form .manual-pix-result');
+    expect(stylesSource).toContain('grid-template-columns: 1fr;');
+  });
+
   it('validates required transaction fields before hitting the API', () => {
     expect(dashboardSource).toContain(
       'if (!form.description.trim() || !form.categoryId || !form.transactionDate || amount <= 0)',

@@ -15181,7 +15181,9 @@ function TransactionModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section
-        className="modal finance-transaction-modal"
+        className={`modal finance-transaction-modal${
+          manualChargeEntryMode && mode === 'MANUAL_PIX' ? ' manual-pix-transaction-modal' : ''
+        }`}
         aria-labelledby="transaction-modal-title"
       >
         <header className="modal-header modal-header-with-icon">
@@ -15488,7 +15490,7 @@ function ManualPixChargeContent({
           </fieldset>
 
           {form.payerType === 'REGISTERED_CLIENT' ? (
-            <label className="field manual-pix-full">
+            <label className="field manual-pix-client-field manual-pix-full">
               <span>Cliente</span>
               <select
                 required
@@ -15512,7 +15514,7 @@ function ManualPixChargeContent({
             </label>
           ) : (
             <>
-              <label className="field">
+              <label className="field manual-pix-payer-name-field">
                 <span>Nome</span>
                 <input
                   required
@@ -15520,7 +15522,7 @@ function ManualPixChargeContent({
                   onChange={(event) => onUpdateForm({ ...form, payerName: event.target.value })}
                 />
               </label>
-              <label className="field">
+              <label className="field manual-pix-payer-phone-field">
                 <span>WhatsApp</span>
                 <input
                   inputMode="tel"
@@ -15533,7 +15535,7 @@ function ManualPixChargeContent({
             </>
           )}
 
-          <label className="field">
+          <label className="field manual-pix-description-field">
             <span>Descrição</span>
             <input
               required
@@ -15541,7 +15543,7 @@ function ManualPixChargeContent({
               onChange={(event) => onUpdateForm({ ...form, description: event.target.value })}
             />
           </label>
-          <label className="field">
+          <label className="field manual-pix-category-field">
             <span>Categoria</span>
             <select
               required
@@ -15556,7 +15558,7 @@ function ManualPixChargeContent({
               ))}
             </select>
           </label>
-          <label className="field">
+          <label className="field manual-pix-amount-field">
             <span>Valor</span>
             <input
               min="0.01"
@@ -15567,7 +15569,7 @@ function ManualPixChargeContent({
               onChange={(event) => onUpdateForm({ ...form, amount: event.target.value })}
             />
           </label>
-          <label className="field">
+          <label className="field manual-pix-due-date-field">
             <span>Vencimento</span>
             <input
               required
@@ -15576,7 +15578,7 @@ function ManualPixChargeContent({
               onChange={(event) => onUpdateForm({ ...form, dueDate: event.target.value })}
             />
           </label>
-          <label className="field manual-pix-full">
+          <label className="field manual-pix-provider-field manual-pix-full">
             <span>Provider PIX</span>
             <select
               disabled={!eligiblePixProviders.length}

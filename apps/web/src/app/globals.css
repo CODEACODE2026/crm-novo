@@ -5834,6 +5834,10 @@ tbody tr:hover,
   width: min(100%, 720px);
 }
 
+.manual-pix-transaction-modal {
+  width: min(100%, 880px);
+}
+
 .renewal-reversal-modal {
   width: min(100%, 760px);
 }
@@ -6117,6 +6121,27 @@ tbody tr:hover,
   min-width: 0;
 }
 
+.manual-pix-modal-form {
+  width: 100%;
+}
+
+.manual-pix-modal-form .manual-pix-flow {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px 16px;
+  width: 100%;
+}
+
+.manual-pix-modal-form .manual-charge-choice.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.manual-pix-modal-form .manual-pix-client-field,
+.manual-pix-modal-form .manual-pix-provider-field {
+  grid-column: 1 / -1;
+}
+
 .manual-pix-full,
 .manual-pix-stepper {
   grid-column: 1 / -1;
@@ -6160,9 +6185,37 @@ tbody tr:hover,
   min-width: 0;
 }
 
+.modal .manual-pix-modal-form .form-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  position: static;
+  bottom: auto;
+  margin: 12px 0 0;
+  padding: 12px 0 0;
+}
+
 .manual-pix-result {
   overflow: hidden;
   margin-bottom: 0;
+}
+
+.manual-pix-modal-form .manual-pix-result {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  align-items: start;
+}
+
+.manual-pix-modal-form .manual-pix-result .pix-status-row,
+.manual-pix-modal-form .manual-pix-result .pix-current-details,
+.manual-pix-modal-form .manual-pix-result .pix-copy-field,
+.manual-pix-modal-form .manual-pix-result .manual-pix-actions,
+.manual-pix-modal-form .manual-pix-result .manual-pix-provider-swap,
+.manual-pix-modal-form .manual-pix-result .notice {
+  grid-column: 1;
+}
+
+.manual-pix-modal-form .manual-pix-result .pix-qr {
+  grid-column: 2;
+  grid-row: 1 / span 5;
 }
 
 .manual-pix-provider-swap {
@@ -9833,6 +9886,23 @@ tbody tr:hover,
     width: 100%;
   }
 
+  .manual-pix-modal-form .manual-pix-flow,
+  .manual-pix-modal-form .manual-charge-choice.compact,
+  .manual-pix-modal-form .manual-pix-result {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-pix-modal-form .manual-pix-result .pix-status-row,
+  .manual-pix-modal-form .manual-pix-result .pix-current-details,
+  .manual-pix-modal-form .manual-pix-result .pix-copy-field,
+  .manual-pix-modal-form .manual-pix-result .pix-qr,
+  .manual-pix-modal-form .manual-pix-result .manual-pix-actions,
+  .manual-pix-modal-form .manual-pix-result .manual-pix-provider-swap,
+  .manual-pix-modal-form .manual-pix-result .notice {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
   .manual-pix-modal-form .manual-pix-actions .ui-button,
   .manual-pix-modal-form .manual-pix-provider-swap .ui-button,
   .modal .manual-pix-modal-form .form-actions .ui-button {
@@ -9847,6 +9917,9 @@ tbody tr:hover,
   }
 
   .modal .manual-pix-modal-form .form-actions {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
     position: static;
     bottom: auto;
     margin: 12px 0 0;

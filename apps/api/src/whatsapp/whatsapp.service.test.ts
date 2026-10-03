@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import {
   BadRequestException,
   ConflictException,
@@ -130,6 +131,53 @@ function pendingContact(overrides: Record<string, unknown> = {}) {
     updatedAt: now,
     whatsAppConnection: connection(),
     client: null,
+    ...overrides,
+  };
+}
+
+function conversation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '66666666-6666-4666-8666-666666666666',
+    whatsAppConnectionId: connection().id,
+    instanceName: 'CRM Principal',
+    provider: 'KIRAGO',
+    externalInstanceId: 'kirago-user',
+    clientId: null,
+    contactName: 'Lucas',
+    phone: '5544999999999',
+    phoneNormalized: '5544999999999',
+    status: 'OPEN',
+    lastMessageAt: null,
+    lastMessagePreview: null,
+    unreadCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function conversationMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '99999999-9999-4999-8999-999999999999',
+    conversationId: conversation().id,
+    whatsAppConnectionId: connection().id,
+    provider: 'KIRAGO',
+    providerMessageId: 'msg-1',
+    requestId: null,
+    messageDispatchId: null,
+    direction: 'INBOUND',
+    type: 'TEXT',
+    text: 'Ola',
+    mediaMimeType: null,
+    mediaFileName: null,
+    mediaSizeBytes: null,
+    mediaDurationSeconds: null,
+    status: 'SENT',
+    sentAt: now,
+    failedAt: null,
+    isFromMe: false,
+    rawMetadata: null,
+    createdAt: now,
     ...overrides,
   };
 }
@@ -347,6 +395,15 @@ function serviceFactory({
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
     },
+    whatsAppConversation: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue(conversation()),
+      update: vi.fn().mockResolvedValue(conversation()),
+    },
+    whatsAppMessage: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue(conversationMessage()),
+    },
     $transaction: vi.fn(async (input: unknown) => {
       if (Array.isArray(input)) {
         return Promise.all(input);
@@ -404,6 +461,8 @@ function serviceFactory({
           update: prisma.whatsAppPendingContact.update,
           upsert: prisma.whatsAppPendingContact.upsert,
         },
+        whatsAppConversation: prisma.whatsAppConversation,
+        whatsAppMessage: prisma.whatsAppMessage,
       });
     }),
     ...prismaOverrides,
@@ -2106,8 +2165,8 @@ describe('WhatsAppService', () => {
     });
   });
 
-  it('ignores group and outgoing webhooks', async () => {
-    const { service, normalizer } = serviceFactory();
+  it('ignores group webhooks and persists external outgoing without waitlist side effects', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
     normalizer.normalize.mockReturnValueOnce({
       provider: 'KIRAGO',
       instanceName: 'CRM Principal',
@@ -2145,8 +2204,402 @@ describe('WhatsAppService', () => {
     });
 
     await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
-      reason: 'ignored_outgoing',
+      action: 'external_outgoing_message_persisted',
+      conversation: {
+        action: 'external_outgoing_message_persisted',
+      },
     });
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ providerMessageId: 'outgoing' }) }),
+    );
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ firstMessageId: 'outgoing' }),
+      }),
+    );
+  });
+
+  it('creates a conversation and inbound message on the first eligible inbound webhook', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Ola conversa', { messageId: 'conversation-msg-1' }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+    const conversationCreate = (prisma.whatsAppConversation.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+    const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    const conversationUpdate = (prisma.whatsAppConversation.update as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+
+    expect(result).toMatchObject({
+      conversation: { action: 'conversation_message_persisted' },
+    });
+    expect(conversationCreate.data).toMatchObject({
+      whatsAppConnectionId: connection().id,
+      instanceName: 'CRM Principal',
+      provider: 'KIRAGO',
+      externalInstanceId: 'kirago-user',
+      clientId: client().id,
+      contactName: 'Cliente Teste',
+      phone: '5544999999999',
+      phoneNormalized: '5544999999999',
+      status: 'OPEN',
+    });
+    expect(messageCreate.data).toMatchObject({
+      conversationId: conversation().id,
+      whatsAppConnectionId: connection().id,
+      provider: 'KIRAGO',
+      providerMessageId: 'conversation-msg-1',
+      direction: 'INBOUND',
+      type: 'TEXT',
+      text: 'Ola conversa',
+      status: 'SENT',
+      sentAt: now,
+      isFromMe: false,
+      messageDispatchId: null,
+    });
+    expect(conversationUpdate.data).toMatchObject({
+      lastMessageAt: now,
+      lastMessagePreview: 'Ola conversa',
+      unreadCount: { increment: 1 },
+    });
+  });
+
+  it('reuses an existing conversation for the same phone and connection', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ contactName: 'Lucas Antigo' })),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation({ contactName: 'Lucas Novo' })),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Segunda', { contactName: 'Lucas Novo', messageId: 'reuse-msg' }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: conversation().id },
+        data: expect.objectContaining({ contactName: 'Lucas Novo' }),
+      }),
+    );
+  });
+
+  it('does not degrade existing conversation snapshots with empty webhook values', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              contactName: 'Lucas Existente',
+              instanceName: 'CRM Principal',
+              externalInstanceId: 'kirago-user',
+            }),
+          ),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', {
+        contactName: null,
+        instanceName: null,
+        providerUserId: 'kirago-user',
+        messageId: 'empty-snapshots',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        data: expect.not.objectContaining({
+          contactName: expect.anything(),
+          instanceName: expect.anything(),
+        }),
+      }),
+    );
+  });
+
+  it('creates a separate conversation for the same phone on another connection', async () => {
+    const secondConnection = connection({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      providerUserId: 'kirago-user-2',
+      providerInstanceName: 'CRM Secundario',
+    });
+    const { service, prisma, normalizer } = serviceFactory({ currentConnection: secondConnection });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi outra conexao', {
+        providerUserId: 'kirago-user-2',
+        instanceName: 'CRM Secundario',
+        messageId: 'other-connection-msg',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppConversation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          whatsAppConnectionId: secondConnection.id,
+          phoneNormalized: '5544999999999',
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    [[client()], client().id],
+    [[], null],
+    [[client(), client({ id: 'other-client-id', reference: 'CLI-2' })], null],
+  ])('sets conversation clientId only for a unique client match %#', async (matches, clientId) => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(matches[0] ?? null),
+          findMany: vi.fn().mockResolvedValue(matches),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', { messageId: `client-${clientId}` }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const conversationCreate = (prisma.whatsAppConversation.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: { clientId?: string | null } };
+
+    expect(conversationCreate.data?.clientId).toBe(clientId);
+    expect('create' in prisma.client).toBe(false);
+  });
+
+  it('re-links a conversation with null clientId but does not replace an existing clientId', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ clientId: null }))
+            .mockResolvedValueOnce(conversation({ clientId: 'already-linked-client' })),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValueOnce(normalizedInbound('Oi', { messageId: 'relink-1' }));
+    normalizer.normalize.mockReturnValueOnce(normalizedInbound('Oi', { messageId: 'relink-2' }));
+
+    await service.receiveWebhook({ type: 'Message' });
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        data: expect.objectContaining({ client: { connect: { id: client().id } } }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.not.objectContaining({ client: expect.anything() }),
+      }),
+    );
+  });
+
+  it.each([
+    ['text', 'TEXT', 'Texto', {}, 'Texto'],
+    ['image', 'IMAGE', 'Legenda imagem', { mimetype: 'image/jpeg', size: 123 }, 'Legenda imagem'],
+    ['audio', 'AUDIO', null, { mimetype: 'audio/ogg', seconds: 8 }, '[Audio]'],
+    ['button_response', 'BUTTON', 'Sim', {}, 'Sim'],
+    ['unknown', 'UNKNOWN', null, {}, '[Mensagem]'],
+  ])(
+    'persists conversational type %s as %s with sanitized metadata',
+    async (messageType, expectedType, text, mediaMetadata, preview) => {
+      const { service, prisma, normalizer } = serviceFactory();
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound(text ?? '', {
+          messageId: `type-${messageType}`,
+          messageType,
+          text,
+          mediaMetadata: Object.keys(mediaMetadata).length
+            ? { kind: messageType, ...mediaMetadata, caption: text }
+            : null,
+        }),
+      );
+
+      await service.receiveWebhook({ token: 'secret-token', type: 'Message' });
+      const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+        data?: Record<string, unknown>;
+      };
+      const conversationUpdate = (prisma.whatsAppConversation.update as MockWithCalls).mock
+        .calls[0]?.[0] as { data?: { lastMessagePreview?: string } };
+
+      expect(messageCreate.data).toMatchObject({
+        type: expectedType,
+        text: expectedType === 'AUDIO' ? null : text,
+      });
+      expect(JSON.stringify(messageCreate.data?.rawMetadata)).not.toContain('secret-token');
+      expect(JSON.stringify(messageCreate.data?.rawMetadata)).not.toContain('authorization');
+      expect(conversationUpdate.data?.lastMessagePreview).toBe(preview);
+    },
+  );
+
+  it('stores document and video media metadata without downloading media', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Contrato', {
+        messageId: 'document-msg',
+        messageType: 'document',
+        mediaMetadata: {
+          kind: 'document',
+          mimetype: 'application/pdf',
+          fileName: 'contrato.pdf',
+          size: '2048',
+          caption: 'Contrato',
+          url: 'https://temporary.example/file',
+          base64: 'AAA',
+        },
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+
+    expect(messageCreate.data).toMatchObject({
+      mediaMimeType: 'application/pdf',
+      mediaFileName: 'contrato.pdf',
+      mediaSizeBytes: 2048,
+    });
+    expect(JSON.stringify(messageCreate.data)).not.toContain('https://temporary.example/file');
+    expect(JSON.stringify(messageCreate.data)).not.toContain('AAA');
+  });
+
+  it('does not duplicate conversation message or unread count on provider replay', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(conversationMessage({ id: 'existing-message' })),
+          create: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(normalizedInbound('Replay', { messageId: 'replay-msg' }));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      conversation: { action: 'duplicate_conversation_message' },
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+  });
+
+  it('reopens resolved conversations only for new inbound messages', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ status: 'RESOLVED' }))
+            .mockResolvedValueOnce(conversation({ status: 'RESOLVED' })),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation({ status: 'RESOLVED' })),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValueOnce(normalizedInbound('Inbound', { messageId: 'reopen' }));
+    normalizer.normalize.mockReturnValueOnce(
+      normalizedInbound('Outbound', {
+        direction: 'OUTGOING',
+        messageId: 'outbound-no-reopen',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'OPEN', unreadCount: { increment: 1 } }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        data: expect.not.objectContaining({ status: 'OPEN', unreadCount: expect.anything() }),
+      }),
+    );
+  });
+
+  it('uses provider timestamp and falls back to receivedAt for conversation sentAt', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    const receivedAt = new Date('2026-09-11T03:00:00.000Z');
+    normalizer.normalize.mockReturnValueOnce(
+      normalizedInbound('Com timestamp', {
+        messageId: 'timestamp-provider',
+        messageTimestamp: now,
+        receivedAt,
+      }),
+    );
+    normalizer.normalize.mockReturnValueOnce(
+      normalizedInbound('Sem timestamp', {
+        messageId: 'timestamp-fallback',
+        messageTimestamp: null,
+        receivedAt,
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect((prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0]).toMatchObject({
+      data: expect.objectContaining({ sentAt: now }),
+    });
+    expect((prisma.whatsAppMessage.create as MockWithCalls).mock.calls[1]?.[0]).toMatchObject({
+      data: expect.objectContaining({ sentAt: receivedAt }),
+    });
+  });
+
+  it('preserves legacy waitlist behavior when conversational persistence fails', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockRejectedValue(new Error('Falha conversacional sanitizada')),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(normalizedInbound('Oi', { messageId: 'failure-msg' }));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'pending_contact_upserted',
+      conversation: {
+        action: 'conversation_persistence_failed',
+        processed: false,
+        errorMessage: 'Falha conversacional sanitizada',
+      },
+    });
+    expect(prisma.whatsAppInboundMessage.create).toHaveBeenCalled();
+    expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalled();
   });
 
   it('does not increment count when provider message is replayed', async () => {

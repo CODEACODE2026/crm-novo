@@ -3,6 +3,7 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
   ServiceUnavailableException,
@@ -13,6 +14,8 @@ import {
   MessageDispatchOrigin,
   Prisma,
   ReceivableStatus,
+  WhatsAppConversation,
+  WhatsAppConversationMessageType,
   WhatsAppInboundMessageType,
   WhatsAppConnection,
   WhatsAppConnectionStatus,
@@ -43,6 +46,7 @@ import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-c
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
+import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
@@ -129,6 +133,8 @@ type PixWhatsAppContext =
 
 @Injectable()
 export class WhatsAppService {
+  private readonly logger = new Logger(WhatsAppService.name);
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(WHATSAPP_PROVIDER) private readonly provider: WhatsAppProvider,
@@ -1028,10 +1034,6 @@ export class WhatsAppService {
       return { received: true, processed: false, reason: 'ignored_group' };
     }
 
-    if (normalized.direction === 'OUTGOING') {
-      return { received: true, processed: false, reason: 'ignored_outgoing' };
-    }
-
     if (!normalized.phone) {
       return { received: true, processed: false, reason: 'missing_phone' };
     }
@@ -1043,15 +1045,41 @@ export class WhatsAppService {
       return { received: true, processed: false, reason: 'connection_not_found' };
     }
 
-    const result = await this.processIncomingWebhook(connection.id, incoming);
-    return { received: true, ...result };
+    const clients = await this.findClientsForIncomingPhone(incoming.phone);
+
+    if (normalized.direction === 'OUTGOING') {
+      const conversationResult = await this.processConversationWebhookSafely(
+        connection,
+        incoming,
+        clients,
+      );
+      return {
+        received: true,
+        processed: conversationResult.processed,
+        action: conversationResult.action,
+        conversation: conversationResult,
+      };
+    }
+
+    const legacyResult = await this.processIncomingWebhook(connection.id, incoming, clients);
+
+    if (legacyResult.action === 'duplicate_message') {
+      return { received: true, ...legacyResult };
+    }
+
+    const conversationResult = await this.processConversationWebhookSafely(
+      connection,
+      incoming,
+      clients,
+    );
+    return { received: true, ...legacyResult, conversation: conversationResult };
   }
 
   private async processIncomingWebhook(
     connectionId: string,
     normalized: NormalizedWhatsAppMessage & { phone: string },
+    clients: Array<{ id: string }>,
   ) {
-    const clients = await this.findClientsForIncomingPhone(normalized.phone);
     const client = clients.length === 1 ? clients[0] : null;
 
     try {
@@ -1134,6 +1162,242 @@ export class WhatsAppService {
 
       throw error;
     }
+  }
+
+  private async processConversationWebhookSafely(
+    connection: WhatsAppConnection,
+    normalized: NormalizedWhatsAppMessage & { phone: string },
+    clients: Array<{ id: string }>,
+  ) {
+    try {
+      return await this.processConversationWebhook(connection, normalized, clients);
+    } catch (error) {
+      const message = this.sanitizeError(error);
+      this.logger.warn(`Falha ao persistir historico conversacional WhatsApp: ${message}`);
+      return {
+        processed: false,
+        action: 'conversation_persistence_failed',
+        errorMessage: message,
+      };
+    }
+  }
+
+  private async processConversationWebhook(
+    connection: WhatsAppConnection,
+    normalized: NormalizedWhatsAppMessage & { phone: string },
+    clients: Array<{ id: string }>,
+  ) {
+    const matchedClientId = clients.length === 1 && clients[0] ? clients[0].id : null;
+
+    return this.prisma.$transaction(async (tx) => {
+      const existingMessage = await this.findExistingConversationMessage(tx, connection.id, {
+        providerMessageId: normalized.messageId,
+        requestId: null,
+      });
+
+      if (existingMessage) {
+        return {
+          processed: true,
+          action: 'duplicate_conversation_message',
+          conversationId: existingMessage.conversationId,
+          messageId: existingMessage.id,
+        };
+      }
+
+      const conversation = await this.upsertWebhookConversation(tx, {
+        connection,
+        normalized,
+        matchedClientId,
+      });
+      const sentAt = normalized.messageTimestamp ?? normalized.receivedAt ?? new Date();
+      const direction = normalized.direction === 'OUTGOING' ? 'OUTBOUND' : 'INBOUND';
+      const messageType = this.toConversationMessageType(normalized.messageType);
+      const metadata = this.buildConversationRawMetadata(normalized);
+      const media = this.conversationMediaFields(normalized.mediaMetadata);
+      const message = await this.createConversationMessage(tx, {
+        conversation,
+        normalized,
+        direction,
+        messageType,
+        sentAt,
+        media,
+        metadata,
+      });
+
+      if (message.duplicate) {
+        return {
+          processed: true,
+          action: 'duplicate_conversation_message',
+          conversationId: message.conversationId,
+          messageId: message.id,
+        };
+      }
+
+      await tx.whatsAppConversation.update({
+        where: { id: conversation.id },
+        data: {
+          lastMessageAt: sentAt,
+          lastMessagePreview: this.conversationLastMessagePreview(messageType, {
+            text: normalized.text,
+            mediaFileName: media.mediaFileName,
+          }),
+          ...(direction === 'INBOUND'
+            ? {
+                unreadCount: { increment: 1 },
+                ...(conversation.status === 'RESOLVED' ? { status: 'OPEN' as const } : {}),
+              }
+            : {}),
+        },
+      });
+
+      return {
+        processed: true,
+        action:
+          direction === 'OUTBOUND'
+            ? 'external_outgoing_message_persisted'
+            : 'conversation_message_persisted',
+        conversationId: conversation.id,
+        messageId: message.id,
+      };
+    });
+  }
+
+  private async createConversationMessage(
+    tx: Prisma.TransactionClient,
+    input: {
+      conversation: WhatsAppConversation;
+      normalized: NormalizedWhatsAppMessage & { phone: string };
+      direction: 'INBOUND' | 'OUTBOUND';
+      messageType: WhatsAppConversationMessageType;
+      sentAt: Date;
+      media: ReturnType<WhatsAppService['conversationMediaFields']>;
+      metadata: Record<string, Prisma.InputJsonValue>;
+    },
+  ) {
+    try {
+      const message = await tx.whatsAppMessage.create({
+        data: buildWhatsAppMessageCreateDataForConversation(input.conversation, {
+          provider: 'KIRAGO',
+          providerMessageId: input.normalized.messageId,
+          requestId: null,
+          messageDispatchId: null,
+          direction: input.direction,
+          type: input.messageType,
+          text: this.conversationMessageText(input.messageType, input.normalized.text),
+          status: 'SENT',
+          sentAt: input.sentAt,
+          failedAt: null,
+          isFromMe: input.normalized.direction === 'OUTGOING',
+          rawMetadata: input.metadata,
+          ...input.media,
+        }),
+        select: { id: true, conversationId: true },
+      });
+
+      return { ...message, duplicate: false as const };
+    } catch (error) {
+      if (!this.isDuplicateConversationMessage(error)) {
+        throw error;
+      }
+
+      const existing = await this.findExistingConversationMessage(
+        tx,
+        input.conversation.whatsAppConnectionId,
+        {
+          providerMessageId: input.normalized.messageId,
+          requestId: null,
+        },
+      );
+
+      if (existing) {
+        return { ...existing, duplicate: true as const };
+      }
+
+      throw error;
+    }
+  }
+
+  private async findExistingConversationMessage(
+    tx: Prisma.TransactionClient,
+    whatsAppConnectionId: string,
+    input: { providerMessageId: string | null; requestId: string | null },
+  ) {
+    if (input.providerMessageId) {
+      const byProviderMessageId = await tx.whatsAppMessage.findFirst({
+        where: {
+          provider: 'KIRAGO',
+          whatsAppConnectionId,
+          providerMessageId: input.providerMessageId,
+        },
+        select: { id: true, conversationId: true },
+      });
+
+      if (byProviderMessageId) {
+        return byProviderMessageId;
+      }
+    }
+
+    if (!input.requestId) {
+      return null;
+    }
+
+    return tx.whatsAppMessage.findFirst({
+      where: { whatsAppConnectionId, requestId: input.requestId },
+      select: { id: true, conversationId: true },
+    });
+  }
+
+  private async upsertWebhookConversation(
+    tx: Prisma.TransactionClient,
+    input: {
+      connection: WhatsAppConnection;
+      normalized: NormalizedWhatsAppMessage & { phone: string };
+      matchedClientId: string | null;
+    },
+  ): Promise<WhatsAppConversation> {
+    const { connection, normalized, matchedClientId } = input;
+    const existing = await tx.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: connection.id,
+          phoneNormalized: normalized.phone,
+        },
+      },
+    });
+
+    if (!existing) {
+      return tx.whatsAppConversation.create({
+        data: {
+          whatsAppConnectionId: connection.id,
+          instanceName: normalized.instanceName,
+          provider: 'KIRAGO',
+          externalInstanceId: normalized.providerUserId,
+          clientId: matchedClientId,
+          contactName: normalized.contactName,
+          phone: normalized.phone,
+          phoneNormalized: normalized.phone,
+          status: 'OPEN',
+        },
+      });
+    }
+
+    const data: Prisma.WhatsAppConversationUpdateInput = {
+      ...(normalized.contactName ? { contactName: normalized.contactName } : {}),
+      ...(normalized.instanceName ? { instanceName: normalized.instanceName } : {}),
+      ...(normalized.providerUserId ? { externalInstanceId: normalized.providerUserId } : {}),
+      ...(existing.clientId === null && matchedClientId
+        ? { client: { connect: { id: matchedClientId } } }
+        : {}),
+    };
+
+    if (Object.keys(data).length === 0) {
+      return existing;
+    }
+
+    return tx.whatsAppConversation.update({
+      where: { id: existing.id },
+      data,
+    });
   }
 
   private findConnectionForWebhook(normalized: NormalizedWhatsAppMessage) {
@@ -1967,6 +2231,114 @@ export class WhatsAppService {
     return `${digits.slice(0, 4)}*****${digits.slice(-4)}`;
   }
 
+  private toConversationMessageType(type: NormalizedMessageType): WhatsAppConversationMessageType {
+    const map: Record<NormalizedMessageType, WhatsAppConversationMessageType> = {
+      text: 'TEXT',
+      image: 'IMAGE',
+      video: 'VIDEO',
+      audio: 'AUDIO',
+      document: 'DOCUMENT',
+      sticker: 'UNKNOWN',
+      location: 'LOCATION',
+      live_location: 'LOCATION',
+      contact: 'UNKNOWN',
+      contacts: 'UNKNOWN',
+      reaction: 'UNKNOWN',
+      button_response: 'BUTTON',
+      list_response: 'BUTTON',
+      interactive_response: 'BUTTON',
+      unknown: 'UNKNOWN',
+    };
+
+    return map[type];
+  }
+
+  private conversationMessageText(type: WhatsAppConversationMessageType, text: string | null) {
+    if (type === 'AUDIO') {
+      return null;
+    }
+
+    return text;
+  }
+
+  private conversationLastMessagePreview(
+    type: WhatsAppConversationMessageType,
+    input: { text: string | null; mediaFileName?: string | null },
+  ) {
+    const text = input.text?.trim();
+
+    if (text) {
+      return text.slice(0, messagePreviewLimit);
+    }
+
+    if (type === 'IMAGE') return '[Imagem]';
+    if (type === 'AUDIO') return '[Audio]';
+    if (type === 'DOCUMENT') return input.mediaFileName || '[Documento]';
+    if (type === 'VIDEO') return '[Video]';
+    if (type === 'LOCATION') return '[Localizacao]';
+    if (type === 'BUTTON') return '[Resposta interativa]';
+    return '[Mensagem]';
+  }
+
+  private conversationMediaFields(mediaMetadata: Record<string, unknown> | null) {
+    return {
+      mediaMimeType: this.optionalMetadataString(mediaMetadata, 'mimetype'),
+      mediaFileName: this.optionalMetadataString(mediaMetadata, 'fileName'),
+      mediaSizeBytes: this.optionalMetadataInt(mediaMetadata, 'size'),
+      mediaDurationSeconds: this.optionalMetadataInt(mediaMetadata, 'seconds'),
+    };
+  }
+
+  private buildConversationRawMetadata(normalized: NormalizedWhatsAppMessage) {
+    const media = normalized.mediaMetadata;
+    const metadata: Record<string, Prisma.InputJsonValue> = {
+      originalType: normalized.messageType,
+      isFromMe: normalized.direction === 'OUTGOING',
+      isGroup: normalized.isGroup,
+      source: normalized.direction === 'OUTGOING' ? 'external_outgoing' : 'webhook',
+    };
+
+    for (const [key, value] of [
+      ['providerMessageId', normalized.messageId],
+      ['providerUserId', normalized.providerUserId],
+      ['instanceName', normalized.instanceName],
+    ] as const) {
+      if (value) {
+        metadata[key] = value;
+      }
+    }
+
+    for (const key of ['mimetype', 'size', 'seconds', 'fileName', 'caption'] as const) {
+      const value = media?.[key];
+
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        metadata[key] = value;
+      }
+    }
+
+    return metadata;
+  }
+
+  private optionalMetadataString(metadata: Record<string, unknown> | null, key: string) {
+    const value = metadata?.[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  private optionalMetadataInt(metadata: Record<string, unknown> | null, key: string) {
+    const value = metadata?.[key];
+
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+    }
+
+    return null;
+  }
+
   private toPrismaMessageType(type: NormalizedMessageType): WhatsAppInboundMessageType {
     const map: Record<NormalizedMessageType, WhatsAppInboundMessageType> = {
       text: 'TEXT',
@@ -2018,6 +2390,15 @@ export class WhatsAppService {
 
     const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
     return target.includes('providerMessageId');
+  }
+
+  private isDuplicateConversationMessage(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+      return false;
+    }
+
+    const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
+    return target.includes('providerMessageId') || target.includes('requestId');
   }
 
   private handleClientCreationError(error: unknown): never {

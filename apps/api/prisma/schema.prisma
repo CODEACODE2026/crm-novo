@@ -228,6 +228,33 @@ enum WhatsAppInboundMessageType {
   UNKNOWN
 }
 
+enum WhatsAppConversationStatus {
+  OPEN
+  RESOLVED
+}
+
+enum WhatsAppConversationMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum WhatsAppConversationMessageStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum WhatsAppConversationMessageType {
+  TEXT
+  IMAGE
+  DOCUMENT
+  AUDIO
+  VIDEO
+  LOCATION
+  BUTTON
+  UNKNOWN
+}
+
 enum LegacyImportRecordStatus {
   IMPORTED
   UPDATED
@@ -306,6 +333,7 @@ model Client {
   recoveryCampaigns       RecoveryCampaign[]
   whatsappPendingContacts WhatsAppPendingContact[]
   whatsappInboundMessages WhatsAppInboundMessage[]
+  whatsappConversations   WhatsAppConversation[]
   referralReceived        Referral?                     @relation("ReferralReferredClient")
   referralsMade           Referral[]                    @relation("ReferralReferrerClient")
 
@@ -380,6 +408,8 @@ model WhatsAppConnection {
   messageDispatches      MessageDispatch[]
   pendingContacts        WhatsAppPendingContact[]
   inboundMessages        WhatsAppInboundMessage[]
+  conversations          WhatsAppConversation[]
+  conversationMessages   WhatsAppMessage[]
 
   @@index([provider])
   @@index([providerInstanceName])
@@ -422,6 +452,7 @@ model MessageDispatch {
   billingResponse       BillingResponse?
   items                 MessageDispatchItem[]
   receivableAuditEvents ReceivableAuditEvent[]
+  whatsappMessages      WhatsAppMessage[]
 
   @@index([clientId])
   @@index([clientReferenceId])
@@ -630,6 +661,66 @@ model WhatsAppInboundMessage {
   @@index([pendingContactId])
   @@index([clientId])
   @@map("whatsapp_inbound_messages")
+}
+
+model WhatsAppConversation {
+  id                   String                     @id @default(uuid()) @db.Uuid
+  whatsAppConnectionId String                     @db.Uuid
+  instanceName         String?
+  provider             WhatsAppProvider           @default(KIRAGO)
+  externalInstanceId   String?
+  clientId             String?                    @db.Uuid
+  contactName          String?
+  phone                String
+  phoneNormalized      String
+  status               WhatsAppConversationStatus @default(OPEN)
+  lastMessageAt        DateTime?
+  lastMessagePreview   String?
+  unreadCount          Int                        @default(0)
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  whatsAppConnection   WhatsAppConnection         @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  client               Client?                    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  messages             WhatsAppMessage[]
+
+  @@unique([whatsAppConnectionId, phoneNormalized])
+  @@index([lastMessageAt])
+  @@index([clientId])
+  @@index([status])
+  @@index([whatsAppConnectionId, status, lastMessageAt])
+  @@map("whatsapp_conversations")
+}
+
+model WhatsAppMessage {
+  id                   String                               @id @default(uuid()) @db.Uuid
+  conversationId       String                               @db.Uuid
+  whatsAppConnectionId String                               @db.Uuid
+  provider             WhatsAppProvider                     @default(KIRAGO)
+  providerMessageId    String?
+  requestId            String?
+  messageDispatchId    String?                              @db.Uuid
+  direction            WhatsAppConversationMessageDirection
+  type                 WhatsAppConversationMessageType
+  text                 String?
+  mediaMimeType        String?
+  mediaFileName        String?
+  mediaSizeBytes       Int?
+  mediaDurationSeconds Int?
+  status               WhatsAppConversationMessageStatus
+  sentAt               DateTime?
+  failedAt             DateTime?
+  isFromMe             Boolean                              @default(false)
+  rawMetadata          Json?
+  createdAt            DateTime                             @default(now())
+  conversation         WhatsAppConversation                 @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  whatsAppConnection   WhatsAppConnection                   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  messageDispatch      MessageDispatch?                     @relation(fields: [messageDispatchId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, whatsAppConnectionId, providerMessageId])
+  @@unique([whatsAppConnectionId, requestId])
+  @@index([conversationId, createdAt])
+  @@index([messageDispatchId])
+  @@map("whatsapp_messages")
 }
 
 model BillingResponse {

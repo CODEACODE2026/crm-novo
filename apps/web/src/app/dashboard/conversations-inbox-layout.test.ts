@@ -236,13 +236,20 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
   });
 
-  it('keeps client and guest panels read-only for Phase 5', () => {
+  it('lets guest conversations link to an existing client without exposing client creation', () => {
     expect(conversationsSource).toContain('Dados do cliente');
     expect(conversationsSource).toContain('Abrir cliente');
     expect(conversationsSource).toContain('Contato avulso');
     expect(conversationsSource).toContain('const pendingAmount = (client.receivables ?? [])');
     expect(conversationsSource).toContain('<dd>{formatCurrency(pendingAmount)}</dd>');
     expect(conversationsSource).toContain('const instanceLabel = conversationInstanceLabel');
+    expect(conversationsSource).toContain('linkWhatsAppConversationClient(selectedConversation.id');
+    expect(conversationsSource).toContain('Vincular a cliente');
+    expect(conversationsSource).toContain('Buscar por nome, telefone ou e-mail...');
+    expect(conversationsSource).toContain('O telefone desta conversa é diferente');
+    expect(conversationsSource).toContain('Esta conversa já está vinculada a outro cliente.');
+    expect(conversationsSource).toContain('setConversations((current) =>');
+    expect(conversationsSource).toContain('setClientDetail(await getClient(linked.client.id))');
     expect(dashboardSource).toContain('function conversationInstanceLabel');
     expect(dashboardSource).toContain('function isTechnicalInstanceName');
     expect(conversationsSource).not.toContain("{conversation.instanceName ?? '-'}");
@@ -250,8 +257,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       "{conversation.instanceName ?? 'Instância WhatsApp'}",
     );
     expect(conversationsSource).not.toContain('Cadastrar cliente');
-    expect(conversationsSource).not.toContain('Vincular cliente');
     expect(conversationsSource).not.toContain('Gerar PIX');
+    expect(stylesSource).toContain('.conversation-link-client');
+    expect(stylesSource).toContain('.conversation-link-actions');
   });
 
   it('keeps the conversation header and list hierarchy visually prepared for polish', () => {

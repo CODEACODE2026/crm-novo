@@ -44,6 +44,7 @@ import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
+import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
 import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
@@ -142,6 +143,7 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
         id: true;
         name: true;
         phone: true;
+        phoneNormalized: true;
       };
     };
   };
@@ -616,7 +618,7 @@ export class WhatsAppService {
         this.prisma.whatsAppConversation.findMany({
           where,
           include: {
-            client: { select: { id: true, name: true, phone: true } },
+            client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
           },
           orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
           skip: (page - 1) * limit,
@@ -767,12 +769,108 @@ export class WhatsAppService {
     }
   }
 
+  async linkConversationClient(
+    id: string,
+    dto: LinkWhatsAppConversationClientDto,
+    actorUserId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const [conversation, client] = await Promise.all([
+        tx.whatsAppConversation.findUnique({
+          where: { id },
+          include: { client: { select: { id: true, name: true } } },
+        }),
+        tx.client.findUnique({
+          where: { id: dto.clientId },
+          select: { id: true, name: true },
+        }),
+      ]);
+
+      if (!conversation) {
+        throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+      }
+
+      if (!client) {
+        throw new NotFoundException('Cliente nao encontrado.');
+      }
+
+      if (conversation.clientId === client.id) {
+        const current = await tx.whatsAppConversation.findUnique({
+          where: { id },
+          include: {
+            client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          },
+        });
+        return this.presentConversation(current!);
+      }
+
+      if (conversation.clientId) {
+        throw new ConflictException({
+          code: 'CONVERSATION_ALREADY_LINKED',
+          message: 'Esta conversa ja esta vinculada a outro cliente.',
+          currentClientId: conversation.clientId,
+          currentClientName: conversation.client?.name ?? null,
+        });
+      }
+
+      const updated = await tx.whatsAppConversation.updateMany({
+        where: { id, clientId: null },
+        data: { clientId: client.id },
+      });
+
+      if (updated.count !== 1) {
+        const current = await tx.whatsAppConversation.findUnique({
+          where: { id },
+          include: { client: { select: { id: true, name: true } } },
+        });
+
+        if (!current) {
+          throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+        }
+
+        throw new ConflictException({
+          code: 'CONVERSATION_ALREADY_LINKED',
+          message: 'Esta conversa ja esta vinculada a outro cliente.',
+          currentClientId: current.clientId,
+          currentClientName: current.client?.name ?? null,
+        });
+      }
+
+      await tx.clientEvent.create({
+        data: {
+          clientId: client.id,
+          type: 'CLIENT_UPDATED',
+          title: 'Conversa WhatsApp vinculada manualmente.',
+          description: `Conversa WhatsApp ${conversation.phoneNormalized} vinculada manualmente ao cliente.`,
+          metadata: {
+            source: 'MANUAL_LINK',
+            conversationId: conversation.id,
+            clientId: client.id,
+            whatsAppConnectionId: conversation.whatsAppConnectionId,
+            phone: conversation.phone,
+            phoneNormalized: conversation.phoneNormalized,
+          },
+          createdByUserId: actorUserId,
+        },
+      });
+
+      const linked = await tx.whatsAppConversation.findUnique({
+        where: { id },
+        include: {
+          client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        },
+      });
+
+      return this.presentConversation(linked!);
+    });
+  }
+
   async markConversationAsRead(id: string) {
     await this.ensureConversationExists(id);
     const conversation = await this.prisma.whatsAppConversation.update({
       where: { id },
       data: { unreadCount: 0 },
-      include: { client: { select: { id: true, name: true, phone: true } } },
+      include: { client: { select: { id: true, name: true, phone: true, phoneNormalized: true } } },
     });
 
     return this.presentConversation(conversation);
@@ -783,7 +881,7 @@ export class WhatsAppService {
     const conversation = await this.prisma.whatsAppConversation.update({
       where: { id },
       data: { status: 'RESOLVED' },
-      include: { client: { select: { id: true, name: true, phone: true } } },
+      include: { client: { select: { id: true, name: true, phone: true, phoneNormalized: true } } },
     });
 
     return this.presentConversation(conversation);
@@ -1729,7 +1827,7 @@ export class WhatsAppService {
   private async findConversationForRead(id: string) {
     return this.prisma.whatsAppConversation.findUnique({
       where: { id },
-      include: { client: { select: { id: true, name: true, phone: true } } },
+      include: { client: { select: { id: true, name: true, phone: true, phoneNormalized: true } } },
     });
   }
 
@@ -2471,6 +2569,7 @@ export class WhatsAppService {
           id: conversation.client.id,
           name: conversation.client.name,
           phone: conversation.client.phone,
+          phoneNormalized: conversation.client.phoneNormalized,
         }
       : null;
 

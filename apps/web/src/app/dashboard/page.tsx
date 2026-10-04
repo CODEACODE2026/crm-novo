@@ -169,6 +169,7 @@ import {
   listReceivables,
   listWhatsAppConversationMessages,
   listWhatsAppConversations,
+  linkWhatsAppConversationClient,
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
   markWhatsAppConversationRead,
@@ -10995,6 +10996,7 @@ function ConversationsView({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [linkingClient, setLinkingClient] = useState(false);
   const [opening, setOpening] = useState(false);
   const [listLoading, setListLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -11003,6 +11005,7 @@ function ConversationsView({
   const [messagesError, setMessagesError] = useState('');
   const [sendError, setSendError] = useState('');
   const [clientError, setClientError] = useState('');
+  const [linkClientError, setLinkClientError] = useState('');
   const [mobileClientOpen, setMobileClientOpen] = useState(false);
   const [mobileMode, setMobileMode] = useState<'list' | 'chat'>('list');
   const [newMessageNotice, setNewMessageNotice] = useState(false);
@@ -11197,6 +11200,7 @@ function ConversationsView({
     setMessages([]);
     setClientDetail(null);
     setClientError('');
+    setLinkClientError('');
     setMessagesError('');
     setSendError('');
     setNewMessageNotice(false);
@@ -11345,6 +11349,38 @@ function ConversationsView({
     }
   }
 
+  async function linkSelectedConversationToClient(clientOption: ClientOption) {
+    if (!selectedConversation || linkingClient) return;
+
+    setLinkingClient(true);
+    setLinkClientError('');
+    setClientError('');
+
+    try {
+      const linked = await linkWhatsAppConversationClient(selectedConversation.id, {
+        clientId: clientOption.id,
+      });
+      if (activeConversationIdRef.current !== linked.id) return;
+
+      setSelectedConversation(linked);
+      setConversations((current) =>
+        current.map((item) => (item.id === linked.id ? { ...item, ...linked } : item)),
+      );
+
+      if (linked.client?.id) {
+        try {
+          setClientDetail(await getClient(linked.client.id));
+        } catch (err) {
+          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+        }
+      }
+    } catch (err) {
+      setLinkClientError(linkClientErrorMessage(err));
+    } finally {
+      setLinkingClient(false);
+    }
+  }
+
   return (
     <section className={`conversations-view mobile-mode-${mobileMode}`}>
       <PageHeader
@@ -11436,8 +11472,11 @@ function ConversationsView({
           client={clientDetail}
           clientError={clientError}
           conversation={selectedConversation}
+          linkClientError={linkClientError}
+          linkingClient={linkingClient}
           mobileOpen={mobileClientOpen}
           onCloseMobile={() => setMobileClientOpen(false)}
+          onLinkClient={(client) => void linkSelectedConversationToClient(client)}
           onOpenClient={(clientId) => void onOpenClient(clientId)}
         />
       </div>
@@ -11806,15 +11845,21 @@ function ConversationClientPanel({
   client,
   clientError,
   conversation,
+  linkClientError,
+  linkingClient,
   mobileOpen,
   onCloseMobile,
+  onLinkClient,
   onOpenClient,
 }: {
   client: Client | null;
   clientError: string;
   conversation: WhatsAppConversation | null;
+  linkClientError: string;
+  linkingClient: boolean;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
   return (
@@ -11824,6 +11869,9 @@ function ConversationClientPanel({
           client={client}
           clientError={clientError}
           conversation={conversation}
+          linkClientError={linkClientError}
+          linkingClient={linkingClient}
+          onLinkClient={onLinkClient}
           onOpenClient={onOpenClient}
         />
       </aside>
@@ -11838,6 +11886,9 @@ function ConversationClientPanel({
               client={client}
               clientError={clientError}
               conversation={conversation}
+              linkClientError={linkClientError}
+              linkingClient={linkingClient}
+              onLinkClient={onLinkClient}
               onOpenClient={onOpenClient}
             />
           </section>
@@ -11851,13 +11902,29 @@ function ConversationClientPanelContent({
   client,
   clientError,
   conversation,
+  linkClientError,
+  linkingClient,
+  onLinkClient,
   onOpenClient,
 }: {
   client: Client | null;
   clientError: string;
   conversation: WhatsAppConversation | null;
+  linkClientError: string;
+  linkingClient: boolean;
+  onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
+
+  useEffect(() => {
+    setLinkOpen(false);
+    setSelectedClientId('');
+    setSelectedClient(null);
+  }, [conversation?.id, client?.id]);
+
   if (!conversation) {
     return (
       <div className="conversation-empty-panel">
@@ -11917,6 +11984,14 @@ function ConversationClientPanelContent({
   }
 
   const instanceLabel = conversationInstanceLabel(conversation.instanceName);
+  const conversationPhone =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const selectedClientPhone = selectedClient?.phoneNormalized
+    ? formatNormalizedBrazilPhone(selectedClient.phoneNormalized)
+    : '-';
+  const phoneDiffers =
+    Boolean(selectedClient?.phoneNormalized) &&
+    selectedClient?.phoneNormalized !== conversation.phoneNormalized;
 
   return (
     <div className="conversation-context-card">
@@ -11929,9 +12004,7 @@ function ConversationClientPanelContent({
         </div>
         <div>
           <dt>Telefone</dt>
-          <dd>
-            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
-          </dd>
+          <dd>{conversationPhone}</dd>
         </div>
         {instanceLabel ? (
           <div>
@@ -11940,6 +12013,79 @@ function ConversationClientPanelContent({
           </div>
         ) : null}
       </dl>
+      <div className="conversation-link-client">
+        <Button
+          icon={UserCheck}
+          size="sm"
+          variant="secondary"
+          onClick={() => setLinkOpen((current) => !current)}
+        >
+          Vincular a cliente
+        </Button>
+
+        {linkOpen ? (
+          <div className="conversation-link-client-form">
+            <FinanceClientAutocomplete
+              label="Buscar cliente"
+              placeholder="Buscar por nome, telefone ou e-mail..."
+              selectedClient={selectedClient}
+              value={selectedClientId}
+              onChange={(clientId, option) => {
+                setSelectedClientId(clientId);
+                setSelectedClient(option);
+              }}
+            />
+
+            {selectedClient ? (
+              <div className="conversation-link-confirmation">
+                <strong>Vincular conversa a: {selectedClient.name}</strong>
+                <dl className="detail-list compact">
+                  <div>
+                    <dt>Telefone da conversa</dt>
+                    <dd>{conversationPhone}</dd>
+                  </div>
+                  <div>
+                    <dt>Telefone do cliente</dt>
+                    <dd>{selectedClientPhone}</dd>
+                  </div>
+                </dl>
+                {phoneDiffers ? (
+                  <div className="notice warning conversation-notice">
+                    O telefone desta conversa é diferente do telefone principal do cliente.
+                  </div>
+                ) : null}
+                <div className="conversation-link-actions">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setSelectedClientId('');
+                      setSelectedClient(null);
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    icon={UserCheck}
+                    loading={linkingClient}
+                    size="sm"
+                    variant="primary"
+                    onClick={() => onLinkClient(selectedClient)}
+                  >
+                    Vincular cliente
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {linkClientError ? (
+              <div className="notice danger conversation-notice" role="alert">
+                {linkClientError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -12074,6 +12220,31 @@ function conversationErrorMessage(error: unknown, fallback: string) {
     return 'Conversa inexistente ou não disponível.';
   }
   return fallback;
+}
+
+function linkClientErrorMessage(error: unknown) {
+  if (error instanceof ApiError && error.status === 409) {
+    const payload =
+      error.payload && typeof error.payload === 'object'
+        ? (error.payload as { code?: unknown })
+        : null;
+
+    if (payload?.code === 'CONVERSATION_ALREADY_LINKED') {
+      return 'Esta conversa já está vinculada a outro cliente.';
+    }
+
+    return 'Outra operação vinculou esta conversa antes. Atualize e tente novamente.';
+  }
+
+  if (error instanceof ApiError && error.status === 404) {
+    return 'Conversa ou cliente inexistente.';
+  }
+
+  if (error instanceof Error && /conex|connection|network|fetch/i.test(error.message)) {
+    return 'Conexão indisponível. Tente novamente em instantes.';
+  }
+
+  return 'Falha ao vincular cliente.';
 }
 
 function WhatsAppView() {

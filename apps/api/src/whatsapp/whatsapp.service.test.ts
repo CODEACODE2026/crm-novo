@@ -384,6 +384,9 @@ function serviceFactory({
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({ id: 'audit-event-id' }),
     },
+    clientEvent: {
+      create: vi.fn().mockResolvedValue({ id: 'client-event-id' }),
+    },
     whatsAppInboundMessage: {
       create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
       update: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
@@ -403,6 +406,7 @@ function serviceFactory({
       aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
       create: vi.fn().mockResolvedValue(conversation()),
       update: vi.fn().mockResolvedValue(conversation()),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     whatsAppMessage: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -421,6 +425,7 @@ function serviceFactory({
       const callback = input as (tx: unknown) => Promise<unknown>;
       return callback({
         client: {
+          findUnique: prisma.client.findUnique,
           create: vi.fn().mockResolvedValue({
             ...client(),
             recurringValue: 50,
@@ -457,9 +462,7 @@ function serviceFactory({
           ),
         },
         receivableAuditEvent: prisma.receivableAuditEvent,
-        clientEvent: {
-          create: vi.fn().mockResolvedValue({}),
-        },
+        clientEvent: prisma.clientEvent,
         billingResponse: prisma.billingResponse,
         whatsAppInboundMessage: {
           create: prisma.whatsAppInboundMessage.create,
@@ -2302,6 +2305,50 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('preserves a manually linked client when a later webhook matches another phone client', async () => {
+    const manualClient = client({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Cliente Manual',
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(client()),
+          findMany: vi.fn().mockResolvedValue([client()]),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              clientId: manualClient.id,
+              client: manualClient,
+              contactName: 'Lucas Manual',
+            }),
+          ),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation({ clientId: manualClient.id })),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Depois do vinculo manual', {
+        contactName: 'Lucas Novo',
+        messageId: 'manual-link-preserved',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const updateArgs = (prisma.whatsAppConversation.update as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+
+    expect(updateArgs.data).toMatchObject({ contactName: 'Lucas Novo' });
+    expect(updateArgs.data).not.toHaveProperty('client');
+    expect(JSON.stringify(updateArgs.data)).not.toContain(client().id);
+  });
+
   it('does not degrade existing conversation snapshots with empty webhook values', async () => {
     const { service, prisma, normalizer } = serviceFactory({
       prismaOverrides: {
@@ -2918,7 +2965,7 @@ describe('WhatsAppService', () => {
       take: 10,
     });
     expect(findManyArgs.include).toEqual({
-      client: { select: { id: true, name: true, phone: true } },
+      client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
     });
     expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
       expect.arrayContaining([
@@ -3123,6 +3170,223 @@ describe('WhatsAppService', () => {
       1,
       expect.objectContaining({ data: { status: 'RESOLVED' } }),
     );
+  });
+
+  it('links a guest conversation to an existing client without changing conversation history fields', async () => {
+    const linkedConversation = conversation({
+      clientId: client().id,
+      client: client(),
+      status: 'RESOLVED',
+      unreadCount: 3,
+      lastMessagePreview: 'Historico preservado',
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ clientId: null, client: null, unreadCount: 3 }))
+            .mockResolvedValueOnce(linkedConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.linkConversationClient(
+      conversation().id,
+      { clientId: client().id },
+      'actor-user-id',
+    );
+    const updateManyArgs = (prisma.whatsAppConversation.updateMany as MockWithCalls).mock
+      .calls[0]?.[0] as { where?: Record<string, unknown>; data?: Record<string, unknown> };
+    const eventArgs = (prisma.clientEvent.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+
+    expect(result).toMatchObject({
+      client: { id: client().id, name: client().name },
+      displayName: client().name,
+      status: 'RESOLVED',
+      unreadCount: 3,
+      lastMessagePreview: 'Historico preservado',
+    });
+    expect(updateManyArgs).toEqual({
+      where: { id: conversation().id, clientId: null },
+      data: { clientId: client().id },
+    });
+    expect(JSON.stringify(updateManyArgs.data)).not.toContain('phone');
+    expect(eventArgs.data).toMatchObject({
+      clientId: client().id,
+      type: 'CLIENT_UPDATED',
+      title: 'Conversa WhatsApp vinculada manualmente.',
+      createdByUserId: 'actor-user-id',
+      metadata: expect.objectContaining({
+        source: 'MANUAL_LINK',
+        conversationId: conversation().id,
+        clientId: client().id,
+        phoneNormalized: conversation().phoneNormalized,
+      }),
+    });
+  });
+
+  it('returns 404 when manually linking a missing conversation or missing client', async () => {
+    const missingConversation = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(
+      missingConversation.service.linkConversationClient(
+        conversation().id,
+        { clientId: client().id },
+        'actor-user-id',
+      ),
+    ).rejects.toThrow(NotFoundException);
+
+    const missingClient = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ clientId: null, client: null })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(
+      missingClient.service.linkConversationClient(
+        conversation().id,
+        { clientId: client().id },
+        'actor-user-id',
+      ),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('treats linking to the same client as idempotent without duplicating audit events', async () => {
+    const linkedConversation = conversation({ clientId: client().id, client: client() });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(linkedConversation)
+            .mockResolvedValueOnce(linkedConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(
+      service.linkConversationClient(conversation().id, { clientId: client().id }, 'actor-user-id'),
+    ).resolves.toMatchObject({ client: { id: client().id } });
+    expect(prisma.whatsAppConversation.updateMany).not.toHaveBeenCalled();
+    expect(prisma.clientEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects relinking to another client with CONVERSATION_ALREADY_LINKED details', async () => {
+    const otherClient = client({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Cliente Atual',
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              clientId: otherClient.id,
+              client: otherClient,
+            }),
+          ),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(
+      service.linkConversationClient(conversation().id, { clientId: client().id }, 'actor-user-id'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'CONVERSATION_ALREADY_LINKED',
+        currentClientId: otherClient.id,
+        currentClientName: otherClient.name,
+      }),
+    });
+    expect(prisma.whatsAppConversation.updateMany).not.toHaveBeenCalled();
+    expect(prisma.clientEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('handles concurrent manual links without last-write-wins', async () => {
+    const winningClient = client({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Cliente Vencedor',
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ clientId: null, client: null }))
+            .mockResolvedValueOnce(
+              conversation({
+                clientId: winningClient.id,
+                client: winningClient,
+              }),
+            ),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(
+      service.linkConversationClient(conversation().id, { clientId: client().id }, 'actor-user-id'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'CONVERSATION_ALREADY_LINKED',
+        currentClientId: winningClient.id,
+        currentClientName: winningClient.name,
+      }),
+    });
+    expect(prisma.whatsAppConversation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: conversation().id, clientId: null } }),
+    );
+    expect(prisma.clientEvent.create).not.toHaveBeenCalled();
   });
 
   it('sends a manual TEXT message through the conversation connection and persists SENT history', async () => {

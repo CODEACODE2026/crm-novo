@@ -271,6 +271,43 @@ a {
   overflow-wrap: anywhere;
 }
 
+.conversation-link-client {
+  display: grid;
+  gap: 10px;
+}
+
+.conversation-link-client-form,
+.conversation-link-confirmation {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.conversation-link-confirmation {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.conversation-link-confirmation > strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.detail-list.compact {
+  gap: 6px;
+}
+
+.conversation-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .field textarea {
   min-height: 130px;
   resize: vertical;

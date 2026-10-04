@@ -5,6 +5,7 @@ import {
   Headers,
   Inject,
   Param,
+  ParseUUIDPipe,
   Post,
   Query,
   Req,
@@ -20,6 +21,7 @@ import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
+import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
 import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
@@ -108,6 +110,15 @@ export class WhatsAppController {
     @Body() dto: SendWhatsAppConversationMessageDto,
   ) {
     return this.whatsAppService.sendConversationTextMessage(id, dto);
+  }
+
+  @Post('conversations/:id/link-client')
+  linkConversationClient(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: LinkWhatsAppConversationClientDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.whatsAppService.linkConversationClient(id, dto, request.user.id);
   }
 
   @Get('conversations/:id')

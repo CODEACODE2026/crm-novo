@@ -704,7 +704,7 @@ export interface WhatsAppConversation {
   instanceName: string | null;
   provider: 'KIRAGO';
   externalInstanceId: string | null;
-  client: Pick<Client, 'id' | 'name' | 'phone'> | null;
+  client: Pick<Client, 'id' | 'name' | 'phone' | 'phoneNormalized'> | null;
   displayName: string;
   contactName: string | null;
   phone: string;
@@ -2501,6 +2501,13 @@ export function sendWhatsAppConversationMessage(
   payload: { body: string; requestId: string },
 ) {
   return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function linkWhatsAppConversationClient(id: string, payload: { clientId: string }) {
+  return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}/link-client`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

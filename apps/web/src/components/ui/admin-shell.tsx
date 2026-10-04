@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 export interface AdminNavItem<T extends string> {
+  badge?: number | string | null;
   id: T;
   label: string;
   icon: LucideIcon;
@@ -121,6 +122,11 @@ export function AdminShell<T extends string>({
               >
                 <Icon aria-hidden="true" size={18} />
                 <span>{item.label}</span>
+                {item.badge ? (
+                  <small className="nav-item-badge" aria-label={`${item.badge} pendentes`}>
+                    {item.badge}
+                  </small>
+                ) : null}
               </button>
             );
           })}

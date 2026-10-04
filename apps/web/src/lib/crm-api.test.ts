@@ -19,8 +19,11 @@ import {
   getPaymentIntentsSummary,
   getReferralSummary,
   getReceivablesSummary,
+  getWhatsAppConversation,
   importLegacyClients,
   importLegacyPayments,
+  listWhatsAppConversationMessages,
+  listWhatsAppConversations,
   listBillingDispatches,
   listClientOptions,
   listClients,
@@ -40,10 +43,13 @@ import {
   recoverReceivablePixReplacement,
   replaceReceivablePix,
   replaceReceivablesPix,
+  resolveWhatsAppConversation,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
+  sendWhatsAppConversationMessage,
   sendPaymentIntentWhatsApp,
   testPaymentProviderCredential,
+  markWhatsAppConversationRead,
   updateClient,
   updateMessageTemplate,
 } from './crm-api';
@@ -1346,5 +1352,78 @@ describe('CRM UI formatters', () => {
       paymentDate: '2026-09-17',
       notes: 'Pago via conferência manual',
     });
+  });
+
+  it('uses the WhatsApp conversation inbox endpoints without creating new backend routes', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+            summary: { totalUnreadConversations: 0, totalUnreadMessages: 0 },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listWhatsAppConversations({
+      page: 2,
+      pageSize: 20,
+      search: 'maria',
+      status: 'OPEN',
+      unreadOnly: true,
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      whatsAppConnectionId: '550e8400-e29b-41d4-a716-446655440001',
+    });
+    await getWhatsAppConversation('conversation-id');
+    await listWhatsAppConversationMessages('conversation-id', { page: 1, pageSize: 30 });
+    await sendWhatsAppConversationMessage('conversation-id', {
+      body: 'Oi',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+    await markWhatsAppConversationRead('conversation-id');
+    await resolveWhatsAppConversation('conversation-id');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        '/whatsapp/conversations?page=2&limit=20&search=maria&status=OPEN&unreadOnly=true&clientId=550e8400-e29b-41d4-a716-446655440000&whatsAppConnectionId=550e8400-e29b-41d4-a716-446655440001',
+      ),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/whatsapp/conversations/conversation-id'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/messages?page=1&limit=30'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/messages'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          body: 'Oi',
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/read'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/resolve'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

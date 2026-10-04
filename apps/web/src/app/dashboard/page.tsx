@@ -44,6 +44,7 @@ import {
   MessageCircle,
   MessageSquare,
   MessageSquareText,
+  MessagesSquare,
   Minus,
   Package,
   PackageOpen,
@@ -151,6 +152,7 @@ import {
   getPaymentIntentsSummary,
   getReceivablesSummary,
   getWhatsAppConnection,
+  getWhatsAppConversation,
   getWhatsAppPendingContact,
   getWhatsAppPendingContactsSummary,
   getWhatsAppProviderHealth,
@@ -165,8 +167,11 @@ import {
   listPlans,
   listPaymentIntents,
   listReceivables,
+  listWhatsAppConversationMessages,
+  listWhatsAppConversations,
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
+  markWhatsAppConversationRead,
   downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
@@ -184,7 +189,9 @@ import {
   refreshWhatsAppStatus,
   reconcileReceivablePix,
   reopenWhatsAppPendingContact,
+  resolveWhatsAppConversation,
   sendWhatsAppMessage,
+  sendWhatsAppConversationMessage,
   updateClient,
   updateClientReference,
   updateClientReferenceStatus,
@@ -299,6 +306,12 @@ import {
   type ReferralStatus,
   type ReferralSummary,
   type WhatsAppConnection,
+  type WhatsAppConversation,
+  type WhatsAppConversationMessage,
+  type WhatsAppConversationMessageStatus,
+  type WhatsAppConversationMessageType,
+  type WhatsAppConversationStatus,
+  type WhatsAppConversationSummary,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
   type WhatsAppPendingContactStatus,
@@ -340,6 +353,7 @@ import { sortPlansByDuration } from '../../lib/plan-utils';
 type View =
   | 'dashboard'
   | 'clients'
+  | 'conversations'
   | 'finance'
   | 'plans'
   | 'whatsapp'
@@ -389,6 +403,7 @@ function shortEntityId(id: string) {
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'clients', label: 'Clientes', icon: Users },
+  { id: 'conversations', label: 'Conversas', icon: MessagesSquare },
   { id: 'referrals', label: 'Indicações', icon: Gift },
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
   { id: 'plans', label: 'Planos', icon: ToggleLeft },
@@ -403,6 +418,8 @@ const navItems = [
 
 const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
 const listPageSize = 10;
+const conversationsPageSize = 20;
+const conversationMessagesPageSize = 30;
 const clientFinancePageSize = 20;
 const monthNamesPt = [
   'Janeiro',
@@ -521,8 +538,22 @@ export default function DashboardPage() {
   const [clientsPage, setClientsPage] = useState(1);
   const [error, setError] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
+  const [conversationSummary, setConversationSummary] =
+    useState<WhatsAppConversationSummary | null>(null);
 
   const clients = clientsPayload?.items ?? [];
+  const mainNavItems = useMemo(
+    () =>
+      navItems.map((item) =>
+        item.id === 'conversations'
+          ? {
+              ...item,
+              badge: conversationSummary?.totalUnreadConversations || null,
+            }
+          : item,
+      ),
+    [conversationSummary],
+  );
 
   const loadData = useCallback(async () => {
     setDataLoading(true);
@@ -842,7 +873,7 @@ export default function DashboardPage() {
       activeId={view}
       collapsed={sidebarCollapsed}
       disabledItems={futureNavItems}
-      items={navItems}
+      items={mainNavItems}
       subtitle={viewSubtitle(view)}
       title={viewTitle(view)}
       userName={user?.name}
@@ -964,6 +995,16 @@ export default function DashboardPage() {
           renewalReversalPreviewLoadingId={renewalReversalPreviewLoadingId}
         />
       ) : null}
+      {view === 'conversations' ? (
+        <ConversationsView
+          onSummaryChange={setConversationSummary}
+          onOpenClient={async (clientId) => {
+            const client = await getClient(clientId);
+            setSelectedClient(client);
+            setView('clients');
+          }}
+        />
+      ) : null}
       {view === 'finance' ? <FinanceView clients={clients} initialTab={financeInitialTab} /> : null}
       {view === 'referrals' ? <ReferralsView clients={clients} /> : null}
       {view === 'plans' ? (
@@ -1073,6 +1114,7 @@ function viewTitle(view: View) {
     automations: 'Automações',
     billing: 'Cobranças',
     clients: 'Clientes',
+    conversations: 'Conversas',
     dashboard: 'Dashboard',
     finance: 'Financeiro',
     imports: 'Importação',
@@ -1092,6 +1134,7 @@ function viewSubtitle(view: View) {
     automations: 'Rotinas operacionais e recuperação',
     billing: 'Cobranças, envios e acompanhamento',
     clients: 'Base de clientes, referências e histórico',
+    conversations: 'Inbox de atendimento WhatsApp',
     dashboard: 'Visão operacional do dia e do período',
     finance: 'Receitas, despesas e contas a receber',
     imports: 'Preview temporário da migração legado',
@@ -10920,6 +10963,963 @@ function RecoveryCampaignDetailModal({
       </section>
     </div>
   );
+}
+
+type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
+
+const conversationFilters = [
+  { id: 'all', label: 'Todas' },
+  { id: 'unread', label: 'Não lidas' },
+  { id: 'clients', label: 'Clientes' },
+  { id: 'guests', label: 'Avulsos' },
+] satisfies Array<{ id: ConversationFilter; label: string }>;
+
+function ConversationsView({
+  onOpenClient,
+  onSummaryChange,
+}: {
+  onOpenClient: (clientId: string) => Promise<void>;
+  onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
+}) {
+  const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
+  const [summary, setSummary] = useState<WhatsAppConversationSummary | null>(null);
+  const [selectedConversation, setSelectedConversation] = useState<WhatsAppConversation | null>(
+    null,
+  );
+  const [messages, setMessages] = useState<WhatsAppConversationMessage[]>([]);
+  const [clientDetail, setClientDetail] = useState<Client | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<ConversationFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [listError, setListError] = useState('');
+  const [messagesError, setMessagesError] = useState('');
+  const [sendError, setSendError] = useState('');
+  const [clientError, setClientError] = useState('');
+  const [mobileClientOpen, setMobileClientOpen] = useState(false);
+  const [mobileMode, setMobileMode] = useState<'list' | 'chat'>('list');
+  const [newMessageNotice, setNewMessageNotice] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+  const lastReadConversationRef = useRef<string | null>(null);
+
+  const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
+  const filteredConversations = conversations.filter((conversation) => {
+    if (filter === 'clients') return Boolean(conversation.client);
+    if (filter === 'guests') return !conversation.client;
+    return true;
+  });
+
+  const loadConversations = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) {
+        setListLoading(true);
+      }
+      setListError('');
+
+      try {
+        const filters: Parameters<typeof listWhatsAppConversations>[0] = {
+          page: 1,
+          pageSize: conversationsPageSize,
+        };
+        if (search) filters.search = search;
+        if (statusFilter) filters.status = statusFilter;
+        if (filter === 'unread') filters.unreadOnly = true;
+
+        const payload = await listWhatsAppConversations({
+          ...filters,
+        });
+        setConversations(payload.items);
+        setSummary(payload.summary);
+        onSummaryChange(payload.summary);
+        setSelectedConversation((current) => {
+          if (!current) return null;
+          return payload.items.find((item) => item.id === current.id) ?? current;
+        });
+      } catch (err) {
+        setListError(conversationErrorMessage(err, 'Falha ao carregar conversas.'));
+      } finally {
+        if (!silent) {
+          setListLoading(false);
+        }
+      }
+    },
+    [filter, onSummaryChange, search, statusFilter],
+  );
+
+  const loadMessages = useCallback(
+    async (
+      conversationId: string,
+      { replace = false, silent = false }: { replace?: boolean; silent?: boolean } = {},
+    ) => {
+      if (!silent) {
+        setMessagesLoading(true);
+      }
+      setMessagesError('');
+
+      const shouldStick = isConversationScrollNearBottom(messagesScrollRef.current);
+
+      try {
+        const payload = await listWhatsAppConversationMessages(conversationId, {
+          page: 1,
+          pageSize: conversationMessagesPageSize,
+        });
+        if (activeConversationIdRef.current !== conversationId) return;
+        setMessages((current) =>
+          replace
+            ? mergeConversationMessages([], payload.items)
+            : mergeConversationMessages(current, payload.items),
+        );
+        window.setTimeout(() => {
+          if (!silent || shouldStick) {
+            scrollConversationToBottom(messagesEndRef.current);
+          } else {
+            setNewMessageNotice(true);
+          }
+        }, 0);
+      } catch (err) {
+        setMessagesError(conversationErrorMessage(err, 'Falha ao carregar mensagens.'));
+      } finally {
+        if (!silent) {
+          setMessagesLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearch(searchInput.trim());
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
+    void loadConversations();
+  }, [loadConversations]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      void loadConversations({ silent: true });
+    }, 10000);
+
+    return () => window.clearInterval(interval);
+  }, [loadConversations]);
+
+  useEffect(() => {
+    if (!selectedConversation) return undefined;
+
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      void loadMessages(selectedConversation.id, { silent: true });
+    }, 4000);
+
+    return () => window.clearInterval(interval);
+  }, [loadMessages, selectedConversation]);
+
+  async function selectConversation(conversation: WhatsAppConversation) {
+    activeConversationIdRef.current = conversation.id;
+    setSelectedConversation(conversation);
+    setMessages([]);
+    setClientDetail(null);
+    setClientError('');
+    setMessagesError('');
+    setSendError('');
+    setNewMessageNotice(false);
+    setMobileMode('chat');
+    setOpening(true);
+
+    try {
+      const [detail] = await Promise.all([
+        getWhatsAppConversation(conversation.id),
+        loadMessages(conversation.id, { replace: true }),
+      ]);
+      if (activeConversationIdRef.current !== conversation.id) return;
+      setSelectedConversation(detail);
+      setConversations((current) =>
+        current.map((item) => (item.id === detail.id ? { ...item, ...detail } : item)),
+      );
+
+      if (detail.unreadCount > 0 && lastReadConversationRef.current !== detail.id) {
+        const unreadBeforeRead = detail.unreadCount;
+        lastReadConversationRef.current = detail.id;
+        const readConversation = await markWhatsAppConversationRead(detail.id);
+        if (activeConversationIdRef.current !== detail.id) return;
+        setSelectedConversation(readConversation);
+        setConversations((current) =>
+          current.map((item) =>
+            item.id === readConversation.id ? { ...item, unreadCount: 0 } : item,
+          ),
+        );
+        setSummary((current) => {
+          if (!current) return current;
+          const next = {
+            totalUnreadConversations: Math.max(0, current.totalUnreadConversations - 1),
+            totalUnreadMessages: Math.max(0, current.totalUnreadMessages - unreadBeforeRead),
+          };
+          onSummaryChange(next);
+          return next;
+        });
+      }
+
+      if (detail.client?.id) {
+        try {
+          setClientDetail(await getClient(detail.client.id));
+        } catch (err) {
+          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+        }
+      }
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Falha ao abrir conversa.'));
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function sendCurrentMessage(bodyOverride?: string) {
+    if (!selectedConversation || sending) return;
+
+    const body = (bodyOverride ?? selectedDraft).trim();
+    if (!body) return;
+
+    setSending(true);
+    setSendError('');
+
+    try {
+      const requestId = createConversationRequestId();
+      const message = await sendWhatsAppConversationMessage(selectedConversation.id, {
+        body,
+        requestId,
+      });
+      setMessages((current) => mergeConversationMessages(current, [message]));
+      setDrafts((current) => ({ ...current, [selectedConversation.id]: '' }));
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? {
+                ...conversation,
+                lastMessageAt: message.sentAt ?? message.createdAt,
+                lastMessagePreview: body,
+              }
+            : conversation,
+        ),
+      );
+      window.setTimeout(() => scrollConversationToBottom(messagesEndRef.current), 0);
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setSendError(conversationErrorMessage(err, 'Falha ao enviar mensagem.'));
+      const failedAt = new Date().toISOString();
+      const failedMessage: WhatsAppConversationMessage = {
+        id: `local-failed-${failedAt}`,
+        createdAt: failedAt,
+        direction: 'OUTBOUND',
+        failedAt,
+        isFromMe: true,
+        mediaDurationSeconds: null,
+        mediaFileName: null,
+        mediaMimeType: null,
+        mediaSizeBytes: null,
+        messageDispatchId: null,
+        providerMessageId: null,
+        sentAt: null,
+        status: 'FAILED',
+        text: body,
+        type: 'TEXT',
+      };
+      setMessages((current) => mergeConversationMessages(current, [failedMessage]));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function resolveSelectedConversation() {
+    if (!selectedConversation || resolving || selectedConversation.status === 'RESOLVED') return;
+
+    setResolving(true);
+    setMessagesError('');
+
+    try {
+      const resolved = await resolveWhatsAppConversation(selectedConversation.id);
+      setSelectedConversation(resolved);
+      setConversations((current) =>
+        current.map((item) => (item.id === resolved.id ? { ...item, ...resolved } : item)),
+      );
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Falha ao resolver conversa.'));
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  return (
+    <section className={`conversations-view mobile-mode-${mobileMode}`}>
+      <PageHeader
+        eyebrow="WhatsApp Inbox"
+        icon={MessagesSquare}
+        title="Conversas"
+        subtitle="Atendimento e histórico conversacional do WhatsApp"
+        actions={
+          summary ? (
+            <span className="conversation-summary-pill">
+              {summary.totalUnreadConversations} conversas não lidas · {summary.totalUnreadMessages}{' '}
+              mensagens
+            </span>
+          ) : null
+        }
+      />
+
+      <div className="conversations-shell">
+        <ConversationList
+          conversations={filteredConversations}
+          filter={filter}
+          listError={listError}
+          loading={listLoading}
+          searchInput={searchInput}
+          selectedId={selectedConversation?.id ?? null}
+          statusFilter={statusFilter}
+          onFilterChange={setFilter}
+          onSearchChange={setSearchInput}
+          onSelect={(conversation) => void selectConversation(conversation)}
+          onStatusFilterChange={setStatusFilter}
+        />
+
+        <section className="conversation-chat-panel" aria-label="Chat da conversa">
+          {selectedConversation ? (
+            <>
+              <ConversationHeader
+                conversation={selectedConversation}
+                opening={opening}
+                resolving={resolving}
+                onBack={() => setMobileMode('list')}
+                onOpenClientPanel={() => setMobileClientOpen(true)}
+                onResolve={() => void resolveSelectedConversation()}
+              />
+
+              <div className="conversation-error-slot">
+                {messagesError ? (
+                  <div className="notice danger conversation-notice" role="alert">
+                    {messagesError}
+                  </div>
+                ) : null}
+              </div>
+
+              <ConversationMessages
+                messages={messages}
+                loading={messagesLoading}
+                messagesEndRef={messagesEndRef}
+                scrollRef={messagesScrollRef}
+                showNewMessageNotice={newMessageNotice}
+                onJumpToBottom={() => {
+                  setNewMessageNotice(false);
+                  scrollConversationToBottom(messagesEndRef.current);
+                }}
+                onRetry={(message) => void sendCurrentMessage(message.text ?? '')}
+              />
+
+              <ConversationComposer
+                draft={selectedDraft}
+                error={sendError}
+                sending={sending}
+                onChange={(value) => {
+                  setDrafts((current) => ({
+                    ...current,
+                    [selectedConversation.id]: value,
+                  }));
+                }}
+                onSend={() => void sendCurrentMessage()}
+              />
+            </>
+          ) : (
+            <div className="conversation-empty-chat">
+              <MessagesSquare aria-hidden="true" size={34} />
+              <strong>Selecione uma conversa</strong>
+              <span>O histórico e o contexto do cliente aparecem aqui.</span>
+            </div>
+          )}
+        </section>
+
+        <ConversationClientPanel
+          client={clientDetail}
+          clientError={clientError}
+          conversation={selectedConversation}
+          mobileOpen={mobileClientOpen}
+          onCloseMobile={() => setMobileClientOpen(false)}
+          onOpenClient={(clientId) => void onOpenClient(clientId)}
+        />
+      </div>
+    </section>
+  );
+}
+
+function ConversationList({
+  conversations,
+  filter,
+  listError,
+  loading,
+  searchInput,
+  selectedId,
+  statusFilter,
+  onFilterChange,
+  onSearchChange,
+  onSelect,
+  onStatusFilterChange,
+}: {
+  conversations: WhatsAppConversation[];
+  filter: ConversationFilter;
+  listError: string;
+  loading: boolean;
+  searchInput: string;
+  selectedId: string | null;
+  statusFilter: WhatsAppConversationStatus | '';
+  onFilterChange: (filter: ConversationFilter) => void;
+  onSearchChange: (search: string) => void;
+  onSelect: (conversation: WhatsAppConversation) => void;
+  onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
+}) {
+  const emptyCopy = searchInput.trim()
+    ? 'Nenhuma conversa corresponde à busca.'
+    : 'Nenhuma conversa encontrada.';
+
+  return (
+    <aside className="conversation-list-panel" aria-label="Lista de conversas">
+      <div className="conversation-panel-header">
+        <div>
+          <h3>Conversas</h3>
+          <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
+        </div>
+      </div>
+
+      <label className="conversation-search" aria-label="Buscar conversas">
+        <Search aria-hidden="true" size={16} />
+        <input
+          aria-label="Buscar por nome ou telefone"
+          placeholder="Buscar por nome ou telefone..."
+          value={searchInput}
+          onChange={(event) => onSearchChange(event.target.value)}
+        />
+      </label>
+
+      <div className="conversation-filter-row" role="tablist" aria-label="Filtros de conversas">
+        {conversationFilters.map((item) => (
+          <button
+            aria-selected={filter === item.id}
+            className={filter === item.id ? 'active' : ''}
+            key={item.id}
+            role="tab"
+            type="button"
+            onClick={() => onFilterChange(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <label className="conversation-status-filter">
+        <span>Status</span>
+        <select
+          value={statusFilter}
+          onChange={(event) =>
+            onStatusFilterChange(event.target.value as WhatsAppConversationStatus | '')
+          }
+        >
+          <option value="">Todos</option>
+          <option value="OPEN">Abertas</option>
+          <option value="RESOLVED">Resolvidas</option>
+        </select>
+      </label>
+
+      {listError ? (
+        <div className="notice danger conversation-notice" role="alert">
+          {listError}
+        </div>
+      ) : null}
+
+      <div className="conversation-list-items">
+        {conversations.map((conversation) => (
+          <ConversationListItem
+            conversation={conversation}
+            key={conversation.id}
+            selected={selectedId === conversation.id}
+            onSelect={onSelect}
+          />
+        ))}
+        {!conversations.length && !loading ? (
+          <div className="conversation-empty-list">{emptyCopy}</div>
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
+function ConversationListItem({
+  conversation,
+  selected,
+  onSelect,
+}: {
+  conversation: WhatsAppConversation;
+  selected: boolean;
+  onSelect: (conversation: WhatsAppConversation) => void;
+}) {
+  return (
+    <button
+      aria-current={selected ? 'true' : undefined}
+      className={`conversation-list-item ${selected ? 'active' : ''}`}
+      type="button"
+      onClick={() => onSelect(conversation)}
+    >
+      <span className="conversation-avatar">{conversationInitial(conversation)}</span>
+      <span className="conversation-list-copy">
+        <span className="conversation-list-title-row">
+          <strong>{conversation.displayName}</strong>
+          <small>
+            {conversationDateLabel(conversation.lastMessageAt ?? conversation.updatedAt)}
+          </small>
+        </span>
+        <span className="conversation-list-meta-row">
+          <span>
+            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
+          </span>
+          <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
+            {conversation.client ? 'Cliente' : 'Avulso'}
+          </span>
+        </span>
+        <span className="conversation-preview-row">
+          <span>{conversation.lastMessagePreview ?? '[Mensagem]'}</span>
+          {conversation.unreadCount > 0 ? (
+            <span className="conversation-unread-badge">{conversation.unreadCount}</span>
+          ) : null}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function ConversationHeader({
+  conversation,
+  opening,
+  resolving,
+  onBack,
+  onOpenClientPanel,
+  onResolve,
+}: {
+  conversation: WhatsAppConversation;
+  opening: boolean;
+  resolving: boolean;
+  onBack: () => void;
+  onOpenClientPanel: () => void;
+  onResolve: () => void;
+}) {
+  return (
+    <header className="conversation-header">
+      <button className="conversation-mobile-back" type="button" onClick={onBack}>
+        <ArrowLeft aria-hidden="true" size={16} />
+        <span>Voltar</span>
+      </button>
+      <div className="conversation-header-main">
+        <span className="conversation-avatar large">{conversationInitial(conversation)}</span>
+        <div>
+          <h3>{conversation.displayName}</h3>
+          <p>
+            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
+            {' · '}
+            {conversation.instanceName ?? 'Instância WhatsApp'}
+          </p>
+          <div className="conversation-header-badges">
+            <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
+              {conversation.client ? 'Cliente' : 'Avulso'}
+            </span>
+            <span
+              className={`conversation-status-badge status-${conversation.status.toLowerCase()}`}
+            >
+              {conversation.status}
+            </span>
+            {opening ? <span className="conversation-sync-badge">Carregando</span> : null}
+          </div>
+        </div>
+      </div>
+      <div className="conversation-header-actions">
+        <IconButton
+          icon={Info}
+          label="Abrir contexto do cliente"
+          className="conversation-mobile-context"
+          onClick={onOpenClientPanel}
+        />
+        {conversation.status === 'RESOLVED' ? (
+          <span className="conversation-resolved-label">Resolvida</span>
+        ) : (
+          <Button icon={CircleCheck} loading={resolving} size="sm" onClick={onResolve}>
+            Resolver
+          </Button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function ConversationMessages({
+  loading,
+  messages,
+  messagesEndRef,
+  onJumpToBottom,
+  onRetry,
+  scrollRef,
+  showNewMessageNotice,
+}: {
+  loading: boolean;
+  messages: WhatsAppConversationMessage[];
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  onJumpToBottom: () => void;
+  onRetry: (message: WhatsAppConversationMessage) => void;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  showNewMessageNotice: boolean;
+}) {
+  return (
+    <div className="conversation-messages-wrap">
+      <div className="conversation-messages" ref={scrollRef}>
+        {loading ? <div className="conversation-loading">Carregando mensagens...</div> : null}
+        {messages.map((message) => (
+          <ConversationBubble key={message.id} message={message} onRetry={onRetry} />
+        ))}
+        {!messages.length && !loading ? (
+          <div className="conversation-empty-chat compact">Nenhuma mensagem nesta conversa.</div>
+        ) : null}
+        <div ref={messagesEndRef} />
+      </div>
+      {showNewMessageNotice ? (
+        <button className="new-message-indicator" type="button" onClick={onJumpToBottom}>
+          Nova mensagem
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ConversationBubble({
+  message,
+  onRetry,
+}: {
+  message: WhatsAppConversationMessage;
+  onRetry: (message: WhatsAppConversationMessage) => void;
+}) {
+  const outbound = message.direction === 'OUTBOUND';
+  const text = conversationMessageDisplayText(message);
+
+  return (
+    <article className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'}`}>
+      <div className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'}`}>
+        <p>{text}</p>
+        {conversationMessageCaption(message) ? (
+          <span className="conversation-caption">{conversationMessageCaption(message)}</span>
+        ) : null}
+        <footer>
+          <span>{conversationMessageTime(message)}</span>
+          {outbound ? (
+            <span className={`conversation-message-status status-${message.status.toLowerCase()}`}>
+              {conversationMessageStatusLabel(message.status)}
+            </span>
+          ) : null}
+        </footer>
+        {message.status === 'FAILED' && outbound ? (
+          <button type="button" onClick={() => onRetry(message)}>
+            Tentar novamente
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function ConversationComposer({
+  draft,
+  error,
+  sending,
+  onChange,
+  onSend,
+}: {
+  draft: string;
+  error: string;
+  sending: boolean;
+  onChange: (value: string) => void;
+  onSend: () => void;
+}) {
+  return (
+    <form
+      className="conversation-composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSend();
+      }}
+    >
+      {error ? (
+        <div className="notice danger conversation-notice" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <label>
+        <span className="sr-only">Digite uma mensagem</span>
+        <textarea
+          aria-label="Digite uma mensagem"
+          placeholder="Digite uma mensagem..."
+          rows={2}
+          value={draft}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              onSend();
+            }
+          }}
+        />
+      </label>
+      <Button
+        icon={Send}
+        loading={sending}
+        variant="primary"
+        disabled={!draft.trim()}
+        type="submit"
+      >
+        Enviar
+      </Button>
+    </form>
+  );
+}
+
+function ConversationClientPanel({
+  client,
+  clientError,
+  conversation,
+  mobileOpen,
+  onCloseMobile,
+  onOpenClient,
+}: {
+  client: Client | null;
+  clientError: string;
+  conversation: WhatsAppConversation | null;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+  onOpenClient: (clientId: string) => void;
+}) {
+  return (
+    <>
+      <aside className="conversation-client-panel" aria-label="Contexto do cliente">
+        <ConversationClientPanelContent
+          client={client}
+          clientError={clientError}
+          conversation={conversation}
+          onOpenClient={onOpenClient}
+        />
+      </aside>
+      {mobileOpen ? (
+        <div className="modal-backdrop conversation-client-drawer" role="presentation">
+          <section className="modal" aria-labelledby="conversation-client-panel-title">
+            <header className="modal-header">
+              <h2 id="conversation-client-panel-title">Contexto</h2>
+              <IconButton icon={X} label="Fechar contexto" onClick={onCloseMobile} />
+            </header>
+            <ConversationClientPanelContent
+              client={client}
+              clientError={clientError}
+              conversation={conversation}
+              onOpenClient={onOpenClient}
+            />
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function ConversationClientPanelContent({
+  client,
+  clientError,
+  conversation,
+  onOpenClient,
+}: {
+  client: Client | null;
+  clientError: string;
+  conversation: WhatsAppConversation | null;
+  onOpenClient: (clientId: string) => void;
+}) {
+  if (!conversation) {
+    return (
+      <div className="conversation-empty-panel">
+        <Info aria-hidden="true" size={22} />
+        <span>Selecione uma conversa para ver o contexto.</span>
+      </div>
+    );
+  }
+
+  if (clientError) {
+    return <div className="notice danger conversation-notice">{clientError}</div>;
+  }
+
+  if (client) {
+    const pendingAmount = client.receivables
+      ?.filter(
+        (receivable) =>
+          receivable.displayStatus === 'PENDENTE' || receivable.displayStatus === 'VENCIDO',
+      )
+      .reduce((total, receivable) => total + Number(receivable.amount), 0);
+
+    return (
+      <div className="conversation-context-card">
+        <span className="conversation-kind client">Cliente</span>
+        <h3>Dados do cliente</h3>
+        <dl className="detail-list">
+          <div>
+            <dt>Nome</dt>
+            <dd>{client.name}</dd>
+          </div>
+          <div>
+            <dt>Telefone</dt>
+            <dd>{normalizeWhatsAppDisplayPhone(client.phoneNormalized) ?? client.phone}</dd>
+          </div>
+          <div>
+            <dt>E-mail</dt>
+            <dd>{client.email ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{client.status}</dd>
+          </div>
+          <div>
+            <dt>Referências</dt>
+            <dd>{client.references?.length ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Total a receber</dt>
+            <dd>{typeof pendingAmount === 'number' ? formatCurrency(pendingAmount) : '-'}</dd>
+          </div>
+        </dl>
+        <Button icon={ArrowRight} variant="primary" onClick={() => onOpenClient(client.id)}>
+          Abrir cliente
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="conversation-context-card">
+      <span className="conversation-kind guest">Avulso</span>
+      <h3>Contato avulso</h3>
+      <dl className="detail-list">
+        <div>
+          <dt>Nome</dt>
+          <dd>{conversation.contactName ?? conversation.displayName}</dd>
+        </div>
+        <div>
+          <dt>Telefone</dt>
+          <dd>
+            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
+          </dd>
+        </div>
+        <div>
+          <dt>Instância</dt>
+          <dd>{conversation.instanceName ?? '-'}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function mergeConversationMessages(
+  current: WhatsAppConversationMessage[],
+  incoming: WhatsAppConversationMessage[],
+) {
+  const map = new Map<string, WhatsAppConversationMessage>();
+  for (const message of [...current, ...incoming]) {
+    map.set(message.id, message);
+  }
+  return [...map.values()].sort(
+    (left, right) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() ||
+      left.id.localeCompare(right.id),
+  );
+}
+
+function createConversationRequestId() {
+  return crypto.randomUUID();
+}
+
+function conversationInitial(conversation: WhatsAppConversation) {
+  return (conversation.displayName || conversation.phone || '?').slice(0, 1).toUpperCase();
+}
+
+function conversationDateLabel(value: string | null) {
+  if (!value) return '-';
+  const date = new Date(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
+
+function conversationMessageTime(message: WhatsAppConversationMessage) {
+  const value = message.sentAt ?? message.createdAt;
+  return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function conversationMessageStatusLabel(status: WhatsAppConversationMessageStatus) {
+  const labels = {
+    FAILED: 'Falhou',
+    PENDING: 'Enviando',
+    SENT: 'Enviada',
+  } satisfies Record<WhatsAppConversationMessageStatus, string>;
+  return labels[status];
+}
+
+function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
+  const labels = {
+    AUDIO: '[Áudio]',
+    BUTTON: '[Mensagem interativa]',
+    DOCUMENT: '[Documento]',
+    IMAGE: '[Imagem]',
+    LOCATION: '[Localização]',
+    TEXT: '',
+    UNKNOWN: '[Mensagem interativa]',
+    VIDEO: '[Vídeo]',
+  } satisfies Record<WhatsAppConversationMessageType, string>;
+  return labels[type];
+}
+
+function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
+  if (message.type === 'TEXT') return message.text || '';
+  return conversationMessagePlaceholder(message.type);
+}
+
+function conversationMessageCaption(message: WhatsAppConversationMessage) {
+  if (message.type === 'TEXT') return '';
+  return message.text?.trim() || '';
+}
+
+function isConversationScrollNearBottom(element: HTMLDivElement | null) {
+  if (!element) return true;
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+}
+
+function scrollConversationToBottom(element: HTMLDivElement | null) {
+  element?.scrollIntoView({ block: 'end' });
+}
+
+function conversationErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && /conex|connection|network|fetch/i.test(error.message)) {
+    return 'Conexão indisponível. Tente novamente em instantes.';
+  }
+  if (error instanceof Error && /404|não encontr|not found/i.test(error.message)) {
+    return 'Conversa inexistente ou não disponível.';
+  }
+  return fallback;
 }
 
 function WhatsAppView() {

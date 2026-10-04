@@ -692,6 +692,65 @@ export interface MessageDispatch {
   connection: Pick<WhatsAppConnection, 'id' | 'name' | 'provider'> | null;
 }
 
+export type WhatsAppConversationStatus = 'OPEN' | 'RESOLVED';
+export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
+export type WhatsAppConversationMessageStatus = 'PENDING' | 'SENT' | 'FAILED';
+export type WhatsAppConversationMessageType =
+  'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'LOCATION' | 'BUTTON' | 'UNKNOWN';
+
+export interface WhatsAppConversation {
+  id: string;
+  whatsAppConnectionId: string;
+  instanceName: string | null;
+  provider: 'KIRAGO';
+  externalInstanceId: string | null;
+  client: Pick<Client, 'id' | 'name' | 'phone'> | null;
+  displayName: string;
+  contactName: string | null;
+  phone: string;
+  phoneNormalized: string;
+  status: WhatsAppConversationStatus;
+  lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+  unreadCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WhatsAppConversationSummary {
+  totalUnreadConversations: number;
+  totalUnreadMessages: number;
+}
+
+export interface WhatsAppConversationMessage {
+  id: string;
+  direction: WhatsAppConversationMessageDirection;
+  type: WhatsAppConversationMessageType;
+  text: string | null;
+  status: WhatsAppConversationMessageStatus;
+  sentAt: string | null;
+  failedAt: string | null;
+  isFromMe: boolean;
+  providerMessageId: string | null;
+  mediaMimeType: string | null;
+  mediaFileName: string | null;
+  mediaSizeBytes: number | null;
+  mediaDurationSeconds: number | null;
+  messageDispatchId: string | null;
+  createdAt: string;
+}
+
+export interface PaginatedWhatsAppConversations {
+  items: WhatsAppConversation[];
+  pagination: PaginatedClients['pagination'];
+  summary: WhatsAppConversationSummary;
+}
+
+export interface PaginatedWhatsAppConversationMessages {
+  items: WhatsAppConversationMessage[];
+  pagination: PaginatedClients['pagination'];
+}
+
 export interface BillingSummary {
   scheduled: number;
   sent: number;
@@ -2387,6 +2446,76 @@ export function sendWhatsAppMessage(payload: {
 
 export function listWhatsAppMessages() {
   return apiFetch<MessageDispatch[]>('/whatsapp/messages');
+}
+
+export function listWhatsAppConversations(
+  filters: {
+    clientId?: string;
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    status?: WhatsAppConversationStatus | '';
+    unreadOnly?: boolean;
+    whatsAppConnectionId?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('limit', String(filters.pageSize));
+  if (filters.search) params.set('search', filters.search);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.unreadOnly) params.set('unreadOnly', 'true');
+  if (filters.clientId) params.set('clientId', filters.clientId);
+  if (filters.whatsAppConnectionId) {
+    params.set('whatsAppConnectionId', filters.whatsAppConnectionId);
+  }
+
+  const query = params.toString();
+  return apiFetch<PaginatedWhatsAppConversations>(
+    `/whatsapp/conversations${query ? `?${query}` : ''}`,
+  );
+}
+
+export function getWhatsAppConversation(id: string) {
+  return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}`);
+}
+
+export function listWhatsAppConversationMessages(
+  id: string,
+  filters: { page?: number; pageSize?: number } = {},
+) {
+  const params = new URLSearchParams();
+
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('limit', String(filters.pageSize));
+
+  const query = params.toString();
+  return apiFetch<PaginatedWhatsAppConversationMessages>(
+    `/whatsapp/conversations/${id}/messages${query ? `?${query}` : ''}`,
+  );
+}
+
+export function sendWhatsAppConversationMessage(
+  id: string,
+  payload: { body: string; requestId: string },
+) {
+  return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function markWhatsAppConversationRead(id: string) {
+  return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}/read`, {
+    method: 'POST',
+  });
+}
+
+export function resolveWhatsAppConversation(id: string) {
+  return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}/resolve`, {
+    method: 'POST',
+  });
 }
 
 export function getBillingSummary() {

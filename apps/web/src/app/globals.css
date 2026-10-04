@@ -2585,15 +2585,25 @@ a {
 
 .conversation-messages {
   box-sizing: border-box;
-  display: flex;
   flex: 1 1 auto;
   height: 100%;
   min-height: 0;
-  flex-direction: column;
-  gap: 7px;
   overflow-y: auto;
   padding: 14px 16px;
   scroll-padding-bottom: 14px;
+}
+
+.conversation-message-stack {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.conversation-message-end {
+  height: 0;
+  overflow: hidden;
 }
 
 .conversation-bubble-row {

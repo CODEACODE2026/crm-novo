@@ -11671,13 +11671,17 @@ function ConversationMessages({
     <div className="conversation-messages-wrap">
       <div className="conversation-messages" ref={scrollRef}>
         {loading ? <div className="conversation-loading">Carregando mensagens...</div> : null}
-        {messages.map((message) => (
-          <ConversationBubble key={message.id} message={message} onRetry={onRetry} />
-        ))}
+        {messages.length ? (
+          <div className="conversation-message-stack">
+            {messages.map((message) => (
+              <ConversationBubble key={message.id} message={message} onRetry={onRetry} />
+            ))}
+          </div>
+        ) : null}
         {!messages.length && !loading ? (
           <div className="conversation-empty-chat compact">Nenhuma mensagem nesta conversa.</div>
         ) : null}
-        <div ref={messagesEndRef} />
+        <div className="conversation-message-end" ref={messagesEndRef} />
       </div>
       {showNewMessageNotice ? (
         <button className="new-message-indicator" type="button" onClick={onJumpToBottom}>

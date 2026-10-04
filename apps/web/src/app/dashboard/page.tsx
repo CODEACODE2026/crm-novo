@@ -10998,6 +10998,7 @@ function ConversationsView({
   const [opening, setOpening] = useState(false);
   const [listLoading, setListLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [listError, setListError] = useState('');
   const [messagesError, setMessagesError] = useState('');
   const [sendError, setSendError] = useState('');
@@ -11007,8 +11008,12 @@ function ConversationsView({
   const [newMessageNotice, setNewMessageNotice] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const lastReadConversationRef = useRef<string | null>(null);
+  const pendingInitialScrollConversationRef = useRef<string | null>(null);
+  const pendingSendScrollConversationRef = useRef<string | null>(null);
+  const pendingComposerFocusRef = useRef(false);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
   const filteredConversations = conversations.filter((conversation) => {
@@ -11077,13 +11082,15 @@ function ConversationsView({
             ? mergeConversationMessages([], payload.items)
             : mergeConversationMessages(current, payload.items),
         );
-        window.setTimeout(() => {
-          if (!silent || shouldStick) {
-            scrollConversationToBottom(messagesEndRef.current);
-          } else {
-            setNewMessageNotice(true);
-          }
-        }, 0);
+        if (!replace) {
+          scheduleConversationScroll(() => {
+            if (shouldStick) {
+              scrollConversationContainerToBottom(messagesScrollRef.current);
+            } else if (silent) {
+              setNewMessageNotice(true);
+            }
+          });
+        }
       } catch (err) {
         setMessagesError(conversationErrorMessage(err, 'Falha ao carregar mensagens.'));
       } finally {
@@ -11127,8 +11134,38 @@ function ConversationsView({
     return () => window.clearInterval(interval);
   }, [loadMessages, selectedConversation]);
 
+  useEffect(() => {
+    if (!selectedConversation || messagesLoading) return;
+    if (pendingInitialScrollConversationRef.current !== selectedConversation.id) return;
+
+    pendingInitialScrollConversationRef.current = null;
+    scheduleConversationScroll(() => {
+      scrollConversationContainerToBottom(messagesScrollRef.current);
+    });
+  }, [messages, messagesLoading, selectedConversation]);
+
+  useEffect(() => {
+    if (!selectedConversation) return;
+    if (pendingSendScrollConversationRef.current !== selectedConversation.id) return;
+
+    pendingSendScrollConversationRef.current = null;
+    scheduleConversationScroll(() => {
+      scrollConversationContainerToBottom(messagesScrollRef.current);
+    });
+  }, [messages, selectedConversation]);
+
+  useEffect(() => {
+    if (sending || !pendingComposerFocusRef.current || composerFocusRequest === 0) return;
+
+    pendingComposerFocusRef.current = false;
+    scheduleComposerFocus(() => {
+      composerRef.current?.focus();
+    });
+  }, [composerFocusRequest, sending]);
+
   async function selectConversation(conversation: WhatsAppConversation) {
     activeConversationIdRef.current = conversation.id;
+    pendingInitialScrollConversationRef.current = conversation.id;
     setSelectedConversation(conversation);
     setMessages([]);
     setClientDetail(null);
@@ -11186,7 +11223,10 @@ function ConversationsView({
     }
   }
 
-  async function sendCurrentMessage(bodyOverride?: string) {
+  async function sendCurrentMessage(
+    bodyOverride?: string,
+    { focusComposer = true }: { focusComposer?: boolean } = {},
+  ) {
     if (!selectedConversation || sending) return;
 
     const body = (bodyOverride ?? selectedDraft).trim();
@@ -11201,8 +11241,11 @@ function ConversationsView({
         body,
         requestId,
       });
+      pendingSendScrollConversationRef.current = selectedConversation.id;
       setMessages((current) => mergeConversationMessages(current, [message]));
-      setDrafts((current) => ({ ...current, [selectedConversation.id]: '' }));
+      if (!bodyOverride) {
+        setDrafts((current) => ({ ...current, [selectedConversation.id]: '' }));
+      }
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === selectedConversation.id
@@ -11214,7 +11257,6 @@ function ConversationsView({
             : conversation,
         ),
       );
-      window.setTimeout(() => scrollConversationToBottom(messagesEndRef.current), 0);
       await loadConversations({ silent: true });
     } catch (err) {
       setSendError(conversationErrorMessage(err, 'Falha ao enviar mensagem.'));
@@ -11238,6 +11280,10 @@ function ConversationsView({
       };
       setMessages((current) => mergeConversationMessages(current, [failedMessage]));
     } finally {
+      pendingComposerFocusRef.current = focusComposer;
+      if (focusComposer) {
+        setComposerFocusRequest((current) => current + 1);
+      }
       setSending(false);
     }
   }
@@ -11318,12 +11364,15 @@ function ConversationsView({
                 showNewMessageNotice={newMessageNotice}
                 onJumpToBottom={() => {
                   setNewMessageNotice(false);
-                  scrollConversationToBottom(messagesEndRef.current);
+                  scrollConversationContainerToBottom(messagesScrollRef.current);
                 }}
-                onRetry={(message) => void sendCurrentMessage(message.text ?? '')}
+                onRetry={(message) =>
+                  void sendCurrentMessage(message.text ?? '', { focusComposer: false })
+                }
               />
 
               <ConversationComposer
+                composerRef={composerRef}
                 draft={selectedDraft}
                 error={sendError}
                 sending={sending}
@@ -11637,12 +11686,14 @@ function ConversationBubble({
 }
 
 function ConversationComposer({
+  composerRef,
   draft,
   error,
   sending,
   onChange,
   onSend,
 }: {
+  composerRef: React.RefObject<HTMLTextAreaElement | null>;
   draft: string;
   error: string;
   sending: boolean;
@@ -11666,6 +11717,7 @@ function ConversationComposer({
         <span className="sr-only">Digite uma mensagem</span>
         <textarea
           aria-label="Digite uma mensagem"
+          ref={composerRef}
           placeholder="Digite uma mensagem..."
           rows={2}
           value={draft}
@@ -11932,8 +11984,22 @@ function isConversationScrollNearBottom(element: HTMLDivElement | null) {
   return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
 }
 
-function scrollConversationToBottom(element: HTMLDivElement | null) {
-  element?.scrollIntoView({ block: 'end' });
+function scheduleConversationScroll(action: () => void) {
+  window.requestAnimationFrame(() => {
+    action();
+    window.requestAnimationFrame(action);
+  });
+}
+
+function scheduleComposerFocus(action: () => void) {
+  window.queueMicrotask(() => {
+    window.requestAnimationFrame(action);
+  });
+}
+
+function scrollConversationContainerToBottom(element: HTMLDivElement | null) {
+  if (!element) return;
+  element.scrollTop = element.scrollHeight;
 }
 
 function conversationErrorMessage(error: unknown, fallback: string) {

@@ -88,6 +88,25 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('setDrafts((current) => ({');
   });
 
+  it('opens selected conversations at the bottom only after the initial messages render', () => {
+    expect(conversationsSource).toContain('pendingInitialScrollConversationRef');
+    expect(conversationsSource).toContain(
+      'pendingInitialScrollConversationRef.current = conversation.id',
+    );
+    expect(conversationsSource).toContain(
+      'if (pendingInitialScrollConversationRef.current !== selectedConversation.id) return;',
+    );
+    expect(conversationsSource).toContain('pendingInitialScrollConversationRef.current = null');
+    expect(conversationsSource).toContain(
+      'scrollConversationContainerToBottom(messagesScrollRef.current)',
+    );
+    expect(conversationsSource).toContain('element.scrollTop = element.scrollHeight');
+    expect(conversationsSource).toContain('if (!replace) {');
+    expect(conversationsSource).toContain('if (shouldStick) {');
+    expect(conversationsSource).toContain('} else if (silent) {');
+    expect(conversationsSource).toContain('setNewMessageNotice(true)');
+  });
+
   it('supports message bubbles, non-text placeholders, send, failure and retry with a fresh request id', () => {
     expect(conversationsSource).toContain('conversation-bubble-row ${outbound ?');
     expect(conversationsSource).toContain("'outbound' : 'inbound'");
@@ -108,6 +127,32 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('disabled={sending}');
     expect(stylesSource).toContain('max-width: min(76%, 680px);');
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
+  });
+
+  it('keeps composer focus after manual send without stealing focus on retry', () => {
+    expect(conversationsSource).toContain(
+      'const composerRef = useRef<HTMLTextAreaElement | null>(null)',
+    );
+    expect(conversationsSource).toContain('composerFocusRequest, setComposerFocusRequest');
+    expect(conversationsSource).toContain('pendingSendScrollConversationRef');
+    expect(conversationsSource).toContain('pendingComposerFocusRef');
+    expect(conversationsSource).toContain('scheduleComposerFocus');
+    expect(conversationsSource).toContain('composerRef={composerRef}');
+    expect(conversationsSource).toContain('ref={composerRef}');
+    expect(conversationsSource).toContain(
+      'pendingSendScrollConversationRef.current = selectedConversation.id',
+    );
+    expect(conversationsSource).toContain('pendingComposerFocusRef.current = focusComposer');
+    expect(conversationsSource).toContain('setComposerFocusRequest((current) => current + 1)');
+    expect(conversationsSource).toContain('if (!bodyOverride) {');
+    expect(conversationsSource).toContain(
+      "void sendCurrentMessage(message.text ?? '', { focusComposer: false })",
+    );
+    expect(conversationsSource).toContain(
+      'scrollConversationContainerToBottom(messagesScrollRef.current)',
+    );
+    expect(conversationsSource).toContain("event.key === 'Enter' && !event.shiftKey");
+    expect(conversationsSource).toContain('event.preventDefault();');
   });
 
   it('keeps client and guest panels read-only for Phase 5', () => {

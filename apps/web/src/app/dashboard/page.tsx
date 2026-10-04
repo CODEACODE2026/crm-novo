@@ -11014,6 +11014,7 @@ function ConversationsView({
   const pendingInitialScrollConversationRef = useRef<string | null>(null);
   const pendingSendScrollConversationRef = useRef<string | null>(null);
   const pendingComposerFocusRef = useRef(false);
+  const sendingRef = useRef(false);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
   const filteredConversations = conversations.filter((conversation) => {
@@ -11253,13 +11254,26 @@ function ConversationsView({
     bodyOverride?: string,
     { focusComposer = true }: { focusComposer?: boolean } = {},
   ) {
-    if (!selectedConversation || sending) return;
+    if (!selectedConversation || sending || sendingRef.current) return;
 
     const body = (bodyOverride ?? selectedDraft).trim();
     if (!body) return;
 
+    sendingRef.current = true;
     setSending(true);
     setSendError('');
+    if (!bodyOverride) {
+      setDrafts((current) =>
+        (current[selectedConversation.id] ?? '').trim() === body
+          ? { ...current, [selectedConversation.id]: '' }
+          : current,
+      );
+    }
+    if (focusComposer) {
+      scheduleComposerFocus(() => {
+        composerRef.current?.focus();
+      });
+    }
 
     try {
       const requestId = createConversationRequestId();
@@ -11269,9 +11283,6 @@ function ConversationsView({
       });
       pendingSendScrollConversationRef.current = selectedConversation.id;
       setMessages((current) => mergeConversationMessages(current, [message]));
-      if (!bodyOverride) {
-        setDrafts((current) => ({ ...current, [selectedConversation.id]: '' }));
-      }
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === selectedConversation.id
@@ -11310,6 +11321,7 @@ function ConversationsView({
       if (focusComposer) {
         setComposerFocusRequest((current) => current + 1);
       }
+      sendingRef.current = false;
       setSending(false);
     }
   }
@@ -11743,11 +11755,11 @@ function ConversationComposer({
         <span className="sr-only">Digite uma mensagem</span>
         <textarea
           aria-label="Digite uma mensagem"
+          aria-busy={sending}
           ref={composerRef}
           placeholder="Digite uma mensagem..."
           rows={2}
           value={draft}
-          disabled={sending}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -11761,8 +11773,24 @@ function ConversationComposer({
         icon={Send}
         loading={sending}
         variant="primary"
-        disabled={!draft.trim()}
+        disabled={!draft.trim() || sending}
         type="submit"
+        onMouseDown={(event) => {
+          if (document.activeElement === composerRef.current) {
+            event.preventDefault();
+          }
+        }}
+        onPointerDown={(event) => {
+          if (event.pointerType !== 'mouse' && document.activeElement === composerRef.current) {
+            event.preventDefault();
+          }
+        }}
+        onPointerUp={(event) => {
+          if (event.pointerType !== 'mouse') {
+            event.preventDefault();
+            onSend();
+          }
+        }}
       >
         Enviar
       </Button>
@@ -12007,7 +12035,12 @@ function conversationMessageCaption(message: WhatsAppConversationMessage) {
 
 function isConversationScrollNearBottom(element: HTMLDivElement | null) {
   if (!element) return true;
+  if (!isConversationScrollable(element)) return true;
   return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+}
+
+function isConversationScrollable(element: HTMLDivElement) {
+  return element.scrollHeight > element.clientHeight + 2;
 }
 
 function scheduleConversationScroll(action: () => void) {
@@ -12025,6 +12058,7 @@ function scheduleComposerFocus(action: () => void) {
 
 function scrollConversationContainerToBottom(element: HTMLDivElement | null) {
   if (!element) return;
+  if (!isConversationScrollable(element)) return;
   element.scrollTop = element.scrollHeight;
 }
 

@@ -6,6 +6,10 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
+const primitivesSource = readFileSync(
+  join(currentDir, '../../components/ui/primitives.tsx'),
+  'utf8',
+);
 const conversationsSource = dashboardSource.slice(
   dashboardSource.indexOf('function ConversationsView'),
   dashboardSource.indexOf('function WhatsAppView'),
@@ -138,7 +142,11 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Tentar novamente');
     expect(conversationsSource).toContain("status: 'FAILED'");
     expect(conversationsSource).toContain("event.key === 'Enter' && !event.shiftKey");
-    expect(conversationsSource).toContain('disabled={sending}');
+    expect(conversationsSource).not.toContain('disabled={sending}');
+    expect(conversationsSource).toContain('aria-busy={sending}');
+    expect(conversationsSource).toContain('loading={sending}');
+    expect(conversationsSource).toContain('disabled={!draft.trim() || sending}');
+    expect(primitivesSource).toContain('disabled={disabled || loading}');
     expect(stylesSource).toContain('max-width: min(76%, 680px);');
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
   });
@@ -150,15 +158,30 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('composerFocusRequest, setComposerFocusRequest');
     expect(conversationsSource).toContain('pendingSendScrollConversationRef');
     expect(conversationsSource).toContain('pendingComposerFocusRef');
+    expect(conversationsSource).toContain('const sendingRef = useRef(false);');
+    expect(conversationsSource).toContain(
+      'if (!selectedConversation || sending || sendingRef.current) return;',
+    );
+    expect(conversationsSource).toContain('sendingRef.current = true;');
+    expect(conversationsSource).toContain('sendingRef.current = false;');
     expect(conversationsSource).toContain('scheduleComposerFocus');
     expect(conversationsSource).toContain('composerRef={composerRef}');
     expect(conversationsSource).toContain('ref={composerRef}');
+    expect(conversationsSource).not.toContain('key={sending}');
+    expect(conversationsSource).not.toContain('key={selectedDraft}');
     expect(conversationsSource).toContain(
       'pendingSendScrollConversationRef.current = selectedConversation.id',
     );
     expect(conversationsSource).toContain('pendingComposerFocusRef.current = focusComposer');
     expect(conversationsSource).toContain('setComposerFocusRequest((current) => current + 1)');
-    expect(conversationsSource).toContain('if (!bodyOverride) {');
+    expect(conversationsSource).toContain(
+      'composerRef.current?.focus();\n      });\n    }\n\n    try {',
+    );
+    expect(conversationsSource).toContain(
+      "(current[selectedConversation.id] ?? '').trim() === body",
+    );
+    expect(conversationsSource).toContain("? { ...current, [selectedConversation.id]: '' }");
+    expect(conversationsSource).toContain(': current,');
     expect(conversationsSource).toContain(
       "void sendCurrentMessage(message.text ?? '', { focusComposer: false })",
     );
@@ -167,6 +190,23 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
     expect(conversationsSource).toContain("event.key === 'Enter' && !event.shiftKey");
     expect(conversationsSource).toContain('event.preventDefault();');
+    expect(conversationsSource).toContain('onMouseDown={(event) => {');
+    expect(conversationsSource).toContain('onPointerDown={(event) => {');
+    expect(conversationsSource).toContain('onPointerUp={(event) => {');
+    expect(conversationsSource).toContain("event.pointerType !== 'mouse'");
+    expect(conversationsSource).toContain('document.activeElement === composerRef.current');
+  });
+
+  it('keeps short conversations from receiving aggressive scroll and treats them as already at bottom', () => {
+    expect(conversationsSource).toContain('function isConversationScrollable');
+    expect(conversationsSource).toContain(
+      'return element.scrollHeight > element.clientHeight + 2;',
+    );
+    expect(conversationsSource).toContain('if (!isConversationScrollable(element)) return true;');
+    expect(conversationsSource).toContain('if (!isConversationScrollable(element)) return;');
+    expect(stylesSource).toContain(
+      '.conversation-messages {\n  box-sizing: border-box;\n  display: flex;',
+    );
   });
 
   it('keeps client and guest panels read-only for Phase 5', () => {
@@ -305,7 +345,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       '.conversation-messages-wrap {\n  position: relative;\n  min-height: 0;\n  overflow: hidden;',
     );
     expect(stylesSource).toContain(
-      '.conversation-messages {\n  display: flex;\n  flex: 1 1 auto;\n  height: 100%;\n  min-height: 0;',
+      '.conversation-messages {\n  box-sizing: border-box;\n  display: flex;\n  flex: 1 1 auto;\n  height: 100%;\n  min-height: 0;',
     );
     expect(stylesSource).toContain('overflow-y: auto;');
     expect(stylesSource).toContain(

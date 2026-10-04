@@ -11128,8 +11128,14 @@ function ConversationsView({
     const visualViewport = window.visualViewport;
 
     const updateChatViewportHeight = () => {
+      const shouldKeepBottom = isConversationScrollNearBottom(messagesScrollRef.current);
       const viewportHeight = visualViewport?.height ?? window.innerHeight;
       root.style.setProperty('--chat-viewport-height', `${Math.round(viewportHeight)}px`);
+      if (shouldKeepBottom) {
+        scheduleConversationScroll(() => {
+          scrollConversationContainerToBottom(messagesScrollRef.current);
+        });
+      }
     };
 
     updateChatViewportHeight();

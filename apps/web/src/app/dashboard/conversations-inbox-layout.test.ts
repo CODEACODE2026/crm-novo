@@ -225,6 +225,13 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   it('stabilizes the mobile chat composer against visual viewport changes', () => {
     expect(conversationsSource).toContain('const visualViewport = window.visualViewport');
     expect(conversationsSource).toContain('--chat-viewport-height');
+    expect(conversationsSource).toContain(
+      'const shouldKeepBottom = isConversationScrollNearBottom(messagesScrollRef.current)',
+    );
+    expect(conversationsSource).toContain('if (shouldKeepBottom) {');
+    expect(conversationsSource).toContain(
+      'scrollConversationContainerToBottom(messagesScrollRef.current)',
+    );
     expect(conversationsSource).toContain("visualViewport?.addEventListener('resize'");
     expect(conversationsSource).toContain("visualViewport?.removeEventListener('resize'");
     expect(conversationsSource).toContain("root.style.removeProperty('--chat-viewport-height')");
@@ -235,6 +242,18 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('padding: 10px 10px max(10px, env(safe-area-inset-bottom));');
     expect(mobileConversationComposerBlock).not.toContain('position: fixed;');
     expect(mobileConversationComposerBlock).not.toContain('position: sticky;');
+  });
+
+  it('keeps keyboard viewport resize pinned only when the operator was near bottom', () => {
+    expect(conversationsSource).toContain(
+      'const shouldKeepBottom = isConversationScrollNearBottom(messagesScrollRef.current)',
+    );
+    expect(conversationsSource).toMatch(
+      /const shouldKeepBottom = isConversationScrollNearBottom\(messagesScrollRef\.current\);[\s\S]*root\.style\.setProperty\('--chat-viewport-height'[\s\S]*if \(shouldKeepBottom\) \{[\s\S]*scheduleConversationScroll/,
+    );
+    expect(conversationsSource).not.toContain('setNewMessageNotice(true);\n      } else {');
+    expect(stylesSource).toContain('scroll-padding-bottom: 14px;');
+    expect(mobileConversationMediaSource).toContain('scroll-padding-bottom: 12px;');
   });
 
   it('keeps the mobile chat height chain owned by the grid instead of page scroll', () => {

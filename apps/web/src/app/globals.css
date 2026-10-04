@@ -11459,20 +11459,23 @@ tbody tr:hover,
   .conversation-mobile-back {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    min-height: 24px;
     width: max-content;
     border: 0;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
+    font-size: 11px;
     font-weight: 700;
-    padding: 0;
+    line-height: 1;
+    padding: 0 2px;
   }
 
   .conversation-header {
-    grid-template-columns: 1fr auto;
-    gap: 8px;
-    padding: 10px;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 2px 8px;
+    padding: 5px 8px 6px;
   }
 
   .conversation-mobile-back {
@@ -11480,16 +11483,60 @@ tbody tr:hover,
   }
 
   .conversation-header-main {
-    grid-template-columns: 36px minmax(0, 1fr);
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .conversation-header-main > div {
+    min-width: 0;
   }
 
   .conversation-avatar.large {
-    width: 36px;
-    height: 36px;
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
   }
 
-  .conversation-header-actions .ui-button {
+  .conversation-header h3 {
+    font-size: 14px;
+    line-height: 1.08;
+  }
+
+  .conversation-header p {
+    margin-top: 1px;
+    font-size: 10.5px;
+    line-height: 1.1;
+  }
+
+  .conversation-header-badges {
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-top: 2px;
+    overflow: hidden;
+  }
+
+  .conversation-header-badges .conversation-kind,
+  .conversation-header-badges .conversation-status-badge,
+  .conversation-header-badges .conversation-sync-badge {
+    min-height: 16px;
+    font-size: 9px;
+    line-height: 1;
+    padding: 0 5px;
+  }
+
+  .conversation-header-actions {
+    min-width: 34px;
+  }
+
+  .conversation-header-actions .ui-button,
+  .conversation-header-actions .conversation-resolved-label {
     display: none;
+  }
+
+  .conversation-mobile-context {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
   }
 
   .conversation-messages {

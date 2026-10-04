@@ -204,6 +204,31 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('min-width: 20px;');
   });
 
+  it('keeps the mobile conversation header compact without affecting desktop header rules', () => {
+    expect(mobileConversationMediaSource).toContain('grid-template-columns: minmax(0, 1fr) 34px;');
+    expect(mobileConversationMediaSource).toContain('gap: 2px 8px;');
+    expect(mobileConversationMediaSource).toContain('padding: 5px 8px 6px;');
+    expect(mobileConversationMediaSource).toContain('min-height: 24px;');
+    expect(mobileConversationMediaSource).toContain('font-size: 11px;');
+    expect(mobileConversationMediaSource).toContain('grid-template-columns: 30px minmax(0, 1fr);');
+    expect(mobileConversationMediaSource).toContain('width: 30px;');
+    expect(mobileConversationMediaSource).toContain('height: 30px;');
+    expect(mobileConversationMediaSource).toContain('font-size: 14px;');
+    expect(mobileConversationMediaSource).toContain('font-size: 10.5px;');
+    expect(mobileConversationMediaSource).toContain('flex-wrap: nowrap;');
+    expect(mobileConversationMediaSource).toContain('min-height: 16px;');
+    expect(mobileConversationMediaSource).toContain('font-size: 9px;');
+    expect(mobileConversationMediaSource).toContain(
+      '.conversation-header-actions .conversation-resolved-label',
+    );
+    expect(mobileConversationMediaSource).toContain('width: 34px;');
+    expect(mobileConversationMediaSource).toContain('height: 34px;');
+    expect(mobileConversationMediaSource).toContain('min-height: 34px;');
+    expect(stylesSource).toContain('min-width: 112px;');
+    expect(stylesSource).toContain('width: 44px;');
+    expect(stylesSource).toContain('height: 44px;');
+  });
+
   it('keeps chat, list, and context scrolling inside the inbox shell', () => {
     expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-error-slot:empty');

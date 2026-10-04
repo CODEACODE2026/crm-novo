@@ -2194,8 +2194,17 @@ a {
 
 .conversations-view {
   display: grid;
-  min-height: calc(100dvh - 128px);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
   gap: 14px;
+}
+
+.app-shell[data-active-view='conversations'] .content {
+  box-sizing: border-box;
+  height: calc(100dvh - 62px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .app-shell[data-active-view='conversations'] .topbar-context h1 {
@@ -2231,7 +2240,8 @@ a {
 .conversations-shell {
   display: grid;
   grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);
-  min-height: min(760px, calc(100dvh - 190px));
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2255,6 +2265,7 @@ a {
   grid-template-rows: auto auto auto auto minmax(0, 1fr);
   gap: 11px;
   border-right: 1px solid var(--border);
+  overflow: hidden;
   padding: 14px;
 }
 
@@ -2487,6 +2498,7 @@ a {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   background: var(--surface-soft);
+  overflow: hidden;
 }
 
 .conversation-error-slot:empty {
@@ -2549,10 +2561,12 @@ a {
 .conversation-messages-wrap {
   position: relative;
   min-height: 0;
+  overflow: hidden;
 }
 
 .conversation-messages {
   display: flex;
+  flex: 1 1 auto;
   height: 100%;
   min-height: 0;
   flex-direction: column;
@@ -2669,6 +2683,8 @@ a {
 }
 
 .conversation-client-panel {
+  box-sizing: border-box;
+  height: 100%;
   border-left: 1px solid var(--border);
   padding: 13px;
   overflow-y: auto;
@@ -11354,6 +11370,7 @@ tbody tr:hover,
 
 @media (max-width: 620px) {
   .app-shell[data-active-view='conversations'] .content {
+    height: 100dvh;
     padding: 0;
   }
 
@@ -11362,6 +11379,7 @@ tbody tr:hover,
   }
 
   .conversations-view {
+    height: 100dvh;
     min-height: 100dvh;
     gap: 0;
   }
@@ -11371,6 +11389,7 @@ tbody tr:hover,
   }
 
   .conversations-shell {
+    height: 100dvh;
     min-height: 100dvh;
     border: 0;
     border-radius: 0;

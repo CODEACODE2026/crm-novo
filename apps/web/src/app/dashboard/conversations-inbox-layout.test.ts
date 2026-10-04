@@ -28,6 +28,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('ConversationList');
     expect(conversationsSource).toContain('ConversationMessages');
     expect(conversationsSource).toContain('ConversationClientPanel');
+    expect(stylesSource).toContain(".app-shell[data-active-view='conversations'] .content");
+    expect(stylesSource).toContain('height: calc(100dvh - 62px);');
+    expect(stylesSource).toContain('grid-template-rows: auto minmax(0, 1fr);');
+    expect(stylesSource).toContain('height: 100%;');
     expect(stylesSource).toContain(
       'grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);',
     );
@@ -134,6 +138,19 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('min-width: 20px;');
   });
 
+  it('keeps chat, list, and context scrolling inside the inbox shell', () => {
+    expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
+    expect(stylesSource).toContain('.conversation-list-panel');
+    expect(stylesSource).toContain('grid-template-rows: auto auto auto auto minmax(0, 1fr);');
+    expect(stylesSource).toContain('.conversation-list-items');
+    expect(stylesSource).toContain('.conversation-messages-wrap');
+    expect(stylesSource).toContain('.conversation-messages');
+    expect(stylesSource).toContain('flex: 1 1 auto;');
+    expect(stylesSource).toContain('overflow-y: auto;');
+    expect(stylesSource).toContain('.conversation-client-panel');
+    expect(stylesSource).toContain('box-sizing: border-box;');
+  });
+
   it('uses mobile list/chat modes and a drawer instead of squeezing three columns', () => {
     expect(conversationsSource).toContain("mobileMode, setMobileMode] = useState<'list' | 'chat'>");
     expect(conversationsSource).toContain("setMobileMode('chat')");
@@ -142,6 +159,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversations-view.mobile-mode-list .conversation-chat-panel');
     expect(stylesSource).toContain('.conversations-view.mobile-mode-chat .conversation-list-panel');
     expect(stylesSource).toContain('min-height: 100dvh;');
+    expect(stylesSource).toContain('height: 100dvh;');
     expect(stylesSource).toContain('position: sticky;');
     expect(stylesSource).toContain('max-width: 88%;');
   });

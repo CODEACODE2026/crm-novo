@@ -2196,13 +2196,29 @@ a {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
+  max-height: 100%;
   min-height: 0;
   gap: 14px;
 }
 
+.app-shell[data-active-view='conversations'] {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell[data-active-view='conversations'] .main-area {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
 .app-shell[data-active-view='conversations'] .content {
   box-sizing: border-box;
-  height: calc(100dvh - 62px);
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -2241,6 +2257,7 @@ a {
   display: grid;
   grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);
   height: 100%;
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -2251,6 +2268,8 @@ a {
 .conversation-list-panel,
 .conversation-chat-panel,
 .conversation-client-panel {
+  height: 100%;
+  max-height: 100%;
   min-width: 0;
   min-height: 0;
 }
@@ -2502,7 +2521,7 @@ a {
 }
 
 .conversation-error-slot:empty {
-  display: none;
+  min-height: 0;
 }
 
 .conversation-header {
@@ -2656,9 +2675,12 @@ a {
 
 .conversation-composer {
   display: grid;
+  box-sizing: border-box;
+  flex: 0 0 auto;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
+  min-height: 82px;
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 10px 12px;
@@ -2673,6 +2695,8 @@ a {
 }
 
 .conversation-composer textarea {
+  box-sizing: border-box;
+  display: block;
   min-height: 44px;
   max-height: 120px;
   resize: vertical;
@@ -11370,7 +11394,7 @@ tbody tr:hover,
 
 @media (max-width: 620px) {
   .app-shell[data-active-view='conversations'] .content {
-    height: 100dvh;
+    height: 100%;
     padding: 0;
   }
 
@@ -11379,8 +11403,8 @@ tbody tr:hover,
   }
 
   .conversations-view {
-    height: 100dvh;
-    min-height: 100dvh;
+    height: 100%;
+    min-height: 0;
     gap: 0;
   }
 
@@ -11389,8 +11413,8 @@ tbody tr:hover,
   }
 
   .conversations-shell {
-    height: 100dvh;
-    min-height: 100dvh;
+    height: 100%;
+    min-height: 0;
     border: 0;
     border-radius: 0;
     grid-template-columns: 1fr;
@@ -11398,7 +11422,7 @@ tbody tr:hover,
 
   .conversation-list-panel,
   .conversation-chat-panel {
-    min-height: 100dvh;
+    min-height: 0;
   }
 
   .conversations-view.mobile-mode-list .conversation-chat-panel {
@@ -11459,8 +11483,6 @@ tbody tr:hover,
   }
 
   .conversation-composer {
-    position: sticky;
-    bottom: 0;
     grid-template-columns: minmax(0, 1fr) auto;
     padding: 10px;
   }

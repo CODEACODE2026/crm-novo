@@ -10,6 +10,8 @@ const conversationsSource = dashboardSource.slice(
   dashboardSource.indexOf('function ConversationsView'),
   dashboardSource.indexOf('function WhatsAppView'),
 );
+const mobileConversationComposerBlock =
+  stylesSource.match(/\.conversation-composer \{[\s\S]*?padding: 10px;\n[ ]{2}\}/)?.[0] ?? '';
 
 describe('CHAT1 Phase 5 conversations inbox', () => {
   it('adds Conversas as a separate navigation module without replacing WhatsApp configuration', () => {
@@ -28,8 +30,13 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('ConversationList');
     expect(conversationsSource).toContain('ConversationMessages');
     expect(conversationsSource).toContain('ConversationClientPanel');
+    expect(stylesSource).toContain(".app-shell[data-active-view='conversations'] {");
+    expect(stylesSource).toContain('height: 100dvh;');
+    expect(stylesSource).toContain(".app-shell[data-active-view='conversations'] .main-area");
+    expect(stylesSource).toContain('grid-template-rows: auto minmax(0, 1fr);');
     expect(stylesSource).toContain(".app-shell[data-active-view='conversations'] .content");
-    expect(stylesSource).toContain('height: calc(100dvh - 62px);');
+    expect(stylesSource).toContain('height: 100%;');
+    expect(stylesSource).not.toContain('height: calc(100dvh - 62px);');
     expect(stylesSource).toContain('grid-template-rows: auto minmax(0, 1fr);');
     expect(stylesSource).toContain('height: 100%;');
     expect(stylesSource).toContain(
@@ -140,6 +147,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('keeps chat, list, and context scrolling inside the inbox shell', () => {
     expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
+    expect(stylesSource).toContain('.conversation-error-slot:empty');
     expect(stylesSource).toContain('.conversation-list-panel');
     expect(stylesSource).toContain('grid-template-rows: auto auto auto auto minmax(0, 1fr);');
     expect(stylesSource).toContain('.conversation-list-items');
@@ -147,6 +155,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversation-messages');
     expect(stylesSource).toContain('flex: 1 1 auto;');
     expect(stylesSource).toContain('overflow-y: auto;');
+    expect(stylesSource).toContain('.conversation-composer');
+    expect(stylesSource).toContain('flex: 0 0 auto;');
+    expect(stylesSource).toContain('min-height: 82px;');
+    expect(mobileConversationComposerBlock).not.toContain('position: sticky;');
     expect(stylesSource).toContain('.conversation-client-panel');
     expect(stylesSource).toContain('box-sizing: border-box;');
   });
@@ -158,9 +170,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('conversation-client-drawer');
     expect(stylesSource).toContain('.conversations-view.mobile-mode-list .conversation-chat-panel');
     expect(stylesSource).toContain('.conversations-view.mobile-mode-chat .conversation-list-panel');
-    expect(stylesSource).toContain('min-height: 100dvh;');
     expect(stylesSource).toContain('height: 100dvh;');
-    expect(stylesSource).toContain('position: sticky;');
+    expect(stylesSource).toContain('min-height: 0;');
     expect(stylesSource).toContain('max-width: 88%;');
   });
 });

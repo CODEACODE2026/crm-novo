@@ -205,14 +205,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('if (!isConversationScrollable(element)) return true;');
     expect(conversationsSource).toContain('if (!isConversationScrollable(element)) return;');
     expect(stylesSource).toContain(
-      '.conversation-message-stack {\n  display: flex;\n  min-height: 100%;\n  flex-direction: column;\n  justify-content: flex-end;',
+      '.conversation-message-stack {\n  box-sizing: border-box;\n  display: flex;\n  min-height: 100%;\n  flex-direction: column;\n  justify-content: flex-end;',
     );
     expect(stylesSource).toContain(
-      '.conversation-message-end {\n  height: 0;\n  overflow: hidden;',
+      '.conversation-message-end {\n  flex: 0 0 0;\n  height: 0;\n  min-height: 0;\n  margin: 0;\n  overflow: hidden;\n  padding: 0;',
     );
   });
 
-  it('bottom-aligns only the message stack while preserving the empty chat state', () => {
+  it('bottom-aligns only the padded message stack while preserving the empty chat state', () => {
     expect(conversationsSource).toContain('className="conversation-message-stack"');
     expect(conversationsSource).toContain('messages.length ? (');
     expect(conversationsSource).toMatch(
@@ -223,6 +223,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
     expect(conversationsSource).toContain('className="conversation-message-end"');
     expect(stylesSource).toContain('justify-content: flex-end;');
+    expect(stylesSource).toContain('padding: 0;\n  scroll-padding-bottom: 14px;');
+    expect(stylesSource).toContain('padding: 14px 16px;');
+    expect(mobileConversationMediaSource).toContain(
+      '.conversation-messages {\n    padding: 0;\n    scroll-padding-bottom: 12px;',
+    );
+    expect(mobileConversationMediaSource).toContain(
+      '.conversation-message-stack {\n    padding: 12px;',
+    );
     expect(stylesSource).not.toContain(
       '.conversation-messages {\n  box-sizing: border-box;\n  display: flex;\n  flex: 1 1 auto;',
     );
@@ -368,7 +376,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       '.conversation-messages {\n  box-sizing: border-box;\n  flex: 1 1 auto;\n  height: 100%;\n  min-height: 0;',
     );
     expect(stylesSource).toContain(
-      '.conversation-message-stack {\n  display: flex;\n  min-height: 100%;\n  flex-direction: column;\n  justify-content: flex-end;\n  gap: 7px;',
+      '.conversation-message-stack {\n  box-sizing: border-box;\n  display: flex;\n  min-height: 100%;\n  flex-direction: column;\n  justify-content: flex-end;\n  gap: 7px;',
     );
     expect(stylesSource).toContain('overflow-y: auto;');
     expect(stylesSource).toContain(

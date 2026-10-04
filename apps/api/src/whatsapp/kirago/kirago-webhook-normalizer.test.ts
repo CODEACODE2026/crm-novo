@@ -142,8 +142,33 @@ describe('KiragoWebhookNormalizer', () => {
     );
 
     expect(outgoing?.direction).toBe('OUTGOING');
+    expect(outgoing?.contactName).toBeNull();
     expect(group?.isGroup).toBe(true);
     expect(group?.phone).toBeNull();
+  });
+
+  it('only trusts inbound sender names and ignores technical instance names', () => {
+    const senderNameFallback = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, PushName: '', senderName: 'Nome do contato' },
+          Message: { conversation: 'Oi' },
+        },
+      }),
+      receivedAt,
+    );
+    const technicalName = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, PushName: 'CRM Principal' },
+          Message: { conversation: 'Oi' },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(senderNameFallback?.contactName).toBe('Nome do contato');
+    expect(technicalName?.contactName).toBeNull();
   });
 
   it('uses the remote Chat phone for outgoing messages when SenderAlt is the instance phone', () => {

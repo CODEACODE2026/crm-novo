@@ -146,6 +146,13 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
         phoneNormalized: true;
       };
     };
+    whatsAppConnection: {
+      select: {
+        name: true;
+        providerInstanceName: true;
+        providerUserId: true;
+      };
+    };
   };
 }>;
 
@@ -619,6 +626,9 @@ export class WhatsAppService {
           where,
           include: {
             client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+            whatsAppConnection: {
+              select: { name: true, providerInstanceName: true, providerUserId: true },
+            },
           },
           orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
           skip: (page - 1) * limit,
@@ -799,6 +809,9 @@ export class WhatsAppService {
           where: { id },
           include: {
             client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+            whatsAppConnection: {
+              select: { name: true, providerInstanceName: true, providerUserId: true },
+            },
           },
         });
         return this.presentConversation(current!);
@@ -858,6 +871,9 @@ export class WhatsAppService {
         where: { id },
         include: {
           client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          whatsAppConnection: {
+            select: { name: true, providerInstanceName: true, providerUserId: true },
+          },
         },
       });
 
@@ -870,7 +886,12 @@ export class WhatsAppService {
     const conversation = await this.prisma.whatsAppConversation.update({
       where: { id },
       data: { unreadCount: 0 },
-      include: { client: { select: { id: true, name: true, phone: true, phoneNormalized: true } } },
+      include: {
+        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        whatsAppConnection: {
+          select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+      },
     });
 
     return this.presentConversation(conversation);
@@ -881,7 +902,12 @@ export class WhatsAppService {
     const conversation = await this.prisma.whatsAppConversation.update({
       where: { id },
       data: { status: 'RESOLVED' },
-      include: { client: { select: { id: true, name: true, phone: true, phoneNormalized: true } } },
+      include: {
+        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        whatsAppConnection: {
+          select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+      },
     });
 
     return this.presentConversation(conversation);
@@ -1727,6 +1753,8 @@ export class WhatsAppService {
     });
 
     if (!existing) {
+      const contactName = this.trustedWebhookContactName(normalized, connection);
+
       return tx.whatsAppConversation.create({
         data: {
           whatsAppConnectionId: connection.id,
@@ -1734,7 +1762,7 @@ export class WhatsAppService {
           provider: 'KIRAGO',
           externalInstanceId: normalized.providerUserId,
           clientId: matchedClientId,
-          contactName: normalized.contactName,
+          contactName,
           phone: normalized.phone,
           phoneNormalized: normalized.phone,
           status: 'OPEN',
@@ -1742,8 +1770,9 @@ export class WhatsAppService {
       });
     }
 
+    const contactName = this.trustedWebhookContactName(normalized, connection);
     const data: Prisma.WhatsAppConversationUpdateInput = {
-      ...(normalized.contactName ? { contactName: normalized.contactName } : {}),
+      ...(contactName ? { contactName } : {}),
       ...(normalized.instanceName ? { instanceName: normalized.instanceName } : {}),
       ...(normalized.providerUserId ? { externalInstanceId: normalized.providerUserId } : {}),
       ...(existing.clientId === null && matchedClientId
@@ -1758,6 +1787,24 @@ export class WhatsAppService {
     return tx.whatsAppConversation.update({
       where: { id: existing.id },
       data,
+    });
+  }
+
+  private trustedWebhookContactName(
+    normalized: NormalizedWhatsAppMessage,
+    connection: Pick<WhatsAppConnection, 'name' | 'providerInstanceName' | 'providerUserId'>,
+  ) {
+    if (normalized.direction !== 'INCOMING') {
+      return null;
+    }
+
+    return this.validConversationContactName({
+      contactName: normalized.contactName,
+      instanceName: normalized.instanceName,
+      externalInstanceId: normalized.providerUserId,
+      connectionName: connection.name,
+      providerInstanceName: connection.providerInstanceName,
+      providerUserId: connection.providerUserId,
     });
   }
 
@@ -1827,7 +1874,12 @@ export class WhatsAppService {
   private async findConversationForRead(id: string) {
     return this.prisma.whatsAppConversation.findUnique({
       where: { id },
-      include: { client: { select: { id: true, name: true, phone: true, phoneNormalized: true } } },
+      include: {
+        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        whatsAppConnection: {
+          select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+      },
     });
   }
 
@@ -2564,6 +2616,14 @@ export class WhatsAppService {
   }
 
   private presentConversation(conversation: WhatsAppConversationForPresenter) {
+    const contactName = this.validConversationContactName({
+      contactName: conversation.contactName,
+      instanceName: conversation.instanceName,
+      externalInstanceId: conversation.externalInstanceId,
+      connectionName: conversation.whatsAppConnection.name,
+      providerInstanceName: conversation.whatsAppConnection.providerInstanceName,
+      providerUserId: conversation.whatsAppConnection.providerUserId,
+    });
     const client = conversation.client
       ? {
           id: conversation.client.id,
@@ -2580,8 +2640,8 @@ export class WhatsAppService {
       provider: conversation.provider,
       externalInstanceId: conversation.externalInstanceId,
       client,
-      displayName: client?.name ?? conversation.contactName ?? conversation.phone,
-      contactName: conversation.contactName,
+      displayName: client?.name ?? contactName ?? conversation.phone,
+      contactName,
       phone: conversation.phone,
       phoneNormalized: conversation.phoneNormalized,
       status: conversation.status,
@@ -2591,6 +2651,33 @@ export class WhatsAppService {
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };
+  }
+
+  private validConversationContactName(input: {
+    contactName: string | null;
+    instanceName: string | null;
+    externalInstanceId: string | null;
+    connectionName: string | null;
+    providerInstanceName: string | null;
+    providerUserId: string | null;
+  }) {
+    const contactName = input.contactName?.trim();
+
+    if (!contactName) {
+      return null;
+    }
+
+    const technicalNames = [
+      input.instanceName,
+      input.externalInstanceId,
+      input.connectionName,
+      input.providerInstanceName,
+      input.providerUserId,
+    ]
+      .map((value) => value?.trim())
+      .filter((value): value is string => Boolean(value));
+
+    return technicalNames.includes(contactName) ? null : contactName;
   }
 
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {

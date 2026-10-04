@@ -75,7 +75,7 @@ export class KiragoWebhookNormalizer {
       instanceName: stringOrNull(body.instanceName),
       providerUserId: stringOrNull(body.userID),
       phone,
-      contactName: stringOrNull(info?.PushName),
+      contactName: this.extractTrustedContactName(body, info, direction),
       messageId: stringOrNull(info?.ID),
       direction,
       messageType,
@@ -85,6 +85,42 @@ export class KiragoWebhookNormalizer {
       isGroup,
       mediaMetadata: this.extractMediaMetadata(message, messageType),
     };
+  }
+
+  private extractTrustedContactName(
+    body: RecordValue,
+    info: RecordValue | null,
+    direction: NormalizedWhatsAppMessage['direction'],
+  ) {
+    if (direction !== 'INCOMING') {
+      return null;
+    }
+
+    const technicalNames = new Set(
+      [body.instanceName, body.userID]
+        .map((value) => stringOrNull(value))
+        .filter((value): value is string => Boolean(value)),
+    );
+    const candidates = [
+      info?.PushName,
+      info?.pushName,
+      info?.NotifyName,
+      info?.notifyName,
+      info?.SenderName,
+      info?.senderName,
+      info?.Name,
+      info?.name,
+    ];
+
+    for (const candidate of candidates) {
+      const name = stringOrNull(candidate);
+
+      if (name && !technicalNames.has(name)) {
+        return name;
+      }
+    }
+
+    return null;
   }
 
   private extractPhone(body: RecordValue, info: RecordValue | null) {

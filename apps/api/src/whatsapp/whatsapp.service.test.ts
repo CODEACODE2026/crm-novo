@@ -153,6 +153,7 @@ function conversation(overrides: Record<string, unknown> = {}) {
     unreadCount: 0,
     createdAt: now,
     updatedAt: now,
+    whatsAppConnection: connection(),
     ...overrides,
   };
 }
@@ -1625,10 +1626,39 @@ describe('WhatsAppService', () => {
       .calls[0]?.[0] as { update: Record<string, unknown> } | undefined;
 
     expect(upsertArgs?.update).toMatchObject({
+      contactName: 'Lucas',
       lastMessageText: 'Segunda mensagem',
       lastMessageId: 'msg-2',
       messageCount: { increment: 1 },
     });
+  });
+
+  it('preserves waitlist contactName when an inbound webhook has no PushName', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Sem nome', {
+        contactName: null,
+        messageId: 'waitlist-no-push-name',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    const upsertArgs = (prisma.whatsAppPendingContact.upsert as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      create?: Record<string, unknown>;
+      update?: Record<string, unknown>;
+    };
+
+    expect(upsertArgs.create).toMatchObject({ contactName: null });
+    expect(upsertArgs.update).not.toHaveProperty('contactName');
   });
 
   it('does not create a pending contact for an existing client webhook', async () => {
@@ -2305,6 +2335,96 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('does not let outgoing webhooks replace the guest contactName with the account name', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ contactName: 'Lucas Antigo' })),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation({ contactName: 'Lucas Antigo' })),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Mensagem enviada', {
+        contactName: 'Atualiza-Software',
+        direction: 'OUTGOING',
+        messageId: 'outgoing-account-name',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const conversationUpdate = (prisma.whatsAppConversation.update as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+
+    expect(conversationUpdate.data).not.toHaveProperty('contactName');
+  });
+
+  it('does not fill contactName when an outgoing webhook creates a conversation', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Mensagem enviada', {
+        contactName: 'Atualiza-Software',
+        direction: 'OUTGOING',
+        messageId: 'outgoing-new-conversation',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const conversationCreate = (prisma.whatsAppConversation.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+
+    expect(conversationCreate.data).toMatchObject({
+      phoneNormalized: '5544999999999',
+      contactName: null,
+    });
+  });
+
+  it('does not persist instance names as guest conversation contactName', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi conversa', {
+        contactName: 'CRM Principal',
+        instanceName: 'CRM Principal',
+        messageId: 'technical-contact-name',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const conversationCreate = (prisma.whatsAppConversation.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+
+    expect(conversationCreate.data).toMatchObject({
+      instanceName: 'CRM Principal',
+      contactName: null,
+    });
+  });
+
+  it('does not persist connection names as guest conversation contactName', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      currentConnection: connection({
+        name: 'Conexao Comercial',
+        providerInstanceName: 'instancia-provider',
+      }),
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi conversa', {
+        contactName: 'Conexao Comercial',
+        instanceName: 'instancia-provider',
+        messageId: 'connection-name-contact',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const conversationCreate = (prisma.whatsAppConversation.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+
+    expect(conversationCreate.data).toMatchObject({
+      instanceName: 'instancia-provider',
+      contactName: null,
+    });
+  });
+
   it('preserves a manually linked client when a later webhook matches another phone client', async () => {
     const manualClient = client({
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -2966,6 +3086,9 @@ describe('WhatsAppService', () => {
     });
     expect(findManyArgs.include).toEqual({
       client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+      whatsAppConnection: {
+        select: { name: true, providerInstanceName: true, providerUserId: true },
+      },
     });
     expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
       expect.arrayContaining([
@@ -3014,6 +3137,50 @@ describe('WhatsAppService', () => {
     await expect(service.getConversation('missing-conversation')).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it('uses client name first and falls back guest displayName to phone for technical contact names', async () => {
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(
+              conversation({
+                client: client({ name: 'Cliente Vinculado' }),
+                clientId: client().id,
+                contactName: 'CRM Principal',
+                instanceName: 'CRM Principal',
+              }),
+            )
+            .mockResolvedValueOnce(
+              conversation({
+                client: null,
+                clientId: null,
+                contactName: 'CRM Principal',
+                instanceName: 'CRM Principal',
+                phone: '5541998746949',
+                phoneNormalized: '5541998746949',
+              }),
+            ),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(service.getConversation(conversation().id)).resolves.toMatchObject({
+      displayName: 'Cliente Vinculado',
+      contactName: null,
+    });
+    await expect(service.getConversation(conversation().id)).resolves.toMatchObject({
+      displayName: '5541998746949',
+      contactName: null,
+    });
   });
 
   it('lists conversation messages by conversation with newest-page pagination and ASC presentation', async () => {

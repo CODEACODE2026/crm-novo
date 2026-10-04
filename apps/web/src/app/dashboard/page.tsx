@@ -11124,6 +11124,26 @@ function ConversationsView({
   }, [loadConversations]);
 
   useEffect(() => {
+    const root = document.documentElement;
+    const visualViewport = window.visualViewport;
+
+    const updateChatViewportHeight = () => {
+      const viewportHeight = visualViewport?.height ?? window.innerHeight;
+      root.style.setProperty('--chat-viewport-height', `${Math.round(viewportHeight)}px`);
+    };
+
+    updateChatViewportHeight();
+    visualViewport?.addEventListener('resize', updateChatViewportHeight);
+    window.addEventListener('resize', updateChatViewportHeight);
+
+    return () => {
+      visualViewport?.removeEventListener('resize', updateChatViewportHeight);
+      window.removeEventListener('resize', updateChatViewportHeight);
+      root.style.removeProperty('--chat-viewport-height');
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedConversation) return undefined;
 
     const interval = window.setInterval(() => {

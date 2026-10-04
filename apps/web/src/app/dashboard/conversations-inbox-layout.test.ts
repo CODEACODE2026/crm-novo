@@ -10,8 +10,22 @@ const conversationsSource = dashboardSource.slice(
   dashboardSource.indexOf('function ConversationsView'),
   dashboardSource.indexOf('function WhatsAppView'),
 );
+const mobileConversationMediaStart = stylesSource.indexOf(
+  "@media (max-width: 620px) {\n  .app-shell[data-active-view='conversations']",
+);
+const mobileConversationMediaSource =
+  mobileConversationMediaStart >= 0
+    ? stylesSource.slice(
+        mobileConversationMediaStart,
+        stylesSource.indexOf('.conversation-client-drawer', mobileConversationMediaStart),
+      )
+    : '';
 const mobileConversationComposerBlock =
-  stylesSource.match(/\.conversation-composer \{[\s\S]*?padding: 10px;\n[ ]{2}\}/)?.[0] ?? '';
+  mobileConversationMediaSource.match(/\.conversation-composer \{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+const mobileConversationChatPanelBlock =
+  mobileConversationMediaSource.match(/\.conversation-chat-panel \{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+const mobileConversationsShellBlock =
+  mobileConversationMediaSource.match(/\.conversations-shell \{[\s\S]*?\n {2}\}/)?.[0] ?? '';
 
 describe('CHAT1 Phase 5 conversations inbox', () => {
   it('adds Conversas as a separate navigation module without replacing WhatsApp configuration', () => {
@@ -206,6 +220,67 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(mobileConversationComposerBlock).not.toContain('position: sticky;');
     expect(stylesSource).toContain('.conversation-client-panel');
     expect(stylesSource).toContain('box-sizing: border-box;');
+  });
+
+  it('stabilizes the mobile chat composer against visual viewport changes', () => {
+    expect(conversationsSource).toContain('const visualViewport = window.visualViewport');
+    expect(conversationsSource).toContain('--chat-viewport-height');
+    expect(conversationsSource).toContain("visualViewport?.addEventListener('resize'");
+    expect(conversationsSource).toContain("visualViewport?.removeEventListener('resize'");
+    expect(conversationsSource).toContain("root.style.removeProperty('--chat-viewport-height')");
+    expect(stylesSource).toContain(
+      ".app-shell[data-active-view='conversations'] {\n    height: var(--chat-viewport-height, 100svh);",
+    );
+    expect(stylesSource).toContain('@supports not (height: 100svh)');
+    expect(stylesSource).toContain('padding: 10px 10px max(10px, env(safe-area-inset-bottom));');
+    expect(mobileConversationComposerBlock).not.toContain('position: fixed;');
+    expect(mobileConversationComposerBlock).not.toContain('position: sticky;');
+  });
+
+  it('keeps the mobile chat height chain owned by the grid instead of page scroll', () => {
+    expect(stylesSource).toContain(
+      ".app-shell[data-active-view='conversations'] .main-area {\n  display: grid;\n  height: 100%;\n  min-height: 0;\n  grid-template-rows: auto minmax(0, 1fr);\n  overflow: hidden;",
+    );
+    expect(mobileConversationMediaSource).toContain(
+      ".app-shell[data-active-view='conversations'] .content {\n    height: 100%;\n    max-height: 100%;",
+    );
+    expect(mobileConversationMediaSource).toContain(
+      '.conversations-view {\n    height: 100%;\n    max-height: 100%;\n    min-height: 0;',
+    );
+    expect(mobileConversationsShellBlock).toContain('height: 100%;');
+    expect(mobileConversationsShellBlock).toContain('max-height: 100%;');
+    expect(mobileConversationsShellBlock).toContain('min-height: 0;');
+    expect(mobileConversationChatPanelBlock).toContain('height: 100%;');
+    expect(mobileConversationChatPanelBlock).toContain('max-height: 100%;');
+    expect(mobileConversationChatPanelBlock).toContain('min-height: 0;');
+  });
+
+  it('keeps messages as the shrinking mobile row and composer as the final row', () => {
+    expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
+    expect(stylesSource).toContain(
+      '.conversation-messages-wrap {\n  position: relative;\n  min-height: 0;\n  overflow: hidden;',
+    );
+    expect(stylesSource).toContain(
+      '.conversation-messages {\n  display: flex;\n  flex: 1 1 auto;\n  height: 100%;\n  min-height: 0;',
+    );
+    expect(stylesSource).toContain('overflow-y: auto;');
+    expect(stylesSource).toContain(
+      '.conversation-composer {\n  display: grid;\n  box-sizing: border-box;\n  flex: 0 0 auto;',
+    );
+    expect(mobileConversationComposerBlock).toContain(
+      'grid-template-columns: minmax(0, 1fr) auto;',
+    );
+  });
+
+  it('keeps the visual viewport override scoped to mobile conversations so desktop remains unchanged', () => {
+    expect(stylesSource).toContain('@media (max-width: 620px)');
+    expect(mobileConversationMediaSource).toContain(
+      ".app-shell[data-active-view='conversations'] {",
+    );
+    expect(mobileConversationMediaSource).toContain('height: var(--chat-viewport-height, 100svh);');
+    expect(stylesSource).toContain(
+      ".app-shell[data-active-view='conversations'] {\n  height: 100dvh;\n  min-height: 0;\n  overflow: hidden;\n}",
+    );
   });
 
   it('uses mobile list/chat modes and a drawer instead of squeezing three columns', () => {

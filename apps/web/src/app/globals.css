@@ -11393,8 +11393,21 @@ tbody tr:hover,
 }
 
 @media (max-width: 620px) {
+  .app-shell[data-active-view='conversations'] {
+    height: var(--chat-viewport-height, 100svh);
+    max-height: var(--chat-viewport-height, 100svh);
+  }
+
+  @supports not (height: 100svh) {
+    .app-shell[data-active-view='conversations'] {
+      height: var(--chat-viewport-height, 100vh);
+      max-height: var(--chat-viewport-height, 100vh);
+    }
+  }
+
   .app-shell[data-active-view='conversations'] .content {
     height: 100%;
+    max-height: 100%;
     padding: 0;
   }
 
@@ -11404,6 +11417,7 @@ tbody tr:hover,
 
   .conversations-view {
     height: 100%;
+    max-height: 100%;
     min-height: 0;
     gap: 0;
   }
@@ -11414,6 +11428,7 @@ tbody tr:hover,
 
   .conversations-shell {
     height: 100%;
+    max-height: 100%;
     min-height: 0;
     border: 0;
     border-radius: 0;
@@ -11422,6 +11437,8 @@ tbody tr:hover,
 
   .conversation-list-panel,
   .conversation-chat-panel {
+    height: 100%;
+    max-height: 100%;
     min-height: 0;
   }
 
@@ -11484,7 +11501,7 @@ tbody tr:hover,
 
   .conversation-composer {
     grid-template-columns: minmax(0, 1fr) auto;
-    padding: 10px;
+    padding: 10px 10px max(10px, env(safe-area-inset-bottom));
   }
 
   .conversation-composer textarea {

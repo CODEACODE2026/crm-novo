@@ -1114,7 +1114,7 @@ function viewTitle(view: View) {
     automations: 'Automações',
     billing: 'Cobranças',
     clients: 'Clientes',
-    conversations: 'Conversas',
+    conversations: 'Inbox WhatsApp',
     dashboard: 'Dashboard',
     finance: 'Financeiro',
     imports: 'Importação',
@@ -11269,11 +11269,8 @@ function ConversationsView({
         title="Conversas"
         subtitle="Atendimento e histórico conversacional do WhatsApp"
         actions={
-          summary ? (
-            <span className="conversation-summary-pill">
-              {summary.totalUnreadConversations} conversas não lidas · {summary.totalUnreadMessages}{' '}
-              mensagens
-            </span>
+          summary && hasUnreadConversationSummary(summary) ? (
+            <span className="conversation-summary-pill">{formatConversationSummary(summary)}</span>
           ) : null
         }
       />
@@ -11485,6 +11482,12 @@ function ConversationListItem({
             {conversationDateLabel(conversation.lastMessageAt ?? conversation.updatedAt)}
           </small>
         </span>
+        <span className="conversation-preview-row">
+          <span>{conversation.lastMessagePreview ?? '[Mensagem]'}</span>
+          {conversation.unreadCount > 0 ? (
+            <span className="conversation-unread-badge">{conversation.unreadCount}</span>
+          ) : null}
+        </span>
         <span className="conversation-list-meta-row">
           <span>
             {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
@@ -11492,12 +11495,6 @@ function ConversationListItem({
           <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
             {conversation.client ? 'Cliente' : 'Avulso'}
           </span>
-        </span>
-        <span className="conversation-preview-row">
-          <span>{conversation.lastMessagePreview ?? '[Mensagem]'}</span>
-          {conversation.unreadCount > 0 ? (
-            <span className="conversation-unread-badge">{conversation.unreadCount}</span>
-          ) : null}
         </span>
       </span>
     </button>
@@ -11519,6 +11516,10 @@ function ConversationHeader({
   onOpenClientPanel: () => void;
   onResolve: () => void;
 }) {
+  const instanceLabel = conversationInstanceLabel(conversation.instanceName);
+  const phoneLabel =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+
   return (
     <header className="conversation-header">
       <button className="conversation-mobile-back" type="button" onClick={onBack}>
@@ -11529,11 +11530,7 @@ function ConversationHeader({
         <span className="conversation-avatar large">{conversationInitial(conversation)}</span>
         <div>
           <h3>{conversation.displayName}</h3>
-          <p>
-            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
-            {' · '}
-            {conversation.instanceName ?? 'Instância WhatsApp'}
-          </p>
+          <p>{instanceLabel ? `${phoneLabel} · ${instanceLabel}` : phoneLabel}</p>
           <div className="conversation-header-badges">
             <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
               {conversation.client ? 'Cliente' : 'Avulso'}
@@ -11672,6 +11669,7 @@ function ConversationComposer({
           placeholder="Digite uma mensagem..."
           rows={2}
           value={draft}
+          disabled={sending}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -11764,7 +11762,7 @@ function ConversationClientPanelContent({
   }
 
   if (client) {
-    const pendingAmount = client.receivables
+    const pendingAmount = (client.receivables ?? [])
       ?.filter(
         (receivable) =>
           receivable.displayStatus === 'PENDENTE' || receivable.displayStatus === 'VENCIDO',
@@ -11798,7 +11796,7 @@ function ConversationClientPanelContent({
           </div>
           <div>
             <dt>Total a receber</dt>
-            <dd>{typeof pendingAmount === 'number' ? formatCurrency(pendingAmount) : '-'}</dd>
+            <dd>{formatCurrency(pendingAmount)}</dd>
           </div>
         </dl>
         <Button icon={ArrowRight} variant="primary" onClick={() => onOpenClient(client.id)}>
@@ -11807,6 +11805,8 @@ function ConversationClientPanelContent({
       </div>
     );
   }
+
+  const instanceLabel = conversationInstanceLabel(conversation.instanceName);
 
   return (
     <div className="conversation-context-card">
@@ -11823,10 +11823,12 @@ function ConversationClientPanelContent({
             {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
           </dd>
         </div>
-        <div>
-          <dt>Instância</dt>
-          <dd>{conversation.instanceName ?? '-'}</dd>
-        </div>
+        {instanceLabel ? (
+          <div>
+            <dt>Instância</dt>
+            <dd>{instanceLabel}</dd>
+          </div>
+        ) : null}
       </dl>
     </div>
   );
@@ -11849,6 +11851,28 @@ function mergeConversationMessages(
 
 function createConversationRequestId() {
   return crypto.randomUUID();
+}
+
+function hasUnreadConversationSummary(summary: WhatsAppConversationSummary) {
+  return summary.totalUnreadConversations > 0 || summary.totalUnreadMessages > 0;
+}
+
+function formatConversationSummary(summary: WhatsAppConversationSummary) {
+  return `${pluralizePt(summary.totalUnreadConversations, 'conversa não lida', 'conversas não lidas')} · ${pluralizePt(summary.totalUnreadMessages, 'mensagem', 'mensagens')}`;
+}
+
+function pluralizePt(value: number, singular: string, plural: string) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function conversationInstanceLabel(instanceName: string | null) {
+  if (!instanceName) return null;
+  if (isTechnicalInstanceName(instanceName)) return null;
+  return instanceName;
+}
+
+function isTechnicalInstanceName(value: string) {
+  return /(?:^|-)crm-novo(?:-|$)/i.test(value) || /^[a-f0-9-]{20,}$/i.test(value);
 }
 
 function conversationInitial(conversation: WhatsAppConversation) {

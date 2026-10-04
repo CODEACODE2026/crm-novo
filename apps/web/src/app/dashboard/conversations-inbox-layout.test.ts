@@ -17,6 +17,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(dashboardSource).toContain("{ id: 'whatsapp', label: 'WhatsApp'");
     expect(dashboardSource).toContain("{view === 'conversations' ? (");
     expect(dashboardSource).toContain("{view === 'whatsapp' ? <WhatsAppView /> : null}");
+    expect(dashboardSource).toContain("conversations: 'Inbox WhatsApp'");
     expect(dashboardSource).toContain("conversations: 'Inbox de atendimento WhatsApp'");
     expect(dashboardSource).toContain('badge: conversationSummary?.totalUnreadConversations');
     expect(stylesSource).toContain('.nav-item-badge');
@@ -28,7 +29,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('ConversationMessages');
     expect(conversationsSource).toContain('ConversationClientPanel');
     expect(stylesSource).toContain(
-      'grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.45fr) minmax(260px, 0.72fr);',
+      'grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);',
+    );
+    expect(stylesSource).toContain(
+      'grid-template-columns: minmax(292px, 0.94fr) minmax(0, 1.16fr);',
     );
     expect(stylesSource).toContain('.conversation-client-panel');
   });
@@ -44,6 +48,20 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Nenhuma conversa encontrada.');
     expect(conversationsSource).toContain('Nenhuma conversa corresponde à busca.');
     expect(conversationsSource).toContain('Falha ao carregar conversas.');
+  });
+
+  it('polishes unread summary copy and hides zero-zero noise', () => {
+    expect(conversationsSource).toContain('hasUnreadConversationSummary(summary)');
+    expect(dashboardSource).toContain('function formatConversationSummary');
+    expect(dashboardSource).toContain(
+      "pluralizePt(summary.totalUnreadConversations, 'conversa não lida', 'conversas não lidas')",
+    );
+    expect(dashboardSource).toContain(
+      "pluralizePt(summary.totalUnreadMessages, 'mensagem', 'mensagens')",
+    );
+    expect(dashboardSource).toContain(
+      'summary.totalUnreadConversations > 0 || summary.totalUnreadMessages > 0',
+    );
   });
 
   it('loads selection, messages, read state, resolve state, and preserves polling safety', () => {
@@ -75,15 +93,45 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('const requestId = createConversationRequestId();');
     expect(conversationsSource).toContain('Tentar novamente');
     expect(conversationsSource).toContain("status: 'FAILED'");
+    expect(conversationsSource).toContain("event.key === 'Enter' && !event.shiftKey");
+    expect(conversationsSource).toContain('disabled={sending}');
+    expect(stylesSource).toContain('max-width: min(76%, 680px);');
+    expect(stylesSource).toContain('overflow-wrap: anywhere;');
   });
 
   it('keeps client and guest panels read-only for Phase 5', () => {
     expect(conversationsSource).toContain('Dados do cliente');
     expect(conversationsSource).toContain('Abrir cliente');
     expect(conversationsSource).toContain('Contato avulso');
+    expect(conversationsSource).toContain('const pendingAmount = (client.receivables ?? [])');
+    expect(conversationsSource).toContain('<dd>{formatCurrency(pendingAmount)}</dd>');
+    expect(conversationsSource).toContain('const instanceLabel = conversationInstanceLabel');
+    expect(dashboardSource).toContain('function conversationInstanceLabel');
+    expect(dashboardSource).toContain('function isTechnicalInstanceName');
+    expect(conversationsSource).not.toContain("{conversation.instanceName ?? '-'}");
+    expect(conversationsSource).not.toContain(
+      "{conversation.instanceName ?? 'Instância WhatsApp'}",
+    );
     expect(conversationsSource).not.toContain('Cadastrar cliente');
     expect(conversationsSource).not.toContain('Vincular cliente');
     expect(conversationsSource).not.toContain('Gerar PIX');
+  });
+
+  it('keeps the conversation header and list hierarchy visually prepared for polish', () => {
+    expect(stylesSource).toContain(
+      ".app-shell[data-active-view='conversations'] .topbar-context h1",
+    );
+    expect(stylesSource).toContain(
+      ".app-shell[data-active-view='conversations'] .topbar-context p",
+    );
+    expect(conversationsSource).toContain('conversation-header-actions');
+    expect(stylesSource).toContain('min-width: 112px;');
+    expect(conversationsSource).toMatch(
+      /conversation-list-title-row[\s\S]*conversation-preview-row[\s\S]*conversation-list-meta-row/,
+    );
+    expect(conversationsSource).toContain('conversation.unreadCount > 0');
+    expect(stylesSource).toContain('flex: 0 0 auto;');
+    expect(stylesSource).toContain('min-width: 20px;');
   });
 
   it('uses mobile list/chat modes and a drawer instead of squeezing three columns', () => {
@@ -95,5 +143,6 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversations-view.mobile-mode-chat .conversation-list-panel');
     expect(stylesSource).toContain('min-height: 100dvh;');
     expect(stylesSource).toContain('position: sticky;');
+    expect(stylesSource).toContain('max-width: 88%;');
   });
 });

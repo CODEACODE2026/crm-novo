@@ -11001,6 +11001,7 @@ function ConversationsView({
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [linkingClient, setLinkingClient] = useState(false);
+  const [creatingGuestClient, setCreatingGuestClient] = useState(false);
   const [opening, setOpening] = useState(false);
   const [listLoading, setListLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -11010,11 +11011,20 @@ function ConversationsView({
   const [sendError, setSendError] = useState('');
   const [clientError, setClientError] = useState('');
   const [linkClientError, setLinkClientError] = useState('');
+  const [guestClientCreateError, setGuestClientCreateError] = useState('');
+  const [guestClientDuplicate, setGuestClientDuplicate] = useState<ClientOption | null>(null);
+  const [guestClientCreatedUnlinked, setGuestClientCreatedUnlinked] = useState<ClientOption | null>(
+    null,
+  );
   const [mobileClientOpen, setMobileClientOpen] = useState(false);
   const [mobileMode, setMobileMode] = useState<'list' | 'chat'>('list');
   const [startConversationOpen, setStartConversationOpen] = useState(false);
   const [startingConversation, setStartingConversation] = useState(false);
   const [startConversationError, setStartConversationError] = useState('');
+  const [guestClientCreateConversation, setGuestClientCreateConversation] =
+    useState<WhatsAppConversation | null>(null);
+  const [guestClientCreatePlans, setGuestClientCreatePlans] = useState<Plan[]>([]);
+  const [guestClientCreatePlansLoading, setGuestClientCreatePlansLoading] = useState(false);
   const [newMessageNotice, setNewMessageNotice] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
@@ -11122,6 +11132,19 @@ function ConversationsView({
     }
   }, []);
 
+  const loadGuestClientCreatePlans = useCallback(async () => {
+    setGuestClientCreatePlansLoading(true);
+
+    try {
+      setGuestClientCreatePlans(await listPlans());
+    } catch (err) {
+      setGuestClientCreateError(conversationErrorMessage(err, 'Falha ao carregar planos.'));
+      setGuestClientCreatePlans([]);
+    } finally {
+      setGuestClientCreatePlansLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setSearch(searchInput.trim());
@@ -11221,6 +11244,10 @@ function ConversationsView({
     setClientDetail(null);
     setClientError('');
     setLinkClientError('');
+    setGuestClientCreateError('');
+    setGuestClientDuplicate(null);
+    setGuestClientCreatedUnlinked(null);
+    setGuestClientCreateConversation(null);
     setMessagesError('');
     setSendError('');
     setNewMessageNotice(false);
@@ -11401,6 +11428,136 @@ function ConversationsView({
     }
   }
 
+  async function linkConversationToClient(conversationId: string, clientOption: ClientOption) {
+    const linked = await linkWhatsAppConversationClient(conversationId, {
+      clientId: clientOption.id,
+    });
+    if (activeConversationIdRef.current !== linked.id) return linked;
+
+    setSelectedConversation(linked);
+    setConversations((current) =>
+      current.map((item) => (item.id === linked.id ? { ...item, ...linked } : item)),
+    );
+
+    if (linked.client?.id) {
+      try {
+        setClientDetail(await getClient(linked.client.id));
+      } catch (err) {
+        setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+      }
+    }
+
+    return linked;
+  }
+
+  async function openGuestClientCreate(conversation: WhatsAppConversation) {
+    setGuestClientCreateConversation(conversation);
+    setGuestClientCreateError('');
+    setGuestClientDuplicate(null);
+    setGuestClientCreatedUnlinked(null);
+
+    if (!guestClientCreatePlans.length) {
+      await loadGuestClientCreatePlans();
+    }
+  }
+
+  async function findDuplicateClientByPhone(phone: string, fallbackPhoneNormalized: string) {
+    const expectedDigits = phoneDigits(phone) || phoneDigits(fallbackPhoneNormalized);
+    if (!expectedDigits) return null;
+
+    const options = await listClientOptions(phone, { limit: 10 });
+    return (
+      options.find((option) => phoneDigitsCompatible(option.phoneNormalized, expectedDigits)) ??
+      null
+    );
+  }
+
+  async function createClientFromGuestConversation(payload: ClientPayload) {
+    if (!guestClientCreateConversation || creatingGuestClient) return;
+
+    setCreatingGuestClient(true);
+    setGuestClientCreateError('');
+    setGuestClientDuplicate(null);
+    setGuestClientCreatedUnlinked(null);
+
+    try {
+      const duplicate = await findDuplicateClientByPhone(
+        payload.phone,
+        guestClientCreateConversation.phoneNormalized,
+      );
+
+      if (duplicate) {
+        setGuestClientDuplicate(duplicate);
+        throw new Error('Já existe um cliente com este telefone.');
+      }
+
+      const created = await createClient(payload);
+      const createdOption = clientOptionFromClient(created);
+      setGuestClientCreatedUnlinked(createdOption);
+
+      try {
+        const linked = await linkConversationToClient(
+          guestClientCreateConversation.id,
+          createdOption,
+        );
+        if (activeConversationIdRef.current === linked.id) {
+          setGuestClientCreateConversation(null);
+          setGuestClientCreatedUnlinked(null);
+          setMobileClientOpen(false);
+          await loadConversations({ silent: true });
+        }
+      } catch (err) {
+        setGuestClientCreateError(
+          conversationErrorMessage(
+            err,
+            'Cliente criado, mas não foi possível vincular a conversa.',
+          ),
+        );
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const conflictMessage = /telefone/i.test(err.message)
+          ? 'Já existe um cliente com este telefone.'
+          : err.message;
+        setGuestClientCreateError(conflictMessage);
+        throw new Error(conflictMessage);
+      }
+
+      if (!(err instanceof Error && err.message === 'Já existe um cliente com este telefone.')) {
+        setGuestClientCreateError(
+          err instanceof Error ? err.message : 'Não foi possível cadastrar o cliente.',
+        );
+      }
+      throw err;
+    } finally {
+      setCreatingGuestClient(false);
+    }
+  }
+
+  async function retryGuestClientLink(clientOption: ClientOption) {
+    if (!guestClientCreateConversation || creatingGuestClient) return;
+
+    setCreatingGuestClient(true);
+    setGuestClientCreateError('');
+
+    try {
+      const linked = await linkConversationToClient(guestClientCreateConversation.id, clientOption);
+      if (activeConversationIdRef.current === linked.id) {
+        setGuestClientCreateConversation(null);
+        setGuestClientCreatedUnlinked(null);
+        setGuestClientDuplicate(null);
+        setMobileClientOpen(false);
+        await loadConversations({ silent: true });
+      }
+    } catch (err) {
+      setGuestClientCreateError(
+        conversationErrorMessage(err, 'Não foi possível vincular a conversa.'),
+      );
+    } finally {
+      setCreatingGuestClient(false);
+    }
+  }
+
   async function startNewConversation(input: {
     body: string;
     client: ClientOption | null;
@@ -11507,6 +11664,28 @@ function ConversationsView({
         />
       ) : null}
 
+      {guestClientCreateConversation ? (
+        <GuestConversationClientModal
+          conversation={guestClientCreateConversation}
+          duplicateClient={guestClientDuplicate}
+          error={guestClientCreateError}
+          loading={creatingGuestClient || guestClientCreatePlansLoading}
+          plans={guestClientCreatePlans}
+          unlinkedClient={guestClientCreatedUnlinked}
+          onClose={() => {
+            if (creatingGuestClient) return;
+            setGuestClientCreateConversation(null);
+            setGuestClientCreateError('');
+            setGuestClientDuplicate(null);
+            setGuestClientCreatedUnlinked(null);
+          }}
+          onLinkExisting={(client) => void retryGuestClientLink(client)}
+          onOpenClient={(clientId) => void onOpenClient(clientId)}
+          onRetryLink={(client) => void retryGuestClientLink(client)}
+          onSubmit={(payload) => createClientFromGuestConversation(payload)}
+        />
+      ) : null}
+
       <div className="conversations-shell">
         <ConversationList
           conversations={filteredConversations}
@@ -11588,6 +11767,7 @@ function ConversationsView({
           linkingClient={linkingClient}
           mobileOpen={mobileClientOpen}
           onCloseMobile={() => setMobileClientOpen(false)}
+          onCreateClient={(conversation) => void openGuestClientCreate(conversation)}
           onLinkClient={(client) => void linkSelectedConversationToClient(client)}
           onOpenClient={(clientId) => void onOpenClient(clientId)}
         />
@@ -12160,6 +12340,7 @@ function ConversationClientPanel({
   linkingClient,
   mobileOpen,
   onCloseMobile,
+  onCreateClient,
   onLinkClient,
   onOpenClient,
 }: {
@@ -12170,6 +12351,7 @@ function ConversationClientPanel({
   linkingClient: boolean;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  onCreateClient: (conversation: WhatsAppConversation) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
@@ -12182,6 +12364,7 @@ function ConversationClientPanel({
           conversation={conversation}
           linkClientError={linkClientError}
           linkingClient={linkingClient}
+          onCreateClient={onCreateClient}
           onLinkClient={onLinkClient}
           onOpenClient={onOpenClient}
         />
@@ -12199,6 +12382,7 @@ function ConversationClientPanel({
               conversation={conversation}
               linkClientError={linkClientError}
               linkingClient={linkingClient}
+              onCreateClient={onCreateClient}
               onLinkClient={onLinkClient}
               onOpenClient={onOpenClient}
             />
@@ -12215,6 +12399,7 @@ function ConversationClientPanelContent({
   conversation,
   linkClientError,
   linkingClient,
+  onCreateClient,
   onLinkClient,
   onOpenClient,
 }: {
@@ -12223,6 +12408,7 @@ function ConversationClientPanelContent({
   conversation: WhatsAppConversation | null;
   linkClientError: string;
   linkingClient: boolean;
+  onCreateClient: (conversation: WhatsAppConversation) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
@@ -12326,6 +12512,14 @@ function ConversationClientPanelContent({
       </dl>
       <div className="conversation-link-client">
         <Button
+          icon={UserRoundPlus}
+          size="sm"
+          variant="primary"
+          onClick={() => onCreateClient(conversation)}
+        >
+          Cadastrar cliente
+        </Button>
+        <Button
           icon={UserCheck}
           size="sm"
           variant="secondary"
@@ -12399,6 +12593,148 @@ function ConversationClientPanelContent({
       </div>
     </div>
   );
+}
+
+function GuestConversationClientModal({
+  conversation,
+  duplicateClient,
+  error,
+  loading,
+  plans,
+  unlinkedClient,
+  onClose,
+  onLinkExisting,
+  onOpenClient,
+  onRetryLink,
+  onSubmit,
+}: {
+  conversation: WhatsAppConversation;
+  duplicateClient: ClientOption | null;
+  error: string;
+  loading: boolean;
+  plans: Plan[];
+  unlinkedClient: ClientOption | null;
+  onClose: () => void;
+  onLinkExisting: (client: ClientOption) => void;
+  onOpenClient: (clientId: string) => void;
+  onRetryLink: (client: ClientOption) => void;
+  onSubmit: (payload: ClientPayload) => Promise<void>;
+}) {
+  const conversationPhone =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal client-form-modal client-create-modal conversation-client-create-modal"
+        aria-labelledby="conversation-client-create-title"
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <UserRoundPlus size={15} />
+          </span>
+          <div>
+            <span className="metric-label">Contato avulso</span>
+            <h2 id="conversation-client-create-title">Cadastrar cliente</h2>
+            <p>WhatsApp da conversa: {conversationPhone}</p>
+          </div>
+          <IconButton icon={X} label="Fechar cadastro de cliente" onClick={onClose} />
+        </header>
+
+        <div className="conversation-client-create-body">
+          {error ? (
+            <div className="notice danger conversation-notice" role="alert">
+              {error}
+            </div>
+          ) : null}
+
+          {duplicateClient ? (
+            <div className="conversation-link-confirmation">
+              <strong>Já existe um cliente com este telefone: {duplicateClient.name}</strong>
+              <span>{formatNormalizedBrazilPhone(duplicateClient.phoneNormalized)}</span>
+              <div className="conversation-link-actions">
+                <Button
+                  icon={ArrowRight}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onOpenClient(duplicateClient.id)}
+                >
+                  Abrir cliente
+                </Button>
+                <Button
+                  icon={UserCheck}
+                  loading={loading}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => onLinkExisting(duplicateClient)}
+                >
+                  Vincular ao cliente existente
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {unlinkedClient ? (
+            <div className="conversation-link-confirmation">
+              <strong>Cliente criado, mas a conversa ainda não foi vinculada.</strong>
+              <span>{unlinkedClient.name}</span>
+              <div className="conversation-link-actions">
+                <Button
+                  icon={ArrowRight}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onOpenClient(unlinkedClient.id)}
+                >
+                  Abrir cliente criado
+                </Button>
+                <Button
+                  icon={UserCheck}
+                  loading={loading}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => onRetryLink(unlinkedClient)}
+                >
+                  Tentar vincular novamente
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {!unlinkedClient ? (
+            plans.length ? (
+              <ClientForm
+                initialValues={{ phone: conversationPhone }}
+                plans={plans}
+                submitLabel="Cadastrar e vincular"
+                onCancel={onClose}
+                onSubmit={async (payload) => onSubmit(payload as ClientPayload)}
+              />
+            ) : (
+              <div className="conversation-empty-panel">
+                <Info aria-hidden="true" size={22} />
+                <span>{loading ? 'Carregando planos...' : 'Nenhum plano disponível.'}</span>
+              </div>
+            )
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function phoneDigits(value: string | null | undefined) {
+  return value?.replace(/\D/g, '') ?? '';
+}
+
+function phoneDigitsCompatible(left: string, right: string) {
+  const leftDigits = phoneDigits(left);
+  const rightDigits = phoneDigits(right);
+
+  if (!leftDigits || !rightDigits) return false;
+  if (leftDigits === rightDigits) return true;
+  if (Math.min(leftDigits.length, rightDigits.length) < 10) return false;
+
+  return leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits);
 }
 
 function mergeConversationMessages(

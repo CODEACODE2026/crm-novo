@@ -6495,6 +6495,12 @@ tbody tr:hover,
   padding: 14px 18px;
 }
 
+.conversation-client-create-modal .conversation-client-create-body {
+  display: grid;
+  min-height: 0;
+  overflow: auto;
+}
+
 .reference-form-modal {
   width: min(100%, 680px);
 }

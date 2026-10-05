@@ -18,6 +18,22 @@ import { ClientReferralSelect } from './client-referral-select';
 
 interface ClientFormProps {
   client?: Client | undefined;
+  initialValues?: Partial<
+    Pick<
+      ClientPayload,
+      | 'billingNoticeDays'
+      | 'dueDate'
+      | 'email'
+      | 'generateInitialReceivable'
+      | 'name'
+      | 'notes'
+      | 'phone'
+      | 'planId'
+      | 'preferredPixProvider'
+      | 'recurringValue'
+      | 'reference'
+    >
+  >;
   plans: Plan[];
   submitLabel: string;
   onCancel?: () => void;
@@ -34,26 +50,44 @@ const unavailableProviderValue = '__UNAVAILABLE__';
 type PreferredPixProviderFormValue =
   ConfigurablePaymentProvider | '' | typeof unavailableProviderValue;
 
-export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: ClientFormProps) {
+export function ClientForm({
+  client,
+  initialValues,
+  plans,
+  submitLabel,
+  onCancel,
+  onSubmit,
+}: ClientFormProps) {
   const sortedPlans = useMemo(() => sortPlansByDuration(plans), [plans]);
   const initialPlan = useMemo(
-    () => sortedPlans.find((plan) => plan.id === client?.planId) ?? sortedPlans[0],
-    [client?.planId, sortedPlans],
+    () =>
+      sortedPlans.find((plan) => plan.id === (client?.planId ?? initialValues?.planId)) ??
+      sortedPlans[0],
+    [client?.planId, initialValues?.planId, sortedPlans],
   );
-  const [name, setName] = useState(client?.name ?? '');
-  const [phone, setPhone] = useState(client?.phone ?? '');
-  const [email, setEmail] = useState(client?.email ?? '');
-  const [reference, setReference] = useState(client?.reference ?? '');
+  const [name, setName] = useState(client?.name ?? initialValues?.name ?? '');
+  const initialPhone = client?.phone ?? initialValues?.phone ?? '';
+  const [phone, setPhone] = useState(initialPhone);
+  const [email, setEmail] = useState(client?.email ?? initialValues?.email ?? '');
+  const [reference, setReference] = useState(client?.reference ?? initialValues?.reference ?? '');
   const [planId, setPlanId] = useState(initialPlan?.id ?? '');
   const [recurringValue, setRecurringValue] = useState(
-    client?.recurringValue ?? initialPlan?.defaultValue ?? '0.00',
+    String(
+      client?.recurringValue ??
+        initialValues?.recurringValue ??
+        initialPlan?.defaultValue ??
+        '0.00',
+    ),
   );
-  const [valueTouched, setValueTouched] = useState(Boolean(client));
-  const [dueDate, setDueDate] = useState(client?.dueDate ?? '');
+  const [valueTouched, setValueTouched] = useState(
+    Boolean(client) || initialValues?.recurringValue !== undefined,
+  );
+  const [dueDate, setDueDate] = useState(client?.dueDate ?? initialValues?.dueDate ?? '');
   const [billingNoticeDays, setBillingNoticeDays] = useState(
-    String(client?.billingNoticeDays ?? 0),
+    String(client?.billingNoticeDays ?? initialValues?.billingNoticeDays ?? 0),
   );
-  const initialPreferredPixProvider = client?.preferredPixProvider ?? null;
+  const initialPreferredPixProvider =
+    client?.preferredPixProvider ?? initialValues?.preferredPixProvider ?? null;
   const [preferredPixProvider, setPreferredPixProvider] = useState<PreferredPixProviderFormValue>(
     initialPreferredPixProvider && isConfigurablePixProvider(initialPreferredPixProvider)
       ? initialPreferredPixProvider
@@ -66,8 +100,10 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
     PaymentProviderCredentialStatus[]
   >([]);
   const [providersLoaded, setProvidersLoaded] = useState(false);
-  const [notes, setNotes] = useState(client?.notes ?? '');
-  const [generateInitialReceivable, setGenerateInitialReceivable] = useState(false);
+  const [notes, setNotes] = useState(client?.notes ?? initialValues?.notes ?? '');
+  const [generateInitialReceivable, setGenerateInitialReceivable] = useState(
+    initialValues?.generateInitialReceivable ?? false,
+  );
   const [referrerClientId, setReferrerClientId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -212,6 +248,9 @@ export function ClientForm({ client, plans, submitLabel, onCancel, onSubmit }: C
             <label className="field">
               <span>WhatsApp</span>
               <input required value={phone} onChange={(event) => setPhone(event.target.value)} />
+              {!editing && initialPhone && phone !== initialPhone ? (
+                <small>Telefone alterado a partir da conversa original: {initialPhone}</small>
+              ) : null}
             </label>
             <label className="field">
               <span>E-mail</span>

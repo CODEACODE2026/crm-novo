@@ -50,6 +50,13 @@ describe('ClientForm manual initial billing source', () => {
     expect(clientFormSource).toContain("payload.referralRewardType = 'FREE_MONTH'");
   });
 
+  it('supports official create-flow prefills without turning them into edit mode', () => {
+    expect(clientFormSource).toContain('initialValues?: Partial');
+    expect(clientFormSource).toContain("client?.phone ?? initialValues?.phone ?? ''");
+    expect(clientFormSource).toContain('Telefone alterado a partir da conversa original');
+    expect(clientFormSource).toContain('!editing && initialPhone && phone !== initialPhone');
+  });
+
   it('supports the client preferred PIX provider without exposing enum labels', () => {
     expect(clientFormSource).toContain('Provider PIX padrão');
     expect(clientFormSource).toContain('Padrão do sistema');

@@ -249,7 +249,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
   });
 
-  it('lets guest conversations link to an existing client without exposing client creation', () => {
+  it('lets guest conversations create a client or link to an existing client', () => {
     expect(conversationsSource).toContain('Dados do cliente');
     expect(conversationsSource).toContain('Abrir cliente');
     expect(conversationsSource).toContain('Contato avulso');
@@ -267,16 +267,33 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Esta conversa já está vinculada a outro cliente.');
     expect(conversationsSource).toContain('setConversations((current) =>');
     expect(conversationsSource).toContain('setClientDetail(await getClient(linked.client.id))');
+    expect(conversationsSource).toContain('Cadastrar cliente');
+    expect(conversationsSource).toContain('GuestConversationClientModal');
+    expect(conversationsSource).toContain('initialValues={{ phone: conversationPhone }}');
+    expect(conversationsSource).toContain('createClient(payload)');
+    expect(conversationsSource).toContain(
+      'linkConversationToClient(guestClientCreateConversation.id',
+    );
+    expect(conversationsSource).toContain('Já existe um cliente com este telefone.');
+    expect(conversationsSource).toContain('Vincular ao cliente existente');
+    expect(conversationsSource).toContain(
+      'Cliente criado, mas a conversa ainda não foi vinculada.',
+    );
+    expect(conversationsSource).toContain('Tentar vincular novamente');
     expect(dashboardSource).toContain('function conversationInstanceLabel');
     expect(dashboardSource).toContain('function isTechnicalInstanceName');
+    expect(dashboardSource).toContain('function phoneDigitsCompatible');
     expect(conversationsSource).not.toContain("{conversation.instanceName ?? '-'}");
     expect(conversationsSource).not.toContain(
       "{conversation.instanceName ?? 'Instância WhatsApp'}",
     );
-    expect(conversationsSource).not.toContain('Cadastrar cliente');
+    expect(conversationsSource).not.toContain('conversation.contactName');
     expect(conversationsSource).not.toContain('Gerar PIX');
     expect(stylesSource).toContain('.conversation-link-client');
     expect(stylesSource).toContain('.conversation-link-actions');
+    expect(stylesSource).toContain(
+      '.conversation-client-create-modal .conversation-client-create-body',
+    );
   });
 
   it('keeps the conversation header and list hierarchy visually prepared for polish', () => {

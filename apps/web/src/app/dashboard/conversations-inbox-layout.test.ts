@@ -79,6 +79,19 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Falha ao carregar conversas.');
   });
 
+  it('keeps a single start conversation action outside the internal list header', () => {
+    expect(conversationsSource).toContain('conversation-page-actions');
+    expect(conversationsSource).toContain('Iniciar conversa');
+    expect(conversationsSource).not.toContain('Nova conversa');
+    expect(conversationsSource).not.toContain('onNewConversation');
+    expect(conversationsSource).toMatch(
+      /conversation-page-actions[\s\S]*<Button[\s\S]*icon=\{Plus\}[\s\S]*>\s*Iniciar conversa\s*<\/Button>/,
+    );
+    expect(conversationsSource).toMatch(
+      /<div className="conversation-panel-header">[\s\S]*<h3>Conversas<\/h3>[\s\S]*`\$\{conversations\.length\} visíveis`[\s\S]*<\/div>\s*<\/div>/,
+    );
+  });
+
   it('polishes unread summary copy and hides zero-zero noise', () => {
     expect(conversationsSource).toContain('hasUnreadConversationSummary(summary)');
     expect(dashboardSource).toContain('function formatConversationSummary');

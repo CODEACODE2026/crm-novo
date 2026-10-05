@@ -11489,7 +11489,7 @@ function ConversationsView({
                 setStartConversationOpen(true);
               }}
             >
-              Nova conversa
+              Iniciar conversa
             </Button>
           </div>
         }
@@ -11517,11 +11517,6 @@ function ConversationsView({
           selectedId={selectedConversation?.id ?? null}
           statusFilter={statusFilter}
           onFilterChange={setFilter}
-          onNewConversation={() => {
-            setStartConversationError('');
-            void loadStartConversationConnections();
-            setStartConversationOpen(true);
-          }}
           onSearchChange={setSearchInput}
           onSelect={(conversation) => void selectConversation(conversation)}
           onStatusFilterChange={setStatusFilter}
@@ -11686,10 +11681,10 @@ function StartConversationModal({
       >
         <header className="modal-header">
           <div>
-            <h2 id="start-conversation-title">Nova conversa</h2>
+            <h2 id="start-conversation-title">Iniciar conversa</h2>
             <p>Inicie atendimento por cliente cadastrado ou contato avulso.</p>
           </div>
-          <IconButton icon={X} label="Fechar nova conversa" onClick={onClose} />
+          <IconButton icon={X} label="Fechar iniciar conversa" onClick={onClose} />
         </header>
 
         <form className="start-conversation-form" onSubmit={submit}>
@@ -11809,7 +11804,6 @@ function ConversationList({
   selectedId,
   statusFilter,
   onFilterChange,
-  onNewConversation,
   onSearchChange,
   onSelect,
   onStatusFilterChange,
@@ -11822,7 +11816,6 @@ function ConversationList({
   selectedId: string | null;
   statusFilter: WhatsAppConversationStatus | '';
   onFilterChange: (filter: ConversationFilter) => void;
-  onNewConversation: () => void;
   onSearchChange: (search: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
   onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
@@ -11838,9 +11831,6 @@ function ConversationList({
           <h3>Conversas</h3>
           <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
         </div>
-        <Button icon={Plus} size="sm" variant="primary" onClick={onNewConversation}>
-          Nova conversa
-        </Button>
       </div>
 
       <label className="conversation-search" aria-label="Buscar conversas">

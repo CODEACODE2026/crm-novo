@@ -242,7 +242,16 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     const data = this.asRecord(envelope?.data);
     const details = data?.Details;
     const detailsRecord = this.asRecord(details);
-    const metadataSource = detailsRecord ?? data;
+    const parsedDetails = this.parseDetailsJson(details);
+    const parsedDetailsRecord = this.asRecord(parsedDetails.value);
+    const metadataSources = [
+      parsedDetailsRecord,
+      this.asRecord(parsedDetailsRecord?.data),
+      this.asRecord(parsedDetailsRecord?.message),
+      this.asRecord(parsedDetailsRecord?.media),
+      detailsRecord,
+      data,
+    ];
 
     return {
       kind,
@@ -250,16 +259,37 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       dataKeys: this.safeObjectKeys(data),
       detailsType: this.valueType(details),
       detailsKeys: this.safeObjectKeys(detailsRecord),
-      hasUrl: this.hasAnyOwnValue(metadataSource, ['Url', 'URL', 'url']),
-      hasDirectPath: this.hasAnyOwnValue(metadataSource, ['DirectPath', 'directPath']),
-      hasMediaKey: this.hasAnyOwnValue(metadataSource, ['MediaKey', 'mediaKey']),
-      hasMimetype: this.hasAnyOwnValue(metadataSource, ['Mimetype', 'mimetype']),
-      hasFileSHA256: this.hasAnyOwnValue(metadataSource, ['FileSHA256', 'fileSHA256']),
-      hasFileEncSHA256: this.hasAnyOwnValue(metadataSource, ['FileEncSHA256', 'fileEncSHA256']),
-      hasFileLength: this.hasAnyOwnValue(metadataSource, ['FileLength', 'fileLength']),
-      hasId: this.hasAnyOwnValue(data, ['Id']),
-      hasTimestamp: this.hasAnyOwnValue(data, ['Timestamp']),
+      ...(typeof details === 'string'
+        ? {
+            detailsLength: details.length,
+            detailsJsonParsable: parsedDetails.parsable,
+            parsedDetailsType: parsedDetails.parsable ? this.valueType(parsedDetails.value) : null,
+            parsedDetailsKeys: this.safeObjectKeys(parsedDetailsRecord),
+            parsedDetailsNestedKeys: this.knownNestedObjectKeys(parsedDetailsRecord),
+          }
+        : {}),
+      hasUrl: this.hasAnyOwnValueIn(metadataSources, ['Url', 'URL', 'url']),
+      hasDirectPath: this.hasAnyOwnValueIn(metadataSources, ['DirectPath', 'directPath']),
+      hasMediaKey: this.hasAnyOwnValueIn(metadataSources, ['MediaKey', 'mediaKey']),
+      hasMimetype: this.hasAnyOwnValueIn(metadataSources, ['Mimetype', 'mimetype']),
+      hasFileSHA256: this.hasAnyOwnValueIn(metadataSources, ['FileSHA256', 'fileSHA256']),
+      hasFileEncSHA256: this.hasAnyOwnValueIn(metadataSources, ['FileEncSHA256', 'fileEncSHA256']),
+      hasFileLength: this.hasAnyOwnValueIn(metadataSources, ['FileLength', 'fileLength']),
+      hasId: this.hasAnyOwnValueIn(metadataSources, ['Id', 'id']),
+      hasTimestamp: this.hasAnyOwnValueIn(metadataSources, ['Timestamp', 'timestamp']),
     };
+  }
+
+  private parseDetailsJson(details: unknown): { parsable: boolean; value: unknown } {
+    if (typeof details !== 'string') {
+      return { parsable: false, value: null };
+    }
+
+    try {
+      return { parsable: true, value: JSON.parse(details) as unknown };
+    } catch {
+      return { parsable: false, value: null };
+    }
   }
 
   private asRecord(value: unknown): Record<string, unknown> | null {
@@ -288,6 +318,27 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     }
 
     return typeof value;
+  }
+
+  private knownNestedObjectKeys(value: Record<string, unknown> | null) {
+    const nested: Record<string, string[]> = {};
+
+    for (const key of ['data', 'message', 'media'] as const) {
+      const record = this.asRecord(value?.[key]);
+
+      if (record) {
+        nested[key] = this.safeObjectKeys(record);
+      }
+    }
+
+    return nested;
+  }
+
+  private hasAnyOwnValueIn(
+    sources: Array<Record<string, unknown> | null>,
+    keys: readonly string[],
+  ) {
+    return sources.some((source) => this.hasAnyOwnValue(source, keys));
   }
 
   private hasAnyOwnValue(source: Record<string, unknown> | null, keys: readonly string[]) {

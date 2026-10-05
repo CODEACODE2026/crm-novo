@@ -231,6 +231,211 @@ describe('Kirago dependency injection', () => {
     expect(output).not.toContain('data:image');
   });
 
+  it('reports plain text Details as non-JSON without exposing content', async () => {
+    process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(instanceClient, 'sendDocument').mockResolvedValue({
+      success: true,
+      data: {
+        Id: 'document-provider-id',
+        Timestamp: '2026-10-05T20:00:00.000Z',
+        Details: 'sent document to https://media.example.test/private?token=secret-token',
+      },
+    });
+
+    await provider.sendDocument('instance-token', {
+      phone: '5544999999999',
+      documentDataUrl: 'data:application/octet-stream;base64,abc',
+      fileName: 'file.txt',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const payload = JSON.parse(output.replace('[WHATSAPP_MEDIA_SEND_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).toMatchObject({
+      kind: 'DOCUMENT',
+      detailsType: 'string',
+      detailsJsonParsable: false,
+      parsedDetailsType: null,
+      parsedDetailsKeys: [],
+      hasUrl: false,
+      hasMediaKey: false,
+      hasFileSHA256: false,
+      hasId: true,
+      hasTimestamp: true,
+    });
+    expect(typeof payload.detailsLength).toBe('number');
+    expect(output).not.toContain('sent document');
+    expect(output).not.toContain('https://media.example.test');
+    expect(output).not.toContain('secret-token');
+  });
+
+  it('reports JSON string Details structure without media fields', async () => {
+    process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(instanceClient, 'sendImage').mockResolvedValue({
+      success: true,
+      data: {
+        Id: 'image-provider-id',
+        Timestamp: '2026-10-05T20:00:00.000Z',
+        Details: JSON.stringify({
+          status: 'queued',
+          message: { delivered: true },
+          token: 'secret-token',
+        }),
+      },
+    });
+
+    await provider.sendImage('instance-token', {
+      phone: '5544999999999',
+      imageDataUrl: 'data:image/jpeg;base64,abc',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const payload = JSON.parse(output.replace('[WHATSAPP_MEDIA_SEND_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).toMatchObject({
+      detailsType: 'string',
+      detailsJsonParsable: true,
+      parsedDetailsType: 'object',
+      parsedDetailsKeys: ['[redacted-key]', 'message', 'status'],
+      parsedDetailsNestedKeys: { message: ['delivered'] },
+      hasUrl: false,
+      hasMediaKey: false,
+      hasFileSHA256: false,
+      hasFileLength: false,
+    });
+    expect(output).not.toContain('queued');
+    expect(output).not.toContain('secret-token');
+  });
+
+  it('detects media field presence inside parsed JSON Details without leaking values', async () => {
+    process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(instanceClient, 'sendImage').mockResolvedValue({
+      success: true,
+      data: {
+        Id: 'image-provider-id',
+        Timestamp: '2026-10-05T20:00:00.000Z',
+        Details: JSON.stringify({
+          media: {
+            Url: 'https://media.example.test/private?token=secret-token',
+            DirectPath: '/v/private',
+            MediaKey: 'secret-media-key',
+            Mimetype: 'image/jpeg',
+            FileSHA256: 'secret-file-sha',
+            FileEncSHA256: 'secret-file-enc-sha',
+            FileLength: 123,
+            Data: 'data:image/jpeg;base64,SECRET',
+          },
+        }),
+      },
+    });
+
+    await provider.sendImage('instance-token', {
+      phone: '5544999999999',
+      imageDataUrl: 'data:image/jpeg;base64,abc',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const payload = JSON.parse(output.replace('[WHATSAPP_MEDIA_SEND_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).toMatchObject({
+      detailsJsonParsable: true,
+      parsedDetailsKeys: ['media'],
+      parsedDetailsNestedKeys: {
+        media: [
+          'Data',
+          'DirectPath',
+          'FileEncSHA256',
+          'FileLength',
+          'FileSHA256',
+          'MediaKey',
+          'Mimetype',
+          'Url',
+        ],
+      },
+      hasUrl: true,
+      hasDirectPath: true,
+      hasMediaKey: true,
+      hasMimetype: true,
+      hasFileSHA256: true,
+      hasFileEncSHA256: true,
+      hasFileLength: true,
+      hasId: true,
+      hasTimestamp: true,
+    });
+    expect(output).not.toContain('https://media.example.test');
+    expect(output).not.toContain('secret-media-key');
+    expect(output).not.toContain('secret-file-sha');
+    expect(output).not.toContain('data:image');
+    expect(output).not.toContain('secret-token');
+  });
+
+  it('does not fail sends when Details contains malformed JSON', async () => {
+    process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(instanceClient, 'sendImage').mockResolvedValue({
+      success: true,
+      data: {
+        Id: 'image-provider-id',
+        Timestamp: '2026-10-05T20:00:00.000Z',
+        Details: '{"Url":"https://media.example.test/private?token=secret-token"',
+      },
+    });
+
+    await expect(
+      provider.sendImage('instance-token', {
+        phone: '5544999999999',
+        imageDataUrl: 'data:image/jpeg;base64,abc',
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      }),
+    ).resolves.toEqual({ providerMessageId: 'image-provider-id' });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const payload = JSON.parse(output.replace('[WHATSAPP_MEDIA_SEND_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).toMatchObject({
+      detailsType: 'string',
+      detailsJsonParsable: false,
+      parsedDetailsType: null,
+      parsedDetailsKeys: [],
+    });
+    expect(output).not.toContain('https://media.example.test');
+    expect(output).not.toContain('secret-token');
+  });
+
   it('maps CRM billing request ids to stable UUID message ids for Kirago sends', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

@@ -3070,7 +3070,7 @@ describe('WhatsAppService', () => {
     expect(result.summary).toEqual({ totalUnreadConversations: 2, totalUnreadMessages: 4 });
     expect(result.items.map((item: { displayName: string }) => item.displayName)).toEqual([
       'Cliente Preferido',
-      'Contato Direto',
+      '5544999999999',
       '5544999999999',
     ]);
     expect(findManyArgs).toMatchObject({
@@ -3139,7 +3139,7 @@ describe('WhatsAppService', () => {
     );
   });
 
-  it('uses client name first and falls back guest displayName to phone for technical contact names', async () => {
+  it('uses client name first and always falls back guest displayName to phone', async () => {
     const { service } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
@@ -3162,6 +3162,15 @@ describe('WhatsAppService', () => {
                 phone: '5541998746949',
                 phoneNormalized: '5541998746949',
               }),
+            )
+            .mockResolvedValueOnce(
+              conversation({
+                client: null,
+                clientId: null,
+                contactName: null,
+                phone: '5555996483134',
+                phoneNormalized: '5555996483134',
+              }),
             ),
           findMany: vi.fn().mockResolvedValue([]),
           count: vi.fn().mockResolvedValue(0),
@@ -3181,6 +3190,114 @@ describe('WhatsAppService', () => {
       displayName: '5541998746949',
       contactName: null,
     });
+    await expect(service.getConversation(conversation().id)).resolves.toMatchObject({
+      displayName: '5555996483134',
+      contactName: null,
+    });
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['connection name', { contactName: '  crm   principal  ' }],
+    ['instance name', { contactName: 'crm principal', instanceName: '  CRM   Principal  ' }],
+    [
+      'provider instance name',
+      {
+        contactName: 'instancia comercial',
+        instanceName: 'CRM Principal',
+        whatsAppConnection: connection({ providerInstanceName: 'Instancia   Comercial' }),
+      },
+    ],
+    [
+      'provider user id',
+      {
+        contactName: 'kirago-user',
+        instanceName: 'CRM Principal',
+        externalInstanceId: 'external-id',
+      },
+    ],
+    ['external instance id', { contactName: 'external-id', externalInstanceId: 'External-ID' }],
+  ])('falls back guest displayName to phone when contactName matches %s', async (_, overrides) => {
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              client: null,
+              clientId: null,
+              phone: '5555996483134',
+              phoneNormalized: '5555996483134',
+              ...overrides,
+            }),
+          ),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(service.getConversation(conversation().id)).resolves.toMatchObject({
+      displayName: '5555996483134',
+      contactName: null,
+    });
+  });
+
+  it('keeps legitimate guest contactName as metadata without using it for displayName', async () => {
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              client: null,
+              clientId: null,
+              contactName: 'Maria Silva',
+              phone: '5555996483134',
+              phoneNormalized: '5555996483134',
+            }),
+          ),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(service.getConversation(conversation().id)).resolves.toMatchObject({
+      displayName: '5555996483134',
+      contactName: 'Maria Silva',
+    });
+  });
+
+  it('allows a new real inbound PushName to replace an existing technical contactName', async () => {
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ contactName: 'CRM Principal' })),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation({ contactName: 'Maria' })),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi, sou Maria', {
+        contactName: 'Maria',
+        messageId: 'real-inbound-name',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ contactName: 'Maria' }),
+      }),
+    );
   });
 
   it('lists conversation messages by conversation with newest-page pagination and ASC presentation', async () => {

@@ -240,6 +240,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Dados do cliente');
     expect(conversationsSource).toContain('Abrir cliente');
     expect(conversationsSource).toContain('Contato avulso');
+    expect(conversationsSource).toContain('<dd>{conversation.displayName}</dd>');
+    expect(conversationsSource).not.toContain(
+      '<dd>{conversation.contactName ?? conversation.displayName}</dd>',
+    );
     expect(conversationsSource).toContain('const pendingAmount = (client.receivables ?? [])');
     expect(conversationsSource).toContain('<dd>{formatCurrency(pendingAmount)}</dd>');
     expect(conversationsSource).toContain('const instanceLabel = conversationInstanceLabel');

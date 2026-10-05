@@ -2640,7 +2640,7 @@ export class WhatsAppService {
       provider: conversation.provider,
       externalInstanceId: conversation.externalInstanceId,
       client,
-      displayName: client?.name ?? contactName ?? conversation.phone,
+      displayName: client?.name ?? conversation.phone,
       contactName,
       phone: conversation.phone,
       phoneNormalized: conversation.phoneNormalized,
@@ -2667,6 +2667,7 @@ export class WhatsAppService {
       return null;
     }
 
+    const normalizedContactName = this.normalizeContactNameComparison(contactName);
     const technicalNames = [
       input.instanceName,
       input.externalInstanceId,
@@ -2674,10 +2675,17 @@ export class WhatsAppService {
       input.providerInstanceName,
       input.providerUserId,
     ]
-      .map((value) => value?.trim())
+      .map((value) => this.normalizeContactNameComparison(value))
       .filter((value): value is string => Boolean(value));
 
-    return technicalNames.includes(contactName) ? null : contactName;
+    return normalizedContactName && technicalNames.includes(normalizedContactName)
+      ? null
+      : contactName;
+  }
+
+  private normalizeContactNameComparison(value: string | null | undefined) {
+    const normalized = value?.trim().replace(/\s+/g, ' ').toLowerCase();
+    return normalized || null;
   }
 
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {

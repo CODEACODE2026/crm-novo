@@ -12000,7 +12000,7 @@ function ConversationClientPanelContent({
       <dl className="detail-list">
         <div>
           <dt>Nome</dt>
-          <dd>{conversation.contactName ?? conversation.displayName}</dd>
+          <dd>{conversation.displayName}</dd>
         </div>
         <div>
           <dt>Telefone</dt>

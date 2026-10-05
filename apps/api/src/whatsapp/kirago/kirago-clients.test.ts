@@ -72,6 +72,13 @@ describe('Kirago clients', () => {
       FileName: 'file.txt',
       Id: 'document-request-id',
     });
+    await client.downloadImage('instance-token', {
+      Url: 'https://mmg.whatsapp.net/image',
+      MediaKey: 'media-key',
+      Mimetype: 'image/jpeg',
+      FileSHA256: 'file-sha',
+      FileLength: 123,
+    });
 
     expect(request).toHaveBeenNthCalledWith(1, '/session/connect', {
       method: 'POST',
@@ -109,6 +116,18 @@ describe('Kirago clients', () => {
         Document: 'data:application/octet-stream;base64,abc',
         FileName: 'file.txt',
         Id: 'document-request-id',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(5, '/chat/downloadimage', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Url: 'https://mmg.whatsapp.net/image',
+        MediaKey: 'media-key',
+        Mimetype: 'image/jpeg',
+        FileSHA256: 'file-sha',
+        FileLength: 123,
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

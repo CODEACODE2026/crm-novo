@@ -548,6 +548,10 @@ function serviceFactory({
     sendImage: vi.fn().mockResolvedValue({ providerMessageId: 'provider-image-id' }),
     sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'provider-document-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
+    downloadMedia: vi.fn().mockResolvedValue({
+      dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
+      mimetype: 'image/jpeg',
+    }),
     health: vi.fn().mockResolvedValue({ online: true }),
     ...providerOverrides,
   };
@@ -3700,7 +3704,16 @@ describe('WhatsAppService', () => {
       type: 'IMAGE',
       text: 'Legenda',
       mediaMimeType: 'image/jpeg',
-      rawMetadata: { secret: 'hidden' },
+      rawMetadata: {
+        secret: 'hidden',
+        mediaDownload: {
+          Url: 'https://mmg.whatsapp.net/image',
+          MediaKey: 'secret-media-key',
+          Mimetype: 'image/jpeg',
+          FileSHA256: 'secret-file-sha',
+          FileLength: 123,
+        },
+      },
       createdAt: new Date('2026-10-03T10:00:00.000Z'),
     });
     const newer = conversationMessage({
@@ -3756,6 +3769,7 @@ describe('WhatsAppService', () => {
       type: 'IMAGE',
       text: 'Legenda',
       mediaMimeType: 'image/jpeg',
+      mediaAvailable: true,
     });
     expect(result.items[1]).toMatchObject({
       direction: 'OUTBOUND',
@@ -3765,7 +3779,350 @@ describe('WhatsAppService', () => {
       messageDispatchId: dispatch().id,
     });
     expect(result.items[0]).not.toHaveProperty('rawMetadata');
+    expect(JSON.stringify(result.items[0])).not.toContain('secret-media-key');
     expect(result.pagination).toEqual({ page: 1, limit: 2, total: 2, totalPages: 1 });
+  });
+
+  it('downloads available conversation media as binary without exposing provider metadata', async () => {
+    const providerData = Buffer.from('image-bytes');
+    const operationalConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const { service, provider } = serviceFactory({
+      providerOverrides: {
+        downloadMedia: vi.fn().mockResolvedValue({
+          dataUrl: `data:image/jpeg;base64,${providerData.toString('base64')}`,
+          mimetype: 'image/jpeg',
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValue(conversation({ whatsAppConnection: operationalConnection })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'message-image',
+              type: 'IMAGE',
+              mediaMimeType: 'image/jpeg',
+              mediaSizeBytes: providerData.length,
+              rawMetadata: {
+                mediaDownload: {
+                  Url: 'https://mmg.whatsapp.net/image',
+                  DirectPath: '/v/image',
+                  MediaKey: 'secret-media-key',
+                  Mimetype: 'image/jpeg',
+                  FileEncSHA256: 'secret-file-enc',
+                  FileSHA256: 'secret-file-sha',
+                  FileLength: providerData.length,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    const result = await service.downloadConversationMessageMedia(
+      conversation().id,
+      'message-image',
+    );
+
+    expect(provider.downloadMedia).toHaveBeenCalledWith('instance-token', {
+      type: 'IMAGE',
+      Url: 'https://mmg.whatsapp.net/image',
+      DirectPath: '/v/image',
+      MediaKey: 'secret-media-key',
+      Mimetype: 'image/jpeg',
+      FileEncSHA256: 'secret-file-enc',
+      FileSHA256: 'secret-file-sha',
+      FileLength: providerData.length,
+    });
+    expect(result).toMatchObject({
+      contentLength: providerData.length,
+      disposition: 'inline',
+      mimetype: 'image/jpeg',
+    });
+    expect(result.buffer.equals(providerData)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('secret-media-key');
+  });
+
+  it.each([
+    ['DOCUMENT', 'application/pdf', 'contract.pdf', 'attachment'],
+    ['AUDIO', 'audio/ogg', null, 'inline'],
+    ['VIDEO', 'video/mp4', null, 'inline'],
+  ] as const)(
+    'downloads available %s conversation media through the provider',
+    async (type, mimetype, fileName, disposition) => {
+      const providerData = Buffer.from(`${type.toLowerCase()}-bytes`);
+      const operationalConnection = connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      });
+      const { service, provider } = serviceFactory({
+        providerOverrides: {
+          downloadMedia: vi.fn().mockResolvedValue({
+            dataUrl: `data:${mimetype};base64,${providerData.toString('base64')}`,
+            mimetype,
+          }),
+        },
+        prismaOverrides: {
+          whatsAppConversation: {
+            findUnique: vi
+              .fn()
+              .mockResolvedValue(conversation({ whatsAppConnection: operationalConnection })),
+          },
+          whatsAppMessage: {
+            findUnique: vi.fn().mockResolvedValue(
+              conversationMessage({
+                id: `message-${type.toLowerCase()}`,
+                type,
+                mediaFileName: fileName,
+                mediaMimeType: mimetype,
+                mediaSizeBytes: providerData.length,
+                rawMetadata: {
+                  mediaDownload: {
+                    Url: `https://mmg.whatsapp.net/${type.toLowerCase()}`,
+                    MediaKey: `${type.toLowerCase()}-media-key`,
+                    Mimetype: mimetype,
+                    FileSHA256: `${type.toLowerCase()}-file-sha`,
+                    FileLength: providerData.length,
+                  },
+                },
+              }),
+            ),
+          },
+        },
+      });
+
+      const result = await service.downloadConversationMessageMedia(
+        conversation().id,
+        `message-${type.toLowerCase()}`,
+      );
+
+      expect(provider.downloadMedia).toHaveBeenCalledWith(
+        'instance-token',
+        expect.objectContaining({ type, Mimetype: mimetype }),
+      );
+      expect(result).toMatchObject({
+        contentLength: providerData.length,
+        disposition,
+        mimetype,
+      });
+      expect(result.buffer.equals(providerData)).toBe(true);
+    },
+  );
+
+  it('returns a controlled error for legacy media without download metadata', async () => {
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'legacy-image',
+              type: 'IMAGE',
+              mediaMimeType: 'image/jpeg',
+              rawMetadata: { source: 'webhook' },
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      service.downloadConversationMessageMedia(conversation().id, 'legacy-image'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MEDIA_NOT_AVAILABLE' }),
+    });
+    expect(provider.downloadMedia).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported conversation media types before calling the provider', async () => {
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'message-text',
+              type: 'TEXT',
+              rawMetadata: {
+                mediaDownload: {
+                  Url: 'https://mmg.whatsapp.net/text',
+                  MediaKey: 'text-media-key',
+                  Mimetype: 'text/plain',
+                  FileSHA256: 'text-file-sha',
+                  FileLength: 12,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      service.downloadConversationMessageMedia(conversation().id, 'message-text'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MEDIA_NOT_AVAILABLE' }),
+    });
+    expect(provider.downloadMedia).not.toHaveBeenCalled();
+  });
+
+  it('rejects message and conversation mismatches before calling the provider', async () => {
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ id: 'conversation-a' })),
+        },
+        whatsAppMessage: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValue(
+              conversationMessage({ id: 'message-b', conversationId: 'conversation-b' }),
+            ),
+        },
+      },
+    });
+
+    await expect(
+      service.downloadConversationMessageMedia('conversation-a', 'message-b'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MESSAGE_CONVERSATION_MISMATCH' }),
+    });
+    expect(provider.downloadMedia).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'invalid Data URL',
+      { dataUrl: 'not-a-data-url', mimetype: 'image/jpeg' },
+      'BadRequestException',
+    ],
+    [
+      'MIME mismatch',
+      {
+        dataUrl: `data:image/png;base64,${Buffer.from('image-bytes').toString('base64')}`,
+        mimetype: 'image/jpeg',
+      },
+      'BadRequestException',
+    ],
+    [
+      'invalid MIME',
+      {
+        dataUrl: `data:text/html;base64,${Buffer.from('<script></script>').toString('base64')}`,
+        mimetype: 'text/html',
+      },
+      'BadRequestException',
+    ],
+    [
+      'oversized media',
+      {
+        dataUrl: `data:image/jpeg;base64,${Buffer.alloc(
+          WhatsAppService.conversationMediaMaxBytes + 1,
+        ).toString('base64')}`,
+        mimetype: 'image/jpeg',
+      },
+      'PayloadTooLargeException',
+    ],
+  ] as const)('rejects provider media with %s', async (_label, providerResponse, exceptionName) => {
+    const { service } = serviceFactory({
+      providerOverrides: {
+        downloadMedia: vi.fn().mockResolvedValue(providerResponse),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'message-image',
+              type: 'IMAGE',
+              mediaMimeType: 'image/jpeg',
+              mediaSizeBytes: null,
+              rawMetadata: {
+                mediaDownload: {
+                  Url: 'https://mmg.whatsapp.net/image',
+                  MediaKey: 'image-media-key',
+                  Mimetype: 'image/jpeg',
+                  FileSHA256: 'image-file-sha',
+                  FileLength: 123,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      service.downloadConversationMessageMedia(conversation().id, 'message-image'),
+    ).rejects.toMatchObject({ name: exceptionName });
+  });
+
+  it('surfaces provider download failure without exposing metadata in the result', async () => {
+    const { service } = serviceFactory({
+      providerOverrides: {
+        downloadMedia: vi.fn().mockRejectedValue(new Error('falha token=secret-value')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'message-image',
+              type: 'IMAGE',
+              mediaMimeType: 'image/jpeg',
+              rawMetadata: {
+                mediaDownload: {
+                  Url: 'https://mmg.whatsapp.net/image',
+                  MediaKey: 'secret-media-key',
+                  Mimetype: 'image/jpeg',
+                  FileSHA256: 'secret-file-sha',
+                  FileLength: 123,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    const result = service.downloadConversationMessageMedia(conversation().id, 'message-image');
+
+    await expect(result).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MEDIA_DOWNLOAD_FAILED' }),
+    });
+    await expect(result).rejects.not.toThrow('secret-value');
   });
 
   it('returns 404 when listing messages for a missing conversation', async () => {

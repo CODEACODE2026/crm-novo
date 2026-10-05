@@ -185,7 +185,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Documento');
     expect(conversationsSource).toContain('onRemoveMedia={clearComposerMedia}');
     expect(conversationsSource).toContain('formatFileSize(selectedMedia.file.size)');
-    expect(conversationsSource).toContain("message.type === 'DOCUMENT' && message.mediaFileName");
+    expect(conversationsSource).toContain('function ConversationMediaContent');
+    expect(conversationsSource).toContain('message.mediaAvailable');
+    expect(conversationsSource).toContain(
+      'downloadWhatsAppConversationMedia(conversationId, message.id)',
+    );
+    expect(conversationsSource).toContain('conversation-image-media');
+    expect(conversationsSource).toContain('conversation-audio-media');
+    expect(conversationsSource).toContain('conversation-video-media');
     expect(conversationsSource).toContain('conversation-media-meta');
     expect(conversationsSource).toContain(
       "message.status === 'FAILED' && outbound && message.type === 'TEXT'",

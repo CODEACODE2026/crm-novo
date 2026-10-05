@@ -17,6 +17,16 @@ export type NormalizedMessageType =
   | 'interactive_response'
   | 'unknown';
 
+export type NormalizedMediaDownloadMetadata = {
+  Url: string;
+  DirectPath?: string;
+  MediaKey: string;
+  Mimetype: string;
+  FileEncSHA256?: string;
+  FileSHA256: string;
+  FileLength: number;
+};
+
 export type NormalizedWhatsAppMessage = {
   provider: 'KIRAGO';
   instanceName: string | null;
@@ -31,6 +41,7 @@ export type NormalizedWhatsAppMessage = {
   receivedAt: Date;
   isGroup: boolean;
   mediaMetadata: Record<string, unknown> | null;
+  mediaDownloadMetadata: NormalizedMediaDownloadMetadata | null;
 };
 
 type RecordValue = Record<string, unknown>;
@@ -84,6 +95,7 @@ export class KiragoWebhookNormalizer {
       receivedAt,
       isGroup,
       mediaMetadata: this.extractMediaMetadata(message, messageType),
+      mediaDownloadMetadata: this.extractMediaDownloadMetadata(message, messageType),
     };
   }
 
@@ -282,14 +294,14 @@ export class KiragoWebhookNormalizer {
 
     const metadata: Record<string, unknown> = { kind: messageType };
 
-    for (const [from, to] of [
-      ['mimetype', 'mimetype'],
-      ['fileLength', 'size'],
-      ['seconds', 'seconds'],
-      ['fileName', 'fileName'],
-      ['caption', 'caption'],
+    for (const [keys, to] of [
+      [['mimetype', 'Mimetype'], 'mimetype'],
+      [['fileLength', 'FileLength'], 'size'],
+      [['seconds', 'Seconds'], 'seconds'],
+      [['fileName', 'FileName'], 'fileName'],
+      [['caption', 'Caption'], 'caption'],
     ] as const) {
-      const value = source[from];
+      const value = firstOwnValue(source, keys);
 
       if (typeof value === 'string' || typeof value === 'number') {
         metadata[to] = value;
@@ -297,6 +309,41 @@ export class KiragoWebhookNormalizer {
     }
 
     return Object.keys(metadata).length > 1 ? metadata : null;
+  }
+
+  private extractMediaDownloadMetadata(
+    message: RecordValue | null,
+    messageType: NormalizedMessageType,
+  ): NormalizedMediaDownloadMetadata | null {
+    const key = this.mediaKey(messageType);
+    const source = key ? asRecord(message?.[key]) : null;
+
+    if (!source) {
+      return null;
+    }
+
+    const Url = stringOrNull(firstOwnValue(source, ['url', 'Url']));
+    const MediaKey = stringOrNull(firstOwnValue(source, ['mediaKey', 'MediaKey']));
+    const Mimetype = stringOrNull(firstOwnValue(source, ['mimetype', 'Mimetype']));
+    const FileSHA256 = stringOrNull(firstOwnValue(source, ['fileSHA256', 'FileSHA256']));
+    const FileLength = numberOrNull(firstOwnValue(source, ['fileLength', 'FileLength']));
+
+    if (!Url || !MediaKey || !Mimetype || !FileSHA256 || FileLength === null) {
+      return null;
+    }
+
+    const DirectPath = stringOrNull(firstOwnValue(source, ['directPath', 'DirectPath']));
+    const FileEncSHA256 = stringOrNull(firstOwnValue(source, ['fileEncSHA256', 'FileEncSHA256']));
+
+    return {
+      Url,
+      ...(DirectPath ? { DirectPath } : {}),
+      MediaKey,
+      Mimetype,
+      ...(FileEncSHA256 ? { FileEncSHA256 } : {}),
+      FileSHA256,
+      FileLength,
+    };
   }
 
   private mediaKey(messageType: NormalizedMessageType) {
@@ -314,4 +361,27 @@ function asRecord(value: unknown): RecordValue | null {
 
 function stringOrNull(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function numberOrNull(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function firstOwnValue(source: RecordValue, keys: readonly string[]) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      return source[key];
+    }
+  }
+
+  return undefined;
 }

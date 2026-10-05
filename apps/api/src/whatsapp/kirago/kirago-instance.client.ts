@@ -61,6 +61,21 @@ export type KiragoSendButtonsData = {
   Timestamp?: string;
 };
 
+export type KiragoDownloadMediaPayload = {
+  Url: string;
+  DirectPath?: string;
+  MediaKey: string;
+  Mimetype: string;
+  FileEncSHA256?: string;
+  FileSHA256: string;
+  FileLength: number;
+};
+
+export type KiragoDownloadMediaData = {
+  Data?: string;
+  Mimetype?: string;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -175,6 +190,22 @@ export class KiragoInstanceClient {
     });
   }
 
+  downloadImage(instanceToken: string, payload: KiragoDownloadMediaPayload) {
+    return this.downloadMedia(instanceToken, '/chat/downloadimage', payload);
+  }
+
+  downloadDocument(instanceToken: string, payload: KiragoDownloadMediaPayload) {
+    return this.downloadMedia(instanceToken, '/chat/downloaddocument', payload);
+  }
+
+  downloadAudio(instanceToken: string, payload: KiragoDownloadMediaPayload) {
+    return this.downloadMedia(instanceToken, '/chat/downloadaudio', payload);
+  }
+
+  downloadVideo(instanceToken: string, payload: KiragoDownloadMediaPayload) {
+    return this.downloadMedia(instanceToken, '/chat/downloadvideo', payload);
+  }
+
   checkPhone(instanceToken: string, phone: string) {
     return this.http.request<KiragoEnvelope<unknown>>('/user/check', {
       method: 'POST',
@@ -188,5 +219,14 @@ export class KiragoInstanceClient {
     return instanceToken.toLowerCase().startsWith('bearer ')
       ? instanceToken
       : `Bearer ${instanceToken}`;
+  }
+
+  private downloadMedia(instanceToken: string, path: string, payload: KiragoDownloadMediaPayload) {
+    return this.http.request<KiragoEnvelope<KiragoDownloadMediaData>>(path, {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
   }
 }

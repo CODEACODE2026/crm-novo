@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
   Optional,
+  PayloadTooLargeException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -38,7 +40,12 @@ import {
   type NormalizedMessageType,
   type NormalizedWhatsAppMessage,
 } from './kirago/kirago-webhook-normalizer';
-import { WHATSAPP_PROVIDER, type WhatsAppProvider } from './provider/whatsapp-provider';
+import {
+  WHATSAPP_PROVIDER,
+  type DownloadMediaType,
+  type DownloadMediaInput,
+  type WhatsAppProvider,
+} from './provider/whatsapp-provider';
 import { TokenEncryptionService } from './security/token-encryption.service';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
@@ -80,6 +87,16 @@ type PreparedConversationMedia = {
   sizeBytes: number;
 };
 
+type ConversationMediaDownload = Omit<DownloadMediaInput, 'type'>;
+
+type DownloadedConversationMedia = {
+  buffer: Buffer;
+  contentLength: number;
+  disposition: 'inline' | 'attachment';
+  fileName: string;
+  mimetype: string;
+};
+
 type MediaDebugFieldSummary = {
   present: boolean;
   type: string | null;
@@ -91,7 +108,7 @@ type MediaDebugValueSummary = MediaDebugFieldSummary & {
 };
 
 type MediaDebugPayload = {
-  mediaType: 'IMAGE' | 'DOCUMENT';
+  mediaType: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
   isFromMe: boolean;
   providerMessageId: string | null;
   instanceName: string | null;
@@ -765,6 +782,98 @@ export class WhatsAppService {
     return {
       items: [...items].reverse().map((message) => this.presentConversationMessage(message)),
       pagination: this.presentLimitPagination(page, limit, total),
+    };
+  }
+
+  async downloadConversationMessageMedia(
+    conversationId: string,
+    messageId: string,
+  ): Promise<DownloadedConversationMedia> {
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id: conversationId },
+      include: { whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const message = await this.prisma.whatsAppMessage.findUnique({ where: { id: messageId } });
+
+    if (!message) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
+    }
+
+    if (message.conversationId !== conversation.id) {
+      throw new BadRequestException({
+        code: 'MESSAGE_CONVERSATION_MISMATCH',
+        message: 'Mensagem nao pertence a conversa informada.',
+      });
+    }
+
+    const type = this.supportedDownloadMediaType(message.type);
+
+    if (!type) {
+      throw new BadRequestException({
+        code: 'MEDIA_NOT_AVAILABLE',
+        message: 'Mensagem nao possui midia suportada para download.',
+      });
+    }
+
+    const mediaDownload = this.mediaDownloadFromRawMetadata(message.rawMetadata);
+
+    if (!mediaDownload) {
+      throw new BadRequestException({
+        code: 'MEDIA_NOT_AVAILABLE',
+        message: 'Midia indisponivel para mensagens antigas ou sem metadados completos.',
+      });
+    }
+
+    const expectedSize = message.mediaSizeBytes ?? mediaDownload.FileLength;
+
+    if (expectedSize > WhatsAppService.conversationMediaMaxBytes) {
+      throw new PayloadTooLargeException({
+        code: 'MEDIA_TOO_LARGE',
+        message: 'Midia excede o limite interno do CRM.',
+      });
+    }
+
+    const connection = conversation.whatsAppConnection;
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    const response = await this.downloadConversationMediaFromProvider(connection, instanceToken, {
+      type,
+      ...mediaDownload,
+    });
+    const parsed = this.parseProviderMediaDataUrl(response.dataUrl);
+    const mimetype = response.mimetype || parsed.mimetype;
+
+    if (mimetype !== parsed.mimetype) {
+      throw new BadRequestException({
+        code: 'INVALID_MEDIA_RESPONSE',
+        message: 'Provider retornou midia com MIME inconsistente.',
+      });
+    }
+
+    this.assertSafeConversationMediaMime(type, mimetype);
+
+    if (parsed.buffer.length > WhatsAppService.conversationMediaMaxBytes) {
+      throw new PayloadTooLargeException({
+        code: 'MEDIA_TOO_LARGE',
+        message: 'Midia excede o limite interno do CRM.',
+      });
+    }
+
+    return {
+      buffer: parsed.buffer,
+      contentLength: parsed.buffer.length,
+      disposition: type === 'DOCUMENT' ? 'attachment' : 'inline',
+      fileName: this.downloadFileName(message, mimetype),
+      mimetype,
     };
   }
 
@@ -1656,8 +1765,18 @@ export class WhatsAppService {
 
     const imageMessage = this.asRecord(message.imageMessage);
     const documentMessage = this.asRecord(message.documentMessage);
-    const mediaType = imageMessage ? 'IMAGE' : documentMessage ? 'DOCUMENT' : null;
-    const media = imageMessage ?? documentMessage;
+    const audioMessage = this.asRecord(message.audioMessage);
+    const videoMessage = this.asRecord(message.videoMessage);
+    const mediaType = imageMessage
+      ? 'IMAGE'
+      : documentMessage
+        ? 'DOCUMENT'
+        : audioMessage
+          ? 'AUDIO'
+          : videoMessage
+            ? 'VIDEO'
+            : null;
+    const media = imageMessage ?? documentMessage ?? audioMessage ?? videoMessage;
 
     if (!mediaType || !media) {
       return null;
@@ -2137,9 +2256,7 @@ export class WhatsAppService {
         ...(existing.mediaDurationSeconds === null
           ? { mediaDurationSeconds: media.mediaDurationSeconds }
           : {}),
-        ...(existing.rawMetadata === null
-          ? { rawMetadata: this.buildConversationRawMetadata(normalized) }
-          : {}),
+        ...this.reconciledRawMetadataUpdate(existing.rawMetadata, normalized),
       },
     });
 
@@ -3461,6 +3578,7 @@ export class WhatsAppService {
       mediaFileName: message.mediaFileName,
       mediaSizeBytes: message.mediaSizeBytes,
       mediaDurationSeconds: message.mediaDurationSeconds,
+      mediaAvailable: this.hasAvailableMedia(message),
       messageDispatchId: message.messageDispatchId,
       createdAt: message.createdAt,
     };
@@ -3711,6 +3829,10 @@ export class WhatsAppService {
       }
     }
 
+    if (normalized.mediaDownloadMetadata) {
+      metadata.mediaDownload = normalized.mediaDownloadMetadata;
+    }
+
     return metadata;
   }
 
@@ -3732,6 +3854,194 @@ export class WhatsAppService {
     }
 
     return null;
+  }
+
+  private reconciledRawMetadataUpdate(
+    current: Prisma.JsonValue | null,
+    normalized: NormalizedWhatsAppMessage,
+  ) {
+    const next = this.buildConversationRawMetadata(normalized);
+
+    if (current === null) {
+      return { rawMetadata: next };
+    }
+
+    if (!normalized.mediaDownloadMetadata || this.mediaDownloadFromRawMetadata(current)) {
+      return {};
+    }
+
+    return {
+      rawMetadata: {
+        ...this.rawMetadataObject(current),
+        mediaDownload: normalized.mediaDownloadMetadata,
+      } as Prisma.InputJsonValue,
+    };
+  }
+
+  private mediaDownloadFromRawMetadata(
+    rawMetadata: Prisma.JsonValue | null,
+    type?: DownloadMediaType,
+  ) {
+    const metadata = this.rawMetadataObject(rawMetadata);
+    const mediaDownload = this.asRecord(metadata.mediaDownload);
+
+    if (!mediaDownload) {
+      return null;
+    }
+
+    const Url = this.optionalMetadataString(mediaDownload, 'Url');
+    const MediaKey = this.optionalMetadataString(mediaDownload, 'MediaKey');
+    const Mimetype = this.optionalMetadataString(mediaDownload, 'Mimetype');
+    const FileSHA256 = this.optionalMetadataString(mediaDownload, 'FileSHA256');
+    const FileLength = this.optionalMetadataInt(mediaDownload, 'FileLength');
+
+    if (!Url || !MediaKey || !Mimetype || !FileSHA256 || FileLength === null) {
+      return null;
+    }
+
+    if (type && !this.isSafeConversationMediaMime(type, Mimetype)) {
+      return null;
+    }
+
+    const DirectPath = this.optionalMetadataString(mediaDownload, 'DirectPath');
+    const FileEncSHA256 = this.optionalMetadataString(mediaDownload, 'FileEncSHA256');
+
+    return {
+      Url,
+      ...(DirectPath ? { DirectPath } : {}),
+      MediaKey,
+      Mimetype,
+      ...(FileEncSHA256 ? { FileEncSHA256 } : {}),
+      FileSHA256,
+      FileLength,
+    } satisfies ConversationMediaDownload;
+  }
+
+  private rawMetadataObject(
+    rawMetadata: Prisma.JsonValue | null,
+  ): Record<string, Prisma.JsonValue> {
+    return rawMetadata && typeof rawMetadata === 'object' && !Array.isArray(rawMetadata)
+      ? (rawMetadata as Record<string, Prisma.JsonValue>)
+      : {};
+  }
+
+  private supportedDownloadMediaType(type: WhatsAppConversationMessageType) {
+    if (type === 'IMAGE' || type === 'DOCUMENT' || type === 'AUDIO' || type === 'VIDEO') {
+      return type;
+    }
+
+    return null;
+  }
+
+  private async downloadConversationMediaFromProvider(
+    connection: WhatsAppConnection,
+    instanceToken: string,
+    input: DownloadMediaInput,
+  ) {
+    try {
+      return await this.mapConnectionProviderError(connection, () =>
+        this.provider.downloadMedia(instanceToken, input),
+      );
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new ServiceUnavailableException({
+        code: 'MEDIA_DOWNLOAD_FAILED',
+        message: 'Nao foi possivel baixar a midia do WhatsApp.',
+      });
+    }
+  }
+
+  private hasAvailableMedia(message: WhatsAppConversationMessageForPresenter) {
+    const type = this.supportedDownloadMediaType(message.type);
+
+    return Boolean(type && this.mediaDownloadFromRawMetadata(message.rawMetadata, type));
+  }
+
+  private parseProviderMediaDataUrl(dataUrl: string) {
+    const match = dataUrl.match(/^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i);
+
+    if (!match || !match[1] || !match[2]) {
+      throw new BadRequestException({
+        code: 'INVALID_MEDIA_RESPONSE',
+        message: 'Provider retornou midia invalida.',
+      });
+    }
+
+    const compactBase64 = match[2].replace(/\s+/g, '');
+    const estimatedBytes = Math.floor((compactBase64.length * 3) / 4);
+
+    if (estimatedBytes > WhatsAppService.conversationMediaMaxBytes + 2) {
+      throw new PayloadTooLargeException({
+        code: 'MEDIA_TOO_LARGE',
+        message: 'Midia excede o limite interno do CRM.',
+      });
+    }
+
+    const buffer = Buffer.from(compactBase64, 'base64');
+    const normalizedInput = compactBase64.replace(/=+$/, '');
+    const normalizedOutput = buffer.toString('base64').replace(/=+$/, '');
+
+    if (!buffer.length || normalizedInput !== normalizedOutput) {
+      throw new BadRequestException({
+        code: 'INVALID_MEDIA_RESPONSE',
+        message: 'Provider retornou Base64 invalido.',
+      });
+    }
+
+    return { buffer, mimetype: match[1] };
+  }
+
+  private downloadFileName(message: WhatsAppMessage, mimetype: string) {
+    const existing = message.mediaFileName?.trim();
+
+    if (existing) {
+      return this.sanitizeMediaFileName(existing);
+    }
+
+    return this.sanitizeMediaFileName(
+      `whatsapp-media-${message.id}.${this.fileExtension(mimetype)}`,
+    );
+  }
+
+  private fileExtension(mimetype: string) {
+    const map: Record<string, string> = {
+      'application/pdf': 'pdf',
+      'audio/ogg': 'ogg',
+      'audio/mpeg': 'mp3',
+      'audio/mp4': 'm4a',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'video/mp4': 'mp4',
+    };
+
+    return map[mimetype.toLowerCase()] ?? 'bin';
+  }
+
+  private assertSafeConversationMediaMime(type: DownloadMediaType, mimetype: string) {
+    if (this.isSafeConversationMediaMime(type, mimetype)) {
+      return;
+    }
+
+    throw new BadRequestException({
+      code: 'INVALID_MEDIA_RESPONSE',
+      message: 'Provider retornou midia com MIME nao permitido.',
+    });
+  }
+
+  private isSafeConversationMediaMime(type: DownloadMediaType, mimetype: string) {
+    const normalized = mimetype.toLowerCase();
+
+    if (type === 'IMAGE') return normalized === 'image/jpeg' || normalized === 'image/png';
+    if (type === 'DOCUMENT') return normalized === 'application/pdf';
+    if (type === 'AUDIO') {
+      return (
+        normalized === 'audio/ogg' || normalized === 'audio/mpeg' || normalized === 'audio/mp4'
+      );
+    }
+    return normalized === 'video/mp4';
   }
 
   private toPrismaMessageType(type: NormalizedMessageType): WhatsAppInboundMessageType {

@@ -6,6 +6,7 @@ import { KiragoInstanceClient } from './kirago-instance.client';
 import { KiragoHttpClient } from './kirago-http.client';
 import { KiragoProviderError } from './kirago-provider.error';
 import type {
+  DownloadMediaInput,
   ProvisionConnectionInput,
   RemoteConnectionLookupInput,
   SendButtonsInput,
@@ -175,6 +176,31 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
 
     return {
       providerMessageId: response.data?.Id ?? null,
+    };
+  }
+
+  async downloadMedia(instanceToken: string, input: DownloadMediaInput) {
+    const payload = {
+      Url: input.Url,
+      ...(input.DirectPath ? { DirectPath: input.DirectPath } : {}),
+      MediaKey: input.MediaKey,
+      Mimetype: input.Mimetype,
+      ...(input.FileEncSHA256 ? { FileEncSHA256: input.FileEncSHA256 } : {}),
+      FileSHA256: input.FileSHA256,
+      FileLength: input.FileLength,
+    };
+    const response =
+      input.type === 'IMAGE'
+        ? await this.instanceClient.downloadImage(instanceToken, payload)
+        : input.type === 'DOCUMENT'
+          ? await this.instanceClient.downloadDocument(instanceToken, payload)
+          : input.type === 'AUDIO'
+            ? await this.instanceClient.downloadAudio(instanceToken, payload)
+            : await this.instanceClient.downloadVideo(instanceToken, payload);
+
+    return {
+      dataUrl: response.data?.Data ?? '',
+      mimetype: response.data?.Mimetype ?? input.Mimetype,
     };
   }
 

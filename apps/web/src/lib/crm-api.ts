@@ -736,6 +736,7 @@ export interface WhatsAppConversationMessage {
   mediaFileName: string | null;
   mediaSizeBytes: number | null;
   mediaDurationSeconds: number | null;
+  mediaAvailable: boolean;
   messageDispatchId: string | null;
   createdAt: string;
 }
@@ -2534,6 +2535,25 @@ export function sendWhatsAppConversationMedia(
     method: 'POST',
     body: formData,
   });
+}
+
+export async function downloadWhatsAppConversationMedia(conversationId: string, messageId: string) {
+  const response = await fetch(
+    buildApiUrl(`/whatsapp/conversations/${conversationId}/messages/${messageId}/media`),
+    { credentials: 'include' },
+  );
+
+  if (response.status === 401) {
+    redirectToLoginOnce();
+    throw new ApiError('Não autenticado.', response.status);
+  }
+
+  if (!response.ok) {
+    const body = await parseJsonResponse<{ message?: string } & Record<string, unknown>>(response);
+    throw new ApiError(body?.message ?? 'Não foi possível baixar a mídia.', response.status, body);
+  }
+
+  return response.blob();
 }
 
 export function startWhatsAppConversation(payload: {

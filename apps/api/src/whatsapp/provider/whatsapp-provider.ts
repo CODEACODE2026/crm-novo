@@ -71,6 +71,24 @@ export type SendButtonsResult = {
   providerMessageId: string | null;
 };
 
+export type DownloadMediaType = 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
+
+export type DownloadMediaInput = {
+  type: DownloadMediaType;
+  Url: string;
+  DirectPath?: string;
+  MediaKey: string;
+  Mimetype: string;
+  FileEncSHA256?: string;
+  FileSHA256: string;
+  FileLength: number;
+};
+
+export type DownloadMediaResult = {
+  dataUrl: string;
+  mimetype: string;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -85,6 +103,7 @@ export interface WhatsAppProvider {
   sendImage(instanceToken: string, input: SendImageInput): Promise<SendImageResult>;
   sendDocument(instanceToken: string, input: SendDocumentInput): Promise<SendDocumentResult>;
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
+  downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

@@ -2692,6 +2692,108 @@ a {
   overflow-wrap: anywhere;
 }
 
+.conversation-image-media,
+.conversation-document-media button,
+.conversation-media-unavailable button {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text-primary);
+}
+
+.conversation-image-media {
+  display: block;
+  width: min(260px, 100%);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+  margin: 2px 0 0;
+  padding: 0;
+}
+
+.conversation-image-media.expanded {
+  width: min(520px, 100%);
+  cursor: zoom-out;
+}
+
+.conversation-image-media img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: var(--surface-soft);
+}
+
+.conversation-document-media {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: min(260px, 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 7px;
+}
+
+.conversation-document-icon {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.conversation-document-copy {
+  min-width: 0;
+}
+
+.conversation-document-copy strong,
+.conversation-document-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-document-copy strong {
+  font-size: 12px;
+}
+
+.conversation-document-copy small,
+.conversation-media-loading,
+.conversation-media-unavailable {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.conversation-document-media button,
+.conversation-media-unavailable button {
+  margin: 0;
+  color: var(--info);
+}
+
+.conversation-audio-media,
+.conversation-video-media {
+  display: block;
+  width: min(360px, 100%);
+  margin-top: 2px;
+}
+
+.conversation-video-media {
+  max-height: 360px;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+.conversation-media-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .conversation-caption {
   display: block;
   margin-top: 6px;

@@ -65,10 +65,18 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
       sendConversationMediaMessage: vi.fn().mockResolvedValue({ id: 'media-message-id' }),
+      downloadConversationMessageMedia: vi.fn().mockResolvedValue({
+        buffer: Buffer.from('image'),
+        contentLength: 5,
+        disposition: 'inline',
+        fileName: 'foto.jpg',
+        mimetype: 'image/jpeg',
+      }),
       markConversationAsRead: vi.fn().mockResolvedValue({ unreadCount: 0 }),
       resolveConversation: vi.fn().mockResolvedValue({ status: 'RESOLVED' }),
     };
     const subject = new WhatsAppController(service as never);
+    const response = { setHeader: vi.fn() };
 
     await expect(subject.listConversations({ page: 1, limit: 20 })).resolves.toEqual({
       items: [],
@@ -111,6 +119,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
       ),
     ).resolves.toEqual({ id: 'media-message-id' });
+    await expect(
+      subject.downloadConversationMessageMedia('conversation-id', 'message-id', response as never),
+    ).resolves.toMatchObject({});
     await expect(subject.markConversationAsRead('conversation-id')).resolves.toEqual({
       unreadCount: 0,
     });
@@ -143,6 +154,12 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       caption: 'Legenda',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
     });
+    expect(service.downloadConversationMessageMedia).toHaveBeenCalledWith(
+      'conversation-id',
+      'message-id',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith('Content-Type', 'image/jpeg');
+    expect(response.setHeader).toHaveBeenCalledWith('Content-Length', '5');
     expect(service.markConversationAsRead).toHaveBeenCalledWith('conversation-id');
     expect(service.resolveConversation).toHaveBeenCalledWith('conversation-id');
   });

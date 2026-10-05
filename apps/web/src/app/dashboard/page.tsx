@@ -175,6 +175,7 @@ import {
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
   markWhatsAppConversationRead,
+  downloadWhatsAppConversationMedia,
   downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
@@ -11425,6 +11426,7 @@ function ConversationsView({
         failedAt,
         isFromMe: true,
         mediaDurationSeconds: null,
+        mediaAvailable: false,
         mediaFileName: mediaToSend?.file.name ?? null,
         mediaMimeType: mediaToSend?.file.type ?? null,
         mediaSizeBytes: mediaToSend?.file.size ?? null,
@@ -11791,6 +11793,7 @@ function ConversationsView({
               </div>
 
               <ConversationMessages
+                conversationId={selectedConversation.id}
                 messages={messages}
                 loading={messagesLoading}
                 messagesEndRef={messagesEndRef}
@@ -12253,6 +12256,7 @@ function ConversationHeader({
 }
 
 function ConversationMessages({
+  conversationId,
   loading,
   messages,
   messagesEndRef,
@@ -12261,6 +12265,7 @@ function ConversationMessages({
   scrollRef,
   showNewMessageNotice,
 }: {
+  conversationId: string;
   loading: boolean;
   messages: WhatsAppConversationMessage[];
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
@@ -12276,7 +12281,12 @@ function ConversationMessages({
         {messages.length ? (
           <div className="conversation-message-stack">
             {messages.map((message) => (
-              <ConversationBubble key={message.id} message={message} onRetry={onRetry} />
+              <ConversationBubble
+                conversationId={conversationId}
+                key={message.id}
+                message={message}
+                onRetry={onRetry}
+              />
             ))}
           </div>
         ) : null}
@@ -12295,9 +12305,11 @@ function ConversationMessages({
 }
 
 function ConversationBubble({
+  conversationId,
   message,
   onRetry,
 }: {
+  conversationId: string;
   message: WhatsAppConversationMessage;
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
@@ -12309,12 +12321,7 @@ function ConversationBubble({
     <article className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'}`}>
       <div className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'}`}>
         <p>{text}</p>
-        {message.type === 'DOCUMENT' && message.mediaFileName ? (
-          <span className="conversation-media-meta">
-            {message.mediaFileName}
-            {message.mediaSizeBytes ? ` | ${formatFileSize(message.mediaSizeBytes)}` : ''}
-          </span>
-        ) : null}
+        <ConversationMediaContent conversationId={conversationId} message={message} />
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         <footer>
           <span>{conversationMessageTime(message)}</span>
@@ -12331,6 +12338,180 @@ function ConversationBubble({
         ) : null}
       </div>
     </article>
+  );
+}
+
+function ConversationMediaContent({
+  conversationId,
+  message,
+}: {
+  conversationId: string;
+  message: WhatsAppConversationMessage;
+}) {
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const mountedRef = useRef(false);
+  const autoPreview =
+    message.type === 'IMAGE' || message.type === 'AUDIO' || message.type === 'VIDEO';
+  const available = message.mediaAvailable && autoPreview;
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setExpanded(false);
+    setError(false);
+    setMediaUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  }, [conversationId, message.id, message.mediaAvailable]);
+
+  const loadMedia = useCallback(async () => {
+    if (!message.mediaAvailable) return null;
+
+    setLoading(true);
+    setError(false);
+
+    try {
+      const blob = await downloadWhatsAppConversationMedia(conversationId, message.id);
+      const objectUrl = URL.createObjectURL(blob);
+
+      if (!mountedRef.current) {
+        URL.revokeObjectURL(objectUrl);
+        return null;
+      }
+
+      setMediaUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return objectUrl;
+      });
+      return objectUrl;
+    } catch {
+      if (mountedRef.current) setError(true);
+      return null;
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
+  }, [conversationId, message.id, message.mediaAvailable]);
+
+  useEffect(() => {
+    if (!available) return undefined;
+    let active = true;
+
+    setLoading(true);
+    setError(false);
+    downloadWhatsAppConversationMedia(conversationId, message.id)
+      .then((blob) => {
+        if (!active) return;
+        const objectUrl = URL.createObjectURL(blob);
+        setMediaUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return objectUrl;
+        });
+      })
+      .catch(() => {
+        if (active) setError(true);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [available, conversationId, message.id]);
+
+  useEffect(() => {
+    return () => {
+      if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+    };
+  }, [mediaUrl]);
+
+  async function openDocument() {
+    const objectUrl = mediaUrl ?? (await loadMedia());
+    if (!objectUrl) return;
+
+    window.open(objectUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  if (!isRenderableConversationMedia(message.type)) {
+    return null;
+  }
+
+  if (!message.mediaAvailable) {
+    return message.type === 'DOCUMENT' && message.mediaFileName ? (
+      <span className="conversation-media-meta">
+        {message.mediaFileName}
+        {message.mediaSizeBytes ? ` | ${formatFileSize(message.mediaSizeBytes)}` : ''}
+      </span>
+    ) : null;
+  }
+
+  if (message.type === 'DOCUMENT') {
+    return (
+      <div className="conversation-document-media">
+        <span className="conversation-document-icon" aria-hidden="true">
+          <FileText size={18} />
+        </span>
+        <span className="conversation-document-copy">
+          <strong>{message.mediaFileName || 'Documento'}</strong>
+          <small>
+            {message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : 'Arquivo'}
+          </small>
+        </span>
+        <button disabled={loading} type="button" onClick={() => void openDocument()}>
+          {loading ? 'Abrindo...' : error ? 'Tentar novamente' : 'Abrir / Baixar'}
+        </button>
+      </div>
+    );
+  }
+
+  if (loading && !mediaUrl) {
+    return <span className="conversation-media-loading">Carregando mídia...</span>;
+  }
+
+  if (error || !mediaUrl) {
+    return (
+      <div className="conversation-media-unavailable">
+        <span>{conversationMessagePlaceholder(message.type)}</span>
+        <button type="button" onClick={() => void loadMedia()}>
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
+
+  if (message.type === 'IMAGE') {
+    return (
+      <button
+        className={`conversation-image-media ${expanded ? 'expanded' : ''}`}
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img alt={message.text || message.mediaFileName || 'Imagem'} src={mediaUrl} />
+      </button>
+    );
+  }
+
+  if (message.type === 'AUDIO') {
+    return (
+      <audio className="conversation-audio-media" controls preload="metadata" src={mediaUrl} />
+    );
+  }
+
+  return (
+    <video className="conversation-video-media" controls preload="metadata" src={mediaUrl}>
+      <track kind="captions" />
+    </video>
   );
 }
 
@@ -12996,6 +13177,10 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
     VIDEO: '[Vídeo]',
   } satisfies Record<WhatsAppConversationMessageType, string>;
   return labels[type];
+}
+
+function isRenderableConversationMedia(type: WhatsAppConversationMessageType) {
+  return type === 'IMAGE' || type === 'DOCUMENT' || type === 'AUDIO' || type === 'VIDEO';
 }
 
 function conversationMessageDisplayText(message: WhatsAppConversationMessage) {

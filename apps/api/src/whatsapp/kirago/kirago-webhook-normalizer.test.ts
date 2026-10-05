@@ -101,6 +101,89 @@ describe('KiragoWebhookNormalizer', () => {
     expect(result?.text).toBe(text);
   });
 
+  it.each([
+    [
+      'image lowercase',
+      {
+        imageMessage: {
+          url: 'https://mmg.whatsapp.net/image',
+          directPath: '/v/image',
+          mediaKey: 'image-media-key',
+          mimetype: 'image/jpeg',
+          fileEncSHA256: 'image-file-enc',
+          fileSHA256: 'image-file',
+          fileLength: 123,
+          caption: 'Foto',
+          jpegThumbnail: 'data:image/jpeg;base64,SECRET',
+        },
+      },
+      'image',
+    ],
+    [
+      'document capitalized',
+      {
+        documentMessage: {
+          Url: 'https://mmg.whatsapp.net/document',
+          DirectPath: '/v/document',
+          MediaKey: 'document-media-key',
+          Mimetype: 'application/pdf',
+          FileEncSHA256: 'document-file-enc',
+          FileSHA256: 'document-file',
+          FileLength: '456',
+          FileName: 'contrato.pdf',
+          Caption: 'Contrato',
+          Document: 'data:application/pdf;base64,SECRET',
+        },
+      },
+      'document',
+    ],
+    [
+      'audio',
+      {
+        audioMessage: {
+          Url: 'https://mmg.whatsapp.net/audio',
+          MediaKey: 'audio-media-key',
+          Mimetype: 'audio/ogg',
+          FileSHA256: 'audio-file',
+          FileLength: 789,
+          Seconds: 8,
+        },
+      },
+      'audio',
+    ],
+    [
+      'video',
+      {
+        videoMessage: {
+          Url: 'https://mmg.whatsapp.net/video',
+          MediaKey: 'video-media-key',
+          Mimetype: 'video/mp4',
+          FileSHA256: 'video-file',
+          FileLength: 1024,
+          Seconds: 12,
+        },
+      },
+      'video',
+    ],
+  ])(
+    'preserves download metadata for %s without storing base64 bodies',
+    (_label, message, type) => {
+      const result = normalizer.normalize(
+        payload({ event: { Info: payload().event.Info, Message: message } }),
+        receivedAt,
+      );
+
+      expect(result?.messageType).toBe(type);
+      expect(result?.mediaDownloadMetadata?.Url).toContain('https://mmg.whatsapp.net/');
+      expect(result?.mediaDownloadMetadata?.MediaKey).toContain('media-key');
+      expect(typeof result?.mediaDownloadMetadata?.Mimetype).toBe('string');
+      expect(typeof result?.mediaDownloadMetadata?.FileSHA256).toBe('string');
+      expect(typeof result?.mediaDownloadMetadata?.FileLength).toBe('number');
+      expect(JSON.stringify(result?.mediaDownloadMetadata)).not.toContain('base64');
+      expect(JSON.stringify(result?.mediaMetadata)).not.toContain('base64');
+    },
+  );
+
   it('ignores non Message events', () => {
     expect(normalizer.normalize(payload({ type: 'Status' }), receivedAt)).toBeNull();
   });

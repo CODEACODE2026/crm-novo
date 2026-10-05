@@ -9,13 +9,15 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -147,6 +149,27 @@ export class WhatsAppController {
       ...(caption !== undefined ? { caption } : {}),
       ...(requestId !== undefined ? { requestId } : {}),
     });
+  }
+
+  @Get('conversations/:conversationId/messages/:messageId/media')
+  async downloadConversationMessageMedia(
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const media = await this.whatsAppService.downloadConversationMessageMedia(
+      conversationId,
+      messageId,
+    );
+    response.setHeader('Content-Type', media.mimetype);
+    response.setHeader('Content-Length', String(media.contentLength));
+    response.setHeader(
+      'Content-Disposition',
+      `${media.disposition}; filename="${media.fileName.replace(/["\\]/g, '_')}"`,
+    );
+    response.setHeader('Cache-Control', 'private, no-store');
+
+    return new StreamableFile(media.buffer);
   }
 
   @Post('conversations/:id/link-client')

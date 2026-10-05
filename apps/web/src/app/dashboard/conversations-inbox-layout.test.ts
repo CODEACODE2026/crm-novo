@@ -158,10 +158,44 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).not.toContain('disabled={sending}');
     expect(conversationsSource).toContain('aria-busy={sending}');
     expect(conversationsSource).toContain('loading={sending}');
-    expect(conversationsSource).toContain('disabled={!draft.trim() || sending}');
+    expect(conversationsSource).toContain('const canSend = Boolean(draft.trim() || selectedMedia)');
+    expect(conversationsSource).toContain('disabled={!canSend}');
     expect(primitivesSource).toContain('disabled={disabled || loading}');
     expect(stylesSource).toContain('max-width: min(76%, 680px);');
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
+  });
+
+  it('supports compact image and document attachments in the conversation composer', () => {
+    expect(dashboardSource).toContain('type ConversationComposerMedia');
+    expect(dashboardSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
+    expect(conversationsSource).toContain('file.size > conversationMediaMaxBytes');
+    expect(conversationsSource).toContain(
+      'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+    );
+    expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
+    expect(conversationsSource).toContain('file: mediaToSend.file');
+    expect(conversationsSource).toContain('caption: body');
+    expect(conversationsSource).toContain('accept="image/jpeg,image/png"');
+    expect(conversationsSource).toContain(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(conversationsSource).toContain('conversation-attachment-preview');
+    expect(conversationsSource).toContain('conversation-attach-menu');
+    expect(conversationsSource).toContain('Imagem');
+    expect(conversationsSource).toContain('Documento');
+    expect(conversationsSource).toContain('onRemoveMedia={clearComposerMedia}');
+    expect(conversationsSource).toContain('formatFileSize(selectedMedia.file.size)');
+    expect(conversationsSource).toContain("message.type === 'DOCUMENT' && message.mediaFileName");
+    expect(conversationsSource).toContain('conversation-media-meta');
+    expect(conversationsSource).toContain(
+      "message.status === 'FAILED' && outbound && message.type === 'TEXT'",
+    );
+    expect(stylesSource).toContain('grid-template-columns: auto minmax(0, 1fr) auto;');
+    expect(stylesSource).toContain('.conversation-attachment-preview');
+    expect(stylesSource).toContain('.conversation-attach-menu');
+    expect(mobileConversationMediaSource).toContain(
+      '.conversation-attachment-preview {\n    grid-template-columns: 34px minmax(0, 1fr) 34px;',
+    );
   });
 
   it('keeps composer focus after manual send without stealing focus on retry', () => {
@@ -425,7 +459,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       '.conversation-composer {\n  display: grid;\n  box-sizing: border-box;\n  flex: 0 0 auto;',
     );
     expect(mobileConversationComposerBlock).toContain(
-      'grid-template-columns: minmax(0, 1fr) auto;',
+      'grid-template-columns: auto minmax(0, 1fr) auto;',
     );
   });
 

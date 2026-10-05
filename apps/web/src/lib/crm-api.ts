@@ -1575,10 +1575,12 @@ function paymentPayload(payload: PaymentPayloadInput) {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const body = init?.body;
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const response = await fetch(buildApiUrl(path), {
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -2514,6 +2516,23 @@ export function sendWhatsAppConversationMessage(
   return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/messages`, {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export function sendWhatsAppConversationMedia(
+  id: string,
+  payload: { file: File; caption?: string; requestId: string },
+) {
+  const formData = new FormData();
+  formData.set('file', payload.file);
+  formData.set('requestId', payload.requestId);
+  if (payload.caption?.trim()) {
+    formData.set('caption', payload.caption.trim());
+  }
+
+  return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/media`, {
+    method: 'POST',
+    body: formData,
   });
 }
 

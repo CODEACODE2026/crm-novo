@@ -132,6 +132,47 @@ describe('Kirago dependency injection', () => {
     });
   });
 
+  it('maps image and document sends to official Kirago payloads', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const sendImage = vi.spyOn(instanceClient, 'sendImage').mockResolvedValue({
+      success: true,
+      data: { Id: 'image-provider-id' },
+    });
+    const sendDocument = vi.spyOn(instanceClient, 'sendDocument').mockResolvedValue({
+      success: true,
+      data: { Id: 'document-provider-id' },
+    });
+
+    await provider.sendImage('instance-token', {
+      phone: '5544999999999',
+      imageDataUrl: 'data:image/png;base64,abc',
+      caption: 'Imagem',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+    await provider.sendDocument('instance-token', {
+      phone: '5544999999999',
+      documentDataUrl: 'data:application/octet-stream;base64,abc',
+      fileName: 'file.txt',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+    });
+
+    expect(sendImage).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Image: 'data:image/png;base64,abc',
+      Caption: 'Imagem',
+      Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+    expect(sendDocument).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Document: 'data:application/octet-stream;base64,abc',
+      FileName: 'file.txt',
+      Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+    });
+  });
+
   it('maps CRM billing request ids to stable UUID message ids for Kirago sends', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

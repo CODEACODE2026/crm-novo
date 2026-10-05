@@ -35,6 +35,7 @@ import {
   Gift,
   Globe2,
   History,
+  Image as ImageIcon,
   Inbox,
   Info,
   LayoutDashboard,
@@ -194,6 +195,7 @@ import {
   resolveWhatsAppConversation,
   sendWhatsAppMessage,
   sendWhatsAppConversationMessage,
+  sendWhatsAppConversationMedia,
   startWhatsAppConversation,
   updateClient,
   updateClientReference,
@@ -10970,6 +10972,13 @@ function RecoveryCampaignDetailModal({
 
 type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
+type ConversationComposerMedia = {
+  file: File;
+  kind: 'IMAGE' | 'DOCUMENT';
+  previewUrl: string | null;
+};
+
+const conversationMediaMaxBytes = 10 * 1024 * 1024;
 
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
@@ -10998,6 +11007,7 @@ function ConversationsView({
   const [filter, setFilter] = useState<ConversationFilter>('all');
   const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [linkingClient, setLinkingClient] = useState(false);
@@ -11236,6 +11246,47 @@ function ConversationsView({
     });
   }, [composerFocusRequest, sending]);
 
+  useEffect(() => {
+    return () => {
+      if (selectedMedia?.previewUrl) {
+        URL.revokeObjectURL(selectedMedia.previewUrl);
+      }
+    };
+  }, [selectedMedia]);
+
+  function selectComposerMedia(kind: ConversationComposerMedia['kind'], file: File) {
+    setSendError('');
+
+    if (file.size > conversationMediaMaxBytes) {
+      setSendError('Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.');
+      return;
+    }
+
+    setSelectedMedia((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+
+      return {
+        file,
+        kind,
+        previewUrl: kind === 'IMAGE' ? URL.createObjectURL(file) : null,
+      };
+    });
+    scheduleComposerFocus(() => {
+      composerRef.current?.focus();
+    });
+  }
+
+  function clearComposerMedia() {
+    setSelectedMedia((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return null;
+    });
+  }
+
   async function selectConversation(conversation: WhatsAppConversation) {
     activeConversationIdRef.current = conversation.id;
     pendingInitialScrollConversationRef.current = conversation.id;
@@ -11250,6 +11301,7 @@ function ConversationsView({
     setGuestClientCreateConversation(null);
     setMessagesError('');
     setSendError('');
+    clearComposerMedia();
     setNewMessageNotice(false);
     setMobileMode('chat');
     setOpening(true);
@@ -11308,12 +11360,13 @@ function ConversationsView({
     if (!selectedConversation || sending || sendingRef.current) return;
 
     const body = (bodyOverride ?? selectedDraft).trim();
-    if (!body) return;
+    const mediaToSend = bodyOverride ? null : selectedMedia;
+    if (!body && !mediaToSend) return;
 
     sendingRef.current = true;
     setSending(true);
     setSendError('');
-    if (!bodyOverride) {
+    if (!bodyOverride && !mediaToSend) {
       setDrafts((current) =>
         (current[selectedConversation.id] ?? '').trim() === body
           ? { ...current, [selectedConversation.id]: '' }
@@ -11328,10 +11381,16 @@ function ConversationsView({
 
     try {
       const requestId = createConversationRequestId();
-      const message = await sendWhatsAppConversationMessage(selectedConversation.id, {
-        body,
-        requestId,
-      });
+      const message = mediaToSend
+        ? await sendWhatsAppConversationMedia(selectedConversation.id, {
+            file: mediaToSend.file,
+            caption: body,
+            requestId,
+          })
+        : await sendWhatsAppConversationMessage(selectedConversation.id, {
+            body,
+            requestId,
+          });
       pendingSendScrollConversationRef.current = selectedConversation.id;
       setMessages((current) => mergeConversationMessages(current, [message]));
       setConversations((current) =>
@@ -11340,11 +11399,21 @@ function ConversationsView({
             ? {
                 ...conversation,
                 lastMessageAt: message.sentAt ?? message.createdAt,
-                lastMessagePreview: body,
+                lastMessagePreview: conversationLastMessagePreview(message),
               }
             : conversation,
         ),
       );
+      if (mediaToSend) {
+        clearComposerMedia();
+      }
+      if (!bodyOverride) {
+        setDrafts((current) =>
+          (current[selectedConversation.id] ?? '').trim() === body
+            ? { ...current, [selectedConversation.id]: '' }
+            : current,
+        );
+      }
       await loadConversations({ silent: true });
     } catch (err) {
       setSendError(conversationErrorMessage(err, 'Falha ao enviar mensagem.'));
@@ -11356,15 +11425,15 @@ function ConversationsView({
         failedAt,
         isFromMe: true,
         mediaDurationSeconds: null,
-        mediaFileName: null,
-        mediaMimeType: null,
-        mediaSizeBytes: null,
+        mediaFileName: mediaToSend?.file.name ?? null,
+        mediaMimeType: mediaToSend?.file.type ?? null,
+        mediaSizeBytes: mediaToSend?.file.size ?? null,
         messageDispatchId: null,
         providerMessageId: null,
         sentAt: null,
         status: 'FAILED',
         text: body,
-        type: 'TEXT',
+        type: mediaToSend?.kind ?? 'TEXT',
       };
       setMessages((current) => mergeConversationMessages(current, [failedMessage]));
     } finally {
@@ -11740,6 +11809,7 @@ function ConversationsView({
                 composerRef={composerRef}
                 draft={selectedDraft}
                 error={sendError}
+                selectedMedia={selectedMedia}
                 sending={sending}
                 onChange={(value) => {
                   setDrafts((current) => ({
@@ -11747,6 +11817,8 @@ function ConversationsView({
                     [selectedConversation.id]: value,
                   }));
                 }}
+                onRemoveMedia={clearComposerMedia}
+                onSelectMedia={selectComposerMedia}
                 onSend={() => void sendCurrentMessage()}
               />
             </>
@@ -12231,14 +12303,19 @@ function ConversationBubble({
 }) {
   const outbound = message.direction === 'OUTBOUND';
   const text = conversationMessageDisplayText(message);
+  const caption = conversationMessageCaption(message);
 
   return (
     <article className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'}`}>
       <div className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'}`}>
         <p>{text}</p>
-        {conversationMessageCaption(message) ? (
-          <span className="conversation-caption">{conversationMessageCaption(message)}</span>
+        {message.type === 'DOCUMENT' && message.mediaFileName ? (
+          <span className="conversation-media-meta">
+            {message.mediaFileName}
+            {message.mediaSizeBytes ? ` | ${formatFileSize(message.mediaSizeBytes)}` : ''}
+          </span>
         ) : null}
+        {caption ? <span className="conversation-caption">{caption}</span> : null}
         <footer>
           <span>{conversationMessageTime(message)}</span>
           {outbound ? (
@@ -12247,7 +12324,7 @@ function ConversationBubble({
             </span>
           ) : null}
         </footer>
-        {message.status === 'FAILED' && outbound ? (
+        {message.status === 'FAILED' && outbound && message.type === 'TEXT' ? (
           <button type="button" onClick={() => onRetry(message)}>
             Tentar novamente
           </button>
@@ -12261,17 +12338,34 @@ function ConversationComposer({
   composerRef,
   draft,
   error,
+  selectedMedia,
   sending,
   onChange,
+  onRemoveMedia,
+  onSelectMedia,
   onSend,
 }: {
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   draft: string;
   error: string;
+  selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
   onChange: (value: string) => void;
+  onRemoveMedia: () => void;
+  onSelectMedia: (kind: ConversationComposerMedia['kind'], file: File) => void;
   onSend: () => void;
 }) {
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const canSend = Boolean(draft.trim() || selectedMedia) && !sending;
+
+  function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
+    if (!file) return;
+    onSelectMedia(kind, file);
+    setAttachmentMenuOpen(false);
+  }
+
   return (
     <form
       className="conversation-composer"
@@ -12285,6 +12379,62 @@ function ConversationComposer({
           {error}
         </div>
       ) : null}
+      {selectedMedia ? (
+        <div className="conversation-attachment-preview">
+          {selectedMedia.previewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img alt="" src={selectedMedia.previewUrl} />
+          ) : (
+            <span className="conversation-attachment-file-icon" aria-hidden="true">
+              <FileText size={18} />
+            </span>
+          )}
+          <span>
+            <strong>{selectedMedia.file.name}</strong>
+            <small>{formatFileSize(selectedMedia.file.size)}</small>
+          </span>
+          <IconButton icon={X} label="Remover anexo" onClick={onRemoveMedia} />
+        </div>
+      ) : null}
+      <div className="conversation-attach-control">
+        <IconButton
+          icon={Plus}
+          label="Anexar arquivo"
+          onClick={() => setAttachmentMenuOpen((current) => !current)}
+        />
+        {attachmentMenuOpen ? (
+          <div className="conversation-attach-menu">
+            <button type="button" onClick={() => imageInputRef.current?.click()}>
+              <ImageIcon aria-hidden="true" size={16} />
+              <span>Imagem</span>
+            </button>
+            <button type="button" onClick={() => documentInputRef.current?.click()}>
+              <FileText aria-hidden="true" size={16} />
+              <span>Documento</span>
+            </button>
+          </div>
+        ) : null}
+        <input
+          ref={imageInputRef}
+          accept="image/jpeg,image/png"
+          className="sr-only"
+          type="file"
+          onChange={(event) => {
+            selectFile('IMAGE', event.target.files?.[0]);
+            event.target.value = '';
+          }}
+        />
+        <input
+          ref={documentInputRef}
+          accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          className="sr-only"
+          type="file"
+          onChange={(event) => {
+            selectFile('DOCUMENT', event.target.files?.[0]);
+            event.target.value = '';
+          }}
+        />
+      </div>
       <label>
         <span className="sr-only">Digite uma mensagem</span>
         <textarea
@@ -12307,7 +12457,7 @@ function ConversationComposer({
         icon={Send}
         loading={sending}
         variant="primary"
-        disabled={!draft.trim() || sending}
+        disabled={!canSend}
         type="submit"
         onMouseDown={(event) => {
           if (document.activeElement === composerRef.current) {
@@ -12816,6 +12966,22 @@ function conversationMessageStatusLabel(status: WhatsAppConversationMessageStatu
     SENT: 'Enviada',
   } satisfies Record<WhatsAppConversationMessageStatus, string>;
   return labels[status];
+}
+
+function conversationLastMessagePreview(message: WhatsAppConversationMessage) {
+  const text = message.text?.trim();
+  if (text) return text;
+  if (message.type === 'IMAGE') return '[Imagem]';
+  if (message.type === 'DOCUMENT') return message.mediaFileName || '[Documento]';
+  return conversationMessagePlaceholder(message.type) || '[Mensagem]';
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
 }
 
 function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {

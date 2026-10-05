@@ -64,6 +64,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
+      sendConversationMediaMessage: vi.fn().mockResolvedValue({ id: 'media-message-id' }),
       markConversationAsRead: vi.fn().mockResolvedValue({ unreadCount: 0 }),
       resolveConversation: vi.fn().mockResolvedValue({ status: 'RESOLVED' }),
     };
@@ -96,6 +97,20 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
       }),
     ).resolves.toEqual({ id: 'message-id' });
+    const file = {
+      buffer: Buffer.from('image'),
+      mimetype: 'image/png',
+      originalname: 'foto.png',
+      size: 5,
+    };
+    await expect(
+      subject.sendConversationMedia(
+        'conversation-id',
+        file,
+        'Legenda',
+        '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+      ),
+    ).resolves.toEqual({ id: 'media-message-id' });
     await expect(subject.markConversationAsRead('conversation-id')).resolves.toEqual({
       unreadCount: 0,
     });
@@ -122,6 +137,11 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     expect(service.sendConversationTextMessage).toHaveBeenCalledWith('conversation-id', {
       body: 'Ola',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+    expect(service.sendConversationMediaMessage).toHaveBeenCalledWith('conversation-id', {
+      file,
+      caption: 'Legenda',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
     });
     expect(service.markConversationAsRead).toHaveBeenCalledWith('conversation-id');
     expect(service.resolveConversation).toHaveBeenCalledWith('conversation-id');

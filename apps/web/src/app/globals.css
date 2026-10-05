@@ -2684,6 +2684,14 @@ a {
   white-space: pre-wrap;
 }
 
+.conversation-media-meta {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .conversation-caption {
   display: block;
   margin-top: 6px;
@@ -2740,7 +2748,7 @@ a {
   display: grid;
   box-sizing: border-box;
   flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
   min-height: 82px;
@@ -2751,6 +2759,94 @@ a {
 
 .conversation-composer .notice {
   grid-column: 1 / -1;
+}
+
+.conversation-attachment-preview {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 7px;
+}
+
+.conversation-attachment-preview img,
+.conversation-attachment-file-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.conversation-attachment-preview img {
+  object-fit: cover;
+}
+
+.conversation-attachment-file-icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-secondary);
+}
+
+.conversation-attachment-preview span {
+  min-width: 0;
+}
+
+.conversation-attachment-preview strong,
+.conversation-attachment-preview small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attachment-preview strong {
+  font-size: 12px;
+}
+
+.conversation-attachment-preview small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.conversation-attach-control {
+  position: relative;
+  align-self: end;
+}
+
+.conversation-attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 5;
+  display: grid;
+  min-width: 150px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.conversation-attach-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.conversation-attach-menu button:hover {
+  background: var(--surface-soft);
 }
 
 .conversation-composer label {
@@ -11663,13 +11759,28 @@ tbody tr:hover,
   }
 
   .conversation-composer {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     padding: 10px 10px max(10px, env(safe-area-inset-bottom));
   }
 
   .conversation-composer textarea {
     min-height: 42px;
     max-height: 96px;
+  }
+
+  .conversation-attachment-preview {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    padding: 6px;
+  }
+
+  .conversation-attachment-preview img,
+  .conversation-attachment-file-icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .conversation-attach-menu {
+    min-width: 136px;
   }
 
   .conversation-client-drawer .modal {

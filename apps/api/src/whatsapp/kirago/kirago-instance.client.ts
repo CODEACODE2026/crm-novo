@@ -43,6 +43,18 @@ export type KiragoSendTextData = {
   Timestamp?: string;
 };
 
+export type KiragoSendImageData = {
+  Details?: string;
+  Id?: string;
+  Timestamp?: string;
+};
+
+export type KiragoSendDocumentData = {
+  Details?: string;
+  Id?: string;
+  Timestamp?: string;
+};
+
 export type KiragoSendButtonsData = {
   Details?: string;
   Id?: string;
@@ -113,6 +125,30 @@ export class KiragoInstanceClient {
       method: 'POST',
       headers: { token: instanceToken },
       body: { ...payload, LinkPreview: false },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  sendImage(
+    instanceToken: string,
+    payload: { Phone: string; Image: string; Caption?: string; Id: string },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoSendImageData>>('/chat/send/image', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  sendDocument(
+    instanceToken: string,
+    payload: { Phone: string; Document: string; FileName: string; Id: string },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoSendDocumentData>>('/chat/send/document', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   }

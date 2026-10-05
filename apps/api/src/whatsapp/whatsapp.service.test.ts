@@ -493,6 +493,8 @@ function serviceFactory({
     }),
     configureWebhook: vi.fn().mockResolvedValue(undefined),
     sendText: vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' }),
+    sendImage: vi.fn().mockResolvedValue({ providerMessageId: 'provider-image-id' }),
+    sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'provider-document-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     health: vi.fn().mockResolvedValue({ online: true }),
     ...providerOverrides,
@@ -881,6 +883,192 @@ describe('WhatsAppService', () => {
 
     expect(result.status).toBe('PENDING');
     expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('sends outbound JPEG conversation media as Kirago image with caption', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('jpeg-bytes'),
+        mimetype: 'image/jpeg',
+        originalname: 'foto.jpg',
+        size: 10,
+      },
+      caption: 'Legenda',
+      requestId: 'media-request-id',
+    });
+
+    expect(provider.sendImage).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      imageDataUrl: `data:image/jpeg;base64,${Buffer.from('jpeg-bytes').toString('base64')}`,
+      caption: 'Legenda',
+      requestId: 'media-request-id',
+    });
+    const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(createCall.data).toMatchObject({
+      type: 'IMAGE',
+      text: 'Legenda',
+      status: 'PENDING',
+      mediaMimeType: 'image/jpeg',
+      mediaFileName: 'foto.jpg',
+      mediaSizeBytes: 10,
+    });
+  });
+
+  it('sends PDF conversation media as Kirago document with sanitized file name', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('pdf-bytes'),
+        mimetype: 'application/pdf',
+        originalname: '../contrato final.pdf',
+        size: 9,
+      },
+      requestId: 'document-request-id',
+    });
+
+    expect(provider.sendDocument).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      documentDataUrl: `data:application/octet-stream;base64,${Buffer.from('pdf-bytes').toString(
+        'base64',
+      )}`,
+      fileName: 'contrato final.pdf',
+      requestId: 'document-request-id',
+    });
+    const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(createCall.data).toMatchObject({
+      type: 'DOCUMENT',
+      mediaMimeType: 'application/pdf',
+      mediaFileName: 'contrato final.pdf',
+      mediaSizeBytes: 9,
+    });
+  });
+
+  it('rejects unsupported media MIME and files above CRM internal size limit', async () => {
+    const { service, provider } = serviceFactory();
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('gif'),
+          mimetype: 'image/gif',
+          originalname: 'animado.gif',
+          size: 3,
+        },
+        requestId: 'gif-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'application/pdf',
+          originalname: 'grande.pdf',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(provider.sendImage).not.toHaveBeenCalled();
+    expect(provider.sendDocument).not.toHaveBeenCalled();
+  });
+
+  it('does not resend conversation media when requestId already exists', async () => {
+    const existing = conversationMessage({
+      direction: 'OUTBOUND',
+      requestId: 'existing-media-request',
+      conversationId: conversation().id,
+      whatsAppConnectionId: connection().id,
+      type: 'IMAGE',
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    const result = await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('png-bytes'),
+        mimetype: 'image/png',
+        originalname: 'foto.png',
+        size: 9,
+      },
+      requestId: 'existing-media-request',
+    });
+
+    expect(result.id).toBe(existing.id);
+    expect(provider.sendImage).not.toHaveBeenCalled();
   });
 
   it('sends the current WAITING_PAYMENT PIX through Kirago buttons without changing finance state', async () => {

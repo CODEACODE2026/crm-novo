@@ -9,8 +9,11 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
@@ -124,6 +127,26 @@ export class WhatsAppController {
     @Body() dto: SendWhatsAppConversationMessageDto,
   ) {
     return this.whatsAppService.sendConversationTextMessage(id, dto);
+  }
+
+  @Post('conversations/:id/media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: WhatsAppService.conversationMediaMaxBytes },
+    }),
+  )
+  sendConversationMedia(
+    @Param('id') id: string,
+    @UploadedFile()
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number } | undefined,
+    @Body('caption') caption: string | undefined,
+    @Body('requestId') requestId: string | undefined,
+  ) {
+    return this.whatsAppService.sendConversationMediaMessage(id, {
+      ...(file ? { file } : {}),
+      ...(caption !== undefined ? { caption } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
+    });
   }
 
   @Post('conversations/:id/link-client')

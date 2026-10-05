@@ -60,6 +60,18 @@ describe('Kirago clients', () => {
       Body: 'Oi',
       Id: 'request-id',
     });
+    await client.sendImage('instance-token', {
+      Phone: '5544999999999',
+      Image: 'data:image/jpeg;base64,abc',
+      Caption: 'Foto',
+      Id: 'image-request-id',
+    });
+    await client.sendDocument('instance-token', {
+      Phone: '5544999999999',
+      Document: 'data:application/octet-stream;base64,abc',
+      FileName: 'file.txt',
+      Id: 'document-request-id',
+    });
 
     expect(request).toHaveBeenNthCalledWith(1, '/session/connect', {
       method: 'POST',
@@ -75,6 +87,28 @@ describe('Kirago clients', () => {
         Body: 'Oi',
         Id: 'request-id',
         LinkPreview: false,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(3, '/chat/send/image', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Image: 'data:image/jpeg;base64,abc',
+        Caption: 'Foto',
+        Id: 'image-request-id',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(4, '/chat/send/document', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Document: 'data:application/octet-stream;base64,abc',
+        FileName: 'file.txt',
+        Id: 'document-request-id',
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

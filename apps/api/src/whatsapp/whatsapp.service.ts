@@ -57,6 +57,28 @@ import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conver
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
 const pageSizeLimit = 100;
+const allowedImageMimeTypes = new Set(['image/jpeg', 'image/png']);
+const allowedDocumentMimeTypes = new Set([
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
+
+type ConversationMediaUploadFile = {
+  buffer: Buffer;
+  mimetype: string;
+  originalname: string;
+  size: number;
+};
+
+type PreparedConversationMedia = {
+  kind: 'IMAGE' | 'DOCUMENT';
+  dataUrl: string;
+  mimeType: string;
+  fileName: string;
+  sizeBytes: number;
+};
 
 type InitialActivationResult = {
   initialReceivableId?: string | null;
@@ -161,6 +183,8 @@ type WhatsAppConversationMessageForPresenter = WhatsAppMessage;
 
 @Injectable()
 export class WhatsAppService {
+  static readonly conversationMediaMaxBytes = 10 * 1024 * 1024;
+
   private readonly logger = new Logger(WhatsAppService.name);
 
   constructor(
@@ -857,6 +881,117 @@ export class WhatsAppService {
           rawMetadata: {
             source: 'manual_outbound_send',
             errorMessage: this.sanitizeError(error),
+          },
+        },
+      });
+
+      return this.presentConversationMessage(failed);
+    }
+  }
+
+  async sendConversationMediaMessage(
+    id: string,
+    input: {
+      file?: ConversationMediaUploadFile;
+      caption?: string;
+      requestId?: string;
+    },
+  ) {
+    const requestId = input.requestId?.trim();
+
+    if (!requestId) {
+      throw new BadRequestException('requestId obrigatorio.');
+    }
+
+    const media = this.prepareConversationMedia(input.file);
+    const caption = input.caption?.trim() || null;
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      include: { whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const connection = conversation.whatsAppConnection;
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const existing = await this.findConversationMessageByRequestId(connection.id, requestId);
+
+    if (existing) {
+      this.assertMessageBelongsToConversation(existing, conversation.id);
+      return this.presentConversationMessage(existing);
+    }
+
+    const pending = await this.createPendingConversationMediaMessage(conversation, {
+      media,
+      caption,
+      requestId,
+    });
+
+    try {
+      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+      const result =
+        media.kind === 'IMAGE'
+          ? await this.mapConnectionProviderError(connection, () =>
+              this.provider.sendImage(instanceToken, {
+                phone: conversation.phoneNormalized,
+                imageDataUrl: media.dataUrl,
+                caption,
+                requestId,
+              }),
+            )
+          : await this.mapConnectionProviderError(connection, () =>
+              this.provider.sendDocument(instanceToken, {
+                phone: conversation.phoneNormalized,
+                documentDataUrl: media.dataUrl,
+                fileName: media.fileName,
+                requestId,
+              }),
+            );
+      const sentAt = new Date();
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const message = await tx.whatsAppMessage.update({
+          where: { id: pending.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: result.providerMessageId,
+            sentAt,
+            failedAt: null,
+          },
+        });
+
+        await tx.whatsAppConversation.update({
+          where: { id: conversation.id },
+          data: {
+            lastMessageAt: sentAt,
+            lastMessagePreview: this.conversationLastMessagePreview(media.kind, {
+              text: caption,
+              mediaFileName: media.fileName,
+            }),
+          },
+        });
+
+        return message;
+      });
+
+      return this.presentConversationMessage(updated);
+    } catch (error) {
+      const failed = await this.prisma.whatsAppMessage.update({
+        where: { id: pending.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          rawMetadata: {
+            source: 'manual_outbound_media_send',
+            errorMessage: this.sanitizeError(error),
+            mimeType: media.mimeType,
+            fileName: media.fileName,
+            sizeBytes: media.sizeBytes,
           },
         },
       });
@@ -2221,6 +2356,110 @@ export class WhatsAppService {
 
       throw error;
     }
+  }
+
+  private async createPendingConversationMediaMessage(
+    conversation: WhatsAppConversation,
+    input: { media: PreparedConversationMedia; caption: string | null; requestId: string },
+  ) {
+    try {
+      return await this.prisma.whatsAppMessage.create({
+        data: buildWhatsAppMessageCreateDataForConversation(conversation, {
+          provider: 'KIRAGO',
+          providerMessageId: null,
+          requestId: input.requestId,
+          messageDispatchId: null,
+          direction: 'OUTBOUND',
+          type: input.media.kind,
+          text: input.caption,
+          status: 'PENDING',
+          sentAt: null,
+          failedAt: null,
+          isFromMe: true,
+          rawMetadata: {
+            source: 'manual_outbound_media_send',
+            storage: 'transient_request_only',
+            retryPolicy: 'select_file_again_after_reload',
+          },
+          mediaMimeType: input.media.mimeType,
+          mediaFileName: input.media.fileName,
+          mediaSizeBytes: input.media.sizeBytes,
+          mediaDurationSeconds: null,
+        }),
+      });
+    } catch (error) {
+      if (!this.isDuplicateConversationMessage(error)) {
+        throw error;
+      }
+
+      const existing = await this.findConversationMessageByRequestId(
+        conversation.whatsAppConnectionId,
+        input.requestId,
+      );
+
+      if (existing) {
+        this.assertMessageBelongsToConversation(existing, conversation.id);
+        return existing;
+      }
+
+      throw error;
+    }
+  }
+
+  private prepareConversationMedia(file: ConversationMediaUploadFile | undefined) {
+    if (!file) {
+      throw new BadRequestException('Arquivo obrigatorio.');
+    }
+
+    if (!file.buffer?.length) {
+      throw new BadRequestException('Arquivo vazio.');
+    }
+
+    const sizeBytes = file.size || file.buffer.length;
+
+    if (sizeBytes > WhatsAppService.conversationMediaMaxBytes) {
+      throw new BadRequestException(
+        'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+      );
+    }
+
+    const mimeType = file.mimetype;
+
+    if (allowedImageMimeTypes.has(mimeType)) {
+      return {
+        kind: 'IMAGE' as const,
+        dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
+        mimeType,
+        fileName: this.sanitizeMediaFileName(file.originalname),
+        sizeBytes,
+      };
+    }
+
+    if (allowedDocumentMimeTypes.has(mimeType)) {
+      return {
+        kind: 'DOCUMENT' as const,
+        dataUrl: `data:application/octet-stream;base64,${file.buffer.toString('base64')}`,
+        mimeType,
+        fileName: this.sanitizeMediaFileName(file.originalname),
+        sizeBytes,
+      };
+    }
+
+    throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
+  }
+
+  private sanitizeMediaFileName(originalName: string) {
+    const rawName = originalName.split(/[\\/]/).pop()?.trim() || 'arquivo';
+    const normalized = rawName
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9._ -]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^\.+/, '')
+      .slice(0, 120);
+
+    return normalized || 'arquivo';
   }
 
   private buildPendingContactWhere(

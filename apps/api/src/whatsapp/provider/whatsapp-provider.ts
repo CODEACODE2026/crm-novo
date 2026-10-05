@@ -35,6 +35,28 @@ export type SendTextResult = {
   providerMessageId: string | null;
 };
 
+export type SendImageInput = {
+  phone: string;
+  imageDataUrl: string;
+  caption?: string | null;
+  requestId: string;
+};
+
+export type SendImageResult = {
+  providerMessageId: string | null;
+};
+
+export type SendDocumentInput = {
+  phone: string;
+  documentDataUrl: string;
+  fileName: string;
+  requestId: string;
+};
+
+export type SendDocumentResult = {
+  providerMessageId: string | null;
+};
+
 export type SendButtonsInput = {
   phone: string;
   title: string;
@@ -60,6 +82,8 @@ export interface WhatsAppProvider {
   getWebhook(instanceToken: string): Promise<unknown>;
   configureWebhook(instanceToken: string, webhookUrl: string, events: string[]): Promise<void>;
   sendText(instanceToken: string, input: SendTextInput): Promise<SendTextResult>;
+  sendImage(instanceToken: string, input: SendImageInput): Promise<SendImageResult>;
+  sendDocument(instanceToken: string, input: SendDocumentInput): Promise<SendDocumentResult>;
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;

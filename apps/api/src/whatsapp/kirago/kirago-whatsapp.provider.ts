@@ -9,6 +9,8 @@ import type {
   ProvisionConnectionInput,
   RemoteConnectionLookupInput,
   SendButtonsInput,
+  SendDocumentInput,
+  SendImageInput,
   SendTextInput,
   WhatsAppProvider,
 } from '../provider/whatsapp-provider';
@@ -128,6 +130,33 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     const response = await this.instanceClient.sendText(instanceToken, {
       Phone: input.phone,
       Body: input.body,
+      Id: this.kiragoMessageId(input.requestId),
+    });
+
+    return {
+      providerMessageId: response.data?.Id ?? null,
+    };
+  }
+
+  async sendImage(instanceToken: string, input: SendImageInput) {
+    const caption = input.caption?.trim();
+    const response = await this.instanceClient.sendImage(instanceToken, {
+      Phone: input.phone,
+      Image: input.imageDataUrl,
+      ...(caption ? { Caption: caption } : {}),
+      Id: this.kiragoMessageId(input.requestId),
+    });
+
+    return {
+      providerMessageId: response.data?.Id ?? null,
+    };
+  }
+
+  async sendDocument(instanceToken: string, input: SendDocumentInput) {
+    const response = await this.instanceClient.sendDocument(instanceToken, {
+      Phone: input.phone,
+      Document: input.documentDataUrl,
+      FileName: input.fileName,
       Id: this.kiragoMessageId(input.requestId),
     });
 

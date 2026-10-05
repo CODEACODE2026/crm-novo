@@ -39,7 +39,8 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 
 - Endpoint publico do CRM: `POST /whatsapp/webhook/kirago`.
 - O endpoint nao exige JWT do usuario do CRM.
-- O body parser da rota usa limite dedicado de `32kb`.
+- O body parser da rota usa limite dedicado de `1mb` para aceitar payloads JSON de midia
+  da Kirago sem ampliar os demais endpoints.
 - Eventos irrelevantes, grupos, mensagens enviadas por mim e mensagens sem telefone real retornam sucesso operacional com motivo de ignorado.
 - O payload bruto da Kirago nao e persistido; somente campos normalizados e metadata minima de midia sao gravados.
 - A configuracao direta usa a API de instancia Kirago: `POST /webhook`, header `token`, body `{ webhook, events, active: true }`.

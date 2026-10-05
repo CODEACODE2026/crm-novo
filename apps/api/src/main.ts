@@ -7,7 +7,10 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { legacyCutoverActivateBodyLimit } from './config/request-body-limits';
+import {
+  kiragoWebhookBodyLimit,
+  legacyCutoverActivateBodyLimit,
+} from './config/request-body-limits';
 import { createOriginProtectionMiddleware, parseCorsOrigins } from './config/security';
 
 async function bootstrap() {
@@ -19,7 +22,7 @@ async function bootstrap() {
     (config.get<string>('NODE_ENV') === 'production' ? '127.0.0.1' : undefined);
 
   app.set('trust proxy', 'loopback');
-  app.use('/whatsapp/webhook/kirago', json({ limit: '32kb' }));
+  app.use('/whatsapp/webhook/kirago', json({ limit: kiragoWebhookBodyLimit }));
   app.use(
     '/payment-webhooks',
     json({

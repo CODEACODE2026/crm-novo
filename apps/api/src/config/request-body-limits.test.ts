@@ -63,6 +63,10 @@ async function startBodyLimitApp() {
       hasMessage: Boolean(body.event?.Message),
     });
   });
+  app.use('/payment-webhooks', json({ limit: '64kb' }));
+  app.post('/payment-webhooks/fastdepix', (_req, res) => {
+    res.status(201).json({ ok: true });
+  });
   app.use('/legacy-import/cutover/activate', json({ limit: legacyCutoverActivateBodyLimit }));
   app.post('/legacy-import/cutover/activate', (req, res) => {
     res
@@ -141,13 +145,13 @@ describe('request body limits', () => {
   });
 
   it('keeps the Kirago webhook JSON parser scoped and large enough for observed media payloads', async () => {
-    expect(kiragoWebhookBodyLimit).toBe('1mb');
-    expect(kiragoWebhookBodyLimitBytes).toBe(1024 * 1024);
+    expect(kiragoWebhookBodyLimit).toBe('8mb');
+    expect(kiragoWebhookBodyLimitBytes).toBe(8 * 1024 * 1024);
 
     const started = await startBodyLimitApp();
     server = started.server;
 
-    for (const targetBytes of [16 * 1024, 100 * 1024, 250 * 1024]) {
+    for (const targetBytes of [250 * 1024, 4_600_000, 6 * 1024 * 1024]) {
       const response = await postJson(
         started.baseUrl,
         '/whatsapp/webhook/kirago',
@@ -199,10 +203,29 @@ describe('request body limits', () => {
     const response = await postJson(
       started.baseUrl,
       '/clients',
-      JSON.stringify({ safePadding: 'x'.repeat(kiragoWebhookBodyLimitBytes + 1024) }),
+      JSON.stringify({ safePadding: 'x'.repeat(1024 * 1024 + 1024) }),
     );
 
     expect(response.status).toBe(413);
+  });
+
+  it('keeps payment webhooks on their existing 64kb limit', async () => {
+    const started = await startBodyLimitApp();
+    server = started.server;
+
+    const accepted = await postJson(
+      started.baseUrl,
+      '/payment-webhooks/fastdepix',
+      JSON.stringify({ safePadding: 'x'.repeat(32 * 1024) }),
+    );
+    const rejected = await postJson(
+      started.baseUrl,
+      '/payment-webhooks/fastdepix',
+      JSON.stringify({ safePadding: 'x'.repeat(70 * 1024) }),
+    );
+
+    expect(accepted.status).toBe(201);
+    expect(rejected.status).toBe(413);
   });
 
   it('allows WHATSAPP_MEDIA_DEBUG media instrumentation to be reached after parsing', async () => {

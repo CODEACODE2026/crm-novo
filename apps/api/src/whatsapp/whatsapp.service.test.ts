@@ -988,10 +988,85 @@ describe('WhatsAppService', () => {
       type: 'IMAGE',
       text: 'Legenda',
       status: 'PENDING',
+      requestId: 'media-request-id',
+      providerMessageId: null,
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        storage: 'transient_request_only',
+        retryPolicy: 'select_file_again_after_reload',
+      },
       mediaMimeType: 'image/jpeg',
       mediaFileName: 'foto.jpg',
       mediaSizeBytes: 10,
     });
+    expect(JSON.stringify(createCall.data?.rawMetadata)).not.toContain('mediaDownload');
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: expect.any(String) }),
+        data: expect.objectContaining({
+          status: 'SENT',
+          providerMessageId: 'provider-image-id',
+          failedAt: null,
+        }),
+      }),
+    );
+  });
+
+  it('sends PNG conversation media as IMAGE without inventing media download metadata', async () => {
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('png-bytes'),
+        mimetype: 'image/png',
+        originalname: 'print.png',
+        size: 9,
+      },
+      requestId: 'png-request-id',
+    });
+
+    expect(provider.sendImage).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      imageDataUrl: `data:image/png;base64,${Buffer.from('png-bytes').toString('base64')}`,
+      caption: null,
+      requestId: 'png-request-id',
+    });
+    const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(createCall.data).toMatchObject({
+      type: 'IMAGE',
+      text: null,
+      requestId: 'png-request-id',
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        storage: 'transient_request_only',
+      },
+      mediaMimeType: 'image/png',
+      mediaFileName: 'print.png',
+      mediaSizeBytes: 9,
+    });
+    expect(JSON.stringify(createCall.data?.rawMetadata)).not.toContain('mediaDownload');
   });
 
   it('sends PDF conversation media as Kirago document with sanitized file name', async () => {
@@ -1040,10 +1115,28 @@ describe('WhatsAppService', () => {
     };
     expect(createCall.data).toMatchObject({
       type: 'DOCUMENT',
+      text: null,
+      requestId: 'document-request-id',
+      providerMessageId: null,
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        storage: 'transient_request_only',
+        retryPolicy: 'select_file_again_after_reload',
+      },
       mediaMimeType: 'application/pdf',
       mediaFileName: 'contrato final.pdf',
       mediaSizeBytes: 9,
     });
+    expect(JSON.stringify(createCall.data?.rawMetadata)).not.toContain('mediaDownload');
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'SENT',
+          providerMessageId: 'provider-document-id',
+          failedAt: null,
+        }),
+      }),
+    );
   });
 
   it('rejects unsupported media MIME and files above CRM internal size limit', async () => {

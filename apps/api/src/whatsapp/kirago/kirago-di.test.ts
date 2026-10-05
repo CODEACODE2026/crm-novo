@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,7 @@ describe('Kirago dependency injection', () => {
   afterEach(async () => {
     await app?.close();
     app = null;
+    delete process.env.WHATSAPP_MEDIA_SEND_DEBUG;
     vi.restoreAllMocks();
   });
 
@@ -171,6 +172,63 @@ describe('Kirago dependency injection', () => {
       FileName: 'file.txt',
       Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
     });
+  });
+
+  it('logs only safe Kirago media send response shape when debug is enabled', async () => {
+    process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(instanceClient, 'sendImage').mockResolvedValue({
+      success: true,
+      data: {
+        Id: 'image-provider-id',
+        Timestamp: '2026-10-05T20:00:00.000Z',
+        Details: {
+          Url: 'https://media.example.test/private?token=secret',
+          DirectPath: '/v/private',
+          MediaKey: 'secret-media-key',
+          Mimetype: 'image/jpeg',
+          FileSHA256: 'secret-file-sha',
+          FileEncSHA256: 'secret-file-enc-sha',
+          FileLength: 123,
+          Image: 'data:image/jpeg;base64,SECRET',
+        },
+      },
+    });
+
+    await provider.sendImage('instance-token', {
+      phone: '5544999999999',
+      imageDataUrl: 'data:image/jpeg;base64,abc',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const payload = JSON.parse(output.replace('[WHATSAPP_MEDIA_SEND_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).toMatchObject({
+      kind: 'IMAGE',
+      envelopeKeys: ['data', 'success'],
+      dataKeys: ['Details', 'Id', 'Timestamp'],
+      detailsType: 'object',
+      hasUrl: true,
+      hasDirectPath: true,
+      hasMediaKey: true,
+      hasMimetype: true,
+      hasFileSHA256: true,
+      hasFileEncSHA256: true,
+      hasFileLength: true,
+      hasId: true,
+      hasTimestamp: true,
+    });
+    expect(output).not.toContain('secret');
+    expect(output).not.toContain('https://media.example.test');
+    expect(output).not.toContain('data:image');
   });
 
   it('maps CRM billing request ids to stable UUID message ids for Kirago sends', async () => {

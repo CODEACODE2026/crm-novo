@@ -38,25 +38,25 @@ export type KiragoWebhookData = {
 };
 
 export type KiragoSendTextData = {
-  Details?: string;
+  Details?: unknown;
   Id?: string;
   Timestamp?: string;
 };
 
 export type KiragoSendImageData = {
-  Details?: string;
+  Details?: unknown;
   Id?: string;
   Timestamp?: string;
 };
 
 export type KiragoSendDocumentData = {
-  Details?: string;
+  Details?: unknown;
   Id?: string;
   Timestamp?: string;
 };
 
 export type KiragoSendButtonsData = {
-  Details?: string;
+  Details?: unknown;
   Id?: string;
   Timestamp?: string;
 };

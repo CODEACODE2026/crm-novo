@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { KiragoAdminClient } from './kirago-admin.client';
@@ -21,6 +21,8 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 @Injectable()
 export class KiragoWhatsAppProvider implements WhatsAppProvider {
+  private readonly logger = new Logger(KiragoWhatsAppProvider.name);
+
   constructor(
     @Inject(KiragoAdminClient)
     private readonly adminClient: KiragoAdminClient,
@@ -148,6 +150,8 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       Id: this.kiragoMessageId(input.requestId),
     });
 
+    this.logMediaSendDebug('IMAGE', response);
+
     return {
       providerMessageId: response.data?.Id ?? null,
     };
@@ -160,6 +164,8 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       FileName: input.fileName,
       Id: this.kiragoMessageId(input.requestId),
     });
+
+    this.logMediaSendDebug('DOCUMENT', response);
 
     return {
       providerMessageId: response.data?.Id ?? null,
@@ -219,6 +225,77 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       `${variant}${hash.slice(17, 20)}`,
       hash.slice(20, 32),
     ].join('-');
+  }
+
+  private logMediaSendDebug(kind: 'IMAGE' | 'DOCUMENT', response: unknown) {
+    if (this.config.get<string>('WHATSAPP_MEDIA_SEND_DEBUG') !== 'true') {
+      return;
+    }
+
+    this.logger.log(
+      `[WHATSAPP_MEDIA_SEND_DEBUG] ${JSON.stringify(this.buildMediaSendDebugPayload(kind, response))}`,
+    );
+  }
+
+  private buildMediaSendDebugPayload(kind: 'IMAGE' | 'DOCUMENT', response: unknown) {
+    const envelope = this.asRecord(response);
+    const data = this.asRecord(envelope?.data);
+    const details = data?.Details;
+    const detailsRecord = this.asRecord(details);
+    const metadataSource = detailsRecord ?? data;
+
+    return {
+      kind,
+      envelopeKeys: this.safeObjectKeys(envelope),
+      dataKeys: this.safeObjectKeys(data),
+      detailsType: this.valueType(details),
+      detailsKeys: this.safeObjectKeys(detailsRecord),
+      hasUrl: this.hasAnyOwnValue(metadataSource, ['Url', 'URL', 'url']),
+      hasDirectPath: this.hasAnyOwnValue(metadataSource, ['DirectPath', 'directPath']),
+      hasMediaKey: this.hasAnyOwnValue(metadataSource, ['MediaKey', 'mediaKey']),
+      hasMimetype: this.hasAnyOwnValue(metadataSource, ['Mimetype', 'mimetype']),
+      hasFileSHA256: this.hasAnyOwnValue(metadataSource, ['FileSHA256', 'fileSHA256']),
+      hasFileEncSHA256: this.hasAnyOwnValue(metadataSource, ['FileEncSHA256', 'fileEncSHA256']),
+      hasFileLength: this.hasAnyOwnValue(metadataSource, ['FileLength', 'fileLength']),
+      hasId: this.hasAnyOwnValue(data, ['Id']),
+      hasTimestamp: this.hasAnyOwnValue(data, ['Timestamp']),
+    };
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  private safeObjectKeys(value: Record<string, unknown> | null) {
+    if (!value) {
+      return [];
+    }
+
+    return Object.keys(value)
+      .map((key) => (/authorization|cookies?|token/i.test(key) ? '[redacted-key]' : key))
+      .sort();
+  }
+
+  private valueType(value: unknown) {
+    if (value === null) {
+      return 'null';
+    }
+
+    if (Array.isArray(value)) {
+      return 'array';
+    }
+
+    return typeof value;
+  }
+
+  private hasAnyOwnValue(source: Record<string, unknown> | null, keys: readonly string[]) {
+    if (!source) {
+      return false;
+    }
+
+    return keys.some((key) => Object.prototype.hasOwnProperty.call(source, key));
   }
 
   checkPhone(instanceToken: string, phone: string) {

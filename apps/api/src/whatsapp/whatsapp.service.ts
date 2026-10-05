@@ -1049,6 +1049,7 @@ export class WhatsAppService {
     }
 
     const media = this.prepareConversationMedia(input.file);
+    const mediaType = this.manualConversationMediaType(media.mimeType);
     const caption = input.caption?.trim() || null;
     const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
@@ -1081,7 +1082,7 @@ export class WhatsAppService {
     try {
       const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
       const result =
-        media.kind === 'IMAGE'
+        mediaType === 'IMAGE'
           ? await this.mapConnectionProviderError(connection, () =>
               this.provider.sendImage(instanceToken, {
                 phone: conversation.phoneNormalized,
@@ -1114,7 +1115,7 @@ export class WhatsAppService {
           where: { id: conversation.id },
           data: {
             lastMessageAt: sentAt,
-            lastMessagePreview: this.conversationLastMessagePreview(media.kind, {
+            lastMessagePreview: this.conversationLastMessagePreview(mediaType, {
               text: caption,
               mediaFileName: media.fileName,
             }),
@@ -2715,6 +2716,8 @@ export class WhatsAppService {
     conversation: WhatsAppConversation,
     input: { media: PreparedConversationMedia; caption: string | null; requestId: string },
   ) {
+    const mediaType = this.manualConversationMediaType(input.media.mimeType);
+
     try {
       return await this.prisma.whatsAppMessage.create({
         data: buildWhatsAppMessageCreateDataForConversation(conversation, {
@@ -2723,7 +2726,7 @@ export class WhatsAppService {
           requestId: input.requestId,
           messageDispatchId: null,
           direction: 'OUTBOUND',
-          type: input.media.kind,
+          type: mediaType,
           text: input.caption,
           status: 'PENDING',
           sentAt: null,
@@ -2796,6 +2799,18 @@ export class WhatsAppService {
         fileName: this.sanitizeMediaFileName(file.originalname),
         sizeBytes,
       };
+    }
+
+    throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
+  }
+
+  private manualConversationMediaType(mimeType: string): 'IMAGE' | 'DOCUMENT' {
+    if (allowedImageMimeTypes.has(mimeType)) {
+      return 'IMAGE';
+    }
+
+    if (allowedDocumentMimeTypes.has(mimeType)) {
+      return 'DOCUMENT';
     }
 
     throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');

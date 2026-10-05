@@ -12314,13 +12314,18 @@ function ConversationBubble({
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
-  const text = conversationMessageDisplayText(message);
+  const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;
+  const text = hasAvailableImage ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
 
   return (
     <article className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'}`}>
-      <div className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'}`}>
-        <p>{text}</p>
+      <div
+        className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'} ${
+          hasAvailableImage ? 'has-image-media' : ''
+        }`}
+      >
+        {text ? <p>{text}</p> : null}
         <ConversationMediaContent conversationId={conversationId} message={message} />
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         <footer>
@@ -12332,7 +12337,11 @@ function ConversationBubble({
           ) : null}
         </footer>
         {message.status === 'FAILED' && outbound && message.type === 'TEXT' ? (
-          <button type="button" onClick={() => onRetry(message)}>
+          <button
+            className="conversation-message-retry"
+            type="button"
+            onClick={() => onRetry(message)}
+          >
             Tentar novamente
           </button>
         ) : null}
@@ -12351,8 +12360,10 @@ function ConversationMediaContent({
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
   const mountedRef = useRef(false);
+  const imageButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
   const autoPreview =
     message.type === 'IMAGE' || message.type === 'AUDIO' || message.type === 'VIDEO';
   const available = message.mediaAvailable && autoPreview;
@@ -12366,7 +12377,7 @@ function ConversationMediaContent({
   }, []);
 
   useEffect(() => {
-    setExpanded(false);
+    setImageLightboxOpen(false);
     setError(false);
     setMediaUrl((current) => {
       if (current) URL.revokeObjectURL(current);
@@ -12402,6 +12413,13 @@ function ConversationMediaContent({
     }
   }, [conversationId, message.id, message.mediaAvailable]);
 
+  const closeImageLightbox = useCallback(() => {
+    setImageLightboxOpen(false);
+    window.setTimeout(() => {
+      if (mountedRef.current) imageButtonRef.current?.focus();
+    }, 0);
+  }, []);
+
   useEffect(() => {
     if (!available) return undefined;
     let active = true;
@@ -12435,6 +12453,27 @@ function ConversationMediaContent({
     };
   }, [mediaUrl]);
 
+  useEffect(() => {
+    if (!imageLightboxOpen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.setTimeout(() => lightboxCloseRef.current?.focus(), 0);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        closeImageLightbox();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [closeImageLightbox, imageLightboxOpen]);
+
   async function openDocument() {
     const objectUrl = mediaUrl ?? (await loadMedia());
     if (!objectUrl) return;
@@ -12467,8 +12506,17 @@ function ConversationMediaContent({
             {message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : 'Arquivo'}
           </small>
         </span>
-        <button disabled={loading} type="button" onClick={() => void openDocument()}>
-          {loading ? 'Abrindo...' : error ? 'Tentar novamente' : 'Abrir / Baixar'}
+        <button
+          aria-label={`${loading ? 'Abrindo' : error ? 'Tentar novamente' : 'Abrir ou baixar'} ${
+            message.mediaFileName || 'documento'
+          }`}
+          className="conversation-document-action"
+          disabled={loading}
+          type="button"
+          onClick={() => void openDocument()}
+        >
+          <Download size={15} aria-hidden="true" />
+          <span>{loading ? 'Abrindo...' : error ? 'Tentar novamente' : 'Abrir / Baixar'}</span>
         </button>
       </div>
     );
@@ -12491,14 +12539,48 @@ function ConversationMediaContent({
 
   if (message.type === 'IMAGE') {
     return (
-      <button
-        className={`conversation-image-media ${expanded ? 'expanded' : ''}`}
-        type="button"
-        onClick={() => setExpanded((current) => !current)}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img alt={message.text || message.mediaFileName || 'Imagem'} src={mediaUrl} />
-      </button>
+      <>
+        <button
+          ref={imageButtonRef}
+          aria-label="Abrir imagem em tamanho grande"
+          className="conversation-image-media"
+          type="button"
+          onClick={() => setImageLightboxOpen(true)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt={message.text || message.mediaFileName || 'Imagem'} src={mediaUrl} />
+        </button>
+        {imageLightboxOpen ? (
+          <div
+            aria-modal="true"
+            className="conversation-image-lightbox"
+            role="dialog"
+            aria-label="Imagem da conversa"
+            onClick={closeImageLightbox}
+          >
+            <button
+              ref={lightboxCloseRef}
+              aria-label="Fechar imagem"
+              className="conversation-image-lightbox-close"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                closeImageLightbox();
+              }}
+            >
+              <X size={22} aria-hidden="true" />
+            </button>
+            <div className="conversation-image-lightbox-stage">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                alt={message.text || message.mediaFileName || 'Imagem'}
+                src={mediaUrl}
+                onClick={(event) => event.stopPropagation()}
+              />
+            </div>
+          </div>
+        ) : null}
+      </>
     );
   }
 

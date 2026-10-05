@@ -188,9 +188,34 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('function ConversationMediaContent');
     expect(conversationsSource).toContain('message.mediaAvailable');
     expect(conversationsSource).toContain(
+      "const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;",
+    );
+    expect(conversationsSource).toContain(
+      "const text = hasAvailableImage ? '' : conversationMessageDisplayText(message);",
+    );
+    expect(conversationsSource).toContain(
       'downloadWhatsAppConversationMedia(conversationId, message.id)',
     );
     expect(conversationsSource).toContain('conversation-image-media');
+    expect(conversationsSource).toContain('conversation-image-lightbox');
+    expect(conversationsSource).toContain('aria-modal="true"');
+    expect(conversationsSource).toContain('setImageLightboxOpen(true)');
+    expect(conversationsSource).toContain("event.key === 'Escape'");
+    expect(conversationsSource).toContain('onClick={closeImageLightbox}');
+    expect(conversationsSource).toContain('event.stopPropagation();');
+    expect(conversationsSource).toContain('imageButtonRef.current?.focus()');
+    expect(conversationsSource).toContain("document.body.style.overflow = 'hidden'");
+    expect(conversationsSource).toContain('document.body.style.overflow = previousOverflow');
+    expect(conversationsSource).toContain('aria-label="Fechar imagem"');
+    expect(conversationsSource).toContain('URL.createObjectURL(blob)');
+    expect(conversationsSource).toContain('URL.revokeObjectURL(current)');
+    expect(conversationsSource).toContain('if (mediaUrl) URL.revokeObjectURL(mediaUrl);');
+    expect(conversationsSource).toContain('conversation-document-action');
+    expect(conversationsSource).toContain('<Download size={15} aria-hidden="true" />');
+    expect(conversationsSource).toContain("message.mediaFileName || 'Documento'");
+    expect(conversationsSource).toContain('formatFileSize(message.mediaSizeBytes)');
+    expect(conversationsSource).toContain('Tentar novamente');
+    expect(conversationsSource).toContain('conversation-media-loading');
     expect(conversationsSource).toContain('conversation-audio-media');
     expect(conversationsSource).toContain('conversation-video-media');
     expect(conversationsSource).toContain('conversation-media-meta');
@@ -198,6 +223,13 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       "message.status === 'FAILED' && outbound && message.type === 'TEXT'",
     );
     expect(stylesSource).toContain('grid-template-columns: auto minmax(0, 1fr) auto;');
+    expect(stylesSource).toContain('.conversation-bubble.has-image-media');
+    expect(stylesSource).toContain('.conversation-image-lightbox');
+    expect(stylesSource).toContain('max-width: calc(100vw - 20px);');
+    expect(stylesSource).toContain('touch-action: pinch-zoom;');
+    expect(stylesSource).toContain('.conversation-media-loading::before');
+    expect(stylesSource).toContain('.conversation-document-copy strong');
+    expect(stylesSource).toContain('text-overflow: ellipsis;');
     expect(stylesSource).toContain('.conversation-attachment-preview');
     expect(stylesSource).toContain('.conversation-attach-menu');
     expect(mobileConversationMediaSource).toContain(

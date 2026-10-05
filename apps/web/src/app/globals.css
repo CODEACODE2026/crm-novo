@@ -2678,6 +2678,11 @@ a {
   background: rgb(38 198 163 / 10%);
 }
 
+.conversation-bubble.has-image-media {
+  max-width: min(76%, 540px);
+  padding: 4px;
+}
+
 .conversation-bubble p {
   margin: 0;
   overflow-wrap: anywhere;
@@ -2693,52 +2698,48 @@ a {
 }
 
 .conversation-image-media,
-.conversation-document-media button,
+.conversation-document-action,
 .conversation-media-unavailable button {
-  border-color: var(--border);
-  background: var(--surface-soft);
   color: var(--text-primary);
 }
 
 .conversation-image-media {
   display: block;
-  width: min(260px, 100%);
+  width: min(340px, 100%);
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
   cursor: zoom-in;
-  margin: 2px 0 0;
+  margin: 0;
   padding: 0;
-}
-
-.conversation-image-media.expanded {
-  width: min(520px, 100%);
-  cursor: zoom-out;
 }
 
 .conversation-image-media img {
   display: block;
   width: 100%;
-  max-height: 420px;
+  height: auto;
+  max-height: 360px;
   object-fit: contain;
-  background: var(--surface-soft);
+  background: #101214;
 }
 
 .conversation-document-media {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  min-width: min(260px, 100%);
+  gap: 9px;
+  width: min(360px, 100%);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-soft);
-  padding: 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 86%, transparent);
+  padding: 8px 9px;
 }
 
 .conversation-document-icon {
   display: inline-grid;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   place-items: center;
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -2759,19 +2760,57 @@ a {
 
 .conversation-document-copy strong {
   font-size: 12px;
+  font-weight: 650;
 }
 
 .conversation-document-copy small,
-.conversation-media-loading,
 .conversation-media-unavailable {
   color: var(--text-secondary);
   font-size: 11px;
 }
 
-.conversation-document-media button,
+.conversation-media-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 168px;
+  min-height: 88px;
+  justify-content: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.conversation-media-loading::before {
+  content: '';
+  width: 42px;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text-secondary) 18%, transparent),
+    color-mix(in srgb, var(--info) 34%, transparent),
+    color-mix(in srgb, var(--text-secondary) 18%, transparent)
+  );
+}
+
+.conversation-document-action,
 .conversation-media-unavailable button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--info);
+  padding: 6px 7px;
+  white-space: nowrap;
+}
+
+.conversation-document-action:hover {
+  background: color-mix(in srgb, var(--info) 10%, transparent);
 }
 
 .conversation-audio-media,
@@ -2794,6 +2833,56 @@ a {
   flex-wrap: wrap;
 }
 
+.conversation-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+    max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  background: rgb(0 0 0 / 86%);
+}
+
+.conversation-image-lightbox-stage {
+  display: grid;
+  max-width: 90vw;
+  max-height: 90vh;
+  place-items: center;
+}
+
+.conversation-image-lightbox-stage img {
+  display: block;
+  max-width: 90vw;
+  max-height: 90vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  cursor: default;
+  touch-action: pinch-zoom;
+  user-select: none;
+}
+
+.conversation-image-lightbox-close {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 1001;
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 999px;
+  background: rgb(20 22 24 / 84%);
+  color: #fff;
+}
+
+.conversation-image-lightbox-close:hover {
+  background: rgb(38 40 44 / 92%);
+}
+
 .conversation-caption {
   display: block;
   margin-top: 6px;
@@ -2811,7 +2900,7 @@ a {
   font-size: 11px;
 }
 
-.conversation-bubble button,
+.conversation-message-retry,
 .new-message-indicator {
   border: 1px solid rgb(255 107 107 / 35%);
   border-radius: var(--radius-sm);
@@ -11858,6 +11947,47 @@ tbody tr:hover,
 
   .conversation-bubble {
     max-width: 88%;
+  }
+
+  .conversation-bubble.has-image-media {
+    max-width: 92%;
+    padding: 3px;
+  }
+
+  .conversation-image-media {
+    width: min(72vw, 100%);
+  }
+
+  .conversation-image-media img {
+    max-height: 52svh;
+  }
+
+  .conversation-document-media {
+    grid-template-columns: 32px minmax(0, 1fr);
+    width: min(78vw, 100%);
+  }
+
+  .conversation-document-action {
+    grid-column: 2;
+    justify-self: start;
+    padding-left: 0;
+  }
+
+  .conversation-image-lightbox {
+    min-height: 100dvh;
+    padding: max(12px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  }
+
+  .conversation-image-lightbox-stage,
+  .conversation-image-lightbox-stage img {
+    max-width: calc(100vw - 20px);
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .conversation-image-lightbox-close {
+    top: max(10px, env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
   }
 
   .conversation-composer {

@@ -107,6 +107,58 @@ function normalizedInbound(text: string, overrides: Record<string, unknown> = {}
   };
 }
 
+function kiragoMediaPayload(mediaType: 'imageMessage' | 'documentMessage') {
+  const media =
+    mediaType === 'imageMessage'
+      ? {
+          Url: 'https://media.example.test/full/private/image?token=secret-token',
+          DirectPath: '/v/t62.7118-24/private-direct-path',
+          MediaKey: 'SECRET_MEDIA_KEY_FULL_VALUE',
+          Mimetype: 'image/jpeg',
+          FileEncSHA256: 'FULL_FILE_ENC_SHA256_SECRET_VALUE',
+          FileSHA256: 'FULL_FILE_SHA256_SECRET_VALUE',
+          FileLength: 12345,
+          Caption: 'Legenda completa sensivel',
+          Authorization: 'Bearer secret',
+          accessToken: 'secret',
+          cookies: 'session=secret',
+          jpegThumbnail: 'data:image/jpeg;base64,VERY_SECRET_BASE64',
+          contextInfo: {
+            Authorization: 'Bearer nested-secret',
+            cookies: 'nested-session=secret',
+            stanzaId: 'nested-secret-id',
+            token: 'nested-token',
+            quotedMessage: { conversation: 'secret' },
+          },
+        }
+      : {
+          url: 'https://media.example.test/full/private/document?token=secret-token',
+          directPath: '/v/t62.7119-24/private-direct-path',
+          mediaKey: 'SECRET_DOCUMENT_MEDIA_KEY_FULL_VALUE',
+          mimetype: 'application/pdf',
+          fileEncSHA256: 'FULL_DOCUMENT_FILE_ENC_SHA256_SECRET_VALUE',
+          fileSHA256: 'FULL_DOCUMENT_FILE_SHA256_SECRET_VALUE',
+          fileLength: '54321',
+          fileName: 'Contrato Super Secreto.pdf',
+          caption: 'Texto completo do documento',
+          token: 'document-token',
+          Cookies: 'document-session=secret',
+          pageCount: 2,
+        };
+
+  return {
+    type: 'Message',
+    instanceName: 'CRM Principal',
+    event: {
+      Info: {
+        ID: 'provider-message-id',
+        IsFromMe: false,
+      },
+      Message: { [mediaType]: media },
+    },
+  };
+}
+
 function pendingContact(overrides: Record<string, unknown> = {}) {
   return {
     id: '44444444-4444-4444-8444-444444444444',
@@ -1766,6 +1818,134 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify((provider.sendButtons as MockWithCalls).mock.calls)).not.toContain(
       'OLD-MANUAL-PIX-CODE',
     );
+  });
+
+  it('does not emit media debug logs when the flag is false', async () => {
+    const { service, normalizer } = serviceFactory({
+      configOverrides: { WHATSAPP_MEDIA_DEBUG: 'false' },
+    });
+    const log = vi.fn();
+    (service as unknown as { logger: { log: typeof log } }).logger.log = log;
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook(kiragoMediaPayload('imageMessage'));
+
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('emits redacted IMAGE media debug structure when the flag is enabled', async () => {
+    const { service, normalizer } = serviceFactory({
+      configOverrides: { WHATSAPP_MEDIA_DEBUG: 'true' },
+    });
+    const log = vi.fn();
+    (service as unknown as { logger: { log: typeof log } }).logger.log = log;
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook(kiragoMediaPayload('imageMessage'));
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const output = String((log as MockWithCalls).mock.calls[0]?.[0]);
+    const parsed = JSON.parse(output.replace('[WHATSAPP_MEDIA_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(output).toContain('[WHATSAPP_MEDIA_DEBUG]');
+    expect(parsed).toMatchObject({
+      mediaType: 'IMAGE',
+      isFromMe: false,
+      providerMessageId: 'provider-message-id',
+      instanceName: 'CRM Principal',
+      url: { present: true, type: 'string', length: 64 },
+      directPath: { present: true, type: 'string', length: 34 },
+      mediaKey: { present: true, type: 'string', length: 27 },
+      mimetype: { present: true, type: 'string', value: 'image/jpeg' },
+      fileEncSHA256: { present: true, type: 'string', length: 33 },
+      fileSHA256: { present: true, type: 'string', length: 29 },
+      fileLength: { present: true, type: 'number', value: 12345 },
+      caption: { present: true, length: 25 },
+    });
+    expect(parsed.messageKeys).toEqual(['imageMessage']);
+    expect(parsed.mediaKeys).toEqual([
+      'Caption',
+      'DirectPath',
+      'FileEncSHA256',
+      'FileLength',
+      'FileSHA256',
+      'MediaKey',
+      'Mimetype',
+      'Url',
+      '[redacted-key]',
+      'contextInfo',
+      'jpegThumbnail',
+    ]);
+    expect(output).not.toMatch(/authorization|cookies|accessToken|token/i);
+    expect(output).not.toContain('SECRET_MEDIA_KEY_FULL_VALUE');
+    expect(output).not.toContain(
+      'https://media.example.test/full/private/image?token=secret-token',
+    );
+    expect(output).not.toContain('FULL_FILE_ENC_SHA256_SECRET_VALUE');
+    expect(output).not.toContain('FULL_FILE_SHA256_SECRET_VALUE');
+    expect(output).not.toContain('VERY_SECRET_BASE64');
+    expect(output).not.toContain('Legenda completa sensivel');
+    expect(output).not.toContain('nested-secret-id');
+  });
+
+  it('emits redacted DOCUMENT media debug structure when the flag is enabled', async () => {
+    const { service, normalizer } = serviceFactory({
+      configOverrides: { WHATSAPP_MEDIA_DEBUG: 'true' },
+    });
+    const log = vi.fn();
+    (service as unknown as { logger: { log: typeof log } }).logger.log = log;
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook(kiragoMediaPayload('documentMessage'));
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const output = String((log as MockWithCalls).mock.calls[0]?.[0]);
+    const parsed = JSON.parse(output.replace('[WHATSAPP_MEDIA_DEBUG] ', '')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(parsed).toMatchObject({
+      mediaType: 'DOCUMENT',
+      url: { present: true, type: 'string', length: 67 },
+      directPath: { present: true, type: 'string', length: 34 },
+      mediaKey: { present: true, type: 'string', length: 36 },
+      mimetype: { present: true, type: 'string', value: 'application/pdf' },
+      fileEncSHA256: { present: true, type: 'string', length: 42 },
+      fileSHA256: { present: true, type: 'string', length: 38 },
+      fileLength: { present: true, type: 'string', value: '54321' },
+      fileName: { present: true, extension: 'pdf', length: 26 },
+      caption: { present: true, length: 27 },
+    });
+    expect(parsed.messageKeys).toEqual(['documentMessage']);
+    expect(output).not.toMatch(/authorization|cookies|token/i);
+    expect(output).not.toContain('SECRET_DOCUMENT_MEDIA_KEY_FULL_VALUE');
+    expect(output).not.toContain(
+      'https://media.example.test/full/private/document?token=secret-token',
+    );
+    expect(output).not.toContain('FULL_DOCUMENT_FILE_ENC_SHA256_SECRET_VALUE');
+    expect(output).not.toContain('FULL_DOCUMENT_FILE_SHA256_SECRET_VALUE');
+    expect(output).not.toContain('Contrato Super Secreto.pdf');
+    expect(output).not.toContain('Texto completo do documento');
+  });
+
+  it('does not emit media debug logs for text messages', async () => {
+    const { service, normalizer } = serviceFactory({
+      configOverrides: { WHATSAPP_MEDIA_DEBUG: 'true' },
+    });
+    const log = vi.fn();
+    (service as unknown as { logger: { log: typeof log } }).logger.log = log;
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'Message',
+      event: { Info: { ID: 'text-id' }, Message: { conversation: 'Texto completo' } },
+    });
+
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('creates a pending contact from an unknown incoming webhook', async () => {

@@ -80,6 +80,42 @@ type PreparedConversationMedia = {
   sizeBytes: number;
 };
 
+type MediaDebugFieldSummary = {
+  present: boolean;
+  type: string | null;
+  length: number | null;
+};
+
+type MediaDebugValueSummary = MediaDebugFieldSummary & {
+  value?: string | number | boolean | null;
+};
+
+type MediaDebugPayload = {
+  mediaType: 'IMAGE' | 'DOCUMENT';
+  isFromMe: boolean;
+  providerMessageId: string | null;
+  instanceName: string | null;
+  messageKeys: string[];
+  mediaKeys: string[];
+  nestedObjectKeys: Record<string, string[]>;
+  url: MediaDebugFieldSummary;
+  directPath: MediaDebugFieldSummary;
+  mediaKey: MediaDebugFieldSummary;
+  mimetype: MediaDebugValueSummary;
+  fileEncSHA256: MediaDebugFieldSummary;
+  fileSHA256: MediaDebugFieldSummary;
+  fileLength: MediaDebugValueSummary;
+  fileName?: {
+    present: boolean;
+    extension: string | null;
+    length: number | null;
+  };
+  caption: {
+    present: boolean;
+    length: number | null;
+  };
+};
+
 type InitialActivationResult = {
   initialReceivableId?: string | null;
   paymentIntentId?: string | null;
@@ -1536,6 +1572,8 @@ export class WhatsAppService {
       throw new BadRequestException('Payload invalido.');
     }
 
+    this.logMediaDebugPayload(payload);
+
     const normalized = this.normalizer.normalize(payload);
 
     if (!normalized) {
@@ -1585,6 +1623,204 @@ export class WhatsAppService {
       clients,
     );
     return { received: true, ...legacyResult, conversation: conversationResult };
+  }
+
+  private logMediaDebugPayload(payload: unknown) {
+    if (this.config.get<string>('WHATSAPP_MEDIA_DEBUG') !== 'true') {
+      return;
+    }
+
+    const debugPayload = this.buildMediaDebugPayload(payload);
+
+    if (!debugPayload) {
+      return;
+    }
+
+    this.logger.log(`[WHATSAPP_MEDIA_DEBUG] ${JSON.stringify(debugPayload)}`);
+  }
+
+  private buildMediaDebugPayload(payload: unknown): MediaDebugPayload | null {
+    const body = this.asRecord(payload);
+
+    if (!body || body.type !== 'Message') {
+      return null;
+    }
+
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(event?.Info);
+    const message = this.asRecord(event?.Message);
+
+    if (!message) {
+      return null;
+    }
+
+    const imageMessage = this.asRecord(message.imageMessage);
+    const documentMessage = this.asRecord(message.documentMessage);
+    const mediaType = imageMessage ? 'IMAGE' : documentMessage ? 'DOCUMENT' : null;
+    const media = imageMessage ?? documentMessage;
+
+    if (!mediaType || !media) {
+      return null;
+    }
+
+    const debugPayload: MediaDebugPayload = {
+      mediaType,
+      isFromMe: info?.IsFromMe === true,
+      providerMessageId: this.debugStringOrNull(info?.ID),
+      instanceName: this.debugStringOrNull(body.instanceName),
+      messageKeys: this.safeObjectKeys(message),
+      mediaKeys: this.safeObjectKeys(media),
+      nestedObjectKeys: this.safeNestedObjectKeys(media),
+      url: this.summarizeMediaField(media, ['url', 'Url']),
+      directPath: this.summarizeMediaField(media, ['directPath', 'DirectPath']),
+      mediaKey: this.summarizeMediaField(media, ['mediaKey', 'MediaKey']),
+      mimetype: this.summarizeMediaValue(media, ['mimetype', 'Mimetype']),
+      fileEncSHA256: this.summarizeMediaField(media, ['fileEncSHA256', 'FileEncSHA256']),
+      fileSHA256: this.summarizeMediaField(media, ['fileSHA256', 'FileSHA256']),
+      fileLength: this.summarizeMediaValue(media, ['fileLength', 'FileLength']),
+      caption: this.summarizeCaption(media),
+    };
+
+    if (mediaType === 'DOCUMENT') {
+      debugPayload.fileName = this.summarizeDocumentFileName(media);
+    }
+
+    return debugPayload;
+  }
+
+  private summarizeMediaField(
+    media: Record<string, unknown>,
+    keys: readonly string[],
+  ): MediaDebugFieldSummary {
+    const value = this.mediaFieldValue(media, keys);
+
+    return {
+      present: value.present,
+      type: value.present ? this.debugType(value.value) : null,
+      length: value.present ? this.debugLength(value.value) : null,
+    };
+  }
+
+  private summarizeMediaValue(
+    media: Record<string, unknown>,
+    keys: readonly string[],
+  ): MediaDebugValueSummary {
+    const value = this.mediaFieldValue(media, keys);
+    const summary: MediaDebugValueSummary = {
+      present: value.present,
+      type: value.present ? this.debugType(value.value) : null,
+      length: value.present ? this.debugLength(value.value) : null,
+    };
+
+    if (
+      value.present &&
+      (typeof value.value === 'string' ||
+        typeof value.value === 'number' ||
+        typeof value.value === 'boolean' ||
+        value.value === null)
+    ) {
+      summary.value = value.value;
+    }
+
+    return summary;
+  }
+
+  private summarizeDocumentFileName(media: Record<string, unknown>) {
+    const value = this.mediaFieldValue(media, ['fileName', 'FileName']);
+    const fileName = typeof value.value === 'string' ? value.value : null;
+    const extensionMatch = fileName?.match(/\.([a-z0-9]{1,16})$/i);
+
+    return {
+      present: value.present,
+      extension: extensionMatch ? (extensionMatch[1]?.toLowerCase() ?? null) : null,
+      length: value.present ? this.debugLength(value.value) : null,
+    };
+  }
+
+  private summarizeCaption(media: Record<string, unknown>) {
+    const value = this.mediaFieldValue(media, ['caption', 'Caption']);
+
+    return {
+      present: value.present,
+      length: value.present ? this.debugLength(value.value) : null,
+    };
+  }
+
+  private mediaFieldValue(media: Record<string, unknown>, keys: readonly string[]) {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(media, key)) {
+        return { present: true, value: media[key] };
+      }
+    }
+
+    return { present: false, value: undefined };
+  }
+
+  private debugStringOrNull(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value : null;
+  }
+
+  private debugType(value: unknown) {
+    if (Array.isArray(value)) {
+      return 'array';
+    }
+
+    if (Buffer.isBuffer(value)) {
+      return 'buffer';
+    }
+
+    return value === null ? 'null' : typeof value;
+  }
+
+  private debugLength(value: unknown) {
+    if (typeof value === 'string' || Array.isArray(value) || Buffer.isBuffer(value)) {
+      return value.length;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      return null;
+    }
+
+    if (value && typeof value === 'object' && 'length' in value) {
+      const length = (value as { length?: unknown }).length;
+      return typeof length === 'number' && Number.isFinite(length) ? length : null;
+    }
+
+    return null;
+  }
+
+  private safeObjectKeys(value: unknown) {
+    const record = this.asRecord(value);
+
+    if (!record) {
+      return [];
+    }
+
+    return [...new Set(Object.keys(record).map((key) => this.safeDebugKey(key)))].sort();
+  }
+
+  private safeNestedObjectKeys(media: Record<string, unknown>) {
+    const entries: Record<string, string[]> = {};
+
+    for (const [key, value] of Object.entries(media)) {
+      if (this.asRecord(value)) {
+        entries[key] = this.safeObjectKeys(value);
+      }
+    }
+
+    return entries;
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Buffer.isBuffer(value)) {
+      return null;
+    }
+
+    return value as Record<string, unknown>;
+  }
+
+  private safeDebugKey(key: string) {
+    return /(authorization|cookies?|token)/i.test(key) ? '[redacted-key]' : key;
   }
 
   private async processIncomingWebhook(

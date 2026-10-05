@@ -111,7 +111,7 @@ function kiragoMediaPayload(mediaType: 'imageMessage' | 'documentMessage') {
   const media =
     mediaType === 'imageMessage'
       ? {
-          Url: 'https://media.example.test/full/private/image?token=secret-token',
+          URL: 'https://media.example.test/full/private/image?token=secret-token',
           DirectPath: '/v/t62.7118-24/private-direct-path',
           MediaKey: 'SECRET_MEDIA_KEY_FULL_VALUE',
           Mimetype: 'image/jpeg',
@@ -1878,7 +1878,7 @@ describe('WhatsAppService', () => {
       'FileSHA256',
       'MediaKey',
       'Mimetype',
-      'Url',
+      'URL',
       '[redacted-key]',
       'contextInfo',
       'jpegThumbnail',
@@ -3027,6 +3027,49 @@ describe('WhatsAppService', () => {
     },
   );
 
+  it('persists uppercase URL media download metadata canonically without public exposure', async () => {
+    const mediaUrl = 'https://media.example.test/full/private/image?token=secret-token';
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Foto', {
+        messageId: 'uppercase-url-image',
+        messageType: 'image',
+        mediaMetadata: {
+          kind: 'image',
+          mimetype: 'image/jpeg',
+          size: 101637,
+          caption: 'Foto',
+          jpegThumbnail: 'data:image/jpeg;base64,SECRET',
+        },
+        mediaDownloadMetadata: {
+          Url: mediaUrl,
+          DirectPath: '/v/t62.7118-24/private-direct-path',
+          MediaKey: 'real-image-media-key',
+          Mimetype: 'image/jpeg',
+          FileEncSHA256: 'real-image-file-enc',
+          FileSHA256: 'real-image-file',
+          FileLength: 101637,
+        },
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+    const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: { rawMetadata?: { mediaDownload?: Record<string, unknown> } };
+    };
+
+    expect(messageCreate.data?.rawMetadata?.mediaDownload).toMatchObject({
+      Url: mediaUrl,
+      DirectPath: '/v/t62.7118-24/private-direct-path',
+      MediaKey: 'real-image-media-key',
+      Mimetype: 'image/jpeg',
+      FileEncSHA256: 'real-image-file-enc',
+      FileSHA256: 'real-image-file',
+      FileLength: 101637,
+    });
+    expect(JSON.stringify(messageCreate.data?.rawMetadata)).not.toContain('base64');
+  });
+
   it('stores document and video media metadata without downloading media', async () => {
     const { service, prisma, normalizer } = serviceFactory();
     normalizer.normalize.mockReturnValue(
@@ -3780,6 +3823,7 @@ describe('WhatsAppService', () => {
     });
     expect(result.items[0]).not.toHaveProperty('rawMetadata');
     expect(JSON.stringify(result.items[0])).not.toContain('secret-media-key');
+    expect(JSON.stringify(result.items[0])).not.toContain('https://mmg.whatsapp.net/image');
     expect(result.pagination).toEqual({ page: 1, limit: 2, total: 2, totalPages: 1 });
   });
 

@@ -120,6 +120,22 @@ describe('KiragoWebhookNormalizer', () => {
       'image',
     ],
     [
+      'image uppercase URL',
+      {
+        imageMessage: {
+          URL: 'https://mmg.whatsapp.net/real-image',
+          directPath: '/v/t62.7118-24/private-direct-path',
+          mediaKey: 'real-image-media-key',
+          mimetype: 'image/jpeg',
+          fileEncSHA256: 'real-image-file-enc',
+          fileSHA256: 'real-image-file',
+          fileLength: 101637,
+          jpegThumbnail: 'data:image/jpeg;base64,SECRET',
+        },
+      },
+      'image',
+    ],
+    [
       'document capitalized',
       {
         documentMessage: {

@@ -322,7 +322,7 @@ export class KiragoWebhookNormalizer {
       return null;
     }
 
-    const Url = stringOrNull(firstOwnValue(source, ['url', 'Url']));
+    const Url = stringOrNull(firstOwnValue(source, ['url', 'Url', 'URL']));
     const MediaKey = stringOrNull(firstOwnValue(source, ['mediaKey', 'MediaKey']));
     const Mimetype = stringOrNull(firstOwnValue(source, ['mimetype', 'Mimetype']));
     const FileSHA256 = stringOrNull(firstOwnValue(source, ['fileSHA256', 'FileSHA256']));

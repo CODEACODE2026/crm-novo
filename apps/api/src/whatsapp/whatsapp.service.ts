@@ -1790,7 +1790,7 @@ export class WhatsAppService {
       messageKeys: this.safeObjectKeys(message),
       mediaKeys: this.safeObjectKeys(media),
       nestedObjectKeys: this.safeNestedObjectKeys(media),
-      url: this.summarizeMediaField(media, ['url', 'Url']),
+      url: this.summarizeMediaField(media, ['url', 'Url', 'URL']),
       directPath: this.summarizeMediaField(media, ['directPath', 'DirectPath']),
       mediaKey: this.summarizeMediaField(media, ['mediaKey', 'MediaKey']),
       mimetype: this.summarizeMediaValue(media, ['mimetype', 'Mimetype']),

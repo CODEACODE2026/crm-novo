@@ -27,6 +27,7 @@ import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { WhatsAppService } from './whatsapp.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
@@ -39,6 +40,11 @@ export class WhatsAppController {
   @Get('connection')
   getConnection() {
     return this.whatsAppService.getConnection();
+  }
+
+  @Get('connections')
+  listConnections() {
+    return this.whatsAppService.listUsableConnections();
   }
 
   @Post('connection')
@@ -94,6 +100,14 @@ export class WhatsAppController {
   @Get('conversations')
   listConversations(@Query() query: ListWhatsAppConversationsDto) {
     return this.whatsAppService.listConversations(query);
+  }
+
+  @Post('conversations/start')
+  startConversation(
+    @Body() dto: StartWhatsAppConversationDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.whatsAppService.startConversation(dto, request.user.id);
   }
 
   @Get('conversations/:id/messages')

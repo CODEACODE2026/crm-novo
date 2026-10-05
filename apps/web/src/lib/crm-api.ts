@@ -751,6 +751,13 @@ export interface PaginatedWhatsAppConversationMessages {
   pagination: PaginatedClients['pagination'];
 }
 
+export interface StartWhatsAppConversationResult {
+  conversation: WhatsAppConversation;
+  message: WhatsAppConversationMessage;
+  reusedConversation: boolean;
+  clientLinked: boolean;
+}
+
 export interface BillingSummary {
   scheduled: number;
   sent: number;
@@ -2398,6 +2405,10 @@ export function getWhatsAppConnection() {
   return apiFetch<WhatsAppConnection | null>('/whatsapp/connection');
 }
 
+export function listWhatsAppConnections() {
+  return apiFetch<WhatsAppConnection[]>('/whatsapp/connections');
+}
+
 export function createWhatsAppConnection(payload: { name: string }) {
   return apiFetch<WhatsAppConnection>('/whatsapp/connection', {
     method: 'POST',
@@ -2501,6 +2512,19 @@ export function sendWhatsAppConversationMessage(
   payload: { body: string; requestId: string },
 ) {
   return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function startWhatsAppConversation(payload: {
+  whatsAppConnectionId: string;
+  clientId?: string;
+  phone?: string;
+  body: string;
+  requestId: string;
+}) {
+  return apiFetch<StartWhatsAppConversationResult>('/whatsapp/conversations/start', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

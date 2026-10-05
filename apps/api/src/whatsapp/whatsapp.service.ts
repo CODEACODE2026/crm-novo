@@ -50,6 +50,7 @@ import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 
@@ -183,6 +184,19 @@ export class WhatsAppService {
   async getConnection() {
     const connection = await this.findPrimaryConnection();
     return connection ? this.presentConnection(connection) : null;
+  }
+
+  async listUsableConnections() {
+    const connections = await this.prisma.whatsAppConnection.findMany({
+      where: {
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      },
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    return connections.map((connection) => this.presentConnection(connection));
   }
 
   async provisionConnection(dto: CreateWhatsAppConnectionDto) {
@@ -694,6 +708,78 @@ export class WhatsAppService {
     };
   }
 
+  async startConversation(dto: StartWhatsAppConversationDto, actorUserId: string) {
+    const body = dto.body.trim();
+
+    if (!body) {
+      throw new BadRequestException('Mensagem obrigatoria.');
+    }
+
+    const connection = await this.requireUsableConnectionById(dto.whatsAppConnectionId);
+    const client = dto.clientId
+      ? await this.prisma.client.findUnique({
+          where: { id: dto.clientId },
+          select: { id: true, name: true, phone: true, phoneNormalized: true },
+        })
+      : null;
+
+    if (dto.clientId && !client) {
+      throw new NotFoundException('Cliente nao encontrado.');
+    }
+
+    if (client && !client.phoneNormalized) {
+      throw new BadRequestException('Cliente nao possui telefone valido para WhatsApp.');
+    }
+
+    const phone = normalizeBrazilPhone(client?.phoneNormalized ?? dto.phone ?? '');
+    const requestId = dto.requestId.trim();
+    const existingMessage = await this.findConversationMessageByRequestId(connection.id, requestId);
+
+    if (existingMessage) {
+      const existingConversation = await this.findConversationForRead(
+        existingMessage.conversationId,
+      );
+
+      if (!existingConversation) {
+        throw new ConflictException('requestId ja existe, mas a conversa nao foi encontrada.');
+      }
+
+      if (
+        existingConversation.whatsAppConnectionId !== connection.id ||
+        existingConversation.phoneNormalized !== phone
+      ) {
+        throw new ConflictException('requestId ja foi usado em outro destino desta conexao.');
+      }
+
+      return {
+        conversation: this.presentConversation(existingConversation),
+        message: this.presentConversationMessage(existingMessage),
+        reusedConversation: true,
+        clientLinked: false,
+      };
+    }
+
+    const prepared = await this.findOrCreateConversationForStart({
+      connection,
+      client,
+      phone,
+      actorUserId,
+    });
+    const message = await this.sendConversationTextMessage(prepared.conversation.id, {
+      body,
+      requestId,
+    });
+    const conversation =
+      (await this.findConversationForRead(prepared.conversation.id)) ?? prepared.conversation;
+
+    return {
+      conversation: this.presentConversation(conversation),
+      message,
+      reusedConversation: prepared.reusedConversation,
+      clientLinked: prepared.clientLinked,
+    };
+  }
+
   async sendConversationTextMessage(id: string, dto: SendWhatsAppConversationMessageDto) {
     const body = dto.body.trim();
 
@@ -826,45 +912,11 @@ export class WhatsAppService {
         });
       }
 
-      const updated = await tx.whatsAppConversation.updateMany({
-        where: { id, clientId: null },
-        data: { clientId: client.id },
-      });
-
-      if (updated.count !== 1) {
-        const current = await tx.whatsAppConversation.findUnique({
-          where: { id },
-          include: { client: { select: { id: true, name: true } } },
-        });
-
-        if (!current) {
-          throw new NotFoundException('Conversa WhatsApp nao encontrada.');
-        }
-
-        throw new ConflictException({
-          code: 'CONVERSATION_ALREADY_LINKED',
-          message: 'Esta conversa ja esta vinculada a outro cliente.',
-          currentClientId: current.clientId,
-          currentClientName: current.client?.name ?? null,
-        });
-      }
-
-      await tx.clientEvent.create({
-        data: {
-          clientId: client.id,
-          type: 'CLIENT_UPDATED',
-          title: 'Conversa WhatsApp vinculada manualmente.',
-          description: `Conversa WhatsApp ${conversation.phoneNormalized} vinculada manualmente ao cliente.`,
-          metadata: {
-            source: 'MANUAL_LINK',
-            conversationId: conversation.id,
-            clientId: client.id,
-            whatsAppConnectionId: conversation.whatsAppConnectionId,
-            phone: conversation.phone,
-            phoneNormalized: conversation.phoneNormalized,
-          },
-          createdByUserId: actorUserId,
-        },
+      await this.linkConversationClientInTransaction(tx, {
+        conversationId: conversation.id,
+        client,
+        actorUserId,
+        source: 'MANUAL_LINK',
       });
 
       const linked = await tx.whatsAppConversation.findUnique({
@@ -1883,6 +1935,223 @@ export class WhatsAppService {
     });
   }
 
+  private async findConversationForReadInTransaction(tx: Prisma.TransactionClient, id: string) {
+    return tx.whatsAppConversation.findUnique({
+      where: { id },
+      include: {
+        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        whatsAppConnection: {
+          select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+      },
+    });
+  }
+
+  private async findOrCreateConversationForStart(input: {
+    connection: WhatsAppConnection;
+    client: { id: string; name: string; phone: string; phoneNormalized: string } | null;
+    phone: string;
+    actorUserId: string;
+  }): Promise<{
+    conversation: WhatsAppConversationForPresenter;
+    reusedConversation: boolean;
+    clientLinked: boolean;
+  }> {
+    const { connection, client, phone } = input;
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.whatsAppConversation.findUnique({
+        where: {
+          whatsAppConnectionId_phoneNormalized: {
+            whatsAppConnectionId: connection.id,
+            phoneNormalized: phone,
+          },
+        },
+        include: {
+          client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          whatsAppConnection: {
+            select: { name: true, providerInstanceName: true, providerUserId: true },
+          },
+        },
+      });
+
+      if (existing) {
+        let clientLinked = false;
+
+        if (client && existing.clientId && existing.clientId !== client.id) {
+          throw new ConflictException({
+            code: 'CONVERSATION_ALREADY_LINKED',
+            message: 'Ja existe uma conversa para este telefone vinculada a outro cliente.',
+            currentClientId: existing.clientId,
+            currentClientName: existing.client?.name ?? null,
+          });
+        }
+
+        if (client && existing.clientId === null) {
+          await this.linkConversationClientInTransaction(tx, {
+            conversationId: existing.id,
+            client,
+            actorUserId: input.actorUserId,
+            source: 'START_CONVERSATION',
+          });
+          clientLinked = true;
+        }
+
+        if (existing.status === 'RESOLVED') {
+          await tx.whatsAppConversation.update({
+            where: { id: existing.id },
+            data: { status: 'OPEN' },
+          });
+        }
+
+        const conversation = await this.findConversationForReadInTransaction(tx, existing.id);
+
+        if (!conversation) {
+          throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+        }
+
+        return { conversation, reusedConversation: true, clientLinked };
+      }
+
+      try {
+        const created = await tx.whatsAppConversation.create({
+          data: {
+            whatsAppConnectionId: connection.id,
+            instanceName: connection.name,
+            provider: connection.provider,
+            externalInstanceId: connection.providerUserId,
+            clientId: client?.id ?? null,
+            contactName: null,
+            phone,
+            phoneNormalized: phone,
+            status: 'OPEN',
+            unreadCount: 0,
+          },
+          include: {
+            client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+            whatsAppConnection: {
+              select: { name: true, providerInstanceName: true, providerUserId: true },
+            },
+          },
+        });
+
+        return { conversation: created, reusedConversation: false, clientLinked: false };
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+          throw error;
+        }
+
+        const raced = await this.findConversationForReadByConnectionAndPhone(tx, {
+          connectionId: connection.id,
+          phone,
+        });
+
+        if (!raced) {
+          throw error;
+        }
+
+        if (client && raced.clientId && raced.clientId !== client.id) {
+          throw new ConflictException({
+            code: 'CONVERSATION_ALREADY_LINKED',
+            message: 'Ja existe uma conversa para este telefone vinculada a outro cliente.',
+            currentClientId: raced.clientId,
+            currentClientName: raced.client?.name ?? null,
+          });
+        }
+
+        return { conversation: raced, reusedConversation: true, clientLinked: false };
+      }
+    });
+  }
+
+  private async findConversationForReadByConnectionAndPhone(
+    tx: Prisma.TransactionClient,
+    input: { connectionId: string; phone: string },
+  ) {
+    return tx.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: input.connectionId,
+          phoneNormalized: input.phone,
+        },
+      },
+      include: {
+        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        whatsAppConnection: {
+          select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+      },
+    });
+  }
+
+  private async linkConversationClientInTransaction(
+    tx: Prisma.TransactionClient,
+    input: {
+      conversationId: string;
+      client: { id: string; name: string };
+      actorUserId: string;
+      source: 'MANUAL_LINK' | 'START_CONVERSATION';
+    },
+  ) {
+    const updated = await tx.whatsAppConversation.updateMany({
+      where: { id: input.conversationId, clientId: null },
+      data: { clientId: input.client.id },
+    });
+
+    if (updated.count !== 1) {
+      const current = await tx.whatsAppConversation.findUnique({
+        where: { id: input.conversationId },
+        include: { client: { select: { id: true, name: true } } },
+      });
+
+      if (!current) {
+        throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+      }
+
+      if (current.clientId === input.client.id) {
+        return;
+      }
+
+      throw new ConflictException({
+        code: 'CONVERSATION_ALREADY_LINKED',
+        message: 'Esta conversa ja esta vinculada a outro cliente.',
+        currentClientId: current.clientId,
+        currentClientName: current.client?.name ?? null,
+      });
+    }
+
+    const conversation = await tx.whatsAppConversation.findUnique({
+      where: { id: input.conversationId },
+      select: {
+        id: true,
+        phone: true,
+        phoneNormalized: true,
+        whatsAppConnectionId: true,
+      },
+    });
+
+    await tx.clientEvent.create({
+      data: {
+        clientId: input.client.id,
+        type: 'CLIENT_UPDATED',
+        title:
+          input.source === 'START_CONVERSATION'
+            ? 'Conversa WhatsApp vinculada ao iniciar atendimento.'
+            : 'Conversa WhatsApp vinculada manualmente.',
+        description: `Conversa WhatsApp ${conversation?.phoneNormalized ?? input.conversationId} vinculada ao cliente.`,
+        metadata: {
+          source: input.source,
+          conversationId: input.conversationId,
+          clientId: input.client.id,
+          whatsAppConnectionId: conversation?.whatsAppConnectionId ?? null,
+          phone: conversation?.phone ?? null,
+          phoneNormalized: conversation?.phoneNormalized ?? null,
+        },
+        createdByUserId: input.actorUserId,
+      },
+    });
+  }
+
   private async ensureConversationExists(id: string) {
     const exists = await this.prisma.whatsAppConversation.count({ where: { id } });
 
@@ -2339,6 +2608,20 @@ export class WhatsAppService {
 
     if (!connection) {
       throw new NotFoundException('Conexao WhatsApp nao encontrada.');
+    }
+
+    return connection;
+  }
+
+  private async requireUsableConnectionById(id: string) {
+    const connection = await this.prisma.whatsAppConnection.findUnique({ where: { id } });
+
+    if (!connection) {
+      throw new NotFoundException('Conexao WhatsApp nao encontrada.');
+    }
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp selecionada nao esta operacional.');
     }
 
     return connection;

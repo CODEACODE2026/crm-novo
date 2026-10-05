@@ -59,8 +59,10 @@ describe('WhatsAppController conversation inbox endpoints', () => {
   it('routes conversation inbox operations to the service', async () => {
     const service = {
       listConversations: vi.fn().mockResolvedValue({ items: [] }),
+      listUsableConnections: vi.fn().mockResolvedValue([{ id: 'connection-id' }]),
       getConversation: vi.fn().mockResolvedValue({ id: 'conversation-id' }),
       listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
+      startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
       markConversationAsRead: vi.fn().mockResolvedValue({ unreadCount: 0 }),
       resolveConversation: vi.fn().mockResolvedValue({ status: 'RESOLVED' }),
@@ -70,12 +72,24 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(subject.listConversations({ page: 1, limit: 20 })).resolves.toEqual({
       items: [],
     });
+    await expect(subject.listConnections()).resolves.toEqual([{ id: 'connection-id' }]);
     await expect(subject.getConversation('conversation-id')).resolves.toEqual({
       id: 'conversation-id',
     });
     await expect(
       subject.listConversationMessages('conversation-id', { page: 1, limit: 20 }),
     ).resolves.toEqual({ items: [] });
+    await expect(
+      subject.startConversation(
+        {
+          whatsAppConnectionId: '11111111-1111-4111-8111-111111111111',
+          clientId: '22222222-2222-4222-8222-222222222222',
+          body: 'Ola',
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+        },
+        { user: { id: 'user-id' } } as never,
+      ),
+    ).resolves.toEqual({ conversation: { id: 'conversation-id' } });
     await expect(
       subject.sendConversationMessage('conversation-id', {
         body: 'Ola',
@@ -90,11 +104,21 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     });
 
     expect(service.listConversations).toHaveBeenCalledWith({ page: 1, limit: 20 });
+    expect(service.listUsableConnections).toHaveBeenCalledWith();
     expect(service.getConversation).toHaveBeenCalledWith('conversation-id');
     expect(service.listConversationMessages).toHaveBeenCalledWith('conversation-id', {
       page: 1,
       limit: 20,
     });
+    expect(service.startConversation).toHaveBeenCalledWith(
+      {
+        whatsAppConnectionId: '11111111-1111-4111-8111-111111111111',
+        clientId: '22222222-2222-4222-8222-222222222222',
+        body: 'Ola',
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      },
+      'user-id',
+    );
     expect(service.sendConversationTextMessage).toHaveBeenCalledWith('conversation-id', {
       body: 'Ola',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',

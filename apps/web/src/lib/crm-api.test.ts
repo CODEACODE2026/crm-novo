@@ -24,6 +24,7 @@ import {
   importLegacyPayments,
   listWhatsAppConversationMessages,
   listWhatsAppConversations,
+  listWhatsAppConnections,
   listBillingDispatches,
   listClientOptions,
   listClients,
@@ -48,6 +49,7 @@ import {
   savePaymentProviderCredential,
   sendWhatsAppConversationMessage,
   sendPaymentIntentWhatsApp,
+  startWhatsAppConversation,
   testPaymentProviderCredential,
   markWhatsAppConversationRead,
   updateClient,
@@ -1378,11 +1380,18 @@ describe('CRM UI formatters', () => {
       clientId: '550e8400-e29b-41d4-a716-446655440000',
       whatsAppConnectionId: '550e8400-e29b-41d4-a716-446655440001',
     });
+    await listWhatsAppConnections();
     await getWhatsAppConversation('conversation-id');
     await listWhatsAppConversationMessages('conversation-id', { page: 1, pageSize: 30 });
     await sendWhatsAppConversationMessage('conversation-id', {
       body: 'Oi',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+    await startWhatsAppConversation({
+      whatsAppConnectionId: '550e8400-e29b-41d4-a716-446655440001',
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      body: 'Oi',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
     });
     await markWhatsAppConversationRead('conversation-id');
     await resolveWhatsAppConversation('conversation-id');
@@ -1396,16 +1405,21 @@ describe('CRM UI formatters', () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('/whatsapp/conversations/conversation-id'),
+      expect.stringContaining('/whatsapp/connections'),
       expect.any(Object),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining('/whatsapp/conversations/conversation-id/messages?page=1&limit=30'),
+      expect.stringContaining('/whatsapp/conversations/conversation-id'),
       expect.any(Object),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       4,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/messages?page=1&limit=30'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
       expect.stringContaining('/whatsapp/conversations/conversation-id/messages'),
       expect.objectContaining({
         method: 'POST',
@@ -1416,12 +1430,25 @@ describe('CRM UI formatters', () => {
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
+      6,
+      expect.stringContaining('/whatsapp/conversations/start'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          whatsAppConnectionId: '550e8400-e29b-41d4-a716-446655440001',
+          clientId: '550e8400-e29b-41d4-a716-446655440000',
+          body: 'Oi',
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
       expect.stringContaining('/whatsapp/conversations/conversation-id/read'),
       expect.objectContaining({ method: 'POST' }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      6,
+      8,
       expect.stringContaining('/whatsapp/conversations/conversation-id/resolve'),
       expect.objectContaining({ method: 'POST' }),
     );

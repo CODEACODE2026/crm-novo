@@ -755,6 +755,31 @@ describe('WhatsAppService', () => {
     expect(result.loggedIn).toBe(true);
   });
 
+  it('lists only usable WhatsApp connections for starting conversations', async () => {
+    const usable = connection({ status: 'CONNECTED', connected: true, loggedIn: true });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConnection: {
+          findFirst: vi.fn().mockResolvedValue(usable),
+          findMany: vi.fn().mockResolvedValue([usable]),
+          findUnique: vi.fn().mockResolvedValue(usable),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+
+    await expect(service.listUsableConnections()).resolves.toEqual([
+      expect.objectContaining({ id: usable.id, name: usable.name, status: 'CONNECTED' }),
+    ]);
+    expect(
+      (prisma.whatsAppConnection as unknown as { findMany: unknown }).findMany,
+    ).toHaveBeenCalledWith({
+      where: { status: 'CONNECTED', connected: true, loggedIn: true },
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+    });
+  });
+
   it('persists CONNECTED status and phone when refreshing a divergent local connection', async () => {
     const { service, prisma } = serviceFactory({
       currentConnection: connection({ status: 'DISCONNECTED', connected: false, loggedIn: false }),
@@ -3470,6 +3495,7 @@ describe('WhatsAppService', () => {
           findUnique: vi
             .fn()
             .mockResolvedValueOnce(conversation({ clientId: null, client: null, unreadCount: 3 }))
+            .mockResolvedValueOnce(conversation({ clientId: client().id, client: client() }))
             .mockResolvedValueOnce(linkedConversation),
           findMany: vi.fn().mockResolvedValue([]),
           count: vi.fn().mockResolvedValue(0),
@@ -3945,6 +3971,165 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(updateArgs.data?.rawMetadata)).toContain('token=[redacted]');
     expect(JSON.stringify(updateArgs.data?.rawMetadata)).not.toContain('secret-value');
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+  });
+
+  it('starts a new client conversation and sends the first outbound without unread increment', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const createdConversation = conversation({
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      clientId: client().id,
+      client: client(),
+      contactName: null,
+      status: 'OPEN',
+    });
+    const createMessage = vi.fn((args: { data: Record<string, unknown> }) =>
+      Promise.resolve(
+        conversationMessage({
+          ...args.data,
+          conversationId: createdConversation.id,
+          whatsAppConnectionId: activeConnection.id,
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+          direction: 'OUTBOUND',
+          status: 'PENDING',
+          text: 'Primeira mensagem',
+        }),
+      ),
+    );
+    const { service, prisma, provider } = serviceFactory({
+      currentConnection: activeConnection,
+      prismaOverrides: {
+        whatsAppConnection: {
+          findFirst: vi.fn().mockResolvedValue(activeConnection),
+          findUnique: vi.fn().mockResolvedValue(activeConnection),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(createdConversation)
+            .mockResolvedValueOnce(createdConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(createdConversation),
+          update: vi.fn().mockResolvedValue(createdConversation),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: createMessage,
+          update: vi.fn((args: { data: Record<string, unknown> }) =>
+            Promise.resolve(
+              conversationMessage({
+                ...args.data,
+                conversationId: createdConversation.id,
+                whatsAppConnectionId: activeConnection.id,
+                direction: 'OUTBOUND',
+                text: 'Primeira mensagem',
+              }),
+            ),
+          ),
+        },
+      },
+    });
+
+    const result = await service.startConversation(
+      {
+        whatsAppConnectionId: activeConnection.id,
+        clientId: client().id,
+        body: ' Primeira mensagem ',
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      },
+      'actor-user-id',
+    );
+    const conversationCreate = (prisma.whatsAppConversation.create as MockWithCalls).mock
+      .calls[0]?.[0] as { data?: Record<string, unknown> };
+
+    expect(conversationCreate.data).toMatchObject({
+      whatsAppConnectionId: activeConnection.id,
+      clientId: client().id,
+      phone: client().phoneNormalized,
+      phoneNormalized: client().phoneNormalized,
+      status: 'OPEN',
+      unreadCount: 0,
+    });
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: client().phoneNormalized,
+      body: 'Primeira mensagem',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+    });
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ lastMessagePreview: 'Primeira mensagem' }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ unreadCount: expect.anything() }),
+      }),
+    );
+    expect(result).toMatchObject({
+      reusedConversation: false,
+      clientLinked: false,
+      conversation: { id: createdConversation.id, displayName: client().name },
+      message: { direction: 'OUTBOUND', text: 'Primeira mensagem' },
+    });
+  });
+
+  it('rejects start when an existing phone conversation belongs to another client', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const existing = conversation({
+      whatsAppConnectionId: activeConnection.id,
+      clientId: 'different-client-id',
+      client: client({ id: 'different-client-id', name: 'Outro Cliente' }),
+      whatsAppConnection: activeConnection,
+    });
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: activeConnection,
+      prismaOverrides: {
+        whatsAppConnection: {
+          findFirst: vi.fn().mockResolvedValue(activeConnection),
+          findUnique: vi.fn().mockResolvedValue(activeConnection),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    await expect(
+      service.startConversation(
+        {
+          whatsAppConnectionId: activeConnection.id,
+          clientId: client().id,
+          body: 'Oi',
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+        },
+        'actor-user-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
   });
 
   it('rejects manual conversation sends for missing conversation, blank body and inactive connection', async () => {

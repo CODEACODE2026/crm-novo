@@ -2290,6 +2290,14 @@ a {
   color: var(--accent-strong);
 }
 
+.conversation-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .conversations-shell {
   display: grid;
   grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);
@@ -2780,6 +2788,34 @@ a {
 
 .conversation-notice {
   margin: 0;
+}
+
+.start-conversation-modal {
+  width: min(520px, calc(100vw - 24px));
+}
+
+.start-conversation-form {
+  display: grid;
+  gap: 14px;
+}
+
+.start-conversation-client-preview {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 10px 12px;
+}
+
+.start-conversation-client-preview span,
+.start-conversation-client-preview small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.start-conversation-client-preview small {
+  color: var(--danger);
 }
 
 .whatsapp-grid {
@@ -11479,6 +11515,20 @@ tbody tr:hover,
 
   .conversations-view .page-header {
     display: none;
+  }
+
+  .start-conversation-modal {
+    width: calc(100vw - 16px);
+    max-height: calc(var(--chat-viewport-height, 100svh) - 16px);
+    overflow-y: auto;
+  }
+
+  .start-conversation-form {
+    gap: 12px;
+  }
+
+  .start-conversation-form .form-actions {
+    grid-template-columns: 1fr;
   }
 
   .conversations-shell {

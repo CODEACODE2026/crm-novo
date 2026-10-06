@@ -2309,7 +2309,12 @@ export class WhatsAppService {
     existing: WhatsAppMessage,
     normalized: NormalizedWhatsAppMessage & { phone: string },
   ) {
-    const messageType = this.toConversationMessageType(normalized.messageType);
+    const normalizedMessageType = this.toConversationMessageType(normalized.messageType);
+    const preservesManualMediaType = this.shouldPreserveManualOutboundMediaType(
+      existing,
+      normalizedMessageType,
+    );
+    const messageType = preservesManualMediaType ? existing.type : normalizedMessageType;
     const media = this.conversationMediaFields(normalized.mediaMetadata);
     const sentAt = normalized.messageTimestamp ?? normalized.receivedAt ?? new Date();
     const updated = await tx.whatsAppMessage.update({
@@ -2319,8 +2324,8 @@ export class WhatsAppService {
         status: 'SENT',
         sentAt: existing.sentAt ?? sentAt,
         failedAt: null,
-        type: messageType,
-        ...(existing.text === null
+        ...(messageType === existing.type ? {} : { type: messageType }),
+        ...(existing.text === null && !preservesManualMediaType
           ? { text: this.conversationMessageText(messageType, normalized.text) }
           : {}),
         ...(existing.mediaMimeType === null ? { mediaMimeType: media.mediaMimeType } : {}),
@@ -2345,6 +2350,27 @@ export class WhatsAppService {
     });
 
     return updated;
+  }
+
+  private shouldPreserveManualOutboundMediaType(
+    existing: WhatsAppMessage,
+    normalizedMessageType: WhatsAppConversationMessageType,
+  ) {
+    return (
+      normalizedMessageType === 'TEXT' &&
+      (existing.type === 'IMAGE' || existing.type === 'DOCUMENT') &&
+      this.isManualOutboundMediaMessage(existing)
+    );
+  }
+
+  private isManualOutboundMediaMessage(message: WhatsAppMessage) {
+    const metadata = this.rawMetadataObject(message.rawMetadata);
+
+    return (
+      message.direction === 'OUTBOUND' &&
+      metadata.source === 'manual_outbound_media_send' &&
+      Boolean(message.mediaMimeType || this.asRecord(metadata.localMedia))
+    );
   }
 
   private async upsertWebhookConversation(

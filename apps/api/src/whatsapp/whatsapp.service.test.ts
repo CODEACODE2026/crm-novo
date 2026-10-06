@@ -1199,6 +1199,153 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('keeps final persisted JPEG conversation media as IMAGE after provider and storage success', async () => {
+    let storedMessage = conversationMessage();
+    const whatsAppMessage = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage(args.data ?? {});
+        return Promise.resolve(storedMessage);
+      }),
+      update: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage({ ...storedMessage, ...(args.data ?? {}) });
+        return Promise.resolve(storedMessage);
+      }),
+    };
+    const { service } = serviceFactory({
+      mediaStorageOverrides: {
+        storeOutboundMedia: vi.fn().mockResolvedValue({
+          storageKey: `${connection().id}/${conversationMessage().id}/dddddddd-dddd-4ddd-8ddd-dddddddddddd`,
+          mimeType: 'image/jpeg',
+          sizeBytes: 10,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppMessage,
+      },
+    });
+
+    const result = await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('jpeg-bytes'),
+        mimetype: 'image/jpeg',
+        originalname: 'foto.jpg',
+        size: 10,
+      },
+      caption: 'Legenda',
+      requestId: 'media-final-image-request-id',
+    });
+
+    expect(result).toMatchObject({
+      type: 'IMAGE',
+      mediaMimeType: 'image/jpeg',
+      mediaFileName: 'foto.jpg',
+      mediaAvailable: true,
+    });
+    expect(whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'IMAGE' }),
+      }),
+    );
+    expect(whatsAppMessage.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'TEXT' }),
+      }),
+    );
+  });
+
+  it('keeps final persisted PDF conversation media as DOCUMENT after provider and storage success', async () => {
+    let storedMessage = conversationMessage();
+    const whatsAppMessage = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage(args.data ?? {});
+        return Promise.resolve(storedMessage);
+      }),
+      update: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage({ ...storedMessage, ...(args.data ?? {}) });
+        return Promise.resolve(storedMessage);
+      }),
+    };
+    const { service } = serviceFactory({
+      mediaStorageOverrides: {
+        storeOutboundMedia: vi.fn().mockResolvedValue({
+          storageKey: `${connection().id}/${conversationMessage().id}/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+          mimeType: 'application/pdf',
+          sizeBytes: 9,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppMessage,
+      },
+    });
+
+    const result = await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('pdf-bytes'),
+        mimetype: 'application/pdf',
+        originalname: 'contrato.pdf',
+        size: 9,
+      },
+      requestId: 'media-final-document-request-id',
+    });
+
+    expect(result).toMatchObject({
+      type: 'DOCUMENT',
+      mediaMimeType: 'application/pdf',
+      mediaFileName: 'contrato.pdf',
+      mediaAvailable: true,
+    });
+    expect(whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'DOCUMENT' }),
+      }),
+    );
+    expect(whatsAppMessage.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'TEXT' }),
+      }),
+    );
+  });
+
   it('does not keep outbound media locally when Kirago send fails', async () => {
     const { service, mediaStorage, prisma } = serviceFactory({
       providerOverrides: {
@@ -1248,6 +1395,20 @@ describe('WhatsAppService', () => {
   });
 
   it('keeps outbound media SENT when local storage fails after Kirago accepts the send', async () => {
+    let storedMessage = conversationMessage();
+    const whatsAppMessage = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage(args.data ?? {});
+        return Promise.resolve(storedMessage);
+      }),
+      update: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage({ ...storedMessage, ...(args.data ?? {}) });
+        return Promise.resolve(storedMessage);
+      }),
+    };
     const { service, prisma } = serviceFactory({
       mediaStorageOverrides: {
         storeOutboundMedia: vi.fn().mockRejectedValue(new Error('disk full with token=secret')),
@@ -1270,6 +1431,7 @@ describe('WhatsAppService', () => {
           create: vi.fn().mockResolvedValue(conversation()),
           updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         },
+        whatsAppMessage,
       },
     });
 
@@ -1287,6 +1449,7 @@ describe('WhatsAppService', () => {
     )?.[0] as { data?: { rawMetadata?: unknown } };
 
     expect(result.status).toBe('SENT');
+    expect(result.type).toBe('IMAGE');
     expect(updateArgs.data?.rawMetadata).toMatchObject({
       localMediaError: {
         source: 'local_storage',
@@ -1294,6 +1457,11 @@ describe('WhatsAppService', () => {
     });
     expect(JSON.stringify(updateArgs.data?.rawMetadata)).toContain('token=[redacted]');
     expect(JSON.stringify(updateArgs.data?.rawMetadata)).not.toContain('secret');
+    expect(whatsAppMessage.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'TEXT' }),
+      }),
+    );
   });
 
   it('removes local outbound media when DB persistence fails after Kirago accepts the send', async () => {
@@ -3482,6 +3650,138 @@ describe('WhatsAppService', () => {
       expect.objectContaining({
         where: { id: existing.conversationId },
         data: expect.not.objectContaining({ unreadCount: expect.anything(), status: 'OPEN' }),
+      }),
+    );
+  });
+
+  it('does not downgrade manual outbound IMAGE to TEXT when the outgoing webhook echo lacks media metadata', async () => {
+    const existing = conversationMessage({
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+      providerMessageId: null,
+      direction: 'OUTBOUND',
+      type: 'IMAGE',
+      status: 'SENT',
+      sentAt: now,
+      isFromMe: true,
+      text: 'Legenda',
+      mediaMimeType: 'image/jpeg',
+      mediaFileName: 'foto.jpg',
+      mediaSizeBytes: 10,
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        storage: 'transient_request_only',
+        retryPolicy: 'select_file_again_after_reload',
+        localMedia: {
+          storageKey: `${connection().id}/message-image/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: 'image/jpeg',
+          sizeBytes: 10,
+        },
+      },
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+          ),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Mensagem sem metadata de midia', {
+        direction: 'OUTGOING',
+        messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+        messageType: 'text',
+        mediaMetadata: null,
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'outgoing_conversation_message_reconciled',
+      conversation: { action: 'outgoing_conversation_message_reconciled' },
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.id },
+        data: expect.not.objectContaining({ type: 'TEXT' }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.conversationId },
+        data: expect.objectContaining({
+          lastMessagePreview: 'Legenda',
+        }),
+      }),
+    );
+  });
+
+  it('does not downgrade manual outbound DOCUMENT to TEXT when the outgoing webhook echo lacks media metadata', async () => {
+    const existing = conversationMessage({
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+      providerMessageId: null,
+      direction: 'OUTBOUND',
+      type: 'DOCUMENT',
+      status: 'SENT',
+      sentAt: now,
+      isFromMe: true,
+      text: null,
+      mediaMimeType: 'application/pdf',
+      mediaFileName: 'contrato.pdf',
+      mediaSizeBytes: 9,
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        storage: 'transient_request_only',
+        retryPolicy: 'select_file_again_after_reload',
+        localMedia: {
+          storageKey: `${connection().id}/message-document/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb`,
+          mimeType: 'application/pdf',
+          sizeBytes: 9,
+        },
+      },
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+          ),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Mensagem sem metadata de documento', {
+        direction: 'OUTGOING',
+        messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+        messageType: 'text',
+        mediaMetadata: null,
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.id },
+        data: expect.not.objectContaining({ type: 'TEXT' }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.conversationId },
+        data: expect.objectContaining({
+          lastMessagePreview: 'contrato.pdf',
+        }),
       }),
     );
   });

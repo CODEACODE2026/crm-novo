@@ -12325,7 +12325,9 @@ function ConversationBubble({
 }) {
   const outbound = message.direction === 'OUTBOUND';
   const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;
-  const text = hasAvailableImage ? '' : conversationMessageDisplayText(message);
+  const hasAvailableInlineMedia =
+    (message.type === 'IMAGE' || message.type === 'AUDIO') && message.mediaAvailable;
+  const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
 
   return (
@@ -12539,7 +12541,7 @@ function ConversationMediaContent({
   if (error || !mediaUrl) {
     return (
       <div className="conversation-media-unavailable">
-        <span>{conversationMessagePlaceholder(message.type)}</span>
+        <span>{conversationMediaUnavailableText(message.type)}</span>
         <button type="button" onClick={() => void loadMedia()}>
           Tentar novamente
         </button>
@@ -13506,7 +13508,7 @@ function formatConversationAudioTime(value: number) {
 
 function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
   const labels = {
-    AUDIO: '[Áudio]',
+    AUDIO: '',
     BUTTON: '[Mensagem interativa]',
     DOCUMENT: '[Documento]',
     IMAGE: '[Imagem]',
@@ -13520,6 +13522,11 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
 
 function isRenderableConversationMedia(type: WhatsAppConversationMessageType) {
   return type === 'IMAGE' || type === 'DOCUMENT' || type === 'AUDIO' || type === 'VIDEO';
+}
+
+function conversationMediaUnavailableText(type: WhatsAppConversationMessageType) {
+  if (type === 'AUDIO') return 'Mídia indisponível';
+  return conversationMessagePlaceholder(type);
 }
 
 function conversationMessageDisplayText(message: WhatsAppConversationMessage) {

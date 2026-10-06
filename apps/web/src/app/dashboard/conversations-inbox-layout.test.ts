@@ -141,7 +141,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   it('supports message bubbles, non-text placeholders, send, failure and retry with a fresh request id', () => {
     expect(conversationsSource).toContain('conversation-bubble-row ${outbound ?');
     expect(conversationsSource).toContain("'outbound' : 'inbound'");
-    expect(conversationsSource).toContain("AUDIO: '[Áudio]'");
+    expect(conversationsSource).toContain("AUDIO: ''");
     expect(conversationsSource).toContain("DOCUMENT: '[Documento]'");
     expect(conversationsSource).toContain("IMAGE: '[Imagem]'");
     expect(conversationsSource).toContain("VIDEO: '[Vídeo]'");
@@ -196,8 +196,12 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       "const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;",
     );
     expect(conversationsSource).toContain(
-      "const text = hasAvailableImage ? '' : conversationMessageDisplayText(message);",
+      "const hasAvailableInlineMedia =\n    (message.type === 'IMAGE' || message.type === 'AUDIO') && message.mediaAvailable;",
     );
+    expect(conversationsSource).toContain(
+      "const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);",
+    );
+    expect(conversationsSource).toContain("if (type === 'AUDIO') return 'Mídia indisponível';");
     expect(conversationsSource).toContain(
       'downloadWhatsAppConversationMedia(conversationId, message.id)',
     );

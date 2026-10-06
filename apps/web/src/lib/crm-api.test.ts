@@ -47,7 +47,9 @@ import {
   resolveWhatsAppConversation,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
+  sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
+  sendWhatsAppConversationVoice,
   sendPaymentIntentWhatsApp,
   startWhatsAppConversation,
   testPaymentProviderCredential,
@@ -1387,11 +1389,20 @@ describe('CRM UI formatters', () => {
       body: 'Oi',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
     });
+    await sendWhatsAppConversationMedia('conversation-id', {
+      file: new File(['ogg'], 'recado.ogg', { type: 'audio/ogg' }),
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+    });
+    await sendWhatsAppConversationVoice('conversation-id', {
+      file: new File(['webm'], 'voice.webm', { type: 'audio/webm;codecs=opus' }),
+      durationSeconds: 3,
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+    });
     await startWhatsAppConversation({
       whatsAppConnectionId: '550e8400-e29b-41d4-a716-446655440001',
       clientId: '550e8400-e29b-41d4-a716-446655440000',
       body: 'Oi',
-      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
     });
     await markWhatsAppConversationRead('conversation-id');
     await resolveWhatsAppConversation('conversation-id');
@@ -1431,6 +1442,27 @@ describe('CRM UI formatters', () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       6,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/media'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/voice'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const mediaCall = fetchMock.mock.calls[5] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    const voiceCall = fetchMock.mock.calls[6] as
+      [RequestInfo | URL, RequestInit | undefined] | undefined;
+    expect(mediaCall?.[1]?.body).toBeInstanceOf(FormData);
+    expect(voiceCall?.[1]?.body).toBeInstanceOf(FormData);
+    const voiceFormData = voiceCall?.[1]?.body as FormData;
+    expect(voiceFormData.get('requestId')).toBe('2f419d6d-d81a-4ed8-9f38-c6ff02d37392');
+    expect(voiceFormData.get('durationSeconds')).toBe('3');
+    expect(voiceFormData.get('file')).toBeInstanceOf(File);
+    expect(voiceCall?.[1]?.headers).not.toHaveProperty('Content-Type');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      8,
       expect.stringContaining('/whatsapp/conversations/start'),
       expect.objectContaining({
         method: 'POST',
@@ -1438,17 +1470,17 @@ describe('CRM UI formatters', () => {
           whatsAppConnectionId: '550e8400-e29b-41d4-a716-446655440001',
           clientId: '550e8400-e29b-41d4-a716-446655440000',
           body: 'Oi',
-          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
         }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      7,
+      9,
       expect.stringContaining('/whatsapp/conversations/conversation-id/read'),
       expect.objectContaining({ method: 'POST' }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      8,
+      10,
       expect.stringContaining('/whatsapp/conversations/conversation-id/resolve'),
       expect.objectContaining({ method: 'POST' }),
     );

@@ -3110,7 +3110,9 @@ a {
   grid-column: 1 / -1;
 }
 
-.conversation-attachment-preview {
+.conversation-attachment-preview,
+.conversation-voice-preview,
+.conversation-voice-recorder {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: 42px minmax(0, 1fr) auto;
@@ -3121,6 +3123,34 @@ a {
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
   padding: 7px;
+}
+
+.conversation-voice-preview {
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+}
+
+.conversation-voice-recorder {
+  grid-template-columns: auto minmax(0, 1fr) 34px 34px;
+  color: var(--danger);
+}
+
+.conversation-recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--danger);
+  box-shadow: 0 0 0 0 rgb(255 107 107 / 45%);
+  animation: conversation-recording-pulse 1.2s ease-out 0s 50;
+}
+
+@keyframes conversation-recording-pulse {
+  70% {
+    box-shadow: 0 0 0 8px rgb(255 107 107 / 0%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgb(255 107 107 / 0%);
+  }
 }
 
 .conversation-attachment-preview img,
@@ -3150,25 +3180,37 @@ a {
   margin-top: 4px;
 }
 
-.conversation-attachment-preview span {
+.conversation-attachment-preview span,
+.conversation-voice-preview span {
   min-width: 0;
 }
 
 .conversation-attachment-preview strong,
-.conversation-attachment-preview small {
+.conversation-attachment-preview small,
+.conversation-voice-preview strong,
+.conversation-voice-preview small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-attachment-preview strong {
+.conversation-attachment-preview strong,
+.conversation-voice-preview strong {
   font-size: 12px;
 }
 
-.conversation-attachment-preview small {
+.conversation-attachment-preview small,
+.conversation-voice-preview small {
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.conversation-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: end;
 }
 
 .conversation-attach-control {
@@ -12178,9 +12220,19 @@ tbody tr:hover,
     max-height: 96px;
   }
 
-  .conversation-attachment-preview {
+  .conversation-attachment-preview,
+  .conversation-voice-preview,
+  .conversation-voice-recorder {
     grid-template-columns: 34px minmax(0, 1fr) 34px;
     padding: 6px;
+  }
+
+  .conversation-voice-preview {
+    grid-template-columns: 34px minmax(0, 1fr) 34px 34px;
+  }
+
+  .conversation-voice-recorder {
+    grid-template-columns: auto minmax(0, 1fr) 34px 34px;
   }
 
   .conversation-attachment-preview img,

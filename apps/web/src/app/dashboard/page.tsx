@@ -47,6 +47,7 @@ import {
   MessageSquare,
   MessageSquareText,
   MessagesSquare,
+  Mic,
   Minus,
   Package,
   PackageOpen,
@@ -66,6 +67,7 @@ import {
   Settings,
   ShieldCheck,
   Loader2,
+  Square,
   Timer,
   Trash2,
   ToggleLeft,
@@ -201,6 +203,7 @@ import {
   sendWhatsAppMessage,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationMedia,
+  sendWhatsAppConversationVoice,
   startWhatsAppConversation,
   updateClient,
   updateClientReference,
@@ -10983,8 +10986,19 @@ type ConversationComposerMedia = {
   previewUrl: string | null;
 };
 
+type ConversationVoiceDraft = {
+  conversationId: string;
+  durationSeconds: number;
+  file: File;
+  previewUrl: string;
+  requestId: string;
+};
+
 const conversationMediaMaxBytes = 10 * 1024 * 1024;
+const conversationVoiceMaxSeconds = 60;
 const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
+const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
+const fallbackConversationVoiceMimeType = 'audio/webm';
 
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
@@ -11458,6 +11472,48 @@ function ConversationsView({
     }
   }
 
+  async function sendCurrentVoiceMessage(voice: ConversationVoiceDraft) {
+    if (!selectedConversation || sending || sendingRef.current) return;
+    if (voice.conversationId !== selectedConversation.id) {
+      setSendError('A gravação pertence a outra conversa. Grave novamente nesta conversa.');
+      throw new Error('Voice conversation changed.');
+    }
+
+    sendingRef.current = true;
+    setSending(true);
+    setSendError('');
+
+    try {
+      const message = await sendWhatsAppConversationVoice(selectedConversation.id, {
+        file: voice.file,
+        durationSeconds: voice.durationSeconds,
+        requestId: voice.requestId,
+      });
+      if (activeConversationIdRef.current !== selectedConversation.id) return;
+
+      pendingSendScrollConversationRef.current = selectedConversation.id;
+      setMessages((current) => mergeConversationMessages(current, [message]));
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? {
+                ...conversation,
+                lastMessageAt: message.sentAt ?? message.createdAt,
+                lastMessagePreview: conversationLastMessagePreview(message),
+              }
+            : conversation,
+        ),
+      );
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setSendError(conversationErrorMessage(err, 'Falha ao enviar gravação.'));
+      throw err;
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
   async function resolveSelectedConversation() {
     if (!selectedConversation || resolving || selectedConversation.status === 'RESOLVED') return;
 
@@ -11820,6 +11876,7 @@ function ConversationsView({
 
               <ConversationComposer
                 composerRef={composerRef}
+                conversationId={selectedConversation.id}
                 draft={selectedDraft}
                 error={sendError}
                 selectedMedia={selectedMedia}
@@ -11833,6 +11890,7 @@ function ConversationsView({
                 onRemoveMedia={clearComposerMedia}
                 onSelectMedia={selectComposerMedia}
                 onSend={() => void sendCurrentMessage()}
+                onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
               />
             </>
           ) : (
@@ -12859,6 +12917,7 @@ function ConversationAudioPlayer({
 
 function ConversationComposer({
   composerRef,
+  conversationId,
   draft,
   error,
   selectedMedia,
@@ -12867,8 +12926,10 @@ function ConversationComposer({
   onRemoveMedia,
   onSelectMedia,
   onSend,
+  onSendVoice,
 }: {
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
+  conversationId: string;
   draft: string;
   error: string;
   selectedMedia: ConversationComposerMedia | null;
@@ -12877,17 +12938,244 @@ function ConversationComposer({
   onRemoveMedia: () => void;
   onSelectMedia: (kind: ConversationComposerMedia['kind'], file: File) => void;
   onSend: () => void;
+  onSendVoice: (voice: ConversationVoiceDraft) => Promise<void>;
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState<ConversationVoiceDraft | null>(null);
+  const [voiceError, setVoiceError] = useState('');
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const discardRecordingRef = useRef(false);
+  const maxDurationTimeoutRef = useRef<number | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const stoppingVoiceRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const voiceSendingRef = useRef(false);
   const canSend = Boolean(draft.trim() || selectedMedia) && !sending;
+  const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
+
+  useEffect(() => {
+    return () => {
+      cancelVoiceRecording();
+    };
+  }, [conversationId]);
 
   function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
     if (!file) return;
     onSelectMedia(kind, file);
     setAttachmentMenuOpen(false);
+  }
+
+  function clearVoicePreview() {
+    setVoiceDraft((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return null;
+    });
+    setVoiceSeconds(0);
+  }
+
+  function stopVoiceTracks() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }
+
+  function clearVoiceTimers() {
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (maxDurationTimeoutRef.current !== null) {
+      window.clearTimeout(maxDurationTimeoutRef.current);
+      maxDurationTimeoutRef.current = null;
+    }
+  }
+
+  function handleRecorderStop(recorder: MediaRecorder) {
+    clearVoiceTimers();
+    stopVoiceTracks();
+    setRecording(false);
+    mediaRecorderRef.current = null;
+    stoppingVoiceRef.current = false;
+
+    const durationSeconds = Math.min(
+      conversationVoiceMaxSeconds,
+      Math.max(
+        1,
+        Math.ceil(
+          recordingStartedAtRef.current
+            ? (Date.now() - recordingStartedAtRef.current) / 1000
+            : voiceSeconds,
+        ),
+      ),
+    );
+    recordingStartedAtRef.current = null;
+
+    const discard = discardRecordingRef.current;
+    discardRecordingRef.current = false;
+
+    if (discard) {
+      chunksRef.current = [];
+      setVoiceSeconds(0);
+      return;
+    }
+
+    const mimeType = recorder.mimeType || fallbackConversationVoiceMimeType;
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    chunksRef.current = [];
+
+    if (!blob.size) {
+      setVoiceError('Não foi possível capturar áudio do microfone.');
+      setVoiceSeconds(0);
+      return;
+    }
+
+    const file = new File([blob], `voice-${Date.now()}.webm`, { type: mimeType });
+    const previewUrl = URL.createObjectURL(blob);
+    setVoiceDraft((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return {
+        conversationId,
+        durationSeconds,
+        file,
+        previewUrl,
+        requestId: createConversationRequestId(),
+      };
+    });
+    setVoiceSeconds(durationSeconds);
+  }
+
+  function finishRecording(discard: boolean) {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      clearVoiceTimers();
+      stopVoiceTracks();
+      setRecording(false);
+      stoppingVoiceRef.current = false;
+      discardRecordingRef.current = false;
+      return;
+    }
+
+    if (stoppingVoiceRef.current) {
+      if (discard) {
+        discardRecordingRef.current = true;
+      }
+      return;
+    }
+
+    discardRecordingRef.current = discard;
+    stoppingVoiceRef.current = true;
+    clearVoiceTimers();
+
+    if (recorder.state === 'inactive') {
+      handleRecorderStop(recorder);
+      return;
+    }
+
+    recorder.stop();
+  }
+
+  function cancelVoiceRecording() {
+    finishRecording(true);
+    clearVoicePreview();
+    setVoiceError('');
+  }
+
+  function voiceMimeType() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    if (MediaRecorder.isTypeSupported(preferredConversationVoiceMimeType)) {
+      return preferredConversationVoiceMimeType;
+    }
+    if (MediaRecorder.isTypeSupported(fallbackConversationVoiceMimeType)) {
+      return fallbackConversationVoiceMimeType;
+    }
+    return null;
+  }
+
+  async function startVoiceRecording() {
+    setVoiceError('');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+      return;
+    }
+
+    const mimeType = voiceMimeType();
+    if (!mimeType) {
+      setVoiceError('Gravação WebM/Opus não é suportada neste navegador.');
+      return;
+    }
+
+    try {
+      clearVoicePreview();
+      onRemoveMedia();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+      discardRecordingRef.current = false;
+      stoppingVoiceRef.current = false;
+      chunksRef.current = [];
+      recordingStartedAtRef.current = Date.now();
+      setVoiceSeconds(0);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+        finishRecording(true);
+      };
+      recorder.onstop = () => {
+        handleRecorderStop(recorder);
+      };
+
+      recorder.start();
+      setRecording(true);
+      recordingTimerRef.current = window.setInterval(() => {
+        if (!recordingStartedAtRef.current) return;
+        setVoiceSeconds(
+          Math.min(
+            conversationVoiceMaxSeconds,
+            Math.floor((Date.now() - recordingStartedAtRef.current) / 1000),
+          ),
+        );
+      }, 250);
+      maxDurationTimeoutRef.current = window.setTimeout(() => {
+        finishRecording(false);
+      }, conversationVoiceMaxSeconds * 1000);
+    } catch {
+      clearVoiceTimers();
+      stopVoiceTracks();
+      setRecording(false);
+      setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+    }
+  }
+
+  async function sendVoiceDraft() {
+    if (!voiceDraft || sending || voiceSendingRef.current) return;
+
+    voiceSendingRef.current = true;
+    try {
+      await onSendVoice(voiceDraft);
+      clearVoicePreview();
+      setVoiceError('');
+    } catch {
+      setVoiceError('Falha ao enviar gravação. Você pode tentar novamente.');
+    } finally {
+      voiceSendingRef.current = false;
+    }
   }
 
   return (
@@ -12901,6 +13189,58 @@ function ConversationComposer({
       {error ? (
         <div className="notice danger conversation-notice" role="alert">
           {error}
+        </div>
+      ) : null}
+      {voiceError ? (
+        <div className="notice danger conversation-notice" role="alert">
+          {voiceError}
+        </div>
+      ) : null}
+      {recording ? (
+        <div className="conversation-voice-recorder" role="status">
+          <span className="conversation-recording-dot" aria-hidden="true" />
+          <strong>{formatConversationAudioTime(voiceSeconds)}</strong>
+          <IconButton
+            icon={X}
+            label="Cancelar gravação"
+            disabled={Boolean(sending)}
+            onClick={cancelVoiceRecording}
+          />
+          <IconButton
+            icon={Square}
+            label="Parar gravação"
+            disabled={Boolean(sending)}
+            onClick={() => finishRecording(false)}
+          />
+        </div>
+      ) : null}
+      {voiceDraft ? (
+        <div className="conversation-voice-preview">
+          <span className="conversation-attachment-file-icon" aria-hidden="true">
+            <FileAudio size={18} />
+          </span>
+          <span>
+            <strong>Gravação de voz</strong>
+            <small>{formatConversationAudioTime(voiceDraft.durationSeconds)}</small>
+            <audio
+              className="conversation-attachment-audio-preview"
+              controls
+              preload="metadata"
+              src={voiceDraft.previewUrl}
+            />
+          </span>
+          <IconButton
+            icon={Trash2}
+            label="Cancelar gravação"
+            disabled={Boolean(sending)}
+            onClick={clearVoicePreview}
+          />
+          <IconButton
+            icon={Send}
+            label="Enviar gravação"
+            disabled={!canSendVoice}
+            onClick={() => void sendVoiceDraft()}
+          />
         </div>
       ) : null}
       {selectedMedia ? (
@@ -12928,57 +13268,66 @@ function ConversationComposer({
           <IconButton icon={X} label="Remover anexo" onClick={onRemoveMedia} />
         </div>
       ) : null}
-      <div className="conversation-attach-control">
+      <div className="conversation-composer-tools">
+        <div className="conversation-attach-control">
+          <IconButton
+            icon={Plus}
+            label="Anexar arquivo"
+            disabled={recording || sending}
+            onClick={() => setAttachmentMenuOpen((current) => !current)}
+          />
+          {attachmentMenuOpen ? (
+            <div className="conversation-attach-menu">
+              <button type="button" onClick={() => imageInputRef.current?.click()}>
+                <ImageIcon aria-hidden="true" size={16} />
+                <span>Imagem</span>
+              </button>
+              <button type="button" onClick={() => documentInputRef.current?.click()}>
+                <FileText aria-hidden="true" size={16} />
+                <span>Documento</span>
+              </button>
+              <button type="button" onClick={() => audioInputRef.current?.click()}>
+                <FileAudio aria-hidden="true" size={16} />
+                <span>Áudio</span>
+              </button>
+            </div>
+          ) : null}
+          <input
+            ref={imageInputRef}
+            accept="image/jpeg,image/png"
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('IMAGE', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={documentInputRef}
+            accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('DOCUMENT', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={audioInputRef}
+            accept="audio/ogg,audio/mpeg,audio/mp4"
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('AUDIO', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+        </div>
         <IconButton
-          icon={Plus}
-          label="Anexar arquivo"
-          onClick={() => setAttachmentMenuOpen((current) => !current)}
-        />
-        {attachmentMenuOpen ? (
-          <div className="conversation-attach-menu">
-            <button type="button" onClick={() => imageInputRef.current?.click()}>
-              <ImageIcon aria-hidden="true" size={16} />
-              <span>Imagem</span>
-            </button>
-            <button type="button" onClick={() => documentInputRef.current?.click()}>
-              <FileText aria-hidden="true" size={16} />
-              <span>Documento</span>
-            </button>
-            <button type="button" onClick={() => audioInputRef.current?.click()}>
-              <FileAudio aria-hidden="true" size={16} />
-              <span>Áudio</span>
-            </button>
-          </div>
-        ) : null}
-        <input
-          ref={imageInputRef}
-          accept="image/jpeg,image/png"
-          className="sr-only"
-          type="file"
-          onChange={(event) => {
-            selectFile('IMAGE', event.target.files?.[0]);
-            event.target.value = '';
-          }}
-        />
-        <input
-          ref={documentInputRef}
-          accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          className="sr-only"
-          type="file"
-          onChange={(event) => {
-            selectFile('DOCUMENT', event.target.files?.[0]);
-            event.target.value = '';
-          }}
-        />
-        <input
-          ref={audioInputRef}
-          accept="audio/ogg,audio/mpeg,audio/mp4"
-          className="sr-only"
-          type="file"
-          onChange={(event) => {
-            selectFile('AUDIO', event.target.files?.[0]);
-            event.target.value = '';
-          }}
+          icon={Mic}
+          label="Gravar áudio"
+          disabled={recording || sending || Boolean(voiceDraft)}
+          onClick={() => void startVoiceRecording()}
         />
       </div>
       <label>

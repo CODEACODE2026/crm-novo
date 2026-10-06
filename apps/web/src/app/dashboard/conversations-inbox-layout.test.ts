@@ -284,10 +284,69 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversation-document-copy strong');
     expect(stylesSource).toContain('text-overflow: ellipsis;');
     expect(stylesSource).toContain('.conversation-attachment-preview');
+    expect(stylesSource).toContain('.conversation-voice-preview');
+    expect(stylesSource).toContain('.conversation-voice-recorder');
     expect(stylesSource).toContain('.conversation-attach-menu');
     expect(mobileConversationMediaSource).toContain(
-      '.conversation-attachment-preview {\n    grid-template-columns: 34px minmax(0, 1fr) 34px;',
+      '.conversation-attachment-preview,\n  .conversation-voice-preview,\n  .conversation-voice-recorder',
     );
+  });
+
+  it('supports WebM microphone voice notes as a separate PTT flow', () => {
+    expect(dashboardSource).toContain('type ConversationVoiceDraft');
+    expect(dashboardSource).toContain('const conversationVoiceMaxSeconds = 60;');
+    expect(dashboardSource).toContain(
+      "const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';",
+    );
+    expect(dashboardSource).toContain("const fallbackConversationVoiceMimeType = 'audio/webm';");
+    expect(conversationsSource).toContain('sendWhatsAppConversationVoice(selectedConversation.id');
+    expect(conversationsSource).toContain('durationSeconds: voice.durationSeconds');
+    expect(conversationsSource).toContain('requestId: voice.requestId');
+    expect(conversationsSource).toContain('voice.conversationId !== selectedConversation.id');
+    expect(conversationsSource).toContain('navigator.mediaDevices.getUserMedia({ audio: true })');
+    expect(conversationsSource).toContain('MediaRecorder.isTypeSupported');
+    expect(conversationsSource).toContain('new MediaRecorder(stream, { mimeType })');
+    expect(conversationsSource).toContain('chunksRef.current.push(event.data)');
+    expect(conversationsSource).toContain('recorder.onstop = () =>');
+    expect(conversationsSource).toContain('handleRecorderStop(recorder)');
+    expect(conversationsSource).toContain('new Blob(chunksRef.current, { type: mimeType })');
+    expect(conversationsSource).toContain('new File([blob], `voice-${Date.now()}.webm`');
+    expect(conversationsSource).toContain('const stoppingVoiceRef = useRef(false);');
+    expect(conversationsSource).toContain('const discardRecordingRef = useRef(false);');
+    expect(conversationsSource).toContain('const voiceSendingRef = useRef(false);');
+    expect(conversationsSource).toContain('if (stoppingVoiceRef.current)');
+    expect(conversationsSource).toContain('discardRecordingRef.current = true');
+    expect(conversationsSource).not.toContain("recorder.onstop(new Event('stop'))");
+    expect(conversationsSource).toContain(
+      'if (!voiceDraft || sending || voiceSendingRef.current) return;',
+    );
+    expect(conversationsSource).toContain('voiceSendingRef.current = true;');
+    expect(conversationsSource).toContain('voiceSendingRef.current = false;');
+    expect(conversationsSource).toContain('streamRef.current = stream;');
+    expect(conversationsSource).toContain('URL.createObjectURL(blob)');
+    expect(conversationsSource).toContain('URL.revokeObjectURL(current.previewUrl)');
+    expect(conversationsSource).toContain('conversationVoiceMaxSeconds * 1000');
+    expect(conversationsSource).toContain('setVoiceError(');
+    expect(conversationsSource).toContain(
+      'Não foi possível acessar o microfone. Verifique a permissão do navegador.',
+    );
+    expect(conversationsSource).toContain('Falha ao enviar gravação. Você pode tentar novamente.');
+    expect(conversationsSource).toContain('cancelVoiceRecording()');
+    expect(conversationsSource).toContain('track.stop()');
+    expect(conversationsSource).toContain('clearVoiceTimers()');
+    expect(conversationsSource).toContain(
+      'onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}',
+    );
+    expect(conversationsSource).toContain('label="Gravar áudio"');
+    expect(conversationsSource).toContain('label="Parar gravação"');
+    expect(conversationsSource).toContain('label="Cancelar gravação"');
+    expect(conversationsSource).toContain('label="Enviar gravação"');
+    expect(conversationsSource).toContain('conversation-recording-dot');
+    expect(conversationsSource).toContain('conversation-voice-preview');
+    expect(conversationsSource).toContain('accept="audio/ogg,audio/mpeg,audio/mp4"');
+    expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
+    expect(stylesSource).toContain('@keyframes conversation-recording-pulse');
+    expect(stylesSource).toContain('.conversation-composer-tools');
   });
 
   it('keeps composer focus after manual send without stealing focus on retry', () => {

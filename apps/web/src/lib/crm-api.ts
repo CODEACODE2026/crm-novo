@@ -2537,6 +2537,21 @@ export function sendWhatsAppConversationMedia(
   });
 }
 
+export function sendWhatsAppConversationVoice(
+  id: string,
+  payload: { file: File; durationSeconds: number; requestId: string },
+) {
+  const formData = new FormData();
+  formData.set('file', payload.file);
+  formData.set('requestId', payload.requestId);
+  formData.set('durationSeconds', String(payload.durationSeconds));
+
+  return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/voice`, {
+    method: 'POST',
+    body: formData,
+  });
+}
+
 export async function downloadWhatsAppConversationMedia(conversationId: string, messageId: string) {
   const response = await fetch(
     buildApiUrl(`/whatsapp/conversations/${conversationId}/messages/${messageId}/media`),

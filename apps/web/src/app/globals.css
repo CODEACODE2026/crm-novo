@@ -2726,13 +2726,59 @@ a {
 
 .conversation-document-media {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
+  gap: 0;
   width: min(360px, 100%);
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface-soft) 86%, transparent);
+}
+
+.conversation-document-media.has-pdf-preview {
+  width: min(320px, 100%);
+}
+
+.conversation-document-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, #ffffff 12%);
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+}
+
+.conversation-document-preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+.conversation-document-preview-skeleton {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--text-secondary) 12%, transparent),
+      transparent
+    ),
+    color-mix(in srgb, var(--surface-soft) 84%, transparent);
+}
+
+.conversation-document-details {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
   padding: 8px 9px;
 }
 
@@ -2811,6 +2857,12 @@ a {
 
 .conversation-document-action:hover {
   background: color-mix(in srgb, var(--info) 10%, transparent);
+}
+
+.conversation-document-preview:focus-visible,
+.conversation-document-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 72%, white);
+  outline-offset: -2px;
 }
 
 .conversation-video-media {
@@ -12078,8 +12130,15 @@ tbody tr:hover,
   }
 
   .conversation-document-media {
-    grid-template-columns: 32px minmax(0, 1fr);
     width: min(78vw, 100%);
+  }
+
+  .conversation-document-media.has-pdf-preview {
+    width: min(78vw, 320px);
+  }
+
+  .conversation-document-details {
+    grid-template-columns: 32px minmax(0, 1fr);
   }
 
   .conversation-document-action {

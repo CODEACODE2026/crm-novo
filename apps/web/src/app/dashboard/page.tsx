@@ -12376,8 +12376,13 @@ function ConversationMediaContent({
   const mountedRef = useRef(false);
   const imageButtonRef = useRef<HTMLButtonElement | null>(null);
   const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
+  const isPdfDocument =
+    message.type === 'DOCUMENT' && message.mediaMimeType?.toLowerCase() === 'application/pdf';
   const autoPreview =
-    message.type === 'IMAGE' || message.type === 'AUDIO' || message.type === 'VIDEO';
+    message.type === 'IMAGE' ||
+    message.type === 'AUDIO' ||
+    message.type === 'VIDEO' ||
+    isPdfDocument;
   const available = message.mediaAvailable && autoPreview;
 
   useEffect(() => {
@@ -12503,33 +12508,62 @@ function ConversationMediaContent({
         {message.mediaFileName}
         {message.mediaSizeBytes ? ` | ${formatFileSize(message.mediaSizeBytes)}` : ''}
       </span>
+    ) : message.type === 'DOCUMENT' ? (
+      <span className="conversation-media-meta">Mídia indisponível</span>
     ) : null;
   }
 
   if (message.type === 'DOCUMENT') {
+    const fileName = message.mediaFileName || 'Documento';
+    const fileSize = message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : 'Arquivo';
+    const showPdfPreview = isPdfDocument && !error;
+    const previewUrl =
+      showPdfPreview && mediaUrl ? `${mediaUrl}#page=1&toolbar=0&navpanes=0` : null;
+
     return (
-      <div className="conversation-document-media">
-        <span className="conversation-document-icon" aria-hidden="true">
-          <FileText size={18} />
-        </span>
-        <span className="conversation-document-copy">
-          <strong>{message.mediaFileName || 'Documento'}</strong>
-          <small>
-            {message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : 'Arquivo'}
-          </small>
-        </span>
-        <button
-          aria-label={`${loading ? 'Abrindo' : error ? 'Tentar novamente' : 'Abrir ou baixar'} ${
-            message.mediaFileName || 'documento'
-          }`}
-          className="conversation-document-action"
-          disabled={loading}
-          type="button"
-          onClick={() => void openDocument()}
-        >
-          <Download size={15} aria-hidden="true" />
-          <span>{loading ? 'Abrindo...' : error ? 'Tentar novamente' : 'Abrir / Baixar'}</span>
-        </button>
+      <div className={`conversation-document-media ${showPdfPreview ? 'has-pdf-preview' : ''}`}>
+        {showPdfPreview ? (
+          <button
+            aria-label={`Abrir ou baixar prévia de ${fileName}`}
+            className="conversation-document-preview"
+            disabled={loading && !mediaUrl}
+            type="button"
+            onClick={() => void openDocument()}
+          >
+            {previewUrl ? (
+              <object
+                aria-hidden="true"
+                className="conversation-document-preview-frame"
+                data={previewUrl}
+                tabIndex={-1}
+                type="application/pdf"
+              >
+                <span>{fileName}</span>
+              </object>
+            ) : (
+              <span className="conversation-document-preview-skeleton" aria-hidden="true" />
+            )}
+          </button>
+        ) : null}
+        <div className="conversation-document-details">
+          <span className="conversation-document-icon" aria-hidden="true">
+            <FileText size={18} />
+          </span>
+          <span className="conversation-document-copy">
+            <strong>{fileName}</strong>
+            <small>{fileSize}</small>
+          </span>
+          <button
+            aria-label={`Abrir ou baixar ${fileName}`}
+            className="conversation-document-action"
+            disabled={loading && !mediaUrl}
+            type="button"
+            onClick={() => void openDocument()}
+          >
+            <Download size={15} aria-hidden="true" />
+            <span>{loading && !mediaUrl ? 'Abrindo...' : 'Abrir / Baixar'}</span>
+          </button>
+        </div>
       </div>
     );
   }
@@ -13482,7 +13516,7 @@ function conversationLastMessagePreview(message: WhatsAppConversationMessage) {
   const text = message.text?.trim();
   if (text) return text;
   if (message.type === 'IMAGE') return '[Imagem]';
-  if (message.type === 'DOCUMENT') return message.mediaFileName || '[Documento]';
+  if (message.type === 'DOCUMENT') return message.mediaFileName || 'Documento';
   return conversationMessagePlaceholder(message.type) || '[Mensagem]';
 }
 
@@ -13510,7 +13544,7 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
   const labels = {
     AUDIO: '',
     BUTTON: '[Mensagem interativa]',
-    DOCUMENT: '[Documento]',
+    DOCUMENT: '',
     IMAGE: '[Imagem]',
     LOCATION: '[Localização]',
     TEXT: '',
@@ -13526,6 +13560,7 @@ function isRenderableConversationMedia(type: WhatsAppConversationMessageType) {
 
 function conversationMediaUnavailableText(type: WhatsAppConversationMessageType) {
   if (type === 'AUDIO') return 'Mídia indisponível';
+  if (type === 'DOCUMENT') return 'Mídia indisponível';
   return conversationMessagePlaceholder(type);
 }
 
@@ -15346,7 +15381,7 @@ function messageTypePreview(type: WhatsAppInboundMessageType) {
     image: '[Imagem]',
     video: '[Video]',
     audio: '[Audio]',
-    document: '[Documento]',
+    document: 'Documento',
     sticker: '[Figurinha]',
     location: '[Localização]',
     live_location: '[Localização ao vivo]',

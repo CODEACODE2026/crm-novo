@@ -142,7 +142,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('conversation-bubble-row ${outbound ?');
     expect(conversationsSource).toContain("'outbound' : 'inbound'");
     expect(conversationsSource).toContain("AUDIO: ''");
-    expect(conversationsSource).toContain("DOCUMENT: '[Documento]'");
+    expect(conversationsSource).toContain("DOCUMENT: ''");
+    expect(conversationsSource).not.toContain('[Documento]');
     expect(conversationsSource).toContain("IMAGE: '[Imagem]'");
     expect(conversationsSource).toContain("VIDEO: '[Vídeo]'");
     expect(conversationsSource).toContain("LOCATION: '[Localização]'");
@@ -220,8 +221,18 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('URL.revokeObjectURL(current)');
     expect(conversationsSource).toContain('if (mediaUrl) URL.revokeObjectURL(mediaUrl);');
     expect(conversationsSource).toContain('conversation-document-action');
+    expect(conversationsSource).toContain('conversation-document-preview');
+    expect(conversationsSource).toContain('conversation-document-preview-frame');
+    expect(conversationsSource).toContain(
+      "message.mediaMimeType?.toLowerCase() === 'application/pdf'",
+    );
+    expect(conversationsSource).toContain('const showPdfPreview = isPdfDocument && !error;');
+    expect(conversationsSource).toContain("showPdfPreview ? 'has-pdf-preview' : ''");
+    expect(conversationsSource).toContain('`${mediaUrl}#page=1&toolbar=0&navpanes=0`');
+    expect(conversationsSource).toContain('const previewUrl =');
     expect(conversationsSource).toContain('<Download size={15} aria-hidden="true" />');
     expect(conversationsSource).toContain("message.mediaFileName || 'Documento'");
+    expect(conversationsSource).toContain("if (type === 'DOCUMENT') return 'Mídia indisponível';");
     expect(conversationsSource).toContain('formatFileSize(message.mediaSizeBytes)');
     expect(conversationsSource).toContain('Tentar novamente');
     expect(conversationsSource).toContain('conversation-media-loading');
@@ -255,6 +266,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('max-width: calc(100vw - 20px);');
     expect(stylesSource).toContain('touch-action: pinch-zoom;');
     expect(stylesSource).toContain('.conversation-media-loading::before');
+    expect(stylesSource).toContain('.conversation-document-media.has-pdf-preview');
+    expect(stylesSource).toContain('aspect-ratio: 4 / 3;');
+    expect(stylesSource).toContain('pointer-events: none;');
+    expect(stylesSource).toContain('.conversation-document-preview:focus-visible');
     expect(stylesSource).toContain('.conversation-audio-player');
     expect(stylesSource).toContain('.conversation-audio-toggle');
     expect(stylesSource).toContain('.conversation-audio-progress');

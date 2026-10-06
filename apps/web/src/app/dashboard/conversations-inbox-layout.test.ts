@@ -222,6 +222,24 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Tentar novamente');
     expect(conversationsSource).toContain('conversation-media-loading');
     expect(conversationsSource).toContain('conversation-audio-media');
+    expect(conversationsSource).toContain('function ConversationAudioPlayer');
+    expect(conversationsSource).toContain('message.mediaDurationSeconds');
+    expect(conversationsSource).toContain('formatConversationAudioTime');
+    expect(conversationsSource).toContain('audio.play()');
+    expect(conversationsSource).toContain('audio.pause()');
+    expect(conversationsSource).toContain('const conversationAudioPlayEvent');
+    expect(conversationsSource).toContain('window.addEventListener(conversationAudioPlayEvent');
+    expect(conversationsSource).toContain('window.removeEventListener(conversationAudioPlayEvent');
+    expect(conversationsSource).toContain(
+      'window.dispatchEvent(new CustomEvent(conversationAudioPlayEvent',
+    );
+    expect(conversationsSource).toContain('audio.currentTime = safeTime;');
+    expect(conversationsSource).toContain('if (audio) audio.currentTime = 0;');
+    expect(conversationsSource).toContain('function seekWithKeyboard');
+    expect(conversationsSource).toContain('role="slider"');
+    expect(conversationsSource).toContain('aria-valuetext');
+    expect(conversationsSource).toContain('onTimeUpdate={syncTime}');
+    expect(conversationsSource).toContain('onLoadedMetadata={syncDuration}');
     expect(conversationsSource).toContain('conversation-video-media');
     expect(conversationsSource).toContain('conversation-media-meta');
     expect(conversationsSource).toContain(
@@ -233,6 +251,11 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('max-width: calc(100vw - 20px);');
     expect(stylesSource).toContain('touch-action: pinch-zoom;');
     expect(stylesSource).toContain('.conversation-media-loading::before');
+    expect(stylesSource).toContain('.conversation-audio-player');
+    expect(stylesSource).toContain('.conversation-audio-toggle');
+    expect(stylesSource).toContain('.conversation-audio-progress');
+    expect(stylesSource).toContain('.conversation-audio-progress:focus-visible');
+    expect(stylesSource).toContain('font-variant-numeric: tabular-nums;');
     expect(stylesSource).toContain('.conversation-document-copy strong');
     expect(stylesSource).toContain('text-overflow: ellipsis;');
     expect(stylesSource).toContain('.conversation-attachment-preview');

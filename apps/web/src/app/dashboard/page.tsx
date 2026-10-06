@@ -50,7 +50,9 @@ import {
   Minus,
   Package,
   PackageOpen,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Power,
   QrCode,
@@ -63,6 +65,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Loader2,
   Timer,
   Trash2,
   ToggleLeft,
@@ -12593,7 +12596,11 @@ function ConversationMediaContent({
 
   if (message.type === 'AUDIO') {
     return (
-      <audio className="conversation-audio-media" controls preload="metadata" src={mediaUrl} />
+      <ConversationAudioPlayer
+        durationSeconds={message.mediaDurationSeconds}
+        outbound={message.direction === 'OUTBOUND'}
+        src={mediaUrl}
+      />
     );
   }
 
@@ -12601,6 +12608,214 @@ function ConversationMediaContent({
     <video className="conversation-video-media" controls preload="metadata" src={mediaUrl}>
       <track kind="captions" />
     </video>
+  );
+}
+
+function ConversationAudioPlayer({
+  durationSeconds,
+  outbound,
+  src,
+}: {
+  durationSeconds: number | null;
+  outbound: boolean;
+  src: string;
+}) {
+  const conversationAudioPlayEvent = 'crm-conversation-audio-play';
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const initialDuration = isFinitePositiveNumber(durationSeconds) ? durationSeconds : 0;
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(initialDuration);
+  const [playing, setPlaying] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+
+  useEffect(() => {
+    function pauseOtherAudio(event: Event) {
+      const audio = audioRef.current;
+      const playingAudio =
+        event instanceof CustomEvent ? (event.detail as HTMLAudioElement | null) : null;
+
+      if (audio && playingAudio && playingAudio !== audio && !audio.paused) {
+        audio.pause();
+      }
+    }
+
+    window.addEventListener(conversationAudioPlayEvent, pauseOtherAudio);
+
+    return () => {
+      window.removeEventListener(conversationAudioPlayEvent, pauseOtherAudio);
+    };
+  }, []);
+
+  useEffect(() => {
+    setCurrentTime(0);
+    setDuration(initialDuration);
+    setPlaying(false);
+    setWaiting(false);
+    setFailed(false);
+  }, [initialDuration, src]);
+
+  function syncTime() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setCurrentTime(isFinitePositiveNumber(audio.currentTime) ? audio.currentTime : 0);
+  }
+
+  function syncDuration() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isFinitePositiveNumber(audio.duration)) setDuration(audio.duration);
+  }
+
+  function seekTo(nextTime: number) {
+    const audio = audioRef.current;
+    if (!audio || failed || duration <= 0) return;
+
+    const safeTime = Math.min(duration, Math.max(0, nextTime));
+    audio.currentTime = safeTime;
+    setCurrentTime(safeTime);
+  }
+
+  async function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio || failed) return;
+
+    try {
+      if (audio.paused) {
+        setWaiting(true);
+        await audio.play();
+      } else {
+        audio.pause();
+      }
+    } catch {
+      setFailed(true);
+      setWaiting(false);
+      setPlaying(false);
+    }
+  }
+
+  function seek(event: ReactMouseEvent<HTMLButtonElement>) {
+    const audio = audioRef.current;
+    if (!audio || failed || duration <= 0) return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    seekTo(ratio * duration);
+  }
+
+  function seekWithKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (failed || duration <= 0) return;
+
+    const stepSeconds = event.shiftKey ? 10 : 5;
+    const keySeekMap: Record<string, number> = {
+      ArrowLeft: currentTime - stepSeconds,
+      ArrowRight: currentTime + stepSeconds,
+      End: duration,
+      Home: 0,
+      PageDown: currentTime - 15,
+      PageUp: currentTime + 15,
+    };
+
+    const nextTime = keySeekMap[event.key];
+    if (nextTime === undefined) return;
+
+    event.preventDefault();
+    seekTo(nextTime);
+  }
+
+  const buttonLabel = failed
+    ? 'Áudio indisponível'
+    : waiting
+      ? 'Carregando áudio'
+      : playing
+        ? 'Pausar áudio'
+        : 'Reproduzir áudio';
+
+  return (
+    <div className={`conversation-audio-player ${outbound ? 'outbound' : 'inbound'}`}>
+      <audio
+        ref={audioRef}
+        className="conversation-audio-media"
+        preload="metadata"
+        src={src}
+        onCanPlay={() => {
+          setWaiting(false);
+          syncDuration();
+        }}
+        onDurationChange={syncDuration}
+        onEnded={() => {
+          const audio = audioRef.current;
+          if (audio) audio.currentTime = 0;
+          setPlaying(false);
+          setWaiting(false);
+          setCurrentTime(0);
+        }}
+        onError={() => {
+          setFailed(true);
+          setWaiting(false);
+          setPlaying(false);
+        }}
+        onLoadedMetadata={syncDuration}
+        onPause={() => {
+          setPlaying(false);
+          setWaiting(false);
+        }}
+        onPlay={() => {
+          const audio = audioRef.current;
+          if (audio) {
+            window.dispatchEvent(new CustomEvent(conversationAudioPlayEvent, { detail: audio }));
+          }
+          setPlaying(true);
+          setFailed(false);
+        }}
+        onPlaying={() => {
+          setPlaying(true);
+          setWaiting(false);
+        }}
+        onTimeUpdate={syncTime}
+        onWaiting={() => setWaiting(true)}
+      />
+      <button
+        aria-label={buttonLabel}
+        className="conversation-audio-toggle"
+        disabled={failed}
+        type="button"
+        onClick={() => void togglePlayback()}
+      >
+        {waiting ? (
+          <Loader2 size={17} aria-hidden="true" />
+        ) : playing ? (
+          <Pause size={17} aria-hidden="true" />
+        ) : (
+          <Play size={17} aria-hidden="true" />
+        )}
+      </button>
+      <div className="conversation-audio-main">
+        <button
+          aria-label="Buscar posição do áudio"
+          aria-valuemax={Math.floor(duration)}
+          aria-valuemin={0}
+          aria-valuenow={Math.floor(currentTime)}
+          aria-valuetext={`${formatConversationAudioTime(currentTime)} de ${formatConversationAudioTime(
+            duration,
+          )}`}
+          className="conversation-audio-progress"
+          disabled={failed || duration <= 0}
+          role="slider"
+          type="button"
+          onClick={seek}
+          onKeyDown={seekWithKeyboard}
+        >
+          <span className="conversation-audio-track" aria-hidden="true">
+            <span className="conversation-audio-fill" style={{ width: `${progress}%` }} />
+          </span>
+        </button>
+        <span className="conversation-audio-time">
+          {formatConversationAudioTime(currentTime)} / {formatConversationAudioTime(duration)}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -13275,6 +13490,18 @@ function formatFileSize(bytes: number) {
   if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
   const mb = kb / 1024;
   return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
+function isFinitePositiveNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function formatConversationAudioTime(value: number) {
+  if (!Number.isFinite(value) || value < 0) return '0:00';
+  const totalSeconds = Math.floor(value);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {

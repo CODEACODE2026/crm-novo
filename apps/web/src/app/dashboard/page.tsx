@@ -31,6 +31,7 @@ import {
   Eye,
   EyeOff,
   Filter,
+  FileAudio,
   FileText,
   Gift,
   Globe2,
@@ -10975,11 +10976,12 @@ type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
 type ConversationComposerMedia = {
   file: File;
-  kind: 'IMAGE' | 'DOCUMENT';
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO';
   previewUrl: string | null;
 };
 
 const conversationMediaMaxBytes = 10 * 1024 * 1024;
+const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
@@ -11263,6 +11265,11 @@ function ConversationsView({
       return;
     }
 
+    if (kind === 'AUDIO' && !allowedConversationAudioMimeTypes.has(file.type)) {
+      setSendError('Formato de áudio não suportado. Envie OGG, MP3 ou M4A.');
+      return;
+    }
+
     setSelectedMedia((current) => {
       if (current?.previewUrl) {
         URL.revokeObjectURL(current.previewUrl);
@@ -11271,7 +11278,7 @@ function ConversationsView({
       return {
         file,
         kind,
-        previewUrl: kind === 'IMAGE' ? URL.createObjectURL(file) : null,
+        previewUrl: kind === 'IMAGE' || kind === 'AUDIO' ? URL.createObjectURL(file) : null,
       };
     });
     scheduleComposerFocus(() => {
@@ -12621,6 +12628,7 @@ function ConversationComposer({
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
   const canSend = Boolean(draft.trim() || selectedMedia) && !sending;
 
   function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
@@ -12644,17 +12652,25 @@ function ConversationComposer({
       ) : null}
       {selectedMedia ? (
         <div className="conversation-attachment-preview">
-          {selectedMedia.previewUrl ? (
+          {selectedMedia.kind === 'IMAGE' && selectedMedia.previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img alt="" src={selectedMedia.previewUrl} />
           ) : (
             <span className="conversation-attachment-file-icon" aria-hidden="true">
-              <FileText size={18} />
+              {selectedMedia.kind === 'AUDIO' ? <FileAudio size={18} /> : <FileText size={18} />}
             </span>
           )}
           <span>
             <strong>{selectedMedia.file.name}</strong>
             <small>{formatFileSize(selectedMedia.file.size)}</small>
+            {selectedMedia.kind === 'AUDIO' && selectedMedia.previewUrl ? (
+              <audio
+                className="conversation-attachment-audio-preview"
+                controls
+                preload="metadata"
+                src={selectedMedia.previewUrl}
+              />
+            ) : null}
           </span>
           <IconButton icon={X} label="Remover anexo" onClick={onRemoveMedia} />
         </div>
@@ -12675,6 +12691,10 @@ function ConversationComposer({
               <FileText aria-hidden="true" size={16} />
               <span>Documento</span>
             </button>
+            <button type="button" onClick={() => audioInputRef.current?.click()}>
+              <FileAudio aria-hidden="true" size={16} />
+              <span>Áudio</span>
+            </button>
           </div>
         ) : null}
         <input
@@ -12694,6 +12714,16 @@ function ConversationComposer({
           type="file"
           onChange={(event) => {
             selectFile('DOCUMENT', event.target.files?.[0]);
+            event.target.value = '';
+          }}
+        />
+        <input
+          ref={audioInputRef}
+          accept="audio/ogg,audio/mpeg,audio/mp4"
+          className="sr-only"
+          type="file"
+          onChange={(event) => {
+            selectFile('AUDIO', event.target.files?.[0]);
             event.target.value = '';
           }}
         />

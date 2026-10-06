@@ -55,6 +55,12 @@ export type KiragoSendDocumentData = {
   Timestamp?: string;
 };
 
+export type KiragoSendAudioData = {
+  Details?: unknown;
+  Id?: string;
+  Timestamp?: string;
+};
+
 export type KiragoSendButtonsData = {
   Details?: unknown;
   Id?: string;
@@ -161,6 +167,25 @@ export class KiragoInstanceClient {
     payload: { Phone: string; Document: string; FileName: string; Id: string },
   ) {
     return this.http.request<KiragoEnvelope<KiragoSendDocumentData>>('/chat/send/document', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  sendAudio(
+    instanceToken: string,
+    payload: {
+      Phone: string;
+      Audio: string;
+      Id: string;
+      PTT: boolean;
+      MimeType: string;
+      Seconds?: number;
+    },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoSendAudioData>>('/chat/send/audio', {
       method: 'POST',
       headers: { token: instanceToken },
       body: payload,

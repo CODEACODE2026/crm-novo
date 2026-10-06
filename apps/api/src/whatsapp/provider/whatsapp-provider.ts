@@ -57,6 +57,19 @@ export type SendDocumentResult = {
   providerMessageId: string | null;
 };
 
+export type SendAudioInput = {
+  phone: string;
+  audioDataUrl: string;
+  mimeType: string;
+  seconds?: number | null;
+  ptt: boolean;
+  requestId: string;
+};
+
+export type SendAudioResult = {
+  providerMessageId: string | null;
+};
+
 export type SendButtonsInput = {
   phone: string;
   title: string;
@@ -102,6 +115,7 @@ export interface WhatsAppProvider {
   sendText(instanceToken: string, input: SendTextInput): Promise<SendTextResult>;
   sendImage(instanceToken: string, input: SendImageInput): Promise<SendImageResult>;
   sendDocument(instanceToken: string, input: SendDocumentInput): Promise<SendDocumentResult>;
+  sendAudio(instanceToken: string, input: SendAudioInput): Promise<SendAudioResult>;
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;

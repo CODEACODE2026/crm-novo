@@ -133,7 +133,7 @@ describe('Kirago dependency injection', () => {
     });
   });
 
-  it('maps image and document sends to official Kirago payloads', async () => {
+  it('maps image, document and audio sends to official Kirago payloads', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 
     const instanceClient = app.get(KiragoInstanceClient);
@@ -145,6 +145,10 @@ describe('Kirago dependency injection', () => {
     const sendDocument = vi.spyOn(instanceClient, 'sendDocument').mockResolvedValue({
       success: true,
       data: { Id: 'document-provider-id' },
+    });
+    const sendAudio = vi.spyOn(instanceClient, 'sendAudio').mockResolvedValue({
+      success: true,
+      data: { Id: 'audio-provider-id' },
     });
 
     await provider.sendImage('instance-token', {
@@ -159,6 +163,14 @@ describe('Kirago dependency injection', () => {
       fileName: 'file.txt',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
     });
+    await provider.sendAudio('instance-token', {
+      phone: '5544999999999',
+      audioDataUrl: 'data:audio/ogg;base64,abc',
+      mimeType: 'audio/ogg',
+      seconds: null,
+      ptt: false,
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+    });
 
     expect(sendImage).toHaveBeenCalledWith('instance-token', {
       Phone: '5544999999999',
@@ -171,6 +183,13 @@ describe('Kirago dependency injection', () => {
       Document: 'data:application/octet-stream;base64,abc',
       FileName: 'file.txt',
       Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+    });
+    expect(sendAudio).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Audio: 'data:audio/ogg;base64,abc',
+      Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+      PTT: false,
+      MimeType: 'audio/ogg',
     });
   });
 

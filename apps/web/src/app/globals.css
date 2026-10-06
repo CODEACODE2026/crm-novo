@@ -2983,6 +2983,15 @@ a {
   color: var(--text-secondary);
 }
 
+.conversation-attachment-audio-preview {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+  height: 34px;
+  margin-top: 4px;
+}
+
 .conversation-attachment-preview span {
   min-width: 0;
 }
@@ -12009,6 +12018,10 @@ tbody tr:hover,
   .conversation-attachment-file-icon {
     width: 34px;
     height: 34px;
+  }
+
+  .conversation-attachment-audio-preview {
+    max-width: 100%;
   }
 
   .conversation-attach-menu {

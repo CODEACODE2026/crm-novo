@@ -75,6 +75,7 @@ const allowedDocumentMimeTypes = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
+const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 
 type ConversationMediaUploadFile = {
   buffer: Buffer;
@@ -84,12 +85,13 @@ type ConversationMediaUploadFile = {
 };
 
 type PreparedConversationMedia = {
-  kind: 'IMAGE' | 'DOCUMENT';
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO';
   dataUrl: string;
   buffer: Buffer;
   mimeType: string;
   fileName: string;
   sizeBytes: number;
+  durationSeconds: number | null;
 };
 
 type ConversationMediaDownload = Omit<DownloadMediaInput, 'type'>;
@@ -1133,24 +1135,36 @@ export class WhatsAppService {
     let result: { providerMessageId: string | null };
 
     try {
-      result =
-        mediaType === 'IMAGE'
-          ? await this.mapConnectionProviderError(connection, () =>
-              this.provider.sendImage(instanceToken, {
-                phone: conversation.phoneNormalized,
-                imageDataUrl: media.dataUrl,
-                caption,
-                requestId,
-              }),
-            )
-          : await this.mapConnectionProviderError(connection, () =>
-              this.provider.sendDocument(instanceToken, {
-                phone: conversation.phoneNormalized,
-                documentDataUrl: media.dataUrl,
-                fileName: media.fileName,
-                requestId,
-              }),
-            );
+      if (mediaType === 'IMAGE') {
+        result = await this.mapConnectionProviderError(connection, () =>
+          this.provider.sendImage(instanceToken, {
+            phone: conversation.phoneNormalized,
+            imageDataUrl: media.dataUrl,
+            caption,
+            requestId,
+          }),
+        );
+      } else if (mediaType === 'AUDIO') {
+        result = await this.mapConnectionProviderError(connection, () =>
+          this.provider.sendAudio(instanceToken, {
+            phone: conversation.phoneNormalized,
+            audioDataUrl: media.dataUrl,
+            mimeType: media.mimeType,
+            seconds: media.durationSeconds,
+            ptt: false,
+            requestId,
+          }),
+        );
+      } else {
+        result = await this.mapConnectionProviderError(connection, () =>
+          this.provider.sendDocument(instanceToken, {
+            phone: conversation.phoneNormalized,
+            documentDataUrl: media.dataUrl,
+            fileName: media.fileName,
+            requestId,
+          }),
+        );
+      }
     } catch (error) {
       const failed = await this.prisma.whatsAppMessage.update({
         where: { id: pending.id },
@@ -2358,7 +2372,7 @@ export class WhatsAppService {
   ) {
     return (
       normalizedMessageType === 'TEXT' &&
-      (existing.type === 'IMAGE' || existing.type === 'DOCUMENT') &&
+      (existing.type === 'IMAGE' || existing.type === 'DOCUMENT' || existing.type === 'AUDIO') &&
       this.isManualOutboundMediaMessage(existing)
     );
   }
@@ -2838,7 +2852,7 @@ export class WhatsAppService {
           mediaMimeType: input.media.mimeType,
           mediaFileName: input.media.fileName,
           mediaSizeBytes: input.media.sizeBytes,
-          mediaDurationSeconds: null,
+          mediaDurationSeconds: input.media.durationSeconds,
         }),
       });
     } catch (error) {
@@ -2952,6 +2966,7 @@ export class WhatsAppService {
         mimeType,
         fileName: this.sanitizeMediaFileName(file.originalname),
         sizeBytes,
+        durationSeconds: null,
       };
     }
 
@@ -2963,19 +2978,40 @@ export class WhatsAppService {
         mimeType,
         fileName: this.sanitizeMediaFileName(file.originalname),
         sizeBytes,
+        durationSeconds: null,
       };
+    }
+
+    if (allowedAudioMimeTypes.has(mimeType)) {
+      return {
+        kind: 'AUDIO' as const,
+        dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
+        buffer: file.buffer,
+        mimeType,
+        fileName: this.sanitizeMediaFileName(file.originalname),
+        sizeBytes,
+        durationSeconds: null,
+      };
+    }
+
+    if (mimeType === 'audio/webm') {
+      throw new BadRequestException('Formato de audio nao suportado. Envie OGG, MP3 ou M4A.');
     }
 
     throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
   }
 
-  private manualConversationMediaType(mimeType: string): 'IMAGE' | 'DOCUMENT' {
+  private manualConversationMediaType(mimeType: string): 'IMAGE' | 'DOCUMENT' | 'AUDIO' {
     if (allowedImageMimeTypes.has(mimeType)) {
       return 'IMAGE';
     }
 
     if (allowedDocumentMimeTypes.has(mimeType)) {
       return 'DOCUMENT';
+    }
+
+    if (allowedAudioMimeTypes.has(mimeType)) {
+      return 'AUDIO';
     }
 
     throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');

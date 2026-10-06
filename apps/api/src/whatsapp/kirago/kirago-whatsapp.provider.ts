@@ -12,6 +12,7 @@ import type {
   SendButtonsInput,
   SendDocumentInput,
   SendImageInput,
+  SendAudioInput,
   SendTextInput,
   WhatsAppProvider,
 } from '../provider/whatsapp-provider';
@@ -166,6 +167,21 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     });
 
     this.logMediaSendDebug('DOCUMENT', response);
+
+    return {
+      providerMessageId: response.data?.Id ?? null,
+    };
+  }
+
+  async sendAudio(instanceToken: string, input: SendAudioInput) {
+    const response = await this.instanceClient.sendAudio(instanceToken, {
+      Phone: input.phone,
+      Audio: input.audioDataUrl,
+      Id: this.kiragoMessageId(input.requestId),
+      PTT: input.ptt,
+      MimeType: input.mimeType,
+      ...(typeof input.seconds === 'number' ? { Seconds: input.seconds } : {}),
+    });
 
     return {
       providerMessageId: response.data?.Id ?? null,

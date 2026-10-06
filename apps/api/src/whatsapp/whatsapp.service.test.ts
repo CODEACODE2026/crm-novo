@@ -549,6 +549,7 @@ function serviceFactory({
     sendText: vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' }),
     sendImage: vi.fn().mockResolvedValue({ providerMessageId: 'provider-image-id' }),
     sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'provider-document-id' }),
+    sendAudio: vi.fn().mockResolvedValue({ providerMessageId: 'provider-audio-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     downloadMedia: vi.fn().mockResolvedValue({
       dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
@@ -1199,6 +1200,88 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it.each([
+    ['audio/ogg', 'audio.ogg'],
+    ['audio/mpeg', 'audio.mp3'],
+    ['audio/mp4', 'audio.m4a'],
+  ] as const)(
+    'sends %s conversation media as AUDIO with PTT disabled',
+    async (mimetype, fileName) => {
+      const { service, provider, prisma, mediaStorage } = serviceFactory({
+        mediaStorageOverrides: {
+          storeOutboundMedia: vi.fn().mockResolvedValue({
+            storageKey: `${connection().id}/${conversationMessage().id}/cccccccc-cccc-4ccc-8ccc-cccccccccccc`,
+            mimeType: mimetype,
+            sizeBytes: 12,
+          }),
+        },
+        prismaOverrides: {
+          whatsAppConversation: {
+            findUnique: vi.fn().mockResolvedValue(
+              conversation({
+                whatsAppConnection: connection({
+                  status: 'CONNECTED',
+                  connected: true,
+                  loggedIn: true,
+                }),
+              }),
+            ),
+            update: vi.fn().mockResolvedValue(conversation()),
+            findMany: vi.fn().mockResolvedValue([]),
+            count: vi.fn().mockResolvedValue(0),
+            aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+            create: vi.fn().mockResolvedValue(conversation()),
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
+        },
+      });
+      const audioBuffer = Buffer.from(`${mimetype}-bytes`);
+
+      await service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: audioBuffer,
+          mimetype,
+          originalname: fileName,
+          size: 12,
+        },
+        requestId: `audio-${mimetype}-request-id`,
+      });
+
+      expect(provider.sendAudio).toHaveBeenCalledWith('instance-token', {
+        phone: '5544999999999',
+        audioDataUrl: `data:${mimetype};base64,${audioBuffer.toString('base64')}`,
+        mimeType: mimetype,
+        seconds: null,
+        ptt: false,
+        requestId: `audio-${mimetype}-request-id`,
+      });
+      const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+        data?: Record<string, unknown>;
+      };
+      expect(createCall.data).toMatchObject({
+        type: 'AUDIO',
+        text: null,
+        requestId: `audio-${mimetype}-request-id`,
+        rawMetadata: {
+          source: 'manual_outbound_media_send',
+          storage: 'transient_request_only',
+          retryPolicy: 'select_file_again_after_reload',
+        },
+        mediaMimeType: mimetype,
+        mediaFileName: fileName,
+        mediaSizeBytes: 12,
+        mediaDurationSeconds: null,
+      });
+      expect(mediaStorage.storeOutboundMedia).toHaveBeenCalledWith({
+        whatsAppConnectionId: connection().id,
+        messageId: conversationMessage().id,
+        buffer: audioBuffer,
+        mimeType: mimetype,
+        sizeBytes: 12,
+      });
+    },
+  );
+
   it('keeps final persisted JPEG conversation media as IMAGE after provider and storage success', async () => {
     let storedMessage = conversationMessage();
     const whatsAppMessage = {
@@ -1337,6 +1420,79 @@ describe('WhatsAppService', () => {
     expect(whatsAppMessage.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ type: 'DOCUMENT' }),
+      }),
+    );
+    expect(whatsAppMessage.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'TEXT' }),
+      }),
+    );
+  });
+
+  it('keeps final persisted OGG conversation media as AUDIO after provider and storage success', async () => {
+    let storedMessage = conversationMessage();
+    const whatsAppMessage = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage(args.data ?? {});
+        return Promise.resolve(storedMessage);
+      }),
+      update: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage({ ...storedMessage, ...(args.data ?? {}) });
+        return Promise.resolve(storedMessage);
+      }),
+    };
+    const { service } = serviceFactory({
+      mediaStorageOverrides: {
+        storeOutboundMedia: vi.fn().mockResolvedValue({
+          storageKey: `${connection().id}/${conversationMessage().id}/ffffffff-ffff-4fff-8fff-ffffffffffff`,
+          mimeType: 'audio/ogg',
+          sizeBytes: 11,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppMessage,
+      },
+    });
+
+    const result = await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('ogg-bytes'),
+        mimetype: 'audio/ogg',
+        originalname: 'recado.ogg',
+        size: 11,
+      },
+      requestId: 'media-final-audio-request-id',
+    });
+
+    expect(result).toMatchObject({
+      type: 'AUDIO',
+      mediaMimeType: 'audio/ogg',
+      mediaFileName: 'recado.ogg',
+      mediaAvailable: true,
+    });
+    expect(whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'AUDIO' }),
       }),
     );
     expect(whatsAppMessage.update).not.toHaveBeenCalledWith(
@@ -1523,7 +1679,7 @@ describe('WhatsAppService', () => {
     );
   });
 
-  it('rejects unsupported media MIME and files above CRM internal size limit', async () => {
+  it('rejects unsupported media MIME, audio/webm and files above CRM internal size limit', async () => {
     const { service, provider } = serviceFactory();
 
     await expect(
@@ -1541,6 +1697,18 @@ describe('WhatsAppService', () => {
     await expect(
       service.sendConversationMediaMessage(conversation().id, {
         file: {
+          buffer: Buffer.from('webm'),
+          mimetype: 'audio/webm',
+          originalname: 'gravacao.webm',
+          size: 4,
+        },
+        requestId: 'webm-request-id',
+      }),
+    ).rejects.toThrow('Formato de audio nao suportado. Envie OGG, MP3 ou M4A.');
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
           buffer: Buffer.alloc(1),
           mimetype: 'application/pdf',
           originalname: 'grande.pdf',
@@ -1551,6 +1719,7 @@ describe('WhatsAppService', () => {
     ).rejects.toThrow(BadRequestException);
     expect(provider.sendImage).not.toHaveBeenCalled();
     expect(provider.sendDocument).not.toHaveBeenCalled();
+    expect(provider.sendAudio).not.toHaveBeenCalled();
   });
 
   it('does not resend conversation media when requestId already exists', async () => {
@@ -3781,6 +3950,70 @@ describe('WhatsAppService', () => {
         where: { id: existing.conversationId },
         data: expect.objectContaining({
           lastMessagePreview: 'contrato.pdf',
+        }),
+      }),
+    );
+  });
+
+  it('does not downgrade manual outbound AUDIO to TEXT when the outgoing webhook echo lacks media metadata', async () => {
+    const existing = conversationMessage({
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
+      providerMessageId: null,
+      direction: 'OUTBOUND',
+      type: 'AUDIO',
+      status: 'SENT',
+      sentAt: now,
+      isFromMe: true,
+      text: null,
+      mediaMimeType: 'audio/ogg',
+      mediaFileName: 'recado.ogg',
+      mediaSizeBytes: 11,
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        storage: 'transient_request_only',
+        retryPolicy: 'select_file_again_after_reload',
+        localMedia: {
+          storageKey: `${connection().id}/message-audio/cccccccc-cccc-4ccc-8ccc-cccccccccccc`,
+          mimeType: 'audio/ogg',
+          sizeBytes: 11,
+        },
+      },
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+          ),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Mensagem sem metadata de audio', {
+        direction: 'OUTGOING',
+        messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
+        messageType: 'text',
+        mediaMetadata: null,
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.id },
+        data: expect.not.objectContaining({ type: 'TEXT' }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.conversationId },
+        data: expect.objectContaining({
+          lastMessagePreview: '[Audio]',
         }),
       }),
     );

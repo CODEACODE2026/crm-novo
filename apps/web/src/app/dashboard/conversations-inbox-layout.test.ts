@@ -165,7 +165,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
   });
 
-  it('supports compact image and document attachments in the conversation composer', () => {
+  it('supports compact image, document and audio attachments in the conversation composer', () => {
     expect(dashboardSource).toContain('type ConversationComposerMedia');
     expect(dashboardSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
     expect(conversationsSource).toContain('file.size > conversationMediaMaxBytes');
@@ -179,10 +179,15 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain(
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
+    expect(conversationsSource).toContain('allowedConversationAudioMimeTypes');
+    expect(conversationsSource).toContain('accept="audio/ogg,audio/mpeg,audio/mp4"');
+    expect(conversationsSource).toContain('Formato de áudio não suportado. Envie OGG, MP3 ou M4A.');
     expect(conversationsSource).toContain('conversation-attachment-preview');
+    expect(conversationsSource).toContain('conversation-attachment-audio-preview');
     expect(conversationsSource).toContain('conversation-attach-menu');
     expect(conversationsSource).toContain('Imagem');
     expect(conversationsSource).toContain('Documento');
+    expect(conversationsSource).toContain('Áudio');
     expect(conversationsSource).toContain('onRemoveMedia={clearComposerMedia}');
     expect(conversationsSource).toContain('formatFileSize(selectedMedia.file.size)');
     expect(conversationsSource).toContain('function ConversationMediaContent');

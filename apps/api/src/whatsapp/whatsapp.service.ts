@@ -9,6 +9,7 @@ import {
   Optional,
   PayloadTooLargeException,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -51,6 +52,7 @@ import {
   type StoredWhatsAppMedia,
   WhatsAppMediaStorageService,
 } from './whatsapp-media-storage.service';
+import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.service';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
@@ -76,6 +78,7 @@ const allowedDocumentMimeTypes = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
+const allowedVoiceInputMimeTypes = new Set(['audio/webm', 'audio/webm;codecs=opus']);
 
 type ConversationMediaUploadFile = {
   buffer: Buffer;
@@ -250,6 +253,7 @@ type WhatsAppConversationMessageForPresenter = WhatsAppMessage;
 @Injectable()
 export class WhatsAppService {
   static readonly conversationMediaMaxBytes = 10 * 1024 * 1024;
+  static readonly conversationVoiceMaxBytes = 5 * 1024 * 1024;
 
   private readonly logger = new Logger(WhatsAppService.name);
 
@@ -268,6 +272,8 @@ export class WhatsAppService {
     private readonly normalizer: KiragoWebhookNormalizer,
     @Inject(WhatsAppMediaStorageService)
     private readonly mediaStorage: WhatsAppMediaStorageService,
+    @Inject(WhatsAppVoiceConversionService)
+    private readonly voiceConversion: WhatsAppVoiceConversionService,
     @Optional()
     @Inject(ReferralsService)
     private readonly referralsService?: ReferralsService,
@@ -1214,6 +1220,133 @@ export class WhatsAppService {
             lastMessageAt: sentAt,
             lastMessagePreview: this.conversationLastMessagePreview(mediaType, {
               text: caption,
+              mediaFileName: media.fileName,
+            }),
+          },
+        });
+
+        return message;
+      });
+
+      return this.presentConversationMessage(updated);
+    } catch (error) {
+      if (localMediaResult.localMedia) {
+        await this.deleteLocalMediaQuietly(localMediaResult.localMedia.storageKey);
+      }
+
+      throw error;
+    }
+  }
+
+  async sendConversationVoiceMessage(
+    id: string,
+    input: {
+      file?: ConversationMediaUploadFile;
+      requestId?: string;
+      durationSeconds?: string | number;
+    },
+  ) {
+    const requestId = input.requestId?.trim();
+
+    if (!requestId) {
+      throw new BadRequestException('requestId obrigatorio.');
+    }
+
+    this.validateConversationVoiceUpload(input.file);
+
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      include: { whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const connection = conversation.whatsAppConnection;
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const existing = await this.findConversationMessageByRequestId(connection.id, requestId);
+
+    if (existing) {
+      this.assertMessageBelongsToConversation(existing, conversation.id);
+      return this.presentConversationMessage(existing);
+    }
+
+    const media = await this.prepareConversationVoiceMedia(input.file, input.durationSeconds);
+    const pending = await this.createPendingConversationMediaMessage(conversation, {
+      media,
+      caption: null,
+      requestId,
+      source: 'manual_outbound_voice_send',
+    });
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let result: { providerMessageId: string | null };
+
+    try {
+      result = await this.mapConnectionProviderError(connection, () =>
+        this.provider.sendAudio(instanceToken, {
+          phone: conversation.phoneNormalized,
+          audioDataUrl: media.dataUrl,
+          mimeType: media.mimeType,
+          seconds: media.durationSeconds,
+          ptt: true,
+          requestId,
+        }),
+      );
+    } catch (error) {
+      const failed = await this.prisma.whatsAppMessage.update({
+        where: { id: pending.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          rawMetadata: {
+            source: 'manual_outbound_voice_send',
+            errorMessage: this.sanitizeError(error),
+            mimeType: media.mimeType,
+            sizeBytes: media.sizeBytes,
+            durationSeconds: media.durationSeconds,
+          },
+        },
+      });
+
+      return this.presentConversationMessage(failed);
+    }
+
+    const localMediaResult = await this.storeOutboundLocalMediaSafely(
+      connection.id,
+      pending.id,
+      media,
+    );
+    const sentAt = new Date();
+
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const message = await tx.whatsAppMessage.update({
+          where: { id: pending.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: result.providerMessageId,
+            sentAt,
+            failedAt: null,
+            rawMetadata: this.rawMetadataWithLocalMedia(
+              pending.rawMetadata,
+              localMediaResult.localMedia,
+              localMediaResult.errorMessage,
+            ),
+          },
+        });
+
+        await tx.whatsAppConversation.update({
+          where: { id: conversation.id },
+          data: {
+            lastMessageAt: sentAt,
+            lastMessagePreview: this.conversationLastMessagePreview('AUDIO', {
+              text: null,
               mediaFileName: media.fileName,
             }),
           },
@@ -2382,7 +2515,8 @@ export class WhatsAppService {
 
     return (
       message.direction === 'OUTBOUND' &&
-      metadata.source === 'manual_outbound_media_send' &&
+      (metadata.source === 'manual_outbound_media_send' ||
+        metadata.source === 'manual_outbound_voice_send') &&
       Boolean(message.mediaMimeType || this.asRecord(metadata.localMedia))
     );
   }
@@ -2826,9 +2960,15 @@ export class WhatsAppService {
 
   private async createPendingConversationMediaMessage(
     conversation: WhatsAppConversation,
-    input: { media: PreparedConversationMedia; caption: string | null; requestId: string },
+    input: {
+      media: PreparedConversationMedia;
+      caption: string | null;
+      requestId: string;
+      source?: 'manual_outbound_media_send' | 'manual_outbound_voice_send';
+    },
   ) {
     const mediaType = this.manualConversationMediaType(input.media.mimeType);
+    const source = input.source ?? 'manual_outbound_media_send';
 
     try {
       return await this.prisma.whatsAppMessage.create({
@@ -2845,7 +2985,7 @@ export class WhatsAppService {
           failedAt: null,
           isFromMe: true,
           rawMetadata: {
-            source: 'manual_outbound_media_send',
+            source,
             storage: 'transient_request_only',
             retryPolicy: 'select_file_again_after_reload',
           },
@@ -3000,6 +3140,102 @@ export class WhatsAppService {
     }
 
     throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
+  }
+
+  private async prepareConversationVoiceMedia(
+    file: ConversationMediaUploadFile | undefined,
+    durationSeconds: string | number | undefined,
+  ): Promise<PreparedConversationMedia> {
+    this.validateConversationVoiceUpload(file);
+    const safeFile = file as ConversationMediaUploadFile;
+
+    try {
+      const converted = await this.voiceConversion.convertWebmToOgg({
+        buffer: safeFile.buffer,
+        mimeType: safeFile.mimetype,
+        durationSeconds: this.parseVoiceDurationHint(durationSeconds),
+      });
+      const duration = this.whatsAppVoiceDurationSeconds(converted.durationSeconds);
+
+      return {
+        kind: 'AUDIO',
+        dataUrl: `data:audio/ogg;base64,${converted.buffer.toString('base64')}`,
+        buffer: converted.buffer,
+        mimeType: converted.mimeType,
+        fileName: 'voice-note.ogg',
+        sizeBytes: converted.sizeBytes,
+        durationSeconds: duration,
+      };
+    } catch (error) {
+      throw this.mapVoiceConversionError(error);
+    }
+  }
+
+  private validateConversationVoiceUpload(file: ConversationMediaUploadFile | undefined) {
+    if (!file) {
+      throw new BadRequestException('Arquivo obrigatorio.');
+    }
+
+    if (!file.buffer?.length) {
+      throw new BadRequestException('Arquivo vazio.');
+    }
+
+    const sizeBytes = file.size || file.buffer.length;
+
+    if (sizeBytes > WhatsAppService.conversationVoiceMaxBytes) {
+      throw new PayloadTooLargeException(
+        'Arquivo excede o limite interno do CRM de 5 MB para gravacao de voz.',
+      );
+    }
+
+    if (!allowedVoiceInputMimeTypes.has(this.normalizeVoiceInputMimeType(file.mimetype))) {
+      throw new BadRequestException('MIME nao permitido para gravacao de voz WhatsApp.');
+    }
+  }
+
+  private parseVoiceDurationHint(value: string | number | undefined) {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+
+    const parsed = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  private whatsAppVoiceDurationSeconds(durationSeconds: number) {
+    return Math.min(60, Math.max(1, Math.ceil(durationSeconds)));
+  }
+
+  private normalizeVoiceInputMimeType(mimeType: string) {
+    return mimeType
+      .split(';')
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean)
+      .join(';');
+  }
+
+  private mapVoiceConversionError(error: unknown) {
+    if (!(error instanceof HttpException)) {
+      return error;
+    }
+
+    const response = error.getResponse();
+    const code =
+      typeof response === 'string'
+        ? response
+        : response && typeof response === 'object' && 'message' in response
+          ? String((response as { message?: unknown }).message)
+          : '';
+
+    if (code === 'VOICE_CONVERSION_TIMEOUT') {
+      return new ServiceUnavailableException(code);
+    }
+
+    if (code === 'VOICE_CONVERSION_FAILED') {
+      return new UnprocessableEntityException(code);
+    }
+
+    return error;
   }
 
   private manualConversationMediaType(mimeType: string): 'IMAGE' | 'DOCUMENT' | 'AUDIO' {

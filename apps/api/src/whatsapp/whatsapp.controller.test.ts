@@ -65,6 +65,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
       sendConversationMediaMessage: vi.fn().mockResolvedValue({ id: 'media-message-id' }),
+      sendConversationVoiceMessage: vi.fn().mockResolvedValue({ id: 'voice-message-id' }),
       downloadConversationMessageMedia: vi.fn().mockResolvedValue({
         buffer: Buffer.from('image'),
         contentLength: 5,
@@ -119,6 +120,20 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
       ),
     ).resolves.toEqual({ id: 'media-message-id' });
+    const voiceFile = {
+      buffer: Buffer.from('webm'),
+      mimetype: 'audio/webm; codecs=opus',
+      originalname: 'gravacao.webm',
+      size: 4,
+    };
+    await expect(
+      subject.sendConversationVoice(
+        'conversation-id',
+        voiceFile,
+        '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+        '2.5',
+      ),
+    ).resolves.toEqual({ id: 'voice-message-id' });
     await expect(
       subject.downloadConversationMessageMedia('conversation-id', 'message-id', response as never),
     ).resolves.toMatchObject({});
@@ -153,6 +168,11 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       file,
       caption: 'Legenda',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+    });
+    expect(service.sendConversationVoiceMessage).toHaveBeenCalledWith('conversation-id', {
+      file: voiceFile,
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+      durationSeconds: '2.5',
     });
     expect(service.downloadConversationMessageMedia).toHaveBeenCalledWith(
       'conversation-id',

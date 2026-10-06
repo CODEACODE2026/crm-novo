@@ -151,6 +151,26 @@ export class WhatsAppController {
     });
   }
 
+  @Post('conversations/:id/voice')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: WhatsAppService.conversationVoiceMaxBytes },
+    }),
+  )
+  sendConversationVoice(
+    @Param('id') id: string,
+    @UploadedFile()
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number } | undefined,
+    @Body('requestId') requestId: string | undefined,
+    @Body('durationSeconds') durationSeconds: string | undefined,
+  ) {
+    return this.whatsAppService.sendConversationVoiceMessage(id, {
+      ...(file ? { file } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
+      ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    });
+  }
+
   @Get('conversations/:conversationId/messages/:messageId/media')
   async downloadConversationMessageMedia(
     @Param('conversationId') conversationId: string,

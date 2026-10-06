@@ -85,6 +85,8 @@ Backend:
   voz. Em producao, usar por exemplo
   `/var/lib/crm-novo/whatsapp-media/tmp/audio4`, com owner do servico da API,
   permissao `0700` e arquivos temporarios `0600`.
+  O WebM recebido pelo endpoint de voice note e temporario; o storage
+  permanente guarda somente o OGG/Opus final em `WHATSAPP_MEDIA_STORAGE_DIR`.
 - `CRM_PUBLIC_URL`: fallback legado aceito pelo registro de webhook de
   pagamentos; novas instalacoes devem usar `CRM_API_PUBLIC_URL`.
 - `FASTDEPIX_NOTIFICATION_URL`: URL explicita opcional enviada na criacao de

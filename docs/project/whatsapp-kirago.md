@@ -97,6 +97,16 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - O servico de conversao nunca usa nomes de arquivo do usuario, nao persiste
   Base64, nao loga conteudo de audio e remove temporarios em sucesso, erro e
   timeout.
+- Backend AUDIO4B expoe um caminho separado para voice note:
+  `POST /whatsapp/conversations/:conversationId/voice`. Esse endpoint aceita
+  somente `multipart/form-data` com campo `file` em `audio/webm` ou
+  `audio/webm; codecs=opus`, converte para OGG/Opus, persiste somente o OGG
+  final no storage privado e envia pela Kirago com `PTT=true`.
+- Upload comum de arquivo de audio continua no endpoint generico de midia com
+  `PTT=false` para OGG, MP3 e MP4/M4A. WebM permanece recusado nesse endpoint
+  para evitar tratar gravacao temporaria como midia final.
+- O frontend de microfone/MediaRecorder ainda nao esta implementado nesta
+  etapa.
 
 ## Sprint 7 - Lista de Espera
 

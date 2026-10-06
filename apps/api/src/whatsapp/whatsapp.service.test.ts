@@ -299,6 +299,7 @@ function serviceFactory({
   encryptionOverrides = {},
   configOverrides = {},
   mediaStorageOverrides = {},
+  voiceConversionOverrides = {},
   prismaOverrides = {},
 }: {
   currentConnection?: ReturnType<typeof connection> | null;
@@ -306,6 +307,7 @@ function serviceFactory({
   encryptionOverrides?: Record<string, unknown>;
   configOverrides?: Record<string, string | undefined>;
   mediaStorageOverrides?: Record<string, unknown>;
+  voiceConversionOverrides?: Record<string, unknown>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
   const txClientReferenceUpdate = vi.fn();
@@ -590,6 +592,15 @@ function serviceFactory({
     isSafeStorageKey: vi.fn().mockReturnValue(true),
     ...mediaStorageOverrides,
   };
+  const voiceConversion = {
+    convertWebmToOgg: vi.fn().mockResolvedValue({
+      buffer: Buffer.from('ogg-opus-bytes'),
+      mimeType: 'audio/ogg; codecs=opus',
+      sizeBytes: 14,
+      durationSeconds: 2.2,
+    }),
+    ...voiceConversionOverrides,
+  };
 
   return {
     service: new WhatsAppService(
@@ -601,6 +612,7 @@ function serviceFactory({
       config as never,
       normalizer as never,
       mediaStorage as never,
+      voiceConversion as never,
     ),
     prisma,
     provider,
@@ -608,6 +620,7 @@ function serviceFactory({
     encryption,
     normalizer,
     mediaStorage,
+    voiceConversion,
     txClientReferenceUpdate,
     txReceivableUpdate,
   };
@@ -1281,6 +1294,310 @@ describe('WhatsAppService', () => {
       });
     },
   );
+
+  it('converts browser WebM voice recording to OGG and sends it as PTT audio', async () => {
+    const webmBuffer = Buffer.from('webm-opus-bytes');
+    const oggBuffer = Buffer.from('ogg-opus-bytes');
+    const { service, provider, prisma, mediaStorage, voiceConversion } = serviceFactory({
+      voiceConversionOverrides: {
+        convertWebmToOgg: vi.fn().mockResolvedValue({
+          buffer: oggBuffer,
+          mimeType: 'audio/ogg; codecs=opus',
+          sizeBytes: oggBuffer.length,
+          durationSeconds: 2.1,
+        }),
+      },
+      mediaStorageOverrides: {
+        storeOutboundMedia: vi.fn().mockResolvedValue({
+          storageKey: `${connection().id}/${conversationMessage().id}/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+          mimeType: 'audio/ogg; codecs=opus',
+          sizeBytes: oggBuffer.length,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationVoiceMessage(conversation().id, {
+      file: {
+        buffer: webmBuffer,
+        mimetype: 'audio/webm; codecs=opus',
+        originalname: 'gravacao.webm',
+        size: webmBuffer.length,
+      },
+      requestId: 'voice-request-id',
+      durationSeconds: '2.1',
+    });
+
+    expect(voiceConversion.convertWebmToOgg).toHaveBeenCalledWith({
+      buffer: webmBuffer,
+      mimeType: 'audio/webm; codecs=opus',
+      durationSeconds: 2.1,
+    });
+    expect(provider.sendAudio).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      audioDataUrl: `data:audio/ogg;base64,${oggBuffer.toString('base64')}`,
+      mimeType: 'audio/ogg; codecs=opus',
+      seconds: 3,
+      ptt: true,
+      requestId: 'voice-request-id',
+    });
+    const audioPayload = (provider.sendAudio as MockWithCalls).mock.calls[0]?.[1] as {
+      audioDataUrl: string;
+      mimeType: string;
+      ptt: boolean;
+      seconds: number;
+    };
+    expect(audioPayload.audioDataUrl.startsWith('data:audio/ogg;base64,')).toBe(true);
+    expect(audioPayload.audioDataUrl.startsWith('data:audio/ogg; codecs=opus;base64,')).toBe(false);
+    expect(audioPayload.mimeType).toBe('audio/ogg; codecs=opus');
+    expect(audioPayload.ptt).toBe(true);
+    expect(audioPayload.seconds).toBeGreaterThanOrEqual(1);
+    expect(audioPayload.seconds).toBeLessThanOrEqual(60);
+    expect(mediaStorage.storeOutboundMedia).toHaveBeenCalledWith({
+      whatsAppConnectionId: connection().id,
+      messageId: conversationMessage().id,
+      buffer: oggBuffer,
+      mimeType: 'audio/ogg; codecs=opus',
+      sizeBytes: oggBuffer.length,
+    });
+    const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(createCall.data).toMatchObject({
+      type: 'AUDIO',
+      text: null,
+      requestId: 'voice-request-id',
+      rawMetadata: {
+        source: 'manual_outbound_voice_send',
+        storage: 'transient_request_only',
+        retryPolicy: 'select_file_again_after_reload',
+      },
+      mediaMimeType: 'audio/ogg; codecs=opus',
+      mediaFileName: 'voice-note.ogg',
+      mediaSizeBytes: oggBuffer.length,
+      mediaDurationSeconds: 3,
+    });
+    expect(
+      JSON.stringify((prisma.whatsAppMessage.update as MockWithCalls).mock.calls),
+    ).not.toContain(webmBuffer.toString('base64'));
+  });
+
+  it('keeps voice duration Seconds between one and sixty seconds', async () => {
+    const { service, provider } = serviceFactory({
+      voiceConversionOverrides: {
+        convertWebmToOgg: vi
+          .fn()
+          .mockResolvedValueOnce({
+            buffer: Buffer.from('short-ogg'),
+            mimeType: 'audio/ogg; codecs=opus',
+            sizeBytes: 9,
+            durationSeconds: 0.2,
+          })
+          .mockResolvedValueOnce({
+            buffer: Buffer.from('long-ogg'),
+            mimeType: 'audio/ogg; codecs=opus',
+            sizeBytes: 8,
+            durationSeconds: 60,
+          }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationVoiceMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('webm'),
+        mimetype: 'audio/webm',
+        originalname: 'curto.webm',
+        size: 4,
+      },
+      requestId: 'voice-short-request-id',
+    });
+    await service.sendConversationVoiceMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('webm2'),
+        mimetype: 'audio/webm',
+        originalname: 'longo.webm',
+        size: 5,
+      },
+      requestId: 'voice-long-request-id',
+    });
+
+    expect(provider.sendAudio).toHaveBeenNthCalledWith(
+      1,
+      'instance-token',
+      expect.objectContaining({ seconds: 1, ptt: true }),
+    );
+    expect(provider.sendAudio).toHaveBeenNthCalledWith(
+      2,
+      'instance-token',
+      expect.objectContaining({ seconds: 60, ptt: true }),
+    );
+  });
+
+  it('rejects invalid voice upload input before calling conversion or provider', async () => {
+    const { service, provider, voiceConversion } = serviceFactory();
+
+    await expect(
+      service.sendConversationVoiceMessage(conversation().id, {
+        requestId: 'voice-missing-file-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationVoiceMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('ogg'),
+          mimetype: 'audio/ogg',
+          originalname: 'audio.ogg',
+          size: 3,
+        },
+        requestId: 'voice-invalid-mime-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationVoiceMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'audio/webm',
+          originalname: 'grande.webm',
+          size: WhatsAppService.conversationVoiceMaxBytes + 1,
+        },
+        requestId: 'voice-large-request-id',
+      }),
+    ).rejects.toThrow('Arquivo excede o limite interno do CRM de 5 MB para gravacao de voz.');
+
+    expect(voiceConversion.convertWebmToOgg).not.toHaveBeenCalled();
+    expect(provider.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it('does not persist WebM or send audio when voice conversion fails', async () => {
+    const { service, provider, mediaStorage } = serviceFactory({
+      voiceConversionOverrides: {
+        convertWebmToOgg: vi.fn().mockRejectedValue(new BadRequestException('VOICE_INPUT_INVALID')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationVoiceMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('webm'),
+          mimetype: 'audio/webm',
+          originalname: 'gravacao.webm',
+          size: 4,
+        },
+        requestId: 'voice-conversion-failed-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    expect(provider.sendAudio).not.toHaveBeenCalled();
+    expect(mediaStorage.storeOutboundMedia).not.toHaveBeenCalled();
+  });
+
+  it('marks voice message as failed without local OGG storage when Kirago send fails', async () => {
+    const { service, prisma, mediaStorage } = serviceFactory({
+      providerOverrides: {
+        sendAudio: vi.fn().mockRejectedValue(new Error('kirago offline token=secret')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationVoiceMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('webm'),
+        mimetype: 'audio/webm',
+        originalname: 'gravacao.webm',
+        size: 4,
+      },
+      requestId: 'voice-kirago-failure-request-id',
+    });
+
+    expect(mediaStorage.storeOutboundMedia).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          rawMetadata: expect.objectContaining({
+            source: 'manual_outbound_voice_send',
+            errorMessage: expect.stringContaining('[redacted]'),
+          }),
+        }),
+      }),
+    );
+  });
 
   it('keeps final persisted JPEG conversation media as IMAGE after provider and storage success', async () => {
     let storedMessage = conversationMessage();
@@ -3955,69 +4272,72 @@ describe('WhatsAppService', () => {
     );
   });
 
-  it('does not downgrade manual outbound AUDIO to TEXT when the outgoing webhook echo lacks media metadata', async () => {
-    const existing = conversationMessage({
-      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
-      providerMessageId: null,
-      direction: 'OUTBOUND',
-      type: 'AUDIO',
-      status: 'SENT',
-      sentAt: now,
-      isFromMe: true,
-      text: null,
-      mediaMimeType: 'audio/ogg',
-      mediaFileName: 'recado.ogg',
-      mediaSizeBytes: 11,
-      rawMetadata: {
-        source: 'manual_outbound_media_send',
-        storage: 'transient_request_only',
-        retryPolicy: 'select_file_again_after_reload',
-        localMedia: {
-          storageKey: `${connection().id}/message-audio/cccccccc-cccc-4ccc-8ccc-cccccccccccc`,
-          mimeType: 'audio/ogg',
-          sizeBytes: 11,
+  it.each(['manual_outbound_media_send', 'manual_outbound_voice_send'] as const)(
+    'does not downgrade %s AUDIO to TEXT when the outgoing webhook echo lacks media metadata',
+    async (source) => {
+      const existing = conversationMessage({
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
+        providerMessageId: null,
+        direction: 'OUTBOUND',
+        type: 'AUDIO',
+        status: 'SENT',
+        sentAt: now,
+        isFromMe: true,
+        text: null,
+        mediaMimeType: 'audio/ogg',
+        mediaFileName: 'recado.ogg',
+        mediaSizeBytes: 11,
+        rawMetadata: {
+          source,
+          storage: 'transient_request_only',
+          retryPolicy: 'select_file_again_after_reload',
+          localMedia: {
+            storageKey: `${connection().id}/message-audio/cccccccc-cccc-4ccc-8ccc-cccccccccccc`,
+            mimeType: 'audio/ogg',
+            sizeBytes: 11,
+          },
         },
-      },
-    });
-    const { service, prisma, normalizer } = serviceFactory({
-      prismaOverrides: {
-        whatsAppMessage: {
-          findFirst: vi.fn().mockResolvedValue(existing),
-          findMany: vi.fn().mockResolvedValue([]),
-          count: vi.fn().mockResolvedValue(0),
-          create: vi.fn(),
-          update: vi.fn((args: { data: Record<string, unknown> }) =>
-            Promise.resolve(conversationMessage({ ...existing, ...args.data })),
-          ),
+      });
+      const { service, prisma, normalizer } = serviceFactory({
+        prismaOverrides: {
+          whatsAppMessage: {
+            findFirst: vi.fn().mockResolvedValue(existing),
+            findMany: vi.fn().mockResolvedValue([]),
+            count: vi.fn().mockResolvedValue(0),
+            create: vi.fn(),
+            update: vi.fn((args: { data: Record<string, unknown> }) =>
+              Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+            ),
+          },
         },
-      },
-    });
-    normalizer.normalize.mockReturnValue(
-      normalizedInbound('Mensagem sem metadata de audio', {
-        direction: 'OUTGOING',
-        messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
-        messageType: 'text',
-        mediaMetadata: null,
-      }),
-    );
-
-    await service.receiveWebhook({ type: 'Message' });
-
-    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: existing.id },
-        data: expect.not.objectContaining({ type: 'TEXT' }),
-      }),
-    );
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: existing.conversationId },
-        data: expect.objectContaining({
-          lastMessagePreview: '[Audio]',
+      });
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound('Mensagem sem metadata de audio', {
+          direction: 'OUTGOING',
+          messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
+          messageType: 'text',
+          mediaMetadata: null,
         }),
-      }),
-    );
-  });
+      );
+
+      await service.receiveWebhook({ type: 'Message' });
+
+      expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: existing.id },
+          data: expect.not.objectContaining({ type: 'TEXT' }),
+        }),
+      );
+      expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: existing.conversationId },
+          data: expect.objectContaining({
+            lastMessagePreview: '[Audio]',
+          }),
+        }),
+      );
+    },
+  );
 
   it('persists external outgoing webhook messages without waitlist side effects', async () => {
     const { service, prisma, normalizer } = serviceFactory({

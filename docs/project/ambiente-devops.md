@@ -78,6 +78,13 @@ Backend:
 - `WHATSAPP_MEDIA_STORAGE_DIR`: diretorio privado local da API para guardar
   copias de midias outbound enviadas pelo CRM. Em producao, usar por exemplo
   `/var/lib/crm-novo/whatsapp-media`.
+- `WHATSAPP_FFMPEG_PATH`: caminho absoluto do binario ffmpeg usado para
+  converter gravacoes de voz WebM/Opus em OGG/Opus. Em producao, usar
+  `/usr/bin/ffmpeg`.
+- `WHATSAPP_VOICE_TEMP_DIR`: diretorio privado temporario para conversoes de
+  voz. Em producao, usar por exemplo
+  `/var/lib/crm-novo/whatsapp-media/tmp/audio4`, com owner do servico da API,
+  permissao `0700` e arquivos temporarios `0600`.
 - `CRM_PUBLIC_URL`: fallback legado aceito pelo registro de webhook de
   pagamentos; novas instalacoes devem usar `CRM_API_PUBLIC_URL`.
 - `FASTDEPIX_NOTIFICATION_URL`: URL explicita opcional enviada na criacao de

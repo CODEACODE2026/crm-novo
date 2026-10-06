@@ -82,6 +82,22 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - Arquivos antigos enviados pelo CRM antes desse storage continuam
   indisponiveis quando nao tiverem `mediaDownload`.
 
+## Gravacao de voz AUDIO4
+
+- Chrome/Android grava voz no navegador como WebM/Opus via `MediaRecorder`.
+- WebM/Opus nao deve ser enviado diretamente para a Kirago como voice note:
+  homologacao real retornou HTTP 200, mas a mensagem nao foi entregue no
+  WhatsApp.
+- O formato final para voice note e OGG/Opus, enviado para
+  `/chat/send/audio` com `PTT=true` e `MimeType=audio/ogg; codecs=opus`.
+- A conversao WebM/Opus -> OGG/Opus usa `WHATSAPP_FFMPEG_PATH` e temporarios
+  privados em `WHATSAPP_VOICE_TEMP_DIR`.
+- Limites do MVP: input WebM maximo 5 MB, duracao real maxima 60s, output OGG
+  maximo 5 MB, timeout ffmpeg 15s e uma conversao simultanea por processo.
+- O servico de conversao nunca usa nomes de arquivo do usuario, nao persiste
+  Base64, nao loga conteudo de audio e remove temporarios em sucesso, erro e
+  timeout.
+
 ## Sprint 7 - Lista de Espera
 
 - O webhook `POST /whatsapp/webhook/kirago` processa somente eventos `Message`.

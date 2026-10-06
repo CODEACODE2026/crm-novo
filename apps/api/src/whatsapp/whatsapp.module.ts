@@ -17,6 +17,7 @@ import {
   WhatsAppWebhookController,
 } from './whatsapp.controller';
 import { WhatsAppMediaStorageService } from './whatsapp-media-storage.service';
+import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.service';
 import { WhatsAppService } from './whatsapp.service';
 
 @Module({
@@ -30,6 +31,7 @@ import { WhatsAppService } from './whatsapp.service';
     KiragoWhatsAppProvider,
     TokenEncryptionService,
     WhatsAppMediaStorageService,
+    WhatsAppVoiceConversionService,
     WhatsAppService,
     {
       provide: WHATSAPP_PROVIDER,

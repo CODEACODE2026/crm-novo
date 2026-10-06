@@ -75,6 +75,9 @@ Backend:
 - `KIRAGO_WEBHOOK_TOKEN`: token forte validado no webhook publico Kirago.
 - `CRM_API_PUBLIC_URL`: URL publica HTTPS da API para webhooks externos
   (WhatsApp e registro de webhook de pagamentos).
+- `WHATSAPP_MEDIA_STORAGE_DIR`: diretorio privado local da API para guardar
+  copias de midias outbound enviadas pelo CRM. Em producao, usar por exemplo
+  `/var/lib/crm-novo/whatsapp-media`.
 - `CRM_PUBLIC_URL`: fallback legado aceito pelo registro de webhook de
   pagamentos; novas instalacoes devem usar `CRM_API_PUBLIC_URL`.
 - `FASTDEPIX_NOTIFICATION_URL`: URL explicita opcional enviada na criacao de
@@ -120,6 +123,12 @@ Futuro PIX:
 - Login deve ter rate limit quando exposto.
 - Logs nao devem expor tokens, cookies, senhas ou payloads sensiveis completos.
 - Erros de producao nao devem expor stack trace.
+- O diretorio de `WHATSAPP_MEDIA_STORAGE_DIR` nao deve ficar dentro do Git,
+  nem dentro de `/opt/crm-novo/app`, nem ser exposto por Nginx/static. O unico
+  acesso deve ser pelo endpoint autenticado do CRM.
+- Criar o diretorio de midia WhatsApp com dono igual ao usuario do
+  `crm-novo-api.service` e permissoes restritas, por exemplo `0750` no
+  diretorio e arquivos `0600`. Nao usar `chmod 777`.
 
 Fora de producao, flags ausentes ou desconhecidas continuam fail-closed: nao
 ligam scheduler.
@@ -175,6 +184,22 @@ Redis/BullMQ:
 
 - Nao adicionar na fundacao.
 - Reavaliar quando WhatsApp real, volume de mensagens ou concorrencia exigir.
+
+## Midia WhatsApp Outbound
+
+Midias recebidas continuam usando metadata/download da Kirago. Midias enviadas
+pelo proprio CRM devem ser gravadas em storage privado da API depois que a
+Kirago aceitar o envio, pois a resposta outbound da Kirago nao fornece URL,
+directPath, mediaKey, hashes, MIME ou tamanho recuperaveis posteriormente.
+
+Politica atual:
+
+- Arquivos permanecem enquanto a mensagem existir.
+- Nao ha limpeza automatica nesta tarefa.
+- Pendencias futuras: politica de retencao, limpeza de orfaos, quota e metricas
+  de uso de disco.
+- Exclusao/cascade de mensagens ou conversas nao deve remover arquivos sem
+  analise e regra aprovada.
 
 ## Deploy Futuro
 

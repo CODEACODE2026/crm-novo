@@ -47,6 +47,10 @@ import {
   type WhatsAppProvider,
 } from './provider/whatsapp-provider';
 import { TokenEncryptionService } from './security/token-encryption.service';
+import {
+  type StoredWhatsAppMedia,
+  WhatsAppMediaStorageService,
+} from './whatsapp-media-storage.service';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
@@ -82,12 +86,19 @@ type ConversationMediaUploadFile = {
 type PreparedConversationMedia = {
   kind: 'IMAGE' | 'DOCUMENT';
   dataUrl: string;
+  buffer: Buffer;
   mimeType: string;
   fileName: string;
   sizeBytes: number;
 };
 
 type ConversationMediaDownload = Omit<DownloadMediaInput, 'type'>;
+
+type ConversationLocalMedia = {
+  storageKey: string;
+  mimeType: string;
+  sizeBytes: number;
+};
 
 type DownloadedConversationMedia = {
   buffer: Buffer;
@@ -253,6 +264,8 @@ export class WhatsAppService {
     private readonly config: ConfigService,
     @Inject(KiragoWebhookNormalizer)
     private readonly normalizer: KiragoWebhookNormalizer,
+    @Inject(WhatsAppMediaStorageService)
+    private readonly mediaStorage: WhatsAppMediaStorageService,
     @Optional()
     @Inject(ReferralsService)
     private readonly referralsService?: ReferralsService,
@@ -820,15 +833,52 @@ export class WhatsAppService {
       });
     }
 
-    const mediaDownload = this.mediaDownloadFromRawMetadata(message.rawMetadata);
+    const localMedia = this.localMediaFromRawMetadata(message.rawMetadata, type);
 
-    if (!mediaDownload) {
-      throw new BadRequestException({
-        code: 'MEDIA_NOT_AVAILABLE',
-        message: 'Midia indisponivel para mensagens antigas ou sem metadados completos.',
-      });
+    if (localMedia) {
+      const buffer = await this.mediaStorage.read(localMedia.storageKey);
+
+      if (buffer) {
+        if (buffer.length > WhatsAppService.conversationMediaMaxBytes) {
+          throw new PayloadTooLargeException({
+            code: 'MEDIA_TOO_LARGE',
+            message: 'Midia excede o limite interno do CRM.',
+          });
+        }
+
+        return {
+          buffer,
+          contentLength: buffer.length,
+          disposition: type === 'DOCUMENT' ? 'attachment' : 'inline',
+          fileName: this.downloadFileName(message, localMedia.mimeType),
+          mimetype: localMedia.mimeType,
+        };
+      }
     }
 
+    const mediaDownload = this.mediaDownloadFromRawMetadata(message.rawMetadata, type);
+
+    if (mediaDownload) {
+      return this.downloadConversationMessageProviderMedia(
+        conversation,
+        message,
+        type,
+        mediaDownload,
+      );
+    }
+
+    throw new BadRequestException({
+      code: 'MEDIA_NOT_AVAILABLE',
+      message: 'Midia indisponivel para mensagens antigas ou sem metadados completos.',
+    });
+  }
+
+  private async downloadConversationMessageProviderMedia(
+    conversation: WhatsAppConversation & { whatsAppConnection: WhatsAppConnection },
+    message: WhatsAppMessage,
+    type: DownloadMediaType,
+    mediaDownload: ConversationMediaDownload,
+  ): Promise<DownloadedConversationMedia> {
     const expectedSize = message.mediaSizeBytes ?? mediaDownload.FileLength;
 
     if (expectedSize > WhatsAppService.conversationMediaMaxBytes) {
@@ -1079,9 +1129,11 @@ export class WhatsAppService {
       requestId,
     });
 
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let result: { providerMessageId: string | null };
+
     try {
-      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-      const result =
+      result =
         mediaType === 'IMAGE'
           ? await this.mapConnectionProviderError(connection, () =>
               this.provider.sendImage(instanceToken, {
@@ -1099,7 +1151,33 @@ export class WhatsAppService {
                 requestId,
               }),
             );
-      const sentAt = new Date();
+    } catch (error) {
+      const failed = await this.prisma.whatsAppMessage.update({
+        where: { id: pending.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          rawMetadata: {
+            source: 'manual_outbound_media_send',
+            errorMessage: this.sanitizeError(error),
+            mimeType: media.mimeType,
+            fileName: media.fileName,
+            sizeBytes: media.sizeBytes,
+          },
+        },
+      });
+
+      return this.presentConversationMessage(failed);
+    }
+
+    const localMediaResult = await this.storeOutboundLocalMediaSafely(
+      connection.id,
+      pending.id,
+      media,
+    );
+    const sentAt = new Date();
+
+    try {
       const updated = await this.prisma.$transaction(async (tx) => {
         const message = await tx.whatsAppMessage.update({
           where: { id: pending.id },
@@ -1108,6 +1186,11 @@ export class WhatsAppService {
             providerMessageId: result.providerMessageId,
             sentAt,
             failedAt: null,
+            rawMetadata: this.rawMetadataWithLocalMedia(
+              pending.rawMetadata,
+              localMediaResult.localMedia,
+              localMediaResult.errorMessage,
+            ),
           },
         });
 
@@ -1127,22 +1210,11 @@ export class WhatsAppService {
 
       return this.presentConversationMessage(updated);
     } catch (error) {
-      const failed = await this.prisma.whatsAppMessage.update({
-        where: { id: pending.id },
-        data: {
-          status: 'FAILED',
-          failedAt: new Date(),
-          rawMetadata: {
-            source: 'manual_outbound_media_send',
-            errorMessage: this.sanitizeError(error),
-            mimeType: media.mimeType,
-            fileName: media.fileName,
-            sizeBytes: media.sizeBytes,
-          },
-        },
-      });
+      if (localMediaResult.localMedia) {
+        await this.deleteLocalMediaQuietly(localMediaResult.localMedia.storageKey);
+      }
 
-      return this.presentConversationMessage(failed);
+      throw error;
     }
   }
 
@@ -2762,6 +2834,71 @@ export class WhatsAppService {
     }
   }
 
+  private async storeOutboundLocalMediaSafely(
+    whatsAppConnectionId: string,
+    messageId: string,
+    media: PreparedConversationMedia,
+  ): Promise<{ localMedia: StoredWhatsAppMedia | null; errorMessage: string | null }> {
+    try {
+      const localMedia = await this.mediaStorage.storeOutboundMedia({
+        whatsAppConnectionId,
+        messageId,
+        buffer: media.buffer,
+        mimeType: media.mimeType,
+        sizeBytes: media.sizeBytes,
+      });
+
+      return { localMedia, errorMessage: null };
+    } catch (error) {
+      const errorMessage = this.sanitizeError(error);
+      this.logger.warn(`Falha ao armazenar midia outbound WhatsApp localmente: ${errorMessage}`);
+      return { localMedia: null, errorMessage };
+    }
+  }
+
+  private async deleteLocalMediaQuietly(storageKey: string) {
+    try {
+      await this.mediaStorage.delete(storageKey);
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao remover midia outbound WhatsApp local apos erro transacional: ${this.sanitizeError(
+          error,
+        )}`,
+      );
+    }
+  }
+
+  private rawMetadataWithLocalMedia(
+    current: Prisma.JsonValue | null,
+    localMedia: StoredWhatsAppMedia | null,
+    errorMessage: string | null,
+  ) {
+    const metadata = this.rawMetadataObject(current);
+
+    if (localMedia) {
+      return {
+        ...metadata,
+        localMedia: {
+          storageKey: localMedia.storageKey,
+          mimeType: localMedia.mimeType,
+          sizeBytes: localMedia.sizeBytes,
+        },
+      } as Prisma.InputJsonValue;
+    }
+
+    if (errorMessage) {
+      return {
+        ...metadata,
+        localMediaError: {
+          source: 'local_storage',
+          message: errorMessage,
+        },
+      } as Prisma.InputJsonValue;
+    }
+
+    return metadata as Prisma.InputJsonValue;
+  }
+
   private prepareConversationMedia(file: ConversationMediaUploadFile | undefined) {
     if (!file) {
       throw new BadRequestException('Arquivo obrigatorio.');
@@ -2785,6 +2922,7 @@ export class WhatsAppService {
       return {
         kind: 'IMAGE' as const,
         dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
+        buffer: file.buffer,
         mimeType,
         fileName: this.sanitizeMediaFileName(file.originalname),
         sizeBytes,
@@ -2795,6 +2933,7 @@ export class WhatsAppService {
       return {
         kind: 'DOCUMENT' as const,
         dataUrl: `data:application/octet-stream;base64,${file.buffer.toString('base64')}`,
+        buffer: file.buffer,
         mimeType,
         fileName: this.sanitizeMediaFileName(file.originalname),
         sizeBytes,
@@ -3932,6 +4071,36 @@ export class WhatsAppService {
     } satisfies ConversationMediaDownload;
   }
 
+  private localMediaFromRawMetadata(
+    rawMetadata: Prisma.JsonValue | null,
+    type?: DownloadMediaType,
+  ): ConversationLocalMedia | null {
+    const metadata = this.rawMetadataObject(rawMetadata);
+    const localMedia = this.asRecord(metadata.localMedia);
+
+    if (!localMedia) {
+      return null;
+    }
+
+    const storageKey = this.optionalMetadataString(localMedia, 'storageKey');
+    const mimeType = this.optionalMetadataString(localMedia, 'mimeType');
+    const sizeBytes = this.optionalMetadataInt(localMedia, 'sizeBytes');
+
+    if (!storageKey || !mimeType || sizeBytes === null) {
+      return null;
+    }
+
+    if (!this.mediaStorage.isSafeStorageKey(storageKey)) {
+      return null;
+    }
+
+    if (type && !this.isSafeConversationMediaMime(type, mimeType)) {
+      return null;
+    }
+
+    return { storageKey, mimeType, sizeBytes };
+  }
+
   private rawMetadataObject(
     rawMetadata: Prisma.JsonValue | null,
   ): Record<string, Prisma.JsonValue> {
@@ -3972,7 +4141,11 @@ export class WhatsAppService {
   private hasAvailableMedia(message: WhatsAppConversationMessageForPresenter) {
     const type = this.supportedDownloadMediaType(message.type);
 
-    return Boolean(type && this.mediaDownloadFromRawMetadata(message.rawMetadata, type));
+    return Boolean(
+      type &&
+      (this.mediaDownloadFromRawMetadata(message.rawMetadata, type) ||
+        this.localMediaFromRawMetadata(message.rawMetadata, type)),
+    );
   }
 
   private parseProviderMediaDataUrl(dataUrl: string) {

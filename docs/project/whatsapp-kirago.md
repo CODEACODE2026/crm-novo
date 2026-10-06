@@ -64,6 +64,24 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - Em sucesso: `MessageDispatch` fica `SENT` e a timeline recebe evento compacto.
 - Em falha: `MessageDispatch` fica `FAILED` com erro sanitizado.
 
+## Midia outbound do CRM
+
+- Para midias recebidas, o CRM preserva o fluxo existente: metadata da Kirago
+  em `rawMetadata.mediaDownload` e download posterior pela propria Kirago.
+- Para midias enviadas pelo endpoint
+  `POST /whatsapp/conversations/:id/media`, a Kirago nao retorna metadata
+  suficiente para recuperacao futura. Depois do envio aceito, a API grava uma
+  copia privada local em `WHATSAPP_MEDIA_STORAGE_DIR`.
+- O metadata publico nao expoe path absoluto nem storage key. Internamente,
+  `WhatsAppMessage.rawMetadata.localMedia` guarda apenas `storageKey`,
+  `mimeType` e `sizeBytes`.
+- O endpoint autenticado
+  `GET /whatsapp/conversations/:conversationId/messages/:messageId/media`
+  tenta primeiro a midia local privada e, se ela nao existir, usa o fallback
+  Kirago quando `mediaDownload` estiver disponivel.
+- Arquivos antigos enviados pelo CRM antes desse storage continuam
+  indisponiveis quando nao tiverem `mediaDownload`.
+
 ## Sprint 7 - Lista de Espera
 
 - O webhook `POST /whatsapp/webhook/kirago` processa somente eventos `Message`.

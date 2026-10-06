@@ -16,6 +16,7 @@ import {
   WhatsAppController,
   WhatsAppWebhookController,
 } from './whatsapp.controller';
+import { WhatsAppMediaStorageService } from './whatsapp-media-storage.service';
 import { WhatsAppService } from './whatsapp.service';
 
 @Module({
@@ -28,6 +29,7 @@ import { WhatsAppService } from './whatsapp.service';
     KiragoWebhookNormalizer,
     KiragoWhatsAppProvider,
     TokenEncryptionService,
+    WhatsAppMediaStorageService,
     WhatsAppService,
     {
       provide: WHATSAPP_PROVIDER,

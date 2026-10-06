@@ -2957,8 +2957,9 @@ export class WhatsAppService {
     }
 
     const mimeType = file.mimetype;
+    const safeMimeType = this.normalizeMediaMimeType(mimeType);
 
-    if (allowedImageMimeTypes.has(mimeType)) {
+    if (safeMimeType && allowedImageMimeTypes.has(safeMimeType)) {
       return {
         kind: 'IMAGE' as const,
         dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
@@ -2970,7 +2971,7 @@ export class WhatsAppService {
       };
     }
 
-    if (allowedDocumentMimeTypes.has(mimeType)) {
+    if (safeMimeType && allowedDocumentMimeTypes.has(safeMimeType)) {
       return {
         kind: 'DOCUMENT' as const,
         dataUrl: `data:application/octet-stream;base64,${file.buffer.toString('base64')}`,
@@ -2982,7 +2983,7 @@ export class WhatsAppService {
       };
     }
 
-    if (allowedAudioMimeTypes.has(mimeType)) {
+    if (safeMimeType && allowedAudioMimeTypes.has(safeMimeType)) {
       return {
         kind: 'AUDIO' as const,
         dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
@@ -2994,7 +2995,7 @@ export class WhatsAppService {
       };
     }
 
-    if (mimeType === 'audio/webm') {
+    if (safeMimeType === 'audio/webm') {
       throw new BadRequestException('Formato de audio nao suportado. Envie OGG, MP3 ou M4A.');
     }
 
@@ -3002,15 +3003,17 @@ export class WhatsAppService {
   }
 
   private manualConversationMediaType(mimeType: string): 'IMAGE' | 'DOCUMENT' | 'AUDIO' {
-    if (allowedImageMimeTypes.has(mimeType)) {
+    const safeMimeType = this.normalizeMediaMimeType(mimeType);
+
+    if (safeMimeType && allowedImageMimeTypes.has(safeMimeType)) {
       return 'IMAGE';
     }
 
-    if (allowedDocumentMimeTypes.has(mimeType)) {
+    if (safeMimeType && allowedDocumentMimeTypes.has(safeMimeType)) {
       return 'DOCUMENT';
     }
 
-    if (allowedAudioMimeTypes.has(mimeType)) {
+    if (safeMimeType && allowedAudioMimeTypes.has(safeMimeType)) {
       return 'AUDIO';
     }
 
@@ -4211,7 +4214,7 @@ export class WhatsAppService {
   }
 
   private parseProviderMediaDataUrl(dataUrl: string) {
-    const match = dataUrl.match(/^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i);
+    const match = dataUrl.match(/^data:([^,]+);base64,([a-z0-9+/=\r\n]+)$/i);
 
     if (!match || !match[1] || !match[2]) {
       throw new BadRequestException({
@@ -4267,7 +4270,9 @@ export class WhatsAppService {
       'video/mp4': 'mp4',
     };
 
-    return map[mimetype.toLowerCase()] ?? 'bin';
+    const safeMimeType = this.normalizeMediaMimeType(mimetype);
+
+    return safeMimeType ? (map[safeMimeType] ?? 'bin') : 'bin';
   }
 
   private assertSafeConversationMediaMime(type: DownloadMediaType, mimetype: string) {
@@ -4282,7 +4287,7 @@ export class WhatsAppService {
   }
 
   private isSafeConversationMediaMime(type: DownloadMediaType, mimetype: string) {
-    const normalized = mimetype.toLowerCase();
+    const normalized = this.normalizeMediaMimeType(mimetype);
 
     if (type === 'IMAGE') return normalized === 'image/jpeg' || normalized === 'image/png';
     if (type === 'DOCUMENT') return normalized === 'application/pdf';
@@ -4292,6 +4297,13 @@ export class WhatsAppService {
       );
     }
     return normalized === 'video/mp4';
+  }
+
+  private normalizeMediaMimeType(mimetype: string) {
+    const [base] = mimetype.split(';', 1);
+    const normalized = base?.trim().toLowerCase() ?? '';
+
+    return normalized || null;
   }
 
   private toPrismaMessageType(type: NormalizedMessageType): WhatsAppInboundMessageType {

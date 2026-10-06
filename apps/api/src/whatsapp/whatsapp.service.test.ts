@@ -4688,6 +4688,23 @@ describe('WhatsAppService', () => {
       true,
     ],
     [
+      'provider audio mediaDownload with codec MIME parameter',
+      {
+        type: 'AUDIO',
+        mediaMimeType: 'audio/ogg; codecs=opus',
+        rawMetadata: {
+          mediaDownload: {
+            Url: 'https://mmg.whatsapp.net/audio',
+            MediaKey: 'audio-media-key',
+            Mimetype: 'audio/ogg; codecs=opus',
+            FileSHA256: 'audio-file-sha',
+            FileLength: 123,
+          },
+        },
+      },
+      true,
+    ],
+    [
       'local storage metadata',
       {
         type: 'DOCUMENT',
@@ -4969,6 +4986,9 @@ describe('WhatsAppService', () => {
   it.each([
     ['DOCUMENT', 'application/pdf', 'contract.pdf', 'attachment'],
     ['AUDIO', 'audio/ogg', null, 'inline'],
+    ['AUDIO', 'audio/ogg; codecs=opus', null, 'inline'],
+    ['AUDIO', ' audio/ogg ; codecs=opus ', null, 'inline'],
+    ['AUDIO', 'Audio/Ogg; codecs=opus', null, 'inline'],
     ['VIDEO', 'video/mp4', null, 'inline'],
   ] as const)(
     'downloads available %s conversation media through the provider',
@@ -5022,7 +5042,7 @@ describe('WhatsAppService', () => {
 
       expect(provider.downloadMedia).toHaveBeenCalledWith(
         'instance-token',
-        expect.objectContaining({ type, Mimetype: mimetype }),
+        expect.objectContaining({ type, Mimetype: mimetype.trim() }),
       );
       expect(result).toMatchObject({
         contentLength: providerData.length,
@@ -5137,6 +5157,14 @@ describe('WhatsAppService', () => {
       {
         dataUrl: `data:text/html;base64,${Buffer.from('<script></script>').toString('base64')}`,
         mimetype: 'text/html',
+      },
+      'BadRequestException',
+    ],
+    [
+      'invalid parameterized MIME',
+      {
+        dataUrl: `data:audio/webm; codecs=opus;base64,${Buffer.from('webm').toString('base64')}`,
+        mimetype: 'audio/webm; codecs=opus',
       },
       'BadRequestException',
     ],

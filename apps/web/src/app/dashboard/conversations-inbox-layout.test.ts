@@ -228,7 +228,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
     expect(conversationsSource).toContain('const showPdfPreview = isPdfDocument && !error;');
     expect(conversationsSource).toContain("showPdfPreview ? 'has-pdf-preview' : ''");
-    expect(conversationsSource).toContain('`${mediaUrl}#page=1&toolbar=0&navpanes=0`');
+    expect(conversationsSource).toContain(
+      '`${mediaUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`',
+    );
     expect(conversationsSource).toContain('const previewUrl =');
     expect(conversationsSource).toContain('<Download size={15} aria-hidden="true" />');
     expect(conversationsSource).toContain("message.mediaFileName || 'Documento'");
@@ -267,7 +269,11 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('touch-action: pinch-zoom;');
     expect(stylesSource).toContain('.conversation-media-loading::before');
     expect(stylesSource).toContain('.conversation-document-media.has-pdf-preview');
-    expect(stylesSource).toContain('aspect-ratio: 4 / 3;');
+    expect(stylesSource).toContain('width: min(300px, 100%);');
+    expect(stylesSource).toContain('height: clamp(140px, 32vw, 170px);');
+    expect(stylesSource).toContain('width: calc(100% + 24px);');
+    expect(stylesSource).toContain('height: calc(100% + 48px);');
+    expect(stylesSource).toContain('height: clamp(140px, 38vw, 160px);');
     expect(stylesSource).toContain('pointer-events: none;');
     expect(stylesSource).toContain('.conversation-document-preview:focus-visible');
     expect(stylesSource).toContain('.conversation-audio-player');

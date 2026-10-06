@@ -2735,13 +2735,13 @@ a {
 }
 
 .conversation-document-media.has-pdf-preview {
-  width: min(320px, 100%);
+  width: min(300px, 100%);
 }
 
 .conversation-document-preview {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  height: clamp(140px, 32vw, 170px);
   overflow: hidden;
   border: 0;
   border-bottom: 1px solid var(--border);
@@ -2753,8 +2753,8 @@ a {
 
 .conversation-document-preview-frame {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: calc(100% + 24px);
+  height: calc(100% + 48px);
   border: 0;
   pointer-events: none;
 }
@@ -12134,7 +12134,11 @@ tbody tr:hover,
   }
 
   .conversation-document-media.has-pdf-preview {
-    width: min(78vw, 320px);
+    width: min(78vw, 300px);
+  }
+
+  .conversation-document-preview {
+    height: clamp(140px, 38vw, 160px);
   }
 
   .conversation-document-details {

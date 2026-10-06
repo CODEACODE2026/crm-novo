@@ -12518,7 +12518,9 @@ function ConversationMediaContent({
     const fileSize = message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : 'Arquivo';
     const showPdfPreview = isPdfDocument && !error;
     const previewUrl =
-      showPdfPreview && mediaUrl ? `${mediaUrl}#page=1&toolbar=0&navpanes=0` : null;
+      showPdfPreview && mediaUrl
+        ? `${mediaUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
+        : null;
 
     return (
       <div className={`conversation-document-media ${showPdfPreview ? 'has-pdf-preview' : ''}`}>

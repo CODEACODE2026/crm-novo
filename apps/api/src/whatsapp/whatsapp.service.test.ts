@@ -4477,6 +4477,135 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalled();
   });
 
+  it('recovers expected WhatsAppMessage P2002 outside the aborted transaction', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['provider', 'whatsAppConnectionId', 'providerMessageId'] },
+    });
+    const existing = conversationMessage({
+      id: 'existing-conversation-message-id',
+      conversationId: conversation().id,
+      providerMessageId: 'duplicate-msg',
+    });
+    const rootFindFirst = vi.fn().mockResolvedValue(existing);
+    const txFindFirst = vi.fn().mockResolvedValue(null);
+    const txMessageCreate = vi.fn().mockRejectedValue(duplicateError);
+    const txConversationUpdate = vi.fn();
+    let transactionCall = 0;
+    const transaction = vi.fn(async (input: unknown) => {
+      transactionCall += 1;
+      const callback = input as (tx: unknown) => Promise<unknown>;
+
+      if (transactionCall === 1) {
+        return callback({
+          whatsAppInboundMessage: {
+            create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
+          },
+        });
+      }
+
+      return callback({
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: txConversationUpdate,
+        },
+        whatsAppMessage: {
+          findFirst: txFindFirst,
+          create: txMessageCreate,
+        },
+      });
+    });
+    const { service, normalizer } = serviceFactory({
+      prismaOverrides: {
+        $transaction: transaction,
+        whatsAppMessage: {
+          findFirst: rootFindFirst,
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(normalizedInbound('Oi', { messageId: 'duplicate-msg' }));
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      conversation: {
+        processed: true,
+        action: 'duplicate_conversation_message',
+        conversationId: existing.conversationId,
+        messageId: existing.id,
+      },
+    });
+    expect(txFindFirst).toHaveBeenCalledTimes(1);
+    expect(rootFindFirst).toHaveBeenCalledTimes(1);
+    expect(txMessageCreate).toHaveBeenCalledTimes(1);
+    expect(txConversationUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not recover unrelated P2002 as a WhatsApp duplicate', async () => {
+    const unrelatedError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['unrelatedUniqueField'] },
+    });
+    const rootFindFirst = vi.fn();
+    let transactionCall = 0;
+    const transaction = vi.fn(async (input: unknown) => {
+      transactionCall += 1;
+      const callback = input as (tx: unknown) => Promise<unknown>;
+
+      if (transactionCall === 1) {
+        return callback({
+          whatsAppInboundMessage: {
+            create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
+          },
+        });
+      }
+
+      return callback({
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockRejectedValue(unrelatedError),
+        },
+      });
+    });
+    const { service, normalizer } = serviceFactory({
+      prismaOverrides: {
+        $transaction: transaction,
+        whatsAppMessage: {
+          findFirst: rootFindFirst,
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Oi', { messageId: 'unrelated-p2002-msg' }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      conversation: {
+        processed: false,
+        action: 'conversation_persistence_failed',
+        errorMessage: 'Unique violation',
+      },
+    });
+    expect(rootFindFirst).not.toHaveBeenCalled();
+  });
+
   it('does not increment count when provider message is replayed', async () => {
     const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
       code: 'P2002',

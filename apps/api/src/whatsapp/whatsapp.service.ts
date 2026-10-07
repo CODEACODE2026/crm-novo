@@ -119,6 +119,8 @@ type MediaDebugFieldSummary = {
   length: number | null;
 };
 
+type WhatsAppMessageLookupClient = Pick<Prisma.TransactionClient, 'whatsAppMessage'>;
+
 type MediaDebugValueSummary = MediaDebugFieldSummary & {
   value?: string | number | boolean | null;
 };
@@ -2260,7 +2262,11 @@ export class WhatsAppService {
       return await this.processConversationWebhook(connection, normalized, clients);
     } catch (error) {
       const message = this.sanitizeError(error);
-      this.logger.warn(`Falha ao persistir historico conversacional WhatsApp: ${message}`);
+      this.logger.warn(
+        `Falha ao persistir historico conversacional WhatsApp: operation=processConversationWebhook ${this.prismaErrorLogDetails(
+          error,
+        )} message=${message}`,
+      );
       return {
         processed: false,
         action: 'conversation_persistence_failed',
@@ -2276,28 +2282,108 @@ export class WhatsAppService {
   ) {
     const matchedClientId = clients.length === 1 && clients[0] ? clients[0].id : null;
 
-    return this.prisma.$transaction(async (tx) => {
-      const existingMessage = await this.findExistingConversationMessage(tx, connection.id, {
-        providerMessageId: normalized.messageId,
-        requestId: this.webhookRequestIdCandidate(normalized),
-      });
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const existingMessage = await this.findExistingConversationMessage(tx, connection.id, {
+          providerMessageId: normalized.messageId,
+          requestId: this.webhookRequestIdCandidate(normalized),
+        });
 
-      if (existingMessage) {
-        if (normalized.direction === 'OUTGOING') {
-          const reconciled = await this.reconcileOutgoingConversationMessage(
-            tx,
-            existingMessage,
-            normalized,
-          );
+        if (existingMessage) {
+          if (normalized.direction === 'OUTGOING') {
+            const reconciled = await this.reconcileOutgoingConversationMessage(
+              tx,
+              existingMessage,
+              normalized,
+            );
+
+            return {
+              processed: true,
+              action: 'outgoing_conversation_message_reconciled',
+              conversationId: reconciled.conversationId,
+              messageId: reconciled.id,
+            };
+          }
 
           return {
             processed: true,
-            action: 'outgoing_conversation_message_reconciled',
-            conversationId: reconciled.conversationId,
-            messageId: reconciled.id,
+            action: 'duplicate_conversation_message',
+            conversationId: existingMessage.conversationId,
+            messageId: existingMessage.id,
           };
         }
 
+        const conversation = await this.upsertWebhookConversation(tx, {
+          connection,
+          normalized,
+          matchedClientId,
+        });
+        const sentAt = normalized.messageTimestamp ?? normalized.receivedAt ?? new Date();
+        const direction = normalized.direction === 'OUTGOING' ? 'OUTBOUND' : 'INBOUND';
+        const messageType = this.toConversationMessageType(normalized.messageType);
+        const metadata = this.buildConversationRawMetadata(normalized);
+        const media = this.conversationMediaFields(normalized.mediaMetadata);
+        const message = await this.createConversationMessage(tx, {
+          conversation,
+          normalized,
+          direction,
+          messageType,
+          sentAt,
+          media,
+          metadata,
+        });
+
+        if (message.duplicate) {
+          return {
+            processed: true,
+            action: 'duplicate_conversation_message',
+            conversationId: message.conversationId,
+            messageId: message.id,
+          };
+        }
+
+        await tx.whatsAppConversation.update({
+          where: { id: conversation.id },
+          data: {
+            lastMessageAt: sentAt,
+            lastMessagePreview: this.conversationLastMessagePreview(messageType, {
+              text: normalized.text,
+              mediaFileName: media.mediaFileName,
+            }),
+            ...(direction === 'INBOUND'
+              ? {
+                  unreadCount: { increment: 1 },
+                  ...(conversation.status === 'RESOLVED' ? { status: 'OPEN' as const } : {}),
+                }
+              : {}),
+          },
+        });
+
+        return {
+          processed: true,
+          action:
+            direction === 'OUTBOUND'
+              ? 'external_outgoing_message_persisted'
+              : 'conversation_message_persisted',
+          conversationId: conversation.id,
+          messageId: message.id,
+        };
+      });
+    } catch (error) {
+      if (!this.isDuplicateConversationMessage(error)) {
+        throw error;
+      }
+
+      const existingMessage = await this.findExistingConversationMessage(
+        this.prisma,
+        connection.id,
+        {
+          providerMessageId: normalized.messageId,
+          requestId: this.webhookRequestIdCandidate(normalized),
+        },
+      );
+
+      if (existingMessage) {
         return {
           processed: true,
           action: 'duplicate_conversation_message',
@@ -2306,62 +2392,8 @@ export class WhatsAppService {
         };
       }
 
-      const conversation = await this.upsertWebhookConversation(tx, {
-        connection,
-        normalized,
-        matchedClientId,
-      });
-      const sentAt = normalized.messageTimestamp ?? normalized.receivedAt ?? new Date();
-      const direction = normalized.direction === 'OUTGOING' ? 'OUTBOUND' : 'INBOUND';
-      const messageType = this.toConversationMessageType(normalized.messageType);
-      const metadata = this.buildConversationRawMetadata(normalized);
-      const media = this.conversationMediaFields(normalized.mediaMetadata);
-      const message = await this.createConversationMessage(tx, {
-        conversation,
-        normalized,
-        direction,
-        messageType,
-        sentAt,
-        media,
-        metadata,
-      });
-
-      if (message.duplicate) {
-        return {
-          processed: true,
-          action: 'duplicate_conversation_message',
-          conversationId: message.conversationId,
-          messageId: message.id,
-        };
-      }
-
-      await tx.whatsAppConversation.update({
-        where: { id: conversation.id },
-        data: {
-          lastMessageAt: sentAt,
-          lastMessagePreview: this.conversationLastMessagePreview(messageType, {
-            text: normalized.text,
-            mediaFileName: media.mediaFileName,
-          }),
-          ...(direction === 'INBOUND'
-            ? {
-                unreadCount: { increment: 1 },
-                ...(conversation.status === 'RESOLVED' ? { status: 'OPEN' as const } : {}),
-              }
-            : {}),
-        },
-      });
-
-      return {
-        processed: true,
-        action:
-          direction === 'OUTBOUND'
-            ? 'external_outgoing_message_persisted'
-            : 'conversation_message_persisted',
-        conversationId: conversation.id,
-        messageId: message.id,
-      };
-    });
+      throw error;
+    }
   }
 
   private async createConversationMessage(
@@ -2376,51 +2408,30 @@ export class WhatsAppService {
       metadata: Record<string, Prisma.InputJsonValue>;
     },
   ) {
-    try {
-      const message = await tx.whatsAppMessage.create({
-        data: buildWhatsAppMessageCreateDataForConversation(input.conversation, {
-          provider: 'KIRAGO',
-          providerMessageId: input.normalized.messageId,
-          requestId: null,
-          messageDispatchId: null,
-          direction: input.direction,
-          type: input.messageType,
-          text: this.conversationMessageText(input.messageType, input.normalized.text),
-          status: 'SENT',
-          sentAt: input.sentAt,
-          failedAt: null,
-          isFromMe: input.normalized.direction === 'OUTGOING',
-          rawMetadata: input.metadata,
-          ...input.media,
-        }),
-        select: { id: true, conversationId: true },
-      });
+    const message = await tx.whatsAppMessage.create({
+      data: buildWhatsAppMessageCreateDataForConversation(input.conversation, {
+        provider: 'KIRAGO',
+        providerMessageId: input.normalized.messageId,
+        requestId: null,
+        messageDispatchId: null,
+        direction: input.direction,
+        type: input.messageType,
+        text: this.conversationMessageText(input.messageType, input.normalized.text),
+        status: 'SENT',
+        sentAt: input.sentAt,
+        failedAt: null,
+        isFromMe: input.normalized.direction === 'OUTGOING',
+        rawMetadata: input.metadata,
+        ...input.media,
+      }),
+      select: { id: true, conversationId: true },
+    });
 
-      return { ...message, duplicate: false as const };
-    } catch (error) {
-      if (!this.isDuplicateConversationMessage(error)) {
-        throw error;
-      }
-
-      const existing = await this.findExistingConversationMessage(
-        tx,
-        input.conversation.whatsAppConnectionId,
-        {
-          providerMessageId: input.normalized.messageId,
-          requestId: this.webhookRequestIdCandidate(input.normalized),
-        },
-      );
-
-      if (existing) {
-        return { ...existing, duplicate: true as const };
-      }
-
-      throw error;
-    }
+    return { ...message, duplicate: false as const };
   }
 
   private async findExistingConversationMessage(
-    tx: Prisma.TransactionClient,
+    tx: WhatsAppMessageLookupClient,
     whatsAppConnectionId: string,
     input: { providerMessageId: string | null; requestId: string | null },
   ) {
@@ -4179,6 +4190,18 @@ export class WhatsAppService {
     }
 
     return 'Falha ao enviar mensagem WhatsApp.';
+  }
+
+  private prismaErrorLogDetails(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError)) {
+      return 'prismaCode=unknown';
+    }
+
+    const target = Array.isArray(error.meta?.target)
+      ? error.meta.target.filter((field): field is string => typeof field === 'string').join(',')
+      : null;
+
+    return `prismaCode=${error.code}${target ? ` target=${target}` : ''}`;
   }
 
   private sanitizePixSendError(error: unknown) {

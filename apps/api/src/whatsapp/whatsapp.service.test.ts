@@ -4817,7 +4817,14 @@ describe('WhatsAppService', () => {
       take?: number;
     };
 
-    expect(result.pagination).toEqual({ page: 2, limit: 10, total: 3, totalPages: 1 });
+    expect(result.pagination).toEqual({
+      page: 2,
+      limit: 10,
+      total: 3,
+      totalPages: 1,
+      hasMore: false,
+      nextPage: null,
+    });
     expect(result.summary).toEqual({ totalUnreadConversations: 2, totalUnreadMessages: 4 });
     expect(result.items.map((item: { displayName: string }) => item.displayName)).toEqual([
       'Cliente Preferido',
@@ -4859,6 +4866,25 @@ describe('WhatsAppService', () => {
       .calls[0]?.[0] as { where?: Record<string, unknown> };
 
     expect(findManyArgs.where).toMatchObject({ status: 'RESOLVED' });
+  });
+
+  it('filters client and guest conversations on the backend before pagination', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listConversations({ hasClient: true });
+    await service.listConversations({ hasClient: false });
+    const findMany = prisma.whatsAppConversation.findMany as MockWithCalls;
+
+    expect(findMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { clientId: { not: null } },
+      skip: 0,
+      take: 20,
+    });
+    expect(findMany.mock.calls[1]?.[0]).toMatchObject({
+      where: { clientId: null },
+      skip: 0,
+      take: 20,
+    });
   });
 
   it('returns conversation detail without loading full messages and handles not found', async () => {
@@ -5118,6 +5144,15 @@ describe('WhatsAppService', () => {
       'message-older',
       'message-newer',
     ]);
+    expect(result.pagination).toEqual({
+      page: 1,
+      limit: 2,
+      total: 2,
+      totalPages: 1,
+      hasMore: false,
+      nextPage: null,
+      nextCursor: null,
+    });
     expect(result.items[0]).toMatchObject({
       direction: 'INBOUND',
       type: 'IMAGE',
@@ -5135,7 +5170,177 @@ describe('WhatsAppService', () => {
     expect(result.items[0]).not.toHaveProperty('rawMetadata');
     expect(JSON.stringify(result.items[0])).not.toContain('secret-media-key');
     expect(JSON.stringify(result.items[0])).not.toContain('https://mmg.whatsapp.net/image');
-    expect(result.pagination).toEqual({ page: 1, limit: 2, total: 2, totalPages: 1 });
+  });
+
+  it('loads older conversation messages with a stable createdAt and id cursor after new realtime inserts', async () => {
+    const message100 = conversationMessage({
+      id: 'message-100',
+      createdAt: new Date('2026-10-03T10:00:00.000Z'),
+    });
+    const message99 = conversationMessage({
+      id: 'message-099',
+      createdAt: new Date('2026-10-03T09:59:00.000Z'),
+    });
+    const message98 = conversationMessage({
+      id: 'message-098',
+      createdAt: new Date('2026-10-03T09:58:00.000Z'),
+    });
+    const message97 = conversationMessage({
+      id: 'message-097',
+      createdAt: new Date('2026-10-03T09:57:00.000Z'),
+    });
+    const message96 = conversationMessage({
+      id: 'message-096',
+      createdAt: new Date('2026-10-03T09:56:00.000Z'),
+    });
+    const newestRealtimeMessage = conversationMessage({
+      id: 'message-101',
+      createdAt: new Date('2026-10-03T10:01:00.000Z'),
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: conversation().id }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValueOnce(5),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi
+            .fn()
+            .mockResolvedValueOnce([message100, message99])
+            .mockResolvedValueOnce([message98, message97, message96]),
+          count: vi.fn().mockResolvedValue(5),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const firstPage = await service.listConversationMessages(conversation().id, {
+      page: 1,
+      limit: 2,
+    });
+    const cursor = firstPage.pagination.nextCursor;
+
+    expect(cursor).toEqual({ createdAt: message99.createdAt, id: message99.id });
+    if (!cursor) throw new Error('Expected a next cursor for older WhatsApp messages.');
+
+    const olderPage = await service.listConversationMessages(conversation().id, {
+      limit: 2,
+      beforeCreatedAt: cursor.createdAt.toISOString(),
+      beforeId: cursor.id,
+    });
+    const cursorFindManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock
+      .calls[1]?.[0] as {
+      where?: Record<string, unknown>;
+      orderBy?: unknown;
+      skip?: number;
+      take?: number;
+    };
+
+    expect(olderPage.items.map((item: { id: string }) => item.id)).toEqual([
+      'message-097',
+      'message-098',
+    ]);
+    expect(olderPage.items.map((item: { id: string }) => item.id)).not.toContain(
+      newestRealtimeMessage.id,
+    );
+    expect(cursorFindManyArgs).toMatchObject({
+      where: {
+        conversationId: conversation().id,
+        OR: [
+          { createdAt: { lt: message99.createdAt } },
+          { createdAt: message99.createdAt, id: { lt: message99.id } },
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 3,
+    });
+    expect(cursorFindManyArgs.skip).toBeUndefined();
+    expect(olderPage.pagination).toEqual({
+      page: 1,
+      limit: 2,
+      total: null,
+      totalPages: null,
+      hasMore: true,
+      nextPage: null,
+      nextCursor: { createdAt: message97.createdAt, id: message97.id },
+    });
+  });
+
+  it('uses id as the tie-break for same-timestamp message cursors', async () => {
+    const cursorCreatedAt = new Date('2026-10-03T10:00:00.000Z');
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: conversation().id }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await service.listConversationMessages(conversation().id, {
+      beforeCreatedAt: cursorCreatedAt.toISOString(),
+      beforeId: 'message-050',
+      limit: 30,
+    });
+    const findManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+    };
+
+    expect(findManyArgs.where).toMatchObject({
+      OR: [
+        { createdAt: { lt: cursorCreatedAt } },
+        { createdAt: cursorCreatedAt, id: { lt: 'message-050' } },
+      ],
+    });
+  });
+
+  it('rejects incomplete or invalid message cursors before querying messages', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: conversation().id }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(
+      service.listConversationMessages(conversation().id, {
+        beforeCreatedAt: '2026-10-03T10:00:00.000Z',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.listConversationMessages(conversation().id, {
+        beforeCreatedAt: 'not-a-date',
+        beforeId: 'message-050',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
   });
 
   it.each([

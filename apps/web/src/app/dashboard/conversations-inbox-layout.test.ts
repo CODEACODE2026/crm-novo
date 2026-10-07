@@ -77,6 +77,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Nenhuma conversa encontrada.');
     expect(conversationsSource).toContain('Nenhuma conversa corresponde à busca.');
     expect(conversationsSource).toContain('Falha ao carregar conversas.');
+    expect(conversationsSource).toContain('Carregar mais conversas');
+    expect(conversationsSource).toContain('Fim da lista');
+    expect(conversationsSource).toContain('hasClient = true');
+    expect(conversationsSource).toContain('hasClient = false');
   });
 
   it('keeps a single start conversation action outside the internal list header', () => {
@@ -157,6 +161,42 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('if (shouldStick) {');
     expect(conversationsSource).toContain('} else if (silent) {');
     expect(conversationsSource).toContain('setNewMessageNotice(true)');
+    expect(conversationsSource).toContain('Carregar mensagens anteriores');
+    expect(conversationsSource).toContain(
+      'previousScrollTop + (currentElement.scrollHeight - previousScrollHeight)',
+    );
+    expect(conversationsSource).toContain('Sem mensagens antigas');
+  });
+
+  it('keeps pagination safe with dedupe, race guards, realtime refresh and retry states', () => {
+    expect(conversationsSource).toContain('conversationListQueryKeyRef');
+    expect(conversationsSource).toContain('mergeConversationLists(current, payload.items)');
+    expect(conversationsSource).toContain('append: true');
+    expect(conversationsSource).toContain('preserveLoaded: true');
+    expect(conversationsSource).toContain('setListLoadMoreError(message)');
+    expect(conversationsSource).toContain('setListLoadMoreError');
+    expect(conversationsSource).toContain('setConversations([])');
+    expect(conversationsSource).toContain('setConversationPage(firstConversationPage)');
+    expect(conversationsSource).toContain('setOlderMessagesError(');
+    expect(conversationsSource).toContain('activeConversationIdRef.current !== conversationId');
+    expect(conversationsSource).toContain('payload.pagination.hasMore');
+    expect(conversationsSource).toContain('olderMessagesCursor');
+    expect(conversationsSource).toContain('olderMessagesLoadingRef.current');
+    expect(conversationsSource).toContain('beforeCreatedAt: olderMessagesCursor.createdAt');
+    expect(conversationsSource).toContain('beforeId: olderMessagesCursor.id');
+    expect(conversationsSource).toContain('payload.pagination.nextCursor');
+    expect(conversationsSource).toContain(
+      'if (activeConversationIdRef.current !== conversationId) return;',
+    );
+    expect(conversationsSource).not.toContain('const nextPage = messagePage + 1');
+  });
+
+  it('keeps conversation list merge ordering compatible with backend pagination', () => {
+    expect(conversationsSource).toContain('function conversationListSortTime');
+    expect(conversationsSource).toContain('conversation.lastMessageAt');
+    expect(conversationsSource).toContain('new Date(right.createdAt).getTime()');
+    expect(conversationsSource).not.toContain('lastMessageAt ?? right.updatedAt');
+    expect(conversationsSource).not.toContain('lastMessageAt ?? left.updatedAt');
   });
 
   it('supports message bubbles, non-text placeholders, send, failure and retry with a fresh request id', () => {

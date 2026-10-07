@@ -832,6 +832,44 @@ export class WhatsAppService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, pageSizeLimit);
     const where: Prisma.WhatsAppMessageWhereInput = { conversationId: id };
+    const hasCursorInput = Boolean(query.beforeCreatedAt || query.beforeId);
+
+    if (hasCursorInput) {
+      if (!query.beforeCreatedAt || !query.beforeId) {
+        throw new BadRequestException('Cursor de mensagens WhatsApp incompleto.');
+      }
+      const cursorCreatedAt = new Date(query.beforeCreatedAt);
+      if (Number.isNaN(cursorCreatedAt.getTime())) {
+        throw new BadRequestException('Cursor de mensagens WhatsApp invalido.');
+      }
+      const items = await this.prisma.whatsAppMessage.findMany({
+        where: {
+          ...where,
+          OR: [
+            { createdAt: { lt: cursorCreatedAt } },
+            { createdAt: cursorCreatedAt, id: { lt: query.beforeId } },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+      });
+      const pageItems = items.slice(0, limit);
+      const hasMore = items.length > limit;
+
+      return {
+        items: [...pageItems].reverse().map((message) => this.presentConversationMessage(message)),
+        pagination: {
+          page,
+          limit,
+          total: null,
+          totalPages: null,
+          hasMore,
+          nextPage: null,
+          nextCursor: this.presentMessageCursor(pageItems, hasMore),
+        },
+      };
+    }
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.whatsAppMessage.findMany({
         where,
@@ -844,7 +882,10 @@ export class WhatsAppService {
 
     return {
       items: [...items].reverse().map((message) => this.presentConversationMessage(message)),
-      pagination: this.presentLimitPagination(page, limit, total),
+      pagination: {
+        ...this.presentLimitPagination(page, limit, total),
+        nextCursor: this.presentMessageCursor(items, page * limit < total),
+      },
     };
   }
 
@@ -2713,6 +2754,10 @@ export class WhatsAppService {
 
     if (query.clientId) {
       where.clientId = query.clientId;
+    } else if (query.hasClient === true) {
+      where.clientId = { not: null };
+    } else if (query.hasClient === false) {
+      where.clientId = null;
     }
 
     if (query.unreadOnly) {
@@ -4120,11 +4165,26 @@ export class WhatsAppService {
   }
 
   private presentLimitPagination(page: number, limit: number, total: number) {
+    const totalPages = Math.ceil(total / limit);
+    const hasMore = page < totalPages;
+
     return {
       page,
       limit,
       total,
-      totalPages: Math.ceil(total / limit),
+      totalPages,
+      hasMore,
+      nextPage: hasMore ? page + 1 : null,
+    };
+  }
+
+  private presentMessageCursor(items: WhatsAppConversationMessageForPresenter[], hasMore: boolean) {
+    if (!hasMore || !items.length) return null;
+    const oldest = items[items.length - 1];
+    if (!oldest) return null;
+    return {
+      createdAt: oldest.createdAt,
+      id: oldest.id,
     };
   }
 

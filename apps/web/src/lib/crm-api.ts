@@ -749,7 +749,21 @@ export interface PaginatedWhatsAppConversations {
 
 export interface PaginatedWhatsAppConversationMessages {
   items: WhatsAppConversationMessage[];
-  pagination: PaginatedClients['pagination'];
+  pagination: {
+    page: number;
+    pageSize?: number;
+    limit?: number;
+    total: number | null;
+    totalPages: number | null;
+    hasMore?: boolean;
+    nextPage?: number | null;
+    nextCursor?: WhatsAppConversationMessagesCursor | null;
+  };
+}
+
+export interface WhatsAppConversationMessagesCursor {
+  createdAt: string;
+  id: string;
 }
 
 export interface StartWhatsAppConversationResult {
@@ -1337,8 +1351,11 @@ export interface PaginatedClients {
   pagination: {
     page: number;
     pageSize: number;
+    limit?: number;
     total: number;
     totalPages: number;
+    hasMore?: boolean;
+    nextPage?: number | null;
   };
 }
 
@@ -2481,6 +2498,7 @@ export function listWhatsAppConversations(
     status?: WhatsAppConversationStatus | '';
     unreadOnly?: boolean;
     whatsAppConnectionId?: string;
+    hasClient?: boolean;
   } = {},
 ) {
   const params = new URLSearchParams();
@@ -2490,6 +2508,7 @@ export function listWhatsAppConversations(
   if (filters.search) params.set('search', filters.search);
   if (filters.status) params.set('status', filters.status);
   if (filters.unreadOnly) params.set('unreadOnly', 'true');
+  if (filters.hasClient !== undefined) params.set('hasClient', String(filters.hasClient));
   if (filters.clientId) params.set('clientId', filters.clientId);
   if (filters.whatsAppConnectionId) {
     params.set('whatsAppConnectionId', filters.whatsAppConnectionId);
@@ -2507,12 +2526,19 @@ export function getWhatsAppConversation(id: string) {
 
 export function listWhatsAppConversationMessages(
   id: string,
-  filters: { page?: number; pageSize?: number } = {},
+  filters: {
+    beforeCreatedAt?: string;
+    beforeId?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
 ) {
   const params = new URLSearchParams();
 
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('limit', String(filters.pageSize));
+  if (filters.beforeCreatedAt) params.set('beforeCreatedAt', filters.beforeCreatedAt);
+  if (filters.beforeId) params.set('beforeId', filters.beforeId);
 
   const query = params.toString();
   return apiFetch<PaginatedWhatsAppConversationMessages>(

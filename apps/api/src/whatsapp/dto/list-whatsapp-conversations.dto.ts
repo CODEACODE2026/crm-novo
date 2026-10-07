@@ -35,4 +35,9 @@ export class ListWhatsAppConversationsDto {
   @IsOptional()
   @IsUUID()
   clientId?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  hasClient?: boolean;
 }

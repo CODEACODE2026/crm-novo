@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class ListWhatsAppConversationMessagesDto {
   @IsOptional()
@@ -13,4 +13,12 @@ export class ListWhatsAppConversationMessagesDto {
   @IsInt()
   @Min(1)
   limit?: number = 20;
+
+  @IsOptional()
+  @IsDateString()
+  beforeCreatedAt?: string;
+
+  @IsOptional()
+  @IsString()
+  beforeId?: string;
 }

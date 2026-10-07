@@ -1125,16 +1125,43 @@ export class WhatsAppService {
       requestId,
     });
 
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let result: { providerMessageId: string | null };
+
     try {
-      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-      const result = await this.mapConnectionProviderError(connection, () =>
+      result = await this.mapConnectionProviderError(connection, () =>
         this.provider.sendText(instanceToken, {
           phone: conversation.phoneNormalized,
           body,
           requestId,
         }),
       );
-      const sentAt = new Date();
+    } catch (error) {
+      const failed = await this.prisma.whatsAppMessage.update({
+        where: { id: pending.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          rawMetadata: {
+            source: 'manual_outbound_send',
+            errorMessage: this.sanitizeError(error),
+          },
+        },
+      });
+
+      this.emitMessageUpdated(conversation.id, failed.id);
+      return this.presentConversationMessage(failed);
+    }
+
+    await this.rememberConversationProviderConfirmation({
+      messageId: pending.id,
+      providerMessageId: result.providerMessageId,
+      rawMetadata: pending.rawMetadata,
+    });
+
+    const sentAt = new Date();
+
+    try {
       const updated = await this.prisma.$transaction(async (tx) => {
         const message = await tx.whatsAppMessage.update({
           where: { id: pending.id },
@@ -1161,20 +1188,11 @@ export class WhatsAppService {
       this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
-      const failed = await this.prisma.whatsAppMessage.update({
-        where: { id: pending.id },
-        data: {
-          status: 'FAILED',
-          failedAt: new Date(),
-          rawMetadata: {
-            source: 'manual_outbound_send',
-            errorMessage: this.sanitizeError(error),
-          },
-        },
+      return this.keepConversationMessagePendingAfterProviderSuccess({
+        conversationId: conversation.id,
+        error,
+        messageId: pending.id,
       });
-
-      this.emitMessageUpdated(conversation.id, failed.id);
-      return this.presentConversationMessage(failed);
     }
   }
 
@@ -1282,6 +1300,17 @@ export class WhatsAppService {
       pending.id,
       media,
     );
+
+    await this.rememberConversationProviderConfirmation({
+      messageId: pending.id,
+      providerMessageId: result.providerMessageId,
+      rawMetadata: this.rawMetadataWithLocalMedia(
+        pending.rawMetadata,
+        localMediaResult.localMedia,
+        localMediaResult.errorMessage,
+      ),
+    });
+
     const sentAt = new Date();
 
     try {
@@ -1323,7 +1352,11 @@ export class WhatsAppService {
         await this.deleteLocalMediaQuietly(localMediaResult.localMedia.storageKey);
       }
 
-      throw error;
+      return this.keepConversationMessagePendingAfterProviderSuccess({
+        conversationId: conversation.id,
+        error,
+        messageId: pending.id,
+      });
     }
   }
 
@@ -1412,6 +1445,17 @@ export class WhatsAppService {
       pending.id,
       media,
     );
+
+    await this.rememberConversationProviderConfirmation({
+      messageId: pending.id,
+      providerMessageId: result.providerMessageId,
+      rawMetadata: this.rawMetadataWithLocalMedia(
+        pending.rawMetadata,
+        localMediaResult.localMedia,
+        localMediaResult.errorMessage,
+      ),
+    });
+
     const sentAt = new Date();
 
     try {
@@ -1453,7 +1497,151 @@ export class WhatsAppService {
         await this.deleteLocalMediaQuietly(localMediaResult.localMedia.storageKey);
       }
 
-      throw error;
+      return this.keepConversationMessagePendingAfterProviderSuccess({
+        conversationId: conversation.id,
+        error,
+        messageId: pending.id,
+      });
+    }
+  }
+
+  async retryConversationMessage(id: string) {
+    const message = await this.prisma.whatsAppMessage.findUnique({
+      where: { id },
+      include: {
+        conversation: true,
+        whatsAppConnection: true,
+      },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
+    }
+
+    if (message.direction !== 'OUTBOUND') {
+      throw new ConflictException('Somente mensagens outbound podem ser reenviadas.');
+    }
+
+    if (message.status !== 'FAILED') {
+      throw new ConflictException('Somente mensagens com falha podem ser reenviadas.');
+    }
+
+    const connection = message.whatsAppConnection;
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const retryAttemptId = randomUUID();
+    const prepared = await this.prepareRetryConversationMessage(message);
+    const claimed = await this.prisma.whatsAppMessage.updateMany({
+      where: { id: message.id, direction: 'OUTBOUND', status: 'FAILED' },
+      data: {
+        status: 'PENDING',
+        requestId: retryAttemptId,
+        providerMessageId: null,
+        failedAt: null,
+        rawMetadata: this.retryRawMetadata(message.rawMetadata, {
+          retryAttemptId,
+          retryStatus: 'PENDING',
+        }),
+      },
+    });
+
+    if (claimed.count !== 1) {
+      const current = await this.prisma.whatsAppMessage.findUnique({ where: { id: message.id } });
+
+      if (!current) {
+        throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
+      }
+
+      return this.presentConversationMessage(current);
+    }
+
+    this.emitMessageUpdated(message.conversationId, message.id);
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let result: { providerMessageId: string | null };
+
+    try {
+      result = await this.mapConnectionProviderError(connection, () =>
+        prepared.send(instanceToken, retryAttemptId),
+      );
+    } catch (error) {
+      const errorMessage = this.sanitizeError(error);
+      const failed = await this.prisma.whatsAppMessage.update({
+        where: { id: message.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          rawMetadata: this.retryRawMetadata(message.rawMetadata, {
+            retryAttemptId,
+            retryStatus: 'FAILED',
+            errorMessage,
+          }),
+        },
+      });
+
+      this.logger.warn(
+        `WhatsApp message retry failed message=${message.id} type=${message.type} error=${errorMessage}`,
+      );
+      this.emitMessageUpdated(message.conversationId, failed.id);
+      return this.presentConversationMessage(failed);
+    }
+
+    await this.rememberConversationProviderConfirmation({
+      messageId: message.id,
+      providerMessageId: result.providerMessageId,
+      rawMetadata: this.retryRawMetadata(message.rawMetadata, {
+        retryAttemptId,
+        retryStatus: 'PROVIDER_CONFIRMED',
+      }),
+    });
+
+    const sentAt = new Date();
+
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const updatedMessage = await tx.whatsAppMessage.update({
+          where: { id: message.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: result.providerMessageId,
+            sentAt,
+            failedAt: null,
+            rawMetadata: this.retryRawMetadata(message.rawMetadata, {
+              retryAttemptId,
+              retryStatus: 'SENT',
+            }),
+          },
+        });
+
+        await tx.whatsAppConversation.update({
+          where: { id: message.conversationId },
+          data: {
+            lastMessageAt: sentAt,
+            lastMessagePreview: this.conversationLastMessagePreview(message.type, {
+              text: message.text,
+              mediaFileName: message.mediaFileName,
+            }),
+          },
+        });
+
+        return updatedMessage;
+      });
+
+      this.logger.log(
+        `WhatsApp message retry succeeded message=${message.id} type=${message.type}`,
+      );
+      this.emitMessageUpdated(message.conversationId, updated.id);
+      this.emitConversationUpdated(message.conversationId);
+      return this.presentConversationMessage(updated);
+    } catch (error) {
+      return this.keepConversationMessagePendingAfterProviderSuccess({
+        conversationId: message.conversationId,
+        error,
+        messageId: message.id,
+      });
     }
   }
 
@@ -2642,6 +2830,14 @@ export class WhatsAppService {
     );
   }
 
+  private isManualOutboundVoiceMessage(
+    message: Pick<WhatsAppMessage, 'direction' | 'rawMetadata'>,
+  ) {
+    const metadata = this.rawMetadataObject(message.rawMetadata);
+
+    return message.direction === 'OUTBOUND' && metadata.source === 'manual_outbound_voice_send';
+  }
+
   private async upsertWebhookConversation(
     tx: Prisma.TransactionClient,
     input: {
@@ -3161,6 +3357,51 @@ export class WhatsAppService {
     }
   }
 
+  private async rememberConversationProviderConfirmation(input: {
+    messageId: string;
+    providerMessageId: string | null;
+    rawMetadata: Prisma.InputJsonValue | Prisma.JsonValue | null;
+  }) {
+    try {
+      await this.prisma.whatsAppMessage.update({
+        where: { id: input.messageId },
+        data: {
+          providerMessageId: input.providerMessageId,
+          rawMetadata: input.rawMetadata === null ? Prisma.JsonNull : input.rawMetadata,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao preservar confirmacao provider WhatsApp message=${input.messageId} ${this.prismaErrorLogDetails(
+          error,
+        )} message=${this.sanitizeError(error)}`,
+      );
+    }
+  }
+
+  private async keepConversationMessagePendingAfterProviderSuccess(input: {
+    conversationId: string;
+    error: unknown;
+    messageId: string;
+  }) {
+    this.logger.warn(
+      `WhatsApp provider confirmou envio, mas persistencia final falhou; mantendo mensagem PENDING para reconciliacao message=${
+        input.messageId
+      } ${this.prismaErrorLogDetails(input.error)} message=${this.sanitizeError(input.error)}`,
+    );
+
+    const current = await this.prisma.whatsAppMessage.findUnique({
+      where: { id: input.messageId },
+    });
+
+    if (!current) {
+      throw input.error;
+    }
+
+    this.emitMessageUpdated(input.conversationId, input.messageId);
+    return this.presentConversationMessage(current);
+  }
+
   private async deleteLocalMediaQuietly(storageKey: string) {
     try {
       await this.mediaStorage.delete(storageKey);
@@ -3202,6 +3443,132 @@ export class WhatsAppService {
     }
 
     return metadata as Prisma.InputJsonValue;
+  }
+
+  private retryRawMetadata(
+    current: Prisma.JsonValue | null,
+    input: {
+      retryAttemptId: string;
+      retryStatus: 'PENDING' | 'PROVIDER_CONFIRMED' | 'SENT' | 'FAILED';
+      errorMessage?: string;
+    },
+  ) {
+    const metadata = this.rawMetadataObject(current);
+
+    return {
+      ...metadata,
+      ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+      retry: {
+        attemptId: input.retryAttemptId,
+        status: input.retryStatus,
+        at: new Date().toISOString(),
+      },
+    } as Prisma.InputJsonValue;
+  }
+
+  private async prepareRetryConversationMessage(
+    message: WhatsAppMessage & { conversation: WhatsAppConversation },
+  ): Promise<{
+    send: (
+      instanceToken: string,
+      requestId: string,
+    ) => Promise<{ providerMessageId: string | null }>;
+  }> {
+    if (message.type === 'TEXT') {
+      const body = message.text?.trim();
+
+      if (!body) {
+        throw new UnprocessableEntityException({
+          code: 'WHATSAPP_RETRY_CONTENT_UNAVAILABLE',
+          message: 'Conteudo original indisponivel para reenviar.',
+        });
+      }
+
+      return {
+        send: (instanceToken, requestId) =>
+          this.provider.sendText(instanceToken, {
+            phone: message.conversation.phoneNormalized,
+            body,
+            requestId,
+          }),
+      };
+    }
+
+    const downloadType = this.supportedDownloadMediaType(message.type);
+    const localMedia = downloadType
+      ? this.localMediaFromRawMetadata(message.rawMetadata, downloadType)
+      : null;
+
+    if (!downloadType || !localMedia) {
+      throw new UnprocessableEntityException({
+        code: this.isManualOutboundVoiceMessage(message)
+          ? 'WHATSAPP_RETRY_VOICE_RE_RECORD_REQUIRED'
+          : 'WHATSAPP_RETRY_MEDIA_UNAVAILABLE',
+        message: this.isManualOutboundVoiceMessage(message)
+          ? 'Gravacao original indisponivel para reenviar.'
+          : 'Arquivo original indisponivel para reenviar.',
+      });
+    }
+
+    const buffer = await this.mediaStorage.read(localMedia.storageKey);
+
+    if (!buffer) {
+      throw new UnprocessableEntityException({
+        code: 'WHATSAPP_RETRY_MEDIA_FILE_MISSING',
+        message: 'Arquivo nao disponivel para reenviar.',
+      });
+    }
+
+    const dataUrl = this.localMediaDataUrl(downloadType, localMedia.mimeType, buffer);
+
+    if (downloadType === 'IMAGE') {
+      return {
+        send: (instanceToken, requestId) =>
+          this.provider.sendImage(instanceToken, {
+            phone: message.conversation.phoneNormalized,
+            imageDataUrl: dataUrl,
+            caption: message.text,
+            requestId,
+          }),
+      };
+    }
+
+    if (downloadType === 'AUDIO') {
+      return {
+        send: (instanceToken, requestId) =>
+          this.provider.sendAudio(instanceToken, {
+            phone: message.conversation.phoneNormalized,
+            audioDataUrl: dataUrl,
+            mimeType: localMedia.mimeType,
+            seconds: message.mediaDurationSeconds,
+            ptt: this.isManualOutboundVoiceMessage(message),
+            requestId,
+          }),
+      };
+    }
+
+    if (downloadType === 'DOCUMENT') {
+      return {
+        send: (instanceToken, requestId) =>
+          this.provider.sendDocument(instanceToken, {
+            phone: message.conversation.phoneNormalized,
+            documentDataUrl: dataUrl,
+            fileName: message.mediaFileName || 'arquivo',
+            requestId,
+          }),
+      };
+    }
+
+    throw new UnprocessableEntityException({
+      code: 'WHATSAPP_RETRY_TYPE_UNSUPPORTED',
+      message: 'Tipo de mensagem nao suportado para reenvio.',
+    });
+  }
+
+  private localMediaDataUrl(type: DownloadMediaType, mimeType: string, buffer: Buffer) {
+    const dataMimeType = type === 'DOCUMENT' ? 'application/octet-stream' : mimeType;
+
+    return `data:${dataMimeType};base64,${buffer.toString('base64')}`;
   }
 
   private prepareConversationMedia(file: ConversationMediaUploadFile | undefined) {
@@ -4159,9 +4526,36 @@ export class WhatsAppService {
       mediaSizeBytes: message.mediaSizeBytes,
       mediaDurationSeconds: message.mediaDurationSeconds,
       mediaAvailable: this.hasAvailableMedia(message),
+      retryAction: this.conversationMessageRetryAction(message),
       messageDispatchId: message.messageDispatchId,
       createdAt: message.createdAt,
     };
+  }
+
+  private conversationMessageRetryAction(message: WhatsAppConversationMessageForPresenter) {
+    if (message.direction !== 'OUTBOUND' || message.status !== 'FAILED') {
+      return null;
+    }
+
+    if (message.type === 'TEXT') {
+      return message.text?.trim() ? 'RETRY' : null;
+    }
+
+    const type = this.supportedDownloadMediaType(message.type);
+
+    if (type && this.localMediaFromRawMetadata(message.rawMetadata, type)) {
+      return 'RETRY';
+    }
+
+    if (this.isManualOutboundVoiceMessage(message)) {
+      return 'RECORD_AGAIN';
+    }
+
+    if (message.type === 'IMAGE' || message.type === 'DOCUMENT' || message.type === 'AUDIO') {
+      return 'SELECT_FILE_AGAIN';
+    }
+
+    return null;
   }
 
   private presentLimitPagination(page: number, limit: number, total: number) {

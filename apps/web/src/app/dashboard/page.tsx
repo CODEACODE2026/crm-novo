@@ -202,6 +202,7 @@ import {
   reconcileReceivablePix,
   reopenWhatsAppPendingContact,
   resolveWhatsAppConversation,
+  retryWhatsAppConversationMessage,
   sendWhatsAppMessage,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationMedia,
@@ -11053,6 +11054,8 @@ function ConversationsView({
   const [messagesError, setMessagesError] = useState('');
   const [olderMessagesError, setOlderMessagesError] = useState('');
   const [sendError, setSendError] = useState('');
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({});
+  const [retryingMessageIds, setRetryingMessageIds] = useState<Set<string>>(new Set());
   const [clientError, setClientError] = useState('');
   const [linkClientError, setLinkClientError] = useState('');
   const [guestClientCreateError, setGuestClientCreateError] = useState('');
@@ -11085,6 +11088,7 @@ function ConversationsView({
   const pendingSendScrollConversationRef = useRef<string | null>(null);
   const pendingComposerFocusRef = useRef(false);
   const sendingRef = useRef(false);
+  const retryingMessagesRef = useRef(new Set<string>());
   const startingConversationRef = useRef(false);
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
   const conversationListQueryKeyRef = useRef('');
@@ -11512,6 +11516,7 @@ function ConversationsView({
     setGuestClientCreateConversation(null);
     setMessagesError('');
     setOlderMessagesError('');
+    setRetryErrors({});
     setOlderMessagesCursor(null);
     setHasOlderMessages(false);
     olderMessagesLoadedRef.current = false;
@@ -11646,6 +11651,7 @@ function ConversationsView({
         mediaFileName: mediaToSend?.file.name ?? null,
         mediaMimeType: mediaToSend?.file.type ?? null,
         mediaSizeBytes: mediaToSend?.file.size ?? null,
+        retryAction: mediaToSend ? 'SELECT_FILE_AGAIN' : 'RETRY',
         messageDispatchId: null,
         providerMessageId: null,
         sentAt: null,
@@ -11703,6 +11709,45 @@ function ConversationsView({
     } finally {
       sendingRef.current = false;
       setSending(false);
+    }
+  }
+
+  async function retryConversationMessage(message: WhatsAppConversationMessage) {
+    if (!selectedConversation || message.retryAction !== 'RETRY') return;
+
+    if (message.id.startsWith('local-failed-') && message.type === 'TEXT') {
+      await sendCurrentMessage(message.text ?? '', { focusComposer: false });
+      return;
+    }
+
+    if (retryingMessagesRef.current.has(message.id)) return;
+
+    retryingMessagesRef.current.add(message.id);
+    setRetryingMessageIds(new Set(retryingMessagesRef.current));
+    setRetryErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+
+    try {
+      const retried = await retryWhatsAppConversationMessage(message.id);
+      if (activeConversationIdRef.current !== selectedConversation.id) return;
+
+      setMessages((current) => {
+        const merged = mergeConversationMessages(current, [retried]);
+        messagesRef.current = merged;
+        return merged;
+      });
+      await loadConversations({ preserveLoaded: true, silent: true });
+    } catch (err) {
+      setRetryErrors((current) => ({
+        ...current,
+        [message.id]: conversationRetryErrorMessage(err),
+      }));
+    } finally {
+      retryingMessagesRef.current.delete(message.id);
+      setRetryingMessageIds(new Set(retryingMessagesRef.current));
     }
   }
 
@@ -12062,6 +12107,8 @@ function ConversationsView({
                 loadingOlder={olderMessagesLoading}
                 messagesEndRef={messagesEndRef}
                 olderError={olderMessagesError}
+                retryErrors={retryErrors}
+                retryingMessageIds={retryingMessageIds}
                 scrollRef={messagesScrollRef}
                 showNewMessageNotice={newMessageNotice}
                 onJumpToBottom={() => {
@@ -12069,9 +12116,7 @@ function ConversationsView({
                   scrollConversationContainerToBottom(messagesScrollRef.current);
                 }}
                 onLoadOlder={() => void loadOlderMessages()}
-                onRetry={(message) =>
-                  void sendCurrentMessage(message.text ?? '', { focusComposer: false })
-                }
+                onRetry={(message) => void retryConversationMessage(message)}
               />
 
               <ConversationComposer
@@ -12555,6 +12600,8 @@ function ConversationMessages({
   messages,
   messagesEndRef,
   olderError,
+  retryErrors,
+  retryingMessageIds,
   onJumpToBottom,
   onLoadOlder,
   onRetry,
@@ -12568,6 +12615,8 @@ function ConversationMessages({
   messages: WhatsAppConversationMessage[];
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   olderError: string;
+  retryErrors: Record<string, string>;
+  retryingMessageIds: Set<string>;
   onJumpToBottom: () => void;
   onLoadOlder: () => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
@@ -12612,6 +12661,8 @@ function ConversationMessages({
                   <ConversationBubble
                     conversationId={conversationId}
                     message={message}
+                    retryError={retryErrors[message.id] ?? ''}
+                    retrying={retryingMessageIds.has(message.id)}
                     onRetry={onRetry}
                   />
                 </Fragment>
@@ -12648,10 +12699,14 @@ function ConversationDateSeparator({ label }: { label: string }) {
 function ConversationBubble({
   conversationId,
   message,
+  retryError,
+  retrying,
   onRetry,
 }: {
   conversationId: string;
   message: WhatsAppConversationMessage;
+  retryError: string;
+  retrying: boolean;
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
@@ -12679,14 +12734,25 @@ function ConversationBubble({
             </span>
           ) : null}
         </footer>
-        {message.status === 'FAILED' && outbound && message.type === 'TEXT' ? (
-          <button
-            className="conversation-message-retry"
-            type="button"
-            onClick={() => onRetry(message)}
-          >
-            Tentar novamente
-          </button>
+        {message.status === 'FAILED' && outbound ? (
+          <div className="conversation-message-failure">
+            <strong>Falhou ao enviar</strong>
+            {retryError ? <span>{retryError}</span> : null}
+            {message.retryAction === 'RETRY' ? (
+              <button
+                className="conversation-message-retry"
+                disabled={retrying}
+                type="button"
+                onClick={() => onRetry(message)}
+              >
+                {retrying ? 'Tentando...' : 'Tentar novamente'}
+              </button>
+            ) : null}
+            {message.retryAction === 'SELECT_FILE_AGAIN' ? (
+              <span>Selecionar arquivo novamente</span>
+            ) : null}
+            {message.retryAction === 'RECORD_AGAIN' ? <span>Gravar novamente</span> : null}
+          </div>
         ) : null}
       </div>
     </article>
@@ -14364,6 +14430,38 @@ function conversationErrorMessage(error: unknown, fallback: string) {
     return 'Conversa inexistente ou não disponível.';
   }
   return fallback;
+}
+
+function conversationRetryErrorMessage(error: unknown) {
+  if (error instanceof ApiError) {
+    const payload =
+      error.payload && typeof error.payload === 'object'
+        ? (error.payload as { code?: unknown; message?: unknown })
+        : null;
+    const code = typeof payload?.code === 'string' ? payload.code : null;
+
+    if (code === 'WHATSAPP_RETRY_MEDIA_FILE_MISSING') {
+      return 'Arquivo não disponível para reenviar.';
+    }
+
+    if (code === 'WHATSAPP_RETRY_MEDIA_UNAVAILABLE') {
+      return 'Arquivo não disponível. Selecione novamente.';
+    }
+
+    if (code === 'WHATSAPP_RETRY_VOICE_RE_RECORD_REQUIRED') {
+      return 'Gravação indisponível. Grave novamente.';
+    }
+
+    if (error.status === 409) {
+      return 'Conexão indisponível ou mensagem já em nova tentativa.';
+    }
+
+    if (error.status === 503) {
+      return 'Provider indisponível. Tente novamente em instantes.';
+    }
+  }
+
+  return conversationErrorMessage(error, 'Falha ao reenviar mensagem.');
 }
 
 function linkClientErrorMessage(error: unknown) {

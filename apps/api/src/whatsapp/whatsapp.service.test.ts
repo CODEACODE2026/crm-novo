@@ -4,6 +4,7 @@ import {
   ConflictException,
   NotFoundException,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -468,6 +469,7 @@ function serviceFactory({
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     whatsAppMessage: {
+      findUnique: vi.fn().mockResolvedValue(conversationMessage()),
       findFirst: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
@@ -475,6 +477,7 @@ function serviceFactory({
       update: vi.fn((args: { data?: Record<string, unknown> }) =>
         Promise.resolve(conversationMessage(args.data ?? {})),
       ),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     $transaction: vi.fn(async (input: unknown) => {
       if (Array.isArray(input)) {
@@ -1947,7 +1950,7 @@ describe('WhatsAppService', () => {
     );
   });
 
-  it('removes local outbound media when DB persistence fails after Kirago accepts the send', async () => {
+  it('keeps outbound media PENDING when DB persistence fails after Kirago accepts the send', async () => {
     const localMedia = {
       storageKey: `${connection().id}/${conversationMessage().id}/cccccccc-cccc-4ccc-8ccc-cccccccccccc`,
       mimeType: 'image/jpeg',
@@ -1976,6 +1979,22 @@ describe('WhatsAppService', () => {
           create: vi.fn().mockResolvedValue(conversation()),
           updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              status: 'PENDING',
+              providerMessageId: 'provider-image-id',
+            }),
+          ),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage(args.data ?? {})),
+          ),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
         $transaction: vi.fn(async (input: unknown) => {
           if (Array.isArray(input)) {
             return Promise.all(input);
@@ -1986,22 +2005,240 @@ describe('WhatsAppService', () => {
       },
     });
 
-    await expect(
-      service.sendConversationMediaMessage(conversation().id, {
-        file: {
-          buffer: Buffer.from('jpeg-bytes'),
-          mimetype: 'image/jpeg',
-          originalname: 'foto.jpg',
-          size: 10,
-        },
-        requestId: 'db-failed-request-id',
-      }),
-    ).rejects.toThrow('db unavailable after send');
+    const result = await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('jpeg-bytes'),
+        mimetype: 'image/jpeg',
+        originalname: 'foto.jpg',
+        size: 10,
+      },
+      requestId: 'db-failed-request-id',
+    });
 
+    expect(result).toMatchObject({ status: 'PENDING', retryAction: null });
     expect(mediaStorage.delete).toHaveBeenCalledWith(localMedia.storageKey);
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: conversationMessage().id },
+        data: expect.objectContaining({
+          providerMessageId: 'provider-image-id',
+        }),
+      }),
+    );
     expect(prisma.whatsAppMessage.update).not.toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'FAILED' }),
+      }),
+    );
+  });
+
+  it('keeps retry PENDING and non-retryable when provider succeeds but final DB persistence fails', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      id: '99999999-9999-4999-8999-999999999999',
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      requestId: 'old-request-id',
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Mensagem ambigua',
+      status: 'FAILED',
+      providerMessageId: null,
+      rawMetadata: { source: 'manual_outbound_send' },
+    });
+    const pending = conversationMessage({
+      ...failed,
+      status: 'PENDING',
+      providerMessageId: 'provider-id',
+      failedAt: null,
+    });
+    const { service, prisma, provider, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(pending),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...pending, ...args.data })),
+          ),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        $transaction: vi.fn(() => {
+          throw new Error('db unavailable after provider success');
+        }),
+      },
+    });
+
+    const result = await service.retryConversationMessage(failed.id);
+    const pendingUpdate = (prisma.whatsAppMessage.updateMany as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      data?: { requestId?: string };
+    };
+
+    expect(provider.sendText).toHaveBeenCalledTimes(1);
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: conversation().phoneNormalized,
+      body: 'Mensagem ambigua',
+      requestId: pendingUpdate.data?.requestId,
+    });
+    expect(result).toMatchObject({
+      id: failed.id,
+      status: 'PENDING',
+      providerMessageId: 'provider-id',
+      retryAction: null,
+    });
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'FAILED' }),
+      }),
+    );
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(conversation().id, failed.id);
+  });
+
+  it('marks retry FAILED when provider rejects before confirming send', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      id: '99999999-9999-4999-8999-999999999999',
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Mensagem falhou',
+      status: 'FAILED',
+    });
+    const { service, provider } = serviceFactory({
+      providerOverrides: {
+        sendText: vi.fn().mockRejectedValue(new Error('provider offline')),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...failed, ...args.data })),
+          ),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.retryConversationMessage(failed.id);
+
+    expect(provider.sendText).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 'FAILED', retryAction: 'RETRY' });
+  });
+
+  it('rejects retry before provider when localMedia MIME is invalid for the message type', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      direction: 'OUTBOUND',
+      type: 'IMAGE',
+      status: 'FAILED',
+      mediaMimeType: 'image/jpeg',
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        localMedia: {
+          storageKey: `${activeConnection.id}/99999999-9999-4999-8999-999999999999/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: 'application/pdf',
+          sizeBytes: 10,
+        },
+      },
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    await expect(service.retryConversationMessage(failed.id)).rejects.toThrow(
+      UnprocessableEntityException,
+    );
+    expect(provider.sendImage).not.toHaveBeenCalled();
+  });
+
+  it('keeps echoed retry messages recoverable by the new requestId after provider confirmation', async () => {
+    const retryRequestId = '2f419d6d-d81a-4ed8-9f38-c6ff02d37394';
+    const existing = conversationMessage({
+      requestId: retryRequestId,
+      providerMessageId: null,
+      direction: 'OUTBOUND',
+      status: 'PENDING',
+      sentAt: null,
+      text: 'Retry echo',
+      rawMetadata: { retry: { attemptId: retryRequestId, status: 'PROVIDER_CONFIRMED' } },
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+          ),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Retry echo', {
+        direction: 'OUTGOING',
+        messageId: retryRequestId,
+      }),
+    );
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      action: 'outgoing_conversation_message_reconciled',
+      conversation: { action: 'outgoing_conversation_message_reconciled' },
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.id },
+        data: expect.objectContaining({
+          providerMessageId: retryRequestId,
+          status: 'SENT',
+        }),
       }),
     );
   });
@@ -6520,6 +6757,382 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(conversation().id, result.id);
     expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+  });
+
+  it('retries a FAILED outbound TEXT message on the same row with a new requestId', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      id: '99999999-9999-4999-8999-999999999999',
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      requestId: 'old-request-id',
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Mensagem falhou',
+      status: 'FAILED',
+      providerMessageId: null,
+      rawMetadata: { source: 'manual_outbound_send' },
+    });
+    const updateMessage = vi.fn((args: { data?: Record<string, unknown> }) =>
+      Promise.resolve(conversationMessage({ ...failed, ...args.data })),
+    );
+    const { service, prisma, provider, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: updateMessage,
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    const result = await service.retryConversationMessage(failed.id);
+    const pendingUpdate = (prisma.whatsAppMessage.updateMany as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      data?: { requestId?: string };
+    };
+
+    expect(pendingUpdate.data?.requestId).toEqual(expect.any(String));
+    expect(pendingUpdate.data?.requestId).not.toBe('old-request-id');
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: conversation().phoneNormalized,
+      body: 'Mensagem falhou',
+      requestId: pendingUpdate.data?.requestId,
+    });
+    expect(result).toMatchObject({ id: failed.id, status: 'SENT', retryAction: null });
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(conversation().id, failed.id);
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
+  });
+
+  it('retries FAILED outbound IMAGE from private local media without exposing storage key', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      id: '99999999-9999-4999-8999-999999999999',
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      requestId: 'old-request-id',
+      direction: 'OUTBOUND',
+      type: 'IMAGE',
+      text: 'Legenda',
+      status: 'FAILED',
+      providerMessageId: null,
+      mediaMimeType: 'image/jpeg',
+      mediaFileName: 'foto.jpg',
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        localMedia: {
+          storageKey: `${activeConnection.id}/99999999-9999-4999-8999-999999999999/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: 'image/jpeg',
+          sizeBytes: 10,
+        },
+      },
+    });
+    const { service, prisma, provider, mediaStorage } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(Buffer.from('image-bytes')),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...failed, ...args.data })),
+          ),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    const result = await service.retryConversationMessage(failed.id);
+
+    expect(mediaStorage.read).toHaveBeenCalledWith(
+      `${activeConnection.id}/99999999-9999-4999-8999-999999999999/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    expect(provider.sendImage).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({
+        phone: conversation().phoneNormalized,
+        imageDataUrl: expect.stringMatching(/^data:image\/jpeg;base64,/),
+        caption: 'Legenda',
+      }),
+    );
+    expect(JSON.stringify(result)).not.toContain('storageKey');
+    expect(result).toMatchObject({ status: 'SENT' });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'DOCUMENT',
+      type: 'DOCUMENT',
+      mimeType: 'application/pdf',
+      fileName: 'boleto.pdf',
+      source: 'manual_outbound_media_send',
+      providerMethod: 'sendDocument',
+      expectedPayload: {
+        documentDataUrl: expect.stringMatching(/^data:application\/octet-stream;base64,/),
+        fileName: 'boleto.pdf',
+      },
+    },
+    {
+      label: 'AUDIO FILE',
+      type: 'AUDIO',
+      mimeType: 'audio/mpeg',
+      fileName: 'audio.mp3',
+      source: 'manual_outbound_media_send',
+      providerMethod: 'sendAudio',
+      expectedPayload: {
+        audioDataUrl: expect.stringMatching(/^data:audio\/mpeg;base64,/),
+        mimeType: 'audio/mpeg',
+        ptt: false,
+      },
+    },
+    {
+      label: 'VOICE NOTE',
+      type: 'AUDIO',
+      mimeType: 'audio/ogg; codecs=opus',
+      fileName: 'voice-note.ogg',
+      source: 'manual_outbound_voice_send',
+      providerMethod: 'sendAudio',
+      expectedPayload: {
+        audioDataUrl: expect.stringMatching(/^data:audio\/ogg; codecs=opus;base64,/),
+        mimeType: 'audio/ogg; codecs=opus',
+        ptt: true,
+      },
+    },
+  ] as const)('retries FAILED outbound $label from stored local media', async (variant) => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      id: '99999999-9999-4999-8999-999999999999',
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      requestId: 'old-request-id',
+      direction: 'OUTBOUND',
+      type: variant.type,
+      text: variant.type === 'DOCUMENT' ? 'Documento' : null,
+      status: 'FAILED',
+      providerMessageId: null,
+      mediaMimeType: variant.mimeType,
+      mediaFileName: variant.fileName,
+      mediaDurationSeconds: variant.type === 'AUDIO' ? 3 : null,
+      rawMetadata: {
+        source: variant.source,
+        localMedia: {
+          storageKey: `${activeConnection.id}/99999999-9999-4999-8999-999999999999/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: variant.mimeType,
+          sizeBytes: 10,
+        },
+      },
+    });
+    const { service, provider } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(Buffer.from('media-bytes')),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...failed, ...args.data })),
+          ),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    await expect(service.retryConversationMessage(failed.id)).resolves.toMatchObject({
+      status: 'SENT',
+    });
+
+    expect(provider[variant.providerMethod]).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({
+        phone: conversation().phoneNormalized,
+        ...variant.expectedPayload,
+      }),
+    );
+  });
+
+  it('keeps FAILED status when retry media metadata exists but the private file is missing', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      direction: 'OUTBOUND',
+      type: 'DOCUMENT',
+      status: 'FAILED',
+      mediaMimeType: 'application/pdf',
+      mediaFileName: 'boleto.pdf',
+      rawMetadata: {
+        source: 'manual_outbound_media_send',
+        localMedia: {
+          storageKey: `${activeConnection.id}/99999999-9999-4999-8999-999999999999/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: 'application/pdf',
+          sizeBytes: 10,
+        },
+      },
+    });
+    const { service, provider } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(null),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    await expect(service.retryConversationMessage(failed.id)).rejects.toThrow(
+      UnprocessableEntityException,
+    );
+    expect(provider.sendDocument).not.toHaveBeenCalled();
+  });
+
+  it('does not double send when a concurrent retry already moved the message out of FAILED', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const failed = conversationMessage({
+      conversationId: conversation().id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversation(),
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Mensagem falhou',
+      status: 'FAILED',
+    });
+    const pending = conversationMessage({
+      ...failed,
+      status: 'PENDING',
+      requestId: 'new-request-id',
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(pending),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(service.retryConversationMessage(failed.id)).resolves.toMatchObject({
+      status: 'PENDING',
+    });
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('blocks retry for inbound, SENT and non-operational connection messages', async () => {
+    const inbound = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(conversationMessage({ direction: 'INBOUND' })),
+        },
+      },
+    });
+    const sent = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(conversationMessage({ direction: 'OUTBOUND' })),
+        },
+      },
+    });
+    const disconnected = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              direction: 'OUTBOUND',
+              status: 'FAILED',
+              whatsAppConnection: connection({ status: 'DISCONNECTED' }),
+              conversation: conversation(),
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      inbound.service.retryConversationMessage(conversationMessage().id),
+    ).rejects.toThrow(ConflictException);
+    await expect(sent.service.retryConversationMessage(conversationMessage().id)).rejects.toThrow(
+      ConflictException,
+    );
+    await expect(
+      disconnected.service.retryConversationMessage(conversationMessage().id),
+    ).rejects.toThrow(ConflictException);
   });
 
   it('starts a new client conversation and sends the first outbound without unread increment', async () => {

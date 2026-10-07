@@ -64,6 +64,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
+      retryConversationMessage: vi.fn().mockResolvedValue({ id: 'retry-message-id' }),
       sendConversationMediaMessage: vi.fn().mockResolvedValue({ id: 'media-message-id' }),
       sendConversationVoiceMessage: vi.fn().mockResolvedValue({ id: 'voice-message-id' }),
       downloadConversationMessageMedia: vi.fn().mockResolvedValue({
@@ -108,6 +109,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
       }),
     ).resolves.toEqual({ id: 'message-id' });
+    await expect(
+      subject.retryConversationMessage('99999999-9999-4999-8999-999999999999'),
+    ).resolves.toEqual({ id: 'retry-message-id' });
     const file = {
       buffer: Buffer.from('image'),
       mimetype: 'image/png',
@@ -167,6 +171,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       body: 'Ola',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
     });
+    expect(service.retryConversationMessage).toHaveBeenCalledWith(
+      '99999999-9999-4999-8999-999999999999',
+    );
     expect(service.sendConversationMediaMessage).toHaveBeenCalledWith('conversation-id', {
       file,
       caption: 'Legenda',

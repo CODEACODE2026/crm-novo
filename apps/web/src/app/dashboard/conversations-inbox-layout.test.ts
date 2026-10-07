@@ -364,9 +364,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('onLoadedMetadata={syncDuration}');
     expect(conversationsSource).toContain('conversation-video-media');
     expect(conversationsSource).toContain('conversation-media-meta');
-    expect(conversationsSource).toContain(
-      "message.status === 'FAILED' && outbound && message.type === 'TEXT'",
-    );
+    expect(conversationsSource).toContain("message.status === 'FAILED' && outbound");
+    expect(conversationsSource).toContain("message.retryAction === 'RETRY'");
+    expect(conversationsSource).toContain('Selecionar arquivo novamente');
+    expect(conversationsSource).toContain('Gravar novamente');
     expect(stylesSource).toContain('grid-template-columns: auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-bubble.has-image-media');
     expect(stylesSource).toContain('.conversation-image-lightbox');
@@ -487,8 +488,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
     expect(conversationsSource).toContain("? { ...current, [selectedConversation.id]: '' }");
     expect(conversationsSource).toContain(': current,');
+    expect(conversationsSource).toContain('retryWhatsAppConversationMessage(message.id)');
     expect(conversationsSource).toContain(
-      "void sendCurrentMessage(message.text ?? '', { focusComposer: false })",
+      "await sendCurrentMessage(message.text ?? '', { focusComposer: false })",
     );
     expect(conversationsSource).toContain(
       'scrollConversationContainerToBottom(messagesScrollRef.current)',

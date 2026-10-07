@@ -140,6 +140,11 @@ export class WhatsAppController {
     return this.whatsAppService.sendConversationTextMessage(id, dto);
   }
 
+  @Post('messages/:id/retry')
+  retryConversationMessage(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.whatsAppService.retryConversationMessage(id);
+  }
+
   @Post('conversations/:id/media')
   @UseInterceptors(
     FileInterceptor('file', {

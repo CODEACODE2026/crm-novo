@@ -3106,6 +3106,24 @@ a {
   font-size: 11px;
 }
 
+.conversation-message-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.conversation-message-failure strong {
+  font-size: 11px;
+}
+
+.conversation-message-failure span {
+  color: var(--text-secondary);
+}
+
 .conversation-message-retry,
 .new-message-indicator {
   border: 1px solid rgb(255 107 107 / 35%);
@@ -3117,6 +3135,11 @@ a {
   font-weight: 700;
   margin-top: 8px;
   padding: 5px 8px;
+}
+
+.conversation-message-retry:disabled {
+  cursor: wait;
+  opacity: 0.68;
 }
 
 .new-message-indicator {

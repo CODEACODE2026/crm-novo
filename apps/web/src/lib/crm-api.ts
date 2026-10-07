@@ -737,6 +737,7 @@ export interface WhatsAppConversationMessage {
   mediaSizeBytes: number | null;
   mediaDurationSeconds: number | null;
   mediaAvailable: boolean;
+  retryAction: 'RETRY' | 'SELECT_FILE_AGAIN' | 'RECORD_AGAIN' | null;
   messageDispatchId: string | null;
   createdAt: string;
 }
@@ -2589,6 +2590,12 @@ export function sendWhatsAppConversationVoice(
   return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/voice`, {
     method: 'POST',
     body: formData,
+  });
+}
+
+export function retryWhatsAppConversationMessage(messageId: string) {
+  return apiFetch<WhatsAppConversationMessage>(`/whatsapp/messages/${messageId}/retry`, {
+    method: 'POST',
   });
 }
 

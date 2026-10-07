@@ -34,6 +34,7 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
   conversionDelayMs = 0;
   capabilityOutputStream: 'stdout' | 'stderr' = 'stdout';
   omitCapability: 'libopus' | 'opusDecoder' | 'webmDemuxer' | 'oggMuxer' | null = null;
+  decoderCapabilityOutput: string | null = null;
   calls: Array<{ command: string; args: string[] }> = [];
 
   protected override async runProcess(
@@ -53,9 +54,10 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
     }
     if (args.includes('-decoders')) {
       return this.capabilityResult(
-        this.omitCapability === 'opusDecoder'
-          ? ' A....D aac AAC'
-          : [' A....D opus Opus', ' A....D libopus libopus Opus (codec opus)'].join('\n'),
+        this.decoderCapabilityOutput ??
+          (this.omitCapability === 'opusDecoder'
+            ? ' A....D aac AAC'
+            : [' A....D opus Opus', ' A....D libopus libopus Opus (codec opus)'].join('\n')),
       );
     }
     if (args.includes('-demuxers')) {
@@ -353,6 +355,34 @@ describe('WhatsAppVoiceConversionService', () => {
       webmDemuxer: true,
       oggMuxer: true,
     });
+  });
+
+  it('detects opus decoder by codec token without matching Canopus descriptions', async () => {
+    subject.decoderCapabilityOutput = [
+      ' VF...D cllc Canopus Lossless Codec',
+      ' V....D hq_hqa Canopus HQ/HQA',
+      ' VFS..D hqx Canopus HQX',
+      ' A....D opus Opus',
+      ' A....D libopus libopus Opus (codec opus)',
+    ].join('\n');
+
+    const capability = await subject.capabilityCheck();
+
+    expect(capability.opusDecoder).toBe(true);
+    expect(capability.available).toBe(true);
+  });
+
+  it('does not detect opus decoder from Canopus-only decoder descriptions', async () => {
+    subject.decoderCapabilityOutput = [
+      ' VF...D cllc Canopus Lossless Codec',
+      ' V....D hq_hqa Canopus HQ/HQA',
+      ' VFS..D hqx Canopus HQX',
+    ].join('\n');
+
+    const capability = await subject.capabilityCheck();
+
+    expect(capability.opusDecoder).toBe(false);
+    expect(capability.available).toBe(false);
   });
 
   it.each([

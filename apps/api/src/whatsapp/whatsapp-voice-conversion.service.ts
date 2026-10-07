@@ -215,9 +215,7 @@ export class WhatsAppVoiceConversionService {
         ffmpegPath,
         ffprobePath,
         libopus: this.hasFfmpegEntryToken(encoderOutput, 'libopus'),
-        opusDecoder:
-          this.hasFfmpegEntryToken(decoderOutput, 'opus') ||
-          this.hasFfmpegEntryToken(decoderOutput, 'libopus'),
+        opusDecoder: this.hasFfmpegCodecEntry(decoderOutput, ['opus', 'libopus']),
         webmDemuxer:
           this.hasFfmpegEntryToken(demuxerOutput, 'matroska,webm') ||
           this.hasFfmpegEntryToken(demuxerOutput, 'webm'),
@@ -269,6 +267,23 @@ export class WhatsAppVoiceConversionService {
         return tokens.some(
           (token) => token === normalizedExpected || token.split(',').includes(normalizedExpected),
         );
+      });
+  }
+
+  private hasFfmpegCodecEntry(output: string, expectedCodecs: string[]) {
+    const normalizedExpected = new Set(expectedCodecs.map((codec) => codec.toLowerCase()));
+
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim().toLowerCase())
+      .filter(Boolean)
+      .some((line) => {
+        const [, codecToken] = line.split(/\s+/);
+        if (!codecToken) {
+          return false;
+        }
+
+        return codecToken.split(',').some((codec) => normalizedExpected.has(codec));
       });
   }
 

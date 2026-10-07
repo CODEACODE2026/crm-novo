@@ -144,6 +144,7 @@ import {
   createReceivablePix,
   createReceivablesPix,
   createPlan,
+  createWhatsAppRealtimeEventSource,
   deleteClient,
   deleteClientReference,
   deletePlan,
@@ -330,6 +331,7 @@ import {
   type WhatsAppPendingContactStatus,
   type WhatsAppPendingContactsSummary,
   type WhatsAppProviderHealth,
+  type WhatsAppRealtimeEvent,
 } from '../../lib/crm-api';
 import { readLegacyImportJsonFile } from '../../lib/legacy-import-file';
 import {
@@ -433,6 +435,10 @@ const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
 const listPageSize = 10;
 const conversationsPageSize = 20;
 const conversationMessagesPageSize = 30;
+const conversationListPollingMs = 10000;
+const conversationMessagesPollingMs = 4000;
+const conversationListRealtimeFallbackPollingMs = 60000;
+const conversationMessagesRealtimeFallbackPollingMs = 30000;
 const clientFinancePageSize = 20;
 const monthNamesPt = [
   'Janeiro',
@@ -11056,6 +11062,7 @@ function ConversationsView({
   const [guestClientCreatePlans, setGuestClientCreatePlans] = useState<Plan[]>([]);
   const [guestClientCreatePlansLoading, setGuestClientCreatePlansLoading] = useState(false);
   const [newMessageNotice, setNewMessageNotice] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -11066,6 +11073,7 @@ function ConversationsView({
   const pendingComposerFocusRef = useRef(false);
   const sendingRef = useRef(false);
   const startingConversationRef = useRef(false);
+  const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
   const filteredConversations = conversations.filter((conversation) => {
@@ -11191,14 +11199,50 @@ function ConversationsView({
     void loadStartConversationConnections();
   }, [loadStartConversationConnections]);
 
+  const scheduleRealtimeListRefresh = useCallback(() => {
+    if (realtimeListRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(realtimeListRefreshTimeoutRef.current);
+    }
+
+    realtimeListRefreshTimeoutRef.current = window.setTimeout(() => {
+      realtimeListRefreshTimeoutRef.current = null;
+      void loadConversations({ silent: true });
+    }, 150);
+  }, [loadConversations]);
+
+  const handleRealtimeEvent = useCallback(
+    (event: WhatsAppRealtimeEvent) => {
+      if (event.type === 'message.created' || event.type === 'message.updated') {
+        if (activeConversationIdRef.current === event.conversationId) {
+          void loadMessages(event.conversationId, { silent: true });
+        }
+        scheduleRealtimeListRefresh();
+        return;
+      }
+
+      if (event.type === 'conversation.updated') {
+        scheduleRealtimeListRefresh();
+      }
+    },
+    [loadMessages, scheduleRealtimeListRefresh],
+  );
+
+  useWhatsAppRealtime({
+    onConnectedChange: setRealtimeConnected,
+    onEvent: handleRealtimeEvent,
+  });
+
   useEffect(() => {
+    const delay = realtimeConnected
+      ? conversationListRealtimeFallbackPollingMs
+      : conversationListPollingMs;
     const interval = window.setInterval(() => {
       if (document.hidden) return;
       void loadConversations({ silent: true });
-    }, 10000);
+    }, delay);
 
     return () => window.clearInterval(interval);
-  }, [loadConversations]);
+  }, [loadConversations, realtimeConnected]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -11229,13 +11273,16 @@ function ConversationsView({
   useEffect(() => {
     if (!selectedConversation) return undefined;
 
+    const delay = realtimeConnected
+      ? conversationMessagesRealtimeFallbackPollingMs
+      : conversationMessagesPollingMs;
     const interval = window.setInterval(() => {
       if (document.hidden) return;
       void loadMessages(selectedConversation.id, { silent: true });
-    }, 4000);
+    }, delay);
 
     return () => window.clearInterval(interval);
-  }, [loadMessages, selectedConversation]);
+  }, [loadMessages, realtimeConnected, selectedConversation]);
 
   useEffect(() => {
     if (!selectedConversation || messagesLoading) return;
@@ -11273,6 +11320,14 @@ function ConversationsView({
       }
     };
   }, [selectedMedia]);
+
+  useEffect(() => {
+    return () => {
+      if (realtimeListRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(realtimeListRefreshTimeoutRef.current);
+      }
+    };
+  }, []);
 
   function selectComposerMedia(kind: ConversationComposerMedia['kind'], file: File) {
     setSendError('');
@@ -13771,6 +13826,45 @@ function GuestConversationClientModal({
       </section>
     </div>
   );
+}
+
+function useWhatsAppRealtime({
+  onConnectedChange,
+  onEvent,
+}: {
+  onConnectedChange: (connected: boolean) => void;
+  onEvent: (event: WhatsAppRealtimeEvent) => void;
+}) {
+  useEffect(() => {
+    const eventSource = createWhatsAppRealtimeEventSource();
+    const handleOpen = () => onConnectedChange(true);
+    const handleError = () => onConnectedChange(false);
+    const handleRealtimeEvent = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as WhatsAppRealtimeEvent;
+        if (!payload.conversationId || !payload.type) return;
+        onEvent(payload);
+      } catch {
+        onConnectedChange(false);
+      }
+    };
+
+    eventSource.addEventListener('open', handleOpen);
+    eventSource.addEventListener('error', handleError);
+    eventSource.addEventListener('message.created', handleRealtimeEvent);
+    eventSource.addEventListener('message.updated', handleRealtimeEvent);
+    eventSource.addEventListener('conversation.updated', handleRealtimeEvent);
+
+    return () => {
+      eventSource.removeEventListener('open', handleOpen);
+      eventSource.removeEventListener('error', handleError);
+      eventSource.removeEventListener('message.created', handleRealtimeEvent);
+      eventSource.removeEventListener('message.updated', handleRealtimeEvent);
+      eventSource.removeEventListener('conversation.updated', handleRealtimeEvent);
+      eventSource.close();
+      onConnectedChange(false);
+    };
+  }, [onConnectedChange, onEvent]);
 }
 
 function phoneDigits(value: string | null | undefined) {

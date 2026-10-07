@@ -300,6 +300,7 @@ function serviceFactory({
   configOverrides = {},
   mediaStorageOverrides = {},
   voiceConversionOverrides = {},
+  realtimeOverrides = {},
   prismaOverrides = {},
 }: {
   currentConnection?: ReturnType<typeof connection> | null;
@@ -308,6 +309,7 @@ function serviceFactory({
   configOverrides?: Record<string, string | undefined>;
   mediaStorageOverrides?: Record<string, unknown>;
   voiceConversionOverrides?: Record<string, unknown>;
+  realtimeOverrides?: Record<string, unknown>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
   const txClientReferenceUpdate = vi.fn();
@@ -601,6 +603,12 @@ function serviceFactory({
     }),
     ...voiceConversionOverrides,
   };
+  const realtime = {
+    emitConversationUpdated: vi.fn(),
+    emitMessageCreated: vi.fn(),
+    emitMessageUpdated: vi.fn(),
+    ...realtimeOverrides,
+  };
 
   return {
     service: new WhatsAppService(
@@ -613,6 +621,7 @@ function serviceFactory({
       normalizer as never,
       mediaStorage as never,
       voiceConversion as never,
+      realtime as never,
     ),
     prisma,
     provider,
@@ -621,6 +630,7 @@ function serviceFactory({
     normalizer,
     mediaStorage,
     voiceConversion,
+    realtime,
     txClientReferenceUpdate,
     txReceivableUpdate,
   };
@@ -3622,7 +3632,7 @@ describe('WhatsAppService', () => {
   });
 
   it('creates a conversation and inbound message on the first eligible inbound webhook', async () => {
-    const { service, prisma, normalizer } = serviceFactory();
+    const { service, prisma, normalizer, realtime } = serviceFactory();
     normalizer.normalize.mockReturnValue(
       normalizedInbound('Ola conversa', { messageId: 'conversation-msg-1' }),
     );
@@ -3668,6 +3678,11 @@ describe('WhatsAppService', () => {
       lastMessagePreview: 'Ola conversa',
       unreadCount: { increment: 1 },
     });
+    expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+      conversation().id,
+      conversationMessage().id,
+    );
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
   });
 
   it('reuses an existing conversation for the same phone and connection', async () => {
@@ -4095,7 +4110,7 @@ describe('WhatsAppService', () => {
       text: 'Eco CRM',
       rawMetadata: null,
     });
-    const { service, prisma, normalizer } = serviceFactory({
+    const { service, prisma, normalizer, realtime } = serviceFactory({
       prismaOverrides: {
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(existing),
@@ -4138,6 +4153,8 @@ describe('WhatsAppService', () => {
         data: expect.not.objectContaining({ unreadCount: expect.anything(), status: 'OPEN' }),
       }),
     );
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(existing.conversationId, existing.id);
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(existing.conversationId);
   });
 
   it('does not downgrade manual outbound IMAGE to TEXT when the outgoing webhook echo lacks media metadata', async () => {
@@ -4449,7 +4466,7 @@ describe('WhatsAppService', () => {
   });
 
   it('preserves legacy waitlist behavior when conversational persistence fails', async () => {
-    const { service, prisma, normalizer } = serviceFactory({
+    const { service, prisma, normalizer, realtime } = serviceFactory({
       prismaOverrides: {
         client: {
           findUnique: vi.fn().mockResolvedValue(null),
@@ -4475,6 +4492,9 @@ describe('WhatsAppService', () => {
     });
     expect(prisma.whatsAppInboundMessage.create).toHaveBeenCalled();
     expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
   });
 
   it('recovers expected WhatsAppMessage P2002 outside the aborted transaction', async () => {
@@ -6052,7 +6072,7 @@ describe('WhatsAppService', () => {
         }),
       ),
     );
-    const { service, prisma, provider, encryption } = serviceFactory({
+    const { service, prisma, provider, encryption, realtime } = serviceFactory({
       currentConnection: otherConnection,
       prismaOverrides: {
         whatsAppConversation: {
@@ -6122,6 +6142,11 @@ describe('WhatsAppService', () => {
       providerMessageId: 'provider-id',
     });
     expect(result).not.toHaveProperty('rawMetadata');
+    expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+      conversationRecord.id,
+      conversationMessage().id,
+    );
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversationRecord.id);
   });
 
   it('returns an existing manual conversation message for repeated requestId without resending', async () => {
@@ -6240,7 +6265,7 @@ describe('WhatsAppService', () => {
         }),
       ),
     );
-    const { service, prisma } = serviceFactory({
+    const { service, prisma, realtime } = serviceFactory({
       providerOverrides: {
         sendText: vi.fn().mockRejectedValue(new Error('falha token=secret-value')),
       },
@@ -6288,6 +6313,8 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(updateArgs.data?.rawMetadata)).toContain('token=[redacted]');
     expect(JSON.stringify(updateArgs.data?.rawMetadata)).not.toContain('secret-value');
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(conversation().id, result.id);
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
   });
 
   it('starts a new client conversation and sends the first outbound without unread increment', async () => {

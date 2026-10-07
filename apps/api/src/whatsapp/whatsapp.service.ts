@@ -66,6 +66,7 @@ import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
+import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
@@ -277,9 +278,48 @@ export class WhatsAppService {
     @Inject(WhatsAppVoiceConversionService)
     private readonly voiceConversion: WhatsAppVoiceConversionService,
     @Optional()
+    @Inject(WhatsAppRealtimeService)
+    private readonly realtime?: WhatsAppRealtimeService,
+    @Optional()
     @Inject(ReferralsService)
     private readonly referralsService?: ReferralsService,
   ) {}
+
+  private emitConversationUpdated(conversationId: string) {
+    try {
+      this.realtime?.emitConversationUpdated(conversationId);
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao emitir evento WhatsApp conversation.updated conversation=${conversationId} message=${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  private emitMessageCreated(conversationId: string, messageId: string) {
+    try {
+      this.realtime?.emitMessageCreated(conversationId, messageId);
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao emitir evento WhatsApp message.created conversation=${conversationId} message=${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  private emitMessageUpdated(conversationId: string, messageId: string) {
+    try {
+      this.realtime?.emitMessageUpdated(conversationId, messageId);
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao emitir evento WhatsApp message.updated conversation=${conversationId} message=${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
+  }
 
   async getConnection() {
     const connection = await this.findPrimaryConnection();
@@ -1076,6 +1116,8 @@ export class WhatsAppService {
         return message;
       });
 
+      this.emitMessageCreated(conversation.id, updated.id);
+      this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
       const failed = await this.prisma.whatsAppMessage.update({
@@ -1090,6 +1132,7 @@ export class WhatsAppService {
         },
       });
 
+      this.emitMessageUpdated(conversation.id, failed.id);
       return this.presentConversationMessage(failed);
     }
   }
@@ -1189,6 +1232,7 @@ export class WhatsAppService {
         },
       });
 
+      this.emitMessageUpdated(conversation.id, failed.id);
       return this.presentConversationMessage(failed);
     }
 
@@ -1230,6 +1274,8 @@ export class WhatsAppService {
         return message;
       });
 
+      this.emitMessageCreated(conversation.id, updated.id);
+      this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
       if (localMediaResult.localMedia) {
@@ -1316,6 +1362,7 @@ export class WhatsAppService {
         },
       });
 
+      this.emitMessageUpdated(conversation.id, failed.id);
       return this.presentConversationMessage(failed);
     }
 
@@ -1357,6 +1404,8 @@ export class WhatsAppService {
         return message;
       });
 
+      this.emitMessageCreated(conversation.id, updated.id);
+      this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
       if (localMediaResult.localMedia) {
@@ -1372,7 +1421,7 @@ export class WhatsAppService {
     dto: LinkWhatsAppConversationClientDto,
     actorUserId: string,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    const linked = await this.prisma.$transaction(async (tx) => {
       const [conversation, client] = await Promise.all([
         tx.whatsAppConversation.findUnique({
           where: { id },
@@ -1433,6 +1482,9 @@ export class WhatsAppService {
 
       return this.presentConversation(linked!);
     });
+
+    this.emitConversationUpdated(id);
+    return linked;
   }
 
   async markConversationAsRead(id: string) {
@@ -1448,6 +1500,7 @@ export class WhatsAppService {
       },
     });
 
+    this.emitConversationUpdated(id);
     return this.presentConversation(conversation);
   }
 
@@ -1464,6 +1517,7 @@ export class WhatsAppService {
       },
     });
 
+    this.emitConversationUpdated(id);
     return this.presentConversation(conversation);
   }
 
@@ -2283,7 +2337,7 @@ export class WhatsAppService {
     const matchedClientId = clients.length === 1 && clients[0] ? clients[0].id : null;
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         const existingMessage = await this.findExistingConversationMessage(tx, connection.id, {
           providerMessageId: normalized.messageId,
           requestId: this.webhookRequestIdCandidate(normalized),
@@ -2369,6 +2423,21 @@ export class WhatsAppService {
           messageId: message.id,
         };
       });
+
+      if (result.processed && result.conversationId) {
+        if (
+          result.action === 'conversation_message_persisted' ||
+          result.action === 'external_outgoing_message_persisted'
+        ) {
+          this.emitMessageCreated(result.conversationId, result.messageId);
+          this.emitConversationUpdated(result.conversationId);
+        } else if (result.action === 'outgoing_conversation_message_reconciled') {
+          this.emitMessageUpdated(result.conversationId, result.messageId);
+          this.emitConversationUpdated(result.conversationId);
+        }
+      }
+
+      return result;
     } catch (error) {
       if (!this.isDuplicateConversationMessage(error)) {
         throw error;

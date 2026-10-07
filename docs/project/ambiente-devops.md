@@ -259,6 +259,30 @@ Apos atualizar codigo da API em producao:
 Source atualizado com `dist` antigo pode manter codigo antigo em execucao,
 incluindo capability checks ou fluxos de conversao anteriores.
 
+## Nginx para SSE do Inbox WhatsApp
+
+O endpoint `GET /whatsapp/events` usa Server-Sent Events e precisa manter a
+conexao HTTP aberta. Se a configuracao atual ja faz proxy generico para a API,
+preferir o menor ajuste possivel nesse location ou em um location especifico:
+
+```nginx
+location /whatsapp/events {
+  proxy_pass http://127.0.0.1:3001;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header Connection '';
+  proxy_buffering off;
+  proxy_cache off;
+  proxy_read_timeout 3600s;
+}
+```
+
+Nao usar `proxy_buffering on` nesse endpoint. O backend tambem envia
+`X-Accel-Buffering: no` e heartbeat SSE a cada 25s.
+
 ## Deploy Futuro
 
 Antes de producao:

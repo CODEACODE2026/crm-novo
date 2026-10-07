@@ -133,6 +133,27 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - A aprovacao cria cliente em transacao, vincula o contato pendente e registra evento operacional no historico do cliente.
 - A Sprint 7 nao implementa chat completo, download de midia, resposta automatica, cobranca, recuperacao, PIX, Redis/BullMQ, Chatwoot, Typebot, grupos ou multiempresa.
 
+## CHAT3-RT1 - Realtime do Inbox
+
+- O Inbox usa SSE autenticado em `GET /whatsapp/events`, protegido pelos
+  mesmos `JwtAuthGuard` e `AdminGuard` das rotas operacionais.
+- A autenticacao usa o cookie `crm_novo_auth`; `EventSource` e criado no
+  frontend com `withCredentials: true`.
+- Eventos internos sao emitidos somente depois da persistencia concluida:
+  `message.created`, `message.updated` e `conversation.updated`.
+- O payload do SSE e minimo: tipo, `conversationId`, `messageId` quando
+  aplicavel e `occurredAt`. Nao trafega corpo de mensagem, telefone, midia,
+  Base64, token ou metadados sensiveis.
+- O frontend trata eventos carregando silenciosamente a lista e, quando o
+  evento pertence a conversa aberta, recarregando a pagina atual de mensagens
+  com o merge existente por `id`.
+- O polling permanece como fallback. Com SSE conectado, lista e conversa aberta
+  usam intervalos maiores; com SSE desconectado, voltam aos intervalos
+  historicos de 10s e 4s.
+- A implementacao e single-process em memoria. Se producao passar a ter
+  multiplas replicas/processos, usar Redis pub/sub ou mecanismo equivalente
+  para que webhook e cliente SSE recebam eventos entre processos.
+
 ## Debito Operacional
 
 - Homologacao com webhook Kirago real permanece pendente para o ambiente Windows, quando `KIRAGO_ADMIN_TOKEN` e demais envs reais forem configurados.

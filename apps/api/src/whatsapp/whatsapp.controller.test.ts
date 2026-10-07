@@ -76,8 +76,10 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       markConversationAsRead: vi.fn().mockResolvedValue({ unreadCount: 0 }),
       resolveConversation: vi.fn().mockResolvedValue({ status: 'RESOLVED' }),
     };
-    const subject = new WhatsAppController(service as never);
+    const realtime = { subscribe: vi.fn() };
+    const subject = new WhatsAppController(service as never, realtime as never);
     const response = { setHeader: vi.fn() };
+    const request = { on: vi.fn() };
 
     await expect(subject.listConversations({ page: 1, limit: 20 })).resolves.toEqual({
       items: [],
@@ -143,6 +145,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(subject.resolveConversation('conversation-id')).resolves.toEqual({
       status: 'RESOLVED',
     });
+    subject.events(request as never, response as never);
 
     expect(service.listConversations).toHaveBeenCalledWith({ page: 1, limit: 20 });
     expect(service.listUsableConnections).toHaveBeenCalledWith();
@@ -182,5 +185,6 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     expect(response.setHeader).toHaveBeenCalledWith('Content-Length', '5');
     expect(service.markConversationAsRead).toHaveBeenCalledWith('conversation-id');
     expect(service.resolveConversation).toHaveBeenCalledWith('conversation-id');
+    expect(realtime.subscribe).toHaveBeenCalledWith(request, response);
   });
 });

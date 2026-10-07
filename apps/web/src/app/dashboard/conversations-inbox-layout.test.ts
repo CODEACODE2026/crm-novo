@@ -119,6 +119,27 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('setDrafts((current) => ({');
   });
 
+  it('uses SSE for realtime updates while keeping slower polling fallback', () => {
+    expect(dashboardSource).toContain('createWhatsAppRealtimeEventSource');
+    expect(dashboardSource).toContain('function useWhatsAppRealtime');
+    expect(conversationsSource).toContain('onConnectedChange: setRealtimeConnected');
+    expect(conversationsSource).toContain("event.type === 'message.created'");
+    expect(conversationsSource).toContain("event.type === 'message.updated'");
+    expect(conversationsSource).toContain("event.type === 'conversation.updated'");
+    expect(conversationsSource).toContain(
+      'activeConversationIdRef.current === event.conversationId',
+    );
+    expect(conversationsSource).toContain('scheduleRealtimeListRefresh');
+    expect(conversationsSource).toContain('realtimeListRefreshTimeoutRef');
+    expect(conversationsSource).toContain(
+      'window.clearTimeout(realtimeListRefreshTimeoutRef.current)',
+    );
+    expect(conversationsSource).toContain('conversationListRealtimeFallbackPollingMs');
+    expect(conversationsSource).toContain('conversationMessagesRealtimeFallbackPollingMs');
+    expect(conversationsSource).toContain('conversationListPollingMs');
+    expect(conversationsSource).toContain('conversationMessagesPollingMs');
+  });
+
   it('opens selected conversations at the bottom only after the initial messages render', () => {
     expect(conversationsSource).toContain('pendingInitialScrollConversationRef');
     expect(conversationsSource).toContain(

@@ -759,6 +759,16 @@ export interface StartWhatsAppConversationResult {
   clientLinked: boolean;
 }
 
+export type WhatsAppRealtimeEventType =
+  'conversation.updated' | 'message.created' | 'message.updated';
+
+export interface WhatsAppRealtimeEvent {
+  type: WhatsAppRealtimeEventType;
+  conversationId: string;
+  messageId?: string;
+  occurredAt: string;
+}
+
 export interface BillingSummary {
   scheduled: number;
   sent: number;
@@ -2508,6 +2518,10 @@ export function listWhatsAppConversationMessages(
   return apiFetch<PaginatedWhatsAppConversationMessages>(
     `/whatsapp/conversations/${id}/messages${query ? `?${query}` : ''}`,
   );
+}
+
+export function createWhatsAppRealtimeEventSource() {
+  return new EventSource(buildApiUrl('/whatsapp/events'), { withCredentials: true });
 }
 
 export function sendWhatsAppConversationMessage(

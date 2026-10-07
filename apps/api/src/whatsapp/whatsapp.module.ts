@@ -17,6 +17,7 @@ import {
   WhatsAppWebhookController,
 } from './whatsapp.controller';
 import { WhatsAppMediaStorageService } from './whatsapp-media-storage.service';
+import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.service';
 import { WhatsAppService } from './whatsapp.service';
 
@@ -31,6 +32,7 @@ import { WhatsAppService } from './whatsapp.service';
     KiragoWhatsAppProvider,
     TokenEncryptionService,
     WhatsAppMediaStorageService,
+    WhatsAppRealtimeService,
     WhatsAppVoiceConversionService,
     WhatsAppService,
     {

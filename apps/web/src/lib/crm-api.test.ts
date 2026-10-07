@@ -11,6 +11,7 @@ import {
   createManualCharge,
   createReceivablePix,
   createReceivablesPix,
+  createWhatsAppRealtimeEventSource,
   deleteClient,
   formatCurrency,
   formatDate,
@@ -1484,5 +1485,16 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/whatsapp/conversations/conversation-id/resolve'),
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('creates WhatsApp realtime EventSource with cookie credentials', () => {
+    const eventSourceMock = vi.fn();
+    vi.stubGlobal('EventSource', eventSourceMock);
+
+    createWhatsAppRealtimeEventSource();
+
+    expect(eventSourceMock).toHaveBeenCalledWith(expect.stringContaining('/whatsapp/events'), {
+      withCredentials: true,
+    });
   });
 });

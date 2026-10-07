@@ -32,6 +32,8 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
   activeConversions = 0;
   maxActiveConversions = 0;
   conversionDelayMs = 0;
+  capabilityOutputStream: 'stdout' | 'stderr' = 'stdout';
+  omitCapability: 'libopus' | 'opusDecoder' | 'webmDemuxer' | 'oggMuxer' | null = null;
   calls: Array<{ command: string; args: string[] }> = [];
 
   protected override async runProcess(
@@ -42,10 +44,34 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
     void timeout;
     this.calls.push({ command, args });
 
-    if (args.includes('-encoders')) return processResult({ stdout: ' A..... libopus' });
-    if (args.includes('-decoders')) return processResult({ stdout: ' A..... opus libopus' });
-    if (args.includes('-demuxers')) return processResult({ stdout: ' D  matroska,webm' });
-    if (args.includes('-muxers')) return processResult({ stdout: ' E  ogg' });
+    if (args.includes('-encoders')) {
+      return this.capabilityResult(
+        this.omitCapability === 'libopus'
+          ? ' A..... aac AAC'
+          : ' A..... libopus libopus Opus (codec opus)',
+      );
+    }
+    if (args.includes('-decoders')) {
+      return this.capabilityResult(
+        this.omitCapability === 'opusDecoder'
+          ? ' A....D aac AAC'
+          : [' A....D opus Opus', ' A....D libopus libopus Opus (codec opus)'].join('\n'),
+      );
+    }
+    if (args.includes('-demuxers')) {
+      return this.capabilityResult(
+        this.omitCapability === 'webmDemuxer'
+          ? ' D mov,mp4,m4a,3gp,3g2,mj2 QuickTime / MOV'
+          : ' D matroska,webm Matroska / WebM',
+      );
+    }
+    if (args.includes('-muxers')) {
+      return this.capabilityResult(
+        this.omitCapability === 'oggMuxer'
+          ? ' E mp4 MP4'
+          : [' E ogg Ogg', ' E opus Ogg Opus'].join('\n'),
+      );
+    }
 
     if (path.basename(command) === 'ffprobe') {
       const target = args.at(-1) ?? '';
@@ -87,6 +113,12 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
     } finally {
       this.activeConversions -= 1;
     }
+  }
+
+  private capabilityResult(output: string) {
+    return this.capabilityOutputStream === 'stdout'
+      ? processResult({ stdout: output })
+      : processResult({ stderr: output });
   }
 }
 
@@ -307,5 +339,33 @@ describe('WhatsAppVoiceConversionService', () => {
         'ogg',
       ]),
     );
+  });
+
+  it('accepts Ubuntu 20.04 ffmpeg 4.2.7 capability output from stderr', async () => {
+    subject.capabilityOutputStream = 'stderr';
+
+    const capability = await subject.capabilityCheck();
+
+    expect(capability).toMatchObject({
+      available: true,
+      libopus: true,
+      opusDecoder: true,
+      webmDemuxer: true,
+      oggMuxer: true,
+    });
+  });
+
+  it.each([
+    ['libopus' as const],
+    ['opusDecoder' as const],
+    ['webmDemuxer' as const],
+    ['oggMuxer' as const],
+  ])('keeps conversion unavailable when %s capability is missing', async (missing) => {
+    subject.omitCapability = missing;
+
+    const capability = await subject.capabilityCheck();
+
+    expect(capability.available).toBe(false);
+    expect(capability[missing]).toBe(false);
   });
 });

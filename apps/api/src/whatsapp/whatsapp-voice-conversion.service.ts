@@ -206,14 +206,22 @@ export class WhatsAppVoiceConversionService {
         this.runProcess(ffmpegPath, ['-hide_banner', '-muxers'], 5_000),
       ]);
 
+      const encoderOutput = this.processOutput(encoders);
+      const decoderOutput = this.processOutput(decoders);
+      const demuxerOutput = this.processOutput(demuxers);
+      const muxerOutput = this.processOutput(muxers);
       const capability: VoiceConversionCapability = {
         available: false,
         ffmpegPath,
         ffprobePath,
-        libopus: /libopus/i.test(encoders.stdout),
-        opusDecoder: /\bopus\b|libopus/i.test(decoders.stdout),
-        webmDemuxer: /matroska|webm/i.test(demuxers.stdout),
-        oggMuxer: /\bogg\b/i.test(muxers.stdout),
+        libopus: this.hasFfmpegEntryToken(encoderOutput, 'libopus'),
+        opusDecoder:
+          this.hasFfmpegEntryToken(decoderOutput, 'opus') ||
+          this.hasFfmpegEntryToken(decoderOutput, 'libopus'),
+        webmDemuxer:
+          this.hasFfmpegEntryToken(demuxerOutput, 'matroska,webm') ||
+          this.hasFfmpegEntryToken(demuxerOutput, 'webm'),
+        oggMuxer: this.hasFfmpegEntryToken(muxerOutput, 'ogg'),
       };
       capability.available =
         capability.libopus &&
@@ -243,6 +251,25 @@ export class WhatsAppVoiceConversionService {
       return null;
     }
     return path.join(path.dirname(ffmpegPath), 'ffprobe');
+  }
+
+  private processOutput(result: ProcessResult) {
+    return `${result.stdout}\n${result.stderr}`;
+  }
+
+  private hasFfmpegEntryToken(output: string, expected: string) {
+    const normalizedExpected = expected.toLowerCase();
+
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim().toLowerCase())
+      .filter(Boolean)
+      .some((line) => {
+        const tokens = line.split(/\s+/);
+        return tokens.some(
+          (token) => token === normalizedExpected || token.split(',').includes(normalizedExpected),
+        );
+      });
   }
 
   private async ensureTempRoot() {
@@ -408,7 +435,13 @@ export class WhatsAppVoiceConversionService {
   private logCapability(capability: VoiceConversionCapability) {
     if (this.capabilityLogged) return;
     this.capabilityLogged = true;
-    this.logger.log(`voice conversion available=${capability.available}`);
+    this.logger.log(
+      `voice conversion available=${capability.available} ffmpeg=${Boolean(
+        capability.ffmpegPath,
+      )} ffprobe=${Boolean(capability.ffprobePath)} encoderLibopus=${capability.libopus} decoderOpus=${
+        capability.opusDecoder
+      } demuxWebm=${capability.webmDemuxer} muxOgg=${capability.oggMuxer}`,
+    );
   }
 
   private error(code: VoiceConversionErrorCode) {

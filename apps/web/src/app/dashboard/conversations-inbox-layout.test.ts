@@ -168,6 +168,34 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('Sem mensagens antigas');
   });
 
+  it('renders WhatsApp-style date separators using Sao Paulo calendar days', () => {
+    expect(conversationsSource).toContain('ConversationDateSeparator');
+    expect(conversationsSource).toContain('conversationMessageDateKey(message)');
+    expect(conversationsSource).toContain('conversationMessageDateKey(previousMessage)');
+    expect(conversationsSource).toContain('currentDateKey !== previousDateKey');
+    expect(conversationsSource).toContain('conversationMessageDateLabel(message)');
+    expect(dashboardSource).toContain(
+      "const conversationDateSeparatorTimeZone = 'America/Sao_Paulo'",
+    );
+    expect(dashboardSource).toContain("if (messageKey === todayKey) return 'Hoje';");
+    expect(dashboardSource).toContain("if (messageKey === yesterdayKey) return 'Ontem';");
+    expect(dashboardSource).toContain(
+      'return `${messageParts.day}/${messageParts.month}/${messageParts.year}`;',
+    );
+    expect(dashboardSource).toContain('message.sentAt ?? message.createdAt');
+    expect(dashboardSource).toContain("new Intl.DateTimeFormat('pt-BR', {");
+    expect(dashboardSource).toContain('timeZone: conversationDateSeparatorTimeZone');
+    expect(dashboardSource).toContain('.formatToParts(date)');
+    expect(dashboardSource).toContain(
+      'Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day) - 1, 12)',
+    );
+    expect(dashboardSource).toContain('role="separator"');
+    expect(dashboardSource).toContain('aria-label={`Mensagens de ${label.toLowerCase()}`}');
+    expect(stylesSource).toContain('.conversation-date-separator');
+    expect(stylesSource).toContain('border-radius: 999px;');
+    expect(stylesSource).toContain('align-self: center;');
+  });
+
   it('keeps pagination safe with dedupe, race guards, realtime refresh and retry states', () => {
     expect(conversationsSource).toContain('conversationListQueryKeyRef');
     expect(conversationsSource).toContain('mergeConversationLists(current, payload.items)');

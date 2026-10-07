@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Fragment,
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -437,6 +438,7 @@ const listPageSize = 10;
 const conversationsPageSize = 20;
 const conversationMessagesPageSize = 30;
 const firstConversationPage = 1;
+const conversationDateSeparatorTimeZone = 'America/Sao_Paulo';
 const conversationListPollingMs = 10000;
 const conversationMessagesPollingMs = 4000;
 const conversationListRealtimeFallbackPollingMs = 60000;
@@ -12594,14 +12596,27 @@ function ConversationMessages({
         ) : null}
         {messages.length ? (
           <div className="conversation-message-stack">
-            {messages.map((message) => (
-              <ConversationBubble
-                conversationId={conversationId}
-                key={message.id}
-                message={message}
-                onRetry={onRetry}
-              />
-            ))}
+            {messages.map((message, index) => {
+              const previousMessage = index > 0 ? messages[index - 1] : null;
+              const currentDateKey = conversationMessageDateKey(message);
+              const previousDateKey = previousMessage
+                ? conversationMessageDateKey(previousMessage)
+                : null;
+              const showDateSeparator = currentDateKey !== previousDateKey;
+
+              return (
+                <Fragment key={message.id}>
+                  {showDateSeparator ? (
+                    <ConversationDateSeparator label={conversationMessageDateLabel(message)} />
+                  ) : null}
+                  <ConversationBubble
+                    conversationId={conversationId}
+                    message={message}
+                    onRetry={onRetry}
+                  />
+                </Fragment>
+              );
+            })}
           </div>
         ) : null}
         {!messages.length && !loading ? (
@@ -12614,6 +12629,18 @@ function ConversationMessages({
           Nova mensagem
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function ConversationDateSeparator({ label }: { label: string }) {
+  return (
+    <div
+      aria-label={`Mensagens de ${label.toLowerCase()}`}
+      className="conversation-date-separator"
+      role="separator"
+    >
+      {label}
     </div>
   );
 }
@@ -14160,6 +14187,55 @@ function conversationDateLabel(value: string | null) {
 function conversationMessageTime(message: WhatsAppConversationMessage) {
   const value = message.sentAt ?? message.createdAt;
   return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function conversationMessageDateKey(message: WhatsAppConversationMessage) {
+  return conversationDateKeyFromValue(message.sentAt ?? message.createdAt);
+}
+
+function conversationMessageDateLabel(message: WhatsAppConversationMessage) {
+  const messageParts = conversationDateParts(message.sentAt ?? message.createdAt);
+  const messageKey = conversationDateKeyFromParts(messageParts);
+  const todayParts = conversationDateParts(new Date());
+  const todayKey = conversationDateKeyFromParts(todayParts);
+  const yesterdayKey = conversationYesterdayKey(todayParts);
+
+  if (messageKey === todayKey) return 'Hoje';
+  if (messageKey === yesterdayKey) return 'Ontem';
+  return `${messageParts.day}/${messageParts.month}/${messageParts.year}`;
+}
+
+function conversationDateKeyFromValue(value: string | Date) {
+  return conversationDateKeyFromParts(conversationDateParts(value));
+}
+
+function conversationYesterdayKey(todayParts: { day: string; month: string; year: string }) {
+  const yesterday = new Date(
+    Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day) - 1, 12),
+  );
+  return conversationDateKeyFromValue(yesterday);
+}
+
+function conversationDateKeyFromParts(parts: { day: string; month: string; year: string }) {
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function conversationDateParts(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    timeZone: conversationDateSeparatorTimeZone,
+    year: 'numeric',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+
+  return {
+    day: part('day'),
+    month: part('month'),
+    year: part('year'),
+  };
 }
 
 function conversationMessageStatusLabel(status: WhatsAppConversationMessageStatus) {

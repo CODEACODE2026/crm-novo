@@ -2671,6 +2671,22 @@ a {
   padding: 0;
 }
 
+.conversation-date-separator {
+  align-self: center;
+  max-width: min(100%, 220px);
+  border: 1px solid rgb(148 163 184 / 18%);
+  border-radius: 999px;
+  background: rgb(15 23 42 / 5%);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  margin: 8px 0 5px;
+  overflow-wrap: anywhere;
+  padding: 6px 10px;
+  text-align: center;
+}
+
 .conversation-bubble-row {
   display: flex;
 }

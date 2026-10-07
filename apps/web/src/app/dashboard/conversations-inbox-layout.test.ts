@@ -5,15 +5,16 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
+const whatsappInboxSource = readFileSync(
+  join(currentDir, '../../components/whatsapp/WhatsAppInbox.tsx'),
+  'utf8',
+);
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const primitivesSource = readFileSync(
   join(currentDir, '../../components/ui/primitives.tsx'),
   'utf8',
 );
-const conversationsSource = dashboardSource.slice(
-  dashboardSource.indexOf('function ConversationsView'),
-  dashboardSource.indexOf('function WhatsAppView'),
-);
+const conversationsSource = whatsappInboxSource;
 const mobileConversationMediaStart = stylesSource.indexOf(
   "@media (max-width: 620px) {\n  .app-shell[data-active-view='conversations']",
 );
@@ -68,10 +69,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('renders search, initial filters, unread summary, and empty/error states', () => {
     expect(conversationsSource).toContain('Buscar por nome ou telefone...');
-    expect(dashboardSource).toContain("id: 'all', label: 'Todas'");
-    expect(dashboardSource).toContain("id: 'unread', label: 'Não lidas'");
-    expect(dashboardSource).toContain("id: 'clients', label: 'Clientes'");
-    expect(dashboardSource).toContain("id: 'guests', label: 'Avulsos'");
+    expect(conversationsSource).toContain("id: 'all', label: 'Todas'");
+    expect(conversationsSource).toContain("id: 'unread', label: 'Não lidas'");
+    expect(conversationsSource).toContain("id: 'clients', label: 'Clientes'");
+    expect(conversationsSource).toContain("id: 'guests', label: 'Avulsos'");
     expect(conversationsSource).toContain('totalUnreadConversations');
     expect(conversationsSource).toContain('onSummaryChange(payload.summary)');
     expect(conversationsSource).toContain('Nenhuma conversa encontrada.');
@@ -98,14 +99,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('polishes unread summary copy and hides zero-zero noise', () => {
     expect(conversationsSource).toContain('hasUnreadConversationSummary(summary)');
-    expect(dashboardSource).toContain('function formatConversationSummary');
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain('function formatConversationSummary');
+    expect(conversationsSource).toContain(
       "pluralizePt(summary.totalUnreadConversations, 'conversa não lida', 'conversas não lidas')",
     );
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain(
       "pluralizePt(summary.totalUnreadMessages, 'mensagem', 'mensagens')",
     );
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain(
       'summary.totalUnreadConversations > 0 || summary.totalUnreadMessages > 0',
     );
   });
@@ -124,8 +125,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('uses SSE for realtime updates while keeping slower polling fallback', () => {
-    expect(dashboardSource).toContain('createWhatsAppRealtimeEventSource');
-    expect(dashboardSource).toContain('function useWhatsAppRealtime');
+    expect(conversationsSource).toContain('createWhatsAppRealtimeEventSource');
+    expect(conversationsSource).toContain('function useWhatsAppRealtime');
     expect(conversationsSource).toContain('onConnectedChange: setRealtimeConnected');
     expect(conversationsSource).toContain("event.type === 'message.created'");
     expect(conversationsSource).toContain("event.type === 'message.updated'");
@@ -174,23 +175,23 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('conversationMessageDateKey(previousMessage)');
     expect(conversationsSource).toContain('currentDateKey !== previousDateKey');
     expect(conversationsSource).toContain('conversationMessageDateLabel(message)');
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain(
       "const conversationDateSeparatorTimeZone = 'America/Sao_Paulo'",
     );
-    expect(dashboardSource).toContain("if (messageKey === todayKey) return 'Hoje';");
-    expect(dashboardSource).toContain("if (messageKey === yesterdayKey) return 'Ontem';");
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain("if (messageKey === todayKey) return 'Hoje';");
+    expect(conversationsSource).toContain("if (messageKey === yesterdayKey) return 'Ontem';");
+    expect(conversationsSource).toContain(
       'return `${messageParts.day}/${messageParts.month}/${messageParts.year}`;',
     );
-    expect(dashboardSource).toContain('message.sentAt ?? message.createdAt');
-    expect(dashboardSource).toContain("new Intl.DateTimeFormat('pt-BR', {");
-    expect(dashboardSource).toContain('timeZone: conversationDateSeparatorTimeZone');
-    expect(dashboardSource).toContain('.formatToParts(date)');
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain('message.sentAt ?? message.createdAt');
+    expect(conversationsSource).toContain("new Intl.DateTimeFormat('pt-BR', {");
+    expect(conversationsSource).toContain('timeZone: conversationDateSeparatorTimeZone');
+    expect(conversationsSource).toContain('.formatToParts(date)');
+    expect(conversationsSource).toContain(
       'Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day) - 1, 12)',
     );
-    expect(dashboardSource).toContain('role="separator"');
-    expect(dashboardSource).toContain('aria-label={`Mensagens de ${label.toLowerCase()}`}');
+    expect(conversationsSource).toContain('role="separator"');
+    expect(conversationsSource).toContain('aria-label={`Mensagens de ${label.toLowerCase()}`}');
     expect(stylesSource).toContain('.conversation-date-separator');
     expect(stylesSource).toContain('border-radius: 999px;');
     expect(stylesSource).toContain('align-self: center;');
@@ -256,8 +257,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('supports compact image, document and audio attachments in the conversation composer', () => {
-    expect(dashboardSource).toContain('type ConversationComposerMedia');
-    expect(dashboardSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
+    expect(conversationsSource).toContain('type ConversationComposerMedia');
+    expect(conversationsSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
     expect(conversationsSource).toContain('file.size > conversationMediaMaxBytes');
     expect(conversationsSource).toContain(
       'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
@@ -352,12 +353,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain(
       "const documentMeta = [documentType, fileSize].filter(Boolean).join(' | ');",
     );
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain(
       'function conversationDocumentTypeLabel(fileName: string, mimeType: string | null)',
     );
-    expect(dashboardSource).toContain("if (normalizedMime === 'application/pdf') return 'PDF';");
-    expect(dashboardSource).toContain('fileName.match(/\\.([a-z0-9]{1,8})$/i)?.[1]');
-    expect(dashboardSource).toContain("return 'Arquivo';");
+    expect(conversationsSource).toContain(
+      "if (normalizedMime === 'application/pdf') return 'PDF';",
+    );
+    expect(conversationsSource).toContain('fileName.match(/\\.([a-z0-9]{1,8})$/i)?.[1]');
+    expect(conversationsSource).toContain("return 'Arquivo';");
     expect(conversationsSource).toContain('<Download size={15} aria-hidden="true" />');
     expect(conversationsSource).toContain("message.mediaFileName || 'Documento'");
     expect(conversationsSource).toContain("if (type === 'DOCUMENT') return 'Mídia indisponível';");
@@ -447,12 +450,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('supports WebM microphone voice notes as a separate PTT flow', () => {
-    expect(dashboardSource).toContain('type ConversationVoiceDraft');
-    expect(dashboardSource).toContain('const conversationVoiceMaxSeconds = 60;');
-    expect(dashboardSource).toContain(
+    expect(conversationsSource).toContain('type ConversationVoiceDraft');
+    expect(conversationsSource).toContain('const conversationVoiceMaxSeconds = 60;');
+    expect(conversationsSource).toContain(
       "const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';",
     );
-    expect(dashboardSource).toContain("const fallbackConversationVoiceMimeType = 'audio/webm';");
+    expect(conversationsSource).toContain(
+      "const fallbackConversationVoiceMimeType = 'audio/webm';",
+    );
     expect(conversationsSource).toContain('sendWhatsAppConversationVoice(selectedConversation.id');
     expect(conversationsSource).toContain('durationSeconds: voice.durationSeconds');
     expect(conversationsSource).toContain('requestId: voice.requestId');
@@ -620,9 +625,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       'Cliente criado, mas a conversa ainda não foi vinculada.',
     );
     expect(conversationsSource).toContain('Tentar vincular novamente');
-    expect(dashboardSource).toContain('function conversationInstanceLabel');
-    expect(dashboardSource).toContain('function isTechnicalInstanceName');
-    expect(dashboardSource).toContain('function phoneDigitsCompatible');
+    expect(conversationsSource).toContain('function conversationInstanceLabel');
+    expect(conversationsSource).toContain('function isTechnicalInstanceName');
+    expect(conversationsSource).toContain('function phoneDigitsCompatible');
     expect(conversationsSource).not.toContain("{conversation.instanceName ?? '-'}");
     expect(conversationsSource).not.toContain(
       "{conversation.instanceName ?? 'Instância WhatsApp'}",

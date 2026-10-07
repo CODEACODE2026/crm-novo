@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
+const financeClientAutocompleteSource = readFileSync(
+  join(currentDir, '../../components/clients/finance-client-autocomplete.tsx'),
+  'utf8',
+);
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const financeViewSource = dashboardSource.slice(
   dashboardSource.indexOf('function FinanceView'),
@@ -226,16 +230,20 @@ describe('global finance presentation source', () => {
   });
 
   it('uses remote client autocomplete for finance client selection', () => {
-    expect(dashboardSource).toContain('function FinanceClientAutocomplete');
-    expect(dashboardSource).toContain("placeholder = 'Buscar por nome, telefone ou e-mail...'");
-    expect(dashboardSource).toContain('(term) => listClientOptions(term, { limit: 15 })');
-    expect(dashboardSource).toContain('scheduleClientReferralSearch(');
-    expect(dashboardSource).toContain('Carregando...');
-    expect(dashboardSource).toContain('Nenhum cliente encontrado');
-    expect(dashboardSource).toContain('financeClientOptionDetails(option)');
-    expect(dashboardSource).toContain('selectClient(options[activeIndex]');
-    expect(dashboardSource).toContain("onChange('', null);");
-    expect(dashboardSource).toContain('aria-label="Limpar cliente"');
+    expect(financeClientAutocompleteSource).toContain('function FinanceClientAutocomplete');
+    expect(financeClientAutocompleteSource).toContain(
+      "placeholder = 'Buscar por nome, telefone ou e-mail...'",
+    );
+    expect(financeClientAutocompleteSource).toContain(
+      '(term) => listClientOptions(term, { limit: 15 })',
+    );
+    expect(financeClientAutocompleteSource).toContain('scheduleClientReferralSearch(');
+    expect(financeClientAutocompleteSource).toContain('Carregando...');
+    expect(financeClientAutocompleteSource).toContain('Nenhum cliente encontrado');
+    expect(financeClientAutocompleteSource).toContain('financeClientOptionDetails(option)');
+    expect(financeClientAutocompleteSource).toContain('selectClient(options[activeIndex]');
+    expect(financeClientAutocompleteSource).toContain("onChange('', null);");
+    expect(financeClientAutocompleteSource).toContain('aria-label="Limpar cliente"');
     expect(dashboardSource).toContain('setForm({ ...form, clientId });');
     expect(stylesSource).toContain('.finance-client-autocomplete');
     expect(stylesSource).toContain('.finance-client-autocomplete .autocomplete-option span,');

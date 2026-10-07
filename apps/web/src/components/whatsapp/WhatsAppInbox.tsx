@@ -1,0 +1,3746 @@
+'use client';
+
+import {
+  Fragment,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CircleCheck,
+  Download,
+  Eye,
+  FileAudio,
+  FileText,
+  Image as ImageIcon,
+  Info,
+  Loader2,
+  MessagesSquare,
+  Mic,
+  Pause,
+  Play,
+  Plus,
+  Search,
+  Send,
+  Square,
+  Trash2,
+  UserCheck,
+  UserRoundPlus,
+  X,
+} from 'lucide-react';
+import { ClientForm } from '../clients/client-form';
+import { FinanceClientAutocomplete } from '../clients/finance-client-autocomplete';
+import { PageHeader } from '../ui/admin-shell';
+import { Button, IconButton } from '../ui/primitives';
+import {
+  ApiError,
+  createClient,
+  createWhatsAppRealtimeEventSource,
+  downloadWhatsAppConversationMedia,
+  formatCurrency,
+  getClient,
+  getWhatsAppConversation,
+  linkWhatsAppConversationClient,
+  listClientOptions,
+  listPlans,
+  listWhatsAppConnections,
+  listWhatsAppConversationMessages,
+  listWhatsAppConversations,
+  markWhatsAppConversationRead,
+  resolveWhatsAppConversation,
+  retryWhatsAppConversationMessage,
+  sendWhatsAppConversationMedia,
+  sendWhatsAppConversationMessage,
+  sendWhatsAppConversationVoice,
+  startWhatsAppConversation,
+  type Client,
+  type ClientOption,
+  type ClientPayload,
+  type Plan,
+  type WhatsAppConnection,
+  type WhatsAppConversation,
+  type WhatsAppConversationMessage,
+  type WhatsAppConversationMessageStatus,
+  type WhatsAppConversationMessageType,
+  type WhatsAppConversationMessagesCursor,
+  type WhatsAppConversationStatus,
+  type WhatsAppConversationSummary,
+  type WhatsAppRealtimeEvent,
+} from '../../lib/crm-api';
+import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
+import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
+
+type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
+type StartConversationRecipientType = 'client' | 'guest';
+type ConversationComposerMedia = {
+  file: File;
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO';
+  previewUrl: string | null;
+};
+
+type ConversationVoiceDraft = {
+  conversationId: string;
+  durationSeconds: number;
+  file: File;
+  previewUrl: string;
+  requestId: string;
+};
+
+const conversationsPageSize = 20;
+const conversationMessagesPageSize = 30;
+const firstConversationPage = 1;
+const conversationDateSeparatorTimeZone = 'America/Sao_Paulo';
+const conversationListPollingMs = 10000;
+const conversationMessagesPollingMs = 4000;
+const conversationListRealtimeFallbackPollingMs = 60000;
+const conversationMessagesRealtimeFallbackPollingMs = 30000;
+const conversationMediaMaxBytes = 10 * 1024 * 1024;
+const conversationVoiceMaxSeconds = 60;
+const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
+const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
+const fallbackConversationVoiceMimeType = 'audio/webm';
+
+const conversationFilters = [
+  { id: 'all', label: 'Todas' },
+  { id: 'unread', label: 'Não lidas' },
+  { id: 'clients', label: 'Clientes' },
+  { id: 'guests', label: 'Avulsos' },
+] satisfies Array<{ id: ConversationFilter; label: string }>;
+
+export function WhatsAppInbox({
+  onOpenClient,
+  onSummaryChange,
+}: {
+  onOpenClient: (clientId: string) => Promise<void>;
+  onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
+}) {
+  const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
+  const [summary, setSummary] = useState<WhatsAppConversationSummary | null>(null);
+  const [selectedConversation, setSelectedConversation] = useState<WhatsAppConversation | null>(
+    null,
+  );
+  const [messages, setMessages] = useState<WhatsAppConversationMessage[]>([]);
+  const [whatsAppConnections, setWhatsAppConnections] = useState<WhatsAppConnection[]>([]);
+  const [clientDetail, setClientDetail] = useState<Client | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<ConversationFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
+  const [sending, setSending] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [linkingClient, setLinkingClient] = useState(false);
+  const [creatingGuestClient, setCreatingGuestClient] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+  const [listLoadingMore, setListLoadingMore] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const [listError, setListError] = useState('');
+  const [listLoadMoreError, setListLoadMoreError] = useState('');
+  const [messagesError, setMessagesError] = useState('');
+  const [olderMessagesError, setOlderMessagesError] = useState('');
+  const [sendError, setSendError] = useState('');
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({});
+  const [retryingMessageIds, setRetryingMessageIds] = useState<Set<string>>(new Set());
+  const [clientError, setClientError] = useState('');
+  const [linkClientError, setLinkClientError] = useState('');
+  const [guestClientCreateError, setGuestClientCreateError] = useState('');
+  const [guestClientDuplicate, setGuestClientDuplicate] = useState<ClientOption | null>(null);
+  const [guestClientCreatedUnlinked, setGuestClientCreatedUnlinked] = useState<ClientOption | null>(
+    null,
+  );
+  const [mobileClientOpen, setMobileClientOpen] = useState(false);
+  const [mobileMode, setMobileMode] = useState<'list' | 'chat'>('list');
+  const [startConversationOpen, setStartConversationOpen] = useState(false);
+  const [startingConversation, setStartingConversation] = useState(false);
+  const [startConversationError, setStartConversationError] = useState('');
+  const [guestClientCreateConversation, setGuestClientCreateConversation] =
+    useState<WhatsAppConversation | null>(null);
+  const [guestClientCreatePlans, setGuestClientCreatePlans] = useState<Plan[]>([]);
+  const [guestClientCreatePlansLoading, setGuestClientCreatePlansLoading] = useState(false);
+  const [newMessageNotice, setNewMessageNotice] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [conversationPage, setConversationPage] = useState(firstConversationPage);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [olderMessagesCursor, setOlderMessagesCursor] =
+    useState<WhatsAppConversationMessagesCursor | null>(null);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+  const lastReadConversationRef = useRef<string | null>(null);
+  const pendingInitialScrollConversationRef = useRef<string | null>(null);
+  const pendingSendScrollConversationRef = useRef<string | null>(null);
+  const pendingComposerFocusRef = useRef(false);
+  const sendingRef = useRef(false);
+  const retryingMessagesRef = useRef(new Set<string>());
+  const startingConversationRef = useRef(false);
+  const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
+  const conversationListQueryKeyRef = useRef('');
+  const olderMessagesLoadedRef = useRef(false);
+  const olderMessagesLoadingRef = useRef(false);
+  const messagesRef = useRef<WhatsAppConversationMessage[]>([]);
+
+  const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
+
+  const loadConversations = useCallback(
+    async ({
+      append = false,
+      page = firstConversationPage,
+      preserveLoaded = false,
+      silent = false,
+    }: { append?: boolean; page?: number; preserveLoaded?: boolean; silent?: boolean } = {}) => {
+      const requestQueryKey = JSON.stringify({ filter, search, statusFilter });
+      conversationListQueryKeyRef.current = requestQueryKey;
+
+      if (append) {
+        setListLoadingMore(true);
+        setListLoadMoreError('');
+      } else if (!silent) {
+        setListLoading(true);
+      }
+      if (!append) {
+        setListError('');
+        setListLoadMoreError('');
+      }
+      if (!append && !preserveLoaded && !silent) {
+        setConversations([]);
+        setConversationPage(firstConversationPage);
+        setHasMoreConversations(false);
+      }
+
+      try {
+        const filters: Parameters<typeof listWhatsAppConversations>[0] = {
+          page,
+          pageSize: conversationsPageSize,
+        };
+        if (search) filters.search = search;
+        if (statusFilter) filters.status = statusFilter;
+        if (filter === 'unread') filters.unreadOnly = true;
+        if (filter === 'clients') filters.hasClient = true;
+        if (filter === 'guests') filters.hasClient = false;
+
+        const payload = await listWhatsAppConversations({
+          ...filters,
+        });
+        if (conversationListQueryKeyRef.current !== requestQueryKey) return;
+
+        setConversations((current) => {
+          if (append || preserveLoaded) {
+            return mergeConversationLists(current, payload.items);
+          }
+          return payload.items;
+        });
+        setConversationPage(page);
+        setHasMoreConversations(payload.pagination.hasMore ?? page < payload.pagination.totalPages);
+        setSummary(payload.summary);
+        onSummaryChange(payload.summary);
+        setSelectedConversation((current) => {
+          if (!current) return null;
+          return payload.items.find((item) => item.id === current.id) ?? current;
+        });
+      } catch (err) {
+        const message = conversationErrorMessage(err, 'Falha ao carregar conversas.');
+        if (append) {
+          setListLoadMoreError(message);
+        } else {
+          setListError(message);
+        }
+      } finally {
+        if (append) {
+          setListLoadingMore(false);
+        } else if (!silent) {
+          setListLoading(false);
+        }
+      }
+    },
+    [filter, onSummaryChange, search, statusFilter],
+  );
+
+  const loadMessages = useCallback(
+    async (
+      conversationId: string,
+      { replace = false, silent = false }: { replace?: boolean; silent?: boolean } = {},
+    ) => {
+      if (!silent) {
+        setMessagesLoading(true);
+      }
+      setMessagesError('');
+      if (replace) {
+        setOlderMessagesError('');
+      }
+
+      const shouldStick = isConversationScrollNearBottom(messagesScrollRef.current);
+
+      try {
+        const payload = await listWhatsAppConversationMessages(conversationId, {
+          page: firstConversationPage,
+          pageSize: conversationMessagesPageSize,
+        });
+        if (activeConversationIdRef.current !== conversationId) return;
+        const mergedMessages = replace
+          ? mergeConversationMessages([], payload.items)
+          : mergeConversationMessages(messagesRef.current, payload.items);
+        setMessages(mergedMessages);
+        messagesRef.current = mergedMessages;
+        if (replace) {
+          olderMessagesLoadedRef.current = false;
+        }
+        if (replace || !olderMessagesLoadedRef.current) {
+          setOlderMessagesCursor(payload.pagination.nextCursor ?? null);
+          setHasOlderMessages(Boolean(payload.pagination.hasMore));
+        }
+        if (!replace) {
+          scheduleConversationScroll(() => {
+            if (shouldStick) {
+              scrollConversationContainerToBottom(messagesScrollRef.current);
+            } else if (silent) {
+              setNewMessageNotice(true);
+            }
+          });
+        }
+      } catch (err) {
+        setMessagesError(conversationErrorMessage(err, 'Falha ao carregar mensagens.'));
+      } finally {
+        if (!silent) {
+          setMessagesLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  const loadMoreConversations = useCallback(async () => {
+    if (listLoadingMore || listLoading || !hasMoreConversations) return;
+    await loadConversations({
+      append: true,
+      page: conversationPage + 1,
+      silent: true,
+    });
+  }, [conversationPage, hasMoreConversations, listLoading, listLoadingMore, loadConversations]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const conversationId = selectedConversation?.id;
+    if (
+      !conversationId ||
+      !olderMessagesCursor ||
+      olderMessagesLoadingRef.current ||
+      olderMessagesLoading ||
+      messagesLoading ||
+      !hasOlderMessages
+    ) {
+      return;
+    }
+
+    const element = messagesScrollRef.current;
+    const previousScrollHeight = element?.scrollHeight ?? 0;
+    const previousScrollTop = element?.scrollTop ?? 0;
+
+    setOlderMessagesLoading(true);
+    olderMessagesLoadingRef.current = true;
+    setOlderMessagesError('');
+
+    try {
+      const payload = await listWhatsAppConversationMessages(conversationId, {
+        beforeCreatedAt: olderMessagesCursor.createdAt,
+        beforeId: olderMessagesCursor.id,
+        page: firstConversationPage,
+        pageSize: conversationMessagesPageSize,
+      });
+      if (activeConversationIdRef.current !== conversationId) return;
+
+      const mergedMessages = mergeConversationMessages(messagesRef.current, payload.items);
+      setMessages(mergedMessages);
+      messagesRef.current = mergedMessages;
+      olderMessagesLoadedRef.current = true;
+      setOlderMessagesCursor(payload.pagination.nextCursor ?? null);
+      setHasOlderMessages(Boolean(payload.pagination.hasMore));
+      scheduleConversationScroll(() => {
+        if (activeConversationIdRef.current !== conversationId) return;
+        const currentElement = messagesScrollRef.current;
+        if (!currentElement) return;
+        currentElement.scrollTop =
+          previousScrollTop + (currentElement.scrollHeight - previousScrollHeight);
+      });
+    } catch (err) {
+      setOlderMessagesError(
+        conversationErrorMessage(err, 'Falha ao carregar mensagens anteriores.'),
+      );
+    } finally {
+      olderMessagesLoadingRef.current = false;
+      setOlderMessagesLoading(false);
+    }
+  }, [
+    hasOlderMessages,
+    messagesLoading,
+    olderMessagesLoading,
+    olderMessagesCursor,
+    selectedConversation?.id,
+  ]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const loadStartConversationConnections = useCallback(async () => {
+    try {
+      setWhatsAppConnections(await listWhatsAppConnections());
+    } catch {
+      setWhatsAppConnections([]);
+    }
+  }, []);
+
+  const loadGuestClientCreatePlans = useCallback(async () => {
+    setGuestClientCreatePlansLoading(true);
+
+    try {
+      setGuestClientCreatePlans(await listPlans());
+    } catch (err) {
+      setGuestClientCreateError(conversationErrorMessage(err, 'Falha ao carregar planos.'));
+      setGuestClientCreatePlans([]);
+    } finally {
+      setGuestClientCreatePlansLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearch(searchInput.trim());
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
+    void loadConversations();
+  }, [loadConversations]);
+
+  useEffect(() => {
+    void loadStartConversationConnections();
+  }, [loadStartConversationConnections]);
+
+  const scheduleRealtimeListRefresh = useCallback(() => {
+    if (realtimeListRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(realtimeListRefreshTimeoutRef.current);
+    }
+
+    realtimeListRefreshTimeoutRef.current = window.setTimeout(() => {
+      realtimeListRefreshTimeoutRef.current = null;
+      void loadConversations({ preserveLoaded: true, silent: true });
+    }, 150);
+  }, [loadConversations]);
+
+  const handleRealtimeEvent = useCallback(
+    (event: WhatsAppRealtimeEvent) => {
+      if (event.type === 'message.created' || event.type === 'message.updated') {
+        if (activeConversationIdRef.current === event.conversationId) {
+          void loadMessages(event.conversationId, { silent: true });
+        }
+        scheduleRealtimeListRefresh();
+        return;
+      }
+
+      if (event.type === 'conversation.updated') {
+        scheduleRealtimeListRefresh();
+      }
+    },
+    [loadMessages, scheduleRealtimeListRefresh],
+  );
+
+  useWhatsAppRealtime({
+    onConnectedChange: setRealtimeConnected,
+    onEvent: handleRealtimeEvent,
+  });
+
+  useEffect(() => {
+    const delay = realtimeConnected
+      ? conversationListRealtimeFallbackPollingMs
+      : conversationListPollingMs;
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      void loadConversations({ preserveLoaded: true, silent: true });
+    }, delay);
+
+    return () => window.clearInterval(interval);
+  }, [loadConversations, realtimeConnected]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const visualViewport = window.visualViewport;
+
+    const updateChatViewportHeight = () => {
+      const shouldKeepBottom = isConversationScrollNearBottom(messagesScrollRef.current);
+      const viewportHeight = visualViewport?.height ?? window.innerHeight;
+      root.style.setProperty('--chat-viewport-height', `${Math.round(viewportHeight)}px`);
+      if (shouldKeepBottom) {
+        scheduleConversationScroll(() => {
+          scrollConversationContainerToBottom(messagesScrollRef.current);
+        });
+      }
+    };
+
+    updateChatViewportHeight();
+    visualViewport?.addEventListener('resize', updateChatViewportHeight);
+    window.addEventListener('resize', updateChatViewportHeight);
+
+    return () => {
+      visualViewport?.removeEventListener('resize', updateChatViewportHeight);
+      window.removeEventListener('resize', updateChatViewportHeight);
+      root.style.removeProperty('--chat-viewport-height');
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedConversation) return undefined;
+
+    const delay = realtimeConnected
+      ? conversationMessagesRealtimeFallbackPollingMs
+      : conversationMessagesPollingMs;
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      void loadMessages(selectedConversation.id, { silent: true });
+    }, delay);
+
+    return () => window.clearInterval(interval);
+  }, [loadMessages, realtimeConnected, selectedConversation]);
+
+  useEffect(() => {
+    if (!selectedConversation || messagesLoading) return;
+    if (pendingInitialScrollConversationRef.current !== selectedConversation.id) return;
+
+    pendingInitialScrollConversationRef.current = null;
+    scheduleConversationScroll(() => {
+      scrollConversationContainerToBottom(messagesScrollRef.current);
+    });
+  }, [messages, messagesLoading, selectedConversation]);
+
+  useEffect(() => {
+    if (!selectedConversation) return;
+    if (pendingSendScrollConversationRef.current !== selectedConversation.id) return;
+
+    pendingSendScrollConversationRef.current = null;
+    scheduleConversationScroll(() => {
+      scrollConversationContainerToBottom(messagesScrollRef.current);
+    });
+  }, [messages, selectedConversation]);
+
+  useEffect(() => {
+    if (sending || !pendingComposerFocusRef.current || composerFocusRequest === 0) return;
+
+    pendingComposerFocusRef.current = false;
+    scheduleComposerFocus(() => {
+      composerRef.current?.focus();
+    });
+  }, [composerFocusRequest, sending]);
+
+  useEffect(() => {
+    return () => {
+      if (selectedMedia?.previewUrl) {
+        URL.revokeObjectURL(selectedMedia.previewUrl);
+      }
+    };
+  }, [selectedMedia]);
+
+  useEffect(() => {
+    return () => {
+      if (realtimeListRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(realtimeListRefreshTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function selectComposerMedia(kind: ConversationComposerMedia['kind'], file: File) {
+    setSendError('');
+
+    if (file.size > conversationMediaMaxBytes) {
+      setSendError('Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.');
+      return;
+    }
+
+    if (kind === 'AUDIO' && !allowedConversationAudioMimeTypes.has(file.type)) {
+      setSendError('Formato de áudio não suportado. Envie OGG, MP3 ou M4A.');
+      return;
+    }
+
+    setSelectedMedia((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+
+      return {
+        file,
+        kind,
+        previewUrl: kind === 'IMAGE' || kind === 'AUDIO' ? URL.createObjectURL(file) : null,
+      };
+    });
+    scheduleComposerFocus(() => {
+      composerRef.current?.focus();
+    });
+  }
+
+  function clearComposerMedia() {
+    setSelectedMedia((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return null;
+    });
+  }
+
+  async function selectConversation(conversation: WhatsAppConversation) {
+    activeConversationIdRef.current = conversation.id;
+    pendingInitialScrollConversationRef.current = conversation.id;
+    setSelectedConversation(conversation);
+    setMessages([]);
+    setClientDetail(null);
+    setClientError('');
+    setLinkClientError('');
+    setGuestClientCreateError('');
+    setGuestClientDuplicate(null);
+    setGuestClientCreatedUnlinked(null);
+    setGuestClientCreateConversation(null);
+    setMessagesError('');
+    setOlderMessagesError('');
+    setRetryErrors({});
+    setOlderMessagesCursor(null);
+    setHasOlderMessages(false);
+    olderMessagesLoadedRef.current = false;
+    olderMessagesLoadingRef.current = false;
+    messagesRef.current = [];
+    setSendError('');
+    clearComposerMedia();
+    setNewMessageNotice(false);
+    setMobileMode('chat');
+    setOpening(true);
+
+    try {
+      const [detail] = await Promise.all([
+        getWhatsAppConversation(conversation.id),
+        loadMessages(conversation.id, { replace: true }),
+      ]);
+      if (activeConversationIdRef.current !== conversation.id) return;
+      setSelectedConversation(detail);
+      setConversations((current) =>
+        current.map((item) => (item.id === detail.id ? { ...item, ...detail } : item)),
+      );
+
+      if (detail.unreadCount > 0 && lastReadConversationRef.current !== detail.id) {
+        const unreadBeforeRead = detail.unreadCount;
+        lastReadConversationRef.current = detail.id;
+        const readConversation = await markWhatsAppConversationRead(detail.id);
+        if (activeConversationIdRef.current !== detail.id) return;
+        setSelectedConversation(readConversation);
+        setConversations((current) =>
+          current.map((item) =>
+            item.id === readConversation.id ? { ...item, unreadCount: 0 } : item,
+          ),
+        );
+        setSummary((current) => {
+          if (!current) return current;
+          const next = {
+            totalUnreadConversations: Math.max(0, current.totalUnreadConversations - 1),
+            totalUnreadMessages: Math.max(0, current.totalUnreadMessages - unreadBeforeRead),
+          };
+          onSummaryChange(next);
+          return next;
+        });
+      }
+
+      if (detail.client?.id) {
+        try {
+          setClientDetail(await getClient(detail.client.id));
+        } catch (err) {
+          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+        }
+      }
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Falha ao abrir conversa.'));
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function sendCurrentMessage(
+    bodyOverride?: string,
+    { focusComposer = true }: { focusComposer?: boolean } = {},
+  ) {
+    if (!selectedConversation || sending || sendingRef.current) return;
+
+    const body = (bodyOverride ?? selectedDraft).trim();
+    const mediaToSend = bodyOverride ? null : selectedMedia;
+    if (!body && !mediaToSend) return;
+
+    sendingRef.current = true;
+    setSending(true);
+    setSendError('');
+    if (!bodyOverride && !mediaToSend) {
+      setDrafts((current) =>
+        (current[selectedConversation.id] ?? '').trim() === body
+          ? { ...current, [selectedConversation.id]: '' }
+          : current,
+      );
+    }
+    if (focusComposer) {
+      scheduleComposerFocus(() => {
+        composerRef.current?.focus();
+      });
+    }
+
+    try {
+      const requestId = createConversationRequestId();
+      const message = mediaToSend
+        ? await sendWhatsAppConversationMedia(selectedConversation.id, {
+            file: mediaToSend.file,
+            caption: body,
+            requestId,
+          })
+        : await sendWhatsAppConversationMessage(selectedConversation.id, {
+            body,
+            requestId,
+          });
+      pendingSendScrollConversationRef.current = selectedConversation.id;
+      setMessages((current) => mergeConversationMessages(current, [message]));
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? {
+                ...conversation,
+                lastMessageAt: message.sentAt ?? message.createdAt,
+                lastMessagePreview: conversationLastMessagePreview(message),
+              }
+            : conversation,
+        ),
+      );
+      if (mediaToSend) {
+        clearComposerMedia();
+      }
+      if (!bodyOverride) {
+        setDrafts((current) =>
+          (current[selectedConversation.id] ?? '').trim() === body
+            ? { ...current, [selectedConversation.id]: '' }
+            : current,
+        );
+      }
+      await loadConversations({ preserveLoaded: true, silent: true });
+    } catch (err) {
+      setSendError(conversationErrorMessage(err, 'Falha ao enviar mensagem.'));
+      const failedAt = new Date().toISOString();
+      const failedMessage: WhatsAppConversationMessage = {
+        id: `local-failed-${failedAt}`,
+        createdAt: failedAt,
+        direction: 'OUTBOUND',
+        failedAt,
+        isFromMe: true,
+        mediaDurationSeconds: null,
+        mediaAvailable: false,
+        mediaFileName: mediaToSend?.file.name ?? null,
+        mediaMimeType: mediaToSend?.file.type ?? null,
+        mediaSizeBytes: mediaToSend?.file.size ?? null,
+        retryAction: mediaToSend ? 'SELECT_FILE_AGAIN' : 'RETRY',
+        messageDispatchId: null,
+        providerMessageId: null,
+        sentAt: null,
+        status: 'FAILED',
+        text: body,
+        type: mediaToSend?.kind ?? 'TEXT',
+      };
+      setMessages((current) => mergeConversationMessages(current, [failedMessage]));
+    } finally {
+      pendingComposerFocusRef.current = focusComposer;
+      if (focusComposer) {
+        setComposerFocusRequest((current) => current + 1);
+      }
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
+  async function sendCurrentVoiceMessage(voice: ConversationVoiceDraft) {
+    if (!selectedConversation || sending || sendingRef.current) return;
+    if (voice.conversationId !== selectedConversation.id) {
+      setSendError('A gravação pertence a outra conversa. Grave novamente nesta conversa.');
+      throw new Error('Voice conversation changed.');
+    }
+
+    sendingRef.current = true;
+    setSending(true);
+    setSendError('');
+
+    try {
+      const message = await sendWhatsAppConversationVoice(selectedConversation.id, {
+        file: voice.file,
+        durationSeconds: voice.durationSeconds,
+        requestId: voice.requestId,
+      });
+      if (activeConversationIdRef.current !== selectedConversation.id) return;
+
+      pendingSendScrollConversationRef.current = selectedConversation.id;
+      setMessages((current) => mergeConversationMessages(current, [message]));
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? {
+                ...conversation,
+                lastMessageAt: message.sentAt ?? message.createdAt,
+                lastMessagePreview: conversationLastMessagePreview(message),
+              }
+            : conversation,
+        ),
+      );
+      await loadConversations({ preserveLoaded: true, silent: true });
+    } catch (err) {
+      setSendError(conversationErrorMessage(err, 'Falha ao enviar gravação.'));
+      throw err;
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
+  async function retryConversationMessage(message: WhatsAppConversationMessage) {
+    if (!selectedConversation || message.retryAction !== 'RETRY') return;
+
+    if (message.id.startsWith('local-failed-') && message.type === 'TEXT') {
+      await sendCurrentMessage(message.text ?? '', { focusComposer: false });
+      return;
+    }
+
+    if (retryingMessagesRef.current.has(message.id)) return;
+
+    retryingMessagesRef.current.add(message.id);
+    setRetryingMessageIds(new Set(retryingMessagesRef.current));
+    setRetryErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+
+    try {
+      const retried = await retryWhatsAppConversationMessage(message.id);
+      if (activeConversationIdRef.current !== selectedConversation.id) return;
+
+      setMessages((current) => {
+        const merged = mergeConversationMessages(current, [retried]);
+        messagesRef.current = merged;
+        return merged;
+      });
+      await loadConversations({ preserveLoaded: true, silent: true });
+    } catch (err) {
+      setRetryErrors((current) => ({
+        ...current,
+        [message.id]: conversationRetryErrorMessage(err),
+      }));
+    } finally {
+      retryingMessagesRef.current.delete(message.id);
+      setRetryingMessageIds(new Set(retryingMessagesRef.current));
+    }
+  }
+
+  async function resolveSelectedConversation() {
+    if (!selectedConversation || resolving || selectedConversation.status === 'RESOLVED') return;
+
+    setResolving(true);
+    setMessagesError('');
+
+    try {
+      const resolved = await resolveWhatsAppConversation(selectedConversation.id);
+      setSelectedConversation(resolved);
+      setConversations((current) =>
+        current.map((item) => (item.id === resolved.id ? { ...item, ...resolved } : item)),
+      );
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Falha ao resolver conversa.'));
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  async function linkSelectedConversationToClient(clientOption: ClientOption) {
+    if (!selectedConversation || linkingClient) return;
+
+    setLinkingClient(true);
+    setLinkClientError('');
+    setClientError('');
+
+    try {
+      const linked = await linkWhatsAppConversationClient(selectedConversation.id, {
+        clientId: clientOption.id,
+      });
+      if (activeConversationIdRef.current !== linked.id) return;
+
+      setSelectedConversation(linked);
+      setConversations((current) =>
+        current.map((item) => (item.id === linked.id ? { ...item, ...linked } : item)),
+      );
+
+      if (linked.client?.id) {
+        try {
+          setClientDetail(await getClient(linked.client.id));
+        } catch (err) {
+          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+        }
+      }
+    } catch (err) {
+      setLinkClientError(linkClientErrorMessage(err));
+    } finally {
+      setLinkingClient(false);
+    }
+  }
+
+  async function linkConversationToClient(conversationId: string, clientOption: ClientOption) {
+    const linked = await linkWhatsAppConversationClient(conversationId, {
+      clientId: clientOption.id,
+    });
+    if (activeConversationIdRef.current !== linked.id) return linked;
+
+    setSelectedConversation(linked);
+    setConversations((current) =>
+      current.map((item) => (item.id === linked.id ? { ...item, ...linked } : item)),
+    );
+
+    if (linked.client?.id) {
+      try {
+        setClientDetail(await getClient(linked.client.id));
+      } catch (err) {
+        setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+      }
+    }
+
+    return linked;
+  }
+
+  async function openGuestClientCreate(conversation: WhatsAppConversation) {
+    setGuestClientCreateConversation(conversation);
+    setGuestClientCreateError('');
+    setGuestClientDuplicate(null);
+    setGuestClientCreatedUnlinked(null);
+
+    if (!guestClientCreatePlans.length) {
+      await loadGuestClientCreatePlans();
+    }
+  }
+
+  async function findDuplicateClientByPhone(phone: string, fallbackPhoneNormalized: string) {
+    const expectedDigits = phoneDigits(phone) || phoneDigits(fallbackPhoneNormalized);
+    if (!expectedDigits) return null;
+
+    const options = await listClientOptions(phone, { limit: 10 });
+    return (
+      options.find((option) => phoneDigitsCompatible(option.phoneNormalized, expectedDigits)) ??
+      null
+    );
+  }
+
+  async function createClientFromGuestConversation(payload: ClientPayload) {
+    if (!guestClientCreateConversation || creatingGuestClient) return;
+
+    setCreatingGuestClient(true);
+    setGuestClientCreateError('');
+    setGuestClientDuplicate(null);
+    setGuestClientCreatedUnlinked(null);
+
+    try {
+      const duplicate = await findDuplicateClientByPhone(
+        payload.phone,
+        guestClientCreateConversation.phoneNormalized,
+      );
+
+      if (duplicate) {
+        setGuestClientDuplicate(duplicate);
+        throw new Error('Já existe um cliente com este telefone.');
+      }
+
+      const created = await createClient(payload);
+      const createdOption = clientOptionFromClient(created);
+      setGuestClientCreatedUnlinked(createdOption);
+
+      try {
+        const linked = await linkConversationToClient(
+          guestClientCreateConversation.id,
+          createdOption,
+        );
+        if (activeConversationIdRef.current === linked.id) {
+          setGuestClientCreateConversation(null);
+          setGuestClientCreatedUnlinked(null);
+          setMobileClientOpen(false);
+          await loadConversations({ silent: true });
+        }
+      } catch (err) {
+        setGuestClientCreateError(
+          conversationErrorMessage(
+            err,
+            'Cliente criado, mas não foi possível vincular a conversa.',
+          ),
+        );
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const conflictMessage = /telefone/i.test(err.message)
+          ? 'Já existe um cliente com este telefone.'
+          : err.message;
+        setGuestClientCreateError(conflictMessage);
+        throw new Error(conflictMessage);
+      }
+
+      if (!(err instanceof Error && err.message === 'Já existe um cliente com este telefone.')) {
+        setGuestClientCreateError(
+          err instanceof Error ? err.message : 'Não foi possível cadastrar o cliente.',
+        );
+      }
+      throw err;
+    } finally {
+      setCreatingGuestClient(false);
+    }
+  }
+
+  async function retryGuestClientLink(clientOption: ClientOption) {
+    if (!guestClientCreateConversation || creatingGuestClient) return;
+
+    setCreatingGuestClient(true);
+    setGuestClientCreateError('');
+
+    try {
+      const linked = await linkConversationToClient(guestClientCreateConversation.id, clientOption);
+      if (activeConversationIdRef.current === linked.id) {
+        setGuestClientCreateConversation(null);
+        setGuestClientCreatedUnlinked(null);
+        setGuestClientDuplicate(null);
+        setMobileClientOpen(false);
+        await loadConversations({ silent: true });
+      }
+    } catch (err) {
+      setGuestClientCreateError(
+        conversationErrorMessage(err, 'Não foi possível vincular a conversa.'),
+      );
+    } finally {
+      setCreatingGuestClient(false);
+    }
+  }
+
+  async function startNewConversation(input: {
+    body: string;
+    client: ClientOption | null;
+    phone: string;
+    recipientType: StartConversationRecipientType;
+    whatsAppConnectionId: string;
+  }) {
+    if (startingConversation || startingConversationRef.current) return;
+
+    startingConversationRef.current = true;
+    setStartingConversation(true);
+    setStartConversationError('');
+
+    try {
+      const payload =
+        input.recipientType === 'client'
+          ? {
+              whatsAppConnectionId: input.whatsAppConnectionId,
+              clientId: input.client!.id,
+              body: input.body.trim(),
+              requestId: createConversationRequestId(),
+            }
+          : {
+              whatsAppConnectionId: input.whatsAppConnectionId,
+              phone: input.phone.trim(),
+              body: input.body.trim(),
+              requestId: createConversationRequestId(),
+            };
+      const result = await startWhatsAppConversation(payload);
+
+      setStartConversationOpen(false);
+      setDrafts((current) => ({ ...current, [result.conversation.id]: '' }));
+      setConversations((current) => upsertConversationList(current, result.conversation));
+      setMessages([result.message]);
+      activeConversationIdRef.current = result.conversation.id;
+      pendingInitialScrollConversationRef.current = result.conversation.id;
+      pendingSendScrollConversationRef.current = result.conversation.id;
+      setSelectedConversation(result.conversation);
+      setClientDetail(null);
+      setClientError('');
+      setMessagesError('');
+      setSendError('');
+      setLinkClientError('');
+      setNewMessageNotice(false);
+      setMobileMode('chat');
+
+      if (result.conversation.client?.id) {
+        try {
+          setClientDetail(await getClient(result.conversation.client.id));
+        } catch (err) {
+          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+        }
+      }
+
+      await loadConversations({ silent: true });
+      await loadMessages(result.conversation.id, { replace: true, silent: true });
+    } catch (err) {
+      setStartConversationError(startConversationErrorMessage(err));
+    } finally {
+      startingConversationRef.current = false;
+      setStartingConversation(false);
+    }
+  }
+
+  return (
+    <section className={`conversations-view mobile-mode-${mobileMode}`}>
+      <PageHeader
+        eyebrow="WhatsApp Inbox"
+        icon={MessagesSquare}
+        title="Conversas"
+        subtitle="Atendimento e histórico conversacional do WhatsApp"
+        actions={
+          <div className="conversation-page-actions">
+            {summary && hasUnreadConversationSummary(summary) ? (
+              <span className="conversation-summary-pill">
+                {formatConversationSummary(summary)}
+              </span>
+            ) : null}
+            <Button
+              icon={Plus}
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                setStartConversationError('');
+                void loadStartConversationConnections();
+                setStartConversationOpen(true);
+              }}
+            >
+              Iniciar conversa
+            </Button>
+          </div>
+        }
+      />
+
+      {startConversationOpen ? (
+        <StartConversationModal
+          connections={whatsAppConnections}
+          error={startConversationError}
+          loading={startingConversation}
+          onClose={() => {
+            if (!startingConversation) setStartConversationOpen(false);
+          }}
+          onSubmit={(input) => void startNewConversation(input)}
+        />
+      ) : null}
+
+      {guestClientCreateConversation ? (
+        <GuestConversationClientModal
+          conversation={guestClientCreateConversation}
+          duplicateClient={guestClientDuplicate}
+          error={guestClientCreateError}
+          loading={creatingGuestClient || guestClientCreatePlansLoading}
+          plans={guestClientCreatePlans}
+          unlinkedClient={guestClientCreatedUnlinked}
+          onClose={() => {
+            if (creatingGuestClient) return;
+            setGuestClientCreateConversation(null);
+            setGuestClientCreateError('');
+            setGuestClientDuplicate(null);
+            setGuestClientCreatedUnlinked(null);
+          }}
+          onLinkExisting={(client) => void retryGuestClientLink(client)}
+          onOpenClient={(clientId) => void onOpenClient(clientId)}
+          onRetryLink={(client) => void retryGuestClientLink(client)}
+          onSubmit={(payload) => createClientFromGuestConversation(payload)}
+        />
+      ) : null}
+
+      <div className="conversations-shell">
+        <ConversationList
+          conversations={conversations}
+          hasMore={hasMoreConversations}
+          filter={filter}
+          listError={listError}
+          loadMoreError={listLoadMoreError}
+          loading={listLoading}
+          loadingMore={listLoadingMore}
+          searchInput={searchInput}
+          selectedId={selectedConversation?.id ?? null}
+          statusFilter={statusFilter}
+          onFilterChange={setFilter}
+          onLoadMore={() => void loadMoreConversations()}
+          onSearchChange={setSearchInput}
+          onSelect={(conversation) => void selectConversation(conversation)}
+          onStatusFilterChange={setStatusFilter}
+        />
+
+        <section className="conversation-chat-panel" aria-label="Chat da conversa">
+          {selectedConversation ? (
+            <>
+              <ConversationHeader
+                conversation={selectedConversation}
+                opening={opening}
+                resolving={resolving}
+                onBack={() => setMobileMode('list')}
+                onOpenClientPanel={() => setMobileClientOpen(true)}
+                onResolve={() => void resolveSelectedConversation()}
+              />
+
+              <div className="conversation-error-slot">
+                {messagesError ? (
+                  <div className="notice danger conversation-notice" role="alert">
+                    {messagesError}
+                  </div>
+                ) : null}
+              </div>
+
+              <ConversationMessages
+                conversationId={selectedConversation.id}
+                messages={messages}
+                hasOlder={hasOlderMessages}
+                loading={messagesLoading}
+                loadingOlder={olderMessagesLoading}
+                messagesEndRef={messagesEndRef}
+                olderError={olderMessagesError}
+                retryErrors={retryErrors}
+                retryingMessageIds={retryingMessageIds}
+                scrollRef={messagesScrollRef}
+                showNewMessageNotice={newMessageNotice}
+                onJumpToBottom={() => {
+                  setNewMessageNotice(false);
+                  scrollConversationContainerToBottom(messagesScrollRef.current);
+                }}
+                onLoadOlder={() => void loadOlderMessages()}
+                onRetry={(message) => void retryConversationMessage(message)}
+              />
+
+              <ConversationComposer
+                composerRef={composerRef}
+                conversationId={selectedConversation.id}
+                draft={selectedDraft}
+                error={sendError}
+                selectedMedia={selectedMedia}
+                sending={sending}
+                onChange={(value) => {
+                  setDrafts((current) => ({
+                    ...current,
+                    [selectedConversation.id]: value,
+                  }));
+                }}
+                onRemoveMedia={clearComposerMedia}
+                onSelectMedia={selectComposerMedia}
+                onSend={() => void sendCurrentMessage()}
+                onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
+              />
+            </>
+          ) : (
+            <div className="conversation-empty-chat">
+              <MessagesSquare aria-hidden="true" size={34} />
+              <strong>Selecione uma conversa</strong>
+              <span>O histórico e o contexto do cliente aparecem aqui.</span>
+            </div>
+          )}
+        </section>
+
+        <ConversationClientPanel
+          client={clientDetail}
+          clientError={clientError}
+          conversation={selectedConversation}
+          linkClientError={linkClientError}
+          linkingClient={linkingClient}
+          mobileOpen={mobileClientOpen}
+          onCloseMobile={() => setMobileClientOpen(false)}
+          onCreateClient={(conversation) => void openGuestClientCreate(conversation)}
+          onLinkClient={(client) => void linkSelectedConversationToClient(client)}
+          onOpenClient={(clientId) => void onOpenClient(clientId)}
+        />
+      </div>
+    </section>
+  );
+}
+
+function StartConversationModal({
+  connections,
+  error,
+  loading,
+  onClose,
+  onSubmit,
+}: {
+  connections: WhatsAppConnection[];
+  error: string;
+  loading: boolean;
+  onClose: () => void;
+  onSubmit: (input: {
+    body: string;
+    client: ClientOption | null;
+    phone: string;
+    recipientType: StartConversationRecipientType;
+    whatsAppConnectionId: string;
+  }) => void;
+}) {
+  const [recipientType, setRecipientType] = useState<StartConversationRecipientType>('client');
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
+  const [phone, setPhone] = useState('');
+  const [connectionId, setConnectionId] = useState(connections[0]?.id ?? '');
+  const [body, setBody] = useState('');
+  const [localError, setLocalError] = useState('');
+
+  useEffect(() => {
+    if (!connectionId && connections[0]?.id) {
+      setConnectionId(connections[0].id);
+    }
+  }, [connectionId, connections]);
+
+  useEffect(() => {
+    setLocalError('');
+  }, [recipientType, selectedClientId, phone, connectionId, body]);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+
+    const trimmedBody = body.trim();
+    if (!connectionId) {
+      setLocalError('Selecione uma instância WhatsApp conectada.');
+      return;
+    }
+    if (recipientType === 'client' && !selectedClient) {
+      setLocalError('Selecione um cliente cadastrado.');
+      return;
+    }
+    if (recipientType === 'client' && !selectedClient?.phoneNormalized) {
+      setLocalError('Cliente sem telefone válido para WhatsApp.');
+      return;
+    }
+    if (recipientType === 'guest' && !phone.trim()) {
+      setLocalError('Informe o telefone/WhatsApp do contato avulso.');
+      return;
+    }
+    if (!trimmedBody) {
+      setLocalError('Escreva a primeira mensagem.');
+      return;
+    }
+
+    onSubmit({
+      body: trimmedBody,
+      client: selectedClient,
+      phone,
+      recipientType,
+      whatsAppConnectionId: connectionId,
+    });
+  }
+
+  const selectedClientPhone = selectedClient?.phoneNormalized
+    ? formatNormalizedBrazilPhone(selectedClient.phoneNormalized)
+    : '-';
+  const friendlyConnectionLabel = (connection: WhatsAppConnection) =>
+    connection.name || normalizeWhatsAppDisplayPhone(connection.phone) || 'WhatsApp conectado';
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal start-conversation-modal"
+        aria-labelledby="start-conversation-title"
+      >
+        <header className="modal-header">
+          <div>
+            <h2 id="start-conversation-title">Iniciar conversa</h2>
+            <p>Inicie atendimento por cliente cadastrado ou contato avulso.</p>
+          </div>
+          <IconButton icon={X} label="Fechar iniciar conversa" onClick={onClose} />
+        </header>
+
+        <form className="start-conversation-form" onSubmit={submit}>
+          <div className="form-tabs" role="tablist" aria-label="Tipo de destinatário">
+            <button
+              aria-selected={recipientType === 'client'}
+              className={recipientType === 'client' ? 'active' : ''}
+              role="tab"
+              type="button"
+              onClick={() => setRecipientType('client')}
+            >
+              Cliente
+            </button>
+            <button
+              aria-selected={recipientType === 'guest'}
+              className={recipientType === 'guest' ? 'active' : ''}
+              role="tab"
+              type="button"
+              onClick={() => setRecipientType('guest')}
+            >
+              Avulso
+            </button>
+          </div>
+
+          {recipientType === 'client' ? (
+            <>
+              <FinanceClientAutocomplete
+                label="Cliente"
+                placeholder="Buscar por nome, telefone ou e-mail..."
+                required
+                selectedClient={selectedClient}
+                value={selectedClientId}
+                onChange={(clientId, option) => {
+                  setSelectedClientId(clientId);
+                  setSelectedClient(option);
+                }}
+              />
+              {selectedClient ? (
+                <div className="start-conversation-client-preview">
+                  <strong>{selectedClient.name}</strong>
+                  <span>{selectedClientPhone}</span>
+                  {!selectedClient.phoneNormalized ? (
+                    <small>Cliente sem telefone válido para WhatsApp.</small>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <label className="field">
+              <span>Telefone/WhatsApp *</span>
+              <input
+                inputMode="tel"
+                placeholder="Ex.: (44) 99999-9999"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+              />
+            </label>
+          )}
+
+          <label className="field">
+            <span>Instância WhatsApp *</span>
+            <select value={connectionId} onChange={(event) => setConnectionId(event.target.value)}>
+              {connections.length ? (
+                connections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {friendlyConnectionLabel(connection)}
+                  </option>
+                ))
+              ) : (
+                <option value="">Nenhuma instância conectada</option>
+              )}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Primeira mensagem *</span>
+            <textarea
+              placeholder="Digite a mensagem inicial..."
+              rows={4}
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+            />
+          </label>
+
+          {localError || error ? (
+            <div className="notice danger conversation-notice" role="alert">
+              {localError || error}
+            </div>
+          ) : null}
+
+          <div className="form-actions">
+            <Button disabled={loading} variant="ghost" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button
+              icon={Send}
+              loading={loading}
+              variant="primary"
+              type="submit"
+              disabled={!connections.length || loading}
+            >
+              Iniciar conversa
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function ConversationList({
+  conversations,
+  filter,
+  hasMore,
+  listError,
+  loadMoreError,
+  loading,
+  loadingMore,
+  searchInput,
+  selectedId,
+  statusFilter,
+  onFilterChange,
+  onLoadMore,
+  onSearchChange,
+  onSelect,
+  onStatusFilterChange,
+}: {
+  conversations: WhatsAppConversation[];
+  filter: ConversationFilter;
+  hasMore: boolean;
+  listError: string;
+  loadMoreError: string;
+  loading: boolean;
+  loadingMore: boolean;
+  searchInput: string;
+  selectedId: string | null;
+  statusFilter: WhatsAppConversationStatus | '';
+  onFilterChange: (filter: ConversationFilter) => void;
+  onLoadMore: () => void;
+  onSearchChange: (search: string) => void;
+  onSelect: (conversation: WhatsAppConversation) => void;
+  onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
+}) {
+  const emptyCopy = searchInput.trim()
+    ? 'Nenhuma conversa corresponde à busca.'
+    : 'Nenhuma conversa encontrada.';
+
+  return (
+    <aside className="conversation-list-panel" aria-label="Lista de conversas">
+      <div className="conversation-panel-header">
+        <div>
+          <h3>Conversas</h3>
+          <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
+        </div>
+      </div>
+
+      <label className="conversation-search" aria-label="Buscar conversas">
+        <Search aria-hidden="true" size={16} />
+        <input
+          aria-label="Buscar por nome ou telefone"
+          placeholder="Buscar por nome ou telefone..."
+          value={searchInput}
+          onChange={(event) => onSearchChange(event.target.value)}
+        />
+      </label>
+
+      <div className="conversation-filter-row" role="tablist" aria-label="Filtros de conversas">
+        {conversationFilters.map((item) => (
+          <button
+            aria-selected={filter === item.id}
+            className={filter === item.id ? 'active' : ''}
+            key={item.id}
+            role="tab"
+            type="button"
+            onClick={() => onFilterChange(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <label className="conversation-status-filter">
+        <span>Status</span>
+        <select
+          value={statusFilter}
+          onChange={(event) =>
+            onStatusFilterChange(event.target.value as WhatsAppConversationStatus | '')
+          }
+        >
+          <option value="">Todos</option>
+          <option value="OPEN">Abertas</option>
+          <option value="RESOLVED">Resolvidas</option>
+        </select>
+      </label>
+
+      {listError ? (
+        <div className="notice danger conversation-notice" role="alert">
+          {listError}
+        </div>
+      ) : null}
+
+      <div className="conversation-list-items">
+        {conversations.map((conversation) => (
+          <ConversationListItem
+            conversation={conversation}
+            key={conversation.id}
+            selected={selectedId === conversation.id}
+            onSelect={onSelect}
+          />
+        ))}
+        {!conversations.length && !loading ? (
+          <div className="conversation-empty-list">{emptyCopy}</div>
+        ) : null}
+        {conversations.length ? (
+          <div className="conversation-list-more">
+            {loadMoreError ? (
+              <div className="notice danger conversation-notice" role="alert">
+                {loadMoreError}
+              </div>
+            ) : null}
+            {hasMore ? (
+              <Button loading={loadingMore} size="sm" variant="ghost" onClick={onLoadMore}>
+                Carregar mais conversas
+              </Button>
+            ) : (
+              <span>Fim da lista</span>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
+function ConversationListItem({
+  conversation,
+  selected,
+  onSelect,
+}: {
+  conversation: WhatsAppConversation;
+  selected: boolean;
+  onSelect: (conversation: WhatsAppConversation) => void;
+}) {
+  return (
+    <button
+      aria-current={selected ? 'true' : undefined}
+      className={`conversation-list-item ${selected ? 'active' : ''}`}
+      type="button"
+      onClick={() => onSelect(conversation)}
+    >
+      <span className="conversation-avatar">{conversationInitial(conversation)}</span>
+      <span className="conversation-list-copy">
+        <span className="conversation-list-title-row">
+          <strong>{conversation.displayName}</strong>
+          <small>
+            {conversationDateLabel(conversation.lastMessageAt ?? conversation.updatedAt)}
+          </small>
+        </span>
+        <span className="conversation-preview-row">
+          <span>{conversation.lastMessagePreview ?? '[Mensagem]'}</span>
+          {conversation.unreadCount > 0 ? (
+            <span className="conversation-unread-badge">{conversation.unreadCount}</span>
+          ) : null}
+        </span>
+        <span className="conversation-list-meta-row">
+          <span>
+            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
+          </span>
+          <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
+            {conversation.client ? 'Cliente' : 'Avulso'}
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function ConversationHeader({
+  conversation,
+  opening,
+  resolving,
+  onBack,
+  onOpenClientPanel,
+  onResolve,
+}: {
+  conversation: WhatsAppConversation;
+  opening: boolean;
+  resolving: boolean;
+  onBack: () => void;
+  onOpenClientPanel: () => void;
+  onResolve: () => void;
+}) {
+  const instanceLabel = conversationInstanceLabel(conversation.instanceName);
+  const phoneLabel =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+
+  return (
+    <header className="conversation-header">
+      <button className="conversation-mobile-back" type="button" onClick={onBack}>
+        <ArrowLeft aria-hidden="true" size={16} />
+        <span>Voltar</span>
+      </button>
+      <div className="conversation-header-main">
+        <span className="conversation-avatar large">{conversationInitial(conversation)}</span>
+        <div>
+          <h3>{conversation.displayName}</h3>
+          <p>{instanceLabel ? `${phoneLabel} · ${instanceLabel}` : phoneLabel}</p>
+          <div className="conversation-header-badges">
+            <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
+              {conversation.client ? 'Cliente' : 'Avulso'}
+            </span>
+            <span
+              className={`conversation-status-badge status-${conversation.status.toLowerCase()}`}
+            >
+              {conversation.status}
+            </span>
+            {opening ? <span className="conversation-sync-badge">Carregando</span> : null}
+          </div>
+        </div>
+      </div>
+      <div className="conversation-header-actions">
+        <IconButton
+          icon={Info}
+          label="Abrir contexto do cliente"
+          className="conversation-mobile-context"
+          onClick={onOpenClientPanel}
+        />
+        {conversation.status === 'RESOLVED' ? (
+          <span className="conversation-resolved-label">Resolvida</span>
+        ) : (
+          <Button icon={CircleCheck} loading={resolving} size="sm" onClick={onResolve}>
+            Resolver
+          </Button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function ConversationMessages({
+  conversationId,
+  hasOlder,
+  loading,
+  loadingOlder,
+  messages,
+  messagesEndRef,
+  olderError,
+  retryErrors,
+  retryingMessageIds,
+  onJumpToBottom,
+  onLoadOlder,
+  onRetry,
+  scrollRef,
+  showNewMessageNotice,
+}: {
+  conversationId: string;
+  hasOlder: boolean;
+  loading: boolean;
+  loadingOlder: boolean;
+  messages: WhatsAppConversationMessage[];
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  olderError: string;
+  retryErrors: Record<string, string>;
+  retryingMessageIds: Set<string>;
+  onJumpToBottom: () => void;
+  onLoadOlder: () => void;
+  onRetry: (message: WhatsAppConversationMessage) => void;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  showNewMessageNotice: boolean;
+}) {
+  return (
+    <div className="conversation-messages-wrap">
+      <div className="conversation-messages" ref={scrollRef}>
+        {loading ? <div className="conversation-loading">Carregando mensagens...</div> : null}
+        {messages.length ? (
+          <div className="conversation-history-controls">
+            {olderError ? (
+              <div className="notice danger conversation-notice" role="alert">
+                {olderError}
+              </div>
+            ) : null}
+            {hasOlder ? (
+              <Button loading={loadingOlder} size="sm" variant="ghost" onClick={onLoadOlder}>
+                Carregar mensagens anteriores
+              </Button>
+            ) : (
+              <span>Sem mensagens antigas</span>
+            )}
+          </div>
+        ) : null}
+        {messages.length ? (
+          <div className="conversation-message-stack">
+            {messages.map((message, index) => {
+              const previousMessage = index > 0 ? messages[index - 1] : null;
+              const currentDateKey = conversationMessageDateKey(message);
+              const previousDateKey = previousMessage
+                ? conversationMessageDateKey(previousMessage)
+                : null;
+              const showDateSeparator = currentDateKey !== previousDateKey;
+
+              return (
+                <Fragment key={message.id}>
+                  {showDateSeparator ? (
+                    <ConversationDateSeparator label={conversationMessageDateLabel(message)} />
+                  ) : null}
+                  <ConversationBubble
+                    conversationId={conversationId}
+                    message={message}
+                    retryError={retryErrors[message.id] ?? ''}
+                    retrying={retryingMessageIds.has(message.id)}
+                    onRetry={onRetry}
+                  />
+                </Fragment>
+              );
+            })}
+          </div>
+        ) : null}
+        {!messages.length && !loading ? (
+          <div className="conversation-empty-chat compact">Nenhuma mensagem nesta conversa.</div>
+        ) : null}
+        <div className="conversation-message-end" ref={messagesEndRef} />
+      </div>
+      {showNewMessageNotice ? (
+        <button className="new-message-indicator" type="button" onClick={onJumpToBottom}>
+          Nova mensagem
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ConversationDateSeparator({ label }: { label: string }) {
+  return (
+    <div
+      aria-label={`Mensagens de ${label.toLowerCase()}`}
+      className="conversation-date-separator"
+      role="separator"
+    >
+      {label}
+    </div>
+  );
+}
+
+function ConversationBubble({
+  conversationId,
+  message,
+  retryError,
+  retrying,
+  onRetry,
+}: {
+  conversationId: string;
+  message: WhatsAppConversationMessage;
+  retryError: string;
+  retrying: boolean;
+  onRetry: (message: WhatsAppConversationMessage) => void;
+}) {
+  const outbound = message.direction === 'OUTBOUND';
+  const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;
+  const hasAvailableInlineMedia =
+    (message.type === 'IMAGE' || message.type === 'AUDIO') && message.mediaAvailable;
+  const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
+  const caption = conversationMessageCaption(message);
+
+  return (
+    <article className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'}`}>
+      <div
+        className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'} ${
+          hasAvailableImage ? 'has-image-media' : ''
+        }`}
+      >
+        {text ? <p>{text}</p> : null}
+        <ConversationMediaContent conversationId={conversationId} message={message} />
+        {caption ? <span className="conversation-caption">{caption}</span> : null}
+        <footer>
+          <span>{conversationMessageTime(message)}</span>
+          {outbound ? (
+            <span className={`conversation-message-status status-${message.status.toLowerCase()}`}>
+              {conversationMessageStatusLabel(message.status)}
+            </span>
+          ) : null}
+        </footer>
+        {message.status === 'FAILED' && outbound ? (
+          <div className="conversation-message-failure">
+            <strong>Falhou ao enviar</strong>
+            {retryError ? <span>{retryError}</span> : null}
+            {message.retryAction === 'RETRY' ? (
+              <button
+                className="conversation-message-retry"
+                disabled={retrying}
+                type="button"
+                onClick={() => onRetry(message)}
+              >
+                {retrying ? 'Tentando...' : 'Tentar novamente'}
+              </button>
+            ) : null}
+            {message.retryAction === 'SELECT_FILE_AGAIN' ? (
+              <span>Selecionar arquivo novamente</span>
+            ) : null}
+            {message.retryAction === 'RECORD_AGAIN' ? <span>Gravar novamente</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function useMediaVisibility(enabled: boolean) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || visible) return undefined;
+
+    const element = elementRef.current;
+    if (!element) return undefined;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '240px 0px', threshold: 0.01 },
+    );
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [enabled, visible]);
+
+  return { elementRef, visible };
+}
+
+function ConversationMediaContent({
+  conversationId,
+  message,
+}: {
+  conversationId: string;
+  message: WhatsAppConversationMessage;
+}) {
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
+  const [pdfPreviewRequested, setPdfPreviewRequested] = useState(false);
+  const mountedRef = useRef(false);
+  const mediaUrlRef = useRef<string | null>(null);
+  const loadingPromiseRef = useRef<Promise<string | null> | null>(null);
+  const requestGenerationRef = useRef(0);
+  const imageButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
+  const isPdfDocument =
+    message.type === 'DOCUMENT' && message.mediaMimeType?.toLowerCase() === 'application/pdf';
+  const imageAutoVisible = message.type === 'IMAGE' && message.mediaAvailable && !mediaUrl;
+  const { elementRef: visibilityRef, visible: mediaVisible } = useMediaVisibility(imageAutoVisible);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      if (mediaUrlRef.current) {
+        URL.revokeObjectURL(mediaUrlRef.current);
+        mediaUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setImageLightboxOpen(false);
+    setPdfPreviewRequested(false);
+    setError(false);
+    requestGenerationRef.current += 1;
+    loadingPromiseRef.current = null;
+    if (mediaUrlRef.current) {
+      URL.revokeObjectURL(mediaUrlRef.current);
+      mediaUrlRef.current = null;
+    }
+    setMediaUrl(null);
+  }, [conversationId, message.id, message.mediaAvailable]);
+
+  const loadMedia = useCallback(async () => {
+    if (!message.mediaAvailable) return null;
+    if (mediaUrlRef.current) return mediaUrlRef.current;
+    if (loadingPromiseRef.current) return loadingPromiseRef.current;
+
+    setLoading(true);
+    setError(false);
+    const requestGeneration = requestGenerationRef.current;
+
+    const request = downloadWhatsAppConversationMedia(conversationId, message.id)
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+
+        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) {
+          URL.revokeObjectURL(objectUrl);
+          return null;
+        }
+
+        if (mediaUrlRef.current && mediaUrlRef.current !== objectUrl) {
+          URL.revokeObjectURL(mediaUrlRef.current);
+        }
+
+        mediaUrlRef.current = objectUrl;
+        setMediaUrl(objectUrl);
+        return objectUrl;
+      })
+      .catch(() => {
+        if (mountedRef.current && requestGeneration === requestGenerationRef.current) {
+          setError(true);
+        }
+        return null;
+      })
+      .finally(() => {
+        if (requestGeneration === requestGenerationRef.current) {
+          loadingPromiseRef.current = null;
+          if (mountedRef.current) setLoading(false);
+        }
+      });
+
+    loadingPromiseRef.current = request;
+    return request;
+  }, [conversationId, message.id, message.mediaAvailable]);
+
+  const closeImageLightbox = useCallback(() => {
+    setImageLightboxOpen(false);
+    window.setTimeout(() => {
+      if (mountedRef.current) imageButtonRef.current?.focus();
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (message.type !== 'IMAGE' || !mediaVisible || mediaUrl) return;
+
+    void loadMedia();
+  }, [loadMedia, mediaUrl, mediaVisible, message.type]);
+
+  useEffect(() => {
+    if (!imageLightboxOpen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.setTimeout(() => lightboxCloseRef.current?.focus(), 0);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        closeImageLightbox();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [closeImageLightbox, imageLightboxOpen]);
+
+  async function openDocument() {
+    const objectUrl = mediaUrl ?? (await loadMedia());
+    if (!objectUrl) return;
+
+    window.open(objectUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  async function openImageLightbox() {
+    const objectUrl = mediaUrl ?? (await loadMedia());
+    if (!objectUrl) return;
+
+    setImageLightboxOpen(true);
+  }
+
+  async function requestPdfPreview() {
+    setPdfPreviewRequested(true);
+    await loadMedia();
+  }
+
+  if (!isRenderableConversationMedia(message.type)) {
+    return null;
+  }
+
+  if (!message.mediaAvailable) {
+    return message.type === 'DOCUMENT' && message.mediaFileName ? (
+      <span className="conversation-media-meta">
+        {message.mediaFileName}
+        {message.mediaSizeBytes ? ` | ${formatFileSize(message.mediaSizeBytes)}` : ''}
+      </span>
+    ) : message.type === 'DOCUMENT' ? (
+      <span className="conversation-media-meta">Mídia indisponível</span>
+    ) : null;
+  }
+
+  if (message.type === 'DOCUMENT') {
+    const fileName = message.mediaFileName || 'Documento';
+    const documentType = conversationDocumentTypeLabel(fileName, message.mediaMimeType);
+    const fileSize = message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : null;
+    const documentMeta = [documentType, fileSize].filter(Boolean).join(' | ');
+    const showPdfPreview = isPdfDocument && pdfPreviewRequested && !error;
+    const previewUrl =
+      showPdfPreview && mediaUrl
+        ? `${mediaUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
+        : null;
+
+    return (
+      <div className={`conversation-document-media ${showPdfPreview ? 'has-pdf-preview' : ''}`}>
+        {showPdfPreview ? (
+          <button
+            aria-label={`Abrir ou baixar prévia de ${fileName}`}
+            className="conversation-document-preview"
+            disabled={loading && !mediaUrl}
+            type="button"
+            onClick={() => void openDocument()}
+          >
+            {previewUrl ? (
+              <object
+                aria-hidden="true"
+                className="conversation-document-preview-frame"
+                data={previewUrl}
+                tabIndex={-1}
+                type="application/pdf"
+              >
+                <span>{fileName}</span>
+              </object>
+            ) : (
+              <span className="conversation-document-preview-skeleton" aria-hidden="true" />
+            )}
+          </button>
+        ) : null}
+        <div className="conversation-document-details">
+          <span className="conversation-document-icon" aria-hidden="true">
+            <FileText size={18} />
+            {isPdfDocument ? <span>PDF</span> : null}
+          </span>
+          <span className="conversation-document-copy">
+            <strong>{fileName}</strong>
+            <small>{documentMeta}</small>
+            {error ? (
+              <small className="conversation-document-error">Falha ao carregar</small>
+            ) : null}
+          </span>
+          {isPdfDocument ? (
+            <button
+              aria-label={`Visualizar PDF ${fileName}`}
+              className="conversation-document-action"
+              disabled={loading && !mediaUrl}
+              type="button"
+              onClick={() => void requestPdfPreview()}
+            >
+              <Eye size={15} aria-hidden="true" />
+              <span>
+                {loading && pdfPreviewRequested && !mediaUrl ? 'Carregando...' : 'Visualizar'}
+              </span>
+            </button>
+          ) : null}
+          <button
+            aria-label={`Abrir ou baixar ${fileName}`}
+            className="conversation-document-action"
+            disabled={loading && !mediaUrl}
+            type="button"
+            onClick={() => void openDocument()}
+          >
+            <Download size={15} aria-hidden="true" />
+            <span>{loading && !mediaUrl ? 'Abrindo...' : 'Abrir / Baixar'}</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (message.type === 'IMAGE' && !mediaUrl) {
+    return (
+      <div ref={visibilityRef} className="conversation-media-unavailable image-placeholder">
+        <span>{loading ? 'Carregando imagem...' : 'Imagem disponível'}</span>
+        {error ? <span>Falha ao carregar</span> : null}
+        <button type="button" onClick={() => void openImageLightbox()}>
+          {loading ? 'Carregando...' : error ? 'Tentar novamente' : 'Carregar imagem'}
+        </button>
+      </div>
+    );
+  }
+
+  if (message.type === 'AUDIO') {
+    return (
+      <ConversationAudioPlayer
+        durationSeconds={message.mediaDurationSeconds}
+        loading={loading}
+        loadError={error}
+        outbound={message.direction === 'OUTBOUND'}
+        onLoadSource={loadMedia}
+        src={mediaUrl}
+      />
+    );
+  }
+
+  if (message.type === 'VIDEO' && !mediaUrl) {
+    return (
+      <div className="conversation-media-unavailable">
+        <span>
+          {loading ? 'Carregando vídeo...' : conversationMediaUnavailableText(message.type)}
+        </span>
+        <button type="button" onClick={() => void loadMedia()}>
+          {loading ? 'Carregando...' : error ? 'Tentar novamente' : 'Carregar vídeo'}
+        </button>
+      </div>
+    );
+  }
+
+  if (loading && !mediaUrl) {
+    return <span className="conversation-media-loading">Carregando mídia...</span>;
+  }
+
+  if (error || !mediaUrl) {
+    return (
+      <div className="conversation-media-unavailable">
+        <span>{conversationMediaUnavailableText(message.type)}</span>
+        <button type="button" onClick={() => void loadMedia()}>
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
+
+  if (message.type === 'IMAGE') {
+    return (
+      <>
+        <button
+          ref={imageButtonRef}
+          aria-label="Abrir imagem em tamanho grande"
+          className="conversation-image-media"
+          type="button"
+          onClick={() => void openImageLightbox()}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt={message.text || message.mediaFileName || 'Imagem'} src={mediaUrl} />
+        </button>
+        {imageLightboxOpen ? (
+          <div
+            aria-modal="true"
+            className="conversation-image-lightbox"
+            role="dialog"
+            aria-label="Imagem da conversa"
+            onClick={closeImageLightbox}
+          >
+            <button
+              ref={lightboxCloseRef}
+              aria-label="Fechar imagem"
+              className="conversation-image-lightbox-close"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                closeImageLightbox();
+              }}
+            >
+              <X size={22} aria-hidden="true" />
+            </button>
+            <div className="conversation-image-lightbox-stage">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                alt={message.text || message.mediaFileName || 'Imagem'}
+                src={mediaUrl}
+                onClick={(event) => event.stopPropagation()}
+              />
+            </div>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <video className="conversation-video-media" controls preload="metadata" src={mediaUrl}>
+      <track kind="captions" />
+    </video>
+  );
+}
+
+function ConversationAudioPlayer({
+  durationSeconds,
+  loading,
+  loadError,
+  onLoadSource,
+  outbound,
+  src,
+}: {
+  durationSeconds: number | null;
+  loading: boolean;
+  loadError: boolean;
+  onLoadSource: () => Promise<string | null>;
+  outbound: boolean;
+  src: string | null;
+}) {
+  const conversationAudioPlayEvent = 'crm-conversation-audio-play';
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingPlaybackRef = useRef(false);
+  const initialDuration = isFinitePositiveNumber(durationSeconds) ? durationSeconds : 0;
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(initialDuration);
+  const [playing, setPlaying] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+
+  useEffect(() => {
+    function pauseOtherAudio(event: Event) {
+      const audio = audioRef.current;
+      const playingAudio =
+        event instanceof CustomEvent ? (event.detail as HTMLAudioElement | null) : null;
+
+      if (audio && playingAudio && playingAudio !== audio && !audio.paused) {
+        audio.pause();
+      }
+    }
+
+    window.addEventListener(conversationAudioPlayEvent, pauseOtherAudio);
+
+    return () => {
+      window.removeEventListener(conversationAudioPlayEvent, pauseOtherAudio);
+    };
+  }, []);
+
+  useEffect(() => {
+    setCurrentTime(0);
+    setDuration(initialDuration);
+    setPlaying(false);
+    if (!pendingPlaybackRef.current) setWaiting(false);
+    setFailed(loadError);
+  }, [initialDuration, loadError, src]);
+
+  useEffect(() => {
+    if (!src || !pendingPlaybackRef.current) return;
+
+    pendingPlaybackRef.current = false;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    setWaiting(true);
+    audio.play().catch(() => {
+      setWaiting(false);
+      setPlaying(false);
+    });
+  }, [src]);
+
+  function syncTime() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setCurrentTime(isFinitePositiveNumber(audio.currentTime) ? audio.currentTime : 0);
+  }
+
+  function syncDuration() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isFinitePositiveNumber(audio.duration)) setDuration(audio.duration);
+  }
+
+  function seekTo(nextTime: number) {
+    const audio = audioRef.current;
+    if (!audio || failed || duration <= 0) return;
+
+    const safeTime = Math.min(duration, Math.max(0, nextTime));
+    audio.currentTime = safeTime;
+    setCurrentTime(safeTime);
+  }
+
+  async function togglePlayback() {
+    if (!src) {
+      if (loading) return;
+
+      pendingPlaybackRef.current = true;
+      setWaiting(true);
+      setFailed(false);
+      const objectUrl = await onLoadSource();
+
+      if (!objectUrl) {
+        pendingPlaybackRef.current = false;
+        setWaiting(false);
+        setFailed(true);
+      }
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio || failed) return;
+
+    try {
+      if (audio.paused) {
+        setWaiting(true);
+        await audio.play();
+      } else {
+        audio.pause();
+      }
+    } catch {
+      setWaiting(false);
+      setPlaying(false);
+    }
+  }
+
+  function seek(event: ReactMouseEvent<HTMLButtonElement>) {
+    const audio = audioRef.current;
+    if (!audio || failed || duration <= 0) return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    seekTo(ratio * duration);
+  }
+
+  function seekWithKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (failed || duration <= 0) return;
+
+    const stepSeconds = event.shiftKey ? 10 : 5;
+    const keySeekMap: Record<string, number> = {
+      ArrowLeft: currentTime - stepSeconds,
+      ArrowRight: currentTime + stepSeconds,
+      End: duration,
+      Home: 0,
+      PageDown: currentTime - 15,
+      PageUp: currentTime + 15,
+    };
+
+    const nextTime = keySeekMap[event.key];
+    if (nextTime === undefined) return;
+
+    event.preventDefault();
+    seekTo(nextTime);
+  }
+
+  const buttonLabel = failed
+    ? 'Áudio indisponível'
+    : waiting || loading
+      ? 'Carregando áudio'
+      : playing
+        ? 'Pausar áudio'
+        : 'Reproduzir áudio';
+
+  return (
+    <div className={`conversation-audio-player ${outbound ? 'outbound' : 'inbound'}`}>
+      {src ? (
+        <audio
+          ref={audioRef}
+          className="conversation-audio-media"
+          preload="metadata"
+          src={src}
+          onCanPlay={() => {
+            setWaiting(false);
+            syncDuration();
+          }}
+          onDurationChange={syncDuration}
+          onEnded={() => {
+            const audio = audioRef.current;
+            if (audio) audio.currentTime = 0;
+            setPlaying(false);
+            setWaiting(false);
+            setCurrentTime(0);
+          }}
+          onError={() => {
+            setFailed(true);
+            setWaiting(false);
+            setPlaying(false);
+          }}
+          onLoadedMetadata={syncDuration}
+          onPause={() => {
+            setPlaying(false);
+            setWaiting(false);
+          }}
+          onPlay={() => {
+            const audio = audioRef.current;
+            if (audio) {
+              window.dispatchEvent(new CustomEvent(conversationAudioPlayEvent, { detail: audio }));
+            }
+            setPlaying(true);
+            setFailed(false);
+          }}
+          onPlaying={() => {
+            setPlaying(true);
+            setWaiting(false);
+          }}
+          onTimeUpdate={syncTime}
+          onWaiting={() => setWaiting(true)}
+        />
+      ) : null}
+      <button
+        aria-label={buttonLabel}
+        className="conversation-audio-toggle"
+        disabled={failed && !loadError}
+        type="button"
+        onClick={() => void togglePlayback()}
+      >
+        {waiting || loading ? (
+          <Loader2 size={17} aria-hidden="true" />
+        ) : playing ? (
+          <Pause size={17} aria-hidden="true" />
+        ) : (
+          <Play size={17} aria-hidden="true" />
+        )}
+      </button>
+      <div className="conversation-audio-main">
+        <button
+          aria-label="Buscar posição do áudio"
+          aria-valuemax={Math.floor(duration)}
+          aria-valuemin={0}
+          aria-valuenow={Math.floor(currentTime)}
+          aria-valuetext={`${formatConversationAudioTime(currentTime)} de ${formatConversationAudioTime(
+            duration,
+          )}`}
+          className="conversation-audio-progress"
+          disabled={failed || duration <= 0}
+          role="slider"
+          type="button"
+          onClick={seek}
+          onKeyDown={seekWithKeyboard}
+        >
+          <span className="conversation-audio-track" aria-hidden="true">
+            <span className="conversation-audio-fill" style={{ width: `${progress}%` }} />
+          </span>
+        </button>
+        <span className="conversation-audio-time">
+          {formatConversationAudioTime(currentTime)} / {formatConversationAudioTime(duration)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ConversationComposer({
+  composerRef,
+  conversationId,
+  draft,
+  error,
+  selectedMedia,
+  sending,
+  onChange,
+  onRemoveMedia,
+  onSelectMedia,
+  onSend,
+  onSendVoice,
+}: {
+  composerRef: React.RefObject<HTMLTextAreaElement | null>;
+  conversationId: string;
+  draft: string;
+  error: string;
+  selectedMedia: ConversationComposerMedia | null;
+  sending: boolean;
+  onChange: (value: string) => void;
+  onRemoveMedia: () => void;
+  onSelectMedia: (kind: ConversationComposerMedia['kind'], file: File) => void;
+  onSend: () => void;
+  onSendVoice: (voice: ConversationVoiceDraft) => Promise<void>;
+}) {
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState<ConversationVoiceDraft | null>(null);
+  const [voiceError, setVoiceError] = useState('');
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const discardRecordingRef = useRef(false);
+  const maxDurationTimeoutRef = useRef<number | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const stoppingVoiceRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const voiceSendingRef = useRef(false);
+  const canSend = Boolean(draft.trim() || selectedMedia) && !sending;
+  const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
+
+  useEffect(() => {
+    return () => {
+      cancelVoiceRecording();
+    };
+  }, [conversationId]);
+
+  function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
+    if (!file) return;
+    onSelectMedia(kind, file);
+    setAttachmentMenuOpen(false);
+  }
+
+  function clearVoicePreview() {
+    setVoiceDraft((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return null;
+    });
+    setVoiceSeconds(0);
+  }
+
+  function stopVoiceTracks() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }
+
+  function clearVoiceTimers() {
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (maxDurationTimeoutRef.current !== null) {
+      window.clearTimeout(maxDurationTimeoutRef.current);
+      maxDurationTimeoutRef.current = null;
+    }
+  }
+
+  function handleRecorderStop(recorder: MediaRecorder) {
+    clearVoiceTimers();
+    stopVoiceTracks();
+    setRecording(false);
+    mediaRecorderRef.current = null;
+    stoppingVoiceRef.current = false;
+
+    const durationSeconds = Math.min(
+      conversationVoiceMaxSeconds,
+      Math.max(
+        1,
+        Math.ceil(
+          recordingStartedAtRef.current
+            ? (Date.now() - recordingStartedAtRef.current) / 1000
+            : voiceSeconds,
+        ),
+      ),
+    );
+    recordingStartedAtRef.current = null;
+
+    const discard = discardRecordingRef.current;
+    discardRecordingRef.current = false;
+
+    if (discard) {
+      chunksRef.current = [];
+      setVoiceSeconds(0);
+      return;
+    }
+
+    const mimeType = recorder.mimeType || fallbackConversationVoiceMimeType;
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    chunksRef.current = [];
+
+    if (!blob.size) {
+      setVoiceError('Não foi possível capturar áudio do microfone.');
+      setVoiceSeconds(0);
+      return;
+    }
+
+    const file = new File([blob], `voice-${Date.now()}.webm`, { type: mimeType });
+    const previewUrl = URL.createObjectURL(blob);
+    setVoiceDraft((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return {
+        conversationId,
+        durationSeconds,
+        file,
+        previewUrl,
+        requestId: createConversationRequestId(),
+      };
+    });
+    setVoiceSeconds(durationSeconds);
+  }
+
+  function finishRecording(discard: boolean) {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      clearVoiceTimers();
+      stopVoiceTracks();
+      setRecording(false);
+      stoppingVoiceRef.current = false;
+      discardRecordingRef.current = false;
+      return;
+    }
+
+    if (stoppingVoiceRef.current) {
+      if (discard) {
+        discardRecordingRef.current = true;
+      }
+      return;
+    }
+
+    discardRecordingRef.current = discard;
+    stoppingVoiceRef.current = true;
+    clearVoiceTimers();
+
+    if (recorder.state === 'inactive') {
+      handleRecorderStop(recorder);
+      return;
+    }
+
+    recorder.stop();
+  }
+
+  function cancelVoiceRecording() {
+    finishRecording(true);
+    clearVoicePreview();
+    setVoiceError('');
+  }
+
+  function voiceMimeType() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    if (MediaRecorder.isTypeSupported(preferredConversationVoiceMimeType)) {
+      return preferredConversationVoiceMimeType;
+    }
+    if (MediaRecorder.isTypeSupported(fallbackConversationVoiceMimeType)) {
+      return fallbackConversationVoiceMimeType;
+    }
+    return null;
+  }
+
+  async function startVoiceRecording() {
+    setVoiceError('');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+      return;
+    }
+
+    const mimeType = voiceMimeType();
+    if (!mimeType) {
+      setVoiceError('Gravação WebM/Opus não é suportada neste navegador.');
+      return;
+    }
+
+    try {
+      clearVoicePreview();
+      onRemoveMedia();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+      discardRecordingRef.current = false;
+      stoppingVoiceRef.current = false;
+      chunksRef.current = [];
+      recordingStartedAtRef.current = Date.now();
+      setVoiceSeconds(0);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+        finishRecording(true);
+      };
+      recorder.onstop = () => {
+        handleRecorderStop(recorder);
+      };
+
+      recorder.start();
+      setRecording(true);
+      recordingTimerRef.current = window.setInterval(() => {
+        if (!recordingStartedAtRef.current) return;
+        setVoiceSeconds(
+          Math.min(
+            conversationVoiceMaxSeconds,
+            Math.floor((Date.now() - recordingStartedAtRef.current) / 1000),
+          ),
+        );
+      }, 250);
+      maxDurationTimeoutRef.current = window.setTimeout(() => {
+        finishRecording(false);
+      }, conversationVoiceMaxSeconds * 1000);
+    } catch {
+      clearVoiceTimers();
+      stopVoiceTracks();
+      setRecording(false);
+      setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+    }
+  }
+
+  async function sendVoiceDraft() {
+    if (!voiceDraft || sending || voiceSendingRef.current) return;
+
+    voiceSendingRef.current = true;
+    try {
+      await onSendVoice(voiceDraft);
+      clearVoicePreview();
+      setVoiceError('');
+    } catch {
+      setVoiceError('Falha ao enviar gravação. Você pode tentar novamente.');
+    } finally {
+      voiceSendingRef.current = false;
+    }
+  }
+
+  return (
+    <form
+      className="conversation-composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSend();
+      }}
+    >
+      {error ? (
+        <div className="notice danger conversation-notice" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {voiceError ? (
+        <div className="notice danger conversation-notice" role="alert">
+          {voiceError}
+        </div>
+      ) : null}
+      {recording ? (
+        <div className="conversation-voice-recorder" role="status">
+          <span className="conversation-recording-dot" aria-hidden="true" />
+          <strong>{formatConversationAudioTime(voiceSeconds)}</strong>
+          <IconButton
+            icon={X}
+            label="Cancelar gravação"
+            disabled={Boolean(sending)}
+            onClick={cancelVoiceRecording}
+          />
+          <IconButton
+            icon={Square}
+            label="Parar gravação"
+            disabled={Boolean(sending)}
+            onClick={() => finishRecording(false)}
+          />
+        </div>
+      ) : null}
+      {voiceDraft ? (
+        <div className="conversation-voice-preview">
+          <span className="conversation-attachment-file-icon" aria-hidden="true">
+            <FileAudio size={18} />
+          </span>
+          <span>
+            <strong>Gravação de voz</strong>
+            <small>{formatConversationAudioTime(voiceDraft.durationSeconds)}</small>
+            <audio
+              className="conversation-attachment-audio-preview"
+              controls
+              preload="metadata"
+              src={voiceDraft.previewUrl}
+            />
+          </span>
+          <IconButton
+            icon={Trash2}
+            label="Cancelar gravação"
+            disabled={Boolean(sending)}
+            onClick={clearVoicePreview}
+          />
+          <IconButton
+            icon={Send}
+            label="Enviar gravação"
+            disabled={!canSendVoice}
+            onClick={() => void sendVoiceDraft()}
+          />
+        </div>
+      ) : null}
+      {selectedMedia ? (
+        <div className="conversation-attachment-preview">
+          {selectedMedia.kind === 'IMAGE' && selectedMedia.previewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img alt="" src={selectedMedia.previewUrl} />
+          ) : (
+            <span className="conversation-attachment-file-icon" aria-hidden="true">
+              {selectedMedia.kind === 'AUDIO' ? <FileAudio size={18} /> : <FileText size={18} />}
+            </span>
+          )}
+          <span>
+            <strong>{selectedMedia.file.name}</strong>
+            <small>{formatFileSize(selectedMedia.file.size)}</small>
+            {selectedMedia.kind === 'AUDIO' && selectedMedia.previewUrl ? (
+              <audio
+                className="conversation-attachment-audio-preview"
+                controls
+                preload="metadata"
+                src={selectedMedia.previewUrl}
+              />
+            ) : null}
+          </span>
+          <IconButton icon={X} label="Remover anexo" onClick={onRemoveMedia} />
+        </div>
+      ) : null}
+      <div className="conversation-composer-tools">
+        <div className="conversation-attach-control">
+          <IconButton
+            icon={Plus}
+            label="Anexar arquivo"
+            disabled={recording || sending}
+            onClick={() => setAttachmentMenuOpen((current) => !current)}
+          />
+          {attachmentMenuOpen ? (
+            <div className="conversation-attach-menu">
+              <button type="button" onClick={() => imageInputRef.current?.click()}>
+                <ImageIcon aria-hidden="true" size={16} />
+                <span>Imagem</span>
+              </button>
+              <button type="button" onClick={() => documentInputRef.current?.click()}>
+                <FileText aria-hidden="true" size={16} />
+                <span>Documento</span>
+              </button>
+              <button type="button" onClick={() => audioInputRef.current?.click()}>
+                <FileAudio aria-hidden="true" size={16} />
+                <span>Áudio</span>
+              </button>
+            </div>
+          ) : null}
+          <input
+            ref={imageInputRef}
+            accept="image/jpeg,image/png"
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('IMAGE', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={documentInputRef}
+            accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('DOCUMENT', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={audioInputRef}
+            accept="audio/ogg,audio/mpeg,audio/mp4"
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('AUDIO', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+        </div>
+        <IconButton
+          icon={Mic}
+          label="Gravar áudio"
+          disabled={recording || sending || Boolean(voiceDraft)}
+          onClick={() => void startVoiceRecording()}
+        />
+      </div>
+      <label>
+        <span className="sr-only">Digite uma mensagem</span>
+        <textarea
+          aria-label="Digite uma mensagem"
+          aria-busy={sending}
+          ref={composerRef}
+          placeholder="Digite uma mensagem..."
+          rows={2}
+          value={draft}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              onSend();
+            }
+          }}
+        />
+      </label>
+      <Button
+        icon={Send}
+        loading={sending}
+        variant="primary"
+        disabled={!canSend}
+        type="submit"
+        onMouseDown={(event) => {
+          if (document.activeElement === composerRef.current) {
+            event.preventDefault();
+          }
+        }}
+        onPointerDown={(event) => {
+          if (event.pointerType !== 'mouse' && document.activeElement === composerRef.current) {
+            event.preventDefault();
+          }
+        }}
+        onPointerUp={(event) => {
+          if (event.pointerType !== 'mouse') {
+            event.preventDefault();
+            onSend();
+          }
+        }}
+      >
+        Enviar
+      </Button>
+    </form>
+  );
+}
+
+function ConversationClientPanel({
+  client,
+  clientError,
+  conversation,
+  linkClientError,
+  linkingClient,
+  mobileOpen,
+  onCloseMobile,
+  onCreateClient,
+  onLinkClient,
+  onOpenClient,
+}: {
+  client: Client | null;
+  clientError: string;
+  conversation: WhatsAppConversation | null;
+  linkClientError: string;
+  linkingClient: boolean;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+  onCreateClient: (conversation: WhatsAppConversation) => void;
+  onLinkClient: (client: ClientOption) => void;
+  onOpenClient: (clientId: string) => void;
+}) {
+  return (
+    <>
+      <aside className="conversation-client-panel" aria-label="Contexto do cliente">
+        <ConversationClientPanelContent
+          client={client}
+          clientError={clientError}
+          conversation={conversation}
+          linkClientError={linkClientError}
+          linkingClient={linkingClient}
+          onCreateClient={onCreateClient}
+          onLinkClient={onLinkClient}
+          onOpenClient={onOpenClient}
+        />
+      </aside>
+      {mobileOpen ? (
+        <div className="modal-backdrop conversation-client-drawer" role="presentation">
+          <section className="modal" aria-labelledby="conversation-client-panel-title">
+            <header className="modal-header">
+              <h2 id="conversation-client-panel-title">Contexto</h2>
+              <IconButton icon={X} label="Fechar contexto" onClick={onCloseMobile} />
+            </header>
+            <ConversationClientPanelContent
+              client={client}
+              clientError={clientError}
+              conversation={conversation}
+              linkClientError={linkClientError}
+              linkingClient={linkingClient}
+              onCreateClient={onCreateClient}
+              onLinkClient={onLinkClient}
+              onOpenClient={onOpenClient}
+            />
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function ConversationClientPanelContent({
+  client,
+  clientError,
+  conversation,
+  linkClientError,
+  linkingClient,
+  onCreateClient,
+  onLinkClient,
+  onOpenClient,
+}: {
+  client: Client | null;
+  clientError: string;
+  conversation: WhatsAppConversation | null;
+  linkClientError: string;
+  linkingClient: boolean;
+  onCreateClient: (conversation: WhatsAppConversation) => void;
+  onLinkClient: (client: ClientOption) => void;
+  onOpenClient: (clientId: string) => void;
+}) {
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
+
+  useEffect(() => {
+    setLinkOpen(false);
+    setSelectedClientId('');
+    setSelectedClient(null);
+  }, [conversation?.id, client?.id]);
+
+  if (!conversation) {
+    return (
+      <div className="conversation-empty-panel">
+        <Info aria-hidden="true" size={22} />
+        <span>Selecione uma conversa para ver o contexto.</span>
+      </div>
+    );
+  }
+
+  if (clientError) {
+    return <div className="notice danger conversation-notice">{clientError}</div>;
+  }
+
+  if (client) {
+    const pendingAmount = (client.receivables ?? [])
+      ?.filter(
+        (receivable) =>
+          receivable.displayStatus === 'PENDENTE' || receivable.displayStatus === 'VENCIDO',
+      )
+      .reduce((total, receivable) => total + Number(receivable.amount), 0);
+
+    return (
+      <div className="conversation-context-card">
+        <span className="conversation-kind client">Cliente</span>
+        <h3>Dados do cliente</h3>
+        <dl className="detail-list">
+          <div>
+            <dt>Nome</dt>
+            <dd>{client.name}</dd>
+          </div>
+          <div>
+            <dt>Telefone</dt>
+            <dd>{normalizeWhatsAppDisplayPhone(client.phoneNormalized) ?? client.phone}</dd>
+          </div>
+          <div>
+            <dt>E-mail</dt>
+            <dd>{client.email ?? '-'}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{client.status}</dd>
+          </div>
+          <div>
+            <dt>Referências</dt>
+            <dd>{client.references?.length ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Total a receber</dt>
+            <dd>{formatCurrency(pendingAmount)}</dd>
+          </div>
+        </dl>
+        <Button icon={ArrowRight} variant="primary" onClick={() => onOpenClient(client.id)}>
+          Abrir cliente
+        </Button>
+      </div>
+    );
+  }
+
+  const instanceLabel = conversationInstanceLabel(conversation.instanceName);
+  const conversationPhone =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const selectedClientPhone = selectedClient?.phoneNormalized
+    ? formatNormalizedBrazilPhone(selectedClient.phoneNormalized)
+    : '-';
+  const phoneDiffers =
+    Boolean(selectedClient?.phoneNormalized) &&
+    selectedClient?.phoneNormalized !== conversation.phoneNormalized;
+
+  return (
+    <div className="conversation-context-card">
+      <span className="conversation-kind guest">Avulso</span>
+      <h3>Contato avulso</h3>
+      <dl className="detail-list">
+        <div>
+          <dt>Nome</dt>
+          <dd>{conversation.displayName}</dd>
+        </div>
+        <div>
+          <dt>Telefone</dt>
+          <dd>{conversationPhone}</dd>
+        </div>
+        {instanceLabel ? (
+          <div>
+            <dt>Instância</dt>
+            <dd>{instanceLabel}</dd>
+          </div>
+        ) : null}
+      </dl>
+      <div className="conversation-link-client">
+        <Button
+          icon={UserRoundPlus}
+          size="sm"
+          variant="primary"
+          onClick={() => onCreateClient(conversation)}
+        >
+          Cadastrar cliente
+        </Button>
+        <Button
+          icon={UserCheck}
+          size="sm"
+          variant="secondary"
+          onClick={() => setLinkOpen((current) => !current)}
+        >
+          Vincular a cliente
+        </Button>
+
+        {linkOpen ? (
+          <div className="conversation-link-client-form">
+            <FinanceClientAutocomplete
+              label="Buscar cliente"
+              placeholder="Buscar por nome, telefone ou e-mail..."
+              selectedClient={selectedClient}
+              value={selectedClientId}
+              onChange={(clientId, option) => {
+                setSelectedClientId(clientId);
+                setSelectedClient(option);
+              }}
+            />
+
+            {selectedClient ? (
+              <div className="conversation-link-confirmation">
+                <strong>Vincular conversa a: {selectedClient.name}</strong>
+                <dl className="detail-list compact">
+                  <div>
+                    <dt>Telefone da conversa</dt>
+                    <dd>{conversationPhone}</dd>
+                  </div>
+                  <div>
+                    <dt>Telefone do cliente</dt>
+                    <dd>{selectedClientPhone}</dd>
+                  </div>
+                </dl>
+                {phoneDiffers ? (
+                  <div className="notice warning conversation-notice">
+                    O telefone desta conversa é diferente do telefone principal do cliente.
+                  </div>
+                ) : null}
+                <div className="conversation-link-actions">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setSelectedClientId('');
+                      setSelectedClient(null);
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    icon={UserCheck}
+                    loading={linkingClient}
+                    size="sm"
+                    variant="primary"
+                    onClick={() => onLinkClient(selectedClient)}
+                  >
+                    Vincular cliente
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {linkClientError ? (
+              <div className="notice danger conversation-notice" role="alert">
+                {linkClientError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function GuestConversationClientModal({
+  conversation,
+  duplicateClient,
+  error,
+  loading,
+  plans,
+  unlinkedClient,
+  onClose,
+  onLinkExisting,
+  onOpenClient,
+  onRetryLink,
+  onSubmit,
+}: {
+  conversation: WhatsAppConversation;
+  duplicateClient: ClientOption | null;
+  error: string;
+  loading: boolean;
+  plans: Plan[];
+  unlinkedClient: ClientOption | null;
+  onClose: () => void;
+  onLinkExisting: (client: ClientOption) => void;
+  onOpenClient: (clientId: string) => void;
+  onRetryLink: (client: ClientOption) => void;
+  onSubmit: (payload: ClientPayload) => Promise<void>;
+}) {
+  const conversationPhone =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal client-form-modal client-create-modal conversation-client-create-modal"
+        aria-labelledby="conversation-client-create-title"
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            <UserRoundPlus size={15} />
+          </span>
+          <div>
+            <span className="metric-label">Contato avulso</span>
+            <h2 id="conversation-client-create-title">Cadastrar cliente</h2>
+            <p>WhatsApp da conversa: {conversationPhone}</p>
+          </div>
+          <IconButton icon={X} label="Fechar cadastro de cliente" onClick={onClose} />
+        </header>
+
+        <div className="conversation-client-create-body">
+          {error ? (
+            <div className="notice danger conversation-notice" role="alert">
+              {error}
+            </div>
+          ) : null}
+
+          {duplicateClient ? (
+            <div className="conversation-link-confirmation">
+              <strong>Já existe um cliente com este telefone: {duplicateClient.name}</strong>
+              <span>{formatNormalizedBrazilPhone(duplicateClient.phoneNormalized)}</span>
+              <div className="conversation-link-actions">
+                <Button
+                  icon={ArrowRight}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onOpenClient(duplicateClient.id)}
+                >
+                  Abrir cliente
+                </Button>
+                <Button
+                  icon={UserCheck}
+                  loading={loading}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => onLinkExisting(duplicateClient)}
+                >
+                  Vincular ao cliente existente
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {unlinkedClient ? (
+            <div className="conversation-link-confirmation">
+              <strong>Cliente criado, mas a conversa ainda não foi vinculada.</strong>
+              <span>{unlinkedClient.name}</span>
+              <div className="conversation-link-actions">
+                <Button
+                  icon={ArrowRight}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onOpenClient(unlinkedClient.id)}
+                >
+                  Abrir cliente criado
+                </Button>
+                <Button
+                  icon={UserCheck}
+                  loading={loading}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => onRetryLink(unlinkedClient)}
+                >
+                  Tentar vincular novamente
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {!unlinkedClient ? (
+            plans.length ? (
+              <ClientForm
+                initialValues={{ phone: conversationPhone }}
+                plans={plans}
+                submitLabel="Cadastrar e vincular"
+                onCancel={onClose}
+                onSubmit={async (payload) => onSubmit(payload as ClientPayload)}
+              />
+            ) : (
+              <div className="conversation-empty-panel">
+                <Info aria-hidden="true" size={22} />
+                <span>{loading ? 'Carregando planos...' : 'Nenhum plano disponível.'}</span>
+              </div>
+            )
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function useWhatsAppRealtime({
+  onConnectedChange,
+  onEvent,
+}: {
+  onConnectedChange: (connected: boolean) => void;
+  onEvent: (event: WhatsAppRealtimeEvent) => void;
+}) {
+  useEffect(() => {
+    const eventSource = createWhatsAppRealtimeEventSource();
+    const handleOpen = () => onConnectedChange(true);
+    const handleError = () => onConnectedChange(false);
+    const handleRealtimeEvent = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as WhatsAppRealtimeEvent;
+        if (!payload.conversationId || !payload.type) return;
+        onEvent(payload);
+      } catch {
+        onConnectedChange(false);
+      }
+    };
+
+    eventSource.addEventListener('open', handleOpen);
+    eventSource.addEventListener('error', handleError);
+    eventSource.addEventListener('message.created', handleRealtimeEvent);
+    eventSource.addEventListener('message.updated', handleRealtimeEvent);
+    eventSource.addEventListener('conversation.updated', handleRealtimeEvent);
+
+    return () => {
+      eventSource.removeEventListener('open', handleOpen);
+      eventSource.removeEventListener('error', handleError);
+      eventSource.removeEventListener('message.created', handleRealtimeEvent);
+      eventSource.removeEventListener('message.updated', handleRealtimeEvent);
+      eventSource.removeEventListener('conversation.updated', handleRealtimeEvent);
+      eventSource.close();
+      onConnectedChange(false);
+    };
+  }, [onConnectedChange, onEvent]);
+}
+
+function phoneDigits(value: string | null | undefined) {
+  return value?.replace(/\D/g, '') ?? '';
+}
+
+function phoneDigitsCompatible(left: string, right: string) {
+  const leftDigits = phoneDigits(left);
+  const rightDigits = phoneDigits(right);
+
+  if (!leftDigits || !rightDigits) return false;
+  if (leftDigits === rightDigits) return true;
+  if (Math.min(leftDigits.length, rightDigits.length) < 10) return false;
+
+  return leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits);
+}
+
+function clientOptionFromClient(client: Client): ClientOption {
+  return {
+    email: client.email,
+    id: client.id,
+    name: client.name,
+    phoneNormalized: client.phoneNormalized,
+    preferredPixProvider: client.preferredPixProvider,
+    reference: client.reference,
+  };
+}
+
+function mergeConversationMessages(
+  current: WhatsAppConversationMessage[],
+  incoming: WhatsAppConversationMessage[],
+) {
+  const map = new Map<string, WhatsAppConversationMessage>();
+  for (const message of [...current, ...incoming]) {
+    map.set(message.id, message);
+  }
+  return [...map.values()].sort(
+    (left, right) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() ||
+      left.id.localeCompare(right.id),
+  );
+}
+
+function upsertConversationList(
+  current: WhatsAppConversation[],
+  conversation: WhatsAppConversation,
+) {
+  const existing = current.filter((item) => item.id !== conversation.id);
+  return [conversation, ...existing].sort(
+    (left, right) =>
+      conversationListSortTime(right) - conversationListSortTime(left) ||
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
+}
+
+function mergeConversationLists(current: WhatsAppConversation[], incoming: WhatsAppConversation[]) {
+  const map = new Map<string, WhatsAppConversation>();
+  for (const conversation of [...current, ...incoming]) {
+    map.set(conversation.id, conversation);
+  }
+  return [...map.values()].sort(
+    (left, right) =>
+      conversationListSortTime(right) - conversationListSortTime(left) ||
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() ||
+      right.id.localeCompare(left.id),
+  );
+}
+
+function conversationListSortTime(conversation: WhatsAppConversation) {
+  return conversation.lastMessageAt ? new Date(conversation.lastMessageAt).getTime() : 0;
+}
+
+function createConversationRequestId() {
+  return crypto.randomUUID();
+}
+
+function hasUnreadConversationSummary(summary: WhatsAppConversationSummary) {
+  return summary.totalUnreadConversations > 0 || summary.totalUnreadMessages > 0;
+}
+
+function formatConversationSummary(summary: WhatsAppConversationSummary) {
+  return `${pluralizePt(summary.totalUnreadConversations, 'conversa não lida', 'conversas não lidas')} · ${pluralizePt(summary.totalUnreadMessages, 'mensagem', 'mensagens')}`;
+}
+
+function pluralizePt(value: number, singular: string, plural: string) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function conversationInstanceLabel(instanceName: string | null) {
+  if (!instanceName) return null;
+  if (isTechnicalInstanceName(instanceName)) return null;
+  return instanceName;
+}
+
+function isTechnicalInstanceName(value: string) {
+  return /(?:^|-)crm-novo(?:-|$)/i.test(value) || /^[a-f0-9-]{20,}$/i.test(value);
+}
+
+function conversationInitial(conversation: WhatsAppConversation) {
+  return (conversation.displayName || conversation.phone || '?').slice(0, 1).toUpperCase();
+}
+
+function conversationDateLabel(value: string | null) {
+  if (!value) return '-';
+  const date = new Date(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
+
+function conversationMessageTime(message: WhatsAppConversationMessage) {
+  const value = message.sentAt ?? message.createdAt;
+  return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function conversationMessageDateKey(message: WhatsAppConversationMessage) {
+  return conversationDateKeyFromValue(message.sentAt ?? message.createdAt);
+}
+
+function conversationMessageDateLabel(message: WhatsAppConversationMessage) {
+  const messageParts = conversationDateParts(message.sentAt ?? message.createdAt);
+  const messageKey = conversationDateKeyFromParts(messageParts);
+  const todayParts = conversationDateParts(new Date());
+  const todayKey = conversationDateKeyFromParts(todayParts);
+  const yesterdayKey = conversationYesterdayKey(todayParts);
+
+  if (messageKey === todayKey) return 'Hoje';
+  if (messageKey === yesterdayKey) return 'Ontem';
+  return `${messageParts.day}/${messageParts.month}/${messageParts.year}`;
+}
+
+function conversationDateKeyFromValue(value: string | Date) {
+  return conversationDateKeyFromParts(conversationDateParts(value));
+}
+
+function conversationYesterdayKey(todayParts: { day: string; month: string; year: string }) {
+  const yesterday = new Date(
+    Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day) - 1, 12),
+  );
+  return conversationDateKeyFromValue(yesterday);
+}
+
+function conversationDateKeyFromParts(parts: { day: string; month: string; year: string }) {
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function conversationDateParts(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    timeZone: conversationDateSeparatorTimeZone,
+    year: 'numeric',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+
+  return {
+    day: part('day'),
+    month: part('month'),
+    year: part('year'),
+  };
+}
+
+function conversationMessageStatusLabel(status: WhatsAppConversationMessageStatus) {
+  const labels = {
+    FAILED: 'Falhou',
+    PENDING: 'Enviando',
+    SENT: 'Enviada',
+  } satisfies Record<WhatsAppConversationMessageStatus, string>;
+  return labels[status];
+}
+
+function conversationLastMessagePreview(message: WhatsAppConversationMessage) {
+  const text = message.text?.trim();
+  if (text) return text;
+  if (message.type === 'IMAGE') return '[Imagem]';
+  if (message.type === 'DOCUMENT') return message.mediaFileName || 'Documento';
+  return conversationMessagePlaceholder(message.type) || '[Mensagem]';
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
+function conversationDocumentTypeLabel(fileName: string, mimeType: string | null) {
+  const normalizedMime = mimeType?.split(';')[0]?.trim().toLowerCase() || '';
+  if (normalizedMime === 'application/pdf') return 'PDF';
+
+  const extension = fileName.match(/\.([a-z0-9]{1,8})$/i)?.[1];
+  if (extension) return extension.toUpperCase();
+
+  if (normalizedMime) {
+    const subtype = normalizedMime
+      .split('/')[1]
+      ?.replace(/^vnd\./, '')
+      .split(/[.+-]/)[0];
+    if (subtype) return subtype.toUpperCase().slice(0, 12);
+  }
+
+  return 'Arquivo';
+}
+
+function isFinitePositiveNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function formatConversationAudioTime(value: number) {
+  if (!Number.isFinite(value) || value < 0) return '0:00';
+  const totalSeconds = Math.floor(value);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
+  const labels = {
+    AUDIO: '',
+    BUTTON: '[Mensagem interativa]',
+    DOCUMENT: '',
+    IMAGE: '[Imagem]',
+    LOCATION: '[Localização]',
+    TEXT: '',
+    UNKNOWN: '[Mensagem interativa]',
+    VIDEO: '[Vídeo]',
+  } satisfies Record<WhatsAppConversationMessageType, string>;
+  return labels[type];
+}
+
+function isRenderableConversationMedia(type: WhatsAppConversationMessageType) {
+  return type === 'IMAGE' || type === 'DOCUMENT' || type === 'AUDIO' || type === 'VIDEO';
+}
+
+function conversationMediaUnavailableText(type: WhatsAppConversationMessageType) {
+  if (type === 'AUDIO') return 'Mídia indisponível';
+  if (type === 'DOCUMENT') return 'Mídia indisponível';
+  return conversationMessagePlaceholder(type);
+}
+
+function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
+  if (message.type === 'TEXT') return message.text || '';
+  return conversationMessagePlaceholder(message.type);
+}
+
+function conversationMessageCaption(message: WhatsAppConversationMessage) {
+  if (message.type === 'TEXT') return '';
+  return message.text?.trim() || '';
+}
+
+function isConversationScrollNearBottom(element: HTMLDivElement | null) {
+  if (!element) return true;
+  if (!isConversationScrollable(element)) return true;
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+}
+
+function isConversationScrollable(element: HTMLDivElement) {
+  return element.scrollHeight > element.clientHeight + 2;
+}
+
+function scheduleConversationScroll(action: () => void) {
+  window.requestAnimationFrame(() => {
+    action();
+    window.requestAnimationFrame(action);
+  });
+}
+
+function scheduleComposerFocus(action: () => void) {
+  window.queueMicrotask(() => {
+    window.requestAnimationFrame(action);
+  });
+}
+
+function scrollConversationContainerToBottom(element: HTMLDivElement | null) {
+  if (!element) return;
+  if (!isConversationScrollable(element)) return;
+  element.scrollTop = element.scrollHeight;
+}
+
+function conversationErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && /conex|connection|network|fetch/i.test(error.message)) {
+    return 'Conexão indisponível. Tente novamente em instantes.';
+  }
+  if (error instanceof Error && /404|não encontr|not found/i.test(error.message)) {
+    return 'Conversa inexistente ou não disponível.';
+  }
+  return fallback;
+}
+
+function conversationRetryErrorMessage(error: unknown) {
+  if (error instanceof ApiError) {
+    const payload =
+      error.payload && typeof error.payload === 'object'
+        ? (error.payload as { code?: unknown; message?: unknown })
+        : null;
+    const code = typeof payload?.code === 'string' ? payload.code : null;
+
+    if (code === 'WHATSAPP_RETRY_MEDIA_FILE_MISSING') {
+      return 'Arquivo não disponível para reenviar.';
+    }
+
+    if (code === 'WHATSAPP_RETRY_MEDIA_UNAVAILABLE') {
+      return 'Arquivo não disponível. Selecione novamente.';
+    }
+
+    if (code === 'WHATSAPP_RETRY_VOICE_RE_RECORD_REQUIRED') {
+      return 'Gravação indisponível. Grave novamente.';
+    }
+
+    if (error.status === 409) {
+      return 'Conexão indisponível ou mensagem já em nova tentativa.';
+    }
+
+    if (error.status === 503) {
+      return 'Provider indisponível. Tente novamente em instantes.';
+    }
+  }
+
+  return conversationErrorMessage(error, 'Falha ao reenviar mensagem.');
+}
+
+function linkClientErrorMessage(error: unknown) {
+  if (error instanceof ApiError && error.status === 409) {
+    const payload =
+      error.payload && typeof error.payload === 'object'
+        ? (error.payload as { code?: unknown })
+        : null;
+
+    if (payload?.code === 'CONVERSATION_ALREADY_LINKED') {
+      return 'Esta conversa já está vinculada a outro cliente.';
+    }
+
+    return 'Outra operação vinculou esta conversa antes. Atualize e tente novamente.';
+  }
+
+  if (error instanceof ApiError && error.status === 404) {
+    return 'Conversa ou cliente inexistente.';
+  }
+
+  if (error instanceof Error && /conex|connection|network|fetch/i.test(error.message)) {
+    return 'Conexão indisponível. Tente novamente em instantes.';
+  }
+
+  return 'Falha ao vincular cliente.';
+}
+
+function startConversationErrorMessage(error: unknown) {
+  if (error instanceof ApiError && error.status === 409) {
+    const payload =
+      error.payload && typeof error.payload === 'object'
+        ? (error.payload as { code?: unknown })
+        : null;
+
+    if (payload?.code === 'CONVERSATION_ALREADY_LINKED') {
+      return 'Já existe conversa para este telefone vinculada a outro cliente.';
+    }
+
+    return 'Não foi possível iniciar a conversa com estes dados.';
+  }
+
+  if (error instanceof ApiError && error.status === 400) {
+    return 'Revise telefone, cliente e mensagem antes de enviar.';
+  }
+
+  if (error instanceof ApiError && error.status === 404) {
+    return 'Cliente, conversa ou instância WhatsApp não encontrada.';
+  }
+
+  if (error instanceof Error && /conex|connection|network|fetch/i.test(error.message)) {
+    return 'Conexão indisponível. Tente novamente em instantes.';
+  }
+
+  return 'Falha ao iniciar conversa.';
+}

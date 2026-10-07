@@ -84,7 +84,11 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 
 ## Gravacao de voz AUDIO4
 
-- Chrome/Android grava voz no navegador como WebM/Opus via `MediaRecorder`.
+- AUDIO4 foi homologado com sucesso em producao para voice note WhatsApp:
+  Chrome Desktop/`MediaRecorder` -> WebM/Opus ->
+  `POST /whatsapp/conversations/:conversationId/voice` -> ffmpeg -> OGG/Opus
+  -> Kirago -> `PTT=true` -> WhatsApp com playback OK.
+- Chrome Desktop grava voz no navegador como WebM/Opus via `MediaRecorder`.
 - WebM/Opus nao deve ser enviado diretamente para a Kirago como voice note:
   homologacao real retornou HTTP 200, mas a mensagem nao foi entregue no
   WhatsApp.
@@ -92,8 +96,14 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
   `/chat/send/audio` com `PTT=true` e `MimeType=audio/ogg; codecs=opus`.
 - A conversao WebM/Opus -> OGG/Opus usa `WHATSAPP_FFMPEG_PATH` e temporarios
   privados em `WHATSAPP_VOICE_TEMP_DIR`.
-- Limites do MVP: input WebM maximo 5 MB, duracao real maxima 60s, output OGG
-  maximo 5 MB, timeout ffmpeg 15s e uma conversao simultanea por processo.
+- Limites do MVP homologado: input WebM maximo 5 MB, duracao real maxima 60s,
+  output OGG maximo 5 MB, timeout ffmpeg 15s e uma conversao simultanea por
+  processo.
+- Producao homologada usa ffmpeg 4.2.7 em `/usr/bin/ffmpeg` e ffprobe em
+  `/usr/bin/ffprobe`.
+- O capability check exige: executavel ffmpeg, executavel ffprobe, encoder
+  `libopus`, decoder Opus (`opus` ou `libopus`), demuxer WebM/Matroska e muxer
+  OGG.
 - O servico de conversao nunca usa nomes de arquivo do usuario, nao persiste
   Base64, nao loga conteudo de audio e remove temporarios em sucesso, erro e
   timeout.
@@ -105,8 +115,11 @@ Sprint 6 adiciona a base de WhatsApp do CRM Novo usando Kirago como provider atu
 - Upload comum de arquivo de audio continua no endpoint generico de midia com
   `PTT=false` para OGG, MP3 e MP4/M4A. WebM permanece recusado nesse endpoint
   para evitar tratar gravacao temporaria como midia final.
-- O frontend de microfone/MediaRecorder ainda nao esta implementado nesta
-  etapa.
+- Temporarios de conversao ficam em `WHATSAPP_VOICE_TEMP_DIR` e sao removidos
+  apos sucesso, erro ou timeout. O storage permanente de midias WhatsApp deve
+  ser `WHATSAPP_MEDIA_STORAGE_DIR`, por exemplo
+  `/var/lib/crm-novo/whatsapp-media`; nao usar `apps/api/storage` como storage
+  real de producao.
 
 ## Sprint 7 - Lista de Espera
 

@@ -82,8 +82,8 @@ Backend:
   converter gravacoes de voz WebM/Opus em OGG/Opus. Em producao, usar
   `/usr/bin/ffmpeg`.
 - `WHATSAPP_VOICE_TEMP_DIR`: diretorio privado temporario para conversoes de
-  voz. Em producao, usar por exemplo
-  `/var/lib/crm-novo/whatsapp-media/tmp/audio4`, com owner do servico da API,
+  voz. Em producao homologada, usar
+  `/var/lib/crm-novo/whatsapp-media/tmp/audio4`, com owner `crmnovo:crmnovo`,
   permissao `0700` e arquivos temporarios `0600`.
   O WebM recebido pelo endpoint de voice note e temporario; o storage
   permanente guarda somente o OGG/Opus final em `WHATSAPP_MEDIA_STORAGE_DIR`.
@@ -138,6 +138,10 @@ Futuro PIX:
 - Criar o diretorio de midia WhatsApp com dono igual ao usuario do
   `crm-novo-api.service` e permissoes restritas, por exemplo `0750` no
   diretorio e arquivos `0600`. Nao usar `chmod 777`.
+- Criar o diretorio temporario de voice note
+  `/var/lib/crm-novo/whatsapp-media/tmp/audio4` com owner `crmnovo:crmnovo` e
+  permissao `0700`. Temporarios de conversao sao removidos pela API apos
+  sucesso, erro ou timeout.
 
 Fora de producao, flags ausentes ou desconhecidas continuam fail-closed: nao
 ligam scheduler.
@@ -201,6 +205,10 @@ pelo proprio CRM devem ser gravadas em storage privado da API depois que a
 Kirago aceitar o envio, pois a resposta outbound da Kirago nao fornece URL,
 directPath, mediaKey, hashes, MIME ou tamanho recuperaveis posteriormente.
 
+Voice notes AUDIO4 usam storage permanente em `WHATSAPP_MEDIA_STORAGE_DIR`
+depois da conversao para OGG/Opus. Nao usar `apps/api/storage` como storage
+real de producao.
+
 Politica atual:
 
 - Arquivos permanecem enquanto a mensagem existir.
@@ -209,6 +217,47 @@ Politica atual:
   de uso de disco.
 - Exclusao/cascade de mensagens ou conversas nao deve remover arquivos sem
   analise e regra aprovada.
+
+## Voice Note AUDIO4 em Producao
+
+Homologacao de producao confirmada:
+
+- Chrome Desktop/`MediaRecorder` grava WebM/Opus.
+- API recebe `POST /whatsapp/conversations/:conversationId/voice`.
+- ffmpeg converte WebM/Opus para OGG/Opus.
+- Kirago recebe audio com `PTT=true`.
+- WhatsApp entrega como voice note com playback OK.
+
+Requisitos de runtime:
+
+- ffmpeg instalado via apt e disponivel em `/usr/bin/ffmpeg`.
+- ffprobe disponivel em `/usr/bin/ffprobe`.
+- ffmpeg 4.2.7 compativel.
+- encoder `libopus` disponivel.
+- decoder Opus disponivel como `opus` ou `libopus`.
+- demuxer `matroska,webm` disponivel.
+- muxer `ogg` disponivel.
+- `WHATSAPP_FFMPEG_PATH=/usr/bin/ffmpeg`.
+- `WHATSAPP_VOICE_TEMP_DIR=/var/lib/crm-novo/whatsapp-media/tmp/audio4`.
+- diretorio temporario com owner `crmnovo:crmnovo` e permissao `0700`.
+
+O capability check da API deve reportar:
+
+```text
+voice conversion available=true ffmpeg=true ffprobe=true encoderLibopus=true decoderOpus=true demuxWebm=true muxOgg=true
+```
+
+## Nota de Deploy API
+
+Apos atualizar codigo da API em producao:
+
+1. Rodar `prisma generate` no artefato/ambiente de build usado pela API.
+2. Rebuildar a API.
+3. Garantir que `dist` foi regenerado a partir do source atualizado.
+4. Reiniciar `crm-novo-api.service`.
+
+Source atualizado com `dist` antigo pode manter codigo antigo em execucao,
+incluindo capability checks ou fluxos de conversao anteriores.
 
 ## Deploy Futuro
 

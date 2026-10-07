@@ -12573,7 +12573,9 @@ function ConversationMediaContent({
 
   if (message.type === 'DOCUMENT') {
     const fileName = message.mediaFileName || 'Documento';
-    const fileSize = message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : 'Arquivo';
+    const documentType = conversationDocumentTypeLabel(fileName, message.mediaMimeType);
+    const fileSize = message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : null;
+    const documentMeta = [documentType, fileSize].filter(Boolean).join(' | ');
     const showPdfPreview = isPdfDocument && !error;
     const previewUrl =
       showPdfPreview && mediaUrl
@@ -12608,10 +12610,14 @@ function ConversationMediaContent({
         <div className="conversation-document-details">
           <span className="conversation-document-icon" aria-hidden="true">
             <FileText size={18} />
+            {isPdfDocument ? <span>PDF</span> : null}
           </span>
           <span className="conversation-document-copy">
             <strong>{fileName}</strong>
-            <small>{fileSize}</small>
+            <small>{documentMeta}</small>
+            {error ? (
+              <small className="conversation-document-error">Falha ao carregar</small>
+            ) : null}
           </span>
           <button
             aria-label={`Abrir ou baixar ${fileName}`}
@@ -13877,6 +13883,24 @@ function formatFileSize(bytes: number) {
   if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
   const mb = kb / 1024;
   return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
+function conversationDocumentTypeLabel(fileName: string, mimeType: string | null) {
+  const normalizedMime = mimeType?.split(';')[0]?.trim().toLowerCase() || '';
+  if (normalizedMime === 'application/pdf') return 'PDF';
+
+  const extension = fileName.match(/\.([a-z0-9]{1,8})$/i)?.[1];
+  if (extension) return extension.toUpperCase();
+
+  if (normalizedMime) {
+    const subtype = normalizedMime
+      .split('/')[1]
+      ?.replace(/^vnd\./, '')
+      .split(/[.+-]/)[0];
+    if (subtype) return subtype.toUpperCase().slice(0, 12);
+  }
+
+  return 'Arquivo';
 }
 
 function isFinitePositiveNumber(value: number | null | undefined): value is number {

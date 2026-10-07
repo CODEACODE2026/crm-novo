@@ -2783,6 +2783,7 @@ a {
 }
 
 .conversation-document-icon {
+  position: relative;
   display: inline-grid;
   width: 34px;
   height: 34px;
@@ -2790,6 +2791,19 @@ a {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-secondary);
+}
+
+.conversation-document-icon span {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--danger) 82%, black);
+  color: white;
+  font-size: 7px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 2px 3px;
 }
 
 .conversation-document-copy {
@@ -2813,6 +2827,10 @@ a {
 .conversation-media-unavailable {
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.conversation-document-copy .conversation-document-error {
+  color: var(--danger);
 }
 
 .conversation-media-loading {

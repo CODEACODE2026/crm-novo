@@ -232,10 +232,26 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       '`${mediaUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`',
     );
     expect(conversationsSource).toContain('const previewUrl =');
+    expect(conversationsSource).toContain('<object');
+    expect(conversationsSource).toContain('type="application/pdf"');
+    expect(conversationsSource).toContain('aria-hidden="true"');
+    expect(conversationsSource).toContain(
+      'const documentType = conversationDocumentTypeLabel(fileName, message.mediaMimeType);',
+    );
+    expect(conversationsSource).toContain(
+      "const documentMeta = [documentType, fileSize].filter(Boolean).join(' | ');",
+    );
+    expect(dashboardSource).toContain(
+      'function conversationDocumentTypeLabel(fileName: string, mimeType: string | null)',
+    );
+    expect(dashboardSource).toContain("if (normalizedMime === 'application/pdf') return 'PDF';");
+    expect(dashboardSource).toContain('fileName.match(/\\.([a-z0-9]{1,8})$/i)?.[1]');
+    expect(dashboardSource).toContain("return 'Arquivo';");
     expect(conversationsSource).toContain('<Download size={15} aria-hidden="true" />');
     expect(conversationsSource).toContain("message.mediaFileName || 'Documento'");
     expect(conversationsSource).toContain("if (type === 'DOCUMENT') return 'Mídia indisponível';");
     expect(conversationsSource).toContain('formatFileSize(message.mediaSizeBytes)');
+    expect(conversationsSource).toContain('Falha ao carregar');
     expect(conversationsSource).toContain('Tentar novamente');
     expect(conversationsSource).toContain('conversation-media-loading');
     expect(conversationsSource).toContain('conversation-audio-media');
@@ -282,6 +298,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversation-audio-progress:focus-visible');
     expect(stylesSource).toContain('font-variant-numeric: tabular-nums;');
     expect(stylesSource).toContain('.conversation-document-copy strong');
+    expect(stylesSource).toContain('.conversation-document-icon span');
+    expect(stylesSource).toContain('.conversation-document-copy .conversation-document-error');
     expect(stylesSource).toContain('text-overflow: ellipsis;');
     expect(stylesSource).toContain('.conversation-attachment-preview');
     expect(stylesSource).toContain('.conversation-voice-preview');

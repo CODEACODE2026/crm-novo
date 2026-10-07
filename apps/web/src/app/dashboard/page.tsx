@@ -12759,6 +12759,39 @@ function ConversationBubble({
   );
 }
 
+function useMediaVisibility(enabled: boolean) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || visible) return undefined;
+
+    const element = elementRef.current;
+    if (!element) return undefined;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '240px 0px', threshold: 0.01 },
+    );
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [enabled, visible]);
+
+  return { elementRef, visible };
+}
+
 function ConversationMediaContent({
   conversationId,
   message,
@@ -12770,61 +12803,84 @@ function ConversationMediaContent({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
+  const [pdfPreviewRequested, setPdfPreviewRequested] = useState(false);
   const mountedRef = useRef(false);
+  const mediaUrlRef = useRef<string | null>(null);
+  const loadingPromiseRef = useRef<Promise<string | null> | null>(null);
+  const requestGenerationRef = useRef(0);
   const imageButtonRef = useRef<HTMLButtonElement | null>(null);
   const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
   const isPdfDocument =
     message.type === 'DOCUMENT' && message.mediaMimeType?.toLowerCase() === 'application/pdf';
-  const autoPreview =
-    message.type === 'IMAGE' ||
-    message.type === 'AUDIO' ||
-    message.type === 'VIDEO' ||
-    isPdfDocument;
-  const available = message.mediaAvailable && autoPreview;
+  const imageAutoVisible = message.type === 'IMAGE' && message.mediaAvailable && !mediaUrl;
+  const { elementRef: visibilityRef, visible: mediaVisible } = useMediaVisibility(imageAutoVisible);
 
   useEffect(() => {
     mountedRef.current = true;
 
     return () => {
       mountedRef.current = false;
+      if (mediaUrlRef.current) {
+        URL.revokeObjectURL(mediaUrlRef.current);
+        mediaUrlRef.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
     setImageLightboxOpen(false);
+    setPdfPreviewRequested(false);
     setError(false);
-    setMediaUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
+    requestGenerationRef.current += 1;
+    loadingPromiseRef.current = null;
+    if (mediaUrlRef.current) {
+      URL.revokeObjectURL(mediaUrlRef.current);
+      mediaUrlRef.current = null;
+    }
+    setMediaUrl(null);
   }, [conversationId, message.id, message.mediaAvailable]);
 
   const loadMedia = useCallback(async () => {
     if (!message.mediaAvailable) return null;
+    if (mediaUrlRef.current) return mediaUrlRef.current;
+    if (loadingPromiseRef.current) return loadingPromiseRef.current;
 
     setLoading(true);
     setError(false);
+    const requestGeneration = requestGenerationRef.current;
 
-    try {
-      const blob = await downloadWhatsAppConversationMedia(conversationId, message.id);
-      const objectUrl = URL.createObjectURL(blob);
+    const request = downloadWhatsAppConversationMedia(conversationId, message.id)
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
 
-      if (!mountedRef.current) {
-        URL.revokeObjectURL(objectUrl);
-        return null;
-      }
+        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) {
+          URL.revokeObjectURL(objectUrl);
+          return null;
+        }
 
-      setMediaUrl((current) => {
-        if (current) URL.revokeObjectURL(current);
+        if (mediaUrlRef.current && mediaUrlRef.current !== objectUrl) {
+          URL.revokeObjectURL(mediaUrlRef.current);
+        }
+
+        mediaUrlRef.current = objectUrl;
+        setMediaUrl(objectUrl);
         return objectUrl;
+      })
+      .catch(() => {
+        if (mountedRef.current && requestGeneration === requestGenerationRef.current) {
+          setError(true);
+        }
+        return null;
+      })
+      .finally(() => {
+        if (requestGeneration === requestGenerationRef.current) {
+          loadingPromiseRef.current = null;
+          if (mountedRef.current) setLoading(false);
+        }
       });
-      return objectUrl;
-    } catch {
-      if (mountedRef.current) setError(true);
-      return null;
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
+
+    loadingPromiseRef.current = request;
+    return request;
   }, [conversationId, message.id, message.mediaAvailable]);
 
   const closeImageLightbox = useCallback(() => {
@@ -12835,37 +12891,10 @@ function ConversationMediaContent({
   }, []);
 
   useEffect(() => {
-    if (!available) return undefined;
-    let active = true;
+    if (message.type !== 'IMAGE' || !mediaVisible || mediaUrl) return;
 
-    setLoading(true);
-    setError(false);
-    downloadWhatsAppConversationMedia(conversationId, message.id)
-      .then((blob) => {
-        if (!active) return;
-        const objectUrl = URL.createObjectURL(blob);
-        setMediaUrl((current) => {
-          if (current) URL.revokeObjectURL(current);
-          return objectUrl;
-        });
-      })
-      .catch(() => {
-        if (active) setError(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [available, conversationId, message.id]);
-
-  useEffect(() => {
-    return () => {
-      if (mediaUrl) URL.revokeObjectURL(mediaUrl);
-    };
-  }, [mediaUrl]);
+    void loadMedia();
+  }, [loadMedia, mediaUrl, mediaVisible, message.type]);
 
   useEffect(() => {
     if (!imageLightboxOpen) return undefined;
@@ -12895,6 +12924,18 @@ function ConversationMediaContent({
     window.open(objectUrl, '_blank', 'noopener,noreferrer');
   }
 
+  async function openImageLightbox() {
+    const objectUrl = mediaUrl ?? (await loadMedia());
+    if (!objectUrl) return;
+
+    setImageLightboxOpen(true);
+  }
+
+  async function requestPdfPreview() {
+    setPdfPreviewRequested(true);
+    await loadMedia();
+  }
+
   if (!isRenderableConversationMedia(message.type)) {
     return null;
   }
@@ -12915,7 +12956,7 @@ function ConversationMediaContent({
     const documentType = conversationDocumentTypeLabel(fileName, message.mediaMimeType);
     const fileSize = message.mediaSizeBytes ? formatFileSize(message.mediaSizeBytes) : null;
     const documentMeta = [documentType, fileSize].filter(Boolean).join(' | ');
-    const showPdfPreview = isPdfDocument && !error;
+    const showPdfPreview = isPdfDocument && pdfPreviewRequested && !error;
     const previewUrl =
       showPdfPreview && mediaUrl
         ? `${mediaUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
@@ -12958,6 +12999,20 @@ function ConversationMediaContent({
               <small className="conversation-document-error">Falha ao carregar</small>
             ) : null}
           </span>
+          {isPdfDocument ? (
+            <button
+              aria-label={`Visualizar PDF ${fileName}`}
+              className="conversation-document-action"
+              disabled={loading && !mediaUrl}
+              type="button"
+              onClick={() => void requestPdfPreview()}
+            >
+              <Eye size={15} aria-hidden="true" />
+              <span>
+                {loading && pdfPreviewRequested && !mediaUrl ? 'Carregando...' : 'Visualizar'}
+              </span>
+            </button>
+          ) : null}
           <button
             aria-label={`Abrir ou baixar ${fileName}`}
             className="conversation-document-action"
@@ -12969,6 +13024,44 @@ function ConversationMediaContent({
             <span>{loading && !mediaUrl ? 'Abrindo...' : 'Abrir / Baixar'}</span>
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (message.type === 'IMAGE' && !mediaUrl) {
+    return (
+      <div ref={visibilityRef} className="conversation-media-unavailable image-placeholder">
+        <span>{loading ? 'Carregando imagem...' : 'Imagem disponível'}</span>
+        {error ? <span>Falha ao carregar</span> : null}
+        <button type="button" onClick={() => void openImageLightbox()}>
+          {loading ? 'Carregando...' : error ? 'Tentar novamente' : 'Carregar imagem'}
+        </button>
+      </div>
+    );
+  }
+
+  if (message.type === 'AUDIO') {
+    return (
+      <ConversationAudioPlayer
+        durationSeconds={message.mediaDurationSeconds}
+        loading={loading}
+        loadError={error}
+        outbound={message.direction === 'OUTBOUND'}
+        onLoadSource={loadMedia}
+        src={mediaUrl}
+      />
+    );
+  }
+
+  if (message.type === 'VIDEO' && !mediaUrl) {
+    return (
+      <div className="conversation-media-unavailable">
+        <span>
+          {loading ? 'Carregando vídeo...' : conversationMediaUnavailableText(message.type)}
+        </span>
+        <button type="button" onClick={() => void loadMedia()}>
+          {loading ? 'Carregando...' : error ? 'Tentar novamente' : 'Carregar vídeo'}
+        </button>
       </div>
     );
   }
@@ -12996,7 +13089,7 @@ function ConversationMediaContent({
           aria-label="Abrir imagem em tamanho grande"
           className="conversation-image-media"
           type="button"
-          onClick={() => setImageLightboxOpen(true)}
+          onClick={() => void openImageLightbox()}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={message.text || message.mediaFileName || 'Imagem'} src={mediaUrl} />
@@ -13035,16 +13128,6 @@ function ConversationMediaContent({
     );
   }
 
-  if (message.type === 'AUDIO') {
-    return (
-      <ConversationAudioPlayer
-        durationSeconds={message.mediaDurationSeconds}
-        outbound={message.direction === 'OUTBOUND'}
-        src={mediaUrl}
-      />
-    );
-  }
-
   return (
     <video className="conversation-video-media" controls preload="metadata" src={mediaUrl}>
       <track kind="captions" />
@@ -13054,15 +13137,22 @@ function ConversationMediaContent({
 
 function ConversationAudioPlayer({
   durationSeconds,
+  loading,
+  loadError,
+  onLoadSource,
   outbound,
   src,
 }: {
   durationSeconds: number | null;
+  loading: boolean;
+  loadError: boolean;
+  onLoadSource: () => Promise<string | null>;
   outbound: boolean;
-  src: string;
+  src: string | null;
 }) {
   const conversationAudioPlayEvent = 'crm-conversation-audio-play';
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingPlaybackRef = useRef(false);
   const initialDuration = isFinitePositiveNumber(durationSeconds) ? durationSeconds : 0;
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(initialDuration);
@@ -13093,9 +13183,23 @@ function ConversationAudioPlayer({
     setCurrentTime(0);
     setDuration(initialDuration);
     setPlaying(false);
-    setWaiting(false);
-    setFailed(false);
-  }, [initialDuration, src]);
+    if (!pendingPlaybackRef.current) setWaiting(false);
+    setFailed(loadError);
+  }, [initialDuration, loadError, src]);
+
+  useEffect(() => {
+    if (!src || !pendingPlaybackRef.current) return;
+
+    pendingPlaybackRef.current = false;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    setWaiting(true);
+    audio.play().catch(() => {
+      setWaiting(false);
+      setPlaying(false);
+    });
+  }, [src]);
 
   function syncTime() {
     const audio = audioRef.current;
@@ -13119,6 +13223,22 @@ function ConversationAudioPlayer({
   }
 
   async function togglePlayback() {
+    if (!src) {
+      if (loading) return;
+
+      pendingPlaybackRef.current = true;
+      setWaiting(true);
+      setFailed(false);
+      const objectUrl = await onLoadSource();
+
+      if (!objectUrl) {
+        pendingPlaybackRef.current = false;
+        setWaiting(false);
+        setFailed(true);
+      }
+      return;
+    }
+
     const audio = audioRef.current;
     if (!audio || failed) return;
 
@@ -13130,7 +13250,6 @@ function ConversationAudioPlayer({
         audio.pause();
       }
     } catch {
-      setFailed(true);
       setWaiting(false);
       setPlaying(false);
     }
@@ -13167,7 +13286,7 @@ function ConversationAudioPlayer({
 
   const buttonLabel = failed
     ? 'Áudio indisponível'
-    : waiting
+    : waiting || loading
       ? 'Carregando áudio'
       : playing
         ? 'Pausar áudio'
@@ -13175,56 +13294,58 @@ function ConversationAudioPlayer({
 
   return (
     <div className={`conversation-audio-player ${outbound ? 'outbound' : 'inbound'}`}>
-      <audio
-        ref={audioRef}
-        className="conversation-audio-media"
-        preload="metadata"
-        src={src}
-        onCanPlay={() => {
-          setWaiting(false);
-          syncDuration();
-        }}
-        onDurationChange={syncDuration}
-        onEnded={() => {
-          const audio = audioRef.current;
-          if (audio) audio.currentTime = 0;
-          setPlaying(false);
-          setWaiting(false);
-          setCurrentTime(0);
-        }}
-        onError={() => {
-          setFailed(true);
-          setWaiting(false);
-          setPlaying(false);
-        }}
-        onLoadedMetadata={syncDuration}
-        onPause={() => {
-          setPlaying(false);
-          setWaiting(false);
-        }}
-        onPlay={() => {
-          const audio = audioRef.current;
-          if (audio) {
-            window.dispatchEvent(new CustomEvent(conversationAudioPlayEvent, { detail: audio }));
-          }
-          setPlaying(true);
-          setFailed(false);
-        }}
-        onPlaying={() => {
-          setPlaying(true);
-          setWaiting(false);
-        }}
-        onTimeUpdate={syncTime}
-        onWaiting={() => setWaiting(true)}
-      />
+      {src ? (
+        <audio
+          ref={audioRef}
+          className="conversation-audio-media"
+          preload="metadata"
+          src={src}
+          onCanPlay={() => {
+            setWaiting(false);
+            syncDuration();
+          }}
+          onDurationChange={syncDuration}
+          onEnded={() => {
+            const audio = audioRef.current;
+            if (audio) audio.currentTime = 0;
+            setPlaying(false);
+            setWaiting(false);
+            setCurrentTime(0);
+          }}
+          onError={() => {
+            setFailed(true);
+            setWaiting(false);
+            setPlaying(false);
+          }}
+          onLoadedMetadata={syncDuration}
+          onPause={() => {
+            setPlaying(false);
+            setWaiting(false);
+          }}
+          onPlay={() => {
+            const audio = audioRef.current;
+            if (audio) {
+              window.dispatchEvent(new CustomEvent(conversationAudioPlayEvent, { detail: audio }));
+            }
+            setPlaying(true);
+            setFailed(false);
+          }}
+          onPlaying={() => {
+            setPlaying(true);
+            setWaiting(false);
+          }}
+          onTimeUpdate={syncTime}
+          onWaiting={() => setWaiting(true)}
+        />
+      ) : null}
       <button
         aria-label={buttonLabel}
         className="conversation-audio-toggle"
-        disabled={failed}
+        disabled={failed && !loadError}
         type="button"
         onClick={() => void togglePlayback()}
       >
-        {waiting ? (
+        {waiting || loading ? (
           <Loader2 size={17} aria-hidden="true" />
         ) : playing ? (
           <Pause size={17} aria-hidden="true" />

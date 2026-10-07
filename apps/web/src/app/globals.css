@@ -2805,7 +2805,7 @@ a {
 
 .conversation-document-details {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 9px;
   min-width: 0;
@@ -2874,6 +2874,16 @@ a {
   background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.conversation-media-unavailable.image-placeholder {
+  min-width: min(220px, calc(100vw - 88px));
+  min-height: 112px;
+  justify-content: center;
+  border: 1px dashed color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 84%, transparent);
+  padding: 10px;
 }
 
 .conversation-media-loading::before {

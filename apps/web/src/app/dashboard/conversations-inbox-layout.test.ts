@@ -291,10 +291,26 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain(
       "const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);",
     );
+    expect(conversationsSource).toContain('function useMediaVisibility(enabled: boolean)');
+    expect(conversationsSource).toContain('new IntersectionObserver');
+    expect(conversationsSource).toContain("rootMargin: '240px 0px'");
+    expect(conversationsSource).toContain('observer.disconnect();');
+    expect(conversationsSource).toContain(
+      "const imageAutoVisible = message.type === 'IMAGE' && message.mediaAvailable && !mediaUrl;",
+    );
     expect(conversationsSource).toContain("if (type === 'AUDIO') return 'Mídia indisponível';");
     expect(conversationsSource).toContain(
       'downloadWhatsAppConversationMedia(conversationId, message.id)',
     );
+    expect(conversationsSource).toContain('loadingPromiseRef.current');
+    expect(conversationsSource).toContain(
+      'if (loadingPromiseRef.current) return loadingPromiseRef.current;',
+    );
+    expect(conversationsSource).toContain('requestGenerationRef.current += 1;');
+    expect(conversationsSource).toContain(
+      'if (!mountedRef.current || requestGeneration !== requestGenerationRef.current)',
+    );
+    expect(conversationsSource).not.toContain('const autoPreview =');
     expect(conversationsSource).toContain('conversation-image-media');
     expect(conversationsSource).toContain('conversation-image-lightbox');
     expect(conversationsSource).toContain('aria-modal="true"');
@@ -307,15 +323,17 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('document.body.style.overflow = previousOverflow');
     expect(conversationsSource).toContain('aria-label="Fechar imagem"');
     expect(conversationsSource).toContain('URL.createObjectURL(blob)');
-    expect(conversationsSource).toContain('URL.revokeObjectURL(current)');
-    expect(conversationsSource).toContain('if (mediaUrl) URL.revokeObjectURL(mediaUrl);');
+    expect(conversationsSource).toContain('URL.revokeObjectURL(mediaUrlRef.current)');
+    expect(conversationsSource).toContain('mediaUrlRef.current = null;');
     expect(conversationsSource).toContain('conversation-document-action');
     expect(conversationsSource).toContain('conversation-document-preview');
     expect(conversationsSource).toContain('conversation-document-preview-frame');
     expect(conversationsSource).toContain(
       "message.mediaMimeType?.toLowerCase() === 'application/pdf'",
     );
-    expect(conversationsSource).toContain('const showPdfPreview = isPdfDocument && !error;');
+    expect(conversationsSource).toContain(
+      'const showPdfPreview = isPdfDocument && pdfPreviewRequested && !error;',
+    );
     expect(conversationsSource).toContain("showPdfPreview ? 'has-pdf-preview' : ''");
     expect(conversationsSource).toContain(
       '`${mediaUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`',
@@ -323,6 +341,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('const previewUrl =');
     expect(conversationsSource).toContain('<object');
     expect(conversationsSource).toContain('type="application/pdf"');
+    expect(conversationsSource).toContain('Visualizar');
+    expect(conversationsSource).toContain('setPdfPreviewRequested(true);');
+    expect(conversationsSource).toContain('Carregar imagem');
+    expect(conversationsSource).toContain('Carregar vídeo');
     expect(conversationsSource).toContain('aria-hidden="true"');
     expect(conversationsSource).toContain(
       'const documentType = conversationDocumentTypeLabel(fileName, message.mediaMimeType);',
@@ -345,6 +367,12 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('conversation-media-loading');
     expect(conversationsSource).toContain('conversation-audio-media');
     expect(conversationsSource).toContain('function ConversationAudioPlayer');
+    expect(conversationsSource).toContain('onLoadSource: () => Promise<string | null>;');
+    expect(conversationsSource).toContain('pendingPlaybackRef.current = true;');
+    expect(conversationsSource).toContain('audio.play().catch(() =>');
+    expect(conversationsSource).toMatch(
+      /audio\.play\(\)\.catch\(\(\) => \{\s+setWaiting\(false\);\s+setPlaying\(false\);\s+\}\);/,
+    );
     expect(conversationsSource).toContain('message.mediaDurationSeconds');
     expect(conversationsSource).toContain('formatConversationAudioTime');
     expect(conversationsSource).toContain('audio.play()');
@@ -374,6 +402,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('max-width: calc(100vw - 20px);');
     expect(stylesSource).toContain('touch-action: pinch-zoom;');
     expect(stylesSource).toContain('.conversation-media-loading::before');
+    expect(stylesSource).toContain('.conversation-media-unavailable.image-placeholder');
     expect(stylesSource).toContain('.conversation-document-media.has-pdf-preview');
     expect(stylesSource).toContain('width: min(300px, 100%);');
     expect(stylesSource).toContain('height: clamp(140px, 32vw, 170px);');
@@ -398,6 +427,23 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(mobileConversationMediaSource).toContain(
       '.conversation-attachment-preview,\n  .conversation-voice-preview,\n  .conversation-voice-recorder',
     );
+  });
+
+  it('keeps conversation media downloads lazy and interaction-gated', () => {
+    expect(conversationsSource).toContain('useMediaVisibility(imageAutoVisible)');
+    expect(conversationsSource).toContain(
+      "if (message.type !== 'IMAGE' || !mediaVisible || mediaUrl) return;",
+    );
+    expect(conversationsSource).toContain('void loadMedia();');
+    expect(conversationsSource).toContain('async function openImageLightbox()');
+    expect(conversationsSource).toContain('const objectUrl = mediaUrl ?? (await loadMedia());');
+    expect(conversationsSource).toContain('async function requestPdfPreview()');
+    expect(conversationsSource).toContain("if (message.type === 'AUDIO')");
+    expect(conversationsSource).toContain('onLoadSource={loadMedia}');
+    expect(conversationsSource).toContain("if (message.type === 'VIDEO' && !mediaUrl)");
+    expect(conversationsSource).toContain('Abrir / Baixar');
+    expect(conversationsSource).toContain('URL.revokeObjectURL(mediaUrlRef.current)');
+    expect(conversationsSource).toContain('return null;');
   });
 
   it('supports WebM microphone voice notes as a separate PTT flow', () => {

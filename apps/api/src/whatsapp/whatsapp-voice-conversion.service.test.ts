@@ -35,21 +35,23 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
   capabilityOutputStream: 'stdout' | 'stderr' = 'stdout';
   omitCapability: 'libopus' | 'opusDecoder' | 'webmDemuxer' | 'oggMuxer' | null = null;
   decoderCapabilityOutput: string | null = null;
-  calls: Array<{ command: string; args: string[] }> = [];
+  calls: Array<{ command: string; args: string[]; outputLimit: number }> = [];
 
   protected override async runProcess(
     command: string,
     args: string[],
     timeout: number,
+    outputLimit = 4_000,
   ): Promise<ProcessResult> {
     void timeout;
-    this.calls.push({ command, args });
+    this.calls.push({ command, args, outputLimit });
 
     if (args.includes('-encoders')) {
       return this.capabilityResult(
         this.omitCapability === 'libopus'
           ? ' A..... aac AAC'
           : ' A..... libopus libopus Opus (codec opus)',
+        outputLimit,
       );
     }
     if (args.includes('-decoders')) {
@@ -58,6 +60,7 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
           (this.omitCapability === 'opusDecoder'
             ? ' A....D aac AAC'
             : [' A....D opus Opus', ' A....D libopus libopus Opus (codec opus)'].join('\n')),
+        outputLimit,
       );
     }
     if (args.includes('-demuxers')) {
@@ -65,6 +68,7 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
         this.omitCapability === 'webmDemuxer'
           ? ' D mov,mp4,m4a,3gp,3g2,mj2 QuickTime / MOV'
           : ' D matroska,webm Matroska / WebM',
+        outputLimit,
       );
     }
     if (args.includes('-muxers')) {
@@ -72,6 +76,7 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
         this.omitCapability === 'oggMuxer'
           ? ' E mp4 MP4'
           : [' E ogg Ogg', ' E opus Ogg Opus'].join('\n'),
+        outputLimit,
       );
     }
 
@@ -117,10 +122,11 @@ class FakeVoiceConversionService extends WhatsAppVoiceConversionService {
     }
   }
 
-  private capabilityResult(output: string) {
+  private capabilityResult(output: string, outputLimit: number) {
+    const boundedOutput = output.slice(-outputLimit);
     return this.capabilityOutputStream === 'stdout'
-      ? processResult({ stdout: output })
-      : processResult({ stderr: output });
+      ? processResult({ stdout: boundedOutput })
+      : processResult({ stderr: boundedOutput });
   }
 }
 
@@ -321,6 +327,7 @@ describe('WhatsAppVoiceConversionService', () => {
     const ffmpegCall = subject.calls.find((call) => call.args.includes('-application'));
 
     expect(ffmpegCall?.command).toBe(ffmpegPath);
+    expect(ffmpegCall?.outputLimit).toBe(4_000);
     expect(ffmpegCall?.args).toEqual(
       expect.arrayContaining([
         '-hide_banner',
@@ -370,6 +377,38 @@ describe('WhatsAppVoiceConversionService', () => {
 
     expect(capability.opusDecoder).toBe(true);
     expect(capability.available).toBe(true);
+  });
+
+  it('retains long ffmpeg decoder capability output beyond the normal 4000-char tail', async () => {
+    const trailingOutput = Array.from(
+      { length: 240 },
+      (_, index) => ` A....D filler_${index} Filler decoder ${index}`,
+    ).join('\n');
+    subject.decoderCapabilityOutput = [
+      ' A....D opus Opus',
+      ' A....D libopus libopus Opus (codec opus)',
+      trailingOutput,
+    ].join('\n');
+
+    expect(subject.decoderCapabilityOutput.slice(-4_000)).not.toContain(' opus ');
+
+    const capability = await subject.capabilityCheck();
+    const decoderCall = subject.calls.find((call) => call.args.includes('-decoders'));
+
+    expect(decoderCall?.outputLimit).toBe(64 * 1024);
+    expect(capability.opusDecoder).toBe(true);
+    expect(capability.available).toBe(true);
+  });
+
+  it('keeps capability output bounded to the capability limit', async () => {
+    subject.decoderCapabilityOutput = [' A....D opus Opus', 'x'.repeat(70 * 1024)].join('\n');
+
+    const capability = await subject.capabilityCheck();
+    const decoderCall = subject.calls.find((call) => call.args.includes('-decoders'));
+
+    expect(decoderCall?.outputLimit).toBe(64 * 1024);
+    expect(capability.opusDecoder).toBe(false);
+    expect(capability.available).toBe(false);
   });
 
   it('does not detect opus decoder from Canopus-only decoder descriptions', async () => {

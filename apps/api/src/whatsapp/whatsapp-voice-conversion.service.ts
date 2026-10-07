@@ -73,6 +73,7 @@ const outputMaxBytes = 5 * 1024 * 1024;
 const durationMaxSeconds = 60;
 const timeoutMs = 15_000;
 const processOutputLimit = 4_000;
+const capabilityOutputLimit = 64 * 1024;
 const outputMimeType = 'audio/ogg; codecs=opus' as const;
 
 @Injectable()
@@ -200,10 +201,10 @@ export class WhatsAppVoiceConversionService {
       await access(ffprobePath, constants.X_OK);
 
       const [encoders, decoders, demuxers, muxers] = await Promise.all([
-        this.runProcess(ffmpegPath, ['-hide_banner', '-encoders'], 5_000),
-        this.runProcess(ffmpegPath, ['-hide_banner', '-decoders'], 5_000),
-        this.runProcess(ffmpegPath, ['-hide_banner', '-demuxers'], 5_000),
-        this.runProcess(ffmpegPath, ['-hide_banner', '-muxers'], 5_000),
+        this.runProcess(ffmpegPath, ['-hide_banner', '-encoders'], 5_000, capabilityOutputLimit),
+        this.runProcess(ffmpegPath, ['-hide_banner', '-decoders'], 5_000, capabilityOutputLimit),
+        this.runProcess(ffmpegPath, ['-hide_banner', '-demuxers'], 5_000, capabilityOutputLimit),
+        this.runProcess(ffmpegPath, ['-hide_banner', '-muxers'], 5_000, capabilityOutputLimit),
       ]);
 
       const encoderOutput = this.processOutput(encoders);
@@ -402,7 +403,12 @@ export class WhatsAppVoiceConversionService {
     }
   }
 
-  protected runProcess(command: string, args: string[], timeout: number): Promise<ProcessResult> {
+  protected runProcess(
+    command: string,
+    args: string[],
+    timeout: number,
+    outputLimit = processOutputLimit,
+  ): Promise<ProcessResult> {
     return new Promise((resolve) => {
       const child = spawn(command, args, {
         shell: false,
@@ -414,7 +420,7 @@ export class WhatsAppVoiceConversionService {
       let timedOut = false;
 
       const append = (current: string, chunk: Buffer) =>
-        (current + chunk.toString('utf8')).slice(-processOutputLimit);
+        (current + chunk.toString('utf8')).slice(-outputLimit);
 
       const finish = (result: Omit<ProcessResult, 'stdout' | 'stderr' | 'timedOut'>) => {
         if (settled) return;

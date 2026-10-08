@@ -2757,6 +2757,8 @@ export class WhatsAppService {
         presenceOnlyKeys: ['remoteJid', 'participant'],
       })}`,
       `eventArrays=${this.buildReadReceiptArraySummary(eventRecords)}`,
+      `eventType=${this.safeProbeNonSensitiveValue(event?.Type) ?? 'unknown'}`,
+      `eventMessageIDs=${this.summarizeReadReceiptMessageIds(event?.MessageIDs)}`,
       `stateType=${this.debugType(stateValue)}`,
       `state=${!state && stateScalar ? stateScalar : 'unknown'}`,
       `stateKeys=${this.buildReadReceiptKeysSummary(stateRecords)}`,
@@ -2842,7 +2844,7 @@ export class WhatsAppService {
   }
 
   private buildReadReceiptArraySummary(records: Array<[string, Record<string, unknown> | null]>) {
-    const candidateKeys = ['ids', 'Ids', 'IDs', 'messageIds', 'messages', 'Messages'];
+    const candidateKeys = ['ids', 'Ids', 'IDs', 'messageIds', 'MessageIDs', 'messages', 'Messages'];
     const entries: string[] = [];
 
     for (const [name, record] of records) {
@@ -2862,6 +2864,41 @@ export class WhatsAppService {
     }
 
     return entries.join('|') || 'none';
+  }
+
+  private summarizeReadReceiptMessageIds(value: unknown) {
+    if (Array.isArray(value)) {
+      const ids = value
+        .flatMap((item) => this.extractReadReceiptMessageIdCandidates(item))
+        .map((item) => this.safeReadReceiptScalarValue(item, true))
+        .filter((item): item is string => Boolean(item));
+
+      return `length=${value.length}${ids.length ? ` ids=${ids.slice(0, 5).join(',')}` : ''}`;
+    }
+
+    const scalar = this.safeReadReceiptScalarValue(value, true);
+
+    if (scalar) {
+      return `value=${scalar}`;
+    }
+
+    return 'none';
+  }
+
+  private extractReadReceiptMessageIdCandidates(value: unknown): unknown[] {
+    if (typeof value === 'string' || typeof value === 'number') {
+      return [value];
+    }
+
+    const record = this.asRecord(value);
+
+    if (!record) {
+      return [];
+    }
+
+    return ['id', 'Id', 'ID', 'messageId', 'MessageId', 'messageID', 'key', 'Key']
+      .filter((key) => Object.prototype.hasOwnProperty.call(record, key))
+      .map((key) => record[key]);
   }
 
   private safeReadReceiptScalarValue(value: unknown, mask: boolean) {

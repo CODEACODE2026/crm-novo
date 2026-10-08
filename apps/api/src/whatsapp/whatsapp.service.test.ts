@@ -4064,6 +4064,84 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
+  it('summarizes ReadReceipt event MessageIDs string arrays with masked ids', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      state: 'Delivered',
+      event: {
+        Type: 'delivery',
+        MessageIDs: ['MSGIDDELIVERED1234567890', 'MSGIDDELIVERED0987654321'],
+        Timestamp: '2026-10-08T18:21:18-03:00',
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('stateType=string state=Delivered');
+    expect(output).toContain('eventType=delivery');
+    expect(output).toContain('event.MessageIDs:length=2 ids=MSGIDD...7890,MSGIDD...4321');
+    expect(output).toContain('eventMessageIDs=length=2 ids=MSGIDD...7890,MSGIDD...4321');
+    expect(output).toContain('event.Timestamp:2026-10-08T18:21:18-03:00');
+    expect(output).not.toContain('MSGIDDELIVERED1234567890');
+    expect(output).not.toContain('MSGIDDELIVERED0987654321');
+    log.mockRestore();
+  });
+
+  it('summarizes ReadReceipt event MessageIDs scalar safely', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      event: {
+        MessageIDs: 'SINGLEDELIVERED1234567890',
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('eventMessageIDs=value=SINGLE...7890');
+    expect(output).not.toContain('SINGLEDELIVERED1234567890');
+    log.mockRestore();
+  });
+
+  it('summarizes ReadReceipt event MessageIDs object arrays using safe technical fields only', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      event: {
+        MessageIDs: [
+          {
+            ID: 'OBJECTDELIVERED1234567890',
+            text: 'texto privado',
+            remoteJid: '5544999999999@s.whatsapp.net',
+          },
+          {
+            messageId: 'OBJECTDELIVERED0987654321',
+            token: 'secret-token',
+          },
+        ],
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('event.MessageIDs:length=2');
+    expect(output).toContain('eventMessageIDs=length=2 ids=OBJECT...7890,OBJECT...4321');
+    expect(output).not.toContain('OBJECTDELIVERED1234567890');
+    expect(output).not.toContain('OBJECTDELIVERED0987654321');
+    expect(output).not.toContain('texto privado');
+    expect(output).not.toContain('5544999999999');
+    expect(output).not.toContain('s.whatsapp.net');
+    expect(output).not.toContain('secret-token');
+    log.mockRestore();
+  });
+
   it('logs ReadReceipt state string and object structure safely', async () => {
     const stateString = serviceFactory();
     const stringLog = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);

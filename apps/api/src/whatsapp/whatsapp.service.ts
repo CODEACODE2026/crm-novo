@@ -2406,6 +2406,10 @@ export class WhatsAppService {
       return { received: true, processed: false, reason: 'missing_phone' };
     }
 
+    if (!this.hasRenderableWebhookMessageContent(normalized)) {
+      return { received: true, processed: false, reason: 'no_renderable_content' };
+    }
+
     const incoming = { ...normalized, phone: normalized.phone };
     const connection = await this.findConnectionForWebhook(normalized);
 
@@ -5287,6 +5291,20 @@ export class WhatsAppService {
     };
 
     return map[type];
+  }
+
+  private hasRenderableWebhookMessageContent(normalized: NormalizedWhatsAppMessage) {
+    if (normalized.text?.trim()) {
+      return true;
+    }
+
+    if (normalized.mediaMetadata || normalized.mediaDownloadMetadata) {
+      return true;
+    }
+
+    return ['image', 'video', 'audio', 'document', 'location', 'live_location'].includes(
+      normalized.messageType,
+    );
   }
 
   private conversationMessageText(type: WhatsAppConversationMessageType, text: string | null) {

@@ -2133,6 +2133,8 @@ function ConversationMessages({
   targetMessageId: string | null;
   targetSearchTerm: string;
 }) {
+  const renderableMessages = messages.filter(isRenderableConversationMessage);
+
   return (
     <div className="conversation-messages-wrap">
       <div className="conversation-messages" ref={scrollRef}>
@@ -2158,10 +2160,10 @@ function ConversationMessages({
             ) : null}
           </div>
         ) : null}
-        {messages.length ? (
+        {renderableMessages.length ? (
           <div className="conversation-message-stack">
-            {messages.map((message, index) => {
-              const previousMessage = index > 0 ? messages[index - 1] : null;
+            {renderableMessages.map((message, index) => {
+              const previousMessage = index > 0 ? renderableMessages[index - 1] : null;
               const currentDateKey = conversationMessageDateKey(message);
               const previousDateKey = previousMessage
                 ? conversationMessageDateKey(previousMessage)
@@ -2187,7 +2189,7 @@ function ConversationMessages({
             })}
           </div>
         ) : null}
-        {!messages.length && !loading ? (
+        {!renderableMessages.length && !loading ? (
           <div className="conversation-empty-chat compact">Nenhuma mensagem nesta conversa.</div>
         ) : null}
         <div className="conversation-message-end" ref={messagesEndRef} />
@@ -2213,6 +2215,24 @@ function ConversationDateSeparator({ label }: { label: string }) {
   );
 }
 
+export function isRenderableConversationMessage(message: WhatsAppConversationMessage) {
+  if (message.text?.trim()) {
+    return true;
+  }
+
+  if (message.type === 'TEXT' || message.type === 'UNKNOWN') {
+    return false;
+  }
+
+  return (
+    message.type === 'IMAGE' ||
+    message.type === 'VIDEO' ||
+    message.type === 'AUDIO' ||
+    message.type === 'DOCUMENT' ||
+    message.type === 'LOCATION'
+  );
+}
+
 function ConversationBubble({
   conversationId,
   highlighted,
@@ -2231,6 +2251,10 @@ function ConversationBubble({
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
+  if (!isRenderableConversationMessage(message)) {
+    return null;
+  }
+
   const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;
   const hasAvailableInlineMedia =
     (message.type === 'IMAGE' || message.type === 'AUDIO') && message.mediaAvailable;
@@ -2463,7 +2487,9 @@ function ConversationMediaContent({
   }
 
   if (!message.mediaAvailable) {
-    return message.type === 'DOCUMENT' && message.mediaFileName ? (
+    return message.type === 'AUDIO' ? (
+      <span className="conversation-media-meta">Mídia indisponível</span>
+    ) : message.type === 'DOCUMENT' && message.mediaFileName ? (
       <span className="conversation-media-meta">
         {message.mediaFileName}
         {message.mediaSizeBytes ? ` | ${formatFileSize(message.mediaSizeBytes)}` : ''}
@@ -4108,7 +4134,7 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
     IMAGE: '[Imagem]',
     LOCATION: '[Localização]',
     TEXT: '',
-    UNKNOWN: '[Mensagem interativa]',
+    UNKNOWN: '',
     VIDEO: '[Vídeo]',
   } satisfies Record<WhatsAppConversationMessageType, string>;
   return labels[type];

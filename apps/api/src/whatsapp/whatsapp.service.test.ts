@@ -4437,6 +4437,101 @@ describe('WhatsAppService', () => {
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
   });
 
+  it('ignores inbound Message webhooks without renderable content', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: 'empty-message',
+        messageType: 'unknown',
+        text: null,
+        mediaMetadata: null,
+        mediaDownloadMetadata: null,
+      }),
+    );
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      processed: false,
+      reason: 'no_renderable_content',
+    });
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+  });
+
+  it('does not create a WhatsAppMessage for ReadReceipt webhooks', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(normalizedReceipt());
+
+    await expect(service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
+      processed: false,
+      action: 'receipt_status_unchanged',
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['image', 'IMAGE', { kind: 'image', mimetype: 'image/jpeg', size: 123 }],
+    ['audio', 'AUDIO', { kind: 'audio', mimetype: 'audio/ogg', seconds: 8 }],
+    [
+      'document',
+      'DOCUMENT',
+      { kind: 'document', mimetype: 'application/pdf', fileName: 'doc.pdf' },
+    ],
+  ])(
+    'persists inbound %s messages without text when media content is present',
+    async (messageType, expectedType, mediaMetadata) => {
+      const { service, prisma, normalizer } = serviceFactory();
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound('', {
+          messageId: `media-only-${messageType}`,
+          messageType,
+          text: null,
+          mediaMetadata,
+        }),
+      );
+
+      await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+        conversation: { action: 'conversation_message_persisted' },
+      });
+
+      expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: expectedType,
+            text: null,
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each([
+    ['location', 'LOCATION'],
+    ['live_location', 'LOCATION'],
+  ])('persists inbound %s messages without text as location content', async (messageType, type) => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: `location-${messageType}`,
+        messageType,
+        text: null,
+        mediaMetadata: null,
+      }),
+    );
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      conversation: { action: 'conversation_message_persisted' },
+    });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type,
+          text: null,
+        }),
+      }),
+    );
+  });
+
   it('reuses an existing conversation for the same phone and connection', async () => {
     const { service, prisma, normalizer } = serviceFactory({
       prismaOverrides: {
@@ -4724,7 +4819,6 @@ describe('WhatsAppService', () => {
     ['image', 'IMAGE', 'Legenda imagem', { mimetype: 'image/jpeg', size: 123 }, 'Legenda imagem'],
     ['audio', 'AUDIO', null, { mimetype: 'audio/ogg', seconds: 8 }, '[Audio]'],
     ['button_response', 'BUTTON', 'Sim', {}, 'Sim'],
-    ['unknown', 'UNKNOWN', null, {}, '[Mensagem]'],
   ])(
     'persists conversational type %s as %s with sanitized metadata',
     async (messageType, expectedType, text, mediaMetadata, preview) => {

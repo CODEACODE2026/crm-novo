@@ -230,6 +230,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('renders WhatsApp-style date separators using Sao Paulo calendar days', () => {
     expect(conversationsSource).toContain('ConversationDateSeparator');
+    expect(conversationsSource).toContain(
+      'const renderableMessages = messages.filter(isRenderableConversationMessage);',
+    );
     expect(conversationsSource).toContain('conversationMessageDateKey(message)');
     expect(conversationsSource).toContain('conversationMessageDateKey(previousMessage)');
     expect(conversationsSource).toContain('currentDateKey !== previousDateKey');
@@ -297,7 +300,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain("VIDEO: '[Vídeo]'");
     expect(conversationsSource).toContain("LOCATION: '[Localização]'");
     expect(conversationsSource).toContain("BUTTON: '[Mensagem interativa]'");
-    expect(conversationsSource).toContain("UNKNOWN: '[Mensagem interativa]'");
+    expect(conversationsSource).toContain("UNKNOWN: ''");
+    expect(conversationsSource).toContain('isRenderableConversationMessage(message)');
+    expect(conversationsSource).toContain("message.type === 'LOCATION'");
     expect(conversationsSource).toContain(
       'sendWhatsAppConversationMessage(selectedConversation.id',
     );
@@ -652,8 +657,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   it('bottom-aligns only the padded message stack while preserving the empty chat state', () => {
     expect(conversationsSource).toContain('className="conversation-message-stack"');
     expect(conversationsSource).toContain('messages.length ? (');
+    expect(conversationsSource).toContain('renderableMessages.length ? (');
     expect(conversationsSource).toMatch(
-      /<div className="conversation-message-stack">[\s\S]*messages\.map/,
+      /<div className="conversation-message-stack">[\s\S]*renderableMessages\.map/,
     );
     expect(conversationsSource).toContain(
       '<div className="conversation-empty-chat compact">Nenhuma mensagem nesta conversa.</div>',

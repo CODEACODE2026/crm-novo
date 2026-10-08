@@ -2,6 +2,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
   UnprocessableEntityException,
@@ -3761,6 +3762,126 @@ describe('WhatsAppService', () => {
       reason: 'missing_phone',
     });
     expect(missingPhone.prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps normal Message webhooks on the existing path without probe logging', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    expect(normalizer.normalize).toHaveBeenCalledWith({ type: 'Message' });
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Kirago webhook probe'));
+    log.mockRestore();
+  });
+
+  it('logs sanitized non-Message webhook probes without changing ignored flow', async () => {
+    const { service, normalizer, prisma } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Status',
+        event: 'message_status',
+        status: 'delivered',
+        instanceName: 'crm-novo-main',
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    expect(String(log.mock.calls[0]?.[0] ?? '')).toContain(
+      'Kirago webhook probe type=Status event=message_status status=delivered',
+    );
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('masks provider message ids in receipt-like probe logs', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'Message',
+      event: {
+        Info: {
+          ID: 'ABCDEF1234567890',
+          Status: 'READ',
+          Timestamp: '2026-10-08T20:00:00.000Z',
+        },
+      },
+      instanceName: 'crm-novo-main',
+      userID: 'kirago-user-123456',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('status=READ');
+    expect(output).toContain('messageId=ABCDEF...7890');
+    expect(output).toContain('providerUserId=kirago...3456');
+    expect(output).not.toContain('ABCDEF1234567890');
+    expect(output).not.toContain('kirago-user-123456');
+    log.mockRestore();
+  });
+
+  it('does not leak phone, text, token, media URL, base64 or contact names in probe logs', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'Status',
+      status: 'read',
+      phone: '5544999999999',
+      token: 'secret-token',
+      contactName: 'Cliente Sigiloso',
+      Message: {
+        conversation: 'texto privado',
+        imageMessage: {
+          URL: 'https://media.example.test/private?token=secret-token',
+          Data: 'data:image/jpeg;base64,abcdef',
+        },
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('Kirago webhook probe');
+    expect(output).not.toContain('5544999999999');
+    expect(output).not.toContain('secret-token');
+    expect(output).not.toContain('Cliente Sigiloso');
+    expect(output).not.toContain('texto privado');
+    expect(output).not.toContain('media.example.test');
+    expect(output).not.toContain('base64');
+    log.mockRestore();
+  });
+
+  it('handles malformed object payloads defensively in probe extraction', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: ['Status'],
+        event: { Info: { ID: { nested: true }, Status: ['READ'] } },
+        data: { id: null, status: { nested: true } },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    expect(String(log.mock.calls[0]?.[0] ?? '')).toContain('Kirago webhook probe');
+    log.mockRestore();
   });
 
   it('identifies webhook connection by provider user id and falls back to instance name', async () => {

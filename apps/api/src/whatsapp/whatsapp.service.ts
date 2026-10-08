@@ -2383,6 +2383,7 @@ export class WhatsAppService {
       throw new BadRequestException('Payload invalido.');
     }
 
+    this.logKiragoWebhookProbe(payload);
     this.logMediaDebugPayload(payload);
 
     const normalized = this.normalizer.normalize(payload);
@@ -2579,6 +2580,130 @@ export class WhatsAppService {
 
   private debugStringOrNull(value: unknown) {
     return typeof value === 'string' && value.trim() ? value : null;
+  }
+
+  private logKiragoWebhookProbe(payload: unknown) {
+    try {
+      const body = this.asRecord(payload);
+
+      if (!body || !this.shouldLogKiragoWebhookProbe(body)) {
+        return;
+      }
+
+      const event = this.asRecord(body.event);
+      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+      const data = this.asRecord(body.data);
+
+      this.logger.log(
+        [
+          'Kirago webhook probe',
+          `type=${this.safeProbeValue(body.type) ?? 'unknown'}`,
+          `event=${this.safeProbeValue(body.event) ?? this.safeProbeValue(event?.type) ?? 'unknown'}`,
+          `status=${
+            this.safeProbeValue(body.status) ??
+            this.safeProbeValue(body.Status) ??
+            this.safeProbeValue(info?.Status) ??
+            this.safeProbeValue(info?.status) ??
+            this.safeProbeValue(data?.status) ??
+            'unknown'
+          }`,
+          `ack=${
+            this.safeProbeValue(body.ack) ??
+            this.safeProbeValue(body.Ack) ??
+            this.safeProbeValue(info?.Ack) ??
+            this.safeProbeValue(info?.ack) ??
+            this.safeProbeValue(data?.ack) ??
+            'unknown'
+          }`,
+          `receipt=${
+            this.safeProbeValue(body.receipt) ??
+            this.safeProbeValue(body.Receipt) ??
+            this.safeProbeValue(info?.Receipt) ??
+            this.safeProbeValue(info?.receipt) ??
+            this.safeProbeValue(data?.receipt) ??
+            'unknown'
+          }`,
+          `messageId=${this.maskProbeId(
+            info?.ID ??
+              info?.id ??
+              message?.ID ??
+              message?.id ??
+              data?.ID ??
+              data?.id ??
+              body.ID ??
+              body.id,
+          )}`,
+          `instance=${this.safeProbeValue(body.instanceName) ?? 'unknown'}`,
+          `providerUserId=${this.maskProbeId(body.userID ?? body.providerUserId)}`,
+          `timestamp=${
+            this.safeProbeValue(body.timestamp) ??
+            this.safeProbeValue(body.Timestamp) ??
+            this.safeProbeValue(info?.Timestamp) ??
+            this.safeProbeValue(data?.timestamp) ??
+            'unknown'
+          }`,
+        ].join(' '),
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private shouldLogKiragoWebhookProbe(body: Record<string, unknown>) {
+    if (this.safeProbeValue(body.type) !== 'Message') {
+      return true;
+    }
+
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+    const data = this.asRecord(body.data);
+
+    return [body, info, data].some((record) =>
+      this.hasAnyOwnValue(record, [
+        'status',
+        'Status',
+        'ack',
+        'Ack',
+        'receipt',
+        'Receipt',
+        'message_status',
+        'MessageStatus',
+        'played',
+        'Played',
+      ]),
+    );
+  }
+
+  private safeProbeValue(value: unknown) {
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      return null;
+    }
+
+    const normalized = String(value).trim().replace(/\s+/g, '_');
+    return normalized ? normalized.slice(0, 80) : null;
+  }
+
+  private maskProbeId(value: unknown) {
+    const normalized = this.safeProbeValue(value);
+
+    if (!normalized) {
+      return 'unknown';
+    }
+
+    if (normalized.length <= 10) {
+      return `${normalized.slice(0, 3)}...${normalized.slice(-2)}`;
+    }
+
+    return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+  }
+
+  private hasAnyOwnValue(source: Record<string, unknown> | null, keys: readonly string[]) {
+    if (!source) {
+      return false;
+    }
+
+    return keys.some((key) => Object.prototype.hasOwnProperty.call(source, key));
   }
 
   private debugType(value: unknown) {

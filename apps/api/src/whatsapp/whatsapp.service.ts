@@ -2738,10 +2738,60 @@ export class WhatsAppService {
       `readReceiptKeys=${keys}`,
       `readReceiptScalars=${this.buildReadReceiptScalarSummary(records)}`,
       `readReceiptArrays=${this.buildReadReceiptArraySummary(records)}`,
+      ...this.buildReadReceiptEventStateSummary(event, body.state),
     ];
   }
 
-  private buildReadReceiptScalarSummary(records: Array<[string, Record<string, unknown> | null]>) {
+  private buildReadReceiptEventStateSummary(
+    event: Record<string, unknown> | null,
+    stateValue: unknown,
+  ) {
+    const eventRecords = this.buildReadReceiptNestedRecords('event', event);
+    const state = this.asRecord(stateValue);
+    const stateRecords = this.buildReadReceiptNestedRecords('state', state);
+    const stateScalar = this.safeProbeNonSensitiveValue(stateValue);
+
+    return [
+      `eventKeys=${this.buildReadReceiptKeysSummary(eventRecords)}`,
+      `eventScalars=${this.buildReadReceiptScalarSummary(eventRecords, {
+        presenceOnlyKeys: ['remoteJid', 'participant'],
+      })}`,
+      `eventArrays=${this.buildReadReceiptArraySummary(eventRecords)}`,
+      `stateType=${this.debugType(stateValue)}`,
+      `state=${!state && stateScalar ? stateScalar : 'unknown'}`,
+      `stateKeys=${this.buildReadReceiptKeysSummary(stateRecords)}`,
+      `stateScalars=${this.buildReadReceiptScalarSummary(stateRecords, {
+        presenceOnlyKeys: ['remoteJid', 'participant'],
+      })}`,
+      `stateArrays=${this.buildReadReceiptArraySummary(stateRecords)}`,
+    ];
+  }
+
+  private buildReadReceiptNestedRecords(prefix: string, record: Record<string, unknown> | null) {
+    if (!record) {
+      return [[prefix, null]] as Array<[string, Record<string, unknown> | null]>;
+    }
+
+    return [
+      [prefix, record],
+      [`${prefix}.Info`, this.asRecord(record.Info)],
+      [`${prefix}.Message`, this.asRecord(record.Message)],
+      [`${prefix}.key`, this.asRecord(record.key) ?? this.asRecord(record.Key)],
+      [`${prefix}.data`, this.asRecord(record.data)],
+      [`${prefix}.receipt`, this.asRecord(record.receipt) ?? this.asRecord(record.Receipt)],
+    ] as Array<[string, Record<string, unknown> | null]>;
+  }
+
+  private buildReadReceiptKeysSummary(records: Array<[string, Record<string, unknown> | null]>) {
+    return records
+      .map(([name, record]) => `${name}:${this.safeObjectKeys(record).join(',') || 'none'}`)
+      .join('|');
+  }
+
+  private buildReadReceiptScalarSummary(
+    records: Array<[string, Record<string, unknown> | null]>,
+    options?: { presenceOnlyKeys?: readonly string[] },
+  ) {
     const candidateKeys = [
       'id',
       'Id',
@@ -2759,8 +2809,11 @@ export class WhatsAppService {
       'Receipt',
       'timestamp',
       'Timestamp',
+      'remoteJid',
+      'participant',
     ];
     const entries: string[] = [];
+    const presenceOnlyKeys = new Set(options?.presenceOnlyKeys ?? []);
 
     for (const [name, record] of records) {
       if (!record) {
@@ -2769,6 +2822,11 @@ export class WhatsAppService {
 
       for (const key of candidateKeys) {
         if (!Object.prototype.hasOwnProperty.call(record, key)) {
+          continue;
+        }
+
+        if (presenceOnlyKeys.has(key)) {
+          entries.push(`${name}.${key}:present`);
           continue;
         }
 

@@ -3991,6 +3991,146 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
+  it('logs ReadReceipt event top-level id and status candidates safely', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      event: {
+        ID: 'EVENTREAD1234567890',
+        status: 'read',
+        timestamp: '2026-10-08T20:55:00.000Z',
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('eventKeys=event:ID,status,timestamp');
+    expect(output).toContain('eventScalars=event.ID:EVENTR...7890');
+    expect(output).toContain('event.status:read');
+    expect(output).toContain('event.timestamp:2026-10-08T20:55:00.000Z');
+    expect(output).not.toContain('EVENTREAD1234567890');
+    log.mockRestore();
+  });
+
+  it('logs ReadReceipt nested event key id while treating JIDs as presence only', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      event: {
+        key: {
+          id: 'KEYREAD1234567890',
+          remoteJid: '5544999999999@s.whatsapp.net',
+          participant: '5544888888888@s.whatsapp.net',
+        },
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('event.key:id,participant,remoteJid');
+    expect(output).toContain('event.key.id:KEYREA...7890');
+    expect(output).toContain('event.key.remoteJid:present');
+    expect(output).toContain('event.key.participant:present');
+    expect(output).not.toContain('KEYREAD1234567890');
+    expect(output).not.toContain('5544999999999');
+    expect(output).not.toContain('5544888888888');
+    expect(output).not.toContain('s.whatsapp.net');
+    log.mockRestore();
+  });
+
+  it('summarizes ReadReceipt event arrays without logging raw objects', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      event: {
+        messageIds: ['EVENTARRAY1234567890', 'EVENTARRAY0987654321'],
+        Messages: [{ id: 'event-nested-object-should-not-log' }],
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('eventArrays=');
+    expect(output).toContain('event.messageIds:length=2 ids=EVENTA...7890,EVENTA...4321');
+    expect(output).toContain('event.Messages:length=1');
+    expect(output).not.toContain('EVENTARRAY1234567890');
+    expect(output).not.toContain('event-nested-object-should-not-log');
+    log.mockRestore();
+  });
+
+  it('logs ReadReceipt state string and object structure safely', async () => {
+    const stateString = serviceFactory();
+    const stringLog = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    stateString.normalizer.normalize.mockReturnValue(null);
+
+    await stateString.service.receiveWebhook({ type: 'ReadReceipt', state: 'read' });
+
+    expect(String(stringLog.mock.calls[0]?.[0] ?? '')).toContain('stateType=string state=read');
+    stringLog.mockRestore();
+
+    const stateObject = serviceFactory();
+    const objectLog = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    stateObject.normalizer.normalize.mockReturnValue(null);
+
+    await stateObject.service.receiveWebhook({
+      type: 'ReadReceipt',
+      state: {
+        messageId: 'STATEREAD1234567890',
+        status: 'read',
+        remoteJid: '5544999999999@s.whatsapp.net',
+      },
+    });
+
+    const output = String(objectLog.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('stateType=object state=unknown');
+    expect(output).toContain('stateKeys=state:messageId,remoteJid,status');
+    expect(output).toContain('stateScalars=state.messageId:STATER...7890');
+    expect(output).toContain('state.remoteJid:present');
+    expect(output).not.toContain('STATEREAD1234567890');
+    expect(output).not.toContain('5544999999999');
+    expect(output).not.toContain('s.whatsapp.net');
+    objectLog.mockRestore();
+  });
+
+  it('handles malformed ReadReceipt event and state structures defensively', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ReadReceipt',
+        event: {
+          key: ['bad-key'],
+          Info: { ID: { nested: true }, Status: ['READ'] },
+          messageIds: [{ id: 'object-should-not-log' }],
+        },
+        state: {
+          data: { messageId: { nested: true } },
+          messages: [{ id: 'state-object-should-not-log' }],
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('Kirago webhook probe');
+    expect(output).toContain('eventArrays=');
+    expect(output).toContain('stateArrays=');
+    expect(output).not.toContain('object-should-not-log');
+    expect(output).not.toContain('state-object-should-not-log');
+    log.mockRestore();
+  });
+
   it('identifies webhook connection by provider user id and falls back to instance name', async () => {
     const byProviderUserId = serviceFactory();
     byProviderUserId.normalizer.normalize.mockReturnValue({

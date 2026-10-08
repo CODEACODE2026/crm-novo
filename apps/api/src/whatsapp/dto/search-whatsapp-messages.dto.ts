@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class SearchWhatsAppMessagesDto {
   @IsString()
@@ -16,4 +16,8 @@ export class SearchWhatsAppMessagesDto {
   @IsInt()
   @Min(1)
   limit?: number = 20;
+
+  @IsOptional()
+  @IsUUID()
+  conversationId?: string;
 }

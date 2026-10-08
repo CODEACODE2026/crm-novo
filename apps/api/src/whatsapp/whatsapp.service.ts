@@ -903,6 +903,7 @@ export class WhatsAppService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, pageSizeLimit);
     const where: Prisma.WhatsAppMessageWhereInput = {
+      ...(query.conversationId ? { conversationId: query.conversationId } : {}),
       type: 'TEXT',
       text: { not: null, contains: q, mode: 'insensitive' },
     };

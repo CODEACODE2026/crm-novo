@@ -5613,7 +5613,12 @@ describe('WhatsAppService', () => {
       },
     });
 
-    const result = await service.searchConversationMessages({ q: 'bruno', page: 1, limit: 10 });
+    const result = await service.searchConversationMessages({
+      conversationId: conversation().id,
+      q: 'bruno',
+      page: 1,
+      limit: 10,
+    });
     const findManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
       where?: Record<string, unknown>;
       include?: unknown;
@@ -5624,6 +5629,7 @@ describe('WhatsAppService', () => {
 
     expect(findManyArgs).toMatchObject({
       where: {
+        conversationId: conversation().id,
         type: 'TEXT',
         text: { not: null, contains: 'bruno', mode: 'insensitive' },
       },
@@ -5640,6 +5646,26 @@ describe('WhatsAppService', () => {
       snippet: 'Bruno, combinado.',
     });
     expect(JSON.stringify(result.items[0])).not.toContain('rawMetadata');
+  });
+
+  it('keeps global message search compatible when conversationId is omitted', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await service.searchConversationMessages({ q: 'bruno', page: 1, limit: 10 });
+    const findManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+    };
+
+    expect(findManyArgs.where).not.toHaveProperty('conversationId');
   });
 
   it('rejects short message searches before querying messages', async () => {

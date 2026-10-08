@@ -1409,7 +1409,12 @@ describe('CRM UI formatters', () => {
     });
     await markWhatsAppConversationRead('conversation-id');
     await resolveWhatsAppConversation('conversation-id');
-    await searchWhatsAppConversationMessages({ q: 'bruno', page: 2, pageSize: 10 });
+    await searchWhatsAppConversationMessages({
+      conversationId: 'conversation-id',
+      q: 'bruno',
+      page: 2,
+      pageSize: 10,
+    });
     await getWhatsAppConversationMessagesAround('conversation-id', 'message-id', { limit: 15 });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -1491,7 +1496,9 @@ describe('CRM UI formatters', () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       11,
-      expect.stringContaining('/whatsapp/messages/search?q=bruno&page=2&limit=10'),
+      expect.stringContaining(
+        '/whatsapp/messages/search?q=bruno&conversationId=conversation-id&page=2&limit=10',
+      ),
       expect.any(Object),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

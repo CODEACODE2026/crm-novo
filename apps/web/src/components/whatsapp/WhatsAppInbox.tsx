@@ -26,6 +26,7 @@ import {
   Pause,
   Play,
   Plus,
+  Search,
   Send,
   Square,
   Trash2,
@@ -37,7 +38,11 @@ import { ClientForm } from '../clients/client-form';
 import { FinanceClientAutocomplete } from '../clients/finance-client-autocomplete';
 import { PageHeader } from '../ui/admin-shell';
 import { Button, IconButton } from '../ui/primitives';
-import { WhatsAppSearch, renderHighlightedSearchText } from './WhatsAppSearch';
+import {
+  ConversationMessageSearch,
+  ConversationSearch,
+  renderHighlightedSearchText,
+} from './WhatsAppSearch';
 import {
   ApiError,
   createClient,
@@ -56,6 +61,7 @@ import {
   markWhatsAppConversationRead,
   resolveWhatsAppConversation,
   retryWhatsAppConversationMessage,
+  searchWhatsAppConversationMessages,
   sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
@@ -96,6 +102,7 @@ type ConversationVoiceDraft = {
 
 const conversationsPageSize = 20;
 const conversationMessagesPageSize = 30;
+const conversationMessageSearchPageSize = 50;
 const firstConversationPage = 1;
 const conversationDateSeparatorTimeZone = 'America/Sao_Paulo';
 const conversationListPollingMs = 10000;
@@ -179,6 +186,18 @@ export function WhatsAppInbox({
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const [targetMessageId, setTargetMessageId] = useState<string | null>(null);
   const [targetSearchTerm, setTargetSearchTerm] = useState('');
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
+  const [messageSearchInput, setMessageSearchInput] = useState('');
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [messageSearchResults, setMessageSearchResults] = useState<WhatsAppMessageSearchResult[]>(
+    [],
+  );
+  const [messageSearchIndex, setMessageSearchIndex] = useState(0);
+  const [messageSearchPage, setMessageSearchPage] = useState(firstConversationPage);
+  const [messageSearchHasMore, setMessageSearchHasMore] = useState(false);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const [messageSearchLoadingMore, setMessageSearchLoadingMore] = useState(false);
+  const [messageSearchError, setMessageSearchError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -197,6 +216,7 @@ export function WhatsAppInbox({
   const messagesRef = useRef<WhatsAppConversationMessage[]>([]);
   const targetHighlightTimeoutRef = useRef<number | null>(null);
   const openMessageSearchGenerationRef = useRef(0);
+  const messageSearchRequestKeyRef = useRef('');
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
 
@@ -407,6 +427,149 @@ export function WhatsAppInbox({
     await loadMessages(conversationId, { replace: true });
   }, [loadMessages, messagesLoading, selectedConversation?.id]);
 
+  const resetMessageSearch = useCallback(() => {
+    messageSearchRequestKeyRef.current = JSON.stringify({ state: 'closed', time: Date.now() });
+    setMessageSearchOpen(false);
+    setMessageSearchInput('');
+    setMessageSearchQuery('');
+    setMessageSearchResults([]);
+    setMessageSearchIndex(0);
+    setMessageSearchPage(firstConversationPage);
+    setMessageSearchHasMore(false);
+    setMessageSearchLoading(false);
+    setMessageSearchLoadingMore(false);
+    setMessageSearchError('');
+    setTargetMessageId(null);
+    setTargetSearchTerm('');
+  }, []);
+
+  const updateMessageSearchInput = useCallback(
+    (value: string) => {
+      const query = value.trim();
+      messageSearchRequestKeyRef.current = JSON.stringify({
+        conversationId: selectedConversation?.id ?? null,
+        query,
+        state: 'typing',
+        time: Date.now(),
+      });
+      setMessageSearchInput(value);
+      setMessageSearchError('');
+      setMessageSearchResults([]);
+      setMessageSearchIndex(0);
+      setMessageSearchPage(firstConversationPage);
+      setMessageSearchHasMore(false);
+      setMessageSearchLoading(false);
+      setMessageSearchLoadingMore(false);
+      setTargetMessageId(null);
+      setTargetSearchTerm('');
+    },
+    [selectedConversation?.id],
+  );
+
+  const activateMessageSearchResult = useCallback(
+    (result: WhatsAppMessageSearchResult, term: string, index: number) => {
+      if (!selectedConversation || result.conversation.id !== selectedConversation.id) return;
+
+      setMessageSearchIndex(index);
+      setTargetSearchTerm(term);
+
+      const alreadyLoaded = messagesRef.current.some((message) => message.id === result.message.id);
+      if (alreadyLoaded) {
+        setTargetMessageId(result.message.id);
+        return;
+      }
+
+      void openMessageSearchResult(result, term);
+    },
+    [selectedConversation],
+  );
+
+  const loadMessageSearchResults = useCallback(
+    async ({
+      append,
+      conversationId,
+      page,
+      query,
+    }: {
+      append: boolean;
+      conversationId: string;
+      page: number;
+      query: string;
+    }) => {
+      const requestKey = JSON.stringify({ append, conversationId, page, query });
+      messageSearchRequestKeyRef.current = requestKey;
+      if (append) {
+        setMessageSearchLoadingMore(true);
+      } else {
+        setMessageSearchLoading(true);
+        setMessageSearchResults([]);
+        setMessageSearchIndex(0);
+      }
+      setMessageSearchError('');
+
+      try {
+        const payload = await searchWhatsAppConversationMessages({
+          conversationId,
+          q: query,
+          page,
+          pageSize: conversationMessageSearchPageSize,
+        });
+        if (
+          messageSearchRequestKeyRef.current !== requestKey ||
+          activeConversationIdRef.current !== conversationId
+        ) {
+          return;
+        }
+
+        const currentResultId = messageSearchResults[messageSearchIndex]?.message.id ?? null;
+        const results = mergeMessageSearchResults(
+          append ? messageSearchResults : [],
+          payload.items,
+        );
+        const nextIndex = currentResultId
+          ? Math.max(
+              0,
+              results.findIndex((result) => result.message.id === currentResultId),
+            )
+          : 0;
+        setMessageSearchResults(results);
+        setMessageSearchPage(page);
+        setMessageSearchHasMore(Boolean(payload.pagination.hasMore));
+        setMessageSearchIndex(nextIndex);
+        if (!append && results[0]) {
+          activateMessageSearchResult(results[0], query, 0);
+        } else if (!results.length) {
+          setTargetMessageId(null);
+          setTargetSearchTerm('');
+        }
+      } catch {
+        if (messageSearchRequestKeyRef.current === requestKey) {
+          setMessageSearchError('Não foi possível buscar mensagens');
+        }
+      } finally {
+        if (messageSearchRequestKeyRef.current === requestKey) {
+          setMessageSearchLoading(false);
+          setMessageSearchLoadingMore(false);
+        }
+      }
+    },
+    [activateMessageSearchResult, messageSearchIndex, messageSearchResults],
+  );
+
+  const goToMessageSearchResult = useCallback(
+    (direction: 'next' | 'previous') => {
+      if (!messageSearchResults.length) return;
+      const delta = direction === 'next' ? 1 : -1;
+      const nextIndex =
+        (messageSearchIndex + delta + messageSearchResults.length) % messageSearchResults.length;
+      const result = messageSearchResults[nextIndex];
+      if (!result) return;
+
+      activateMessageSearchResult(result, messageSearchQuery, nextIndex);
+    },
+    [activateMessageSearchResult, messageSearchIndex, messageSearchQuery, messageSearchResults],
+  );
+
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -439,6 +602,72 @@ export function WhatsAppInbox({
 
     return () => window.clearTimeout(timer);
   }, [searchInput]);
+
+  useEffect(() => {
+    if (!messageSearchOpen) return undefined;
+
+    const timer = window.setTimeout(() => {
+      setMessageSearchQuery(messageSearchInput.trim());
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [messageSearchInput, messageSearchOpen]);
+
+  useEffect(() => {
+    const conversationId = selectedConversation?.id;
+    if (!messageSearchOpen || !conversationId) return;
+
+    if (messageSearchQuery.length < 2) {
+      messageSearchRequestKeyRef.current = JSON.stringify({
+        conversationId,
+        query: messageSearchQuery,
+        state: 'idle',
+      });
+      setMessageSearchResults([]);
+      setMessageSearchIndex(0);
+      setMessageSearchPage(firstConversationPage);
+      setMessageSearchHasMore(false);
+      setMessageSearchError('');
+      setMessageSearchLoading(false);
+      setMessageSearchLoadingMore(false);
+      return;
+    }
+
+    void loadMessageSearchResults({
+      append: false,
+      conversationId,
+      page: firstConversationPage,
+      query: messageSearchQuery,
+    });
+  }, [loadMessageSearchResults, messageSearchOpen, messageSearchQuery, selectedConversation?.id]);
+
+  const loadMoreMessageSearchResults = useCallback(() => {
+    const conversationId = selectedConversation?.id;
+    if (
+      !conversationId ||
+      !messageSearchQuery ||
+      !messageSearchHasMore ||
+      messageSearchLoading ||
+      messageSearchLoadingMore
+    ) {
+      return;
+    }
+
+    void loadMessageSearchResults({
+      append: true,
+      conversationId,
+      page: messageSearchPage + 1,
+      query: messageSearchQuery,
+    });
+  }, [
+    loadMessageSearchResults,
+    messageSearchHasMore,
+    messageSearchLoading,
+    messageSearchLoadingMore,
+    messageSearchPage,
+    messageSearchQuery,
+    selectedConversation?.id,
+  ]);
 
   useEffect(() => {
     void loadConversations();
@@ -640,6 +869,7 @@ export function WhatsAppInbox({
 
   async function selectConversation(conversation: WhatsAppConversation) {
     openMessageSearchGenerationRef.current += 1;
+    resetMessageSearch();
     activeConversationIdRef.current = conversation.id;
     pendingInitialScrollConversationRef.current = conversation.id;
     setSelectedConversation(conversation);
@@ -1285,12 +1515,6 @@ export function WhatsAppInbox({
         />
       ) : null}
 
-      <WhatsAppSearch
-        conversationQuery={searchInput}
-        onConversationQueryChange={setSearchInput}
-        onOpenMessage={(result, term) => void openMessageSearchResult(result, term)}
-      />
-
       <div className="conversations-shell">
         <ConversationList
           conversations={conversations}
@@ -1300,10 +1524,12 @@ export function WhatsAppInbox({
           loadMoreError={listLoadMoreError}
           loading={listLoading}
           loadingMore={listLoadingMore}
+          searchInput={searchInput}
           selectedId={selectedConversation?.id ?? null}
           statusFilter={statusFilter}
           onFilterChange={setFilter}
           onLoadMore={() => void loadMoreConversations()}
+          onSearchChange={setSearchInput}
           onSelect={(conversation) => void selectConversation(conversation)}
           onStatusFilterChange={setStatusFilter}
         />
@@ -1318,6 +1544,31 @@ export function WhatsAppInbox({
                 onBack={() => setMobileMode('list')}
                 onOpenClientPanel={() => setMobileClientOpen(true)}
                 onResolve={() => void resolveSelectedConversation()}
+                onToggleSearch={() => {
+                  if (messageSearchOpen) {
+                    resetMessageSearch();
+                    return;
+                  }
+                  setMessageSearchOpen(true);
+                  setMessageSearchError('');
+                }}
+              />
+
+              <ConversationMessageSearch
+                currentIndex={messageSearchIndex}
+                error={messageSearchError}
+                hasMore={messageSearchHasMore}
+                hasResults={messageSearchResults.length > 0}
+                loading={messageSearchLoading}
+                loadingMore={messageSearchLoadingMore}
+                open={messageSearchOpen}
+                query={messageSearchInput}
+                total={messageSearchResults.length}
+                onClose={resetMessageSearch}
+                onLoadMore={loadMoreMessageSearchResults}
+                onNext={() => goToMessageSearchResult('next')}
+                onPrevious={() => goToMessageSearchResult('previous')}
+                onQueryChange={updateMessageSearchInput}
               />
 
               <div className="conversation-error-slot">
@@ -1604,10 +1855,12 @@ function ConversationList({
   loadMoreError,
   loading,
   loadingMore,
+  searchInput,
   selectedId,
   statusFilter,
   onFilterChange,
   onLoadMore,
+  onSearchChange,
   onSelect,
   onStatusFilterChange,
 }: {
@@ -1618,10 +1871,12 @@ function ConversationList({
   loadMoreError: string;
   loading: boolean;
   loadingMore: boolean;
+  searchInput: string;
   selectedId: string | null;
   statusFilter: WhatsAppConversationStatus | '';
   onFilterChange: (filter: ConversationFilter) => void;
   onLoadMore: () => void;
+  onSearchChange: (search: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
   onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
 }) {
@@ -1635,6 +1890,8 @@ function ConversationList({
           <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
         </div>
       </div>
+
+      <ConversationSearch query={searchInput} onQueryChange={onSearchChange} />
 
       <div className="conversation-filter-row" role="tablist" aria-label="Filtros de conversas">
         {conversationFilters.map((item) => (
@@ -1754,6 +2011,7 @@ function ConversationHeader({
   onBack,
   onOpenClientPanel,
   onResolve,
+  onToggleSearch,
 }: {
   conversation: WhatsAppConversation;
   opening: boolean;
@@ -1761,6 +2019,7 @@ function ConversationHeader({
   onBack: () => void;
   onOpenClientPanel: () => void;
   onResolve: () => void;
+  onToggleSearch: () => void;
 }) {
   const instanceLabel = conversationInstanceLabel(conversation.instanceName);
   const phoneLabel =
@@ -1791,6 +2050,7 @@ function ConversationHeader({
         </div>
       </div>
       <div className="conversation-header-actions">
+        <IconButton icon={Search} label="Buscar nesta conversa" onClick={onToggleSearch} />
         <IconButton
           icon={Info}
           label="Abrir contexto do cliente"
@@ -3577,6 +3837,26 @@ function mergeConversationLists(current: WhatsAppConversation[], incoming: Whats
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() ||
       right.id.localeCompare(left.id),
   );
+}
+
+function compareMessageSearchResultsByTime(
+  left: WhatsAppMessageSearchResult,
+  right: WhatsAppMessageSearchResult,
+) {
+  const leftTime = new Date(left.message.sentAt ?? left.message.createdAt).getTime();
+  const rightTime = new Date(right.message.sentAt ?? right.message.createdAt).getTime();
+  return leftTime - rightTime || left.message.id.localeCompare(right.message.id);
+}
+
+function mergeMessageSearchResults(
+  current: WhatsAppMessageSearchResult[],
+  incoming: WhatsAppMessageSearchResult[],
+) {
+  const map = new Map<string, WhatsAppMessageSearchResult>();
+  for (const result of [...current, ...incoming]) {
+    map.set(result.message.id, result);
+  }
+  return [...map.values()].sort(compareMessageSearchResultsByTime);
 }
 
 function conversationListSortTime(conversation: WhatsAppConversation) {

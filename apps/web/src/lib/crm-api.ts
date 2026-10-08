@@ -2574,12 +2574,14 @@ export function listWhatsAppConversationMessages(
 }
 
 export function searchWhatsAppConversationMessages(filters: {
+  conversationId?: string;
   q: string;
   page?: number;
   pageSize?: number;
 }) {
   const params = new URLSearchParams();
   params.set('q', filters.q);
+  if (filters.conversationId) params.set('conversationId', filters.conversationId);
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('limit', String(filters.pageSize));
 

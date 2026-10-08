@@ -1,212 +1,137 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageSquareText, Search, X } from 'lucide-react';
-import {
-  searchWhatsAppConversationMessages,
-  type WhatsAppMessageSearchResult,
-} from '../../lib/crm-api';
-import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
+import { ArrowDown, ArrowUp, Search, X } from 'lucide-react';
+import { type KeyboardEvent } from 'react';
 import { Button, IconButton } from '../ui/primitives';
 
-type WhatsAppSearchMode = 'conversations' | 'messages';
-
-const messageSearchPageSize = 10;
-
-export function WhatsAppSearch({
-  conversationQuery,
-  onConversationQueryChange,
-  onOpenMessage,
+export function ConversationSearch({
+  query,
+  onQueryChange,
 }: {
-  conversationQuery: string;
-  onConversationQueryChange: (query: string) => void;
-  onOpenMessage: (result: WhatsAppMessageSearchResult, term: string) => void;
+  query: string;
+  onQueryChange: (query: string) => void;
 }) {
-  const [mode, setMode] = useState<WhatsAppSearchMode>('conversations');
-  const [messageQueryInput, setMessageQueryInput] = useState('');
-  const [messageQuery, setMessageQuery] = useState('');
-  const [messageResults, setMessageResults] = useState<WhatsAppMessageSearchResult[]>([]);
-  const [messagePage, setMessagePage] = useState(1);
-  const [hasMoreMessages, setHasMoreMessages] = useState(false);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-  const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
-  const [messageError, setMessageError] = useState('');
-  const requestKeyRef = useRef('');
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setMessageQuery(messageQueryInput.trim());
-    }, 300);
-
-    return () => window.clearTimeout(timer);
-  }, [messageQueryInput]);
-
-  const loadMessageResults = useCallback(
-    async ({ page, append }: { page: number; append: boolean }) => {
-      const requestKey = JSON.stringify({ messageQuery, page });
-      requestKeyRef.current = requestKey;
-      if (append) {
-        setLoadingMoreMessages(true);
-      } else {
-        setLoadingMessages(true);
-        setMessageResults([]);
-      }
-      setMessageError('');
-
-      try {
-        const payload = await searchWhatsAppConversationMessages({
-          q: messageQuery,
-          page,
-          pageSize: messageSearchPageSize,
-        });
-        if (requestKeyRef.current !== requestKey) return;
-        setMessageResults((current) => (append ? [...current, ...payload.items] : payload.items));
-        setMessagePage(page);
-        setHasMoreMessages(Boolean(payload.pagination.hasMore));
-      } catch {
-        setMessageError('Falha ao buscar mensagens.');
-      } finally {
-        setLoadingMessages(false);
-        setLoadingMoreMessages(false);
-      }
-    },
-    [messageQuery],
+  return (
+    <label className="conversation-search" aria-label="Buscar conversas">
+      <Search aria-hidden="true" size={16} />
+      <input
+        aria-label="Buscar conversas por nome ou telefone"
+        placeholder="Buscar nome ou telefone"
+        value={query}
+        onChange={(event) => onQueryChange(event.target.value)}
+      />
+      {query ? (
+        <IconButton icon={X} label="Limpar busca de conversas" onClick={() => onQueryChange('')} />
+      ) : null}
+    </label>
   );
+}
 
-  useEffect(() => {
-    if (mode !== 'messages') return;
-    if (messageQuery.length < 2) {
-      requestKeyRef.current = JSON.stringify({ messageQuery, state: 'idle' });
-      setMessageResults([]);
-      setMessagePage(1);
-      setHasMoreMessages(false);
-      setMessageError('');
+export function ConversationMessageSearch({
+  currentIndex,
+  error,
+  hasResults,
+  loading,
+  loadingMore,
+  hasMore,
+  open,
+  query,
+  total,
+  onClose,
+  onNext,
+  onPrevious,
+  onLoadMore,
+  onQueryChange,
+}: {
+  currentIndex: number;
+  error: string;
+  hasResults: boolean;
+  hasMore: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  open: boolean;
+  query: string;
+  total: number;
+  onClose: () => void;
+  onNext: () => void;
+  onPrevious: () => void;
+  onLoadMore: () => void;
+  onQueryChange: (query: string) => void;
+}) {
+  if (!open) return null;
+
+  const trimmedQuery = query.trim();
+  const status = loading
+    ? 'Buscando...'
+    : error || (trimmedQuery.length >= 2 && !hasResults ? 'Nenhuma mensagem encontrada' : '');
+  const counter = hasResults ? `${currentIndex + 1} de ${total}` : '0 de 0';
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
       return;
     }
 
-    void loadMessageResults({ page: 1, append: false });
-  }, [loadMessageResults, messageQuery, mode]);
-
-  const activeQuery = mode === 'conversations' ? conversationQuery : messageQueryInput;
-  const showMessageHint = mode === 'messages' && messageQueryInput.trim().length < 2;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (event.shiftKey) {
+        onPrevious();
+      } else {
+        onNext();
+      }
+    }
+  }
 
   return (
-    <section className="whatsapp-search-panel" aria-label="Busca do WhatsApp Inbox">
-      <div className="whatsapp-search-tabs" role="tablist" aria-label="Escopo da busca">
-        <button
-          aria-selected={mode === 'conversations'}
-          className={mode === 'conversations' ? 'active' : ''}
-          role="tab"
-          type="button"
-          onClick={() => setMode('conversations')}
-        >
-          Conversas
-        </button>
-        <button
-          aria-selected={mode === 'messages'}
-          className={mode === 'messages' ? 'active' : ''}
-          role="tab"
-          type="button"
-          onClick={() => setMode('messages')}
-        >
-          Mensagens
-        </button>
-      </div>
-
-      <label className="conversation-search whatsapp-search-input">
-        <Search aria-hidden="true" size={16} />
+    <div className="conversation-message-search-bar" aria-live="polite">
+      <label className="conversation-search conversation-message-search-input">
+        <Search aria-hidden="true" size={15} />
         <input
-          aria-label={
-            mode === 'conversations'
-              ? 'Buscar conversas por nome ou telefone'
-              : 'Buscar texto nas mensagens'
-          }
-          placeholder={
-            mode === 'conversations'
-              ? 'Buscar conversas por nome ou telefone...'
-              : 'Buscar texto nas mensagens...'
-          }
-          value={activeQuery}
-          onChange={(event) => {
-            if (mode === 'conversations') {
-              onConversationQueryChange(event.target.value);
-            } else {
-              setMessageQueryInput(event.target.value);
-            }
-          }}
+          aria-label="Buscar mensagens nesta conversa"
+          autoFocus
+          placeholder="Buscar nesta conversa..."
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={handleKeyDown}
         />
-        {activeQuery ? (
-          <IconButton
-            icon={X}
-            label="Limpar busca"
-            onClick={() => {
-              if (mode === 'conversations') {
-                onConversationQueryChange('');
-              } else {
-                requestKeyRef.current = JSON.stringify({ messageQuery: '', state: 'cleared' });
-                setMessageQueryInput('');
-                setMessageQuery('');
-                setMessageResults([]);
-              }
-            }}
-          />
-        ) : null}
       </label>
-
-      {mode === 'messages' ? (
-        <div className="whatsapp-message-search-results" aria-live="polite">
-          {showMessageHint ? (
-            <span className="whatsapp-search-hint">Digite ao menos 2 caracteres.</span>
-          ) : null}
-          {loadingMessages ? (
-            <span className="whatsapp-search-hint">Buscando mensagens...</span>
-          ) : null}
-          {messageError ? (
-            <div className="notice danger conversation-notice" role="alert">
-              {messageError}
-            </div>
-          ) : null}
-          {!loadingMessages &&
-          !messageError &&
-          messageQuery.length >= 2 &&
-          !messageResults.length ? (
-            <span className="whatsapp-search-hint">Nenhuma mensagem encontrada.</span>
-          ) : null}
-          {messageResults.map((result) => (
-            <button
-              className="whatsapp-message-search-result"
-              key={result.message.id}
-              type="button"
-              onClick={() => onOpenMessage(result, messageQuery)}
-            >
-              <span className="whatsapp-message-search-icon">
-                <MessageSquareText aria-hidden="true" size={15} />
-              </span>
-              <span className="whatsapp-message-search-copy">
-                <strong>{result.conversation.displayName}</strong>
-                <span>{renderHighlightedSearchText(result.snippet, messageQuery)}</span>
-                <small>
-                  {result.message.direction === 'OUTBOUND' ? 'Enviada' : 'Recebida'} ·{' '}
-                  {conversationSearchDate(result.message.sentAt ?? result.message.createdAt)} ·{' '}
-                  {normalizeWhatsAppDisplayPhone(result.conversation.phoneNormalized) ??
-                    result.conversation.phone}
-                </small>
-              </span>
-            </button>
-          ))}
-          {hasMoreMessages ? (
-            <Button
-              loading={loadingMoreMessages}
-              size="sm"
-              variant="ghost"
-              onClick={() => void loadMessageResults({ page: messagePage + 1, append: true })}
-            >
-              Carregar mais resultados
-            </Button>
-          ) : null}
-        </div>
+      <span
+        aria-label={hasResults ? `Resultado ${currentIndex + 1} de ${total}` : 'Nenhum resultado'}
+        className="conversation-message-search-counter"
+      >
+        {counter}
+      </span>
+      <IconButton
+        disabled={!hasResults}
+        label="Resultado anterior"
+        icon={ArrowUp}
+        className="conversation-search-previous"
+        onClick={onPrevious}
+      />
+      <IconButton
+        disabled={!hasResults}
+        label="Próximo resultado"
+        icon={ArrowDown}
+        className="conversation-search-next"
+        onClick={onNext}
+      />
+      <IconButton icon={X} label="Fechar busca" onClick={onClose} />
+      {hasMore ? (
+        <Button
+          className="conversation-message-search-more"
+          loading={loadingMore}
+          size="sm"
+          variant="ghost"
+          onClick={onLoadMore}
+        >
+          Carregar mais resultados
+        </Button>
       ) : null}
-    </section>
+      {status ? (
+        <span className={error ? 'conversation-message-search-error' : ''}>{status}</span>
+      ) : null}
+    </div>
   );
 }
 
@@ -240,13 +165,4 @@ export function renderHighlightedSearchText(text: string, term: string) {
       <span key={`${part.text}-${partIndex}`}>{part.text}</span>
     ),
   );
-}
-
-function conversationSearchDate(value: string) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    month: '2-digit',
-  }).format(new Date(value));
 }

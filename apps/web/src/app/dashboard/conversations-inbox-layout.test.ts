@@ -72,9 +72,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('renders search, initial filters, unread summary, and empty/error states', () => {
-    expect(whatsappSearchSource).toContain('Buscar conversas por nome ou telefone...');
-    expect(whatsappSearchSource).toContain('Buscar texto nas mensagens...');
-    expect(conversationsSource).toContain('WhatsAppSearch');
+    expect(whatsappSearchSource).toContain('function ConversationSearch');
+    expect(whatsappSearchSource).toContain('Buscar nome ou telefone');
+    expect(whatsappSearchSource).toContain('function ConversationMessageSearch');
+    expect(whatsappSearchSource).toContain('Buscar nesta conversa...');
+    expect(whatsappSearchSource).toContain('Carregar mais resultados');
+    expect(conversationsSource).toContain('ConversationSearch query={searchInput}');
+    expect(conversationsSource).toContain('ConversationMessageSearch');
+    expect(conversationsSource).not.toContain('whatsapp-search-tabs');
     expect(conversationsSource).toContain("id: 'all', label: 'Todas'");
     expect(conversationsSource).toContain("id: 'unread', label: 'Não lidas'");
     expect(conversationsSource).toContain("id: 'clients', label: 'Clientes'");
@@ -82,7 +87,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('totalUnreadConversations');
     expect(conversationsSource).toContain('onSummaryChange(payload.summary)');
     expect(conversationsSource).toContain('Nenhuma conversa encontrada.');
-    expect(whatsappSearchSource).toContain('Nenhuma mensagem encontrada.');
+    expect(whatsappSearchSource).toContain('Nenhuma mensagem encontrada');
     expect(conversationsSource).toContain('Falha ao carregar conversas.');
     expect(conversationsSource).toContain('Carregar mais conversas');
     expect(conversationsSource).toContain('Fim da lista');
@@ -95,12 +100,19 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain(
       'conversationListQueryKeyRef.current !== requestQueryKey',
     );
-    expect(whatsappSearchSource).toContain('requestKeyRef.current = requestKey');
-    expect(whatsappSearchSource).toContain('requestKeyRef.current !== requestKey');
-    expect(whatsappSearchSource).toContain("state: 'cleared'");
-    expect(whatsappSearchSource).toContain("state: 'idle'");
-    expect(whatsappSearchSource).toContain('setMessagePage(1)');
-    expect(whatsappSearchSource).toContain('setMessageResults([])');
+    expect(conversationsSource).toContain('messageSearchRequestKeyRef.current = requestKey');
+    expect(conversationsSource).toContain('messageSearchRequestKeyRef.current !== requestKey');
+    expect(conversationsSource).toContain("state: 'closed'");
+    expect(conversationsSource).toContain("state: 'idle'");
+    expect(conversationsSource).toContain('setMessageSearchIndex(0)');
+    expect(conversationsSource).toContain('setMessageSearchResults([])');
+    expect(conversationsSource).toContain('setMessageSearchHasMore(false)');
+    expect(conversationsSource).toContain('conversationId,');
+    expect(conversationsSource).toContain('updateMessageSearchInput');
+    expect(conversationsSource).toContain("state: 'typing'");
+    expect(conversationsSource).toContain('compareMessageSearchResultsByTime');
+    expect(conversationsSource).toContain('mergeMessageSearchResults');
+    expect(conversationsSource).toContain('loadMoreMessageSearchResults');
   });
 
   it('keeps result switching, target scroll, and highlight cleanup scoped to the active request', () => {
@@ -113,6 +125,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('target?.scrollIntoView({ block:');
     expect(conversationsSource).toContain('window.clearTimeout(targetHighlightTimeoutRef.current)');
     expect(conversationsSource).toContain('renderHighlightedSearchText(text, searchTerm)');
+    expect(conversationsSource).toContain('messagesRef.current.some');
+    expect(conversationsSource).toContain("goToMessageSearchResult('next')");
+    expect(conversationsSource).toContain("goToMessageSearchResult('previous')");
   });
 
   it('keeps a single start conversation action outside the internal list header', () => {
@@ -718,7 +733,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-error-slot:empty');
     expect(stylesSource).toContain('.conversation-list-panel');
-    expect(stylesSource).toContain('grid-template-rows: auto auto auto minmax(0, 1fr);');
+    expect(stylesSource).toContain('grid-template-rows: auto auto auto auto minmax(0, 1fr);');
     expect(stylesSource).toContain('.conversation-list-items');
     expect(stylesSource).toContain('.conversation-messages-wrap');
     expect(stylesSource).toContain('.conversation-messages');

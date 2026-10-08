@@ -217,6 +217,8 @@ export function WhatsAppInbox({
   const targetHighlightTimeoutRef = useRef<number | null>(null);
   const openMessageSearchGenerationRef = useRef(0);
   const messageSearchRequestKeyRef = useRef('');
+  const messageSearchResultsRef = useRef<WhatsAppMessageSearchResult[]>([]);
+  const messageSearchIndexRef = useRef(0);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
 
@@ -432,6 +434,8 @@ export function WhatsAppInbox({
     setMessageSearchOpen(false);
     setMessageSearchInput('');
     setMessageSearchQuery('');
+    messageSearchResultsRef.current = [];
+    messageSearchIndexRef.current = 0;
     setMessageSearchResults([]);
     setMessageSearchIndex(0);
     setMessageSearchPage(firstConversationPage);
@@ -454,6 +458,8 @@ export function WhatsAppInbox({
       });
       setMessageSearchInput(value);
       setMessageSearchError('');
+      messageSearchResultsRef.current = [];
+      messageSearchIndexRef.current = 0;
       setMessageSearchResults([]);
       setMessageSearchIndex(0);
       setMessageSearchPage(firstConversationPage);
@@ -468,8 +474,9 @@ export function WhatsAppInbox({
 
   const activateMessageSearchResult = useCallback(
     (result: WhatsAppMessageSearchResult, term: string, index: number) => {
-      if (!selectedConversation || result.conversation.id !== selectedConversation.id) return;
+      if (activeConversationIdRef.current !== result.conversation.id) return;
 
+      messageSearchIndexRef.current = index;
       setMessageSearchIndex(index);
       setTargetSearchTerm(term);
 
@@ -481,7 +488,7 @@ export function WhatsAppInbox({
 
       void openMessageSearchResult(result, term);
     },
-    [selectedConversation],
+    [],
   );
 
   const loadMessageSearchResults = useCallback(
@@ -521,17 +528,17 @@ export function WhatsAppInbox({
           return;
         }
 
-        const currentResultId = messageSearchResults[messageSearchIndex]?.message.id ?? null;
-        const results = mergeMessageSearchResults(
-          append ? messageSearchResults : [],
-          payload.items,
-        );
+        const currentResults = messageSearchResultsRef.current;
+        const currentResultId = currentResults[messageSearchIndexRef.current]?.message.id ?? null;
+        const results = mergeMessageSearchResults(append ? currentResults : [], payload.items);
         const nextIndex = currentResultId
           ? Math.max(
               0,
               results.findIndex((result) => result.message.id === currentResultId),
             )
           : 0;
+        messageSearchResultsRef.current = results;
+        messageSearchIndexRef.current = nextIndex;
         setMessageSearchResults(results);
         setMessageSearchPage(page);
         setMessageSearchHasMore(Boolean(payload.pagination.hasMore));
@@ -542,9 +549,9 @@ export function WhatsAppInbox({
           setTargetMessageId(null);
           setTargetSearchTerm('');
         }
-      } catch {
+      } catch (err) {
         if (messageSearchRequestKeyRef.current === requestKey) {
-          setMessageSearchError('Não foi possível buscar mensagens');
+          setMessageSearchError(searchMessageErrorMessage(err));
         }
       } finally {
         if (messageSearchRequestKeyRef.current === requestKey) {
@@ -553,7 +560,7 @@ export function WhatsAppInbox({
         }
       }
     },
-    [activateMessageSearchResult, messageSearchIndex, messageSearchResults],
+    [activateMessageSearchResult],
   );
 
   const goToMessageSearchResult = useCallback(
@@ -623,6 +630,8 @@ export function WhatsAppInbox({
         query: messageSearchQuery,
         state: 'idle',
       });
+      messageSearchResultsRef.current = [];
+      messageSearchIndexRef.current = 0;
       setMessageSearchResults([]);
       setMessageSearchIndex(0);
       setMessageSearchPage(firstConversationPage);
@@ -632,6 +641,14 @@ export function WhatsAppInbox({
       setMessageSearchLoadingMore(false);
       return;
     }
+
+    const requestKey = JSON.stringify({
+      append: false,
+      conversationId,
+      page: firstConversationPage,
+      query: messageSearchQuery,
+    });
+    if (messageSearchRequestKeyRef.current === requestKey) return;
 
     void loadMessageSearchResults({
       append: false,
@@ -4083,6 +4100,13 @@ function conversationErrorMessage(error: unknown, fallback: string) {
     return 'Conversa inexistente ou não disponível.';
   }
   return fallback;
+}
+
+function searchMessageErrorMessage(error?: unknown) {
+  if (error instanceof Error && /429|too many|muitas buscas|rate limit/i.test(error.message)) {
+    return 'Muitas buscas em sequência. Aguarde alguns segundos.';
+  }
+  return 'Não foi possível buscar mensagens';
 }
 
 function conversationRetryErrorMessage(error: unknown) {

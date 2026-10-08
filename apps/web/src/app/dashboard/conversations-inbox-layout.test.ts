@@ -113,6 +113,13 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('compareMessageSearchResultsByTime');
     expect(conversationsSource).toContain('mergeMessageSearchResults');
     expect(conversationsSource).toContain('loadMoreMessageSearchResults');
+    expect(conversationsSource).toContain('messageSearchResultsRef.current');
+    expect(conversationsSource).toContain('messageSearchIndexRef.current');
+    expect(conversationsSource).toContain(
+      'if (messageSearchRequestKeyRef.current === requestKey) return',
+    );
+    expect(conversationsSource).toContain('searchMessageErrorMessage(err)');
+    expect(conversationsSource).toContain('Muitas buscas em sequência. Aguarde alguns segundos.');
   });
 
   it('keeps result switching, target scroll, and highlight cleanup scoped to the active request', () => {

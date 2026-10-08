@@ -192,6 +192,32 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('marks messages as read with the confirmed Kirago payload and bearer auth', async () => {
+    const request = vi.fn().mockResolvedValue({
+      code: 200,
+      data: { Details: 'Message(s) marked as read' },
+      success: true,
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.markRead('instance-token', {
+      Id: ['provider-message-id'],
+      ChatPhone: '554699999999',
+      SenderPhone: '554699999999',
+    });
+
+    expect(request).toHaveBeenCalledWith('/chat/markread', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer instance-token' },
+      body: {
+        Id: ['provider-message-id'],
+        ChatPhone: '554699999999',
+        SenderPhone: '554699999999',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('checks instance status through Kirago session status endpoint', async () => {
     const request = vi.fn().mockResolvedValue({
       success: true,

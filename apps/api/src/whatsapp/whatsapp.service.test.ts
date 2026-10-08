@@ -558,6 +558,7 @@ function serviceFactory({
     sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'provider-document-id' }),
     sendAudio: vi.fn().mockResolvedValue({ providerMessageId: 'provider-audio-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
+    markMessagesAsRead: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn().mockResolvedValue({
       dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
       mimetype: 'image/jpeg',
@@ -6389,19 +6390,32 @@ describe('WhatsAppService', () => {
     );
   });
 
-  it('marks conversations as read idempotently without changing status', async () => {
-    const { service, prisma } = serviceFactory({
+  it('marks inbound provider messages as read in KiraGo before decrementing local unread', async () => {
+    const activeConversation = conversation({
+      unreadCount: 2,
+      whatsAppConnection: connection({ phone: '5599999999999' }),
+    });
+    const { service, prisma, provider, encryption } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
-          findUnique: vi.fn().mockResolvedValue(null),
+          findUnique: vi.fn().mockResolvedValue(activeConversation),
           findMany: vi.fn().mockResolvedValue([]),
-          count: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(1),
+          count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0, status: 'OPEN' })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi
             .fn()
-            .mockResolvedValueOnce(conversation({ unreadCount: 0, status: 'OPEN' }))
-            .mockResolvedValueOnce(conversation({ unreadCount: 0, status: 'RESOLVED' })),
+            .mockResolvedValue([
+              { providerMessageId: 'provider-inbound-1' },
+              { providerMessageId: 'provider-inbound-2' },
+              { providerMessageId: 'provider-inbound-1' },
+            ]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
         },
       },
     });
@@ -6410,14 +6424,526 @@ describe('WhatsAppService', () => {
       unreadCount: 0,
       status: 'OPEN',
     });
+    expect(encryption.decrypt).toHaveBeenCalledWith('encrypted-token');
+    expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
+      messageIds: ['provider-inbound-1', 'provider-inbound-2'],
+      phone: activeConversation.phoneNormalized,
+    });
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: activeConversation.whatsAppConnection.phone }),
+    );
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          conversationId: conversation().id,
+          direction: 'INBOUND',
+        },
+        take: 2,
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 2 } } }),
+    );
+  });
+
+  it('stops at the first missing provider id in the unread inbound window', async () => {
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 2 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi
+            .fn()
+            .mockResolvedValue([
+              { providerMessageId: 'provider-newest' },
+              { providerMessageId: null },
+              { providerMessageId: 'provider-oldest' },
+            ]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 2,
+    });
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 3,
+        where: {
+          conversationId: conversation().id,
+          direction: 'INBOUND',
+        },
+      }),
+    );
+    expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
+      messageIds: ['provider-oldest'],
+      phone: conversation().phoneNormalized,
+    });
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ messageIds: expect.arrayContaining(['provider-newest']) }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 1 } } }),
+    );
+  });
+
+  it('keeps the unread window aligned across consecutive opens when a provider id is missing in the middle', async () => {
+    const findUnique = vi
+      .fn()
+      .mockResolvedValueOnce(conversation({ unreadCount: 3 }))
+      .mockResolvedValueOnce(conversation({ unreadCount: 2 }));
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 2 }));
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { providerMessageId: 'provider-c' },
+        { providerMessageId: null },
+        { providerMessageId: 'provider-a' },
+      ])
+      .mockResolvedValueOnce([{ providerMessageId: 'provider-c' }, { providerMessageId: null }]);
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique,
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update,
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany,
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 2,
+    });
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 2,
+    });
+
+    expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
+    expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
+      messageIds: ['provider-a'],
+      phone: conversation().phoneNormalized,
+    });
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ messageIds: expect.arrayContaining(['provider-c']) }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 1 } } }),
+    );
+  });
+
+  it('never reaches false zero when the only remaining unread message has no provider id', async () => {
+    const findUnique = vi
+      .fn()
+      .mockResolvedValueOnce(conversation({ unreadCount: 3 }))
+      .mockResolvedValueOnce(conversation({ unreadCount: 1 }));
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 1 }));
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { providerMessageId: null },
+        { providerMessageId: 'provider-b' },
+        { providerMessageId: 'provider-a' },
+      ])
+      .mockResolvedValueOnce([{ providerMessageId: null }]);
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique,
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update,
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany,
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 1,
+    });
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 1,
+    });
+
+    expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
+    expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
+      messageIds: ['provider-a', 'provider-b'],
+      phone: conversation().phoneNormalized,
+    });
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 2 } } }),
+    );
+  });
+
+  it('does not send newer ids when the oldest unread message is missing provider id', async () => {
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi
+            .fn()
+            .mockResolvedValue([
+              { providerMessageId: 'provider-c' },
+              { providerMessageId: 'provider-b' },
+              { providerMessageId: null },
+            ]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 3,
+    });
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+  });
+
+  it('does not reach older inbound messages outside the unread window', async () => {
+    const findMany = vi
+      .fn()
+      .mockResolvedValue([
+        { providerMessageId: 'provider-unread-newest' },
+        { providerMessageId: 'provider-unread-middle' },
+        { providerMessageId: 'provider-unread-oldest' },
+      ]);
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany,
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await service.markConversationAsRead(conversation().id);
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 3,
+        where: {
+          conversationId: conversation().id,
+          direction: 'INBOUND',
+        },
+      }),
+    );
+    expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
+      messageIds: ['provider-unread-oldest', 'provider-unread-middle', 'provider-unread-newest'],
+      phone: conversation().phoneNormalized,
+    });
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ messageIds: expect.arrayContaining(['provider-read-497']) }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 3 } } }),
+    );
+  });
+
+  it('processes large unread windows in sequential batches without relying on a second open', async () => {
+    const messages = Array.from({ length: 150 }, (_, index) => ({
+      providerMessageId: `provider-${150 - index}`,
+    }));
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 150 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue(messages),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await service.markConversationAsRead(conversation().id);
+
+    expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(2);
+    expect(provider.markMessagesAsRead).toHaveBeenNthCalledWith(1, 'instance-token', {
+      messageIds: Array.from({ length: 100 }, (_, index) => `provider-${index + 1}`),
+      phone: conversation().phoneNormalized,
+    });
+    expect(provider.markMessagesAsRead).toHaveBeenNthCalledWith(2, 'instance-token', {
+      messageIds: Array.from({ length: 50 }, (_, index) => `provider-${index + 101}`),
+      phone: conversation().phoneNormalized,
+    });
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 150 } } }),
+    );
+  });
+
+  it('stops sequential batches after a failure and decrements only confirmed prefix batches', async () => {
+    const markMessagesAsRead = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('provider timeout'));
+    const messages = Array.from({ length: 250 }, (_, index) => ({
+      providerMessageId: `provider-${250 - index}`,
+    }));
+    const { service, prisma } = serviceFactory({
+      providerOverrides: { markMessagesAsRead },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 250 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 150 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue(messages),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 150,
+    });
+    expect(markMessagesAsRead).toHaveBeenCalledTimes(2);
+    expect(markMessagesAsRead).toHaveBeenNthCalledWith(1, 'instance-token', {
+      messageIds: Array.from({ length: 100 }, (_, index) => `provider-${index + 1}`),
+      phone: conversation().phoneNormalized,
+    });
+    expect(markMessagesAsRead).toHaveBeenNthCalledWith(2, 'instance-token', {
+      messageIds: Array.from({ length: 100 }, (_, index) => `provider-${index + 101}`),
+      phone: conversation().phoneNormalized,
+    });
+    expect(markMessagesAsRead).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ messageIds: expect.arrayContaining(['provider-201']) }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 100 } } }),
+    );
+  });
+
+  it('keeps failed batch and new inbound messages unread after a partial batch failure', async () => {
+    const markMessagesAsRead = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('provider timeout'));
+    const messages = Array.from({ length: 150 }, (_, index) => ({
+      providerMessageId: `provider-${150 - index}`,
+    }));
+    const { service, prisma } = serviceFactory({
+      providerOverrides: { markMessagesAsRead },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 150 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 51 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue(messages),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 51,
+    });
+    expect(markMessagesAsRead).toHaveBeenCalledTimes(2);
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 100 } } }),
+    );
+  });
+
+  it('keeps a new inbound message unread when it arrives during provider markread', async () => {
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 1 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi
+            .fn()
+            .mockResolvedValue([
+              { providerMessageId: 'provider-c' },
+              { providerMessageId: 'provider-b' },
+              { providerMessageId: 'provider-a' },
+            ]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 1,
+    });
+    expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
+      messageIds: ['provider-a', 'provider-b', 'provider-c'],
+      phone: conversation().phoneNormalized,
+    });
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unreadCount: { decrement: 3 } } }),
+    );
+  });
+
+  it('dedupes concurrent markread calls for the same conversation', async () => {
+    const markMessagesAsRead = vi.fn().mockResolvedValue(undefined);
+    const { service, provider } = serviceFactory({
+      providerOverrides: { markMessagesAsRead },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 1 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([{ providerMessageId: 'provider-inbound-1' }]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const first = service.markConversationAsRead(conversation().id);
+    const second = service.markConversationAsRead(conversation().id);
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+
+    expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps unread count when markread provider fails or no provider ids exist', async () => {
+    const unreadConversation = conversation({ unreadCount: 2 });
+    const { service, prisma, provider } = serviceFactory({
+      providerOverrides: {
+        markMessagesAsRead: vi.fn().mockRejectedValue(new Error('provider unavailable')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(unreadConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([{ providerMessageId: 'provider-inbound-1' }]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 2,
+    });
+    expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+  });
+
+  it('does not call markread provider when unread is zero or provider ids are missing', async () => {
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(conversation({ unreadCount: 0 }))
+            .mockResolvedValueOnce(conversation({ unreadCount: 2 })),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
     await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
       unreadCount: 0,
-      status: 'RESOLVED',
     });
-    expect(prisma.whatsAppConversation.update).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ data: { unreadCount: 0 } }),
-    );
+    await expect(service.markConversationAsRead(conversation().id)).resolves.toMatchObject({
+      unreadCount: 2,
+    });
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
   });
 
   it('resolves conversations idempotently without clearing unread count', async () => {

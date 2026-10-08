@@ -82,6 +82,10 @@ export type KiragoDownloadMediaData = {
   Mimetype?: string;
 };
 
+export type KiragoMarkReadData = {
+  Details?: unknown;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -236,6 +240,20 @@ export class KiragoInstanceClient {
       method: 'POST',
       headers: { token: instanceToken },
       body: { Phone: phone },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  markRead(
+    instanceToken: string,
+    payload: { Id: string[]; ChatPhone: string; SenderPhone: string },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoMarkReadData>>('/chat/markread', {
+      method: 'POST',
+      headers: {
+        Authorization: this.instanceBearer(instanceToken),
+      },
+      body: payload,
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   }

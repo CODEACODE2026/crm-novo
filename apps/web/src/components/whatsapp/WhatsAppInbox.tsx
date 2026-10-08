@@ -934,18 +934,27 @@ export function WhatsAppInbox({
         setSelectedConversation(readConversation);
         setConversations((current) =>
           current.map((item) =>
-            item.id === readConversation.id ? { ...item, unreadCount: 0 } : item,
+            item.id === readConversation.id
+              ? { ...item, unreadCount: readConversation.unreadCount }
+              : item,
           ),
         );
-        setSummary((current) => {
-          if (!current) return current;
-          const next = {
-            totalUnreadConversations: Math.max(0, current.totalUnreadConversations - 1),
-            totalUnreadMessages: Math.max(0, current.totalUnreadMessages - unreadBeforeRead),
-          };
-          onSummaryChange(next);
-          return next;
-        });
+        const unreadAfterRead = readConversation.unreadCount;
+        const readDelta = Math.max(0, unreadBeforeRead - unreadAfterRead);
+        if (readDelta > 0) {
+          setSummary((current) => {
+            if (!current) return current;
+            const next = {
+              totalUnreadConversations:
+                unreadAfterRead === 0
+                  ? Math.max(0, current.totalUnreadConversations - 1)
+                  : current.totalUnreadConversations,
+              totalUnreadMessages: Math.max(0, current.totalUnreadMessages - readDelta),
+            };
+            onSummaryChange(next);
+            return next;
+          });
+        }
       }
 
       if (detail.client?.id) {

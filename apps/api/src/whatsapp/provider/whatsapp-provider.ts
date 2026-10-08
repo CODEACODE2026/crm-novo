@@ -102,6 +102,11 @@ export type DownloadMediaResult = {
   mimetype: string;
 };
 
+export type MarkMessagesAsReadInput = {
+  messageIds: string[];
+  phone: string;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -118,6 +123,7 @@ export interface WhatsAppProvider {
   sendAudio(instanceToken: string, input: SendAudioInput): Promise<SendAudioResult>;
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
+  markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput): Promise<void>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

@@ -193,6 +193,30 @@ describe('Kirago dependency injection', () => {
     });
   });
 
+  it('requires Kirago markread success=true before accepting read confirmation', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const markRead = vi.spyOn(instanceClient, 'markRead').mockResolvedValue({
+      code: 200,
+      data: { Details: 'failed' },
+      success: false,
+    });
+
+    await expect(
+      provider.markMessagesAsRead('instance-token', {
+        messageIds: ['provider-message-id'],
+        phone: '554699999999',
+      }),
+    ).rejects.toThrow('Falha ao confirmar leitura na Kirago.');
+    expect(markRead).toHaveBeenCalledWith('instance-token', {
+      Id: ['provider-message-id'],
+      ChatPhone: '554699999999',
+      SenderPhone: '554699999999',
+    });
+  });
+
   it('logs only safe Kirago media send response shape when debug is enabled', async () => {
     process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });

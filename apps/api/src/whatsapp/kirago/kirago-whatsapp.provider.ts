@@ -7,6 +7,7 @@ import { KiragoHttpClient } from './kirago-http.client';
 import { KiragoProviderError } from './kirago-provider.error';
 import type {
   DownloadMediaInput,
+  MarkMessagesAsReadInput,
   ProvisionConnectionInput,
   RemoteConnectionLookupInput,
   SendButtonsInput,
@@ -224,6 +225,22 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       dataUrl: response.data?.Data ?? '',
       mimetype: response.data?.Mimetype ?? input.Mimetype,
     };
+  }
+
+  async markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput) {
+    const response = await this.instanceClient.markRead(instanceToken, {
+      Id: input.messageIds,
+      ChatPhone: input.phone,
+      SenderPhone: input.phone,
+    });
+
+    if (response.success !== true) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao confirmar leitura na Kirago.',
+        response.code,
+      );
+    }
   }
 
   private kiragoMessageId(requestId: string) {

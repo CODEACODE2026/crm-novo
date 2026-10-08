@@ -263,6 +263,10 @@ export class WhatsAppService {
   static readonly conversationVoiceMaxBytes = 5 * 1024 * 1024;
 
   private readonly logger = new Logger(WhatsAppService.name);
+  private readonly markReadInFlight = new Map<
+    string,
+    Promise<ReturnType<WhatsAppService['presentConversation']>>
+  >();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -1822,10 +1826,93 @@ export class WhatsAppService {
   }
 
   async markConversationAsRead(id: string) {
-    await this.ensureConversationExists(id);
-    const conversation = await this.prisma.whatsAppConversation.update({
+    const current = this.markReadInFlight.get(id);
+    if (current) return current;
+
+    const promise = this.markConversationAsReadOnce(id).finally(() => {
+      this.markReadInFlight.delete(id);
+    });
+    this.markReadInFlight.set(id, promise);
+    return promise;
+  }
+
+  private async markConversationAsReadOnce(id: string) {
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
-      data: { unreadCount: 0 },
+      include: {
+        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        whatsAppConnection: true,
+      },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const unreadSnapshot = conversation.unreadCount;
+    if (unreadSnapshot <= 0) {
+      return this.presentConversation(conversation);
+    }
+
+    const phone = conversation.phoneNormalized;
+    if (!phone) {
+      this.logger.warn(`WhatsApp markread skipped conversation=${id} reason=missing_phone`);
+      return this.presentConversation(conversation);
+    }
+
+    const messages = await this.prisma.whatsAppMessage.findMany({
+      where: {
+        conversationId: id,
+        direction: 'INBOUND',
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { providerMessageId: true },
+      take: unreadSnapshot,
+    });
+    const providerMessageIds: string[] = [];
+    const seenProviderMessageIds = new Set<string>();
+    for (const message of [...messages].reverse()) {
+      if (!message.providerMessageId) {
+        this.logger.warn(
+          `WhatsApp markread stopped conversation=${id} missingProviderMessageId=true`,
+        );
+        break;
+      }
+      if (!seenProviderMessageIds.has(message.providerMessageId)) {
+        providerMessageIds.push(message.providerMessageId);
+        seenProviderMessageIds.add(message.providerMessageId);
+      }
+    }
+
+    if (!providerMessageIds.length) {
+      this.logger.warn(`WhatsApp markread skipped conversation=${id} reason=no_provider_ids`);
+      return this.presentConversation(conversation);
+    }
+
+    let confirmedReadCount = 0;
+    try {
+      const instanceToken = this.encryption.decrypt(
+        conversation.whatsAppConnection.providerTokenEncrypted,
+      );
+      for (const batch of chunks(providerMessageIds, 100)) {
+        await this.provider.markMessagesAsRead(instanceToken, {
+          messageIds: batch,
+          phone,
+        });
+        confirmedReadCount += batch.length;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `WhatsApp markread provider failed conversation=${id} connection=${conversation.whatsAppConnectionId} confirmed=${confirmedReadCount} pending=${providerMessageIds.length - confirmedReadCount} message=${this.sanitizeError(error)}`,
+      );
+      if (confirmedReadCount === 0) {
+        return this.presentConversation(conversation);
+      }
+    }
+
+    const updated = await this.prisma.whatsAppConversation.update({
+      where: { id },
+      data: { unreadCount: { decrement: confirmedReadCount } },
       include: {
         client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
         whatsAppConnection: {
@@ -1835,7 +1922,7 @@ export class WhatsAppService {
     });
 
     this.emitConversationUpdated(id);
-    return this.presentConversation(conversation);
+    return this.presentConversation(updated);
   }
 
   async resolveConversation(id: string) {
@@ -5316,4 +5403,12 @@ export class WhatsAppService {
 
     throw error;
   }
+}
+
+function chunks<T>(items: T[], size: number) {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
 }

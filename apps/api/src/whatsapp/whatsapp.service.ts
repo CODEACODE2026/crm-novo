@@ -2594,6 +2594,10 @@ export class WhatsAppService {
       const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
       const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
       const data = this.asRecord(body.data);
+      const readReceiptSummary =
+        this.safeProbeValue(body.type) === 'ReadReceipt'
+          ? this.buildReadReceiptProbeSummary(body)
+          : [];
 
       this.logger.log(
         [
@@ -2617,11 +2621,11 @@ export class WhatsAppService {
             'unknown'
           }`,
           `receipt=${
-            this.safeProbeValue(body.receipt) ??
-            this.safeProbeValue(body.Receipt) ??
-            this.safeProbeValue(info?.Receipt) ??
-            this.safeProbeValue(info?.receipt) ??
-            this.safeProbeValue(data?.receipt) ??
+            this.safeProbeNonSensitiveValue(body.receipt) ??
+            this.safeProbeNonSensitiveValue(body.Receipt) ??
+            this.safeProbeNonSensitiveValue(info?.Receipt) ??
+            this.safeProbeNonSensitiveValue(info?.receipt) ??
+            this.safeProbeNonSensitiveValue(data?.receipt) ??
             'unknown'
           }`,
           `messageId=${this.maskProbeId(
@@ -2643,6 +2647,7 @@ export class WhatsAppService {
             this.safeProbeValue(data?.timestamp) ??
             'unknown'
           }`,
+          ...readReceiptSummary,
         ].join(' '),
       );
     } catch {
@@ -2687,7 +2692,7 @@ export class WhatsAppService {
   private maskProbeId(value: unknown) {
     const normalized = this.safeProbeValue(value);
 
-    if (!normalized) {
+    if (!normalized || this.looksSensitiveProbeValue(normalized)) {
       return 'unknown';
     }
 
@@ -2696,6 +2701,142 @@ export class WhatsAppService {
     }
 
     return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+  }
+
+  private safeProbeNonSensitiveValue(value: unknown) {
+    const normalized = this.safeProbeValue(value);
+
+    if (!normalized || this.looksSensitiveProbeValue(normalized)) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  private buildReadReceiptProbeSummary(body: Record<string, unknown>) {
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+    const data = this.asRecord(body.data);
+    const receipt = this.asRecord(body.receipt) ?? this.asRecord(body.Receipt);
+    const readReceipt = this.asRecord(body.ReadReceipt);
+    const key = this.asRecord(body.key) ?? this.asRecord(body.Key);
+    const records: Array<[string, Record<string, unknown> | null]> = [
+      ['top', body],
+      ['Info', info],
+      ['Message', message],
+      ['data', data],
+      ['receipt', receipt],
+      ['ReadReceipt', readReceipt],
+      ['key', key],
+    ];
+    const keys = records
+      .map(([name, record]) => `${name}:${this.safeObjectKeys(record).join(',') || 'none'}`)
+      .join('|');
+
+    return [
+      `readReceiptKeys=${keys}`,
+      `readReceiptScalars=${this.buildReadReceiptScalarSummary(records)}`,
+      `readReceiptArrays=${this.buildReadReceiptArraySummary(records)}`,
+    ];
+  }
+
+  private buildReadReceiptScalarSummary(records: Array<[string, Record<string, unknown> | null]>) {
+    const candidateKeys = [
+      'id',
+      'Id',
+      'ID',
+      'messageId',
+      'MessageId',
+      'messageID',
+      'key',
+      'Key',
+      'status',
+      'Status',
+      'ack',
+      'Ack',
+      'receipt',
+      'Receipt',
+      'timestamp',
+      'Timestamp',
+    ];
+    const entries: string[] = [];
+
+    for (const [name, record] of records) {
+      if (!record) {
+        continue;
+      }
+
+      for (const key of candidateKeys) {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) {
+          continue;
+        }
+
+        const summary = this.safeReadReceiptScalarValue(record[key], this.isIdLikeProbeKey(key));
+
+        if (summary) {
+          entries.push(`${name}.${key}:${summary}`);
+        }
+      }
+    }
+
+    return entries.join('|') || 'none';
+  }
+
+  private buildReadReceiptArraySummary(records: Array<[string, Record<string, unknown> | null]>) {
+    const candidateKeys = ['ids', 'Ids', 'IDs', 'messageIds', 'messages', 'Messages'];
+    const entries: string[] = [];
+
+    for (const [name, record] of records) {
+      if (!record) {
+        continue;
+      }
+
+      for (const key of candidateKeys) {
+        const value = record[key];
+
+        if (!Array.isArray(value)) {
+          continue;
+        }
+
+        entries.push(`${name}.${key}:length=${value.length}${this.maskProbeIdArray(value)}`);
+      }
+    }
+
+    return entries.join('|') || 'none';
+  }
+
+  private safeReadReceiptScalarValue(value: unknown, mask: boolean) {
+    const normalized = this.safeProbeValue(value);
+
+    if (!normalized || this.looksSensitiveProbeValue(normalized)) {
+      return null;
+    }
+
+    return mask ? this.maskProbeId(normalized) : normalized;
+  }
+
+  private maskProbeIdArray(values: unknown[]) {
+    const masked = values
+      .filter((value) => typeof value === 'string' || typeof value === 'number')
+      .map((value) => this.safeReadReceiptScalarValue(value, true))
+      .filter((value): value is string => Boolean(value));
+
+    return masked.length ? ` ids=${masked.slice(0, 5).join(',')}` : '';
+  }
+
+  private isIdLikeProbeKey(key: string) {
+    return /(^id$|messageid|key)/i.test(key);
+  }
+
+  private looksSensitiveProbeValue(value: string) {
+    return (
+      /^\+?\d{10,15}$/.test(value) ||
+      /^https?:\/\//i.test(value) ||
+      /base64/i.test(value) ||
+      /token/i.test(value) ||
+      value.length > 200
+    );
   }
 
   private hasAnyOwnValue(source: Record<string, unknown> | null, keys: readonly string[]) {

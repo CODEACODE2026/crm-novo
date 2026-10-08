@@ -3884,6 +3884,113 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
+  it('logs ReadReceipt top-level structure and masked id candidates', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      ID: 'ABCDEF1234567890',
+      status: 'READ',
+      timestamp: '2026-10-08T20:35:00.000Z',
+      instanceName: 'crm-novo-main',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('type=ReadReceipt');
+    expect(output).toContain('readReceiptKeys=');
+    expect(output).toContain('top:ID,instanceName,status,timestamp,type');
+    expect(output).toContain('readReceiptScalars=');
+    expect(output).toContain('top.ID:ABCDEF...7890');
+    expect(output).toContain('top.status:READ');
+    expect(output).toContain('top.timestamp:2026-10-08T20:35:00.000Z');
+    expect(output).not.toContain('ABCDEF1234567890');
+    log.mockRestore();
+  });
+
+  it('logs ReadReceipt nested Info and data id candidates with masked values', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      Info: {
+        ID: 'INFOREAD1234567890',
+        Status: 'READ',
+        Timestamp: '2026-10-08T20:36:00.000Z',
+      },
+      data: {
+        messageId: 'DATAREAD1234567890',
+        ack: 'read',
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('Info:ID,Status,Timestamp');
+    expect(output).toContain('data:ack,messageId');
+    expect(output).toContain('Info.ID:INFORE...7890');
+    expect(output).toContain('Info.Status:READ');
+    expect(output).toContain('data.messageId:DATARE...7890');
+    expect(output).toContain('data.ack:read');
+    expect(output).not.toContain('INFOREAD1234567890');
+    expect(output).not.toContain('DATAREAD1234567890');
+    log.mockRestore();
+  });
+
+  it('summarizes ReadReceipt id arrays without logging raw objects', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      ReadReceipt: {
+        messageIds: ['ARRAYREAD1234567890', 'ARRAYREAD0987654321'],
+        messages: [{ id: 'nested-object-should-not-log' }],
+      },
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('ReadReceipt:messageIds,messages');
+    expect(output).toContain('ReadReceipt.messageIds:length=2 ids=ARRAYR...7890,ARRAYR...4321');
+    expect(output).toContain('ReadReceipt.messages:length=1');
+    expect(output).not.toContain('ARRAYREAD1234567890');
+    expect(output).not.toContain('nested-object-should-not-log');
+    log.mockRestore();
+  });
+
+  it('does not leak sensitive ReadReceipt scalar candidates', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await service.receiveWebhook({
+      type: 'ReadReceipt',
+      id: '5544999999999',
+      Key: 'https://media.example.test/private?token=secret-token',
+      Receipt: 'data:image/jpeg;base64,abcdef',
+      Message: {
+        status: 'READ',
+        conversation: 'texto privado',
+      },
+      token: 'secret-token',
+      contactName: 'Cliente Sigiloso',
+    });
+
+    const output = String(log.mock.calls[0]?.[0] ?? '');
+    expect(output).toContain('Kirago webhook probe');
+    expect(output).toContain('Message.status:READ');
+    expect(output).not.toContain('5544999999999');
+    expect(output).not.toContain('secret-token');
+    expect(output).not.toContain('media.example.test');
+    expect(output).not.toContain('base64');
+    expect(output).not.toContain('texto privado');
+    expect(output).not.toContain('Cliente Sigiloso');
+    log.mockRestore();
+  });
+
   it('identifies webhook connection by provider user id and falls back to instance name', async () => {
     const byProviderUserId = serviceFactory();
     byProviderUserId.normalizer.normalize.mockReturnValue({

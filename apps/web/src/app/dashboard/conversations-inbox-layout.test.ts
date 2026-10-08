@@ -169,12 +169,16 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('listWhatsAppConversationMessages(conversationId');
     expect(conversationsSource).toContain('markWhatsAppConversationRead(detail.id)');
     expect(conversationsSource).toContain('readConversation.unreadCount');
-    expect(conversationsSource).toContain('const readDelta = Math.max');
-    expect(conversationsSource).toContain('totalUnreadMessages: Math.max');
+    expect(conversationsSource).toContain('mergeConversationById(current, readConversation)');
+    expect(conversationsSource).toContain(
+      'if (activeConversationIdRef.current === readConversation.id)',
+    );
+    expect(conversationsSource).toContain('updateConversationSummaryAfterRead');
     expect(conversationsSource).toContain('resolveWhatsAppConversation(selectedConversation.id)');
     expect(conversationsSource).toContain('document.hidden');
     expect(conversationsSource).toContain('mergeConversationMessages');
     expect(conversationsSource).toContain('activeConversationIdRef.current !== conversationId');
+    expect(conversationsSource).toContain('activeConversationIdRef.current === conversation.id');
     expect(conversationsSource).toContain('isConversationScrollNearBottom');
     expect(conversationsSource).toContain('setDrafts((current) => ({');
   });

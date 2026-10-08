@@ -922,38 +922,33 @@ export function WhatsAppInbox({
       ]);
       if (activeConversationIdRef.current !== conversation.id) return;
       setSelectedConversation(detail);
-      setConversations((current) =>
-        current.map((item) => (item.id === detail.id ? { ...item, ...detail } : item)),
-      );
+      setConversations((current) => mergeConversationById(current, detail));
 
       if (detail.unreadCount > 0 && lastReadConversationRef.current !== detail.id) {
         const unreadBeforeRead = detail.unreadCount;
         lastReadConversationRef.current = detail.id;
-        const readConversation = await markWhatsAppConversationRead(detail.id);
-        if (activeConversationIdRef.current !== detail.id) return;
-        setSelectedConversation(readConversation);
-        setConversations((current) =>
-          current.map((item) =>
-            item.id === readConversation.id
-              ? { ...item, unreadCount: readConversation.unreadCount }
-              : item,
-          ),
-        );
-        const unreadAfterRead = readConversation.unreadCount;
-        const readDelta = Math.max(0, unreadBeforeRead - unreadAfterRead);
-        if (readDelta > 0) {
+        try {
+          const readConversation = await markWhatsAppConversationRead(detail.id);
+          setConversations((current) => mergeConversationById(current, readConversation));
+          if (activeConversationIdRef.current === readConversation.id) {
+            setSelectedConversation(readConversation);
+          }
+
           setSummary((current) => {
-            if (!current) return current;
-            const next = {
-              totalUnreadConversations:
-                unreadAfterRead === 0
-                  ? Math.max(0, current.totalUnreadConversations - 1)
-                  : current.totalUnreadConversations,
-              totalUnreadMessages: Math.max(0, current.totalUnreadMessages - readDelta),
-            };
-            onSummaryChange(next);
+            const next = updateConversationSummaryAfterRead(
+              current,
+              unreadBeforeRead,
+              readConversation.unreadCount,
+            );
+            if (next !== current) {
+              onSummaryChange(next);
+            }
             return next;
           });
+        } catch {
+          if (lastReadConversationRef.current === detail.id) {
+            lastReadConversationRef.current = null;
+          }
         }
       }
 
@@ -967,7 +962,9 @@ export function WhatsAppInbox({
     } catch (err) {
       setMessagesError(conversationErrorMessage(err, 'Falha ao abrir conversa.'));
     } finally {
-      setOpening(false);
+      if (activeConversationIdRef.current === conversation.id) {
+        setOpening(false);
+      }
     }
   }
 
@@ -3863,6 +3860,46 @@ function mergeConversationLists(current: WhatsAppConversation[], incoming: Whats
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() ||
       right.id.localeCompare(left.id),
   );
+}
+
+export function mergeConversationById(
+  current: WhatsAppConversation[],
+  incoming: WhatsAppConversation,
+) {
+  let found = false;
+  const merged = current.map((conversation) => {
+    if (conversation.id !== incoming.id) {
+      return conversation;
+    }
+
+    found = true;
+    return { ...conversation, ...incoming };
+  });
+
+  if (found) {
+    return merged;
+  }
+
+  return mergeConversationLists(current, [incoming]);
+}
+
+export function updateConversationSummaryAfterRead(
+  summary: WhatsAppConversationSummary | null,
+  unreadBeforeRead: number,
+  unreadAfterRead: number,
+) {
+  if (!summary) return summary;
+
+  const readDelta = Math.max(0, unreadBeforeRead - unreadAfterRead);
+  if (readDelta <= 0) return summary;
+
+  return {
+    totalUnreadConversations:
+      unreadAfterRead === 0
+        ? Math.max(0, summary.totalUnreadConversations - 1)
+        : summary.totalUnreadConversations,
+    totalUnreadMessages: Math.max(0, summary.totalUnreadMessages - readDelta),
+  };
 }
 
 function compareMessageSearchResultsByTime(

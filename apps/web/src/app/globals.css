@@ -3215,8 +3215,21 @@ a {
   box-shadow: var(--shadow);
 }
 
-.conversation-message-status.status-sent {
-  color: var(--accent-strong);
+.conversation-message-status {
+  min-width: 16px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: right;
+}
+
+.conversation-message-status.status-sent,
+.conversation-message-status.status-delivered {
+  color: var(--muted);
+}
+
+.conversation-message-status.status-read {
+  color: var(--info);
 }
 
 .conversation-message-status.status-pending {

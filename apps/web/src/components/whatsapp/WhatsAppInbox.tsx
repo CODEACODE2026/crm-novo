@@ -1122,6 +1122,7 @@ export function WhatsAppInbox({
         id: `local-failed-${failedAt}`,
         createdAt: failedAt,
         direction: 'OUTBOUND',
+        deliveredAt: null,
         failedAt,
         isFromMe: true,
         mediaDurationSeconds: null,
@@ -1132,6 +1133,7 @@ export function WhatsAppInbox({
         retryAction: mediaToSend ? 'SELECT_FILE_AGAIN' : 'RETRY',
         messageDispatchId: null,
         providerMessageId: null,
+        readAt: null,
         sentAt: null,
         status: 'FAILED',
         text: body,
@@ -2252,11 +2254,7 @@ function ConversationBubble({
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         <footer>
           <span>{conversationMessageTime(message)}</span>
-          {outbound ? (
-            <span className={`conversation-message-status status-${message.status.toLowerCase()}`}>
-              {conversationMessageStatusLabel(message.status)}
-            </span>
-          ) : null}
+          {outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}
         </footer>
         {message.status === 'FAILED' && outbound ? (
           <div className="conversation-message-failure">
@@ -4022,11 +4020,38 @@ function conversationDateParts(value: string | Date) {
 
 function conversationMessageStatusLabel(status: WhatsAppConversationMessageStatus) {
   const labels = {
+    DELIVERED: 'Entregue',
     FAILED: 'Falhou',
     PENDING: 'Enviando',
+    READ: 'Visualizada',
     SENT: 'Enviada',
   } satisfies Record<WhatsAppConversationMessageStatus, string>;
   return labels[status];
+}
+
+function ConversationMessageStatusIcon({ status }: { status: WhatsAppConversationMessageStatus }) {
+  const label = conversationMessageStatusLabel(status);
+
+  return (
+    <span
+      aria-label={label}
+      className={`conversation-message-status status-${status.toLowerCase()}`}
+      title={label}
+    >
+      {conversationMessageStatusSymbol(status)}
+    </span>
+  );
+}
+
+function conversationMessageStatusSymbol(status: WhatsAppConversationMessageStatus) {
+  const symbols = {
+    DELIVERED: '✓✓',
+    FAILED: '!',
+    PENDING: '◷',
+    READ: '✓✓',
+    SENT: '✓',
+  } satisfies Record<WhatsAppConversationMessageStatus, string>;
+  return symbols[status];
 }
 
 function conversationLastMessagePreview(message: WhatsAppConversationMessage) {

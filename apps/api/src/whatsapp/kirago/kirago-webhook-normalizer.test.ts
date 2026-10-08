@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { KiragoWebhookNormalizer } from './kirago-webhook-normalizer';
+import {
+  KiragoWebhookNormalizer,
+  type NormalizedWhatsAppReceipt,
+} from './kirago-webhook-normalizer';
 
 const receivedAt = new Date('2026-09-11T02:00:00.000Z');
+
+function expectReceipt(result: ReturnType<KiragoWebhookNormalizer['normalize']>) {
+  expect(result).toMatchObject({ kind: 'MESSAGE_RECEIPT' });
+  return result as NormalizedWhatsAppReceipt;
+}
 
 function payload(overrides: Record<string, unknown> = {}) {
   return {
@@ -202,6 +210,86 @@ describe('KiragoWebhookNormalizer', () => {
 
   it('ignores non Message events', () => {
     expect(normalizer.normalize(payload({ type: 'Status' }), receivedAt)).toBeNull();
+  });
+
+  it('normalizes delivered ReadReceipt payloads with MessageIDs and timestamp', () => {
+    const result = normalizer.normalize(
+      {
+        type: 'ReadReceipt',
+        instanceName: 'CRM Principal',
+        userID: 'kirago-user',
+        state: 'Delivered',
+        event: {
+          MessageIDs: ['provider-id-1', 'provider-id-2', 'provider-id-1'],
+          Timestamp: '2026-10-08T18:43:05-03:00',
+          Type: 'delivery',
+        },
+      },
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      kind: 'MESSAGE_RECEIPT',
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      state: 'DELIVERED',
+      rawState: 'Delivered',
+      providerMessageIds: ['provider-id-1', 'provider-id-2'],
+    });
+    expect(expectReceipt(result).timestamp?.toISOString()).toBe('2026-10-08T21:43:05.000Z');
+  });
+
+  it('normalizes read ReadReceipt payloads with scalar and object MessageIDs', () => {
+    const scalar = normalizer.normalize(
+      {
+        type: 'ReadReceipt',
+        state: 'Read',
+        event: { MessageIDs: 'provider-id-scalar', Timestamp: 1789088400 },
+      },
+      receivedAt,
+    );
+
+    expect(scalar).toMatchObject({
+      kind: 'MESSAGE_RECEIPT',
+      state: 'READ',
+      providerMessageIds: ['provider-id-scalar'],
+    });
+
+    const objectArray = normalizer.normalize(
+      {
+        type: 'ReadReceipt',
+        state: 'read',
+        event: {
+          MessageIDs: [{ ID: 'provider-id-object-1' }, { messageId: 'provider-id-object-2' }],
+        },
+      },
+      receivedAt,
+    );
+
+    expect(objectArray).toMatchObject({
+      kind: 'MESSAGE_RECEIPT',
+      state: 'READ',
+      providerMessageIds: ['provider-id-object-1', 'provider-id-object-2'],
+    });
+  });
+
+  it('keeps unknown ReadReceipt states visible without mapping them', () => {
+    const result = normalizer.normalize(
+      {
+        type: 'ReadReceipt',
+        state: 'Viewed',
+        event: { MessageIDs: ['provider-id'] },
+      },
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      kind: 'MESSAGE_RECEIPT',
+      state: null,
+      rawState: 'Viewed',
+      providerMessageIds: ['provider-id'],
+    });
   });
 
   it('falls back to unknown when message shape and Info.Type are not recognized', () => {

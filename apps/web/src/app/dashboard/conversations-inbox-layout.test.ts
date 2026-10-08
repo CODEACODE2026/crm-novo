@@ -437,6 +437,26 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
     expect(conversationsSource).toContain('message.mediaDurationSeconds');
     expect(conversationsSource).toContain('formatConversationAudioTime');
+    expect(conversationsSource).toContain('function ConversationMessageStatusIcon');
+    expect(conversationsSource).toContain("DELIVERED: '✓✓'");
+    expect(conversationsSource).toContain("READ: '✓✓'");
+    expect(conversationsSource).toContain("SENT: '✓'");
+    expect(conversationsSource).toContain("PENDING: '◷'");
+    expect(conversationsSource).toContain("FAILED: '!'");
+    expect(conversationsSource).toContain("DELIVERED: 'Entregue'");
+    expect(conversationsSource).toContain("READ: 'Visualizada'");
+    expect(conversationsSource).toContain('aria-label={label}');
+    expect(conversationsSource).toContain('title={label}');
+    expect(conversationsSource).toContain(
+      '{outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}',
+    );
+    expect(conversationsSource).toContain(
+      '}, [conversationId, message.id, message.mediaAvailable]);',
+    );
+    expect(stylesSource).toContain('.conversation-message-status.status-read');
+    expect(stylesSource).toContain('.conversation-message-status.status-delivered');
+    expect(stylesSource).toContain('color: var(--info);');
+    expect(stylesSource).toContain('color: var(--muted);');
     expect(conversationsSource).toContain('audio.play()');
     expect(conversationsSource).toContain('audio.pause()');
     expect(conversationsSource).toContain('const conversationAudioPlayEvent');

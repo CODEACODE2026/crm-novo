@@ -694,7 +694,8 @@ export interface MessageDispatch {
 
 export type WhatsAppConversationStatus = 'OPEN' | 'RESOLVED';
 export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
-export type WhatsAppConversationMessageStatus = 'PENDING' | 'SENT' | 'FAILED';
+export type WhatsAppConversationMessageStatus =
+  'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
 export type WhatsAppConversationMessageType =
   'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'LOCATION' | 'BUTTON' | 'UNKNOWN';
 
@@ -729,6 +730,8 @@ export interface WhatsAppConversationMessage {
   text: string | null;
   status: WhatsAppConversationMessageStatus;
   sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
   failedAt: string | null;
   isFromMe: boolean;
   providerMessageId: string | null;

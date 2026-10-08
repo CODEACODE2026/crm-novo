@@ -241,6 +241,8 @@ enum WhatsAppConversationMessageDirection {
 enum WhatsAppConversationMessageStatus {
   PENDING
   SENT
+  DELIVERED
+  READ
   FAILED
 }
 
@@ -708,6 +710,8 @@ model WhatsAppMessage {
   mediaDurationSeconds Int?
   status               WhatsAppConversationMessageStatus
   sentAt               DateTime?
+  deliveredAt          DateTime?
+  readAt               DateTime?
   failedAt             DateTime?
   isFromMe             Boolean                              @default(false)
   rawMetadata          Json?

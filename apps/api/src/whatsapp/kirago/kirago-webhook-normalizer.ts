@@ -28,6 +28,7 @@ export type NormalizedMediaDownloadMetadata = {
 };
 
 export type NormalizedWhatsAppMessage = {
+  kind: 'MESSAGE';
   provider: 'KIRAGO';
   instanceName: string | null;
   providerUserId: string | null;
@@ -43,6 +44,22 @@ export type NormalizedWhatsAppMessage = {
   mediaMetadata: Record<string, unknown> | null;
   mediaDownloadMetadata: NormalizedMediaDownloadMetadata | null;
 };
+
+export type NormalizedWhatsAppReceipt = {
+  kind: 'MESSAGE_RECEIPT';
+  provider: 'KIRAGO';
+  instanceName: string | null;
+  providerUserId: string | null;
+  state: 'DELIVERED' | 'READ' | null;
+  rawState: string | null;
+  providerMessageIds: string[];
+  timestamp: Date | null;
+  receivedAt: Date;
+};
+
+export type NormalizedKiragoWebhook =
+  | NormalizedWhatsAppMessage
+  | (NormalizedWhatsAppReceipt & Partial<Omit<NormalizedWhatsAppMessage, 'kind'>>);
 
 type RecordValue = Record<string, unknown>;
 
@@ -66,10 +83,18 @@ const messageTypeMap: Record<string, NormalizedMessageType> = {
 };
 
 export class KiragoWebhookNormalizer {
-  normalize(payload: unknown, receivedAt = new Date()): NormalizedWhatsAppMessage | null {
+  normalize(payload: unknown, receivedAt = new Date()): NormalizedKiragoWebhook | null {
     const body = asRecord(payload);
 
-    if (!body || body.type !== 'Message') {
+    if (!body) {
+      return null;
+    }
+
+    if (body.type === 'ReadReceipt') {
+      return this.normalizeReceipt(body, receivedAt);
+    }
+
+    if (body.type !== 'Message') {
       return null;
     }
 
@@ -82,6 +107,7 @@ export class KiragoWebhookNormalizer {
     const messageType = this.extractMessageType(message, info);
 
     return {
+      kind: 'MESSAGE',
       provider: 'KIRAGO',
       instanceName: stringOrNull(body.instanceName),
       providerUserId: stringOrNull(body.userID),
@@ -97,6 +123,62 @@ export class KiragoWebhookNormalizer {
       mediaMetadata: this.extractMediaMetadata(message, messageType),
       mediaDownloadMetadata: this.extractMediaDownloadMetadata(message, messageType),
     };
+  }
+
+  private normalizeReceipt(body: RecordValue, receivedAt: Date): NormalizedWhatsAppReceipt {
+    const event = asRecord(body.event);
+    const rawState = stringOrNull(body.state);
+
+    return {
+      kind: 'MESSAGE_RECEIPT',
+      provider: 'KIRAGO',
+      instanceName: stringOrNull(body.instanceName),
+      providerUserId: stringOrNull(body.userID),
+      state: this.mapReceiptState(rawState),
+      rawState,
+      providerMessageIds: this.extractReceiptMessageIds(event?.MessageIDs),
+      timestamp: this.parseTimestamp(event?.Timestamp),
+      receivedAt,
+    };
+  }
+
+  private mapReceiptState(state: string | null): NormalizedWhatsAppReceipt['state'] {
+    const normalized = state?.trim().toLowerCase();
+
+    if (normalized === 'delivered') {
+      return 'DELIVERED';
+    }
+
+    if (normalized === 'read') {
+      return 'READ';
+    }
+
+    return null;
+  }
+
+  private extractReceiptMessageIds(value: unknown) {
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    const ids = values.flatMap((item) => this.extractReceiptMessageIdCandidates(item));
+
+    return [...new Set(ids)];
+  }
+
+  private extractReceiptMessageIdCandidates(value: unknown): string[] {
+    const scalar = stringOrNull(value);
+
+    if (scalar) {
+      return [scalar];
+    }
+
+    const record = asRecord(value);
+
+    if (!record) {
+      return [];
+    }
+
+    return ['id', 'Id', 'ID', 'messageId', 'MessageId', 'messageID', 'key', 'Key']
+      .map((key) => stringOrNull(record[key]))
+      .filter((item): item is string => Boolean(item));
   }
 
   private extractTrustedContactName(

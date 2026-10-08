@@ -93,6 +93,7 @@ function dispatch(overrides: Record<string, unknown> = {}) {
 
 function normalizedInbound(text: string, overrides: Record<string, unknown> = {}) {
   return {
+    kind: 'MESSAGE',
     provider: 'KIRAGO',
     instanceName: 'CRM Principal',
     providerUserId: 'kirago-user',
@@ -106,6 +107,21 @@ function normalizedInbound(text: string, overrides: Record<string, unknown> = {}
     receivedAt: now,
     isGroup: false,
     mediaMetadata: null,
+    ...overrides,
+  };
+}
+
+function normalizedReceipt(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: 'MESSAGE_RECEIPT',
+    provider: 'KIRAGO',
+    instanceName: 'CRM Principal',
+    providerUserId: 'kirago-user',
+    state: 'DELIVERED',
+    rawState: 'Delivered',
+    providerMessageIds: ['provider-message-id'],
+    timestamp: new Date('2026-10-08T21:21:18.000Z'),
+    receivedAt: now,
     ...overrides,
   };
 }
@@ -231,6 +247,8 @@ function conversationMessage(overrides: Record<string, unknown> = {}) {
     mediaDurationSeconds: null,
     status: 'SENT',
     sentAt: now,
+    deliveredAt: null,
+    readAt: null,
     failedAt: null,
     isFromMe: false,
     rawMetadata: null,
@@ -664,7 +682,7 @@ describe('WhatsAppService', () => {
     expect(provider.provisionConnection).toHaveBeenCalledWith(
       expect.objectContaining({
         webhookUrl: 'https://crm.example.com/whatsapp/webhook/kirago',
-        events: ['Message'],
+        events: ['Message', 'ReadReceipt'],
       }),
     );
     expect(providerPayload.name).toMatch(/^crm-novo-crm-principal-[a-f0-9]{6}$/);
@@ -690,7 +708,7 @@ describe('WhatsAppService', () => {
     expect(provider.configureWebhook).toHaveBeenCalledWith(
       'instance-token',
       'https://crm.example.com/whatsapp/webhook/kirago',
-      ['Message'],
+      ['Message', 'ReadReceipt'],
     );
   });
 
@@ -704,7 +722,7 @@ describe('WhatsAppService', () => {
     expect(provider.configureWebhook).toHaveBeenCalledWith(
       'instance-token',
       'https://crm.example.com/whatsapp/webhook/kirago?kirago_webhook_token=strong-webhook-token',
-      ['Message'],
+      ['Message', 'ReadReceipt'],
     );
   });
 
@@ -3884,329 +3902,378 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
-  it('logs ReadReceipt top-level structure and masked id candidates', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
+  it('updates outbound messages to DELIVERED from Kirago ReadReceipt', async () => {
+    const receiptAt = new Date('2026-10-08T21:21:18.000Z');
+    const existing = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-message-id',
+      status: 'SENT',
+    });
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    normalizer.normalize.mockReturnValue(normalizedReceipt({ timestamp: receiptAt }));
+    prisma.whatsAppMessage.findMany.mockResolvedValue([existing]);
 
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      ID: 'ABCDEF1234567890',
-      status: 'READ',
-      timestamp: '2026-10-08T20:35:00.000Z',
-      instanceName: 'crm-novo-main',
+    await expect(service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
+      received: true,
+      processed: true,
+      action: 'receipt_status_updated',
+      updatedCount: 1,
     });
 
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('type=ReadReceipt');
-    expect(output).toContain('readReceiptKeys=');
-    expect(output).toContain('top:ID,instanceName,status,timestamp,type');
-    expect(output).toContain('readReceiptScalars=');
-    expect(output).toContain('top.ID:ABCDEF...7890');
-    expect(output).toContain('top.status:READ');
-    expect(output).toContain('top.timestamp:2026-10-08T20:35:00.000Z');
-    expect(output).not.toContain('ABCDEF1234567890');
-    log.mockRestore();
-  });
-
-  it('logs ReadReceipt nested Info and data id candidates with masked values', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      Info: {
-        ID: 'INFOREAD1234567890',
-        Status: 'READ',
-        Timestamp: '2026-10-08T20:36:00.000Z',
-      },
-      data: {
-        messageId: 'DATAREAD1234567890',
-        ack: 'read',
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith({
+      where: {
+        provider: 'KIRAGO',
+        whatsAppConnectionId: connection().id,
+        providerMessageId: { in: ['provider-message-id'] },
+        direction: 'OUTBOUND',
       },
     });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('Info:ID,Status,Timestamp');
-    expect(output).toContain('data:ack,messageId');
-    expect(output).toContain('Info.ID:INFORE...7890');
-    expect(output).toContain('Info.Status:READ');
-    expect(output).toContain('data.messageId:DATARE...7890');
-    expect(output).toContain('data.ack:read');
-    expect(output).not.toContain('INFOREAD1234567890');
-    expect(output).not.toContain('DATAREAD1234567890');
-    log.mockRestore();
-  });
-
-  it('summarizes ReadReceipt id arrays without logging raw objects', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      ReadReceipt: {
-        messageIds: ['ARRAYREAD1234567890', 'ARRAYREAD0987654321'],
-        messages: [{ id: 'nested-object-should-not-log' }],
-      },
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+      where: { id: existing.id },
+      data: { status: 'DELIVERED', deliveredAt: receiptAt },
     });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('ReadReceipt:messageIds,messages');
-    expect(output).toContain('ReadReceipt.messageIds:length=2 ids=ARRAYR...7890,ARRAYR...4321');
-    expect(output).toContain('ReadReceipt.messages:length=1');
-    expect(output).not.toContain('ARRAYREAD1234567890');
-    expect(output).not.toContain('nested-object-should-not-log');
-    log.mockRestore();
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(existing.conversationId, existing.id);
   });
 
-  it('does not leak sensitive ReadReceipt scalar candidates', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      id: '5544999999999',
-      Key: 'https://media.example.test/private?token=secret-token',
-      Receipt: 'data:image/jpeg;base64,abcdef',
-      Message: {
-        status: 'READ',
-        conversation: 'texto privado',
-      },
-      token: 'secret-token',
-      contactName: 'Cliente Sigiloso',
+  it('updates outbound messages to READ without inventing deliveredAt', async () => {
+    const readAt = new Date('2026-10-08T21:25:00.000Z');
+    const existing = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-message-id',
+      status: 'SENT',
     });
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedReceipt({ state: 'READ', rawState: 'Read', timestamp: readAt }),
+    );
+    prisma.whatsAppMessage.findMany.mockResolvedValue([existing]);
 
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('Kirago webhook probe');
-    expect(output).toContain('Message.status:READ');
-    expect(output).not.toContain('5544999999999');
-    expect(output).not.toContain('secret-token');
-    expect(output).not.toContain('media.example.test');
-    expect(output).not.toContain('base64');
-    expect(output).not.toContain('texto privado');
-    expect(output).not.toContain('Cliente Sigiloso');
-    log.mockRestore();
-  });
+    await service.receiveWebhook({ type: 'ReadReceipt' });
 
-  it('logs ReadReceipt event top-level id and status candidates safely', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      event: {
-        ID: 'EVENTREAD1234567890',
-        status: 'read',
-        timestamp: '2026-10-08T20:55:00.000Z',
-      },
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+      where: { id: existing.id },
+      data: { status: 'READ', readAt },
     });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('eventKeys=event:ID,status,timestamp');
-    expect(output).toContain('eventScalars=event.ID:EVENTR...7890');
-    expect(output).toContain('event.status:read');
-    expect(output).toContain('event.timestamp:2026-10-08T20:55:00.000Z');
-    expect(output).not.toContain('EVENTREAD1234567890');
-    log.mockRestore();
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(existing.conversationId, existing.id);
   });
 
-  it('logs ReadReceipt nested event key id while treating JIDs as presence only', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      event: {
-        key: {
-          id: 'KEYREAD1234567890',
-          remoteJid: '5544999999999@s.whatsapp.net',
-          participant: '5544888888888@s.whatsapp.net',
-        },
-      },
+  it('processes and deduplicates receipt arrays with multiple provider ids', async () => {
+    const receiptAt = new Date('2026-10-08T21:21:18.000Z');
+    const first = conversationMessage({
+      id: 'message-1',
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-1',
+      status: 'SENT',
     });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('event.key:id,participant,remoteJid');
-    expect(output).toContain('event.key.id:KEYREA...7890');
-    expect(output).toContain('event.key.remoteJid:present');
-    expect(output).toContain('event.key.participant:present');
-    expect(output).not.toContain('KEYREAD1234567890');
-    expect(output).not.toContain('5544999999999');
-    expect(output).not.toContain('5544888888888');
-    expect(output).not.toContain('s.whatsapp.net');
-    log.mockRestore();
-  });
-
-  it('summarizes ReadReceipt event arrays without logging raw objects', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      event: {
-        messageIds: ['EVENTARRAY1234567890', 'EVENTARRAY0987654321'],
-        Messages: [{ id: 'event-nested-object-should-not-log' }],
-      },
+    const second = conversationMessage({
+      id: 'message-2',
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-2',
+      status: 'SENT',
     });
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedReceipt({ providerMessageIds: ['provider-1', 'provider-2', 'provider-1'] }),
+    );
+    prisma.whatsAppMessage.findMany.mockResolvedValue([first, second]);
 
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('eventArrays=');
-    expect(output).toContain('event.messageIds:length=2 ids=EVENTA...7890,EVENTA...4321');
-    expect(output).toContain('event.Messages:length=1');
-    expect(output).not.toContain('EVENTARRAY1234567890');
-    expect(output).not.toContain('event-nested-object-should-not-log');
-    log.mockRestore();
-  });
+    await service.receiveWebhook({ type: 'ReadReceipt' });
 
-  it('summarizes ReadReceipt event MessageIDs string arrays with masked ids', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      state: 'Delivered',
-      event: {
-        Type: 'delivery',
-        MessageIDs: ['MSGIDDELIVERED1234567890', 'MSGIDDELIVERED0987654321'],
-        Timestamp: '2026-10-08T18:21:18-03:00',
-      },
-    });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('stateType=string state=Delivered');
-    expect(output).toContain('eventType=delivery');
-    expect(output).toContain('event.MessageIDs:length=2 ids=MSGIDD...7890,MSGIDD...4321');
-    expect(output).toContain('eventMessageIDs=length=2 ids=MSGIDD...7890,MSGIDD...4321');
-    expect(output).toContain('event.Timestamp:2026-10-08T18:21:18-03:00');
-    expect(output).not.toContain('MSGIDDELIVERED1234567890');
-    expect(output).not.toContain('MSGIDDELIVERED0987654321');
-    log.mockRestore();
-  });
-
-  it('summarizes ReadReceipt event MessageIDs scalar safely', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      event: {
-        MessageIDs: 'SINGLEDELIVERED1234567890',
-      },
-    });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('eventMessageIDs=value=SINGLE...7890');
-    expect(output).not.toContain('SINGLEDELIVERED1234567890');
-    log.mockRestore();
-  });
-
-  it('summarizes ReadReceipt event MessageIDs object arrays using safe technical fields only', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'ReadReceipt',
-      event: {
-        MessageIDs: [
-          {
-            ID: 'OBJECTDELIVERED1234567890',
-            text: 'texto privado',
-            remoteJid: '5544999999999@s.whatsapp.net',
-          },
-          {
-            messageId: 'OBJECTDELIVERED0987654321',
-            token: 'secret-token',
-          },
-        ],
-      },
-    });
-
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('event.MessageIDs:length=2');
-    expect(output).toContain('eventMessageIDs=length=2 ids=OBJECT...7890,OBJECT...4321');
-    expect(output).not.toContain('OBJECTDELIVERED1234567890');
-    expect(output).not.toContain('OBJECTDELIVERED0987654321');
-    expect(output).not.toContain('texto privado');
-    expect(output).not.toContain('5544999999999');
-    expect(output).not.toContain('s.whatsapp.net');
-    expect(output).not.toContain('secret-token');
-    log.mockRestore();
-  });
-
-  it('logs ReadReceipt state string and object structure safely', async () => {
-    const stateString = serviceFactory();
-    const stringLog = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    stateString.normalizer.normalize.mockReturnValue(null);
-
-    await stateString.service.receiveWebhook({ type: 'ReadReceipt', state: 'read' });
-
-    expect(String(stringLog.mock.calls[0]?.[0] ?? '')).toContain('stateType=string state=read');
-    stringLog.mockRestore();
-
-    const stateObject = serviceFactory();
-    const objectLog = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    stateObject.normalizer.normalize.mockReturnValue(null);
-
-    await stateObject.service.receiveWebhook({
-      type: 'ReadReceipt',
-      state: {
-        messageId: 'STATEREAD1234567890',
-        status: 'read',
-        remoteJid: '5544999999999@s.whatsapp.net',
-      },
-    });
-
-    const output = String(objectLog.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('stateType=object state=unknown');
-    expect(output).toContain('stateKeys=state:messageId,remoteJid,status');
-    expect(output).toContain('stateScalars=state.messageId:STATER...7890');
-    expect(output).toContain('state.remoteJid:present');
-    expect(output).not.toContain('STATEREAD1234567890');
-    expect(output).not.toContain('5544999999999');
-    expect(output).not.toContain('s.whatsapp.net');
-    objectLog.mockRestore();
-  });
-
-  it('handles malformed ReadReceipt event and state structures defensively', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: 'ReadReceipt',
-        event: {
-          key: ['bad-key'],
-          Info: { ID: { nested: true }, Status: ['READ'] },
-          messageIds: [{ id: 'object-should-not-log' }],
-        },
-        state: {
-          data: { messageId: { nested: true } },
-          messages: [{ id: 'state-object-should-not-log' }],
-        },
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          providerMessageId: { in: ['provider-1', 'provider-2'] },
+        }),
       }),
-    ).resolves.toEqual({
+    );
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledTimes(2);
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(1, {
+      where: { id: first.id },
+      data: { status: 'DELIVERED', deliveredAt: receiptAt },
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(2, {
+      where: { id: second.id },
+      data: { status: 'DELIVERED', deliveredAt: receiptAt },
+    });
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledTimes(2);
+  });
+
+  it('processes four receipt ids and emits events only for changed messages', async () => {
+    const receiptAt = new Date('2026-10-08T21:21:18.000Z');
+    const changed = [
+      conversationMessage({
+        id: 'message-1',
+        direction: 'OUTBOUND',
+        providerMessageId: 'provider-1',
+        status: 'SENT',
+      }),
+      conversationMessage({
+        id: 'message-2',
+        direction: 'OUTBOUND',
+        providerMessageId: 'provider-2',
+        status: 'PENDING',
+      }),
+      conversationMessage({
+        id: 'message-3',
+        direction: 'OUTBOUND',
+        providerMessageId: 'provider-3',
+        status: 'FAILED',
+      }),
+    ];
+    const unchanged = conversationMessage({
+      id: 'message-4',
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-4',
+      status: 'DELIVERED',
+      deliveredAt: receiptAt,
+    });
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedReceipt({
+        providerMessageIds: ['provider-1', 'provider-2', 'provider-3', 'provider-4'],
+        timestamp: receiptAt,
+      }),
+    );
+    prisma.whatsAppMessage.findMany.mockResolvedValue([...changed, unchanged]);
+
+    await expect(service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
+      received: true,
+      processed: true,
+      updatedCount: 3,
+    });
+
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledTimes(3);
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ where: { id: 'message-1' } }),
+    );
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ where: { id: 'message-2' } }),
+    );
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ where: { id: 'message-3' } }),
+    );
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['PENDING', 'DELIVERED', { status: 'DELIVERED' }],
+    ['SENT', 'DELIVERED', { status: 'DELIVERED' }],
+    ['DELIVERED', 'DELIVERED', null],
+    ['READ', 'DELIVERED', null],
+    ['FAILED', 'DELIVERED', { status: 'DELIVERED' }],
+    ['PENDING', 'READ', { status: 'READ' }],
+    ['SENT', 'READ', { status: 'READ' }],
+    ['DELIVERED', 'READ', { status: 'READ' }],
+    ['READ', 'READ', null],
+    ['FAILED', 'READ', { status: 'READ' }],
+  ])(
+    'keeps receipt status monotonic from %s with %s receipts',
+    async (currentStatus, receiptState, expectedData) => {
+      const receiptAt = new Date('2026-10-08T21:30:00.000Z');
+      const existing = conversationMessage({
+        direction: 'OUTBOUND',
+        providerMessageId: 'provider-message-id',
+        status: currentStatus,
+        deliveredAt:
+          currentStatus === 'DELIVERED' || currentStatus === 'READ'
+            ? new Date('2026-10-08T21:00:00.000Z')
+            : null,
+        readAt: currentStatus === 'READ' ? new Date('2026-10-08T21:10:00.000Z') : null,
+      });
+      const { service, normalizer, prisma, realtime } = serviceFactory();
+      normalizer.normalize.mockReturnValue(
+        normalizedReceipt({
+          state: receiptState,
+          rawState: receiptState === 'READ' ? 'Read' : 'Delivered',
+          timestamp: receiptAt,
+        }),
+      );
+      prisma.whatsAppMessage.findMany.mockResolvedValue([existing]);
+
+      await service.receiveWebhook({ type: 'ReadReceipt' });
+
+      if (!expectedData) {
+        expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+        expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+        where: { id: existing.id },
+        data: expect.objectContaining(expectedData),
+      });
+      expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(
+        existing.conversationId,
+        existing.id,
+      );
+    },
+  );
+
+  it('uses the matched connection when provider message ids collide across connections', async () => {
+    const targetConnection = connection({ id: '11111111-1111-4111-8111-111111111111' });
+    const otherConnection = connection({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      providerUserId: 'other-kirago-user',
+      providerInstanceName: 'Outra conexao',
+    });
+    const existing = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'same-provider-id',
+      whatsAppConnectionId: targetConnection.id,
+    });
+    const { service, normalizer, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConnection: {
+          findFirst: vi
+            .fn()
+            .mockImplementation(({ where }: { where: { providerUserId?: string } }) =>
+              Promise.resolve(
+                where.providerUserId === 'kirago-user' ? targetConnection : otherConnection,
+              ),
+            ),
+          findUnique: vi.fn().mockResolvedValue(targetConnection),
+          create: vi.fn().mockResolvedValue(targetConnection),
+          update: vi.fn().mockResolvedValue(targetConnection),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedReceipt({ providerMessageIds: ['same-provider-id'] }),
+    );
+    prisma.whatsAppMessage.findMany.mockResolvedValue([existing]);
+
+    await service.receiveWebhook({ type: 'ReadReceipt' });
+
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith({
+      where: {
+        provider: 'KIRAGO',
+        whatsAppConnectionId: targetConnection.id,
+        providerMessageId: { in: ['same-provider-id'] },
+        direction: 'OUTBOUND',
+      },
+    });
+  });
+
+  it('applies Delivered then Read to the same provider message id preserving both timestamps', async () => {
+    const deliveredAt = new Date('2026-10-08T21:21:18.000Z');
+    const readAt = new Date('2026-10-08T21:25:00.000Z');
+    const existing = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-message-id',
+      status: 'SENT',
+    });
+    const { service, normalizer, prisma } = serviceFactory();
+    normalizer.normalize
+      .mockReturnValueOnce(normalizedReceipt({ timestamp: deliveredAt }))
+      .mockReturnValueOnce(
+        normalizedReceipt({ state: 'READ', rawState: 'Read', timestamp: readAt }),
+      );
+    prisma.whatsAppMessage.findMany
+      .mockResolvedValueOnce([existing])
+      .mockResolvedValueOnce([{ ...existing, status: 'DELIVERED', deliveredAt }]);
+
+    await service.receiveWebhook({ type: 'ReadReceipt' });
+    await service.receiveWebhook({ type: 'ReadReceipt' });
+
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(1, {
+      where: { id: existing.id },
+      data: { status: 'DELIVERED', deliveredAt },
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenNthCalledWith(2, {
+      where: { id: existing.id },
+      data: { status: 'READ', readAt },
+    });
+  });
+
+  it('keeps duplicate delivered and read receipts idempotent', async () => {
+    const existingDelivered = conversationMessage({
+      direction: 'OUTBOUND',
+      status: 'DELIVERED',
+      deliveredAt: new Date('2026-10-08T21:00:00.000Z'),
+    });
+    const delivered = serviceFactory();
+    delivered.normalizer.normalize.mockReturnValue(normalizedReceipt());
+    delivered.prisma.whatsAppMessage.findMany.mockResolvedValue([existingDelivered]);
+
+    await expect(delivered.service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
       received: true,
       processed: false,
-      reason: 'ignored_event',
+      action: 'receipt_status_unchanged',
     });
+    expect(delivered.prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(delivered.realtime.emitMessageUpdated).not.toHaveBeenCalled();
 
-    const output = String(log.mock.calls[0]?.[0] ?? '');
-    expect(output).toContain('Kirago webhook probe');
-    expect(output).toContain('eventArrays=');
-    expect(output).toContain('stateArrays=');
-    expect(output).not.toContain('object-should-not-log');
-    expect(output).not.toContain('state-object-should-not-log');
+    const existingRead = conversationMessage({
+      direction: 'OUTBOUND',
+      status: 'READ',
+      readAt: new Date('2026-10-08T21:10:00.000Z'),
+    });
+    const read = serviceFactory();
+    read.normalizer.normalize.mockReturnValue(
+      normalizedReceipt({ state: 'READ', rawState: 'Read' }),
+    );
+    read.prisma.whatsAppMessage.findMany.mockResolvedValue([existingRead]);
+
+    await expect(read.service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      action: 'receipt_status_unchanged',
+    });
+    expect(read.prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(read.realtime.emitMessageUpdated).not.toHaveBeenCalled();
+  });
+
+  it('does not regress READ when a delayed Delivered receipt arrives', async () => {
+    const readAt = new Date('2026-10-08T21:25:00.000Z');
+    const deliveredAt = new Date('2026-10-08T21:21:18.000Z');
+    const existing = conversationMessage({
+      direction: 'OUTBOUND',
+      status: 'READ',
+      deliveredAt: null,
+      readAt,
+    });
+    const { service, normalizer, prisma } = serviceFactory();
+    normalizer.normalize.mockReturnValue(normalizedReceipt({ timestamp: deliveredAt }));
+    prisma.whatsAppMessage.findMany.mockResolvedValue([existing]);
+
+    await service.receiveWebhook({ type: 'ReadReceipt' });
+
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+      where: { id: existing.id },
+      data: { deliveredAt },
+    });
+  });
+
+  it('ignores unknown receipt states and malformed receipt payloads', async () => {
+    const unknown = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    unknown.normalizer.normalize.mockReturnValue(
+      normalizedReceipt({ state: null, rawState: 'Viewed' }),
+    );
+
+    await expect(unknown.service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      reason: 'unknown_receipt_state',
+    });
+    expect(unknown.prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
+    expect(String(log.mock.calls.at(-1)?.[0] ?? '')).toContain(
+      'Kirago read receipt ignored state=Viewed',
+    );
     log.mockRestore();
+
+    const malformed = serviceFactory();
+    malformed.normalizer.normalize.mockReturnValue(normalizedReceipt({ providerMessageIds: [] }));
+
+    await expect(malformed.service.receiveWebhook({ type: 'ReadReceipt' })).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      reason: 'missing_message_ids',
+    });
+    expect(malformed.prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
   });
 
   it('identifies webhook connection by provider user id and falls back to instance name', async () => {

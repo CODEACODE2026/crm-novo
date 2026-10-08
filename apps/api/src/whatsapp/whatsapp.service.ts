@@ -42,7 +42,9 @@ import {
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import {
   KiragoWebhookNormalizer,
+  type NormalizedKiragoWebhook,
   type NormalizedMessageType,
+  type NormalizedWhatsAppReceipt,
   type NormalizedWhatsAppMessage,
 } from './kirago/kirago-webhook-normalizer';
 import {
@@ -74,7 +76,7 @@ import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 
-const providerEvents = ['Message'];
+const providerEvents = ['Message', 'ReadReceipt'];
 const messagePreviewLimit = 80;
 const pageSizeLimit = 100;
 const messageSearchMinLength = 2;
@@ -2392,6 +2394,10 @@ export class WhatsAppService {
       return { received: true, processed: false, reason: 'ignored_event' };
     }
 
+    if (normalized.kind === 'MESSAGE_RECEIPT') {
+      return { received: true, ...(await this.processMessageReceiptWebhook(normalized)) };
+    }
+
     if (normalized.isGroup) {
       return { received: true, processed: false, reason: 'ignored_group' };
     }
@@ -2594,10 +2600,6 @@ export class WhatsAppService {
       const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
       const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
       const data = this.asRecord(body.data);
-      const readReceiptSummary =
-        this.safeProbeValue(body.type) === 'ReadReceipt'
-          ? this.buildReadReceiptProbeSummary(body)
-          : [];
 
       this.logger.log(
         [
@@ -2647,7 +2649,6 @@ export class WhatsAppService {
             this.safeProbeValue(data?.timestamp) ??
             'unknown'
           }`,
-          ...readReceiptSummary,
         ].join(' '),
       );
     } catch {
@@ -2656,7 +2657,13 @@ export class WhatsAppService {
   }
 
   private shouldLogKiragoWebhookProbe(body: Record<string, unknown>) {
-    if (this.safeProbeValue(body.type) !== 'Message') {
+    const type = this.safeProbeValue(body.type);
+
+    if (type === 'ReadReceipt') {
+      return false;
+    }
+
+    if (type !== 'Message') {
       return true;
     }
 
@@ -2711,217 +2718,6 @@ export class WhatsAppService {
     }
 
     return normalized;
-  }
-
-  private buildReadReceiptProbeSummary(body: Record<string, unknown>) {
-    const event = this.asRecord(body.event);
-    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-    const data = this.asRecord(body.data);
-    const receipt = this.asRecord(body.receipt) ?? this.asRecord(body.Receipt);
-    const readReceipt = this.asRecord(body.ReadReceipt);
-    const key = this.asRecord(body.key) ?? this.asRecord(body.Key);
-    const records: Array<[string, Record<string, unknown> | null]> = [
-      ['top', body],
-      ['Info', info],
-      ['Message', message],
-      ['data', data],
-      ['receipt', receipt],
-      ['ReadReceipt', readReceipt],
-      ['key', key],
-    ];
-    const keys = records
-      .map(([name, record]) => `${name}:${this.safeObjectKeys(record).join(',') || 'none'}`)
-      .join('|');
-
-    return [
-      `readReceiptKeys=${keys}`,
-      `readReceiptScalars=${this.buildReadReceiptScalarSummary(records)}`,
-      `readReceiptArrays=${this.buildReadReceiptArraySummary(records)}`,
-      ...this.buildReadReceiptEventStateSummary(event, body.state),
-    ];
-  }
-
-  private buildReadReceiptEventStateSummary(
-    event: Record<string, unknown> | null,
-    stateValue: unknown,
-  ) {
-    const eventRecords = this.buildReadReceiptNestedRecords('event', event);
-    const state = this.asRecord(stateValue);
-    const stateRecords = this.buildReadReceiptNestedRecords('state', state);
-    const stateScalar = this.safeProbeNonSensitiveValue(stateValue);
-
-    return [
-      `eventKeys=${this.buildReadReceiptKeysSummary(eventRecords)}`,
-      `eventScalars=${this.buildReadReceiptScalarSummary(eventRecords, {
-        presenceOnlyKeys: ['remoteJid', 'participant'],
-      })}`,
-      `eventArrays=${this.buildReadReceiptArraySummary(eventRecords)}`,
-      `eventType=${this.safeProbeNonSensitiveValue(event?.Type) ?? 'unknown'}`,
-      `eventMessageIDs=${this.summarizeReadReceiptMessageIds(event?.MessageIDs)}`,
-      `stateType=${this.debugType(stateValue)}`,
-      `state=${!state && stateScalar ? stateScalar : 'unknown'}`,
-      `stateKeys=${this.buildReadReceiptKeysSummary(stateRecords)}`,
-      `stateScalars=${this.buildReadReceiptScalarSummary(stateRecords, {
-        presenceOnlyKeys: ['remoteJid', 'participant'],
-      })}`,
-      `stateArrays=${this.buildReadReceiptArraySummary(stateRecords)}`,
-    ];
-  }
-
-  private buildReadReceiptNestedRecords(prefix: string, record: Record<string, unknown> | null) {
-    if (!record) {
-      return [[prefix, null]] as Array<[string, Record<string, unknown> | null]>;
-    }
-
-    return [
-      [prefix, record],
-      [`${prefix}.Info`, this.asRecord(record.Info)],
-      [`${prefix}.Message`, this.asRecord(record.Message)],
-      [`${prefix}.key`, this.asRecord(record.key) ?? this.asRecord(record.Key)],
-      [`${prefix}.data`, this.asRecord(record.data)],
-      [`${prefix}.receipt`, this.asRecord(record.receipt) ?? this.asRecord(record.Receipt)],
-    ] as Array<[string, Record<string, unknown> | null]>;
-  }
-
-  private buildReadReceiptKeysSummary(records: Array<[string, Record<string, unknown> | null]>) {
-    return records
-      .map(([name, record]) => `${name}:${this.safeObjectKeys(record).join(',') || 'none'}`)
-      .join('|');
-  }
-
-  private buildReadReceiptScalarSummary(
-    records: Array<[string, Record<string, unknown> | null]>,
-    options?: { presenceOnlyKeys?: readonly string[] },
-  ) {
-    const candidateKeys = [
-      'id',
-      'Id',
-      'ID',
-      'messageId',
-      'MessageId',
-      'messageID',
-      'key',
-      'Key',
-      'status',
-      'Status',
-      'ack',
-      'Ack',
-      'receipt',
-      'Receipt',
-      'timestamp',
-      'Timestamp',
-      'remoteJid',
-      'participant',
-    ];
-    const entries: string[] = [];
-    const presenceOnlyKeys = new Set(options?.presenceOnlyKeys ?? []);
-
-    for (const [name, record] of records) {
-      if (!record) {
-        continue;
-      }
-
-      for (const key of candidateKeys) {
-        if (!Object.prototype.hasOwnProperty.call(record, key)) {
-          continue;
-        }
-
-        if (presenceOnlyKeys.has(key)) {
-          entries.push(`${name}.${key}:present`);
-          continue;
-        }
-
-        const summary = this.safeReadReceiptScalarValue(record[key], this.isIdLikeProbeKey(key));
-
-        if (summary) {
-          entries.push(`${name}.${key}:${summary}`);
-        }
-      }
-    }
-
-    return entries.join('|') || 'none';
-  }
-
-  private buildReadReceiptArraySummary(records: Array<[string, Record<string, unknown> | null]>) {
-    const candidateKeys = ['ids', 'Ids', 'IDs', 'messageIds', 'MessageIDs', 'messages', 'Messages'];
-    const entries: string[] = [];
-
-    for (const [name, record] of records) {
-      if (!record) {
-        continue;
-      }
-
-      for (const key of candidateKeys) {
-        const value = record[key];
-
-        if (!Array.isArray(value)) {
-          continue;
-        }
-
-        entries.push(`${name}.${key}:length=${value.length}${this.maskProbeIdArray(value)}`);
-      }
-    }
-
-    return entries.join('|') || 'none';
-  }
-
-  private summarizeReadReceiptMessageIds(value: unknown) {
-    if (Array.isArray(value)) {
-      const ids = value
-        .flatMap((item) => this.extractReadReceiptMessageIdCandidates(item))
-        .map((item) => this.safeReadReceiptScalarValue(item, true))
-        .filter((item): item is string => Boolean(item));
-
-      return `length=${value.length}${ids.length ? ` ids=${ids.slice(0, 5).join(',')}` : ''}`;
-    }
-
-    const scalar = this.safeReadReceiptScalarValue(value, true);
-
-    if (scalar) {
-      return `value=${scalar}`;
-    }
-
-    return 'none';
-  }
-
-  private extractReadReceiptMessageIdCandidates(value: unknown): unknown[] {
-    if (typeof value === 'string' || typeof value === 'number') {
-      return [value];
-    }
-
-    const record = this.asRecord(value);
-
-    if (!record) {
-      return [];
-    }
-
-    return ['id', 'Id', 'ID', 'messageId', 'MessageId', 'messageID', 'key', 'Key']
-      .filter((key) => Object.prototype.hasOwnProperty.call(record, key))
-      .map((key) => record[key]);
-  }
-
-  private safeReadReceiptScalarValue(value: unknown, mask: boolean) {
-    const normalized = this.safeProbeValue(value);
-
-    if (!normalized || this.looksSensitiveProbeValue(normalized)) {
-      return null;
-    }
-
-    return mask ? this.maskProbeId(normalized) : normalized;
-  }
-
-  private maskProbeIdArray(values: unknown[]) {
-    const masked = values
-      .filter((value) => typeof value === 'string' || typeof value === 'number')
-      .map((value) => this.safeReadReceiptScalarValue(value, true))
-      .filter((value): value is string => Boolean(value));
-
-    return masked.length ? ` ids=${masked.slice(0, 5).join(',')}` : '';
-  }
-
-  private isIdLikeProbeKey(key: string) {
-    return /(^id$|messageid|key)/i.test(key);
   }
 
   private looksSensitiveProbeValue(value: string) {
@@ -3114,6 +2910,112 @@ export class WhatsAppService {
         errorMessage: message,
       };
     }
+  }
+
+  private async processMessageReceiptWebhook(normalized: NormalizedWhatsAppReceipt) {
+    if (!normalized.state) {
+      this.logger.log(
+        `Kirago read receipt ignored state=${this.safeProbeNonSensitiveValue(normalized.rawState) ?? 'unknown'}`,
+      );
+      return { processed: false, reason: 'unknown_receipt_state' };
+    }
+
+    const receiptState = normalized.state;
+    const providerMessageIds = [...new Set(normalized.providerMessageIds.filter(Boolean))];
+
+    if (!providerMessageIds.length) {
+      return { processed: false, reason: 'missing_message_ids' };
+    }
+
+    const connection = await this.findConnectionForWebhook(normalized);
+
+    if (!connection) {
+      return { processed: false, reason: 'connection_not_found' };
+    }
+
+    const receiptTimestamp = normalized.timestamp ?? normalized.receivedAt;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const messages = await tx.whatsAppMessage.findMany({
+        where: {
+          provider: 'KIRAGO',
+          whatsAppConnectionId: connection.id,
+          providerMessageId: { in: providerMessageIds },
+          direction: 'OUTBOUND',
+        },
+      });
+      const changed: Array<{ id: string; conversationId: string }> = [];
+
+      for (const message of messages) {
+        const data = this.buildReceiptStatusUpdate(message, receiptState, receiptTimestamp);
+
+        if (!data) {
+          continue;
+        }
+
+        const updatedMessage = await tx.whatsAppMessage.update({
+          where: { id: message.id },
+          data,
+        });
+        changed.push({ id: updatedMessage.id, conversationId: updatedMessage.conversationId });
+      }
+
+      return changed;
+    });
+
+    for (const message of updated) {
+      this.emitMessageUpdated(message.conversationId, message.id);
+    }
+
+    this.logger.log(
+      `Kirago receipt state=${receiptState} ids=${providerMessageIds.length} updated=${updated.length}`,
+    );
+
+    return {
+      processed: updated.length > 0,
+      action: updated.length > 0 ? 'receipt_status_updated' : 'receipt_status_unchanged',
+      updatedCount: updated.length,
+    };
+  }
+
+  private buildReceiptStatusUpdate(
+    message: WhatsAppMessage,
+    state: NonNullable<NormalizedWhatsAppReceipt['state']>,
+    timestamp: Date,
+  ): Prisma.WhatsAppMessageUpdateInput | null {
+    const data: Prisma.WhatsAppMessageUpdateInput = {};
+
+    if (state === 'READ') {
+      if (message.status !== 'READ') {
+        data.status = 'READ';
+      }
+
+      if (!message.readAt) {
+        data.readAt = timestamp;
+      }
+
+      return Object.keys(data).length ? data : null;
+    }
+
+    if (message.status !== 'READ' && this.receiptStatusRank(message.status) < 2) {
+      data.status = 'DELIVERED';
+    }
+
+    if (
+      !message.deliveredAt &&
+      (!message.readAt || timestamp.getTime() <= message.readAt.getTime())
+    ) {
+      data.deliveredAt = timestamp;
+    }
+
+    return Object.keys(data).length ? data : null;
+  }
+
+  private receiptStatusRank(status: WhatsAppMessage['status']) {
+    if (status === 'READ') return 3;
+    if (status === 'DELIVERED') return 2;
+    if (status === 'SENT') return 1;
+    if (status === 'PENDING') return 0;
+    return -1;
   }
 
   private async processConversationWebhook(
@@ -3470,7 +3372,9 @@ export class WhatsAppService {
     });
   }
 
-  private findConnectionForWebhook(normalized: NormalizedWhatsAppMessage) {
+  private findConnectionForWebhook(
+    normalized: Pick<NormalizedKiragoWebhook, 'providerUserId' | 'instanceName'>,
+  ) {
     if (normalized.providerUserId) {
       return this.prisma.whatsAppConnection.findFirst({
         where: { provider: 'KIRAGO', providerUserId: normalized.providerUserId },
@@ -5091,6 +4995,8 @@ export class WhatsAppService {
       text: message.text,
       status: message.status,
       sentAt: message.sentAt,
+      deliveredAt: message.deliveredAt,
+      readAt: message.readAt,
       failedAt: message.failedAt,
       isFromMe: message.isFromMe,
       providerMessageId: message.providerMessageId,

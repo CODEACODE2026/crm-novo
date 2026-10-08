@@ -21,6 +21,7 @@ import {
   getReferralSummary,
   getReceivablesSummary,
   getWhatsAppConversation,
+  getWhatsAppConversationMessagesAround,
   importLegacyClients,
   importLegacyPayments,
   listWhatsAppConversationMessages,
@@ -48,6 +49,7 @@ import {
   resolveWhatsAppConversation,
   resetUnauthorizedRedirectForTests,
   savePaymentProviderCredential,
+  searchWhatsAppConversationMessages,
   sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
@@ -1407,6 +1409,8 @@ describe('CRM UI formatters', () => {
     });
     await markWhatsAppConversationRead('conversation-id');
     await resolveWhatsAppConversation('conversation-id');
+    await searchWhatsAppConversationMessages({ q: 'bruno', page: 2, pageSize: 10 });
+    await getWhatsAppConversationMessagesAround('conversation-id', 'message-id', { limit: 15 });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1484,6 +1488,18 @@ describe('CRM UI formatters', () => {
       10,
       expect.stringContaining('/whatsapp/conversations/conversation-id/resolve'),
       expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      11,
+      expect.stringContaining('/whatsapp/messages/search?q=bruno&page=2&limit=10'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      12,
+      expect.stringContaining(
+        '/whatsapp/conversations/conversation-id/messages/around/message-id?limit=15',
+      ),
+      expect.any(Object),
     );
   });
 

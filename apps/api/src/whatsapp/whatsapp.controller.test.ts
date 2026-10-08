@@ -1,9 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ForbiddenException } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WhatsAppController, WhatsAppWebhookController } from './whatsapp.controller';
+
+const controllerSource = readFileSync(
+  join(process.cwd(), 'src/whatsapp/whatsapp.controller.ts'),
+  'utf8',
+);
 
 function controller(expectedToken = 'webhook-secret') {
   const service = { receiveWebhook: vi.fn().mockResolvedValue({ processed: true }) };
@@ -56,12 +63,25 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     expect(guards).toEqual([JwtAuthGuard, AdminGuard]);
   });
 
+  it('keeps static and specific search routes before broader conversation routes', () => {
+    expect(controllerSource.indexOf("@Get('messages/search')")).toBeGreaterThanOrEqual(0);
+    expect(controllerSource.indexOf("@Post('messages/:id/retry')")).toBeGreaterThanOrEqual(0);
+    expect(controllerSource.indexOf("@Get('messages/search')")).toBeLessThan(
+      controllerSource.indexOf("@Post('messages/:id/retry')"),
+    );
+    expect(
+      controllerSource.indexOf("@Get('conversations/:conversationId/messages/around/:messageId')"),
+    ).toBeLessThan(controllerSource.indexOf("@Get('conversations/:id')"));
+  });
+
   it('routes conversation inbox operations to the service', async () => {
     const service = {
       listConversations: vi.fn().mockResolvedValue({ items: [] }),
       listUsableConnections: vi.fn().mockResolvedValue([{ id: 'connection-id' }]),
       getConversation: vi.fn().mockResolvedValue({ id: 'conversation-id' }),
       listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
+      searchConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
+      getConversationMessagesAround: vi.fn().mockResolvedValue({ items: [] }),
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
       retryConversationMessage: vi.fn().mockResolvedValue({ id: 'retry-message-id' }),
@@ -91,6 +111,14 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     });
     await expect(
       subject.listConversationMessages('conversation-id', { page: 1, limit: 20 }),
+    ).resolves.toEqual({ items: [] });
+    await expect(
+      subject.searchConversationMessages({ q: 'ola', page: 1, limit: 20 }),
+    ).resolves.toEqual({
+      items: [],
+    });
+    await expect(
+      subject.getConversationMessagesAround('conversation-id', 'message-id', { limit: 15 }),
     ).resolves.toEqual({ items: [] });
     await expect(
       subject.startConversation(
@@ -158,6 +186,16 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       page: 1,
       limit: 20,
     });
+    expect(service.searchConversationMessages).toHaveBeenCalledWith({
+      q: 'ola',
+      page: 1,
+      limit: 20,
+    });
+    expect(service.getConversationMessagesAround).toHaveBeenCalledWith(
+      'conversation-id',
+      'message-id',
+      { limit: 15 },
+    );
     expect(service.startConversation).toHaveBeenCalledWith(
       {
         whatsAppConnectionId: '11111111-1111-4111-8111-111111111111',

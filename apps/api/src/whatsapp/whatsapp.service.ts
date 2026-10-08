@@ -61,9 +61,11 @@ import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversat
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
 import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
+import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
+import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
@@ -71,6 +73,8 @@ import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 const providerEvents = ['Message'];
 const messagePreviewLimit = 80;
 const pageSizeLimit = 100;
+const messageSearchMinLength = 2;
+const messageSearchSnippetRadius = 56;
 const allowedImageMimeTypes = new Set(['image/jpeg', 'image/png']);
 const allowedDocumentMimeTypes = new Set([
   'application/pdf',
@@ -885,6 +889,106 @@ export class WhatsAppService {
       pagination: {
         ...this.presentLimitPagination(page, limit, total),
         nextCursor: this.presentMessageCursor(items, page * limit < total),
+      },
+    };
+  }
+
+  async searchConversationMessages(query: SearchWhatsAppMessagesDto) {
+    const q = query.q.trim();
+
+    if (q.length < messageSearchMinLength) {
+      throw new BadRequestException('Informe ao menos 2 caracteres para buscar mensagens.');
+    }
+
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, pageSizeLimit);
+    const where: Prisma.WhatsAppMessageWhereInput = {
+      type: 'TEXT',
+      text: { not: null, contains: q, mode: 'insensitive' },
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.whatsAppMessage.findMany({
+        where,
+        include: {
+          conversation: {
+            include: {
+              client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+              whatsAppConnection: {
+                select: { name: true, providerInstanceName: true, providerUserId: true },
+              },
+            },
+          },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.whatsAppMessage.count({ where }),
+    ]);
+
+    return {
+      items: items.map((message) => this.presentConversationMessageSearchResult(message, q)),
+      pagination: this.presentLimitPagination(page, limit, total),
+    };
+  }
+
+  async getConversationMessagesAround(
+    conversationId: string,
+    messageId: string,
+    query: WhatsAppMessageContextDto,
+  ) {
+    const limit = Math.min(query.limit ?? 15, pageSizeLimit);
+    const target = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, conversationId },
+    });
+
+    if (!target) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada nesta conversa.');
+    }
+
+    const [olderWithExtra, newerWithExtra] = await this.prisma.$transaction([
+      this.prisma.whatsAppMessage.findMany({
+        where: {
+          conversationId,
+          OR: [
+            { createdAt: { lt: target.createdAt } },
+            { createdAt: target.createdAt, id: { lt: target.id } },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+      }),
+      this.prisma.whatsAppMessage.findMany({
+        where: {
+          conversationId,
+          OR: [
+            { createdAt: { gt: target.createdAt } },
+            { createdAt: target.createdAt, id: { gt: target.id } },
+          ],
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+    ]);
+
+    const older = olderWithExtra.slice(0, limit);
+    const newer = newerWithExtra.slice(0, limit);
+    const items = [...older].reverse().concat(target, newer);
+
+    return {
+      targetId: target.id,
+      items: items.map((message) => this.presentConversationMessage(message)),
+      pagination: {
+        page: 1,
+        limit,
+        total: null,
+        totalPages: null,
+        hasMore: olderWithExtra.length > limit,
+        hasOlder: olderWithExtra.length > limit,
+        hasNewer: newerWithExtra.length > limit,
+        nextPage: null,
+        nextCursor: this.presentMessageCursor(older, olderWithExtra.length > limit),
       },
     };
   }
@@ -2970,9 +3074,12 @@ export class WhatsAppService {
       where.OR = [
         { contactName: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search, mode: 'insensitive' } },
-        { lastMessagePreview: { contains: search, mode: 'insensitive' } },
         { client: { name: { contains: search, mode: 'insensitive' } } },
+        { client: { phone: { contains: search, mode: 'insensitive' } } },
         ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
+        ...(normalizedPhone
+          ? [{ client: { phoneNormalized: { contains: normalizedPhone } } }]
+          : []),
       ];
     }
 
@@ -4530,6 +4637,49 @@ export class WhatsAppService {
       messageDispatchId: message.messageDispatchId,
       createdAt: message.createdAt,
     };
+  }
+
+  private presentConversationMessageSearchResult(
+    message: WhatsAppMessage & { conversation: WhatsAppConversationForPresenter },
+    term: string,
+  ) {
+    const text = message.text ?? '';
+
+    return {
+      message: this.presentConversationMessage(message),
+      conversation: {
+        id: message.conversation.id,
+        displayName: this.presentConversation(message.conversation).displayName,
+        phone: message.conversation.phone,
+        phoneNormalized: message.conversation.phoneNormalized,
+        client: message.conversation.client
+          ? {
+              id: message.conversation.client.id,
+              name: message.conversation.client.name,
+            }
+          : null,
+      },
+      snippet: this.buildMessageSearchSnippet(text, term),
+    };
+  }
+
+  private buildMessageSearchSnippet(text: string, term: string) {
+    const normalizedText = text.toLocaleLowerCase('pt-BR');
+    const normalizedTerm = term.toLocaleLowerCase('pt-BR');
+    const index = normalizedText.indexOf(normalizedTerm);
+
+    if (index === -1) {
+      return text.length > messageSearchSnippetRadius * 2
+        ? `${text.slice(0, messageSearchSnippetRadius * 2).trim()}...`
+        : text;
+    }
+
+    const start = Math.max(0, index - messageSearchSnippetRadius);
+    const end = Math.min(text.length, index + term.length + messageSearchSnippetRadius);
+    const prefix = start > 0 ? '...' : '';
+    const suffix = end < text.length ? '...' : '';
+
+    return `${prefix}${text.slice(start, end).trim()}${suffix}`;
   }
 
   private conversationMessageRetryAction(message: WhatsAppConversationMessageForPresenter) {

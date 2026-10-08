@@ -5091,6 +5091,13 @@ describe('WhatsAppService', () => {
         { phone: { contains: '(44) 99999-9999', mode: 'insensitive' } },
         { phoneNormalized: { contains: '5544999999999' } },
         { client: { name: { contains: '(44) 99999-9999', mode: 'insensitive' } } },
+        { client: { phone: { contains: '(44) 99999-9999', mode: 'insensitive' } } },
+        { client: { phoneNormalized: { contains: '5544999999999' } } },
+      ]),
+    );
+    expect(findManyArgs.where?.OR as unknown[] | undefined).not.toEqual(
+      expect.arrayContaining([
+        { lastMessagePreview: { contains: '(44) 99999-9999', mode: 'insensitive' } },
       ]),
     );
   });
@@ -5577,6 +5584,164 @@ describe('WhatsAppService', () => {
         beforeId: 'message-050',
       }),
     ).rejects.toThrow(BadRequestException);
+    expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
+  });
+
+  it('searches text conversation messages with pagination and conversation metadata', async () => {
+    const inbound = conversationMessage({
+      id: 'message-inbound',
+      direction: 'INBOUND',
+      text: 'Ola Bruno, seguem detalhes do atendimento.',
+      createdAt: new Date('2026-10-03T10:00:00.000Z'),
+      conversation: conversation({ client: client({ name: 'Bruno Cliente' }) }),
+    });
+    const outbound = conversationMessage({
+      id: 'message-outbound',
+      direction: 'OUTBOUND',
+      text: 'Bruno, combinado.',
+      createdAt: new Date('2026-10-03T10:05:00.000Z'),
+      conversation: conversation({ client: null, contactName: 'Bruno Avulso' }),
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([outbound, inbound]),
+          count: vi.fn().mockResolvedValue(2),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const result = await service.searchConversationMessages({ q: 'bruno', page: 1, limit: 10 });
+    const findManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+      include?: unknown;
+      orderBy?: unknown;
+      skip?: number;
+      take?: number;
+    };
+
+    expect(findManyArgs).toMatchObject({
+      where: {
+        type: 'TEXT',
+        text: { not: null, contains: 'bruno', mode: 'insensitive' },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: 0,
+      take: 10,
+    });
+    expect(result.items.map((item: { message: { id: string } }) => item.message.id)).toEqual([
+      'message-outbound',
+      'message-inbound',
+    ]);
+    expect(result.items[0]).toMatchObject({
+      conversation: { id: conversation().id, displayName: '5544999999999' },
+      snippet: 'Bruno, combinado.',
+    });
+    expect(JSON.stringify(result.items[0])).not.toContain('rawMetadata');
+  });
+
+  it('rejects short message searches before querying messages', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await expect(service.searchConversationMessages({ q: 'a' })).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
+  });
+
+  it('loads context around a target message without sequential paging', async () => {
+    const sameTimestamp = new Date('2026-10-03T10:00:00.000Z');
+    const older = conversationMessage({
+      id: 'message-a-older',
+      createdAt: sameTimestamp,
+    });
+    const target = conversationMessage({
+      id: 'message-b-target',
+      createdAt: sameTimestamp,
+    });
+    const newer = conversationMessage({
+      id: 'message-c-newer',
+      createdAt: sameTimestamp,
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findMany: vi.fn().mockResolvedValueOnce([older]).mockResolvedValueOnce([newer]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const result = await service.getConversationMessagesAround(conversation().id, target.id, {
+      limit: 1,
+    });
+
+    expect(result.targetId).toBe(target.id);
+    expect(result.items.map((item: { id: string }) => item.id)).toEqual([
+      older.id,
+      target.id,
+      newer.id,
+    ]);
+    expect(result.pagination).toMatchObject({ hasOlder: false, hasNewer: false });
+    expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith({
+      where: { id: target.id, conversationId: conversation().id },
+    });
+    const olderQuery = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+      orderBy?: unknown;
+    };
+    const newerQuery = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[1]?.[0] as {
+      where?: Record<string, unknown>;
+      orderBy?: unknown;
+    };
+    expect(olderQuery).toMatchObject({
+      where: {
+        conversationId: conversation().id,
+        OR: [
+          { createdAt: { lt: sameTimestamp } },
+          { createdAt: sameTimestamp, id: { lt: target.id } },
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    expect(newerQuery).toMatchObject({
+      where: {
+        conversationId: conversation().id,
+        OR: [
+          { createdAt: { gt: sameTimestamp } },
+          { createdAt: sameTimestamp, id: { gt: target.id } },
+        ],
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    expect((prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls).toHaveLength(2);
+  });
+
+  it('rejects around-message lookup when the target does not belong to the conversation', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    await expect(
+      service.getConversationMessagesAround(
+        conversation().id,
+        'message-from-another-conversation',
+        {
+          limit: 10,
+        },
+      ),
+    ).rejects.toThrow(NotFoundException);
     expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
   });
 

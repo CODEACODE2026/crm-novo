@@ -30,9 +30,11 @@ import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversat
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
 import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
+import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
+import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
 
@@ -101,6 +103,11 @@ export class WhatsAppController {
     return this.whatsAppService.sendManualMessage(dto, request.user.id);
   }
 
+  @Get('messages/search')
+  searchConversationMessages(@Query() query: SearchWhatsAppMessagesDto) {
+    return this.whatsAppService.searchConversationMessages(query);
+  }
+
   @Get('messages')
   listMessages() {
     return this.whatsAppService.listMessages();
@@ -130,6 +137,15 @@ export class WhatsAppController {
     @Query() query: ListWhatsAppConversationMessagesDto,
   ) {
     return this.whatsAppService.listConversationMessages(id, query);
+  }
+
+  @Get('conversations/:conversationId/messages/around/:messageId')
+  getConversationMessagesAround(
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Query() query: WhatsAppMessageContextDto,
+  ) {
+    return this.whatsAppService.getConversationMessagesAround(conversationId, messageId, query);
   }
 
   @Post('conversations/:id/messages')

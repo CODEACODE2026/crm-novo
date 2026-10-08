@@ -26,7 +26,6 @@ import {
   Pause,
   Play,
   Plus,
-  Search,
   Send,
   Square,
   Trash2,
@@ -38,6 +37,7 @@ import { ClientForm } from '../clients/client-form';
 import { FinanceClientAutocomplete } from '../clients/finance-client-autocomplete';
 import { PageHeader } from '../ui/admin-shell';
 import { Button, IconButton } from '../ui/primitives';
+import { WhatsAppSearch, renderHighlightedSearchText } from './WhatsAppSearch';
 import {
   ApiError,
   createClient,
@@ -46,6 +46,7 @@ import {
   formatCurrency,
   getClient,
   getWhatsAppConversation,
+  getWhatsAppConversationMessagesAround,
   linkWhatsAppConversationClient,
   listClientOptions,
   listPlans,
@@ -69,6 +70,7 @@ import {
   type WhatsAppConversationMessageStatus,
   type WhatsAppConversationMessageType,
   type WhatsAppConversationMessagesCursor,
+  type WhatsAppMessageSearchResult,
   type WhatsAppConversationStatus,
   type WhatsAppConversationSummary,
   type WhatsAppRealtimeEvent,
@@ -174,6 +176,9 @@ export function WhatsAppInbox({
   const [olderMessagesCursor, setOlderMessagesCursor] =
     useState<WhatsAppConversationMessagesCursor | null>(null);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [hasNewerMessages, setHasNewerMessages] = useState(false);
+  const [targetMessageId, setTargetMessageId] = useState<string | null>(null);
+  const [targetSearchTerm, setTargetSearchTerm] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -190,6 +195,8 @@ export function WhatsAppInbox({
   const olderMessagesLoadedRef = useRef(false);
   const olderMessagesLoadingRef = useRef(false);
   const messagesRef = useRef<WhatsAppConversationMessage[]>([]);
+  const targetHighlightTimeoutRef = useRef<number | null>(null);
+  const openMessageSearchGenerationRef = useRef(0);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
 
@@ -299,6 +306,7 @@ export function WhatsAppInbox({
         if (replace || !olderMessagesLoadedRef.current) {
           setOlderMessagesCursor(payload.pagination.nextCursor ?? null);
           setHasOlderMessages(Boolean(payload.pagination.hasMore));
+          setHasNewerMessages(false);
         }
         if (!replace) {
           scheduleConversationScroll(() => {
@@ -387,6 +395,17 @@ export function WhatsAppInbox({
     olderMessagesCursor,
     selectedConversation?.id,
   ]);
+
+  const loadLatestMessages = useCallback(async () => {
+    const conversationId = selectedConversation?.id;
+    if (!conversationId || messagesLoading) return;
+
+    pendingInitialScrollConversationRef.current = conversationId;
+    setTargetMessageId(null);
+    setTargetSearchTerm('');
+    setHasNewerMessages(false);
+    await loadMessages(conversationId, { replace: true });
+  }, [loadMessages, messagesLoading, selectedConversation?.id]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -525,6 +544,25 @@ export function WhatsAppInbox({
   }, [messages, messagesLoading, selectedConversation]);
 
   useEffect(() => {
+    if (!targetMessageId || messagesLoading) return;
+
+    scheduleConversationScroll(() => {
+      const target = messagesScrollRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${targetMessageId}"]`,
+      );
+      target?.scrollIntoView({ block: 'center' });
+    });
+
+    if (targetHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(targetHighlightTimeoutRef.current);
+    }
+    targetHighlightTimeoutRef.current = window.setTimeout(() => {
+      setTargetMessageId(null);
+      targetHighlightTimeoutRef.current = null;
+    }, 2600);
+  }, [messages, messagesLoading, targetMessageId]);
+
+  useEffect(() => {
     if (!selectedConversation) return;
     if (pendingSendScrollConversationRef.current !== selectedConversation.id) return;
 
@@ -555,6 +593,9 @@ export function WhatsAppInbox({
     return () => {
       if (realtimeListRefreshTimeoutRef.current !== null) {
         window.clearTimeout(realtimeListRefreshTimeoutRef.current);
+      }
+      if (targetHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(targetHighlightTimeoutRef.current);
       }
     };
   }, []);
@@ -598,6 +639,7 @@ export function WhatsAppInbox({
   }
 
   async function selectConversation(conversation: WhatsAppConversation) {
+    openMessageSearchGenerationRef.current += 1;
     activeConversationIdRef.current = conversation.id;
     pendingInitialScrollConversationRef.current = conversation.id;
     setSelectedConversation(conversation);
@@ -617,6 +659,9 @@ export function WhatsAppInbox({
     olderMessagesLoadedRef.current = false;
     olderMessagesLoadingRef.current = false;
     messagesRef.current = [];
+    setHasNewerMessages(false);
+    setTargetMessageId(null);
+    setTargetSearchTerm('');
     setSendError('');
     clearComposerMedia();
     setNewMessageNotice(false);
@@ -667,6 +712,91 @@ export function WhatsAppInbox({
       setMessagesError(conversationErrorMessage(err, 'Falha ao abrir conversa.'));
     } finally {
       setOpening(false);
+    }
+  }
+
+  async function openMessageSearchResult(result: WhatsAppMessageSearchResult, term: string) {
+    const conversationId = result.conversation.id;
+    const requestGeneration = openMessageSearchGenerationRef.current + 1;
+    openMessageSearchGenerationRef.current = requestGeneration;
+    activeConversationIdRef.current = conversationId;
+    pendingInitialScrollConversationRef.current = null;
+    setOpening(true);
+    setMessagesLoading(true);
+    setMessagesError('');
+    setOlderMessagesError('');
+    setRetryErrors({});
+    setSelectedConversation((current) =>
+      current?.id === conversationId
+        ? current
+        : {
+            id: conversationId,
+            whatsAppConnectionId: '',
+            instanceName: null,
+            provider: 'KIRAGO',
+            externalInstanceId: null,
+            displayName: result.conversation.displayName,
+            contactName: null,
+            phone: result.conversation.phone,
+            phoneNormalized: result.conversation.phoneNormalized,
+            status: 'OPEN',
+            lastMessageAt: result.message.sentAt ?? result.message.createdAt,
+            lastMessagePreview: result.snippet,
+            unreadCount: 0,
+            createdAt: result.message.createdAt,
+            updatedAt: result.message.createdAt,
+            client: result.conversation.client
+              ? {
+                  id: result.conversation.client.id,
+                  name: result.conversation.client.name,
+                  phone: '',
+                  phoneNormalized: '',
+                }
+              : null,
+          },
+    );
+    setClientDetail(null);
+    setLinkClientError('');
+    setSendError('');
+    setNewMessageNotice(false);
+    setMobileMode('chat');
+
+    try {
+      const [detail, context] = await Promise.all([
+        getWhatsAppConversation(conversationId),
+        getWhatsAppConversationMessagesAround(conversationId, result.message.id, {
+          limit: Math.floor(conversationMessagesPageSize / 2),
+        }),
+      ]);
+      if (
+        activeConversationIdRef.current !== conversationId ||
+        openMessageSearchGenerationRef.current !== requestGeneration
+      ) {
+        return;
+      }
+      const mergedMessages = mergeConversationMessages([], context.items);
+      setSelectedConversation(detail);
+      setConversations((current) => mergeConversationLists(current, [detail]));
+      setMessages(mergedMessages);
+      messagesRef.current = mergedMessages;
+      olderMessagesLoadedRef.current = true;
+      setOlderMessagesCursor(context.pagination.nextCursor ?? null);
+      setHasOlderMessages(Boolean(context.pagination.hasOlder));
+      setHasNewerMessages(Boolean(context.pagination.hasNewer));
+      setTargetMessageId(context.targetId);
+      setTargetSearchTerm(term);
+      if (detail.client?.id) {
+        try {
+          setClientDetail(await getClient(detail.client.id));
+        } catch (err) {
+          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
+        }
+      }
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Falha ao abrir resultado da busca.'));
+    } finally {
+      setOpening(false);
+      setMessagesLoading(false);
     }
   }
 
@@ -1155,6 +1285,12 @@ export function WhatsAppInbox({
         />
       ) : null}
 
+      <WhatsAppSearch
+        conversationQuery={searchInput}
+        onConversationQueryChange={setSearchInput}
+        onOpenMessage={(result, term) => void openMessageSearchResult(result, term)}
+      />
+
       <div className="conversations-shell">
         <ConversationList
           conversations={conversations}
@@ -1164,12 +1300,10 @@ export function WhatsAppInbox({
           loadMoreError={listLoadMoreError}
           loading={listLoading}
           loadingMore={listLoadingMore}
-          searchInput={searchInput}
           selectedId={selectedConversation?.id ?? null}
           statusFilter={statusFilter}
           onFilterChange={setFilter}
           onLoadMore={() => void loadMoreConversations()}
-          onSearchChange={setSearchInput}
           onSelect={(conversation) => void selectConversation(conversation)}
           onStatusFilterChange={setStatusFilter}
         />
@@ -1201,15 +1335,19 @@ export function WhatsAppInbox({
                 loading={messagesLoading}
                 loadingOlder={olderMessagesLoading}
                 messagesEndRef={messagesEndRef}
+                hasNewer={hasNewerMessages}
                 olderError={olderMessagesError}
                 retryErrors={retryErrors}
                 retryingMessageIds={retryingMessageIds}
                 scrollRef={messagesScrollRef}
                 showNewMessageNotice={newMessageNotice}
+                targetMessageId={targetMessageId}
+                targetSearchTerm={targetSearchTerm}
                 onJumpToBottom={() => {
                   setNewMessageNotice(false);
                   scrollConversationContainerToBottom(messagesScrollRef.current);
                 }}
+                onLoadLatest={() => void loadLatestMessages()}
                 onLoadOlder={() => void loadOlderMessages()}
                 onRetry={(message) => void retryConversationMessage(message)}
               />
@@ -1466,12 +1604,10 @@ function ConversationList({
   loadMoreError,
   loading,
   loadingMore,
-  searchInput,
   selectedId,
   statusFilter,
   onFilterChange,
   onLoadMore,
-  onSearchChange,
   onSelect,
   onStatusFilterChange,
 }: {
@@ -1482,18 +1618,14 @@ function ConversationList({
   loadMoreError: string;
   loading: boolean;
   loadingMore: boolean;
-  searchInput: string;
   selectedId: string | null;
   statusFilter: WhatsAppConversationStatus | '';
   onFilterChange: (filter: ConversationFilter) => void;
   onLoadMore: () => void;
-  onSearchChange: (search: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
   onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
 }) {
-  const emptyCopy = searchInput.trim()
-    ? 'Nenhuma conversa corresponde à busca.'
-    : 'Nenhuma conversa encontrada.';
+  const emptyCopy = 'Nenhuma conversa encontrada.';
 
   return (
     <aside className="conversation-list-panel" aria-label="Lista de conversas">
@@ -1503,16 +1635,6 @@ function ConversationList({
           <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
         </div>
       </div>
-
-      <label className="conversation-search" aria-label="Buscar conversas">
-        <Search aria-hidden="true" size={16} />
-        <input
-          aria-label="Buscar por nome ou telefone"
-          placeholder="Buscar por nome ou telefone..."
-          value={searchInput}
-          onChange={(event) => onSearchChange(event.target.value)}
-        />
-      </label>
 
       <div className="conversation-filter-row" role="tablist" aria-label="Filtros de conversas">
         {conversationFilters.map((item) => (
@@ -1690,6 +1812,7 @@ function ConversationHeader({
 function ConversationMessages({
   conversationId,
   hasOlder,
+  hasNewer,
   loading,
   loadingOlder,
   messages,
@@ -1698,13 +1821,17 @@ function ConversationMessages({
   retryErrors,
   retryingMessageIds,
   onJumpToBottom,
+  onLoadLatest,
   onLoadOlder,
   onRetry,
   scrollRef,
   showNewMessageNotice,
+  targetMessageId,
+  targetSearchTerm,
 }: {
   conversationId: string;
   hasOlder: boolean;
+  hasNewer: boolean;
   loading: boolean;
   loadingOlder: boolean;
   messages: WhatsAppConversationMessage[];
@@ -1713,10 +1840,13 @@ function ConversationMessages({
   retryErrors: Record<string, string>;
   retryingMessageIds: Set<string>;
   onJumpToBottom: () => void;
+  onLoadLatest: () => void;
   onLoadOlder: () => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   showNewMessageNotice: boolean;
+  targetMessageId: string | null;
+  targetSearchTerm: string;
 }) {
   return (
     <div className="conversation-messages-wrap">
@@ -1736,6 +1866,11 @@ function ConversationMessages({
             ) : (
               <span>Sem mensagens antigas</span>
             )}
+            {hasNewer ? (
+              <Button size="sm" variant="ghost" onClick={onLoadLatest}>
+                Voltar às mais recentes
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {messages.length ? (
@@ -1755,9 +1890,11 @@ function ConversationMessages({
                   ) : null}
                   <ConversationBubble
                     conversationId={conversationId}
+                    highlighted={targetMessageId === message.id}
                     message={message}
                     retryError={retryErrors[message.id] ?? ''}
                     retrying={retryingMessageIds.has(message.id)}
+                    searchTerm={targetMessageId === message.id ? targetSearchTerm : ''}
                     onRetry={onRetry}
                   />
                 </Fragment>
@@ -1793,15 +1930,19 @@ function ConversationDateSeparator({ label }: { label: string }) {
 
 function ConversationBubble({
   conversationId,
+  highlighted,
   message,
   retryError,
   retrying,
+  searchTerm,
   onRetry,
 }: {
   conversationId: string;
+  highlighted: boolean;
   message: WhatsAppConversationMessage;
   retryError: string;
   retrying: boolean;
+  searchTerm: string;
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
@@ -1812,13 +1953,18 @@ function ConversationBubble({
   const caption = conversationMessageCaption(message);
 
   return (
-    <article className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'}`}>
+    <article
+      className={`conversation-bubble-row ${outbound ? 'outbound' : 'inbound'} ${
+        highlighted ? 'target-highlight' : ''
+      }`}
+      data-message-id={message.id}
+    >
       <div
         className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'} ${
           hasAvailableImage ? 'has-image-media' : ''
         }`}
       >
-        {text ? <p>{text}</p> : null}
+        {text ? <p>{renderHighlightedSearchText(text, searchTerm)}</p> : null}
         <ConversationMediaContent conversationId={conversationId} message={message} />
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         <footer>

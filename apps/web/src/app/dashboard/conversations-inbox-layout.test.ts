@@ -9,6 +9,10 @@ const whatsappInboxSource = readFileSync(
   join(currentDir, '../../components/whatsapp/WhatsAppInbox.tsx'),
   'utf8',
 );
+const whatsappSearchSource = readFileSync(
+  join(currentDir, '../../components/whatsapp/WhatsAppSearch.tsx'),
+  'utf8',
+);
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const primitivesSource = readFileSync(
   join(currentDir, '../../components/ui/primitives.tsx'),
@@ -68,7 +72,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('renders search, initial filters, unread summary, and empty/error states', () => {
-    expect(conversationsSource).toContain('Buscar por nome ou telefone...');
+    expect(whatsappSearchSource).toContain('Buscar conversas por nome ou telefone...');
+    expect(whatsappSearchSource).toContain('Buscar texto nas mensagens...');
+    expect(conversationsSource).toContain('WhatsAppSearch');
     expect(conversationsSource).toContain("id: 'all', label: 'Todas'");
     expect(conversationsSource).toContain("id: 'unread', label: 'Não lidas'");
     expect(conversationsSource).toContain("id: 'clients', label: 'Clientes'");
@@ -76,12 +82,37 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('totalUnreadConversations');
     expect(conversationsSource).toContain('onSummaryChange(payload.summary)');
     expect(conversationsSource).toContain('Nenhuma conversa encontrada.');
-    expect(conversationsSource).toContain('Nenhuma conversa corresponde à busca.');
+    expect(whatsappSearchSource).toContain('Nenhuma mensagem encontrada.');
     expect(conversationsSource).toContain('Falha ao carregar conversas.');
     expect(conversationsSource).toContain('Carregar mais conversas');
     expect(conversationsSource).toContain('Fim da lista');
     expect(conversationsSource).toContain('hasClient = true');
     expect(conversationsSource).toContain('hasClient = false');
+  });
+
+  it('keeps search requests race-safe and resets message result pagination by query', () => {
+    expect(conversationsSource).toContain('conversationListQueryKeyRef.current = requestQueryKey');
+    expect(conversationsSource).toContain(
+      'conversationListQueryKeyRef.current !== requestQueryKey',
+    );
+    expect(whatsappSearchSource).toContain('requestKeyRef.current = requestKey');
+    expect(whatsappSearchSource).toContain('requestKeyRef.current !== requestKey');
+    expect(whatsappSearchSource).toContain("state: 'cleared'");
+    expect(whatsappSearchSource).toContain("state: 'idle'");
+    expect(whatsappSearchSource).toContain('setMessagePage(1)');
+    expect(whatsappSearchSource).toContain('setMessageResults([])');
+  });
+
+  it('keeps result switching, target scroll, and highlight cleanup scoped to the active request', () => {
+    expect(conversationsSource).toContain('openMessageSearchGenerationRef');
+    expect(conversationsSource).toContain(
+      'openMessageSearchGenerationRef.current !== requestGeneration',
+    );
+    expect(conversationsSource).toContain('activeConversationIdRef.current !== conversationId');
+    expect(conversationsSource).toContain('data-message-id={message.id}');
+    expect(conversationsSource).toContain('target?.scrollIntoView({ block:');
+    expect(conversationsSource).toContain('window.clearTimeout(targetHighlightTimeoutRef.current)');
+    expect(conversationsSource).toContain('renderHighlightedSearchText(text, searchTerm)');
   });
 
   it('keeps a single start conversation action outside the internal list header', () => {
@@ -687,7 +718,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-error-slot:empty');
     expect(stylesSource).toContain('.conversation-list-panel');
-    expect(stylesSource).toContain('grid-template-rows: auto auto auto auto minmax(0, 1fr);');
+    expect(stylesSource).toContain('grid-template-rows: auto auto auto minmax(0, 1fr);');
     expect(stylesSource).toContain('.conversation-list-items');
     expect(stylesSource).toContain('.conversation-messages-wrap');
     expect(stylesSource).toContain('.conversation-messages');

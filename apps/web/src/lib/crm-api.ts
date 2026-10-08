@@ -767,6 +767,32 @@ export interface WhatsAppConversationMessagesCursor {
   id: string;
 }
 
+export interface WhatsAppMessageSearchResult {
+  message: WhatsAppConversationMessage;
+  conversation: {
+    id: string;
+    displayName: string;
+    phone: string;
+    phoneNormalized: string;
+    client: Pick<Client, 'id' | 'name'> | null;
+  };
+  snippet: string;
+}
+
+export interface PaginatedWhatsAppMessageSearchResults {
+  items: WhatsAppMessageSearchResult[];
+  pagination: PaginatedClients['pagination'];
+}
+
+export interface WhatsAppMessageContext {
+  targetId: string;
+  items: WhatsAppConversationMessage[];
+  pagination: PaginatedWhatsAppConversationMessages['pagination'] & {
+    hasOlder: boolean;
+    hasNewer: boolean;
+  };
+}
+
 export interface StartWhatsAppConversationResult {
   conversation: WhatsAppConversation;
   message: WhatsAppConversationMessage;
@@ -2544,6 +2570,35 @@ export function listWhatsAppConversationMessages(
   const query = params.toString();
   return apiFetch<PaginatedWhatsAppConversationMessages>(
     `/whatsapp/conversations/${id}/messages${query ? `?${query}` : ''}`,
+  );
+}
+
+export function searchWhatsAppConversationMessages(filters: {
+  q: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const params = new URLSearchParams();
+  params.set('q', filters.q);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('limit', String(filters.pageSize));
+
+  return apiFetch<PaginatedWhatsAppMessageSearchResults>(`/whatsapp/messages/search?${params}`);
+}
+
+export function getWhatsAppConversationMessagesAround(
+  conversationId: string,
+  messageId: string,
+  filters: { limit?: number } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.limit) params.set('limit', String(filters.limit));
+  const query = params.toString();
+
+  return apiFetch<WhatsAppMessageContext>(
+    `/whatsapp/conversations/${conversationId}/messages/around/${messageId}${
+      query ? `?${query}` : ''
+    }`,
   );
 }
 

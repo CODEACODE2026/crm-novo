@@ -14,6 +14,7 @@ import { KiragoWebhookNormalizer } from './kirago/kirago-webhook-normalizer';
 import { WhatsAppService } from './whatsapp.service';
 
 const now = new Date('2026-09-11T00:00:00.000Z');
+const defaultKiragoReadReceiptPhone = '554499999999';
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -6392,6 +6393,8 @@ describe('WhatsAppService', () => {
 
   it('marks inbound provider messages as read in KiraGo before decrementing local unread', async () => {
     const activeConversation = conversation({
+      phone: '5546999814046',
+      phoneNormalized: '5546999814046',
       unreadCount: 2,
       whatsAppConnection: connection({ phone: '5599999999999' }),
     });
@@ -6427,11 +6430,15 @@ describe('WhatsAppService', () => {
     expect(encryption.decrypt).toHaveBeenCalledWith('encrypted-token');
     expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
       messageIds: ['provider-inbound-1', 'provider-inbound-2'],
-      phone: activeConversation.phoneNormalized,
+      phone: '554699814046',
     });
     expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
       'instance-token',
       expect.objectContaining({ phone: activeConversation.whatsAppConnection.phone }),
+    );
+    expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: activeConversation.phoneNormalized }),
     );
     expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -6488,7 +6495,7 @@ describe('WhatsAppService', () => {
     );
     expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
       messageIds: ['provider-oldest'],
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
       'instance-token',
@@ -6542,7 +6549,7 @@ describe('WhatsAppService', () => {
     expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
     expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
       messageIds: ['provider-a'],
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
       'instance-token',
@@ -6597,7 +6604,7 @@ describe('WhatsAppService', () => {
     expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
     expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
       messageIds: ['provider-a', 'provider-b'],
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(prisma.whatsAppConversation.update).toHaveBeenCalledTimes(1);
     expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
@@ -6679,7 +6686,7 @@ describe('WhatsAppService', () => {
     );
     expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
       messageIds: ['provider-unread-oldest', 'provider-unread-middle', 'provider-unread-newest'],
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(provider.markMessagesAsRead).not.toHaveBeenCalledWith(
       'instance-token',
@@ -6718,11 +6725,11 @@ describe('WhatsAppService', () => {
     expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(2);
     expect(provider.markMessagesAsRead).toHaveBeenNthCalledWith(1, 'instance-token', {
       messageIds: Array.from({ length: 100 }, (_, index) => `provider-${index + 1}`),
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(provider.markMessagesAsRead).toHaveBeenNthCalledWith(2, 'instance-token', {
       messageIds: Array.from({ length: 50 }, (_, index) => `provider-${index + 101}`),
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 150 } } }),
@@ -6763,11 +6770,11 @@ describe('WhatsAppService', () => {
     expect(markMessagesAsRead).toHaveBeenCalledTimes(2);
     expect(markMessagesAsRead).toHaveBeenNthCalledWith(1, 'instance-token', {
       messageIds: Array.from({ length: 100 }, (_, index) => `provider-${index + 1}`),
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(markMessagesAsRead).toHaveBeenNthCalledWith(2, 'instance-token', {
       messageIds: Array.from({ length: 100 }, (_, index) => `provider-${index + 101}`),
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(markMessagesAsRead).not.toHaveBeenCalledWith(
       'instance-token',
@@ -6846,7 +6853,7 @@ describe('WhatsAppService', () => {
     });
     expect(provider.markMessagesAsRead).toHaveBeenCalledWith('instance-token', {
       messageIds: ['provider-a', 'provider-b', 'provider-c'],
-      phone: conversation().phoneNormalized,
+      phone: defaultKiragoReadReceiptPhone,
     });
     expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 3 } } }),

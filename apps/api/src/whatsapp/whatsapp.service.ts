@@ -34,7 +34,11 @@ import {
   getBusinessDateDay,
   parseBusinessDate,
 } from '../clients/utils/business-date';
-import { brazilLegacyMobileVariant, normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
+import {
+  brazilCanonicalMobileToLegacyVariant,
+  brazilLegacyMobileVariant,
+  normalizeBrazilPhone,
+} from '../clients/utils/phone-normalizer';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import {
   KiragoWebhookNormalizer,
@@ -1859,6 +1863,7 @@ export class WhatsAppService {
       this.logger.warn(`WhatsApp markread skipped conversation=${id} reason=missing_phone`);
       return this.presentConversation(conversation);
     }
+    const providerPhone = this.resolveKiragoMarkReadPhone(id, phone);
 
     const messages = await this.prisma.whatsAppMessage.findMany({
       where: {
@@ -1897,7 +1902,7 @@ export class WhatsAppService {
       for (const batch of chunks(providerMessageIds, 100)) {
         await this.provider.markMessagesAsRead(instanceToken, {
           messageIds: batch,
-          phone,
+          phone: providerPhone,
         });
         confirmedReadCount += batch.length;
       }
@@ -4028,6 +4033,18 @@ export class WhatsAppService {
     } catch {
       return null;
     }
+  }
+
+  private resolveKiragoMarkReadPhone(conversationId: string, phoneNormalized: string) {
+    const legacyVariant = brazilCanonicalMobileToLegacyVariant(phoneNormalized);
+
+    if (legacyVariant) {
+      this.logger.log(`WhatsApp markread conversation=${conversationId} phoneVariant=legacy`);
+      return legacyVariant;
+    }
+
+    this.logger.log(`WhatsApp markread conversation=${conversationId} phoneVariant=canonical`);
+    return phoneNormalized;
   }
 
   private async findClientsByPhone(phoneNormalized: string) {

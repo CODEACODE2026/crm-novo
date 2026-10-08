@@ -37,3 +37,20 @@ export function brazilLegacyMobileVariant(phoneNormalized: string) {
 
   return `55${areaCode}9${subscriber}`;
 }
+
+export function brazilCanonicalMobileToLegacyVariant(phoneNormalized: string) {
+  const digits = phoneNormalized.replace(/\D/g, '');
+
+  if (!/^55\d{11}$/.test(digits)) {
+    return null;
+  }
+
+  const areaCode = digits.slice(2, 4);
+  const subscriber = digits.slice(4);
+
+  if (!/^9[6-9]\d{7}$/.test(subscriber)) {
+    return null;
+  }
+
+  return `55${areaCode}${subscriber.slice(1)}`;
+}

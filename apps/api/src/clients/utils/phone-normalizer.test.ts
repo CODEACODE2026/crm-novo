@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { brazilLegacyMobileVariant, normalizeBrazilPhone } from './phone-normalizer';
+import {
+  brazilCanonicalMobileToLegacyVariant,
+  brazilLegacyMobileVariant,
+  normalizeBrazilPhone,
+} from './phone-normalizer';
 
 describe('normalizeBrazilPhone', () => {
   it.each([
@@ -34,6 +38,21 @@ describe('normalizeBrazilPhone', () => {
     'does not generate a legacy mobile variant for %s',
     (input) => {
       expect(brazilLegacyMobileVariant(input)).toBeNull();
+    },
+  );
+
+  it.each([
+    ['5546999814046', '554699814046'],
+    ['5591984805831', '559184805831'],
+    ['5551984629666', '555184629666'],
+  ])('generates a provider legacy mobile variant for canonical %s', (input, expected) => {
+    expect(brazilCanonicalMobileToLegacyVariant(input)).toBe(expected);
+  });
+
+  it.each(['554699814046', '558532324022', '+1 (555) 9929-4022', '123', '554693214046'])(
+    'does not generate a provider legacy mobile variant for %s',
+    (input) => {
+      expect(brazilCanonicalMobileToLegacyVariant(input)).toBeNull();
     },
   );
 });

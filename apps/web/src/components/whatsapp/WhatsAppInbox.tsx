@@ -125,8 +125,36 @@ const allowedConversationDocumentMimeTypes = new Set([
   'text/plain',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/vnd.rar',
+  'application/x-rar-compressed',
+  'image/vnd.adobe.photoshop',
+  'application/x-photoshop',
+  'application/vnd.android.package-archive',
 ]);
+const allowedConversationDocumentExtensions = new Set([
+  'pdf',
+  'txt',
+  'doc',
+  'docx',
+  'zip',
+  'rar',
+  'psd',
+  'apk',
+]);
+const conversationDocumentMimeTypesByExtension: Record<string, Set<string>> = {
+  pdf: new Set(['application/pdf']),
+  txt: new Set(['text/plain']),
+  doc: new Set(['application/msword']),
+  docx: new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document']),
+  zip: new Set(['application/zip', 'application/x-zip-compressed']),
+  rar: new Set(['application/vnd.rar', 'application/x-rar-compressed']),
+  psd: new Set(['image/vnd.adobe.photoshop', 'application/x-photoshop']),
+  apk: new Set(['application/vnd.android.package-archive']),
+};
 const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
+const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
 
@@ -2724,12 +2752,19 @@ export function classifyConversationIncomingFile(file: File): ConversationIncomi
   }
 
   const mimeType = file.type.split(';')[0]?.trim().toLowerCase() || '';
+  const extension = conversationFileExtension(file.name);
+
+  if (allowedConversationDocumentExtensions.has(extension)) {
+    return isAllowedConversationDocument(mimeType, extension)
+      ? { ok: true, kind: 'DOCUMENT' }
+      : { ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' };
+  }
 
   if (allowedConversationImageMimeTypes.has(mimeType)) {
     return { ok: true, kind: 'IMAGE' };
   }
 
-  if (allowedConversationDocumentMimeTypes.has(mimeType)) {
+  if (isAllowedConversationDocument(mimeType, extension)) {
     return { ok: true, kind: 'DOCUMENT' };
   }
 
@@ -2742,6 +2777,29 @@ export function classifyConversationIncomingFile(file: File): ConversationIncomi
   }
 
   return { ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' };
+}
+
+function conversationFileExtension(fileName: string) {
+  const cleanName = fileName.split(/[\\/]/).pop()?.trim() ?? '';
+  const lastDot = cleanName.lastIndexOf('.');
+
+  return lastDot >= 0 ? cleanName.slice(lastDot + 1).toLowerCase() : '';
+}
+
+function isAllowedConversationDocument(mimeType: string, extension: string) {
+  if (!allowedConversationDocumentExtensions.has(extension)) {
+    return false;
+  }
+
+  if (genericConversationFileMimeTypes.has(mimeType)) {
+    return true;
+  }
+
+  if (!allowedConversationDocumentMimeTypes.has(mimeType)) {
+    return false;
+  }
+
+  return conversationDocumentMimeTypesByExtension[extension]?.has(mimeType) ?? false;
 }
 
 function ConversationBubble({
@@ -3896,7 +3954,7 @@ function ConversationComposer({
           />
           <input
             ref={documentInputRef}
-            accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,image/vnd.adobe.photoshop,application/x-photoshop,application/vnd.android.package-archive,.zip,.rar,.psd,.apk"
             className="sr-only"
             type="file"
             onChange={(event) => {

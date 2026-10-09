@@ -1254,6 +1254,116 @@ describe('WhatsAppService', () => {
   });
 
   it.each([
+    ['ZIP application/zip', 'arquivos.zip', 'application/zip'],
+    ['ZIP x-zip-compressed', 'arquivos.zip', 'application/x-zip-compressed'],
+    ['ZIP octet-stream', 'arquivos.zip', 'application/octet-stream'],
+    ['RAR application/vnd.rar', 'pacote.rar', 'application/vnd.rar'],
+    ['RAR x-rar-compressed', 'pacote.rar', 'application/x-rar-compressed'],
+    ['RAR octet-stream', 'pacote.rar', 'application/octet-stream'],
+    ['PSD image/vnd.adobe.photoshop', 'layout.psd', 'image/vnd.adobe.photoshop'],
+    ['PSD x-photoshop', 'layout.psd', 'application/x-photoshop'],
+    ['PSD octet-stream', 'layout.psd', 'application/octet-stream'],
+    ['APK android package', 'app.apk', 'application/vnd.android.package-archive'],
+    ['APK octet-stream', 'app.apk', 'application/octet-stream'],
+    ['uppercase ZIP extension', 'ARQUIVOS.ZIP', 'application/octet-stream'],
+    ['mixed-case RAR extension', 'pacote.Rar', 'application/octet-stream'],
+    ['uppercase PSD extension', 'LAYOUT.PSD', 'application/octet-stream'],
+    ['uppercase APK extension', 'APP.APK', 'application/octet-stream'],
+  ])('sends %s conversation media as DOCUMENT', async (_label, fileName, mimetype) => {
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+    const requestId = `${fileName.replace(/[^a-z]/gi, '-')}-request-id`;
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('document-bytes'),
+        mimetype,
+        originalname: fileName,
+        size: 14,
+      },
+      requestId,
+    });
+
+    expect(provider.sendDocument).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({
+        documentDataUrl: expect.stringMatching(/^data:application\/octet-stream;base64,/),
+        fileName,
+        requestId,
+      }),
+    );
+    const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(createCall.data).toMatchObject({
+      type: 'DOCUMENT',
+      mediaFileName: fileName,
+      mediaMimeType: mimetype,
+      mediaSizeBytes: 14,
+    });
+  });
+
+  it('sanitizes document file names without changing safe extensions silently', async () => {
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('zip'),
+        mimetype: 'application/zip',
+        originalname: '../../arquivo estranho @#.zip',
+        size: 3,
+      },
+      requestId: 'traversal-document-request-id',
+    });
+
+    expect(provider.sendDocument).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({
+        fileName: 'arquivo estranho __.zip',
+      }),
+    );
+  });
+
+  it.each([
     ['audio/ogg', 'audio.ogg'],
     ['audio/mpeg', 'audio.mp3'],
     ['audio/mp4', 'audio.m4a'],
@@ -2308,6 +2418,102 @@ describe('WhatsAppService', () => {
         requestId: 'large-request-id',
       }),
     ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('exe'),
+          mimetype: 'application/octet-stream',
+          originalname: 'setup.exe',
+          size: 3,
+        },
+        requestId: 'exe-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('bin'),
+          mimetype: 'application/octet-stream',
+          originalname: 'payload.bin',
+          size: 3,
+        },
+        requestId: 'bin-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('unknown'),
+          mimetype: 'application/octet-stream',
+          originalname: 'arquivo.xyz',
+          size: 7,
+        },
+        requestId: 'unknown-extension-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('exe'),
+          mimetype: 'application/x-msdownload',
+          originalname: 'arquivo.zip',
+          size: 3,
+        },
+        requestId: 'zip-msdownload-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('jpeg'),
+          mimetype: 'image/jpeg',
+          originalname: 'arquivo.zip',
+          size: 4,
+        },
+        requestId: 'zip-jpeg-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('exe'),
+          mimetype: 'application/x-msdownload',
+          originalname: 'arquivo.exe.zip',
+          size: 3,
+        },
+        requestId: 'double-extension-msdownload-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('zip'),
+          mimetype: 'application/octet-stream',
+          originalname: 'arquivo.zip.exe',
+          size: 3,
+        },
+        requestId: 'double-extension-exe-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(0),
+          mimetype: 'application/zip',
+          originalname: 'vazio.zip',
+          size: 0,
+        },
+        requestId: 'empty-file-request-id',
+      }),
+    ).rejects.toThrow('Arquivo vazio.');
     expect(provider.sendImage).not.toHaveBeenCalled();
     expect(provider.sendDocument).not.toHaveBeenCalled();
     expect(provider.sendAudio).not.toHaveBeenCalled();
@@ -8576,6 +8782,18 @@ describe('WhatsAppService', () => {
       expectedPayload: {
         documentDataUrl: expect.stringMatching(/^data:application\/octet-stream;base64,/),
         fileName: 'boleto.pdf',
+      },
+    },
+    {
+      label: 'ZIP DOCUMENT',
+      type: 'DOCUMENT',
+      mimeType: 'application/zip',
+      fileName: 'arquivos.zip',
+      source: 'manual_outbound_media_send',
+      providerMethod: 'sendDocument',
+      expectedPayload: {
+        documentDataUrl: expect.stringMatching(/^data:application\/octet-stream;base64,/),
+        fileName: 'arquivos.zip',
       },
     },
     {

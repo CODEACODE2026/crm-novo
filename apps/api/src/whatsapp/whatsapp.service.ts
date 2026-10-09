@@ -89,7 +89,35 @@ const allowedDocumentMimeTypes = new Set([
   'text/plain',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/vnd.rar',
+  'application/x-rar-compressed',
+  'image/vnd.adobe.photoshop',
+  'application/x-photoshop',
+  'application/vnd.android.package-archive',
 ]);
+const allowedDocumentExtensions = new Set([
+  'pdf',
+  'txt',
+  'doc',
+  'docx',
+  'zip',
+  'rar',
+  'psd',
+  'apk',
+]);
+const documentMimeTypesByExtension: Record<string, Set<string>> = {
+  pdf: new Set(['application/pdf']),
+  txt: new Set(['text/plain']),
+  doc: new Set(['application/msword']),
+  docx: new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document']),
+  zip: new Set(['application/zip', 'application/x-zip-compressed']),
+  rar: new Set(['application/vnd.rar', 'application/x-rar-compressed']),
+  psd: new Set(['image/vnd.adobe.photoshop', 'application/x-photoshop']),
+  apk: new Set(['application/vnd.android.package-archive']),
+};
+const genericDocumentMimeTypes = new Set(['application/octet-stream']);
 const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 const allowedVoiceInputMimeTypes = new Set(['audio/webm', 'audio/webm;codecs=opus']);
 const whatsappMessageQuoteSelect = {
@@ -1379,7 +1407,7 @@ export class WhatsAppService {
     }
 
     const media = this.prepareConversationMedia(input.file);
-    const mediaType = this.manualConversationMediaType(media.mimeType);
+    const mediaType = media.kind;
     const caption = input.caption?.trim() || null;
     const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
@@ -3921,7 +3949,7 @@ export class WhatsAppService {
       source?: 'manual_outbound_media_send' | 'manual_outbound_voice_send';
     },
   ) {
-    const mediaType = this.manualConversationMediaType(input.media.mimeType);
+    const mediaType = input.media.kind;
     const source = input.source ?? 'manual_outbound_media_send';
 
     try {
@@ -4232,6 +4260,15 @@ export class WhatsAppService {
 
     const mimeType = file.mimetype;
     const safeMimeType = this.normalizeMediaMimeType(mimeType);
+    const safeFileName = this.sanitizeMediaFileName(file.originalname);
+    const fileExtension = this.mediaFileExtension(safeFileName);
+
+    if (
+      allowedDocumentExtensions.has(fileExtension) &&
+      !this.isAllowedOutboundDocument(safeMimeType, fileExtension)
+    ) {
+      throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
+    }
 
     if (safeMimeType && allowedImageMimeTypes.has(safeMimeType)) {
       return {
@@ -4239,19 +4276,19 @@ export class WhatsAppService {
         dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
         buffer: file.buffer,
         mimeType,
-        fileName: this.sanitizeMediaFileName(file.originalname),
+        fileName: safeFileName,
         sizeBytes,
         durationSeconds: null,
       };
     }
 
-    if (safeMimeType && allowedDocumentMimeTypes.has(safeMimeType)) {
+    if (this.isAllowedOutboundDocument(safeMimeType, fileExtension)) {
       return {
         kind: 'DOCUMENT' as const,
         dataUrl: `data:application/octet-stream;base64,${file.buffer.toString('base64')}`,
         buffer: file.buffer,
-        mimeType,
-        fileName: this.sanitizeMediaFileName(file.originalname),
+        mimeType: safeMimeType || 'application/octet-stream',
+        fileName: safeFileName,
         sizeBytes,
         durationSeconds: null,
       };
@@ -4263,7 +4300,7 @@ export class WhatsAppService {
         dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
         buffer: file.buffer,
         mimeType,
-        fileName: this.sanitizeMediaFileName(file.originalname),
+        fileName: safeFileName,
         sizeBytes,
         durationSeconds: null,
       };
@@ -4372,24 +4409,6 @@ export class WhatsAppService {
     return error;
   }
 
-  private manualConversationMediaType(mimeType: string): 'IMAGE' | 'DOCUMENT' | 'AUDIO' {
-    const safeMimeType = this.normalizeMediaMimeType(mimeType);
-
-    if (safeMimeType && allowedImageMimeTypes.has(safeMimeType)) {
-      return 'IMAGE';
-    }
-
-    if (safeMimeType && allowedDocumentMimeTypes.has(safeMimeType)) {
-      return 'DOCUMENT';
-    }
-
-    if (safeMimeType && allowedAudioMimeTypes.has(safeMimeType)) {
-      return 'AUDIO';
-    }
-
-    throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
-  }
-
   private sanitizeMediaFileName(originalName: string) {
     const rawName = originalName.split(/[\\/]/).pop()?.trim() || 'arquivo';
     const normalized = rawName
@@ -4402,6 +4421,24 @@ export class WhatsAppService {
       .slice(0, 120);
 
     return normalized || 'arquivo';
+  }
+
+  private mediaFileExtension(fileName: string) {
+    const lastDot = fileName.lastIndexOf('.');
+
+    return lastDot >= 0 ? fileName.slice(lastDot + 1).toLowerCase() : '';
+  }
+
+  private isAllowedOutboundDocument(mimeType: string | null, extension: string) {
+    if (!allowedDocumentExtensions.has(extension)) {
+      return false;
+    }
+
+    if (!mimeType || genericDocumentMimeTypes.has(mimeType)) {
+      return true;
+    }
+
+    return documentMimeTypesByExtension[extension]?.has(mimeType) ?? false;
   }
 
   private buildPendingContactWhere(
@@ -5809,6 +5846,13 @@ export class WhatsAppService {
   private fileExtension(mimetype: string) {
     const map: Record<string, string> = {
       'application/pdf': 'pdf',
+      'application/zip': 'zip',
+      'application/x-zip-compressed': 'zip',
+      'application/vnd.rar': 'rar',
+      'application/x-rar-compressed': 'rar',
+      'image/vnd.adobe.photoshop': 'psd',
+      'application/x-photoshop': 'psd',
+      'application/vnd.android.package-archive': 'apk',
       'audio/ogg': 'ogg',
       'audio/mpeg': 'mp3',
       'audio/mp4': 'm4a',
@@ -5837,7 +5881,7 @@ export class WhatsAppService {
     const normalized = this.normalizeMediaMimeType(mimetype);
 
     if (type === 'IMAGE') return normalized === 'image/jpeg' || normalized === 'image/png';
-    if (type === 'DOCUMENT') return normalized === 'application/pdf';
+    if (type === 'DOCUMENT') return Boolean(normalized && allowedDocumentMimeTypes.has(normalized));
     if (type === 'AUDIO') {
       return (
         normalized === 'audio/ogg' || normalized === 'audio/mpeg' || normalized === 'audio/mp4'

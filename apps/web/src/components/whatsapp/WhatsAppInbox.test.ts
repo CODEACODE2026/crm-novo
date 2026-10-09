@@ -84,9 +84,68 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(
       classifyConversationIncomingFile(new File(['audio'], 'audio.ogg', { type: 'audio/ogg' })),
     ).toEqual({ ok: true, kind: 'AUDIO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['zip'], 'arquivos.zip', { type: 'application/zip' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['zip'], 'arquivos.zip', { type: 'application/x-zip-compressed' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['zip'], 'arquivos.zip', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['rar'], 'pacote.rar', { type: 'application/vnd.rar' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['rar'], 'pacote.rar', { type: 'application/x-rar-compressed' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['psd'], 'layout.psd', { type: 'image/vnd.adobe.photoshop' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['psd'], 'layout.psd', { type: 'application/x-photoshop' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['psd'], 'layout.psd', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['apk'], 'app.apk', { type: 'application/vnd.android.package-archive' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['apk'], 'app.apk', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(new File(['zip'], 'ARQUIVOS.ZIP', { type: '' })),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['rar'], 'pacote.Rar', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
   });
 
-  it('rejects unsupported, oversized and non-enabled video composer files before upload', () => {
+  it('rejects unsupported, mismatched, oversized and non-enabled video composer files before upload', () => {
     expect(
       classifyConversationIncomingFile(new File(['video'], 'video.mp4', { type: 'video/mp4' })),
     ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
@@ -94,6 +153,46 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(
       classifyConversationIncomingFile(new File(['audio'], 'audio.wav', { type: 'audio/wav' })),
     ).toEqual({ ok: false, error: 'Formato de áudio não suportado. Envie OGG, MP3 ou M4A.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['exe'], 'setup.exe', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['bin'], 'payload.bin', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['unknown'], 'arquivo.xyz', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['exe'], 'arquivo.zip', { type: 'application/x-msdownload' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(new File(['jpeg'], 'arquivo.zip', { type: 'image/jpeg' })),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['zip'], 'arquivo.exe.zip', { type: 'application/x-msdownload' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['exe'], 'arquivo.zip.exe', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
 
     expect(
       classifyConversationIncomingFile(

@@ -97,9 +97,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('keeps search requests race-safe and resets message result pagination by query', () => {
     expect(conversationsSource).toContain('conversationListQueryKeyRef.current = requestQueryKey');
-    expect(conversationsSource).toContain(
-      'conversationListQueryKeyRef.current !== requestQueryKey',
-    );
+    expect(conversationsSource).toContain('conversationListRequestGenerationRef');
+    expect(conversationsSource).toContain('shouldApplyConversationListResponse');
+    expect(conversationsSource).toContain('nextConversationListRequestGeneration');
+    expect(conversationsSource).toContain('advanceConversationListGeneration');
     expect(conversationsSource).toContain('messageSearchRequestKeyRef.current = requestKey');
     expect(conversationsSource).toContain('messageSearchRequestKeyRef.current !== requestKey');
     expect(conversationsSource).toContain("state: 'closed'");

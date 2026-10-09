@@ -216,6 +216,7 @@ export function WhatsAppInbox({
   const readRetryConversationIdsRef = useRef(new Set<string>());
   const activeConversationReadSchedulerRef = useRef<(conversationId: string) => void>(() => {});
   const conversationListQueryKeyRef = useRef('');
+  const conversationListRequestGenerationRef = useRef(0);
   const olderMessagesLoadedRef = useRef(false);
   const olderMessagesLoadingRef = useRef(false);
   const messagesRef = useRef<WhatsAppConversationMessage[]>([]);
@@ -251,6 +252,13 @@ export function WhatsAppInbox({
     }: { append?: boolean; page?: number; preserveLoaded?: boolean; silent?: boolean } = {}) => {
       const requestQueryKey = JSON.stringify({ filter, search, statusFilter });
       conversationListQueryKeyRef.current = requestQueryKey;
+      const requestGeneration = nextConversationListRequestGeneration(
+        conversationListRequestGenerationRef.current,
+        append,
+      );
+      if (!append) {
+        conversationListRequestGenerationRef.current = requestGeneration;
+      }
 
       if (append) {
         setListLoadingMore(true);
@@ -282,7 +290,16 @@ export function WhatsAppInbox({
         const payload = await listWhatsAppConversations({
           ...filters,
         });
-        if (conversationListQueryKeyRef.current !== requestQueryKey) return;
+        if (
+          !shouldApplyConversationListResponse({
+            currentGeneration: conversationListRequestGenerationRef.current,
+            currentQueryKey: conversationListQueryKeyRef.current,
+            requestGeneration,
+            requestQueryKey,
+          })
+        ) {
+          return;
+        }
 
         setConversations((current) => {
           if (append || preserveLoaded) {
@@ -727,6 +744,10 @@ export function WhatsAppInbox({
       unreadBeforeRead: number,
       { updateSelected = true }: { updateSelected?: boolean } = {},
     ) => {
+      conversationListRequestGenerationRef.current = advanceConversationListGeneration(
+        conversationListRequestGenerationRef.current,
+      );
+
       setConversations((current) => {
         const next = mergeConversationById(current, readConversation);
         conversationsRef.current = next;
@@ -4078,7 +4099,10 @@ function upsertConversationList(
   );
 }
 
-function mergeConversationLists(current: WhatsAppConversation[], incoming: WhatsAppConversation[]) {
+export function mergeConversationLists(
+  current: WhatsAppConversation[],
+  incoming: WhatsAppConversation[],
+) {
   const map = new Map<string, WhatsAppConversation>();
   for (const conversation of [...current, ...incoming]) {
     map.set(conversation.id, conversation);
@@ -4110,6 +4134,28 @@ export function mergeConversationById(
   }
 
   return mergeConversationLists(current, [incoming]);
+}
+
+export function nextConversationListRequestGeneration(currentGeneration: number, append: boolean) {
+  return append ? currentGeneration : currentGeneration + 1;
+}
+
+export function advanceConversationListGeneration(currentGeneration: number) {
+  return currentGeneration + 1;
+}
+
+export function shouldApplyConversationListResponse({
+  currentGeneration,
+  currentQueryKey,
+  requestGeneration,
+  requestQueryKey,
+}: {
+  currentGeneration: number;
+  currentQueryKey: string;
+  requestGeneration: number;
+  requestQueryKey: string;
+}) {
+  return currentGeneration === requestGeneration && currentQueryKey === requestQueryKey;
 }
 
 export function updateConversationSummaryAfterRead(

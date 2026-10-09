@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  advanceConversationListGeneration,
   isRenderableConversationMessage,
   mergeConversationById,
+  mergeConversationLists,
+  nextConversationListRequestGeneration,
   shouldAutoReadRealtimeMessage,
+  shouldApplyConversationListResponse,
   shouldReadVisibleConversationOnReturn,
   shouldRetryActiveConversationRead,
   updateConversationSummaryAfterRead,
@@ -117,6 +121,200 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     const read = conversation('mobile-a', { unreadCount: 0 });
 
     expect(mergeConversationById(mobileListState, read)[0]?.unreadCount).toBe(0);
+  });
+
+  it('keeps read zero when an older realtime list refresh returns stale unread later', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    let currentGeneration = 0;
+    const staleRefreshGeneration = nextConversationListRequestGeneration(currentGeneration, false);
+    currentGeneration = staleRefreshGeneration;
+
+    let listState = [conversation('a', { unreadCount: 4 })];
+    const selected = conversation('a', { unreadCount: 4 });
+    const readConversation = conversation('a', {
+      unreadCount: 0,
+      updatedAt: '2026-10-08T12:01:00.000Z',
+    });
+
+    currentGeneration = advanceConversationListGeneration(currentGeneration);
+    listState = mergeConversationById(listState, readConversation);
+    const selectedAfterRead = mergeConversationById([selected], readConversation)[0];
+
+    expect(
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: staleRefreshGeneration,
+        requestQueryKey: queryKey,
+      }),
+    ).toBe(false);
+    expect(listState[0]?.unreadCount).toBe(0);
+    expect(selectedAfterRead?.unreadCount).toBe(0);
+  });
+
+  it('lets a newer list refresh with unread zero beat an older unread refresh', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    let currentGeneration = 0;
+    const oldRefreshGeneration = nextConversationListRequestGeneration(currentGeneration, false);
+    currentGeneration = oldRefreshGeneration;
+    const newRefreshGeneration = nextConversationListRequestGeneration(currentGeneration, false);
+    currentGeneration = newRefreshGeneration;
+
+    let listState = [conversation('a', { unreadCount: 4 })];
+    const newPayload = [conversation('a', { unreadCount: 0 })];
+    const oldPayload = [conversation('a', { unreadCount: 4 })];
+
+    if (
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: newRefreshGeneration,
+        requestQueryKey: queryKey,
+      })
+    ) {
+      listState = mergeConversationLists(listState, newPayload);
+    }
+    if (
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: oldRefreshGeneration,
+        requestQueryKey: queryKey,
+      })
+    ) {
+      listState = mergeConversationLists(listState, oldPayload);
+    }
+
+    expect(listState[0]?.unreadCount).toBe(0);
+  });
+
+  it('allows unread to increase again when a newer refresh observes a new inbound after read', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    let currentGeneration = 1;
+    let listState = [conversation('a', { unreadCount: 0 })];
+
+    currentGeneration = advanceConversationListGeneration(currentGeneration);
+    const inboundRefreshGeneration = nextConversationListRequestGeneration(
+      currentGeneration,
+      false,
+    );
+    currentGeneration = inboundRefreshGeneration;
+
+    if (
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: inboundRefreshGeneration,
+        requestQueryKey: queryKey,
+      })
+    ) {
+      listState = mergeConversationLists(listState, [conversation('a', { unreadCount: 1 })]);
+    }
+
+    expect(listState[0]?.unreadCount).toBe(1);
+  });
+
+  it('keeps other conversations and load-more pagination updates valid for current generations', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    const currentGeneration = 3;
+    let listState = [conversation('a', { unreadCount: 0 }), conversation('b', { unreadCount: 0 })];
+
+    if (
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: currentGeneration,
+        requestQueryKey: queryKey,
+      })
+    ) {
+      listState = mergeConversationLists(listState, [
+        conversation('b', { unreadCount: 2, updatedAt: '2026-10-08T12:02:00.000Z' }),
+        conversation('c', { unreadCount: 0 }),
+      ]);
+    }
+
+    expect(listState.find((item) => item.id === 'a')?.unreadCount).toBe(0);
+    expect(listState.find((item) => item.id === 'b')?.unreadCount).toBe(2);
+    expect(listState.find((item) => item.id === 'c')).toBeTruthy();
+    expect(nextConversationListRequestGeneration(currentGeneration, true)).toBe(currentGeneration);
+  });
+
+  it('discards stale SSE and polling list responses after read invalidates their generation', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    const sources = ['message.created', 'conversation.updated', 'polling'];
+
+    for (const source of sources) {
+      let currentGeneration = 5;
+      const staleRefreshGeneration = nextConversationListRequestGeneration(
+        currentGeneration,
+        false,
+      );
+      currentGeneration = staleRefreshGeneration;
+      currentGeneration = advanceConversationListGeneration(currentGeneration);
+
+      expect(
+        shouldApplyConversationListResponse({
+          currentGeneration,
+          currentQueryKey: queryKey,
+          requestGeneration: staleRefreshGeneration,
+          requestQueryKey: queryKey,
+        }),
+      ).toBe(false);
+      expect(source).toBeTruthy();
+    }
+  });
+
+  it('discards old query responses even when their generation number matches', () => {
+    expect(
+      shouldApplyConversationListResponse({
+        currentGeneration: 7,
+        currentQueryKey: JSON.stringify({ filter: 'unread', search: 'ana', statusFilter: '' }),
+        requestGeneration: 7,
+        requestQueryKey: JSON.stringify({ filter: 'all', search: '', statusFilter: '' }),
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps summary reduced when a stale refresh summary arrives after read', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    let currentGeneration = 0;
+    const staleRefreshGeneration = nextConversationListRequestGeneration(currentGeneration, false);
+    currentGeneration = staleRefreshGeneration;
+
+    let summary = { totalUnreadConversations: 1, totalUnreadMessages: 4 };
+    currentGeneration = advanceConversationListGeneration(currentGeneration);
+    summary = updateConversationSummaryAfterRead(summary, 4, 0) ?? summary;
+
+    if (
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: staleRefreshGeneration,
+        requestQueryKey: queryKey,
+      })
+    ) {
+      summary = { totalUnreadConversations: 1, totalUnreadMessages: 4 };
+    }
+
+    expect(summary).toEqual({ totalUnreadConversations: 0, totalUnreadMessages: 0 });
+  });
+
+  it('discards load-more responses after a newer refresh changes generation', () => {
+    const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
+    let currentGeneration = 3;
+    const loadMoreGeneration = nextConversationListRequestGeneration(currentGeneration, true);
+    currentGeneration = nextConversationListRequestGeneration(currentGeneration, false);
+
+    expect(loadMoreGeneration).toBe(3);
+    expect(currentGeneration).toBe(4);
+    expect(
+      shouldApplyConversationListResponse({
+        currentGeneration,
+        currentQueryKey: queryKey,
+        requestGeneration: loadMoreGeneration,
+        requestQueryKey: queryKey,
+      }),
+    ).toBe(false);
   });
 
   it('does not render empty text or unknown messages as chat bubbles', () => {

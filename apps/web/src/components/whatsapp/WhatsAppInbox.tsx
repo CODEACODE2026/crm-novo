@@ -20,6 +20,7 @@ import {
   Eye,
   FileAudio,
   FileText,
+  FileVideo,
   Image as ImageIcon,
   Info,
   Loader2,
@@ -90,9 +91,9 @@ import { useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
 
 type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
-type ConversationComposerMedia = {
+export type ConversationComposerMedia = {
   file: File;
-  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO';
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
   previewUrl: string | null;
 };
 
@@ -118,6 +119,7 @@ const conversationListRealtimeFallbackPollingMs = 60000;
 const conversationMessagesRealtimeFallbackPollingMs = 30000;
 const activeConversationReadDebounceMs = 180;
 const conversationMediaMaxBytes = 10 * 1024 * 1024;
+const conversationVideoMaxBytes = conversationMediaMaxBytes;
 const conversationVoiceMaxSeconds = 60;
 const allowedConversationImageMimeTypes = new Set(['image/jpeg', 'image/png']);
 const allowedConversationDocumentMimeTypes = new Set([
@@ -154,6 +156,13 @@ const conversationDocumentMimeTypesByExtension: Record<string, Set<string>> = {
   apk: new Set(['application/vnd.android.package-archive']),
 };
 const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
+const allowedConversationVideoMimeTypes = new Set(['video/mp4']);
+const allowedConversationVideoExtensions = new Set(['mp4']);
+export const conversationImageAccept = 'image/jpeg,image/png';
+export const conversationDocumentAccept =
+  'application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,image/vnd.adobe.photoshop,application/x-photoshop,application/vnd.android.package-archive,.zip,.rar,.psd,.apk';
+export const conversationAudioAccept = 'audio/ogg,audio/mpeg,audio/mp4';
+export const conversationVideoAccept = 'video/mp4';
 const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
@@ -1147,9 +1156,7 @@ export function WhatsAppInbox({
 
   useEffect(() => {
     return () => {
-      if (selectedMedia?.previewUrl) {
-        URL.revokeObjectURL(selectedMedia.previewUrl);
-      }
+      disposeConversationComposerMedia(selectedMedia);
     };
   }, [selectedMedia]);
 
@@ -1195,18 +1202,8 @@ export function WhatsAppInbox({
     }
 
     setSelectedMedia((current) => {
-      if (current?.previewUrl) {
-        URL.revokeObjectURL(current.previewUrl);
-      }
-
-      return {
-        file,
-        kind: validation.kind,
-        previewUrl:
-          validation.kind === 'IMAGE' || validation.kind === 'AUDIO'
-            ? URL.createObjectURL(file)
-            : null,
-      };
+      disposeConversationComposerMedia(current);
+      return createConversationComposerMedia(file, validation.kind);
     });
     setSendError([notice, replyNotice].filter(Boolean).join(' '));
     scheduleComposerFocus(() => {
@@ -1221,9 +1218,7 @@ export function WhatsAppInbox({
 
   function clearComposerMedia() {
     setSelectedMedia((current) => {
-      if (current?.previewUrl) {
-        URL.revokeObjectURL(current.previewUrl);
-      }
+      disposeConversationComposerMedia(current);
       return null;
     });
   }
@@ -2744,19 +2739,31 @@ export function isRenderableConversationMessage(message: WhatsAppConversationMes
 }
 
 export function classifyConversationIncomingFile(file: File): ConversationIncomingFileResult {
-  if (file.size > conversationMediaMaxBytes) {
-    return {
-      ok: false,
-      error: 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
-    };
-  }
-
   const mimeType = file.type.split(';')[0]?.trim().toLowerCase() || '';
   const extension = conversationFileExtension(file.name);
+  const isVideoFile =
+    allowedConversationVideoMimeTypes.has(mimeType) ||
+    allowedConversationVideoExtensions.has(extension);
+  const maxBytes = isVideoFile ? conversationVideoMaxBytes : conversationMediaMaxBytes;
+
+  if (file.size > maxBytes) {
+    return {
+      ok: false,
+      error: isVideoFile
+        ? 'Vídeo excede o limite de 10 MB permitido para envio por WhatsApp.'
+        : 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+    };
+  }
 
   if (allowedConversationDocumentExtensions.has(extension)) {
     return isAllowedConversationDocument(mimeType, extension)
       ? { ok: true, kind: 'DOCUMENT' }
+      : { ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' };
+  }
+
+  if (allowedConversationVideoExtensions.has(extension)) {
+    return allowedConversationVideoMimeTypes.has(mimeType)
+      ? { ok: true, kind: 'VIDEO' }
       : { ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' };
   }
 
@@ -2772,11 +2779,41 @@ export function classifyConversationIncomingFile(file: File): ConversationIncomi
     return { ok: true, kind: 'AUDIO' };
   }
 
+  if (mimeType.startsWith('video/')) {
+    return { ok: false, error: 'Formato de vídeo não suportado. Envie MP4.' };
+  }
+
   if (mimeType.startsWith('audio/')) {
     return { ok: false, error: 'Formato de áudio não suportado. Envie OGG, MP3 ou M4A.' };
   }
 
   return { ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' };
+}
+
+export function createConversationComposerMedia(
+  file: File,
+  kind: ConversationComposerMedia['kind'],
+): ConversationComposerMedia {
+  return {
+    file,
+    kind,
+    previewUrl:
+      kind === 'IMAGE' || kind === 'AUDIO' || kind === 'VIDEO' ? URL.createObjectURL(file) : null,
+  };
+}
+
+export function disposeConversationComposerMedia(media: ConversationComposerMedia | null) {
+  if (media?.previewUrl) {
+    URL.revokeObjectURL(media.previewUrl);
+  }
+}
+
+export function conversationComposerActionMode(
+  draft: string,
+  selectedMedia: ConversationComposerMedia | null,
+  sending: boolean,
+) {
+  return draft.trim() || selectedMedia || sending ? 'SEND' : 'VOICE';
 }
 
 function conversationFileExtension(fileName: string) {
@@ -3581,6 +3618,7 @@ function ConversationComposer({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
   const maxDurationTimeoutRef = useRef<number | null>(null);
@@ -3592,7 +3630,8 @@ function ConversationComposer({
   const voiceSendingRef = useRef(false);
   const hasText = Boolean(draft.trim());
   const hasSendableContent = Boolean(hasText || selectedMedia);
-  const shouldShowSendAction = hasSendableContent || sending;
+  const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);
+  const shouldShowSendAction = actionMode === 'SEND';
   const canSend = hasSendableContent && !sending;
   const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
 
@@ -3898,9 +3937,24 @@ function ConversationComposer({
           {selectedMedia.kind === 'IMAGE' && selectedMedia.previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img alt="" src={selectedMedia.previewUrl} />
+          ) : selectedMedia.kind === 'VIDEO' && selectedMedia.previewUrl ? (
+            <video
+              className="conversation-attachment-video-preview"
+              controls
+              preload="metadata"
+              src={selectedMedia.previewUrl}
+            >
+              <track kind="captions" />
+            </video>
           ) : (
             <span className="conversation-attachment-file-icon" aria-hidden="true">
-              {selectedMedia.kind === 'AUDIO' ? <FileAudio size={18} /> : <FileText size={18} />}
+              {selectedMedia.kind === 'AUDIO' ? (
+                <FileAudio size={18} />
+              ) : selectedMedia.kind === 'VIDEO' ? (
+                <FileVideo size={18} />
+              ) : (
+                <FileText size={18} />
+              )}
             </span>
           )}
           <span>
@@ -3940,11 +3994,15 @@ function ConversationComposer({
                 <FileAudio aria-hidden="true" size={16} />
                 <span>Áudio</span>
               </button>
+              <button type="button" onClick={() => videoInputRef.current?.click()}>
+                <FileVideo aria-hidden="true" size={16} />
+                <span>Vídeo</span>
+              </button>
             </div>
           ) : null}
           <input
             ref={imageInputRef}
-            accept="image/jpeg,image/png"
+            accept={conversationImageAccept}
             className="sr-only"
             type="file"
             onChange={(event) => {
@@ -3954,7 +4012,7 @@ function ConversationComposer({
           />
           <input
             ref={documentInputRef}
-            accept="application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,image/vnd.adobe.photoshop,application/x-photoshop,application/vnd.android.package-archive,.zip,.rar,.psd,.apk"
+            accept={conversationDocumentAccept}
             className="sr-only"
             type="file"
             onChange={(event) => {
@@ -3964,11 +4022,21 @@ function ConversationComposer({
           />
           <input
             ref={audioInputRef}
-            accept="audio/ogg,audio/mpeg,audio/mp4"
+            accept={conversationAudioAccept}
             className="sr-only"
             type="file"
             onChange={(event) => {
               selectFile('AUDIO', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={videoInputRef}
+            accept={conversationVideoAccept}
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('VIDEO', event.target.files?.[0]);
               event.target.value = '';
             }}
           />

@@ -15,6 +15,7 @@ import type {
   SendImageInput,
   SendAudioInput,
   SendTextInput,
+  SendVideoInput,
   WhatsAppProvider,
 } from '../provider/whatsapp-provider';
 
@@ -198,6 +199,23 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     };
   }
 
+  async sendVideo(instanceToken: string, input: SendVideoInput) {
+    const caption = input.caption?.trim();
+    const response = await this.instanceClient.sendVideo(instanceToken, {
+      Phone: input.phone,
+      Video: input.videoDataUrl,
+      ...(caption ? { Caption: caption } : {}),
+      MimeType: input.mimeType,
+      Id: this.kiragoMessageId(input.requestId),
+    });
+
+    this.logMediaSendDebug('VIDEO', response);
+
+    return {
+      providerMessageId: response.data?.Id ?? null,
+    };
+  }
+
   async sendButtons(instanceToken: string, input: SendButtonsInput) {
     const response = await this.instanceClient.sendButtons(instanceToken, {
       phone: input.phone,
@@ -269,7 +287,7 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     ].join('-');
   }
 
-  private logMediaSendDebug(kind: 'IMAGE' | 'DOCUMENT', response: unknown) {
+  private logMediaSendDebug(kind: 'IMAGE' | 'DOCUMENT' | 'VIDEO', response: unknown) {
     if (this.config.get<string>('WHATSAPP_MEDIA_SEND_DEBUG') !== 'true') {
       return;
     }
@@ -279,7 +297,7 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     );
   }
 
-  private buildMediaSendDebugPayload(kind: 'IMAGE' | 'DOCUMENT', response: unknown) {
+  private buildMediaSendDebugPayload(kind: 'IMAGE' | 'DOCUMENT' | 'VIDEO', response: unknown) {
     const envelope = this.asRecord(response);
     const data = this.asRecord(envelope?.data);
     const details = data?.Details;

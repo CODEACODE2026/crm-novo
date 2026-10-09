@@ -166,7 +166,7 @@ describe('Kirago dependency injection', () => {
     });
   });
 
-  it('maps image, document and audio sends to official Kirago payloads', async () => {
+  it('maps image, document, audio and video sends to official Kirago payloads', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 
     const instanceClient = app.get(KiragoInstanceClient);
@@ -182,6 +182,10 @@ describe('Kirago dependency injection', () => {
     const sendAudio = vi.spyOn(instanceClient, 'sendAudio').mockResolvedValue({
       success: true,
       data: { Id: 'audio-provider-id' },
+    });
+    const sendVideo = vi.spyOn(instanceClient, 'sendVideo').mockResolvedValue({
+      success: true,
+      data: { Id: 'video-provider-id' },
     });
 
     await provider.sendImage('instance-token', {
@@ -204,6 +208,13 @@ describe('Kirago dependency injection', () => {
       ptt: false,
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
     });
+    await provider.sendVideo('instance-token', {
+      phone: '5544999999999',
+      videoDataUrl: 'data:video/mp4;base64,abc',
+      caption: 'Video',
+      mimeType: 'video/mp4',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
+    });
 
     expect(sendImage).toHaveBeenCalledWith('instance-token', {
       Phone: '5544999999999',
@@ -223,6 +234,13 @@ describe('Kirago dependency injection', () => {
       Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
       PTT: false,
       MimeType: 'audio/ogg',
+    });
+    expect(sendVideo).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Video: 'data:video/mp4;base64,abc',
+      Caption: 'Video',
+      MimeType: 'video/mp4',
+      Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37393',
     });
   });
 

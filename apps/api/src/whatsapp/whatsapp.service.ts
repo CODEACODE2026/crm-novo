@@ -119,6 +119,8 @@ const documentMimeTypesByExtension: Record<string, Set<string>> = {
 };
 const genericDocumentMimeTypes = new Set(['application/octet-stream']);
 const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
+const allowedVideoMimeTypes = new Set(['video/mp4']);
+const allowedVideoExtensions = new Set(['mp4']);
 const allowedVoiceInputMimeTypes = new Set(['audio/webm', 'audio/webm;codecs=opus']);
 const whatsappMessageQuoteSelect = {
   id: true,
@@ -139,7 +141,7 @@ type ConversationMediaUploadFile = {
 };
 
 type PreparedConversationMedia = {
-  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO';
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
   dataUrl: string;
   buffer: Buffer;
   mimeType: string;
@@ -331,6 +333,7 @@ type ResolvedWhatsAppReplyTarget = {
 @Injectable()
 export class WhatsAppService {
   static readonly conversationMediaMaxBytes = 10 * 1024 * 1024;
+  static readonly conversationVideoMaxBytes = WhatsAppService.conversationMediaMaxBytes;
   static readonly conversationVoiceMaxBytes = 5 * 1024 * 1024;
 
   private readonly logger = new Logger(WhatsAppService.name);
@@ -1458,6 +1461,16 @@ export class WhatsAppService {
             mimeType: media.mimeType,
             seconds: media.durationSeconds,
             ptt: false,
+            requestId,
+          }),
+        );
+      } else if (mediaType === 'VIDEO') {
+        result = await this.mapConnectionProviderError(connection, () =>
+          this.provider.sendVideo(instanceToken, {
+            phone: conversation.phoneNormalized,
+            videoDataUrl: media.dataUrl,
+            caption,
+            mimeType: media.mimeType,
             requestId,
           }),
         );
@@ -4229,6 +4242,19 @@ export class WhatsAppService {
       };
     }
 
+    if (downloadType === 'VIDEO') {
+      return {
+        send: (instanceToken, requestId) =>
+          this.provider.sendVideo(instanceToken, {
+            phone: message.conversation.phoneNormalized,
+            videoDataUrl: dataUrl,
+            caption: message.text,
+            mimeType: localMedia.mimeType,
+            requestId,
+          }),
+      };
+    }
+
     throw new UnprocessableEntityException({
       code: 'WHATSAPP_RETRY_TYPE_UNSUPPORTED',
       message: 'Tipo de mensagem nao suportado para reenvio.',
@@ -4251,17 +4277,31 @@ export class WhatsAppService {
     }
 
     const sizeBytes = file.size || file.buffer.length;
-
-    if (sizeBytes > WhatsAppService.conversationMediaMaxBytes) {
-      throw new BadRequestException(
-        'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
-      );
-    }
-
     const mimeType = file.mimetype;
     const safeMimeType = this.normalizeMediaMimeType(mimeType);
     const safeFileName = this.sanitizeMediaFileName(file.originalname);
     const fileExtension = this.mediaFileExtension(safeFileName);
+    const isVideoFile =
+      Boolean(safeMimeType && allowedVideoMimeTypes.has(safeMimeType)) ||
+      allowedVideoExtensions.has(fileExtension);
+    const maxBytes = isVideoFile
+      ? WhatsAppService.conversationVideoMaxBytes
+      : WhatsAppService.conversationMediaMaxBytes;
+
+    if (sizeBytes > maxBytes) {
+      throw new BadRequestException(
+        isVideoFile
+          ? 'Video excede o limite de 10 MB permitido para envio por WhatsApp.'
+          : 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+      );
+    }
+
+    if (
+      allowedVideoExtensions.has(fileExtension) &&
+      (!safeMimeType || !allowedVideoMimeTypes.has(safeMimeType))
+    ) {
+      throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
+    }
 
     if (
       allowedDocumentExtensions.has(fileExtension) &&
@@ -4297,6 +4337,18 @@ export class WhatsAppService {
     if (safeMimeType && allowedAudioMimeTypes.has(safeMimeType)) {
       return {
         kind: 'AUDIO' as const,
+        dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
+        buffer: file.buffer,
+        mimeType,
+        fileName: safeFileName,
+        sizeBytes,
+        durationSeconds: null,
+      };
+    }
+
+    if (safeMimeType && allowedVideoMimeTypes.has(safeMimeType) && fileExtension === 'mp4') {
+      return {
+        kind: 'VIDEO' as const,
         dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
         buffer: file.buffer,
         mimeType,
@@ -5299,7 +5351,12 @@ export class WhatsAppService {
       return 'RECORD_AGAIN';
     }
 
-    if (message.type === 'IMAGE' || message.type === 'DOCUMENT' || message.type === 'AUDIO') {
+    if (
+      message.type === 'IMAGE' ||
+      message.type === 'DOCUMENT' ||
+      message.type === 'AUDIO' ||
+      message.type === 'VIDEO'
+    ) {
       return 'SELECT_FILE_AGAIN';
     }
 

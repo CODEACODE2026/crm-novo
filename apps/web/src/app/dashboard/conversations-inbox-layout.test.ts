@@ -390,8 +390,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       'const hasSendableContent = Boolean(hasText || selectedMedia);',
     );
     expect(conversationsSource).toContain(
-      'const shouldShowSendAction = hasSendableContent || sending;',
+      'const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);',
     );
+    expect(conversationsSource).toContain("const shouldShowSendAction = actionMode === 'SEND';");
     expect(conversationsSource).toContain('const canSend = hasSendableContent && !sending;');
     expect(conversationsSource).toContain('disabled={!canSend}');
     expect(conversationsSource).toContain('{shouldShowSendAction ? (');
@@ -403,23 +404,27 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
   });
 
-  it('supports compact image, document and audio attachments in the conversation composer', () => {
+  it('supports compact image, document, audio and video attachments in the conversation composer', () => {
     expect(conversationsSource).toContain('type ConversationComposerMedia');
     expect(conversationsSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
     expect(conversationsSource).toContain('classifyConversationIncomingFile(file)');
-    expect(conversationsSource).toContain('file.size > conversationMediaMaxBytes');
+    expect(conversationsSource).toContain('file.size > maxBytes');
     expect(conversationsSource).toContain(
       'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
     );
     expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
     expect(conversationsSource).toContain('file: mediaToSend.file');
     expect(conversationsSource).toContain('caption: body');
-    expect(conversationsSource).toContain('accept="image/jpeg,image/png"');
+    expect(conversationsSource).toContain('accept={conversationImageAccept}');
     expect(conversationsSource).toContain(
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
     expect(conversationsSource).toContain('allowedConversationAudioMimeTypes');
-    expect(conversationsSource).toContain('accept="audio/ogg,audio/mpeg,audio/mp4"');
+    expect(conversationsSource).toContain('accept={conversationAudioAccept}');
+    expect(conversationsSource).toContain('accept={conversationVideoAccept}');
+    expect(conversationsSource).toContain("const conversationVideoAccept = 'video/mp4';");
+    expect(conversationsSource).toContain('allowedConversationVideoMimeTypes');
+    expect(conversationsSource).toContain('conversation-attachment-video-preview');
     expect(conversationsSource).toContain('Formato de áudio não suportado. Envie OGG, MP3 ou M4A.');
     expect(conversationsSource).toContain(
       "allowedConversationImageMimeTypes = new Set(['image/jpeg', 'image/png'])",
@@ -726,7 +731,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('label="Enviar gravação"');
     expect(conversationsSource).toContain('conversation-recording-dot');
     expect(conversationsSource).toContain('conversation-voice-preview');
-    expect(conversationsSource).toContain('accept="audio/ogg,audio/mpeg,audio/mp4"');
+    expect(conversationsSource).toContain('accept={conversationAudioAccept}');
     expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
     expect(stylesSource).toContain('@keyframes conversation-recording-pulse');
     expect(stylesSource).toContain('.conversation-composer-tools');

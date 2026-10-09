@@ -61,6 +61,12 @@ export type KiragoSendAudioData = {
   Timestamp?: string;
 };
 
+export type KiragoSendVideoData = {
+  Details?: unknown;
+  Id?: string;
+  Timestamp?: string;
+};
+
 export type KiragoSendButtonsData = {
   Details?: unknown;
   Id?: string;
@@ -199,6 +205,18 @@ export class KiragoInstanceClient {
     },
   ) {
     return this.http.request<KiragoEnvelope<KiragoSendAudioData>>('/chat/send/audio', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  sendVideo(
+    instanceToken: string,
+    payload: { Phone: string; Video: string; Caption?: string; MimeType: string; Id: string },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoSendVideoData>>('/chat/send/video', {
       method: 'POST',
       headers: { token: instanceToken },
       body: payload,

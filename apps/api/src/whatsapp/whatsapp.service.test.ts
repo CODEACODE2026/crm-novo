@@ -583,6 +583,7 @@ function serviceFactory({
     sendImage: vi.fn().mockResolvedValue({ providerMessageId: 'provider-image-id' }),
     sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'provider-document-id' }),
     sendAudio: vi.fn().mockResolvedValue({ providerMessageId: 'provider-audio-id' }),
+    sendVideo: vi.fn().mockResolvedValue({ providerMessageId: 'provider-video-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     markMessagesAsRead: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn().mockResolvedValue({
@@ -1445,6 +1446,84 @@ describe('WhatsAppService', () => {
     },
   );
 
+  it('sends MP4 conversation media as VIDEO with caption and provider id persistence', async () => {
+    const { service, provider, prisma, mediaStorage } = serviceFactory({
+      mediaStorageOverrides: {
+        storeOutboundMedia: vi.fn().mockResolvedValue({
+          storageKey: `${connection().id}/${conversationMessage().id}/dddddddd-dddd-4ddd-8ddd-dddddddddddd`,
+          mimeType: 'video/mp4',
+          sizeBytes: 13,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+    const videoBuffer = Buffer.from('mp4-bytes');
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: videoBuffer,
+        mimetype: 'video/mp4',
+        originalname: 'VIDEO.MP4',
+        size: 13,
+      },
+      caption: 'Veja isso',
+      requestId: 'video-request-id',
+    });
+
+    expect(provider.sendVideo).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      videoDataUrl: `data:video/mp4;base64,${videoBuffer.toString('base64')}`,
+      caption: 'Veja isso',
+      mimeType: 'video/mp4',
+      requestId: 'video-request-id',
+    });
+    const createCall = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(createCall.data).toMatchObject({
+      type: 'VIDEO',
+      text: 'Veja isso',
+      requestId: 'video-request-id',
+      mediaMimeType: 'video/mp4',
+      mediaFileName: 'VIDEO.MP4',
+      mediaSizeBytes: 13,
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'SENT',
+          providerMessageId: 'provider-video-id',
+          failedAt: null,
+        }),
+      }),
+    );
+    expect(mediaStorage.storeOutboundMedia).toHaveBeenCalledWith({
+      whatsAppConnectionId: connection().id,
+      messageId: conversationMessage().id,
+      buffer: videoBuffer,
+      mimeType: 'video/mp4',
+      sizeBytes: 13,
+    });
+  });
+
   it('converts browser WebM voice recording to OGG and sends it as PTT audio', async () => {
     const webmBuffer = Buffer.from('webm-opus-bytes');
     const oggBuffer = Buffer.from('ogg-opus-bytes');
@@ -2017,6 +2096,79 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('marks outbound VIDEO as FAILED when Kirago video send fails', async () => {
+    let storedMessage = conversationMessage();
+    const whatsAppMessage = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage(args.data ?? {});
+        return Promise.resolve(storedMessage);
+      }),
+      update: vi.fn((args: { data?: Record<string, unknown> }) => {
+        storedMessage = conversationMessage({ ...storedMessage, ...(args.data ?? {}) });
+        return Promise.resolve(storedMessage);
+      }),
+    };
+    const { service, provider, prisma, mediaStorage } = serviceFactory({
+      providerOverrides: {
+        sendVideo: vi.fn().mockRejectedValue(new Error('kirago video unavailable')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppMessage,
+      },
+    });
+
+    const result = await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('mp4-bytes'),
+        mimetype: 'video/mp4',
+        originalname: 'video.mp4',
+        size: 9,
+      },
+      caption: 'Falhar video',
+      requestId: 'failed-video-request-id',
+    });
+
+    expect(provider.sendVideo).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({
+        videoDataUrl: expect.stringMatching(/^data:video\/mp4;base64,/),
+        caption: 'Falhar video',
+        mimeType: 'video/mp4',
+        requestId: 'failed-video-request-id',
+      }),
+    );
+    expect(result).toMatchObject({ type: 'VIDEO', status: 'FAILED' });
+    expect(mediaStorage.storeOutboundMedia).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          rawMetadata: expect.not.objectContaining({ localMedia: expect.anything() }),
+        }),
+      }),
+    );
+  });
+
   it('keeps outbound media SENT when local storage fails after Kirago accepts the send', async () => {
     let storedMessage = conversationMessage();
     const whatsAppMessage = {
@@ -2422,6 +2574,18 @@ describe('WhatsAppService', () => {
     await expect(
       service.sendConversationMediaMessage(conversation().id, {
         file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'video/mp4',
+          originalname: 'grande.mp4',
+          size: WhatsAppService.conversationVideoMaxBytes + 1,
+        },
+        requestId: 'large-video-request-id',
+      }),
+    ).rejects.toThrow('Video excede o limite de 10 MB permitido para envio por WhatsApp.');
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
           buffer: Buffer.from('exe'),
           mimetype: 'application/octet-stream',
           originalname: 'setup.exe',
@@ -2514,9 +2678,59 @@ describe('WhatsAppService', () => {
         requestId: 'empty-file-request-id',
       }),
     ).rejects.toThrow('Arquivo vazio.');
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('fake-video'),
+          mimetype: 'image/jpeg',
+          originalname: 'video.mp4',
+          size: 10,
+        },
+        requestId: 'video-mismatch-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('fake-video'),
+          mimetype: 'application/octet-stream',
+          originalname: 'video.mp4',
+          size: 10,
+        },
+        requestId: 'video-octet-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('empty-video'),
+          mimetype: 'video/mp4',
+          originalname: 'video.mov',
+          size: 11,
+        },
+        requestId: 'video-extension-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('fake-video'),
+          mimetype: 'video/mp4',
+          originalname: 'arquivo.jpg',
+          size: 10,
+        },
+        requestId: 'video-jpg-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
     expect(provider.sendImage).not.toHaveBeenCalled();
     expect(provider.sendDocument).not.toHaveBeenCalled();
     expect(provider.sendAudio).not.toHaveBeenCalled();
+    expect(provider.sendVideo).not.toHaveBeenCalled();
   });
 
   it('does not resend conversation media when requestId already exists', async () => {
@@ -8794,6 +9008,19 @@ describe('WhatsAppService', () => {
       expectedPayload: {
         documentDataUrl: expect.stringMatching(/^data:application\/octet-stream;base64,/),
         fileName: 'arquivos.zip',
+      },
+    },
+    {
+      label: 'VIDEO FILE',
+      type: 'VIDEO',
+      mimeType: 'video/mp4',
+      fileName: 'video.mp4',
+      source: 'manual_outbound_media_send',
+      providerMethod: 'sendVideo',
+      expectedPayload: {
+        videoDataUrl: expect.stringMatching(/^data:video\/mp4;base64,/),
+        caption: null,
+        mimeType: 'video/mp4',
       },
     },
     {

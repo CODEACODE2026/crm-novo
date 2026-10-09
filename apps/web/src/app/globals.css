@@ -3478,6 +3478,7 @@ a {
 }
 
 .conversation-attachment-preview img,
+.conversation-attachment-video-preview,
 .conversation-attachment-file-icon {
   width: 42px;
   height: 42px;
@@ -3485,8 +3486,14 @@ a {
   background: var(--surface);
 }
 
-.conversation-attachment-preview img {
+.conversation-attachment-preview img,
+.conversation-attachment-video-preview {
   object-fit: cover;
+}
+
+.conversation-attachment-video-preview {
+  display: block;
+  background: #000;
 }
 
 .conversation-attachment-file-icon {
@@ -12630,6 +12637,7 @@ tbody tr:hover,
   }
 
   .conversation-attachment-preview img,
+  .conversation-attachment-video-preview,
   .conversation-attachment-file-icon {
     width: 34px;
     height: 34px;

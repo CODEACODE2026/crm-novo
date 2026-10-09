@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   advanceConversationListGeneration,
   classifyConversationIncomingFile,
+  conversationComposerActionMode,
+  conversationVideoAccept,
+  createConversationComposerMedia,
+  disposeConversationComposerMedia,
   isRenderableConversationMessage,
   mergeConversationById,
   mergeConversationLists,
@@ -84,6 +88,13 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(
       classifyConversationIncomingFile(new File(['audio'], 'audio.ogg', { type: 'audio/ogg' })),
     ).toEqual({ ok: true, kind: 'AUDIO' });
+    expect(
+      classifyConversationIncomingFile(new File(['video'], 'video.mp4', { type: 'video/mp4' })),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+    expect(
+      classifyConversationIncomingFile(new File(['video'], 'VIDEO.MP4', { type: 'video/mp4' })),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+    expect(conversationVideoAccept).toContain('video/mp4');
 
     expect(
       classifyConversationIncomingFile(
@@ -145,14 +156,32 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toEqual({ ok: true, kind: 'DOCUMENT' });
   });
 
-  it('rejects unsupported, mismatched, oversized and non-enabled video composer files before upload', () => {
-    expect(
-      classifyConversationIncomingFile(new File(['video'], 'video.mp4', { type: 'video/mp4' })),
-    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
-
+  it('rejects unsupported, mismatched and oversized composer files before upload', () => {
     expect(
       classifyConversationIncomingFile(new File(['audio'], 'audio.wav', { type: 'audio/wav' })),
     ).toEqual({ ok: false, error: 'Formato de áudio não suportado. Envie OGG, MP3 ou M4A.' });
+
+    expect(
+      classifyConversationIncomingFile(new File(['video'], 'video.webm', { type: 'video/webm' })),
+    ).toEqual({ ok: false, error: 'Formato de vídeo não suportado. Envie MP4.' });
+
+    expect(
+      classifyConversationIncomingFile(new File(['fake'], 'video.mp4', { type: 'image/jpeg' })),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File(['fake'], 'video.mp4', { type: 'application/octet-stream' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(new File(['fake'], 'arquivo.mov', { type: 'video/mp4' })),
+    ).toEqual({ ok: false, error: 'Formato de vídeo não suportado. Envie MP4.' });
+
+    expect(
+      classifyConversationIncomingFile(new File(['fake'], 'arquivo.jpg', { type: 'video/mp4' })),
+    ).toEqual({ ok: false, error: 'Formato de vídeo não suportado. Envie MP4.' });
 
     expect(
       classifyConversationIncomingFile(
@@ -204,6 +233,45 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       ok: false,
       error: 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
     });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'grande.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      error: 'Vídeo excede o limite de 10 MB permitido para envio por WhatsApp.',
+    });
+  });
+
+  it('uses central classifier and composer helpers for drag/drop and paste video files', () => {
+    const droppedVideo = new File(['video'], 'drop.mp4', { type: 'video/mp4' });
+    const pastedVideo = new File(['video'], 'paste.mp4', { type: 'video/mp4' });
+
+    expect(classifyConversationIncomingFile(droppedVideo)).toEqual({ ok: true, kind: 'VIDEO' });
+    expect(classifyConversationIncomingFile(pastedVideo)).toEqual({ ok: true, kind: 'VIDEO' });
+  });
+
+  it('creates video previews, keeps send action while attached and cleans object URLs', () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:video-preview');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const video = new File(['video'], 'preview.mp4', { type: 'video/mp4' });
+
+    const media = createConversationComposerMedia(video, 'VIDEO');
+
+    expect(media).toMatchObject({ file: video, kind: 'VIDEO', previewUrl: 'blob:video-preview' });
+    expect(createObjectURL).toHaveBeenCalledWith(video);
+    expect(conversationComposerActionMode('', media, false)).toBe('SEND');
+
+    disposeConversationComposerMedia(media);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:video-preview');
+
+    expect(conversationComposerActionMode('', null, false)).toBe('VOICE');
+
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
   });
 
   it('removes the sidebar unread badge immediately when read returns zero', () => {

@@ -79,6 +79,13 @@ describe('Kirago clients', () => {
       PTT: false,
       MimeType: 'audio/ogg',
     });
+    await client.sendVideo('instance-token', {
+      Phone: '5544999999999',
+      Video: 'data:video/mp4;base64,abc',
+      Caption: 'Video',
+      MimeType: 'video/mp4',
+      Id: 'video-request-id',
+    });
     await client.downloadImage('instance-token', {
       Url: 'https://mmg.whatsapp.net/image',
       MediaKey: 'media-key',
@@ -138,7 +145,19 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(6, '/chat/downloadimage', {
+    expect(request).toHaveBeenNthCalledWith(6, '/chat/send/video', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Video: 'data:video/mp4;base64,abc',
+        Caption: 'Video',
+        MimeType: 'video/mp4',
+        Id: 'video-request-id',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(7, '/chat/downloadimage', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {

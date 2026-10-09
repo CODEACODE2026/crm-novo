@@ -410,7 +410,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       'const defaultConversationMediaMaxBytes = 10 * 1024 * 1024;',
     );
     expect(conversationsSource).toContain(
-      'const videoConversationMediaMaxBytes = 25 * 1024 * 1024;',
+      'const videoConversationMediaMaxBytes = 50 * 1024 * 1024;',
     );
     expect(conversationsSource).toContain('classifyConversationIncomingFile(file)');
     expect(conversationsSource).toContain('file.size > maxBytes');

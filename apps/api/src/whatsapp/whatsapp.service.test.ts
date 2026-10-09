@@ -1525,13 +1525,13 @@ describe('WhatsAppService', () => {
   });
 
   it.each([
-    ['9 MB', 9 * 1024 * 1024],
-    ['10.5 MB', 10 * 1024 * 1024 + 512 * 1024],
-    ['20 MB', 20 * 1024 * 1024],
-    ['24.9 MB', 24 * 1024 * 1024 + 900 * 1024],
     ['25 MB', 25 * 1024 * 1024],
+    ['30 MB', 30 * 1024 * 1024],
+    ['40 MB', 40 * 1024 * 1024],
+    ['49.9 MB', 49 * 1024 * 1024 + 900 * 1024],
+    ['50 MB', 50 * 1024 * 1024],
   ] as const)(
-    'accepts %s MP4 conversation media under the 25 MB video limit',
+    'accepts %s MP4 conversation media under the 50 MB video limit',
     async (_label, size) => {
       const { service, provider } = serviceFactory({
         mediaStorageOverrides: {
@@ -2671,8 +2671,8 @@ describe('WhatsAppService', () => {
         file: {
           buffer: Buffer.alloc(1),
           mimetype: 'application/pdf',
-          originalname: 'grande.pdf',
-          size: WhatsAppService.conversationMediaMaxBytes + 1,
+          originalname: 'pdf-11mb.pdf',
+          size: 11 * 1024 * 1024,
         },
         requestId: 'large-request-id',
       }),
@@ -2755,8 +2755,8 @@ describe('WhatsAppService', () => {
         file: {
           buffer: Buffer.alloc(1),
           mimetype: 'image/jpeg',
-          originalname: 'grande.jpg',
-          size: WhatsAppService.conversationMediaMaxBytes + 1,
+          originalname: 'image-11mb.jpg',
+          size: 11 * 1024 * 1024,
         },
         requestId: 'large-image-request-id',
       }),
@@ -2767,8 +2767,8 @@ describe('WhatsAppService', () => {
         file: {
           buffer: Buffer.alloc(1),
           mimetype: 'audio/mpeg',
-          originalname: 'grande.mp3',
-          size: WhatsAppService.conversationMediaMaxBytes + 1,
+          originalname: 'audio-11mb.mp3',
+          size: 11 * 1024 * 1024,
         },
         requestId: 'large-audio-request-id',
       }),
@@ -2784,7 +2784,7 @@ describe('WhatsAppService', () => {
         },
         requestId: 'large-video-request-id',
       }),
-    ).rejects.toThrow('Vídeo excede o limite de 25 MB permitido para envio por WhatsApp.');
+    ).rejects.toThrow('Vídeo excede o limite de 50 MB permitido para envio por WhatsApp.');
 
     await expect(
       service.sendConversationMediaMessage(conversation().id, {
@@ -7339,7 +7339,7 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(result)).not.toContain('storageKey');
   });
 
-  it('downloads local outbound VIDEO at the 25 MB media limit', async () => {
+  it('downloads local outbound VIDEO at the 50 MB media limit', async () => {
     const localData = Buffer.alloc(WhatsAppService.conversationVideoMaxBytes, 'v');
     const { service, provider, mediaStorage } = serviceFactory({
       mediaStorageOverrides: {

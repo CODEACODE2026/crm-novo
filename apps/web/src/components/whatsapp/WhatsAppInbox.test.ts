@@ -227,38 +227,6 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
     expect(
       classifyConversationIncomingFile(
-        new File([new Uint8Array(9 * oneMb)], 'video-9mb.mp4', {
-          type: 'video/mp4',
-        }),
-      ),
-    ).toEqual({ ok: true, kind: 'VIDEO' });
-
-    expect(
-      classifyConversationIncomingFile(
-        new File([new Uint8Array(10 * oneMb + 512 * 1024)], 'video-10-5mb.mp4', {
-          type: 'video/mp4',
-        }),
-      ),
-    ).toEqual({ ok: true, kind: 'VIDEO' });
-
-    expect(
-      classifyConversationIncomingFile(
-        new File([new Uint8Array(20 * oneMb)], 'video-20mb.mp4', {
-          type: 'video/mp4',
-        }),
-      ),
-    ).toEqual({ ok: true, kind: 'VIDEO' });
-
-    expect(
-      classifyConversationIncomingFile(
-        new File([new Uint8Array(24 * oneMb + 900 * 1024)], 'video-24-9mb.mp4', {
-          type: 'video/mp4',
-        }),
-      ),
-    ).toEqual({ ok: true, kind: 'VIDEO' });
-
-    expect(
-      classifyConversationIncomingFile(
         new File([new Uint8Array(25 * oneMb)], 'video-25mb.mp4', {
           type: 'video/mp4',
         }),
@@ -267,13 +235,45 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
     expect(
       classifyConversationIncomingFile(
-        new File([new Uint8Array(25 * oneMb + 1)], 'grande.mp4', {
+        new File([new Uint8Array(30 * oneMb)], 'video-30mb.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(40 * oneMb)], 'video-40mb.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(49 * oneMb + 900 * 1024)], 'video-49-9mb.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(50 * oneMb)], 'video-50mb.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(50 * oneMb + 1)], 'grande.mp4', {
           type: 'video/mp4',
         }),
       ),
     ).toEqual({
       ok: false,
-      error: 'Vídeo excede o limite de 25 MB permitido para envio por WhatsApp.',
+      error: 'Vídeo excede o limite de 50 MB permitido para envio por WhatsApp.',
     });
 
     expect(
@@ -283,8 +283,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toEqual({ ok: true, kind: 'IMAGE' });
 
     for (const file of [
-      new File([new Uint8Array(10 * oneMb + 1)], 'grande.pdf', { type: 'application/pdf' }),
-      new File([new Uint8Array(10 * oneMb + 1)], 'grande.zip', { type: 'application/zip' }),
+      new File([new Uint8Array(11 * oneMb)], 'grande.pdf', { type: 'application/pdf' }),
+      new File([new Uint8Array(20 * oneMb)], 'grande.zip', { type: 'application/zip' }),
       new File([new Uint8Array(10 * oneMb + 1)], 'grande.rar', { type: 'application/vnd.rar' }),
       new File([new Uint8Array(10 * oneMb + 1)], 'grande.psd', {
         type: 'image/vnd.adobe.photoshop',
@@ -292,8 +292,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       new File([new Uint8Array(10 * oneMb + 1)], 'grande.apk', {
         type: 'application/vnd.android.package-archive',
       }),
-      new File([new Uint8Array(10 * oneMb + 1)], 'grande.jpg', { type: 'image/jpeg' }),
-      new File([new Uint8Array(10 * oneMb + 1)], 'grande.mp3', { type: 'audio/mpeg' }),
+      new File([new Uint8Array(11 * oneMb)], 'grande.jpg', { type: 'image/jpeg' }),
+      new File([new Uint8Array(11 * oneMb)], 'grande.mp3', { type: 'audio/mpeg' }),
     ]) {
       expect(classifyConversationIncomingFile(file)).toEqual({
         ok: false,

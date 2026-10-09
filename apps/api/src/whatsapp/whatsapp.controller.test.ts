@@ -84,7 +84,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       'limits: { fileSize: WhatsAppService.conversationUploadMaxBytes }',
     );
     expect(controllerSource).toContain(
-      'Arquivo excede o limite maximo de 25 MB permitido para upload.',
+      'Arquivo excede o limite maximo de 50 MB permitido para upload.',
     );
     expect(controllerSource).toContain(
       'limits: { fileSize: WhatsAppService.conversationVoiceMaxBytes }',
@@ -105,7 +105,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     expect(status).toHaveBeenCalledWith(413);
     expect(json).toHaveBeenCalledWith({
       statusCode: 413,
-      message: 'Arquivo excede o limite maximo de 25 MB permitido para upload.',
+      message: 'Arquivo excede o limite maximo de 50 MB permitido para upload.',
       error: 'Payload Too Large',
     });
   });

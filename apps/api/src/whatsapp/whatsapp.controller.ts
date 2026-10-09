@@ -52,7 +52,7 @@ export class WhatsAppMulterExceptionFilter implements ExceptionFilter {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'LIMIT_FILE_SIZE') {
       response.status(413).json({
         statusCode: 413,
-        message: 'Arquivo excede o limite maximo de 25 MB permitido para upload.',
+        message: 'Arquivo excede o limite maximo de 50 MB permitido para upload.',
         error: 'Payload Too Large',
       });
       return;

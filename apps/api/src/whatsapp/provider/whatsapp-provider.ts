@@ -29,6 +29,11 @@ export type SendTextInput = {
   phone: string;
   body: string;
   requestId: string;
+  reply?: {
+    stanzaId: string;
+    participant: string;
+    quotedText?: string | null;
+  };
 };
 
 export type SendTextResult = {

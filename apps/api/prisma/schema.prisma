@@ -701,6 +701,9 @@ model WhatsAppMessage {
   providerMessageId    String?
   requestId            String?
   messageDispatchId    String?                              @db.Uuid
+  replyToMessageId     String?                              @db.Uuid
+  replyToProviderMessageId String?
+  quotedText           String?
   direction            WhatsAppConversationMessageDirection
   type                 WhatsAppConversationMessageType
   text                 String?
@@ -719,11 +722,15 @@ model WhatsAppMessage {
   conversation         WhatsAppConversation                 @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   whatsAppConnection   WhatsAppConnection                   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
   messageDispatch      MessageDispatch?                     @relation(fields: [messageDispatchId], references: [id], onDelete: SetNull)
+  replyTo              WhatsAppMessage?                     @relation("WhatsAppMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies              WhatsAppMessage[]                    @relation("WhatsAppMessageReplies")
 
   @@unique([provider, whatsAppConnectionId, providerMessageId])
   @@unique([whatsAppConnectionId, requestId])
   @@index([conversationId, createdAt])
   @@index([messageDispatchId])
+  @@index([replyToMessageId])
+  @@index([provider, whatsAppConnectionId, replyToProviderMessageId], map: "whatsapp_messages_reply_provider_msg_idx")
   @@map("whatsapp_messages")
 }
 

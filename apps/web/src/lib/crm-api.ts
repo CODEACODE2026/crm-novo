@@ -735,6 +735,16 @@ export interface WhatsAppConversationMessage {
   failedAt: string | null;
   isFromMe: boolean;
   providerMessageId: string | null;
+  replyToMessageId: string | null;
+  replyToProviderMessageId: string | null;
+  quotedText: string | null;
+  replyTo: {
+    id: string;
+    direction: WhatsAppConversationMessageDirection;
+    type: WhatsAppConversationMessageType;
+    text: string | null;
+    mediaFileName: string | null;
+  } | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
   mediaSizeBytes: number | null;
@@ -2614,7 +2624,7 @@ export function createWhatsAppRealtimeEventSource() {
 
 export function sendWhatsAppConversationMessage(
   id: string,
-  payload: { body: string; requestId: string },
+  payload: { body: string; requestId: string; replyToMessageId?: string },
 ) {
   return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/messages`, {
     method: 'POST',

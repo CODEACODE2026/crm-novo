@@ -225,6 +225,25 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).not.toContain('function useWhatsAppRealtime({');
   });
 
+  it('supports WhatsApp reply selection, composer preview, quoted bubbles and quote navigation', () => {
+    expect(conversationsSource).toContain('const [replyTarget, setReplyTarget]');
+    expect(conversationsSource).toContain('replyToMessageId: replyToSend.id');
+    expect(conversationsSource).toContain('setReplyTarget(null)');
+    expect(conversationsSource).toContain('replyToOverride?: WhatsAppConversationMessage | null');
+    expect(conversationsSource).toContain('replyToOverride:');
+    expect(conversationsSource).toContain('function ConversationQuote');
+    expect(conversationsSource).toContain('Mensagem original não disponível');
+    expect(conversationsSource).toContain('getWhatsAppConversationMessagesAround');
+    expect(conversationsSource).toContain(
+      'onQuoteClick={(message) => void jumpToQuotedMessage(message)}',
+    );
+    expect(conversationsSource).toContain('label="Cancelar resposta"');
+    expect(conversationsSource).toContain("event.key === 'Escape' && replyTarget");
+    expect(stylesSource).toContain('.conversation-reply-action');
+    expect(stylesSource).toContain('.conversation-reply-preview');
+    expect(stylesSource).toContain('.conversation-quote');
+  });
+
   it('auto-marks visible active inbound realtime messages without flooding read requests', () => {
     expect(conversationsSource).toContain('shouldAutoReadRealtimeMessage');
     expect(conversationsSource).toContain("event.type === 'message.created'");
@@ -677,9 +696,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain("? { ...current, [selectedConversation.id]: '' }");
     expect(conversationsSource).toContain(': current,');
     expect(conversationsSource).toContain('retryWhatsAppConversationMessage(message.id)');
-    expect(conversationsSource).toContain(
-      "await sendCurrentMessage(message.text ?? '', { focusComposer: false })",
-    );
+    expect(conversationsSource).toContain("await sendCurrentMessage(message.text ?? '', {");
+    expect(conversationsSource).toContain('focusComposer: false');
+    expect(conversationsSource).toContain('replyToOverride:');
     expect(conversationsSource).toContain(
       'scrollConversationContainerToBottom(messagesScrollRef.current)',
     );

@@ -2759,6 +2759,7 @@ a {
 }
 
 .conversation-bubble {
+  position: relative;
   max-width: min(76%, 680px);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2780,6 +2781,71 @@ a {
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.conversation-reply-action {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
+}
+
+.conversation-bubble:hover .conversation-reply-action,
+.conversation-reply-action:focus-visible {
+  opacity: 1;
+}
+
+.conversation-reply-action:hover {
+  color: var(--accent);
+}
+
+.conversation-quote {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 0 7px;
+  border: 0;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: rgb(17 24 39 / 6%);
+  color: inherit;
+  cursor: pointer;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.conversation-quote.unavailable {
+  cursor: default;
+}
+
+.conversation-quote strong,
+.conversation-quote span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-quote strong {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.conversation-quote span {
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .conversation-media-meta {
@@ -3268,6 +3334,7 @@ a {
 }
 
 .conversation-attachment-preview,
+.conversation-reply-preview,
 .conversation-voice-preview,
 .conversation-voice-recorder {
   display: grid;
@@ -3280,6 +3347,11 @@ a {
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
   padding: 7px;
+}
+
+.conversation-reply-preview {
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  border-left: 3px solid var(--accent);
 }
 
 .conversation-voice-preview {
@@ -3338,12 +3410,15 @@ a {
 }
 
 .conversation-attachment-preview span,
+.conversation-reply-preview span,
 .conversation-voice-preview span {
   min-width: 0;
 }
 
 .conversation-attachment-preview strong,
 .conversation-attachment-preview small,
+.conversation-reply-preview strong,
+.conversation-reply-preview small,
 .conversation-voice-preview strong,
 .conversation-voice-preview small {
   display: block;
@@ -3353,11 +3428,13 @@ a {
 }
 
 .conversation-attachment-preview strong,
+.conversation-reply-preview strong,
 .conversation-voice-preview strong {
   font-size: 12px;
 }
 
 .conversation-attachment-preview small,
+.conversation-reply-preview small,
 .conversation-voice-preview small {
   color: var(--text-secondary);
   font-size: 11px;

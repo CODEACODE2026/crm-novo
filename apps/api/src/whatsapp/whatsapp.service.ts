@@ -51,6 +51,7 @@ import {
   WHATSAPP_PROVIDER,
   type DownloadMediaType,
   type DownloadMediaInput,
+  type SendTextInput,
   type WhatsAppProvider,
 } from './provider/whatsapp-provider';
 import { TokenEncryptionService } from './security/token-encryption.service';
@@ -78,6 +79,7 @@ import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 
 const providerEvents = ['Message', 'ReadReceipt'];
 const messagePreviewLimit = 80;
+const quotedTextLimit = 240;
 const pageSizeLimit = 100;
 const messageSearchMinLength = 2;
 const messageSearchSnippetRadius = 56;
@@ -90,6 +92,16 @@ const allowedDocumentMimeTypes = new Set([
 ]);
 const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 const allowedVoiceInputMimeTypes = new Set(['audio/webm', 'audio/webm;codecs=opus']);
+const whatsappMessageQuoteSelect = {
+  id: true,
+  direction: true,
+  type: true,
+  text: true,
+  mediaFileName: true,
+} satisfies Prisma.WhatsAppMessageSelect;
+const whatsappMessageReplyInclude = {
+  replyTo: { select: whatsappMessageQuoteSelect },
+} satisfies Prisma.WhatsAppMessageInclude;
 
 type ConversationMediaUploadFile = {
   buffer: Buffer;
@@ -261,7 +273,32 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
   };
 }>;
 
-type WhatsAppConversationMessageForPresenter = WhatsAppMessage;
+type WhatsAppConversationMessageQuote = Pick<
+  WhatsAppMessage,
+  'id' | 'direction' | 'type' | 'text' | 'mediaFileName'
+>;
+
+type WhatsAppConversationMessageForPresenter = WhatsAppMessage & {
+  replyTo?: WhatsAppConversationMessageQuote | null;
+};
+
+type WhatsAppReplyTargetMessage = Pick<
+  WhatsAppMessage,
+  | 'id'
+  | 'conversationId'
+  | 'whatsAppConnectionId'
+  | 'provider'
+  | 'providerMessageId'
+  | 'type'
+  | 'text'
+  | 'mediaFileName'
+>;
+
+type ResolvedWhatsAppReplyTarget = {
+  message: WhatsAppReplyTargetMessage;
+  providerReply: NonNullable<SendTextInput['reply']>;
+  quotedText: string;
+};
 
 @Injectable()
 export class WhatsAppService {
@@ -868,6 +905,7 @@ export class WhatsAppService {
             { createdAt: cursorCreatedAt, id: { lt: query.beforeId } },
           ],
         },
+        include: whatsappMessageReplyInclude,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
       });
@@ -891,6 +929,7 @@ export class WhatsAppService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.whatsAppMessage.findMany({
         where,
+        include: whatsappMessageReplyInclude,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * limit,
         take: limit,
@@ -926,6 +965,7 @@ export class WhatsAppService {
       this.prisma.whatsAppMessage.findMany({
         where,
         include: {
+          ...whatsappMessageReplyInclude,
           conversation: {
             include: {
               client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
@@ -956,6 +996,7 @@ export class WhatsAppService {
     const limit = Math.min(query.limit ?? 15, pageSizeLimit);
     const target = await this.prisma.whatsAppMessage.findFirst({
       where: { id: messageId, conversationId },
+      include: whatsappMessageReplyInclude,
     });
 
     if (!target) {
@@ -971,6 +1012,7 @@ export class WhatsAppService {
             { createdAt: target.createdAt, id: { lt: target.id } },
           ],
         },
+        include: whatsappMessageReplyInclude,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
       }),
@@ -982,6 +1024,7 @@ export class WhatsAppService {
             { createdAt: target.createdAt, id: { gt: target.id } },
           ],
         },
+        include: whatsappMessageReplyInclude,
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take: limit + 1,
       }),
@@ -1239,9 +1282,14 @@ export class WhatsAppService {
       return this.presentConversationMessage(existing);
     }
 
+    const replyTarget = await this.resolveConversationReplyTarget(
+      conversation,
+      dto.replyToMessageId,
+    );
     const pending = await this.createPendingConversationTextMessage(conversation, {
       body,
       requestId,
+      replyTarget,
     });
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
@@ -1253,6 +1301,7 @@ export class WhatsAppService {
           phone: conversation.phoneNormalized,
           body,
           requestId,
+          ...(replyTarget ? { reply: replyTarget.providerReply } : {}),
         }),
       );
     } catch (error) {
@@ -3074,6 +3123,7 @@ export class WhatsAppService {
         const messageType = this.toConversationMessageType(normalized.messageType);
         const metadata = this.buildConversationRawMetadata(normalized);
         const media = this.conversationMediaFields(normalized.mediaMetadata);
+        const reply = await this.resolveInboundReplyReference(tx, conversation, normalized);
         const message = await this.createConversationMessage(tx, {
           conversation,
           normalized,
@@ -3082,6 +3132,7 @@ export class WhatsAppService {
           sentAt,
           media,
           metadata,
+          reply,
         });
 
         if (message.duplicate) {
@@ -3176,6 +3227,11 @@ export class WhatsAppService {
       sentAt: Date;
       media: ReturnType<WhatsAppService['conversationMediaFields']>;
       metadata: Record<string, Prisma.InputJsonValue>;
+      reply: {
+        replyToMessageId: string | null;
+        replyToProviderMessageId: string | null;
+        quotedText: string | null;
+      };
     },
   ) {
     const message = await tx.whatsAppMessage.create({
@@ -3184,6 +3240,9 @@ export class WhatsAppService {
         providerMessageId: input.normalized.messageId,
         requestId: null,
         messageDispatchId: null,
+        replyToMessageId: input.reply.replyToMessageId,
+        replyToProviderMessageId: input.reply.replyToProviderMessageId,
+        quotedText: input.reply.quotedText,
         direction: input.direction,
         type: input.messageType,
         text: this.conversationMessageText(input.messageType, input.normalized.text),
@@ -3198,6 +3257,45 @@ export class WhatsAppService {
     });
 
     return { ...message, duplicate: false as const };
+  }
+
+  private async resolveInboundReplyReference(
+    tx: Prisma.TransactionClient,
+    conversation: WhatsAppConversation,
+    normalized: NormalizedWhatsAppMessage,
+  ) {
+    const providerMessageId = normalized.replyContext?.providerMessageId ?? null;
+
+    if (!providerMessageId) {
+      return {
+        replyToMessageId: null,
+        replyToProviderMessageId: null,
+        quotedText: null,
+      };
+    }
+
+    const original = await tx.whatsAppMessage.findFirst({
+      where: {
+        provider: normalized.provider,
+        whatsAppConnectionId: conversation.whatsAppConnectionId,
+        conversationId: conversation.id,
+        providerMessageId,
+      },
+      select: {
+        id: true,
+        type: true,
+        text: true,
+        mediaFileName: true,
+      },
+    });
+
+    return {
+      replyToMessageId: original?.id ?? null,
+      replyToProviderMessageId: providerMessageId,
+      quotedText:
+        this.quotedTextSnapshot(normalized.replyContext?.quotedText) ??
+        (original ? this.whatsAppQuotePreview(original) : null),
+    };
   }
 
   private async findExistingConversationMessage(
@@ -3712,9 +3810,64 @@ export class WhatsAppService {
     }
   }
 
+  private async resolveConversationReplyTarget(
+    conversation: WhatsAppConversation,
+    replyToMessageId: string | undefined,
+  ): Promise<ResolvedWhatsAppReplyTarget | null> {
+    if (!replyToMessageId) {
+      return null;
+    }
+
+    const message = await this.prisma.whatsAppMessage.findUnique({
+      where: { id: replyToMessageId },
+      select: {
+        id: true,
+        conversationId: true,
+        whatsAppConnectionId: true,
+        provider: true,
+        providerMessageId: true,
+        type: true,
+        text: true,
+        mediaFileName: true,
+      },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Mensagem citada nao encontrada.');
+    }
+
+    if (
+      message.conversationId !== conversation.id ||
+      message.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
+      message.provider !== conversation.provider
+    ) {
+      throw new BadRequestException('Mensagem citada nao pertence a esta conversa.');
+    }
+
+    if (!message.providerMessageId) {
+      throw new BadRequestException('Mensagem citada ainda nao possui id do WhatsApp.');
+    }
+
+    const quotedText = this.whatsAppQuotePreview(message);
+
+    return {
+      message,
+      providerReply: {
+        stanzaId: message.providerMessageId,
+        participant: this.privateConversationParticipantJid(conversation),
+        quotedText,
+      },
+      quotedText,
+    };
+  }
+
   private async createPendingConversationTextMessage(
     conversation: WhatsAppConversation,
-    input: { body: string; requestId: string },
+    input: {
+      body: string;
+      requestId: string;
+      replyTarget?: ResolvedWhatsAppReplyTarget | null;
+    },
   ) {
     try {
       return await this.prisma.whatsAppMessage.create({
@@ -3723,6 +3876,9 @@ export class WhatsAppService {
           providerMessageId: null,
           requestId: input.requestId,
           messageDispatchId: null,
+          replyToMessageId: input.replyTarget?.message.id ?? null,
+          replyToProviderMessageId: input.replyTarget?.message.providerMessageId ?? null,
+          quotedText: input.replyTarget?.quotedText ?? null,
           direction: 'OUTBOUND',
           type: 'TEXT',
           text: input.body,
@@ -3961,12 +4117,21 @@ export class WhatsAppService {
         });
       }
 
+      const reply = message.replyToProviderMessageId
+        ? {
+            stanzaId: message.replyToProviderMessageId,
+            participant: this.privateConversationParticipantJid(message.conversation),
+            quotedText: message.quotedText,
+          }
+        : undefined;
+
       return {
         send: (instanceToken, requestId) =>
           this.provider.sendText(instanceToken, {
             phone: message.conversation.phoneNormalized,
             body,
             requestId,
+            ...(reply ? { reply } : {}),
           }),
       };
     }
@@ -5012,6 +5177,18 @@ export class WhatsAppService {
       failedAt: message.failedAt,
       isFromMe: message.isFromMe,
       providerMessageId: message.providerMessageId,
+      replyToMessageId: message.replyToMessageId,
+      replyToProviderMessageId: message.replyToProviderMessageId,
+      quotedText: message.quotedText,
+      replyTo: message.replyTo
+        ? {
+            id: message.replyTo.id,
+            direction: message.replyTo.direction,
+            type: message.replyTo.type,
+            text: message.replyTo.text,
+            mediaFileName: message.replyTo.mediaFileName,
+          }
+        : null,
       mediaMimeType: message.mediaMimeType,
       mediaFileName: message.mediaFileName,
       mediaSizeBytes: message.mediaSizeBytes,
@@ -5342,6 +5519,34 @@ export class WhatsAppService {
     return '[Mensagem]';
   }
 
+  private whatsAppQuotePreview(message: Pick<WhatsAppMessage, 'type' | 'text' | 'mediaFileName'>) {
+    const text = message.text?.trim();
+
+    if (text) {
+      return text.slice(0, quotedTextLimit);
+    }
+
+    if (message.type === 'IMAGE') return 'Imagem';
+    if (message.type === 'AUDIO') return 'Áudio';
+    if (message.type === 'DOCUMENT') return message.mediaFileName?.trim() || 'Documento';
+    if (message.type === 'VIDEO') return 'Vídeo';
+    if (message.type === 'LOCATION') return 'Localização';
+
+    return 'Mensagem';
+  }
+
+  private quotedTextSnapshot(value: string | null | undefined) {
+    const text = value?.trim();
+
+    return text ? text.slice(0, quotedTextLimit) : null;
+  }
+
+  private privateConversationParticipantJid(
+    conversation: Pick<WhatsAppConversation, 'phoneNormalized'>,
+  ) {
+    return `${conversation.phoneNormalized}@s.whatsapp.net`;
+  }
+
   private conversationMediaFields(mediaMetadata: Record<string, unknown> | null) {
     return {
       mediaMimeType: this.optionalMetadataString(mediaMetadata, 'mimetype'),
@@ -5380,6 +5585,18 @@ export class WhatsAppService {
 
     if (normalized.mediaDownloadMetadata) {
       metadata.mediaDownload = normalized.mediaDownloadMetadata;
+    }
+
+    if (normalized.replyContext) {
+      metadata.replyContext = {
+        providerMessageId: normalized.replyContext.providerMessageId,
+        ...(normalized.replyContext.participant
+          ? { participant: normalized.replyContext.participant }
+          : {}),
+        ...(normalized.replyContext.quotedText
+          ? { quotedText: this.quotedTextSnapshot(normalized.replyContext.quotedText) }
+          : {}),
+      };
     }
 
     return metadata;

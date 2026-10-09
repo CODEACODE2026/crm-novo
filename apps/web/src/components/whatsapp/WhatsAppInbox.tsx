@@ -26,6 +26,7 @@ import {
   Pause,
   Play,
   Plus,
+  Reply,
   Search,
   Send,
   Square,
@@ -146,6 +147,7 @@ export function WhatsAppInbox({
   const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
+  const [replyTarget, setReplyTarget] = useState<WhatsAppConversationMessage | null>(null);
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [linkingClient, setLinkingClient] = useState(false);
@@ -1172,6 +1174,7 @@ export function WhatsAppInbox({
     setTargetMessageId(null);
     setTargetSearchTerm('');
     setSendError('');
+    setReplyTarget(null);
     clearComposerMedia();
     setNewMessageNotice(false);
     setMobileMode('chat');
@@ -1217,6 +1220,7 @@ export function WhatsAppInbox({
     setMessagesError('');
     setOlderMessagesError('');
     setRetryErrors({});
+    setReplyTarget(null);
     setSelectedConversation((current) =>
       current?.id === conversationId
         ? current
@@ -1291,15 +1295,66 @@ export function WhatsAppInbox({
     }
   }
 
+  async function jumpToQuotedMessage(message: WhatsAppConversationMessage) {
+    if (!selectedConversation || !message.replyToMessageId) return;
+
+    const loaded = messagesRef.current.some((item) => item.id === message.replyToMessageId);
+    if (loaded) {
+      setTargetSearchTerm('');
+      setTargetMessageId(message.replyToMessageId);
+      return;
+    }
+
+    setMessagesLoading(true);
+    setMessagesError('');
+
+    try {
+      const context = await getWhatsAppConversationMessagesAround(
+        selectedConversation.id,
+        message.replyToMessageId,
+        { limit: Math.floor(conversationMessagesPageSize / 2) },
+      );
+      const mergedMessages = mergeConversationMessages([], context.items);
+      setMessages(mergedMessages);
+      messagesRef.current = mergedMessages;
+      olderMessagesLoadedRef.current = true;
+      setOlderMessagesCursor(context.pagination.nextCursor ?? null);
+      setHasOlderMessages(Boolean(context.pagination.hasOlder));
+      setHasNewerMessages(Boolean(context.pagination.hasNewer));
+      setTargetSearchTerm('');
+      setTargetMessageId(context.targetId);
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Mensagem original não disponível.'));
+    } finally {
+      setMessagesLoading(false);
+    }
+  }
+
+  function selectReplyTarget(message: WhatsAppConversationMessage) {
+    setReplyTarget(message);
+    setSendError('');
+    scheduleComposerFocus(() => {
+      composerRef.current?.focus();
+    });
+  }
+
   async function sendCurrentMessage(
     bodyOverride?: string,
-    { focusComposer = true }: { focusComposer?: boolean } = {},
+    {
+      focusComposer = true,
+      replyToOverride = null,
+    }: { focusComposer?: boolean; replyToOverride?: WhatsAppConversationMessage | null } = {},
   ) {
     if (!selectedConversation || sending || sendingRef.current) return;
 
     const body = (bodyOverride ?? selectedDraft).trim();
     const mediaToSend = bodyOverride ? null : selectedMedia;
+    const replyToSend = bodyOverride ? replyToOverride : replyTarget;
     if (!body && !mediaToSend) return;
+    if (replyToSend && mediaToSend) {
+      setSendError('Resposta com anexo ainda não está disponível. Envie uma resposta em texto.');
+      return;
+    }
 
     sendingRef.current = true;
     setSending(true);
@@ -1328,6 +1383,7 @@ export function WhatsAppInbox({
         : await sendWhatsAppConversationMessage(selectedConversation.id, {
             body,
             requestId,
+            ...(replyToSend ? { replyToMessageId: replyToSend.id } : {}),
           });
       pendingSendScrollConversationRef.current = selectedConversation.id;
       setMessages((current) => mergeConversationMessages(current, [message]));
@@ -1351,6 +1407,7 @@ export function WhatsAppInbox({
             ? { ...current, [selectedConversation.id]: '' }
             : current,
         );
+        setReplyTarget(null);
       }
       await loadConversations({ preserveLoaded: true, silent: true });
     } catch (err) {
@@ -1371,7 +1428,19 @@ export function WhatsAppInbox({
         retryAction: mediaToSend ? 'SELECT_FILE_AGAIN' : 'RETRY',
         messageDispatchId: null,
         providerMessageId: null,
+        quotedText: replyToSend ? conversationMessageQuotePreview(replyToSend) : null,
         readAt: null,
+        replyTo: replyToSend
+          ? {
+              id: replyToSend.id,
+              direction: replyToSend.direction,
+              type: replyToSend.type,
+              text: replyToSend.text,
+              mediaFileName: replyToSend.mediaFileName,
+            }
+          : null,
+        replyToMessageId: replyToSend?.id ?? null,
+        replyToProviderMessageId: replyToSend?.providerMessageId ?? null,
         sentAt: null,
         status: 'FAILED',
         text: body,
@@ -1434,7 +1503,20 @@ export function WhatsAppInbox({
     if (!selectedConversation || message.retryAction !== 'RETRY') return;
 
     if (message.id.startsWith('local-failed-') && message.type === 'TEXT') {
-      await sendCurrentMessage(message.text ?? '', { focusComposer: false });
+      await sendCurrentMessage(message.text ?? '', {
+        focusComposer: false,
+        replyToOverride:
+          message.replyTo && message.replyToMessageId
+            ? {
+                ...message,
+                id: message.replyToMessageId,
+                direction: message.replyTo.direction,
+                type: message.replyTo.type,
+                text: message.replyTo.text,
+                mediaFileName: message.replyTo.mediaFileName,
+              }
+            : null,
+      });
       return;
     }
 
@@ -1863,6 +1945,8 @@ export function WhatsAppInbox({
                 }}
                 onLoadLatest={() => void loadLatestMessages()}
                 onLoadOlder={() => void loadOlderMessages()}
+                onQuoteClick={(message) => void jumpToQuotedMessage(message)}
+                onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
               />
 
@@ -1871,6 +1955,7 @@ export function WhatsAppInbox({
                 conversationId={selectedConversation.id}
                 draft={selectedDraft}
                 error={sendError}
+                replyTarget={replyTarget}
                 selectedMedia={selectedMedia}
                 sending={sending}
                 onChange={(value) => {
@@ -1880,6 +1965,7 @@ export function WhatsAppInbox({
                   }));
                 }}
                 onRemoveMedia={clearComposerMedia}
+                onCancelReply={() => setReplyTarget(null)}
                 onSelectMedia={selectComposerMedia}
                 onSend={() => void sendCurrentMessage()}
                 onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
@@ -2346,6 +2432,8 @@ function ConversationMessages({
   onJumpToBottom,
   onLoadLatest,
   onLoadOlder,
+  onQuoteClick,
+  onReply,
   onRetry,
   scrollRef,
   showNewMessageNotice,
@@ -2365,6 +2453,8 @@ function ConversationMessages({
   onJumpToBottom: () => void;
   onLoadLatest: () => void;
   onLoadOlder: () => void;
+  onQuoteClick: (message: WhatsAppConversationMessage) => void;
+  onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   showNewMessageNotice: boolean;
@@ -2420,6 +2510,8 @@ function ConversationMessages({
                     retryError={retryErrors[message.id] ?? ''}
                     retrying={retryingMessageIds.has(message.id)}
                     searchTerm={targetMessageId === message.id ? targetSearchTerm : ''}
+                    onQuoteClick={onQuoteClick}
+                    onReply={onReply}
                     onRetry={onRetry}
                   />
                 </Fragment>
@@ -2478,6 +2570,8 @@ function ConversationBubble({
   retryError,
   retrying,
   searchTerm,
+  onQuoteClick,
+  onReply,
   onRetry,
 }: {
   conversationId: string;
@@ -2486,6 +2580,8 @@ function ConversationBubble({
   retryError: string;
   retrying: boolean;
   searchTerm: string;
+  onQuoteClick: (message: WhatsAppConversationMessage) => void;
+  onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
@@ -2511,6 +2607,16 @@ function ConversationBubble({
           hasAvailableImage ? 'has-image-media' : ''
         }`}
       >
+        <button
+          className="conversation-reply-action"
+          type="button"
+          title="Responder"
+          aria-label="Responder mensagem"
+          onClick={() => onReply(message)}
+        >
+          <Reply aria-hidden="true" size={14} />
+        </button>
+        <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
         {text ? <p>{renderHighlightedSearchText(text, searchTerm)}</p> : null}
         <ConversationMediaContent conversationId={conversationId} message={message} />
         {caption ? <span className="conversation-caption">{caption}</span> : null}
@@ -2540,6 +2646,38 @@ function ConversationBubble({
         ) : null}
       </div>
     </article>
+  );
+}
+
+function ConversationQuote({
+  message,
+  onClick,
+}: {
+  message: WhatsAppConversationMessage;
+  onClick: () => void;
+}) {
+  const preview = message.quotedText || conversationReplyFallbackPreview(message);
+
+  if (!preview) {
+    return null;
+  }
+
+  const available = Boolean(message.replyToMessageId);
+
+  return (
+    <button
+      className={`conversation-quote ${available ? '' : 'unavailable'}`}
+      type="button"
+      title={available ? 'Ir para mensagem original' : 'Mensagem original não disponível'}
+      onClick={() => {
+        if (available) onClick();
+      }}
+    >
+      <strong>
+        {message.replyTo ? conversationReplyAuthorLabel(message.replyTo) : 'Mensagem citada'}
+      </strong>
+      <span>{preview}</span>
+    </button>
   );
 }
 
@@ -3172,9 +3310,11 @@ function ConversationComposer({
   conversationId,
   draft,
   error,
+  replyTarget,
   selectedMedia,
   sending,
   onChange,
+  onCancelReply,
   onRemoveMedia,
   onSelectMedia,
   onSend,
@@ -3184,9 +3324,11 @@ function ConversationComposer({
   conversationId: string;
   draft: string;
   error: string;
+  replyTarget: WhatsAppConversationMessage | null;
   selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
   onChange: (value: string) => void;
+  onCancelReply: () => void;
   onRemoveMedia: () => void;
   onSelectMedia: (kind: ConversationComposerMedia['kind'], file: File) => void;
   onSend: () => void;
@@ -3448,6 +3590,18 @@ function ConversationComposer({
           {voiceError}
         </div>
       ) : null}
+      {replyTarget ? (
+        <div className="conversation-reply-preview">
+          <Reply aria-hidden="true" size={16} />
+          <span>
+            <strong>
+              Respondendo a {replyTarget.direction === 'OUTBOUND' ? 'você' : 'contato'}
+            </strong>
+            <small>{conversationMessageQuotePreview(replyTarget)}</small>
+          </span>
+          <IconButton icon={X} label="Cancelar resposta" onClick={onCancelReply} />
+        </div>
+      ) : null}
       {recording ? (
         <div className="conversation-voice-recorder" role="status">
           <span className="conversation-recording-dot" aria-hidden="true" />
@@ -3593,6 +3747,11 @@ function ConversationComposer({
           value={draft}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === 'Escape' && replyTarget) {
+              event.preventDefault();
+              onCancelReply();
+              return;
+            }
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               onSend();
@@ -4483,6 +4642,36 @@ function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
 function conversationMessageCaption(message: WhatsAppConversationMessage) {
   if (message.type === 'TEXT') return '';
   return message.text?.trim() || '';
+}
+
+function conversationMessageQuotePreview(message: WhatsAppConversationMessage) {
+  const text = message.text?.trim();
+  if (text) return text.slice(0, 160);
+  if (message.type === 'IMAGE') return 'Imagem';
+  if (message.type === 'AUDIO') return 'Áudio';
+  if (message.type === 'DOCUMENT') return message.mediaFileName || 'Documento';
+  if (message.type === 'VIDEO') return 'Vídeo';
+  if (message.type === 'LOCATION') return 'Localização';
+  return 'Mensagem';
+}
+
+function conversationReplyFallbackPreview(message: WhatsAppConversationMessage) {
+  if (message.replyTo) {
+    return conversationMessageQuotePreview({
+      ...message,
+      text: message.replyTo.text,
+      type: message.replyTo.type,
+      mediaFileName: message.replyTo.mediaFileName,
+    });
+  }
+
+  return message.replyToProviderMessageId ? 'Mensagem' : '';
+}
+
+function conversationReplyAuthorLabel(
+  message: NonNullable<WhatsAppConversationMessage['replyTo']>,
+) {
+  return message.direction === 'OUTBOUND' ? 'Você' : 'Contato';
 }
 
 function isConversationScrollNearBottom(element: HTMLDivElement | null) {

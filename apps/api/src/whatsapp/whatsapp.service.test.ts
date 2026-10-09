@@ -107,6 +107,8 @@ function normalizedInbound(text: string, overrides: Record<string, unknown> = {}
     receivedAt: now,
     isGroup: false,
     mediaMetadata: null,
+    mediaDownloadMetadata: null,
+    replyContext: null,
     ...overrides,
   };
 }
@@ -238,6 +240,10 @@ function conversationMessage(overrides: Record<string, unknown> = {}) {
     providerMessageId: 'msg-1',
     requestId: null,
     messageDispatchId: null,
+    replyToMessageId: null,
+    replyToProviderMessageId: null,
+    quotedText: null,
+    replyTo: null,
     direction: 'INBOUND',
     type: 'TEXT',
     text: 'Ola',
@@ -4438,6 +4444,86 @@ describe('WhatsAppService', () => {
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
   });
 
+  it('correlates inbound replies by provider stanza id and preserves quoted snapshots', async () => {
+    const original = conversationMessage({
+      id: '88888888-8888-4888-8888-888888888888',
+      conversationId: conversation().id,
+      whatsAppConnectionId: connection().id,
+      providerMessageId: 'original-provider-id',
+      text: 'Texto original',
+    });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(conversationMessage()),
+          findFirst: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(original),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn((args: { data: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage(args.data)),
+          ),
+          update: vi.fn().mockResolvedValue(conversationMessage()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Resposta inbound', {
+        messageId: 'reply-provider-id',
+        replyContext: {
+          providerMessageId: 'original-provider-id',
+          participant: '5544999999999@s.whatsapp.net',
+          quotedText: 'Texto original',
+        },
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          replyToMessageId: original.id,
+          replyToProviderMessageId: 'original-provider-id',
+          quotedText: 'Texto original',
+          rawMetadata: expect.objectContaining({
+            replyContext: {
+              providerMessageId: 'original-provider-id',
+              participant: '5544999999999@s.whatsapp.net',
+              quotedText: 'Texto original',
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('keeps inbound replies when the quoted original is not stored locally', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Resposta inbound', {
+        messageId: 'reply-provider-id',
+        replyContext: {
+          providerMessageId: 'missing-provider-id',
+          participant: '5544999999999@s.whatsapp.net',
+          quotedText: 'Mensagem externa',
+        },
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          replyToMessageId: null,
+          replyToProviderMessageId: 'missing-provider-id',
+          quotedText: 'Mensagem externa',
+        }),
+      }),
+    );
+  });
+
   it('ignores inbound Message webhooks without renderable content', async () => {
     const { service, prisma, normalizer } = serviceFactory();
     normalizer.normalize.mockReturnValue(
@@ -6358,9 +6444,11 @@ describe('WhatsAppService', () => {
       newer.id,
     ]);
     expect(result.pagination).toMatchObject({ hasOlder: false, hasNewer: false });
-    expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith({
-      where: { id: target.id, conversationId: conversation().id },
-    });
+    expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: target.id, conversationId: conversation().id },
+      }),
+    );
     const olderQuery = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
       where?: Record<string, unknown>;
       orderBy?: unknown;
@@ -7163,7 +7251,7 @@ describe('WhatsAppService', () => {
         { providerMessageId: 'provider-a' },
       ])
       .mockResolvedValueOnce([{ providerMessageId: 'provider-c' }, { providerMessageId: null }]);
-    const { service, prisma, provider } = serviceFactory({
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique,
@@ -7198,8 +7286,8 @@ describe('WhatsAppService', () => {
       'instance-token',
       expect.objectContaining({ messageIds: expect.arrayContaining(['provider-c']) }),
     );
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledTimes(1);
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 1 } } }),
     );
   });
@@ -7218,7 +7306,7 @@ describe('WhatsAppService', () => {
         { providerMessageId: 'provider-a' },
       ])
       .mockResolvedValueOnce([{ providerMessageId: null }]);
-    const { service, prisma, provider } = serviceFactory({
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique,
@@ -7249,14 +7337,15 @@ describe('WhatsAppService', () => {
       messageIds: ['provider-a', 'provider-b'],
       phone: defaultKiragoReadReceiptPhone,
     });
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledTimes(1);
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 2 } } }),
     );
   });
 
   it('does not send newer ids when the oldest unread message is missing provider id', async () => {
-    const { service, prisma, provider } = serviceFactory({
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 0 }));
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
@@ -7264,7 +7353,7 @@ describe('WhatsAppService', () => {
           count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+          update,
         },
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(null),
@@ -7285,7 +7374,7 @@ describe('WhatsAppService', () => {
       unreadCount: 3,
     });
     expect(provider.markMessagesAsRead).not.toHaveBeenCalled();
-    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('does not reach older inbound messages outside the unread window', async () => {
@@ -7296,7 +7385,8 @@ describe('WhatsAppService', () => {
         { providerMessageId: 'provider-unread-middle' },
         { providerMessageId: 'provider-unread-oldest' },
       ]);
-    const { service, prisma, provider } = serviceFactory({
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 0 }));
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
@@ -7304,7 +7394,7 @@ describe('WhatsAppService', () => {
           count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+          update,
         },
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(null),
@@ -7335,7 +7425,7 @@ describe('WhatsAppService', () => {
       'instance-token',
       expect.objectContaining({ messageIds: expect.arrayContaining(['provider-read-497']) }),
     );
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 3 } } }),
     );
   });
@@ -7344,7 +7434,8 @@ describe('WhatsAppService', () => {
     const messages = Array.from({ length: 150 }, (_, index) => ({
       providerMessageId: `provider-${150 - index}`,
     }));
-    const { service, prisma, provider } = serviceFactory({
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 0 }));
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 150 })),
@@ -7352,7 +7443,7 @@ describe('WhatsAppService', () => {
           count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+          update,
         },
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(null),
@@ -7374,7 +7465,7 @@ describe('WhatsAppService', () => {
       messageIds: Array.from({ length: 50 }, (_, index) => `provider-${index + 101}`),
       phone: defaultKiragoReadReceiptPhone,
     });
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 150 } } }),
     );
   });
@@ -7466,7 +7557,8 @@ describe('WhatsAppService', () => {
   });
 
   it('keeps a new inbound message unread when it arrives during provider markread', async () => {
-    const { service, prisma, provider } = serviceFactory({
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 1 }));
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(conversation({ unreadCount: 3 })),
@@ -7474,7 +7566,7 @@ describe('WhatsAppService', () => {
           count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 1 })),
+          update,
         },
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(null),
@@ -7498,7 +7590,7 @@ describe('WhatsAppService', () => {
       messageIds: ['provider-a', 'provider-b', 'provider-c'],
       phone: defaultKiragoReadReceiptPhone,
     });
-    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { unreadCount: { decrement: 3 } } }),
     );
   });
@@ -7534,7 +7626,8 @@ describe('WhatsAppService', () => {
 
   it('keeps unread count when markread provider fails or no provider ids exist', async () => {
     const unreadConversation = conversation({ unreadCount: 2 });
-    const { service, prisma, provider } = serviceFactory({
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 0 }));
+    const { service, provider } = serviceFactory({
       providerOverrides: {
         markMessagesAsRead: vi.fn().mockRejectedValue(new Error('provider unavailable')),
       },
@@ -7545,7 +7638,7 @@ describe('WhatsAppService', () => {
           count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+          update,
         },
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(null),
@@ -7560,11 +7653,12 @@ describe('WhatsAppService', () => {
       unreadCount: 2,
     });
     expect(provider.markMessagesAsRead).toHaveBeenCalledTimes(1);
-    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('does not call markread provider when unread is zero or provider ids are missing', async () => {
-    const { service, prisma, provider } = serviceFactory({
+    const update = vi.fn().mockResolvedValue(conversation({ unreadCount: 0 }));
+    const { service, provider } = serviceFactory({
       prismaOverrides: {
         whatsAppConversation: {
           findUnique: vi
@@ -7575,7 +7669,7 @@ describe('WhatsAppService', () => {
           count: vi.fn().mockResolvedValue(1),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation({ unreadCount: 0 })),
+          update,
         },
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(null),
@@ -7593,7 +7687,7 @@ describe('WhatsAppService', () => {
       unreadCount: 2,
     });
     expect(provider.markMessagesAsRead).not.toHaveBeenCalled();
-    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('resolves conversations idempotently without clearing unread count', async () => {
@@ -7959,6 +8053,146 @@ describe('WhatsAppService', () => {
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversationRecord.id);
   });
 
+  it('sends a manual TEXT reply using providerMessageId as StanzaId and persists quote fields', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const conversationRecord = conversation({
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+    });
+    const original = conversationMessage({
+      id: '88888888-8888-4888-8888-888888888888',
+      conversationId: conversationRecord.id,
+      whatsAppConnectionId: activeConnection.id,
+      providerMessageId: 'original-provider-id',
+      direction: 'INBOUND',
+      text: 'Mensagem original',
+    });
+    const createMessage = vi.fn((args: { data: Record<string, unknown> }) =>
+      Promise.resolve(conversationMessage(args.data)),
+    );
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversationRecord),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversationRecord),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(original),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: createMessage,
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(
+              conversationMessage({ ...args.data, ...createMessage.mock.calls[0]?.[0]?.data }),
+            ),
+          ),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationTextMessage(conversationRecord.id, {
+      body: 'Resposta',
+      requestId: 'reply-request-id',
+      replyToMessageId: original.id,
+    });
+
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: conversationRecord.phoneNormalized,
+      body: 'Resposta',
+      requestId: 'reply-request-id',
+      reply: {
+        stanzaId: 'original-provider-id',
+        participant: '5544999999999@s.whatsapp.net',
+        quotedText: 'Mensagem original',
+      },
+    });
+    expect(createMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          replyToMessageId: original.id,
+          replyToProviderMessageId: 'original-provider-id',
+          quotedText: 'Mensagem original',
+        }),
+      }),
+    );
+  });
+
+  it('rejects manual replies to another conversation or messages without providerMessageId', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const conversationRecord = conversation({
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+    });
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversationRecord),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversationRecord),
+        },
+        whatsAppMessage: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(
+              conversationMessage({
+                id: '88888888-8888-4888-8888-888888888888',
+                conversationId: '77777777-7777-4777-8777-777777777777',
+                whatsAppConnectionId: activeConnection.id,
+              }),
+            )
+            .mockResolvedValueOnce(
+              conversationMessage({
+                id: '88888888-8888-4888-8888-888888888888',
+                conversationId: conversationRecord.id,
+                whatsAppConnectionId: activeConnection.id,
+                providerMessageId: null,
+              }),
+            ),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(conversationMessage()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationTextMessage(conversationRecord.id, {
+        body: 'Resposta',
+        requestId: 'reply-request-id-1',
+        replyToMessageId: '88888888-8888-4888-8888-888888888888',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.sendConversationTextMessage(conversationRecord.id, {
+        body: 'Resposta',
+        requestId: 'reply-request-id-2',
+        replyToMessageId: '88888888-8888-4888-8888-888888888888',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
   it('returns an existing manual conversation message for repeated requestId without resending', async () => {
     const activeConnection = connection({
       status: 'CONNECTED',
@@ -8188,6 +8422,73 @@ describe('WhatsAppService', () => {
     expect(result).toMatchObject({ id: failed.id, status: 'SENT', retryAction: null });
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(conversation().id, failed.id);
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
+  });
+
+  it('preserves reply context when retrying a FAILED outbound TEXT reply', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const conversationRecord = conversation();
+    const failed = conversationMessage({
+      id: '99999999-9999-4999-8999-999999999999',
+      conversationId: conversationRecord.id,
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      conversation: conversationRecord,
+      requestId: 'old-request-id',
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Mensagem reply falhou',
+      status: 'FAILED',
+      providerMessageId: null,
+      replyToMessageId: '88888888-8888-4888-8888-888888888888',
+      replyToProviderMessageId: 'original-provider-id',
+      quotedText: 'Mensagem original',
+      rawMetadata: { source: 'manual_outbound_send' },
+    });
+    const updateMessage = vi.fn((args: { data?: Record<string, unknown> }) =>
+      Promise.resolve(conversationMessage({ ...failed, ...args.data })),
+    );
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(failed),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: updateMessage,
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversationRecord),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversationRecord),
+        },
+      },
+    });
+
+    await service.retryConversationMessage(failed.id);
+    const pendingUpdate = (prisma.whatsAppMessage.updateMany as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      data?: { requestId?: string };
+    };
+
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: conversationRecord.phoneNormalized,
+      body: 'Mensagem reply falhou',
+      requestId: pendingUpdate.data?.requestId,
+      reply: {
+        stanzaId: 'original-provider-id',
+        participant: '5544999999999@s.whatsapp.net',
+        quotedText: 'Mensagem original',
+      },
+    });
   });
 
   it('retries FAILED outbound IMAGE from private local media without exposing storage key', async () => {

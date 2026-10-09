@@ -82,6 +82,37 @@ describe('KiragoWebhookNormalizer', () => {
     });
   });
 
+  it('normalizes inbound reply context from extended text contextInfo', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'reply-provider-id', Type: 'text' },
+          Message: {
+            extendedTextMessage: {
+              text: 'Resposta ao orçamento',
+              contextInfo: {
+                stanzaId: 'original-provider-id',
+                participant: '5544999999999@s.whatsapp.net',
+                quotedMessage: { conversation: 'Mensagem original' },
+              },
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageId: 'reply-provider-id',
+      text: 'Resposta ao orçamento',
+      replyContext: {
+        providerMessageId: 'original-provider-id',
+        participant: '5544999999999@s.whatsapp.net',
+        quotedText: 'Mensagem original',
+      },
+    });
+  });
+
   it.each([
     [{ extendedTextMessage: { text: 'Texto estendido' } }, 'text', 'Texto estendido'],
     [

@@ -27,6 +27,12 @@ export type NormalizedMediaDownloadMetadata = {
   FileLength: number;
 };
 
+export type NormalizedReplyContext = {
+  providerMessageId: string;
+  participant: string | null;
+  quotedText: string | null;
+};
+
 export type NormalizedWhatsAppMessage = {
   kind: 'MESSAGE';
   provider: 'KIRAGO';
@@ -43,6 +49,7 @@ export type NormalizedWhatsAppMessage = {
   isGroup: boolean;
   mediaMetadata: Record<string, unknown> | null;
   mediaDownloadMetadata: NormalizedMediaDownloadMetadata | null;
+  replyContext: NormalizedReplyContext | null;
 };
 
 export type NormalizedWhatsAppReceipt = {
@@ -122,6 +129,7 @@ export class KiragoWebhookNormalizer {
       isGroup,
       mediaMetadata: this.extractMediaMetadata(message, messageType),
       mediaDownloadMetadata: this.extractMediaDownloadMetadata(message, messageType),
+      replyContext: this.extractReplyContext(message, messageType),
     };
   }
 
@@ -426,6 +434,92 @@ export class KiragoWebhookNormalizer {
       FileSHA256,
       FileLength,
     };
+  }
+
+  private extractReplyContext(
+    message: RecordValue | null,
+    messageType: NormalizedMessageType,
+  ): NormalizedReplyContext | null {
+    const context = this.extractContextInfo(message, messageType);
+
+    if (!context) {
+      return null;
+    }
+
+    const providerMessageId = stringOrNull(
+      firstOwnValue(context, ['stanzaId', 'StanzaId', 'stanzaID', 'StanzaID']),
+    );
+
+    if (!providerMessageId) {
+      return null;
+    }
+
+    return {
+      providerMessageId,
+      participant: stringOrNull(firstOwnValue(context, ['participant', 'Participant'])),
+      quotedText:
+        stringOrNull(firstOwnValue(context, ['quotedText', 'QuotedText'])) ??
+        this.extractQuotedText(
+          asRecord(firstOwnValue(context, ['quotedMessage', 'QuotedMessage'])),
+        ),
+    };
+  }
+
+  private extractContextInfo(
+    message: RecordValue | null,
+    messageType: NormalizedMessageType,
+  ): RecordValue | null {
+    const records: Array<RecordValue | null> = [message];
+    const key = this.mediaKey(messageType);
+
+    if (messageType === 'text') {
+      records.push(asRecord(message?.extendedTextMessage));
+    }
+
+    if (key) {
+      records.push(asRecord(message?.[key]));
+    }
+
+    for (const record of records) {
+      const context = asRecord(record?.contextInfo) ?? asRecord(record?.ContextInfo);
+
+      if (context) {
+        return context;
+      }
+    }
+
+    return null;
+  }
+
+  private extractQuotedText(quotedMessage: RecordValue | null) {
+    if (!quotedMessage) {
+      return null;
+    }
+
+    const candidates = [
+      quotedMessage.conversation,
+      asRecord(quotedMessage.extendedTextMessage)?.text,
+      asRecord(quotedMessage.imageMessage)?.caption,
+      asRecord(quotedMessage.videoMessage)?.caption,
+      asRecord(quotedMessage.documentMessage)?.caption,
+      asRecord(quotedMessage.documentMessage)?.fileName,
+    ];
+
+    for (const candidate of candidates) {
+      const text = stringOrNull(candidate);
+
+      if (text) {
+        return text;
+      }
+    }
+
+    if (quotedMessage.imageMessage) return 'Imagem';
+    if (quotedMessage.audioMessage) return 'Áudio';
+    if (quotedMessage.videoMessage) return 'Vídeo';
+    if (quotedMessage.documentMessage) return 'Documento';
+    if (quotedMessage.locationMessage || quotedMessage.liveLocationMessage) return 'Localização';
+
+    return null;
   }
 
   private mediaKey(messageType: NormalizedMessageType) {

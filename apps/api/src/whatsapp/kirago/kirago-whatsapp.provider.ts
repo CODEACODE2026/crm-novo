@@ -136,6 +136,15 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       Phone: input.phone,
       Body: input.body,
       Id: this.kiragoMessageId(input.requestId),
+      ...(input.reply
+        ? {
+            ContextInfo: {
+              StanzaId: input.reply.stanzaId,
+              Participant: input.reply.participant,
+            },
+            ...(input.reply.quotedText ? { QuotedText: input.reply.quotedText } : {}),
+          }
+        : {}),
     });
 
     return {

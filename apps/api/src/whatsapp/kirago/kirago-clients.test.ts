@@ -152,6 +152,39 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('passes optional text reply context to Kirago without forwarding metadata', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'reply-id' } });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.sendText('instance-token', {
+      Phone: '5544999999999',
+      Body: 'Respondendo',
+      Id: 'request-id',
+      ContextInfo: {
+        StanzaId: 'original-provider-id',
+        Participant: '5544999999999@s.whatsapp.net',
+      },
+      QuotedText: 'Mensagem original',
+    });
+
+    expect(request).toHaveBeenCalledWith('/chat/send/text', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Body: 'Respondendo',
+        Id: 'request-id',
+        ContextInfo: {
+          StanzaId: 'original-provider-id',
+          Participant: '5544999999999@s.whatsapp.net',
+        },
+        QuotedText: 'Mensagem original',
+        LinkPreview: false,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('sends PIX buttons with the instance bearer token, not the admin token', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
     const client = new KiragoInstanceClient({ request } as never);

@@ -145,7 +145,16 @@ export class KiragoInstanceClient {
     });
   }
 
-  sendText(instanceToken: string, payload: { Phone: string; Body: string; Id: string }) {
+  sendText(
+    instanceToken: string,
+    payload: {
+      Phone: string;
+      Body: string;
+      Id: string;
+      ContextInfo?: { StanzaId: string; Participant: string };
+      QuotedText?: string;
+    },
+  ) {
     return this.http.request<KiragoEnvelope<KiragoSendTextData>>('/chat/send/text', {
       method: 'POST',
       headers: { token: instanceToken },

@@ -9,4 +9,8 @@ export class SendWhatsAppConversationMessageDto {
   @IsOptional()
   @IsUUID()
   requestId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  replyToMessageId?: string;
 }

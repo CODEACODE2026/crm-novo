@@ -133,6 +133,39 @@ describe('Kirago dependency injection', () => {
     });
   });
 
+  it('maps text reply input to Kirago ContextInfo and QuotedText', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const sendText = vi.spyOn(instanceClient, 'sendText').mockResolvedValue({
+      success: true,
+      data: { Id: 'reply-provider-id' },
+    });
+
+    await provider.sendText('instance-token', {
+      phone: '5544999999999',
+      body: 'Respondendo',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      reply: {
+        stanzaId: 'original-provider-id',
+        participant: '5544999999999@s.whatsapp.net',
+        quotedText: 'Mensagem original',
+      },
+    });
+
+    expect(sendText).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Body: 'Respondendo',
+      Id: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      ContextInfo: {
+        StanzaId: 'original-provider-id',
+        Participant: '5544999999999@s.whatsapp.net',
+      },
+      QuotedText: 'Mensagem original',
+    });
+  });
+
   it('maps image, document and audio sends to official Kirago payloads', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

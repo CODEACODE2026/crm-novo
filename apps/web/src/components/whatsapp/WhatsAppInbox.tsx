@@ -3351,7 +3351,10 @@ function ConversationComposer({
   const stoppingVoiceRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const voiceSendingRef = useRef(false);
-  const canSend = Boolean(draft.trim() || selectedMedia) && !sending;
+  const hasText = Boolean(draft.trim());
+  const hasSendableContent = Boolean(hasText || selectedMedia);
+  const shouldShowSendAction = hasSendableContent || sending;
+  const canSend = hasSendableContent && !sending;
   const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
 
   useEffect(() => {
@@ -3577,7 +3580,9 @@ function ConversationComposer({
       className="conversation-composer"
       onSubmit={(event) => {
         event.preventDefault();
-        onSend();
+        if (shouldShowSendAction) {
+          onSend();
+        }
       }}
     >
       {error ? (
@@ -3729,12 +3734,6 @@ function ConversationComposer({
             }}
           />
         </div>
-        <IconButton
-          icon={Mic}
-          label="Gravar áudio"
-          disabled={recording || sending || Boolean(voiceDraft)}
-          onClick={() => void startVoiceRecording()}
-        />
       </div>
       <label>
         <span className="sr-only">Digite uma mensagem</span>
@@ -3754,36 +3753,53 @@ function ConversationComposer({
             }
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              onSend();
+              if (shouldShowSendAction) {
+                onSend();
+              }
             }
           }}
         />
       </label>
-      <Button
-        icon={Send}
-        loading={sending}
-        variant="primary"
-        disabled={!canSend}
-        type="submit"
-        onMouseDown={(event) => {
-          if (document.activeElement === composerRef.current) {
-            event.preventDefault();
-          }
-        }}
-        onPointerDown={(event) => {
-          if (event.pointerType !== 'mouse' && document.activeElement === composerRef.current) {
-            event.preventDefault();
-          }
-        }}
-        onPointerUp={(event) => {
-          if (event.pointerType !== 'mouse') {
-            event.preventDefault();
-            onSend();
-          }
-        }}
-      >
-        Enviar
-      </Button>
+      {shouldShowSendAction ? (
+        <Button
+          aria-label="Enviar mensagem"
+          className="conversation-primary-action"
+          icon={Send}
+          loading={sending}
+          title="Enviar mensagem"
+          variant="primary"
+          disabled={!canSend}
+          type="submit"
+          onMouseDown={(event) => {
+            if (document.activeElement === composerRef.current) {
+              event.preventDefault();
+            }
+          }}
+          onPointerDown={(event) => {
+            if (event.pointerType !== 'mouse' && document.activeElement === composerRef.current) {
+              event.preventDefault();
+            }
+          }}
+          onPointerUp={(event) => {
+            if (event.pointerType !== 'mouse') {
+              event.preventDefault();
+              if (canSend) {
+                onSend();
+              }
+            }
+          }}
+        >
+          Enviar mensagem
+        </Button>
+      ) : (
+        <IconButton
+          className="conversation-primary-action"
+          icon={Mic}
+          label="Gravar áudio"
+          disabled={recording || sending || Boolean(voiceDraft)}
+          onClick={() => void startVoiceRecording()}
+        />
+      )}
     </form>
   );
 }

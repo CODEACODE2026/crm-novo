@@ -385,8 +385,19 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).not.toContain('disabled={sending}');
     expect(conversationsSource).toContain('aria-busy={sending}');
     expect(conversationsSource).toContain('loading={sending}');
-    expect(conversationsSource).toContain('const canSend = Boolean(draft.trim() || selectedMedia)');
+    expect(conversationsSource).toContain('const hasText = Boolean(draft.trim());');
+    expect(conversationsSource).toContain(
+      'const hasSendableContent = Boolean(hasText || selectedMedia);',
+    );
+    expect(conversationsSource).toContain(
+      'const shouldShowSendAction = hasSendableContent || sending;',
+    );
+    expect(conversationsSource).toContain('const canSend = hasSendableContent && !sending;');
     expect(conversationsSource).toContain('disabled={!canSend}');
+    expect(conversationsSource).toContain('{shouldShowSendAction ? (');
+    expect(conversationsSource).toContain('aria-label="Enviar mensagem"');
+    expect(conversationsSource).toContain('title="Enviar mensagem"');
+    expect(conversationsSource).toContain('if (shouldShowSendAction) {\n                onSend();');
     expect(primitivesSource).toContain('disabled={disabled || loading}');
     expect(stylesSource).toContain('max-width: min(76%, 680px);');
     expect(stylesSource).toContain('overflow-wrap: anywhere;');
@@ -653,6 +664,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       'onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}',
     );
     expect(conversationsSource).toContain('label="Gravar áudio"');
+    expect(conversationsSource).toContain('className="conversation-primary-action"');
     expect(conversationsSource).toContain('label="Parar gravação"');
     expect(conversationsSource).toContain('label="Cancelar gravação"');
     expect(conversationsSource).toContain('label="Enviar gravação"');
@@ -662,6 +674,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
     expect(stylesSource).toContain('@keyframes conversation-recording-pulse');
     expect(stylesSource).toContain('.conversation-composer-tools');
+    expect(stylesSource).toContain('.conversation-primary-action');
   });
 
   it('keeps composer focus after manual send without stealing focus on retry', () => {

@@ -3568,6 +3568,47 @@ a {
   padding: 10px 12px;
 }
 
+.conversation-primary-action {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  border-radius: 999px;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.conversation-primary-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.conversation-primary-action.ui-button {
+  padding: 0;
+}
+
+.conversation-primary-action.ui-button span {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.conversation-primary-action.ui-icon-button {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.conversation-primary-action.ui-icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
 .conversation-client-panel {
   box-sizing: border-box;
   height: 100%;

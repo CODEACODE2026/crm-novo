@@ -217,6 +217,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('readRetryConversationIdsRef');
     expect(conversationsSource).toContain('readConversation.unreadCount > 0');
     expect(conversationsSource).toContain('shouldRetryActiveConversationRead');
+    expect(conversationsSource).toContain('const messagesBeforeLoad = messagesRef.current');
+    expect(conversationsSource).toContain('resolveRealtimeCreatedMessage');
     expect(conversationsSource).toContain('activeConversation.unreadCount > 0');
     expect(conversationsSource).toContain(
       'activeConversationIdRef.current === readConversation.id',

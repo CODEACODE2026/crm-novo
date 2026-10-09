@@ -5,6 +5,7 @@ import {
   mergeConversationById,
   mergeConversationLists,
   nextConversationListRequestGeneration,
+  resolveRealtimeCreatedMessage,
   shouldAutoReadRealtimeMessage,
   shouldApplyConversationListResponse,
   shouldReadVisibleConversationOnReturn,
@@ -407,6 +408,117 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
         messageDirection: 'INBOUND',
         visible: true,
         focused: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('resolves the real SSE message.created payload to the loaded inbound message', () => {
+    const loadedMessages = [
+      message({ id: 'MSG1', direction: 'OUTBOUND' }),
+      message({ id: 'MSG2', direction: 'INBOUND', providerMessageId: 'A5FCB3' }),
+    ];
+
+    const createdMessage = resolveRealtimeCreatedMessage(
+      { type: 'message.created', messageId: 'MSG2' },
+      loadedMessages,
+      [loadedMessages[0]!],
+    );
+
+    expect(createdMessage).toMatchObject({ id: 'MSG2', direction: 'INBOUND' });
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'A',
+        conversationId: 'A',
+        eventType: 'message.created',
+        messageDirection: createdMessage?.direction ?? null,
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('resolves realtime message.created by provider id when the SSE id shape differs', () => {
+    const loadedMessages = [
+      message({ id: 'internal-1', direction: 'INBOUND', providerMessageId: 'A55F14' }),
+    ];
+
+    expect(
+      resolveRealtimeCreatedMessage(
+        { type: 'message.created', messageId: 'A55F14' },
+        loadedMessages,
+        [],
+      ),
+    ).toMatchObject({ id: 'internal-1', direction: 'INBOUND' });
+  });
+
+  it('uses newly loaded messages instead of stale previous state for realtime read decisions', () => {
+    const previousMessages = [message({ id: 'MSG1', direction: 'OUTBOUND' })];
+    const loadedMessages = [
+      ...previousMessages,
+      message({ id: 'MSG2', direction: 'INBOUND', providerMessageId: 'A5FCB3' }),
+    ];
+
+    const createdMessage = resolveRealtimeCreatedMessage(
+      { type: 'message.created', messageId: 'unknown-sse-id' },
+      loadedMessages,
+      previousMessages,
+    );
+
+    expect(createdMessage).toMatchObject({ id: 'MSG2', direction: 'INBOUND' });
+  });
+
+  it('fails closed when multiple messages are newly loaded without an id match', () => {
+    const previousMessages = [message({ id: 'MSG1', direction: 'INBOUND' })];
+    const loadedMessages = [
+      ...previousMessages,
+      message({ id: 'MSG2', direction: 'OUTBOUND', providerMessageId: 'OUT2' }),
+      message({ id: 'MSG3', direction: 'INBOUND', providerMessageId: 'IN3' }),
+    ];
+
+    expect(
+      resolveRealtimeCreatedMessage(
+        { type: 'message.created', messageId: 'unknown-sse-id' },
+        loadedMessages,
+        previousMessages,
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps outbound, other conversation, and hidden realtime events from scheduling reads', () => {
+    const outbound = resolveRealtimeCreatedMessage(
+      { type: 'message.created', messageId: 'OUT1' },
+      [message({ id: 'OUT1', direction: 'OUTBOUND' })],
+      [],
+    );
+
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'A',
+        conversationId: 'A',
+        eventType: 'message.created',
+        messageDirection: outbound?.direction ?? null,
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'A',
+        conversationId: 'B',
+        eventType: 'message.created',
+        messageDirection: 'INBOUND',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'A',
+        conversationId: 'A',
+        eventType: 'message.created',
+        messageDirection: 'INBOUND',
+        visible: false,
+        focused: true,
       }),
     ).toBe(false);
   });

@@ -896,10 +896,13 @@ export function WhatsAppInbox({
       if (event.type === 'message.created' || event.type === 'message.updated') {
         if (activeConversationIdRef.current === event.conversationId) {
           void (async () => {
+            const messagesBeforeLoad = messagesRef.current;
             const loadedMessages = await loadMessages(event.conversationId, { silent: true });
-            const createdMessage = event.messageId
-              ? loadedMessages?.find((message) => message.id === event.messageId)
-              : null;
+            const createdMessage = resolveRealtimeCreatedMessage(
+              event,
+              loadedMessages,
+              messagesBeforeLoad,
+            );
             if (
               shouldAutoReadRealtimeMessage({
                 activeConversationId: activeConversationIdRef.current,
@@ -4199,6 +4202,37 @@ export function shouldAutoReadRealtimeMessage({
     visible &&
     focused
   );
+}
+
+export function resolveRealtimeCreatedMessage(
+  event: Pick<WhatsAppRealtimeEvent, 'messageId' | 'type'>,
+  loadedMessages: WhatsAppConversationMessage[] | null,
+  previousMessages: WhatsAppConversationMessage[],
+) {
+  if (!loadedMessages?.length || event.type !== 'message.created') {
+    return null;
+  }
+
+  if (event.messageId) {
+    const matched = loadedMessages.find(
+      (message) => message.id === event.messageId || message.providerMessageId === event.messageId,
+    );
+    if (matched) return matched;
+  }
+
+  const previousIds = new Set(previousMessages.map((message) => message.id));
+  const previousProviderIds = new Set(
+    previousMessages
+      .map((message) => message.providerMessageId)
+      .filter((providerMessageId): providerMessageId is string => Boolean(providerMessageId)),
+  );
+  const newlyLoadedMessages = loadedMessages.filter(
+    (message) =>
+      !previousIds.has(message.id) &&
+      (!message.providerMessageId || !previousProviderIds.has(message.providerMessageId)),
+  );
+
+  return newlyLoadedMessages.length === 1 ? newlyLoadedMessages[0]! : null;
 }
 
 export function shouldReadVisibleConversationOnReturn({

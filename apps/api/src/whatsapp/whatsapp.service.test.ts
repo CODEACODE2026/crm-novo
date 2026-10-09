@@ -1526,9 +1526,12 @@ describe('WhatsAppService', () => {
 
   it.each([
     ['9 MB', 9 * 1024 * 1024],
-    ['10 MB', 10 * 1024 * 1024],
+    ['10.5 MB', 10 * 1024 * 1024 + 512 * 1024],
+    ['20 MB', 20 * 1024 * 1024],
+    ['24.9 MB', 24 * 1024 * 1024 + 900 * 1024],
+    ['25 MB', 25 * 1024 * 1024],
   ] as const)(
-    'accepts %s MP4 conversation media under the 10 MB video limit',
+    'accepts %s MP4 conversation media under the 25 MB video limit',
     async (_label, size) => {
       const { service, provider } = serviceFactory({
         mediaStorageOverrides: {
@@ -1578,6 +1581,55 @@ describe('WhatsAppService', () => {
       );
     },
   );
+
+  it('accepts default conversation media at exactly the 10 MB limit', async () => {
+    const { service, provider, mediaStorage } = serviceFactory({
+      mediaStorageOverrides: {
+        storeOutboundMedia: vi.fn().mockResolvedValue({
+          storageKey: `${connection().id}/${conversationMessage().id}/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+          mimeType: 'application/pdf',
+          sizeBytes: WhatsAppService.conversationMediaMaxBytes,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('pdf-bytes'),
+        mimetype: 'application/pdf',
+        originalname: 'limite.pdf',
+        size: WhatsAppService.conversationMediaMaxBytes,
+      },
+      requestId: 'pdf-exact-limit-request-id',
+    });
+
+    expect(provider.sendDocument).toHaveBeenCalled();
+    expect(mediaStorage.storeOutboundMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mimeType: 'application/pdf',
+        sizeBytes: WhatsAppService.conversationMediaMaxBytes,
+      }),
+    );
+  });
 
   it('converts browser WebM voice recording to OGG and sends it as PTT audio', async () => {
     const webmBuffer = Buffer.from('webm-opus-bytes');
@@ -2630,11 +2682,71 @@ describe('WhatsAppService', () => {
       service.sendConversationMediaMessage(conversation().id, {
         file: {
           buffer: Buffer.alloc(1),
+          mimetype: 'application/pdf',
+          originalname: 'pdf-20mb.pdf',
+          size: 20 * 1024 * 1024,
+        },
+        requestId: 'large-pdf-20mb-request-id',
+      }),
+    ).rejects.toThrow('Arquivo excede o limite de 10 MB permitido.');
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
           mimetype: 'application/zip',
           originalname: 'grande.zip',
           size: WhatsAppService.conversationMediaMaxBytes + 1,
         },
         requestId: 'large-zip-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'application/zip',
+          originalname: 'zip-20mb.zip',
+          size: 20 * 1024 * 1024,
+        },
+        requestId: 'large-zip-20mb-request-id',
+      }),
+    ).rejects.toThrow('Arquivo excede o limite de 10 MB permitido.');
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'application/vnd.rar',
+          originalname: 'grande.rar',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-rar-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'image/vnd.adobe.photoshop',
+          originalname: 'grande.psd',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-psd-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'application/vnd.android.package-archive',
+          originalname: 'grande.apk',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-apk-request-id',
       }),
     ).rejects.toThrow(BadRequestException);
 
@@ -2672,7 +2784,7 @@ describe('WhatsAppService', () => {
         },
         requestId: 'large-video-request-id',
       }),
-    ).rejects.toThrow('Video excede o limite de 10 MB permitido para envio por WhatsApp.');
+    ).rejects.toThrow('Vídeo excede o limite de 25 MB permitido para envio por WhatsApp.');
 
     await expect(
       service.sendConversationMediaMessage(conversation().id, {
@@ -7227,7 +7339,7 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(result)).not.toContain('storageKey');
   });
 
-  it('downloads local outbound VIDEO at the 10 MB media limit', async () => {
+  it('downloads local outbound VIDEO at the 25 MB media limit', async () => {
     const localData = Buffer.alloc(WhatsAppService.conversationVideoMaxBytes, 'v');
     const { service, provider, mediaStorage } = serviceFactory({
       mediaStorageOverrides: {

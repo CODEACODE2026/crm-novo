@@ -1,6 +1,9 @@
 import {
+  ArgumentsHost,
   Body,
+  Catch,
   Controller,
+  ExceptionFilter,
   Get,
   Headers,
   Inject,
@@ -12,6 +15,7 @@ import {
   Res,
   StreamableFile,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -39,6 +43,24 @@ import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
+
+@Catch()
+export class WhatsAppMulterExceptionFilter implements ExceptionFilter {
+  catch(error: unknown, host: ArgumentsHost) {
+    const response = host.switchToHttp().getResponse<Response>();
+
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'LIMIT_FILE_SIZE') {
+      response.status(413).json({
+        statusCode: 413,
+        message: 'Arquivo excede o limite maximo de 25 MB permitido para upload.',
+        error: 'Payload Too Large',
+      });
+      return;
+    }
+
+    throw error;
+  }
+}
 
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('whatsapp')
@@ -162,6 +184,7 @@ export class WhatsAppController {
   }
 
   @Post('conversations/:id/media')
+  @UseFilters(WhatsAppMulterExceptionFilter)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: WhatsAppService.conversationUploadMaxBytes },

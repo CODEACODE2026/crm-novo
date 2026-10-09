@@ -5,7 +5,11 @@ import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { WhatsAppController, WhatsAppWebhookController } from './whatsapp.controller';
+import {
+  WhatsAppController,
+  WhatsAppMulterExceptionFilter,
+  WhatsAppWebhookController,
+} from './whatsapp.controller';
 
 const controllerSource = readFileSync(
   join(process.cwd(), 'src/whatsapp/whatsapp.controller.ts'),
@@ -75,12 +79,35 @@ describe('WhatsAppController conversation inbox endpoints', () => {
   });
 
   it('keeps media upload multipart size aligned to the video ceiling', () => {
+    expect(controllerSource).toContain('@UseFilters(WhatsAppMulterExceptionFilter)');
     expect(controllerSource).toContain(
       'limits: { fileSize: WhatsAppService.conversationUploadMaxBytes }',
     );
     expect(controllerSource).toContain(
+      'Arquivo excede o limite maximo de 25 MB permitido para upload.',
+    );
+    expect(controllerSource).toContain(
       'limits: { fileSize: WhatsAppService.conversationVoiceMaxBytes }',
     );
+  });
+
+  it('maps Multer file size failures to a friendly 413 response', () => {
+    const status = vi.fn().mockReturnThis();
+    const json = vi.fn();
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => ({ status, json }),
+      }),
+    };
+
+    new WhatsAppMulterExceptionFilter().catch({ code: 'LIMIT_FILE_SIZE' }, host as never);
+
+    expect(status).toHaveBeenCalledWith(413);
+    expect(json).toHaveBeenCalledWith({
+      statusCode: 413,
+      message: 'Arquivo excede o limite maximo de 25 MB permitido para upload.',
+      error: 'Payload Too Large',
+    });
   });
 
   it('routes conversation inbox operations to the service', async () => {

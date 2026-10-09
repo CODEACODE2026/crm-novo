@@ -37,6 +37,30 @@ describe('AdminShell mobile navigation', () => {
     expect(html).toContain('Clientes');
   });
 
+  it('renders accessible unread badges without hiding collapsed indicators', () => {
+    const html = renderToStaticMarkup(
+      <AdminShell
+        activeId="conversations"
+        collapsed
+        items={[
+          { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+          { id: 'conversations', label: 'Conversas', icon: Users, badge: '99+' },
+        ]}
+        title="Conversas"
+        onNavigate={() => undefined}
+        onToggleCollapsed={() => undefined}
+      >
+        <div>Conteúdo</div>
+      </AdminShell>,
+    );
+
+    expect(html).toContain('99+');
+    expect(html).toContain('aria-label="99+ mensagens não lidas em Conversas"');
+    expect(html).toContain('title="99+ mensagens não lidas em Conversas"');
+    expect(stylesSource).toContain('.app-shell.is-collapsed .nav-item-badge');
+    expect(stylesSource).not.toContain('.app-shell.is-collapsed .nav-item-badge,');
+  });
+
   it('keeps mobile drawer behavior in the shell instead of the dashboard page', () => {
     expect(shellSource).toContain('const [mobileMenuOpen, setMobileMenuOpen] = useState(false)');
     expect(shellSource).toContain("event.key === 'Escape'");

@@ -32,24 +32,39 @@ describe('WhatsAppRealtimeService', () => {
     expect(service.subscriberCount()).toBe(0);
   });
 
-  it('broadcasts minimal message and conversation events to multiple subscribers', () => {
+  it('broadcasts minimal message events with direction to multiple subscribers', () => {
     const service = new WhatsAppRealtimeService();
     const first = sseClient();
     const second = sseClient();
 
     service.subscribe(first.request as never, first.response as never);
     service.subscribe(second.request as never, second.response as never);
-    service.emitMessageCreated('conversation-1', 'message-1');
+    service.emitMessageCreated('conversation-1', 'message-1', 'INBOUND');
 
     for (const client of [first, second]) {
       const writes = client.response.write.mock.calls.map(([chunk]) => String(chunk)).join('');
       expect(writes).toContain('event: message.created');
       expect(writes).toContain('"conversationId":"conversation-1"');
       expect(writes).toContain('"messageId":"message-1"');
+      expect(writes).toContain('"direction":"INBOUND"');
       expect(writes).not.toContain('phone');
       expect(writes).not.toContain('text');
       expect(writes).not.toContain('media');
     }
+  });
+
+  it('keeps non-created realtime events compatible without direction', () => {
+    const service = new WhatsAppRealtimeService();
+    const { request, response } = sseClient();
+
+    service.subscribe(request as never, response as never);
+    service.emitConversationUpdated('conversation-1');
+    service.emitMessageUpdated('conversation-1', 'message-1');
+
+    const writes = response.write.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(writes).toContain('event: conversation.updated');
+    expect(writes).toContain('event: message.updated');
+    expect(writes).not.toContain('"direction"');
   });
 
   it('sends heartbeat pings without message payload data', () => {

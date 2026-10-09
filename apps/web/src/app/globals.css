@@ -641,6 +641,7 @@ a {
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -707,7 +708,6 @@ a {
 
 .app-shell.is-collapsed .brand-copy,
 .app-shell.is-collapsed .nav-item span,
-.app-shell.is-collapsed .nav-item-badge,
 .app-shell.is-collapsed .profile-copy {
   display: none;
 }
@@ -728,6 +728,16 @@ a {
 .app-shell.is-collapsed .nav-item {
   justify-content: center;
   padding-inline: 0;
+}
+
+.app-shell.is-collapsed .nav-item-badge {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 9px;
 }
 
 .sidebar-footer {
@@ -9200,9 +9210,16 @@ tbody tr:hover,
 
   .app-shell.is-collapsed .brand-copy,
   .app-shell.is-collapsed .nav-item span,
-  .app-shell.is-collapsed .nav-item-badge,
   .app-shell.is-collapsed .profile-copy {
     display: grid;
+  }
+
+  .app-shell.is-collapsed .nav-item-badge {
+    position: static;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    font-size: 11px;
   }
 
   .app-shell.is-collapsed .nav-item {

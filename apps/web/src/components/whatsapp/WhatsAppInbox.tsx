@@ -46,7 +46,6 @@ import {
 import {
   ApiError,
   createClient,
-  createWhatsAppRealtimeEventSource,
   downloadWhatsAppConversationMedia,
   formatCurrency,
   getClient,
@@ -83,6 +82,7 @@ import {
 } from '../../lib/crm-api';
 import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
 import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
+import { useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
 
 type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
@@ -126,9 +126,11 @@ const conversationFilters = [
 export function WhatsAppInbox({
   onOpenClient,
   onSummaryChange,
+  onSummaryRefreshRequest,
 }: {
   onOpenClient: (clientId: string) => Promise<void>;
   onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
+  onSummaryRefreshRequest: () => Promise<WhatsAppConversationSummary | null>;
 }) {
   const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
   const [summary, setSummary] = useState<WhatsAppConversationSummary | null>(null);
@@ -178,7 +180,11 @@ export function WhatsAppInbox({
   const [guestClientCreatePlans, setGuestClientCreatePlans] = useState<Plan[]>([]);
   const [guestClientCreatePlansLoading, setGuestClientCreatePlansLoading] = useState(false);
   const [newMessageNotice, setNewMessageNotice] = useState(false);
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const {
+    realtimeConnected,
+    setActiveConversationId: setGlobalActiveConversationId,
+    subscribe: subscribeRealtime,
+  } = useWhatsAppRealtime();
   const [conversationPage, setConversationPage] = useState(firstConversationPage);
   const [hasMoreConversations, setHasMoreConversations] = useState(false);
   const [olderMessagesCursor, setOlderMessagesCursor] =
@@ -771,8 +777,9 @@ export function WhatsAppInbox({
         }
         return next;
       });
+      void onSummaryRefreshRequest();
     },
-    [onSummaryChange],
+    [onSummaryChange, onSummaryRefreshRequest],
   );
 
   const clearPendingReadTimeout = useCallback((conversationId: string) => {
@@ -928,10 +935,12 @@ export function WhatsAppInbox({
     [loadMessages, scheduleActiveConversationRead, scheduleRealtimeListRefresh],
   );
 
-  useWhatsAppRealtime({
-    onConnectedChange: setRealtimeConnected,
-    onEvent: handleRealtimeEvent,
-  });
+  useEffect(() => subscribeRealtime(handleRealtimeEvent), [handleRealtimeEvent, subscribeRealtime]);
+
+  useEffect(() => {
+    setGlobalActiveConversationId(selectedConversation?.id ?? null);
+    return () => setGlobalActiveConversationId(null);
+  }, [selectedConversation, setGlobalActiveConversationId]);
 
   useEffect(() => {
     const scheduleVisibleActiveConversationRead = () => {
@@ -4008,45 +4017,6 @@ function GuestConversationClientModal({
       </section>
     </div>
   );
-}
-
-function useWhatsAppRealtime({
-  onConnectedChange,
-  onEvent,
-}: {
-  onConnectedChange: (connected: boolean) => void;
-  onEvent: (event: WhatsAppRealtimeEvent) => void;
-}) {
-  useEffect(() => {
-    const eventSource = createWhatsAppRealtimeEventSource();
-    const handleOpen = () => onConnectedChange(true);
-    const handleError = () => onConnectedChange(false);
-    const handleRealtimeEvent = (event: MessageEvent<string>) => {
-      try {
-        const payload = JSON.parse(event.data) as WhatsAppRealtimeEvent;
-        if (!payload.conversationId || !payload.type) return;
-        onEvent(payload);
-      } catch {
-        onConnectedChange(false);
-      }
-    };
-
-    eventSource.addEventListener('open', handleOpen);
-    eventSource.addEventListener('error', handleError);
-    eventSource.addEventListener('message.created', handleRealtimeEvent);
-    eventSource.addEventListener('message.updated', handleRealtimeEvent);
-    eventSource.addEventListener('conversation.updated', handleRealtimeEvent);
-
-    return () => {
-      eventSource.removeEventListener('open', handleOpen);
-      eventSource.removeEventListener('error', handleError);
-      eventSource.removeEventListener('message.created', handleRealtimeEvent);
-      eventSource.removeEventListener('message.updated', handleRealtimeEvent);
-      eventSource.removeEventListener('conversation.updated', handleRealtimeEvent);
-      eventSource.close();
-      onConnectedChange(false);
-    };
-  }, [onConnectedChange, onEvent]);
 }
 
 function phoneDigits(value: string | null | undefined) {

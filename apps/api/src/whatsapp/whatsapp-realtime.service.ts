@@ -7,6 +7,7 @@ export type WhatsAppRealtimeEventType =
 export interface WhatsAppRealtimeEvent {
   type: WhatsAppRealtimeEventType;
   conversationId: string;
+  direction?: 'INBOUND' | 'OUTBOUND';
   messageId?: string;
   occurredAt: string;
 }
@@ -62,10 +63,11 @@ export class WhatsAppRealtimeService implements OnModuleDestroy {
     });
   }
 
-  emitMessageCreated(conversationId: string, messageId: string) {
+  emitMessageCreated(conversationId: string, messageId: string, direction: 'INBOUND' | 'OUTBOUND') {
     this.emit({
       type: 'message.created',
       conversationId,
+      direction,
       messageId,
       occurredAt: new Date().toISOString(),
     });

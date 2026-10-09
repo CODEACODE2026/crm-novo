@@ -4433,6 +4433,7 @@ describe('WhatsAppService', () => {
     expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
       conversation().id,
       conversationMessage().id,
+      'INBOUND',
     );
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
   });
@@ -7953,6 +7954,7 @@ describe('WhatsAppService', () => {
     expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
       conversationRecord.id,
       conversationMessage().id,
+      'OUTBOUND',
     );
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversationRecord.id);
   });

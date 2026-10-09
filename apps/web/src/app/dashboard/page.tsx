@@ -72,6 +72,8 @@ import {
   UserPlus,
   UserX,
   Users,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   Workflow,
@@ -89,6 +91,11 @@ import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
 import { FinanceClientAutocomplete } from '../../components/clients/finance-client-autocomplete';
 import { WhatsAppInbox } from '../../components/whatsapp/WhatsAppInbox';
+import {
+  formatUnreadBadge,
+  useWhatsAppRealtimeManager,
+  WhatsAppRealtimeProvider,
+} from '../../components/whatsapp/WhatsAppRealtimeProvider';
 import { ClientReferralSelect } from '../../components/clients/client-referral-select';
 import { StatusBadge } from '../../components/clients/status-badge';
 import {
@@ -297,7 +304,6 @@ import {
   type ReferralStatus,
   type ReferralSummary,
   type WhatsAppConnection,
-  type WhatsAppConversationSummary,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
   type WhatsAppPendingContactStatus,
@@ -522,8 +528,8 @@ export default function DashboardPage() {
   const [clientsPage, setClientsPage] = useState(1);
   const [error, setError] = useState('');
   const [dataLoading, setDataLoading] = useState(false);
-  const [conversationSummary, setConversationSummary] =
-    useState<WhatsAppConversationSummary | null>(null);
+  const whatsappRealtime = useWhatsAppRealtimeManager(!loadingSession && Boolean(user));
+  const conversationSummary = whatsappRealtime.summary;
 
   const clients = clientsPayload?.items ?? [];
   const mainNavItems = useMemo(
@@ -532,7 +538,7 @@ export default function DashboardPage() {
         item.id === 'conversations'
           ? {
               ...item,
-              badge: conversationSummary?.totalUnreadConversations || null,
+              badge: formatUnreadBadge(conversationSummary?.totalUnreadMessages),
             }
           : item,
       ),
@@ -853,243 +859,274 @@ export default function DashboardPage() {
   }
 
   return (
-    <AdminShell
-      activeId={view}
-      collapsed={sidebarCollapsed}
-      disabledItems={futureNavItems}
-      items={mainNavItems}
-      subtitle={viewSubtitle(view)}
-      title={viewTitle(view)}
-      userName={user?.name}
-      onNavigate={handlePrimaryNavigation}
-      onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
-    >
-      {error ? <div className="notice danger">{error}</div> : null}
-      {view === 'dashboard' ? (
-        <OperationalDashboard
-          onNewClient={() => {
-            setEditingClient(null);
-            setClientFormOpen(true);
-            setView('clients');
-          }}
-          onOpenClient={async (id) => {
-            const client = await getClient(id);
-            setSelectedClient(client);
-            setView('clients');
-          }}
-          onOpenFinance={(tab) => {
-            setFinanceInitialTab(tab);
-            setView('finance');
-          }}
-          onOpenOperationalView={(nextView) => setView(nextView)}
-          onRenew={async (id, clientReferenceId) => {
-            const client = await getClient(id);
-            const reference = client.references?.find((item) => item.id === clientReferenceId);
-            openReferenceLifecycleAction(client, reference);
-          }}
-        />
-      ) : null}
-      {view === 'clients' ? (
-        <ClientsView
-          clientFormOpen={clientFormOpen}
-          clients={clients}
-          clientsPagination={clientsPayload?.pagination ?? null}
-          dataLoading={dataLoading}
-          detailTabRequest={clientDetailTabRequest}
-          editingClient={editingClient}
-          onApplyFilters={() => void loadData()}
-          onCreate={async (payload) => {
-            const client = await createClient(payload);
-            setSelectedClient(client);
-            await reloadAfterMutation();
-          }}
-          onEdit={(client) => {
-            setEditingClient(client);
-            setClientFormOpen(true);
-          }}
-          onNew={() => {
-            setEditingClient(null);
-            setClientFormOpen(true);
-          }}
-          onReferenceLifecycleAction={openReferenceLifecycleAction}
-          onRevertRenewal={(client, renewal) => void openRenewalReversal(client, renewal)}
-          onCreateReference={async (client, payload) => {
-            const reference = await createClientReference(client.id, payload);
-            const detailed = await getClient(client.id);
-            setSelectedClient(detailed);
-            setRenewalNotice(
-              `Referência ${reference.reference} criada aguardando pagamento. Gere o PIX manualmente em Cobranças/PIX; o Billing automático começa somente no próximo ciclo após o pagamento.`,
-            );
-            await loadData();
-          }}
-          onUpdateReference={async (reference, payload) => {
-            await updateClientReference(reference.id, payload);
-            const detailed = await getClient(reference.clientId);
-            setSelectedClient(detailed);
-            await loadData();
-          }}
-          onCloseForm={() => {
-            setClientFormOpen(false);
-            setEditingClient(null);
-          }}
-          onSelect={async (client) => {
-            const detailed = await getClient(client.id);
-            setSelectedClient(detailed);
-          }}
-          onClearSelection={() => setSelectedClient(null)}
-          onRemoveClient={(client) => void handleRemoveClient(client)}
-          onRemoveReference={(reference) => void handleRemoveReference(reference)}
-          onReferenceStatusChange={(reference, nextStatus, reason) =>
-            void handleReferenceStatusChange(reference, nextStatus, reason)
-          }
-          onClientsPageChange={setClientsPage}
-          onFinancialMutation={async (clientId) => {
-            const detailed = await getClient(clientId);
-            setSelectedClient(detailed);
-            await loadData();
-          }}
-          onWhatsAppSent={async (clientId) => {
-            const detailed = await getClient(clientId);
-            setSelectedClient(detailed);
-          }}
-          onUpdate={async (payload) => {
-            if (!editingClient) return;
-            const client = await updateClient(editingClient.id, payload);
-            setSelectedClient(client);
-            await reloadAfterMutation();
-          }}
-          planId={planId}
-          plans={plans}
-          search={search}
-          selectedClient={selectedClient}
-          setPlanId={(value) => {
-            setPlanId(value);
-            setClientsPage(1);
-          }}
-          setSearch={(value) => {
-            setSearch(value);
-            setClientsPage(1);
-          }}
-          setStatus={(value) => {
-            setStatus(value);
-            setClientsPage(1);
-          }}
-          status={status}
-          renewalNotice={renewalNotice}
-          renewalReversalPreviewLoadingId={renewalReversalPreviewLoadingId}
-        />
-      ) : null}
-      {view === 'conversations' ? (
-        <WhatsAppInbox
-          onSummaryChange={setConversationSummary}
-          onOpenClient={async (clientId) => {
-            const client = await getClient(clientId);
-            setSelectedClient(client);
-            setView('clients');
-          }}
-        />
-      ) : null}
-      {view === 'finance' ? <FinanceView clients={clients} initialTab={financeInitialTab} /> : null}
-      {view === 'referrals' ? <ReferralsView clients={clients} /> : null}
-      {view === 'plans' ? (
-        <PlansView
-          editingPlan={editingPlan}
-          onCreate={async (payload) => {
-            await createPlan(payload);
-            await reloadAfterMutation();
-          }}
-          onDelete={async (id) => {
-            await deletePlan(id);
-            await reloadAfterMutation();
-          }}
-          onEdit={(plan) => {
-            setEditingPlan(plan);
-            setPlanFormOpen(true);
-          }}
-          onNew={() => {
-            setEditingPlan(null);
-            setPlanFormOpen(true);
-          }}
-          onCloseForm={() => {
-            setEditingPlan(null);
-            setPlanFormOpen(false);
-          }}
-          onUpdate={async (payload) => {
-            if (!editingPlan) return;
-            await updatePlan(editingPlan.id, payload);
-            await reloadAfterMutation();
-          }}
-          planFormOpen={planFormOpen}
-          plans={plans}
-        />
-      ) : null}
-      {view === 'whatsapp' ? <WhatsAppView /> : null}
-      {view === 'billing' ? <BillingView /> : null}
-      {view === 'automations' ? (
-        <AutomationsView
-          onOpenBillingSettings={(tab = 'rules') => {
-            setSettingsInitialSection('billing');
-            setSettingsInitialBillingTab(tab);
-            setView('settings');
-          }}
-        />
-      ) : null}
-      {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
-      {view === 'imports' ? <LegacyImportPreviewView plans={plans} /> : null}
-      {view === 'settings' ? (
-        <SettingsView
-          initialBillingTab={settingsInitialBillingTab}
-          initialSection={settingsInitialSection}
-          onOpenAutomations={() => setView('automations')}
-          onOpenFinance={() => setView('finance')}
-          onOpenWhatsApp={() => setView('whatsapp')}
-        />
-      ) : null}
-      {view === 'waitlist' ? (
-        <WaitlistView
-          plans={plans}
-          onClientCreated={async (client) => {
-            await loadData();
-            setSelectedClient(client);
-            setView('clients');
-          }}
-        />
-      ) : null}
-      {renewalTarget ? (
-        <RenewalModal
-          target={renewalTarget}
-          plans={plans.filter((plan) => plan.active || plan.id === renewalTarget.reference.planId)}
-          onClose={() => setRenewalTarget(null)}
-          onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
-        />
-      ) : null}
-      {reactivationTarget ? (
-        <ReactivationModal
-          target={reactivationTarget}
-          plans={plans.filter((plan) => plan.active)}
-          onClose={() => setReactivationTarget(null)}
-          onConfirm={async (payload) => handleReactivationConfirm(reactivationTarget, payload)}
-          onGeneratePix={openPendingReactivationPix}
-          onGoToBilling={openPendingReactivationBilling}
-        />
-      ) : null}
-      {renewalReversalTarget ? (
-        <RenewalReversalModal
-          target={renewalReversalTarget}
-          onClose={() => setRenewalReversalTarget(null)}
-          onConfirm={async (payload) =>
-            handleRenewalReversalConfirm(renewalReversalTarget, payload)
-          }
-        />
-      ) : null}
-      {deletionTarget ? (
-        <DeletionConfirmationModal
-          target={deletionTarget}
-          onClose={() => setDeletionTarget(null)}
-          onConfirm={confirmDeletion}
-        />
-      ) : null}
-    </AdminShell>
+    <WhatsAppRealtimeProvider value={whatsappRealtime}>
+      <AdminShell
+        activeId={view}
+        collapsed={sidebarCollapsed}
+        disabledItems={futureNavItems}
+        items={mainNavItems}
+        subtitle={viewSubtitle(view)}
+        title={viewTitle(view)}
+        topbarActions={
+          <button
+            aria-pressed={whatsappRealtime.soundEnabled}
+            aria-label={
+              whatsappRealtime.soundEnabled
+                ? 'Desativar som de mensagens'
+                : 'Ativar som de mensagens'
+            }
+            className="icon-button"
+            title={
+              whatsappRealtime.soundEnabled
+                ? 'Som de mensagens ativado'
+                : 'Som de mensagens desativado'
+            }
+            type="button"
+            onClick={() => whatsappRealtime.setSoundEnabled(!whatsappRealtime.soundEnabled)}
+          >
+            {whatsappRealtime.soundEnabled ? (
+              <Volume2 aria-hidden="true" size={16} />
+            ) : (
+              <VolumeX aria-hidden="true" size={16} />
+            )}
+          </button>
+        }
+        userName={user?.name}
+        onNavigate={handlePrimaryNavigation}
+        onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+      >
+        {error ? <div className="notice danger">{error}</div> : null}
+        {view === 'dashboard' ? (
+          <OperationalDashboard
+            onNewClient={() => {
+              setEditingClient(null);
+              setClientFormOpen(true);
+              setView('clients');
+            }}
+            onOpenClient={async (id) => {
+              const client = await getClient(id);
+              setSelectedClient(client);
+              setView('clients');
+            }}
+            onOpenFinance={(tab) => {
+              setFinanceInitialTab(tab);
+              setView('finance');
+            }}
+            onOpenOperationalView={(nextView) => setView(nextView)}
+            onRenew={async (id, clientReferenceId) => {
+              const client = await getClient(id);
+              const reference = client.references?.find((item) => item.id === clientReferenceId);
+              openReferenceLifecycleAction(client, reference);
+            }}
+          />
+        ) : null}
+        {view === 'clients' ? (
+          <ClientsView
+            clientFormOpen={clientFormOpen}
+            clients={clients}
+            clientsPagination={clientsPayload?.pagination ?? null}
+            dataLoading={dataLoading}
+            detailTabRequest={clientDetailTabRequest}
+            editingClient={editingClient}
+            onApplyFilters={() => void loadData()}
+            onCreate={async (payload) => {
+              const client = await createClient(payload);
+              setSelectedClient(client);
+              await reloadAfterMutation();
+            }}
+            onEdit={(client) => {
+              setEditingClient(client);
+              setClientFormOpen(true);
+            }}
+            onNew={() => {
+              setEditingClient(null);
+              setClientFormOpen(true);
+            }}
+            onReferenceLifecycleAction={openReferenceLifecycleAction}
+            onRevertRenewal={(client, renewal) => void openRenewalReversal(client, renewal)}
+            onCreateReference={async (client, payload) => {
+              const reference = await createClientReference(client.id, payload);
+              const detailed = await getClient(client.id);
+              setSelectedClient(detailed);
+              setRenewalNotice(
+                `Referência ${reference.reference} criada aguardando pagamento. Gere o PIX manualmente em Cobranças/PIX; o Billing automático começa somente no próximo ciclo após o pagamento.`,
+              );
+              await loadData();
+            }}
+            onUpdateReference={async (reference, payload) => {
+              await updateClientReference(reference.id, payload);
+              const detailed = await getClient(reference.clientId);
+              setSelectedClient(detailed);
+              await loadData();
+            }}
+            onCloseForm={() => {
+              setClientFormOpen(false);
+              setEditingClient(null);
+            }}
+            onSelect={async (client) => {
+              const detailed = await getClient(client.id);
+              setSelectedClient(detailed);
+            }}
+            onClearSelection={() => setSelectedClient(null)}
+            onRemoveClient={(client) => void handleRemoveClient(client)}
+            onRemoveReference={(reference) => void handleRemoveReference(reference)}
+            onReferenceStatusChange={(reference, nextStatus, reason) =>
+              void handleReferenceStatusChange(reference, nextStatus, reason)
+            }
+            onClientsPageChange={setClientsPage}
+            onFinancialMutation={async (clientId) => {
+              const detailed = await getClient(clientId);
+              setSelectedClient(detailed);
+              await loadData();
+            }}
+            onWhatsAppSent={async (clientId) => {
+              const detailed = await getClient(clientId);
+              setSelectedClient(detailed);
+            }}
+            onUpdate={async (payload) => {
+              if (!editingClient) return;
+              const client = await updateClient(editingClient.id, payload);
+              setSelectedClient(client);
+              await reloadAfterMutation();
+            }}
+            planId={planId}
+            plans={plans}
+            search={search}
+            selectedClient={selectedClient}
+            setPlanId={(value) => {
+              setPlanId(value);
+              setClientsPage(1);
+            }}
+            setSearch={(value) => {
+              setSearch(value);
+              setClientsPage(1);
+            }}
+            setStatus={(value) => {
+              setStatus(value);
+              setClientsPage(1);
+            }}
+            status={status}
+            renewalNotice={renewalNotice}
+            renewalReversalPreviewLoadingId={renewalReversalPreviewLoadingId}
+          />
+        ) : null}
+        {view === 'conversations' ? (
+          <WhatsAppInbox
+            onSummaryChange={whatsappRealtime.setSummary}
+            onSummaryRefreshRequest={whatsappRealtime.refreshSummary}
+            onOpenClient={async (clientId) => {
+              const client = await getClient(clientId);
+              setSelectedClient(client);
+              setView('clients');
+            }}
+          />
+        ) : null}
+        {view === 'finance' ? (
+          <FinanceView clients={clients} initialTab={financeInitialTab} />
+        ) : null}
+        {view === 'referrals' ? <ReferralsView clients={clients} /> : null}
+        {view === 'plans' ? (
+          <PlansView
+            editingPlan={editingPlan}
+            onCreate={async (payload) => {
+              await createPlan(payload);
+              await reloadAfterMutation();
+            }}
+            onDelete={async (id) => {
+              await deletePlan(id);
+              await reloadAfterMutation();
+            }}
+            onEdit={(plan) => {
+              setEditingPlan(plan);
+              setPlanFormOpen(true);
+            }}
+            onNew={() => {
+              setEditingPlan(null);
+              setPlanFormOpen(true);
+            }}
+            onCloseForm={() => {
+              setEditingPlan(null);
+              setPlanFormOpen(false);
+            }}
+            onUpdate={async (payload) => {
+              if (!editingPlan) return;
+              await updatePlan(editingPlan.id, payload);
+              await reloadAfterMutation();
+            }}
+            planFormOpen={planFormOpen}
+            plans={plans}
+          />
+        ) : null}
+        {view === 'whatsapp' ? <WhatsAppView /> : null}
+        {view === 'billing' ? <BillingView /> : null}
+        {view === 'automations' ? (
+          <AutomationsView
+            onOpenBillingSettings={(tab = 'rules') => {
+              setSettingsInitialSection('billing');
+              setSettingsInitialBillingTab(tab);
+              setView('settings');
+            }}
+          />
+        ) : null}
+        {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
+        {view === 'imports' ? <LegacyImportPreviewView plans={plans} /> : null}
+        {view === 'settings' ? (
+          <SettingsView
+            initialBillingTab={settingsInitialBillingTab}
+            initialSection={settingsInitialSection}
+            onOpenAutomations={() => setView('automations')}
+            onOpenFinance={() => setView('finance')}
+            onOpenWhatsApp={() => setView('whatsapp')}
+          />
+        ) : null}
+        {view === 'waitlist' ? (
+          <WaitlistView
+            plans={plans}
+            onClientCreated={async (client) => {
+              await loadData();
+              setSelectedClient(client);
+              setView('clients');
+            }}
+          />
+        ) : null}
+        {renewalTarget ? (
+          <RenewalModal
+            target={renewalTarget}
+            plans={plans.filter(
+              (plan) => plan.active || plan.id === renewalTarget.reference.planId,
+            )}
+            onClose={() => setRenewalTarget(null)}
+            onConfirm={async (payload) => handleRenewalConfirm(renewalTarget, payload)}
+          />
+        ) : null}
+        {reactivationTarget ? (
+          <ReactivationModal
+            target={reactivationTarget}
+            plans={plans.filter((plan) => plan.active)}
+            onClose={() => setReactivationTarget(null)}
+            onConfirm={async (payload) => handleReactivationConfirm(reactivationTarget, payload)}
+            onGeneratePix={openPendingReactivationPix}
+            onGoToBilling={openPendingReactivationBilling}
+          />
+        ) : null}
+        {renewalReversalTarget ? (
+          <RenewalReversalModal
+            target={renewalReversalTarget}
+            onClose={() => setRenewalReversalTarget(null)}
+            onConfirm={async (payload) =>
+              handleRenewalReversalConfirm(renewalReversalTarget, payload)
+            }
+          />
+        ) : null}
+        {deletionTarget ? (
+          <DeletionConfirmationModal
+            target={deletionTarget}
+            onClose={() => setDeletionTarget(null)}
+            onConfirm={confirmDeletion}
+          />
+        ) : null}
+      </AdminShell>
+    </WhatsAppRealtimeProvider>
   );
 }
 

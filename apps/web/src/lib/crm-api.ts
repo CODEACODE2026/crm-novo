@@ -809,6 +809,7 @@ export type WhatsAppRealtimeEventType =
 export interface WhatsAppRealtimeEvent {
   type: WhatsAppRealtimeEventType;
   conversationId: string;
+  direction?: WhatsAppConversationMessageDirection;
   messageId?: string;
   occurredAt: string;
 }

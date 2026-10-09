@@ -28,6 +28,7 @@ interface AdminShellProps<T extends string> {
   onToggleCollapsed: () => void;
   subtitle?: string;
   title: string;
+  topbarActions?: ReactNode;
   userName?: string | undefined;
 }
 
@@ -41,6 +42,7 @@ export function AdminShell<T extends string>({
   onToggleCollapsed,
   subtitle,
   title,
+  topbarActions,
   userName,
 }: AdminShellProps<T>) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -111,20 +113,22 @@ export function AdminShell<T extends string>({
         <nav className="nav-list">
           {items.map((item) => {
             const Icon = item.icon;
+            const badge = item.badge ? String(item.badge) : null;
+            const badgeLabel = badge ? `${badge} mensagens não lidas em ${item.label}` : null;
             return (
               <button
                 aria-current={activeId === item.id ? 'page' : undefined}
                 className={`nav-item ${activeId === item.id ? 'active' : ''}`}
                 key={item.id}
-                title={collapsed ? item.label : undefined}
+                title={badgeLabel ?? (collapsed ? item.label : undefined)}
                 type="button"
                 onClick={() => handleNavigate(item.id)}
               >
                 <Icon aria-hidden="true" size={18} />
                 <span>{item.label}</span>
-                {item.badge ? (
-                  <small className="nav-item-badge" aria-label={`${item.badge} pendentes`}>
-                    {item.badge}
+                {badge ? (
+                  <small className="nav-item-badge" aria-label={badgeLabel ?? undefined}>
+                    {badge}
                   </small>
                 ) : null}
               </button>
@@ -178,6 +182,7 @@ export function AdminShell<T extends string>({
             </div>
           </div>
           <div className="topbar-actions">
+            {topbarActions}
             <span
               aria-label={`Usuário ${userName || 'Admin'}`}
               className="topbar-user"

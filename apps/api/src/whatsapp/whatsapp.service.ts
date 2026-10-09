@@ -311,9 +311,13 @@ export class WhatsAppService {
     }
   }
 
-  private emitMessageCreated(conversationId: string, messageId: string) {
+  private emitMessageCreated(
+    conversationId: string,
+    messageId: string,
+    direction: 'INBOUND' | 'OUTBOUND',
+  ) {
     try {
-      this.realtime?.emitMessageCreated(conversationId, messageId);
+      this.realtime?.emitMessageCreated(conversationId, messageId, direction);
     } catch (error) {
       this.logger.warn(
         `Falha ao emitir evento WhatsApp message.created conversation=${conversationId} message=${
@@ -1299,7 +1303,7 @@ export class WhatsAppService {
         return message;
       });
 
-      this.emitMessageCreated(conversation.id, updated.id);
+      this.emitMessageCreated(conversation.id, updated.id, updated.direction);
       this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
@@ -1459,7 +1463,7 @@ export class WhatsAppService {
         return message;
       });
 
-      this.emitMessageCreated(conversation.id, updated.id);
+      this.emitMessageCreated(conversation.id, updated.id, updated.direction);
       this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
@@ -1604,7 +1608,7 @@ export class WhatsAppService {
         return message;
       });
 
-      this.emitMessageCreated(conversation.id, updated.id);
+      this.emitMessageCreated(conversation.id, updated.id, updated.direction);
       this.emitConversationUpdated(conversation.id);
       return this.presentConversationMessage(updated);
     } catch (error) {
@@ -3113,6 +3117,7 @@ export class WhatsAppService {
               ? 'external_outgoing_message_persisted'
               : 'conversation_message_persisted',
           conversationId: conversation.id,
+          direction,
           messageId: message.id,
         };
       });
@@ -3122,7 +3127,10 @@ export class WhatsAppService {
           result.action === 'conversation_message_persisted' ||
           result.action === 'external_outgoing_message_persisted'
         ) {
-          this.emitMessageCreated(result.conversationId, result.messageId);
+          if (result.direction !== 'INBOUND' && result.direction !== 'OUTBOUND') {
+            throw new Error('Direction missing for WhatsApp message.created realtime event.');
+          }
+          this.emitMessageCreated(result.conversationId, result.messageId, result.direction);
           this.emitConversationUpdated(result.conversationId);
         } else if (result.action === 'outgoing_conversation_message_reconciled') {
           this.emitMessageUpdated(result.conversationId, result.messageId);

@@ -13,6 +13,10 @@ const whatsappSearchSource = readFileSync(
   join(currentDir, '../../components/whatsapp/WhatsAppSearch.tsx'),
   'utf8',
 );
+const whatsappRealtimeProviderSource = readFileSync(
+  join(currentDir, '../../components/whatsapp/WhatsAppRealtimeProvider.tsx'),
+  'utf8',
+);
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const primitivesSource = readFileSync(
   join(currentDir, '../../components/ui/primitives.tsx'),
@@ -44,8 +48,11 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(dashboardSource).toContain("{view === 'whatsapp' ? <WhatsAppView /> : null}");
     expect(dashboardSource).toContain("conversations: 'Inbox WhatsApp'");
     expect(dashboardSource).toContain("conversations: 'Inbox de atendimento WhatsApp'");
-    expect(dashboardSource).toContain('badge: conversationSummary?.totalUnreadConversations');
+    expect(dashboardSource).toContain(
+      'badge: formatUnreadBadge(conversationSummary?.totalUnreadMessages)',
+    );
     expect(stylesSource).toContain('.nav-item-badge');
+    expect(dashboardSource).toContain('WhatsAppRealtimeProvider');
   });
 
   it('keeps the desktop inbox as list, chat and client context columns', () => {
@@ -86,6 +93,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain("id: 'guests', label: 'Avulsos'");
     expect(conversationsSource).toContain('totalUnreadConversations');
     expect(conversationsSource).toContain('onSummaryChange(payload.summary)');
+    expect(dashboardSource).toContain('onSummaryChange={whatsappRealtime.setSummary}');
     expect(conversationsSource).toContain('Nenhuma conversa encontrada.');
     expect(whatsappSearchSource).toContain('Nenhuma mensagem encontrada');
     expect(conversationsSource).toContain('Falha ao carregar conversas.');
@@ -185,9 +193,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('uses SSE for realtime updates while keeping slower polling fallback', () => {
-    expect(conversationsSource).toContain('createWhatsAppRealtimeEventSource');
-    expect(conversationsSource).toContain('function useWhatsAppRealtime');
-    expect(conversationsSource).toContain('onConnectedChange: setRealtimeConnected');
+    expect(whatsappRealtimeProviderSource).toContain('createWhatsAppRealtimeEventSource');
+    expect(whatsappRealtimeProviderSource).toContain('function useWhatsAppRealtimeManager');
+    expect(conversationsSource).toContain('subscribeRealtime(handleRealtimeEvent)');
     expect(conversationsSource).toContain("event.type === 'message.created'");
     expect(conversationsSource).toContain("event.type === 'message.updated'");
     expect(conversationsSource).toContain("event.type === 'conversation.updated'");
@@ -203,6 +211,18 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('conversationMessagesRealtimeFallbackPollingMs');
     expect(conversationsSource).toContain('conversationListPollingMs');
     expect(conversationsSource).toContain('conversationMessagesPollingMs');
+  });
+
+  it('centralizes global unread, sound settings, and single SSE ownership in the provider', () => {
+    expect(whatsappRealtimeProviderSource).toContain(
+      'listWhatsAppConversations({ page: 1, pageSize: 1 })',
+    );
+    expect(whatsappRealtimeProviderSource).toContain("direction === 'INBOUND'");
+    expect(whatsappRealtimeProviderSource).toContain('soundEnabledStorageKey');
+    expect(whatsappRealtimeProviderSource).toContain('createLimitedMessageIdCache');
+    expect(whatsappRealtimeProviderSource).toContain('audio.play()');
+    expect(whatsappRealtimeProviderSource).toContain('audio.play().catch(() => undefined)');
+    expect(conversationsSource).not.toContain('function useWhatsAppRealtime({');
   });
 
   it('auto-marks visible active inbound realtime messages without flooding read requests', () => {

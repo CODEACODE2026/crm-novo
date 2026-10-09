@@ -406,6 +406,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   it('supports compact image, document and audio attachments in the conversation composer', () => {
     expect(conversationsSource).toContain('type ConversationComposerMedia');
     expect(conversationsSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
+    expect(conversationsSource).toContain('classifyConversationIncomingFile(file)');
     expect(conversationsSource).toContain('file.size > conversationMediaMaxBytes');
     expect(conversationsSource).toContain(
       'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
@@ -420,6 +421,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('allowedConversationAudioMimeTypes');
     expect(conversationsSource).toContain('accept="audio/ogg,audio/mpeg,audio/mp4"');
     expect(conversationsSource).toContain('Formato de áudio não suportado. Envie OGG, MP3 ou M4A.');
+    expect(conversationsSource).toContain(
+      "allowedConversationImageMimeTypes = new Set(['image/jpeg', 'image/png'])",
+    );
+    expect(conversationsSource).toContain('allowedConversationDocumentMimeTypes');
     expect(conversationsSource).toContain('conversation-attachment-preview');
     expect(conversationsSource).toContain('conversation-attachment-audio-preview');
     expect(conversationsSource).toContain('conversation-attach-menu');
@@ -597,6 +602,57 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(mobileConversationMediaSource).toContain(
       '.conversation-attachment-preview,\n  .conversation-voice-preview,\n  .conversation-voice-recorder',
     );
+  });
+
+  it('supports drag/drop and paste into the conversation attachment flow', () => {
+    expect(conversationsSource).toContain('function handleIncomingFile(');
+    expect(conversationsSource).toContain(
+      'function handleIncomingFileList(files: FileList | File[])',
+    );
+    expect(conversationsSource).toContain(
+      'onDragEnter={selectedConversation ? handleChatDragEnter : undefined}',
+    );
+    expect(conversationsSource).toContain(
+      'onDragLeave={selectedConversation ? handleChatDragLeave : undefined}',
+    );
+    expect(conversationsSource).toContain(
+      'onDragOver={selectedConversation ? handleChatDragOver : undefined}',
+    );
+    expect(conversationsSource).toContain(
+      'onDrop={selectedConversation ? handleChatDrop : undefined}',
+    );
+    expect(conversationsSource).toContain(
+      'onPaste={selectedConversation ? handleChatPaste : undefined}',
+    );
+    expect(conversationsSource).toContain('chatDropDepthRef.current += 1;');
+    expect(conversationsSource).toContain(
+      'chatDropDepthRef.current = Math.max(0, chatDropDepthRef.current - 1);',
+    );
+    expect(conversationsSource).toContain('resetChatDropState();');
+    expect(conversationsSource).toContain('handleIncomingFileList(event.dataTransfer.files);');
+    expect(conversationsSource).toContain(
+      'function clipboardIncomingFiles(clipboardData: DataTransfer)',
+    );
+    expect(conversationsSource).toContain('const filesByKey = new Map<string, File>();');
+    expect(conversationsSource).toContain(
+      'const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`;',
+    );
+    expect(conversationsSource).toContain("item.kind === 'file'");
+    expect(conversationsSource).toContain(
+      'Apenas um arquivo por vez. Usei o primeiro arquivo selecionado.',
+    );
+    expect(conversationsSource).toContain('if (sending || sendingRef.current) {');
+    expect(conversationsSource).toContain(
+      'Aguarde o envio atual terminar antes de anexar outro arquivo.',
+    );
+    expect(conversationsSource).toContain(
+      'Anexo selecionado como nova mensagem; respostas com mídia ainda não estão disponíveis.',
+    );
+    expect(conversationsSource).toContain('setReplyTarget(null);');
+    expect(conversationsSource).toContain('Solte o arquivo para anexar');
+    expect(stylesSource).toContain('.conversation-drop-overlay');
+    expect(stylesSource).toContain('border: 1px dashed');
+    expect(stylesSource).toContain('pointer-events: none;');
   });
 
   it('keeps conversation media downloads lazy and interaction-gated', () => {

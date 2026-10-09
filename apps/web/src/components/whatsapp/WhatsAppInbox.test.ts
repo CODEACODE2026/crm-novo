@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   advanceConversationListGeneration,
+  classifyConversationIncomingFile,
   isRenderableConversationMessage,
   mergeConversationById,
   mergeConversationLists,
@@ -71,6 +72,41 @@ function message(
 }
 
 describe('WhatsAppInbox unread reconciliation helpers', () => {
+  it('classifies incoming composer files with the same media rules used by upload', () => {
+    expect(
+      classifyConversationIncomingFile(new File(['image'], 'print.png', { type: 'image/png' })),
+    ).toEqual({ ok: true, kind: 'IMAGE' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['document'], 'contrato.pdf', { type: 'application/pdf' }),
+      ),
+    ).toEqual({ ok: true, kind: 'DOCUMENT' });
+    expect(
+      classifyConversationIncomingFile(new File(['audio'], 'audio.ogg', { type: 'audio/ogg' })),
+    ).toEqual({ ok: true, kind: 'AUDIO' });
+  });
+
+  it('rejects unsupported, oversized and non-enabled video composer files before upload', () => {
+    expect(
+      classifyConversationIncomingFile(new File(['video'], 'video.mp4', { type: 'video/mp4' })),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+
+    expect(
+      classifyConversationIncomingFile(new File(['audio'], 'audio.wav', { type: 'audio/wav' })),
+    ).toEqual({ ok: false, error: 'Formato de áudio não suportado. Envie OGG, MP3 ou M4A.' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'grande.pdf', {
+          type: 'application/pdf',
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      error: 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+    });
+  });
+
   it('removes the sidebar unread badge immediately when read returns zero', () => {
     const current = [conversation('a', { unreadCount: 1 })];
     const read = conversation('a', { unreadCount: 0, updatedAt: '2026-10-08T12:01:00.000Z' });

@@ -2,6 +2,8 @@
 
 import {
   Fragment,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -31,6 +33,7 @@ import {
   Send,
   Square,
   Trash2,
+  Upload,
   UserCheck,
   UserRoundPlus,
   X,
@@ -93,6 +96,9 @@ type ConversationComposerMedia = {
   previewUrl: string | null;
 };
 
+type ConversationIncomingFileResult =
+  { ok: true; kind: ConversationComposerMedia['kind'] } | { ok: false; error: string };
+
 type ConversationVoiceDraft = {
   conversationId: string;
   durationSeconds: number;
@@ -113,6 +119,13 @@ const conversationMessagesRealtimeFallbackPollingMs = 30000;
 const activeConversationReadDebounceMs = 180;
 const conversationMediaMaxBytes = 10 * 1024 * 1024;
 const conversationVoiceMaxSeconds = 60;
+const allowedConversationImageMimeTypes = new Set(['image/jpeg', 'image/png']);
+const allowedConversationDocumentMimeTypes = new Set([
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
 const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
@@ -147,6 +160,7 @@ export function WhatsAppInbox({
   const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
+  const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
   const [replyTarget, setReplyTarget] = useState<WhatsAppConversationMessage | null>(null);
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -236,6 +250,7 @@ export function WhatsAppInbox({
   const messageSearchRequestKeyRef = useRef('');
   const messageSearchResultsRef = useRef<WhatsAppMessageSearchResult[]>([]);
   const messageSearchIndexRef = useRef(0);
+  const chatDropDepthRef = useRef(0);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
 
@@ -250,6 +265,17 @@ export function WhatsAppInbox({
   useEffect(() => {
     summaryRef.current = summary;
   }, [summary]);
+
+  useEffect(() => {
+    chatDropDepthRef.current = 0;
+    setDropOverlayVisible(false);
+    setSelectedMedia((current) => {
+      if (current?.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return null;
+    });
+  }, [selectedConversation?.id]);
 
   const loadConversations = useCallback(
     async ({
@@ -1110,17 +1136,34 @@ export function WhatsAppInbox({
     };
   }, []);
 
-  function selectComposerMedia(kind: ConversationComposerMedia['kind'], file: File) {
-    setSendError('');
-
-    if (file.size > conversationMediaMaxBytes) {
-      setSendError('Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.');
-      return;
+  function handleIncomingFile(
+    file: File,
+    {
+      expectedKind = null,
+      notice = '',
+    }: { expectedKind?: ConversationComposerMedia['kind'] | null; notice?: string } = {},
+  ) {
+    if (sending || sendingRef.current) {
+      setSendError('Aguarde o envio atual terminar antes de anexar outro arquivo.');
+      return false;
     }
 
-    if (kind === 'AUDIO' && !allowedConversationAudioMimeTypes.has(file.type)) {
-      setSendError('Formato de áudio não suportado. Envie OGG, MP3 ou M4A.');
-      return;
+    const validation = classifyConversationIncomingFile(file);
+    if (!validation.ok) {
+      setSendError(validation.error);
+      return false;
+    }
+
+    if (expectedKind && validation.kind !== expectedKind) {
+      setSendError('Tipo de arquivo não suportado para esta opção de anexo.');
+      return false;
+    }
+
+    const replyNotice = replyTarget
+      ? 'Anexo selecionado como nova mensagem; respostas com mídia ainda não estão disponíveis.'
+      : '';
+    if (replyTarget) {
+      setReplyTarget(null);
     }
 
     setSelectedMedia((current) => {
@@ -1130,13 +1173,22 @@ export function WhatsAppInbox({
 
       return {
         file,
-        kind,
-        previewUrl: kind === 'IMAGE' || kind === 'AUDIO' ? URL.createObjectURL(file) : null,
+        kind: validation.kind,
+        previewUrl:
+          validation.kind === 'IMAGE' || validation.kind === 'AUDIO'
+            ? URL.createObjectURL(file)
+            : null,
       };
     });
+    setSendError([notice, replyNotice].filter(Boolean).join(' '));
     scheduleComposerFocus(() => {
       composerRef.current?.focus();
     });
+    return true;
+  }
+
+  function selectComposerMedia(kind: ConversationComposerMedia['kind'], file: File) {
+    handleIncomingFile(file, { expectedKind: kind });
   }
 
   function clearComposerMedia() {
@@ -1146,6 +1198,90 @@ export function WhatsAppInbox({
       }
       return null;
     });
+  }
+
+  function resetChatDropState() {
+    chatDropDepthRef.current = 0;
+    setDropOverlayVisible(false);
+  }
+
+  function dataTransferHasFiles(dataTransfer: DataTransfer) {
+    return Array.from(dataTransfer.types).includes('Files');
+  }
+
+  function handleIncomingFileList(files: FileList | File[]) {
+    const file = Array.from(files)[0];
+    if (!file) return false;
+
+    const notice =
+      files.length > 1 ? 'Apenas um arquivo por vez. Usei o primeiro arquivo selecionado.' : '';
+    return handleIncomingFile(file, { notice });
+  }
+
+  function clipboardIncomingFiles(clipboardData: DataTransfer) {
+    const filesByKey = new Map<string, File>();
+    const addFile = (file: File | null) => {
+      if (!file) return;
+      const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+      if (!filesByKey.has(key)) {
+        filesByKey.set(key, file);
+      }
+    };
+
+    Array.from(clipboardData.files).forEach(addFile);
+    Array.from(clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .forEach((item) => addFile(item.getAsFile()));
+
+    return Array.from(filesByKey.values());
+  }
+
+  function handleChatDragEnter(event: ReactDragEvent<HTMLElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+
+    event.preventDefault();
+    chatDropDepthRef.current += 1;
+    if (!sending && !sendingRef.current) {
+      setDropOverlayVisible(true);
+    }
+  }
+
+  function handleChatDragOver(event: ReactDragEvent<HTMLElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = sending || sendingRef.current ? 'none' : 'copy';
+  }
+
+  function handleChatDragLeave(event: ReactDragEvent<HTMLElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+
+    event.preventDefault();
+    chatDropDepthRef.current = Math.max(0, chatDropDepthRef.current - 1);
+    if (chatDropDepthRef.current === 0) {
+      setDropOverlayVisible(false);
+    }
+  }
+
+  function handleChatDrop(event: ReactDragEvent<HTMLElement>) {
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
+
+    event.preventDefault();
+    resetChatDropState();
+    handleIncomingFileList(event.dataTransfer.files);
+  }
+
+  function handleChatPaste(event: ReactClipboardEvent<HTMLElement>) {
+    const files = clipboardIncomingFiles(event.clipboardData);
+    if (!files.length) return;
+
+    event.preventDefault();
+    if (sending || sendingRef.current) {
+      setSendError('Aguarde o envio atual terminar antes de anexar outro arquivo.');
+      return;
+    }
+
+    handleIncomingFileList(files);
   }
 
   async function selectConversation(conversation: WhatsAppConversation) {
@@ -1879,9 +2015,25 @@ export function WhatsAppInbox({
           onStatusFilterChange={setStatusFilter}
         />
 
-        <section className="conversation-chat-panel" aria-label="Chat da conversa">
+        <section
+          className="conversation-chat-panel"
+          aria-label="Chat da conversa"
+          onDragEnter={selectedConversation ? handleChatDragEnter : undefined}
+          onDragLeave={selectedConversation ? handleChatDragLeave : undefined}
+          onDragOver={selectedConversation ? handleChatDragOver : undefined}
+          onDrop={selectedConversation ? handleChatDrop : undefined}
+          onPaste={selectedConversation ? handleChatPaste : undefined}
+        >
           {selectedConversation ? (
             <>
+              {dropOverlayVisible ? (
+                <div className="conversation-drop-overlay" role="status" aria-live="polite">
+                  <span aria-hidden="true">
+                    <Upload size={24} />
+                  </span>
+                  <strong>Solte o arquivo para anexar</strong>
+                </div>
+              ) : null}
               <ConversationHeader
                 conversation={selectedConversation}
                 opening={opening}
@@ -2561,6 +2713,35 @@ export function isRenderableConversationMessage(message: WhatsAppConversationMes
     message.type === 'DOCUMENT' ||
     message.type === 'LOCATION'
   );
+}
+
+export function classifyConversationIncomingFile(file: File): ConversationIncomingFileResult {
+  if (file.size > conversationMediaMaxBytes) {
+    return {
+      ok: false,
+      error: 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+    };
+  }
+
+  const mimeType = file.type.split(';')[0]?.trim().toLowerCase() || '';
+
+  if (allowedConversationImageMimeTypes.has(mimeType)) {
+    return { ok: true, kind: 'IMAGE' };
+  }
+
+  if (allowedConversationDocumentMimeTypes.has(mimeType)) {
+    return { ok: true, kind: 'DOCUMENT' };
+  }
+
+  if (allowedConversationAudioMimeTypes.has(mimeType)) {
+    return { ok: true, kind: 'AUDIO' };
+  }
+
+  if (mimeType.startsWith('audio/')) {
+    return { ok: false, error: 'Formato de áudio não suportado. Envie OGG, MP3 ou M4A.' };
+  }
+
+  return { ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' };
 }
 
 function ConversationBubble({

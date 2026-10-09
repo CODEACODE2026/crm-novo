@@ -2631,10 +2631,41 @@ a {
 }
 
 .conversation-chat-panel {
+  position: relative;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   background: var(--surface-soft);
   overflow: hidden;
+}
+
+.conversation-drop-overlay {
+  position: absolute;
+  inset: 10px;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 64%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  color: var(--accent-strong);
+  box-shadow: 0 12px 30px rgb(15 23 42 / 10%);
+  pointer-events: none;
+}
+
+.conversation-drop-overlay span {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.conversation-drop-overlay strong {
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .conversation-error-slot:empty {

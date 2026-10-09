@@ -2761,15 +2761,19 @@ a {
 .conversation-bubble {
   position: relative;
   max-width: min(76%, 680px);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 14px 14px 14px 5px;
   background: var(--surface);
-  padding: 8px 10px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 6%);
+  color: var(--text);
+  line-height: 1.42;
+  padding: 8px 10px 6px;
 }
 
 .conversation-bubble.outbound {
-  border-color: rgb(38 198 163 / 28%);
-  background: rgb(38 198 163 / 10%);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 14px 14px 5px 14px;
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
 }
 
 .conversation-bubble.has-image-media {
@@ -2785,20 +2789,23 @@ a {
 
 .conversation-reply-action {
   position: absolute;
-  top: 5px;
-  right: 5px;
+  top: 6px;
+  right: 6px;
   display: inline-grid;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
   opacity: 0;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 12%);
   transition:
+    background 0.15s ease,
     opacity 0.15s ease,
+    transform 0.15s ease,
     color 0.15s ease;
 }
 
@@ -2808,44 +2815,92 @@ a {
 }
 
 .conversation-reply-action:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .conversation-quote {
-  display: block;
+  position: relative;
+  display: grid;
+  gap: 2px;
   width: 100%;
-  max-width: 360px;
-  margin: 0 0 7px;
+  max-width: 420px;
+  min-width: 0;
+  margin: 0 0 6px;
   border: 0;
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: rgb(17 24 39 / 6%);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
   color: inherit;
   cursor: pointer;
-  padding: 6px 8px;
+  overflow: hidden;
+  padding: 6px 9px 6px 12px;
   text-align: left;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.conversation-quote::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.conversation-bubble.inbound .conversation-quote::before {
+  background: var(--info);
+}
+
+.conversation-bubble.outbound .conversation-quote {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.conversation-quote:hover {
+  background: color-mix(in srgb, var(--info) 9%, var(--surface-soft));
+  transform: translateY(-1px);
 }
 
 .conversation-quote.unavailable {
   cursor: default;
+  opacity: 0.82;
+}
+
+.conversation-quote.unavailable:hover {
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
+  transform: none;
 }
 
 .conversation-quote strong,
 .conversation-quote span {
-  display: block;
+  display: -webkit-box;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .conversation-quote strong {
-  color: var(--accent);
+  color: var(--accent-strong);
   font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .conversation-quote span {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.conversation-bubble.inbound .conversation-quote strong {
+  color: var(--info);
 }
 
 .conversation-media-meta {
@@ -3238,11 +3293,17 @@ a {
 
 .conversation-bubble footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 5px;
+  gap: 6px;
+  margin-top: 4px;
   color: var(--muted);
   font-size: 11px;
+  line-height: 1;
+}
+
+.conversation-bubble footer > span:first-child {
+  opacity: 0.86;
 }
 
 .conversation-message-failure {
@@ -3351,7 +3412,10 @@ a {
 
 .conversation-reply-preview {
   grid-template-columns: 24px minmax(0, 1fr) auto;
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
   border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-soft));
 }
 
 .conversation-voice-preview {
@@ -3431,6 +3495,11 @@ a {
 .conversation-reply-preview strong,
 .conversation-voice-preview strong {
   font-size: 12px;
+}
+
+.conversation-reply-preview strong {
+  color: var(--accent-strong);
+  font-weight: 800;
 }
 
 .conversation-attachment-preview small,
@@ -12404,6 +12473,11 @@ tbody tr:hover,
 
   .conversation-bubble {
     max-width: 88%;
+  }
+
+  .conversation-quote {
+    max-width: min(100%, 72vw);
+    padding: 6px 8px 6px 11px;
   }
 
   .conversation-bubble.has-image-media {

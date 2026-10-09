@@ -114,7 +114,7 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
 
     const audio = audioRef.current ?? new Audio(notificationSoundPath);
     audioRef.current = audio;
-    audio.volume = 0.32;
+    audio.volume = 0.7;
     audio.currentTime = 0;
 
     void audio.play().catch(() => undefined);

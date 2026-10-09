@@ -4458,6 +4458,40 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['null text', null, null, null],
+    ['empty text', '', null, null],
+    ['blank text', '   ', null, null],
+    ['empty media metadata', null, {}, null],
+    ['empty media download metadata', null, null, {}],
+    ['generic technical metadata', null, { originalType: 'text', provider: 'KIRAGO' }, null],
+  ])(
+    'ignores inbound TEXT webhooks with %s and no real text content',
+    async (_label, text, mediaMetadata, mediaDownloadMetadata) => {
+      const { service, prisma, normalizer, realtime } = serviceFactory();
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound('', {
+          messageId: 'empty-text-message',
+          messageType: 'text',
+          text,
+          mediaMetadata,
+          mediaDownloadMetadata,
+        }),
+      );
+
+      await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+        processed: false,
+        reason: 'no_renderable_content',
+      });
+      expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+      expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+      expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+      expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+      expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+      expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not create a WhatsAppMessage for ReadReceipt webhooks', async () => {
     const { service, prisma, normalizer } = serviceFactory();
     normalizer.normalize.mockReturnValue(normalizedReceipt());
@@ -4471,6 +4505,7 @@ describe('WhatsAppService', () => {
 
   it.each([
     ['image', 'IMAGE', { kind: 'image', mimetype: 'image/jpeg', size: 123 }],
+    ['video', 'VIDEO', { kind: 'video', mimetype: 'video/mp4', seconds: 12 }],
     ['audio', 'AUDIO', { kind: 'audio', mimetype: 'audio/ogg', seconds: 8 }],
     [
       'document',

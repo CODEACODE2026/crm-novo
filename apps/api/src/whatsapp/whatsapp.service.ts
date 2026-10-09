@@ -5298,8 +5298,8 @@ export class WhatsAppService {
       return true;
     }
 
-    if (normalized.mediaMetadata || normalized.mediaDownloadMetadata) {
-      return true;
+    if (normalized.messageType === 'text') {
+      return false;
     }
 
     return ['image', 'video', 'audio', 'document', 'location', 'live_location'].includes(

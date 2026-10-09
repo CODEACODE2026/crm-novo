@@ -61,6 +61,27 @@ describe('KiragoWebhookNormalizer', () => {
     expect(result?.messageTimestamp?.toISOString()).toBe('2026-09-11T01:00:00.000Z');
   });
 
+  it('normalizes text Message payloads without body as empty text without media metadata', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'empty-text-provider-id', Type: 'text' },
+          Message: {},
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageId: 'empty-text-provider-id',
+      direction: 'INCOMING',
+      messageType: 'text',
+      text: null,
+      mediaMetadata: null,
+      mediaDownloadMetadata: null,
+    });
+  });
+
   it.each([
     [{ extendedTextMessage: { text: 'Texto estendido' } }, 'text', 'Texto estendido'],
     [

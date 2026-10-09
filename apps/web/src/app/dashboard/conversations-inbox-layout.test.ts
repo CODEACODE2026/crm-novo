@@ -406,12 +406,15 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('supports compact image, document, audio and video attachments in the conversation composer', () => {
     expect(conversationsSource).toContain('type ConversationComposerMedia');
-    expect(conversationsSource).toContain('const conversationMediaMaxBytes = 10 * 1024 * 1024;');
+    expect(conversationsSource).toContain(
+      'const defaultConversationMediaMaxBytes = 10 * 1024 * 1024;',
+    );
+    expect(conversationsSource).toContain(
+      'const videoConversationMediaMaxBytes = defaultConversationMediaMaxBytes;',
+    );
     expect(conversationsSource).toContain('classifyConversationIncomingFile(file)');
     expect(conversationsSource).toContain('file.size > maxBytes');
-    expect(conversationsSource).toContain(
-      'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
-    );
+    expect(conversationsSource).toContain('Arquivo excede o limite de 10 MB permitido.');
     expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
     expect(conversationsSource).toContain('file: mediaToSend.file');
     expect(conversationsSource).toContain('caption: body');

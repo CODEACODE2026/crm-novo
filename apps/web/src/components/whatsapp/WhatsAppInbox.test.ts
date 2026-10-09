@@ -223,20 +223,27 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       ),
     ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
 
-    expect(
-      classifyConversationIncomingFile(
-        new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'grande.pdf', {
-          type: 'application/pdf',
-        }),
-      ),
-    ).toEqual({
-      ok: false,
-      error: 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
-    });
+    const oneMb = 1024 * 1024;
 
     expect(
       classifyConversationIncomingFile(
-        new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'grande.mp4', {
+        new File([new Uint8Array(9 * oneMb)], 'video-9mb.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(10 * oneMb)], 'video-10mb.mp4', {
+          type: 'video/mp4',
+        }),
+      ),
+    ).toEqual({ ok: true, kind: 'VIDEO' });
+
+    expect(
+      classifyConversationIncomingFile(
+        new File([new Uint8Array(10 * oneMb + 1)], 'grande.mp4', {
           type: 'video/mp4',
         }),
       ),
@@ -244,6 +251,18 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       ok: false,
       error: 'Vídeo excede o limite de 10 MB permitido para envio por WhatsApp.',
     });
+
+    for (const file of [
+      new File([new Uint8Array(10 * oneMb + 1)], 'grande.pdf', { type: 'application/pdf' }),
+      new File([new Uint8Array(10 * oneMb + 1)], 'grande.zip', { type: 'application/zip' }),
+      new File([new Uint8Array(10 * oneMb + 1)], 'grande.jpg', { type: 'image/jpeg' }),
+      new File([new Uint8Array(10 * oneMb + 1)], 'grande.mp3', { type: 'audio/mpeg' }),
+    ]) {
+      expect(classifyConversationIncomingFile(file)).toEqual({
+        ok: false,
+        error: 'Arquivo excede o limite de 10 MB permitido.',
+      });
+    }
   });
 
   it('uses central classifier and composer helpers for drag/drop and paste video files', () => {

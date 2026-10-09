@@ -164,7 +164,7 @@ export class WhatsAppController {
   @Post('conversations/:id/media')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: { fileSize: WhatsAppService.conversationMediaMaxBytes },
+      limits: { fileSize: WhatsAppService.conversationUploadMaxBytes },
     }),
   )
   sendConversationMedia(

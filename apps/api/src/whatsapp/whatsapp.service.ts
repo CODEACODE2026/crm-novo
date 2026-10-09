@@ -122,6 +122,8 @@ const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 const allowedVideoMimeTypes = new Set(['video/mp4']);
 const allowedVideoExtensions = new Set(['mp4']);
 const allowedVoiceInputMimeTypes = new Set(['audio/webm', 'audio/webm;codecs=opus']);
+const defaultConversationMediaMaxBytes = 10 * 1024 * 1024;
+const videoConversationMediaMaxBytes = defaultConversationMediaMaxBytes;
 const whatsappMessageQuoteSelect = {
   id: true,
   direction: true,
@@ -332,8 +334,9 @@ type ResolvedWhatsAppReplyTarget = {
 
 @Injectable()
 export class WhatsAppService {
-  static readonly conversationMediaMaxBytes = 10 * 1024 * 1024;
-  static readonly conversationVideoMaxBytes = WhatsAppService.conversationMediaMaxBytes;
+  static readonly conversationMediaMaxBytes = defaultConversationMediaMaxBytes;
+  static readonly conversationVideoMaxBytes = videoConversationMediaMaxBytes;
+  static readonly conversationUploadMaxBytes = WhatsAppService.conversationVideoMaxBytes;
   static readonly conversationVoiceMaxBytes = 5 * 1024 * 1024;
 
   private readonly logger = new Logger(WhatsAppService.name);
@@ -1123,7 +1126,7 @@ export class WhatsAppService {
       const buffer = await this.mediaStorage.read(localMedia.storageKey);
 
       if (buffer) {
-        if (buffer.length > WhatsAppService.conversationMediaMaxBytes) {
+        if (buffer.length > this.conversationMediaMaxBytesForType(type)) {
           throw new PayloadTooLargeException({
             code: 'MEDIA_TOO_LARGE',
             message: 'Midia excede o limite interno do CRM.',
@@ -1164,8 +1167,9 @@ export class WhatsAppService {
     mediaDownload: ConversationMediaDownload,
   ): Promise<DownloadedConversationMedia> {
     const expectedSize = message.mediaSizeBytes ?? mediaDownload.FileLength;
+    const maxBytes = this.conversationMediaMaxBytesForType(type);
 
-    if (expectedSize > WhatsAppService.conversationMediaMaxBytes) {
+    if (expectedSize > maxBytes) {
       throw new PayloadTooLargeException({
         code: 'MEDIA_TOO_LARGE',
         message: 'Midia excede o limite interno do CRM.',
@@ -1183,7 +1187,7 @@ export class WhatsAppService {
       type,
       ...mediaDownload,
     });
-    const parsed = this.parseProviderMediaDataUrl(response.dataUrl);
+    const parsed = this.parseProviderMediaDataUrl(response.dataUrl, maxBytes);
     const mimetype = response.mimetype || parsed.mimetype;
 
     if (mimetype !== parsed.mimetype) {
@@ -1195,7 +1199,7 @@ export class WhatsAppService {
 
     this.assertSafeConversationMediaMime(type, mimetype);
 
-    if (parsed.buffer.length > WhatsAppService.conversationMediaMaxBytes) {
+    if (parsed.buffer.length > maxBytes) {
       throw new PayloadTooLargeException({
         code: 'MEDIA_TOO_LARGE',
         message: 'Midia excede o limite interno do CRM.',
@@ -4292,7 +4296,7 @@ export class WhatsAppService {
       throw new BadRequestException(
         isVideoFile
           ? 'Video excede o limite de 10 MB permitido para envio por WhatsApp.'
-          : 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+          : 'Arquivo excede o limite de 10 MB permitido.',
       );
     }
 
@@ -5854,7 +5858,10 @@ export class WhatsAppService {
     );
   }
 
-  private parseProviderMediaDataUrl(dataUrl: string) {
+  private parseProviderMediaDataUrl(
+    dataUrl: string,
+    maxBytes = WhatsAppService.conversationMediaMaxBytes,
+  ) {
     const match = dataUrl.match(/^data:([^,]+);base64,([a-z0-9+/=\r\n]+)$/i);
 
     if (!match || !match[1] || !match[2]) {
@@ -5867,7 +5874,7 @@ export class WhatsAppService {
     const compactBase64 = match[2].replace(/\s+/g, '');
     const estimatedBytes = Math.floor((compactBase64.length * 3) / 4);
 
-    if (estimatedBytes > WhatsAppService.conversationMediaMaxBytes + 2) {
+    if (estimatedBytes > maxBytes + 2) {
       throw new PayloadTooLargeException({
         code: 'MEDIA_TOO_LARGE',
         message: 'Midia excede o limite interno do CRM.',
@@ -5945,6 +5952,12 @@ export class WhatsAppService {
       );
     }
     return normalized === 'video/mp4';
+  }
+
+  private conversationMediaMaxBytesForType(type: DownloadMediaType) {
+    return type === 'VIDEO'
+      ? WhatsAppService.conversationVideoMaxBytes
+      : WhatsAppService.conversationMediaMaxBytes;
   }
 
   private normalizeMediaMimeType(mimetype: string) {

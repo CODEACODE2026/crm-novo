@@ -118,8 +118,10 @@ const conversationMessagesPollingMs = 4000;
 const conversationListRealtimeFallbackPollingMs = 60000;
 const conversationMessagesRealtimeFallbackPollingMs = 30000;
 const activeConversationReadDebounceMs = 180;
-const conversationMediaMaxBytes = 10 * 1024 * 1024;
-const conversationVideoMaxBytes = conversationMediaMaxBytes;
+const defaultConversationMediaMaxBytes = 10 * 1024 * 1024;
+const videoConversationMediaMaxBytes = defaultConversationMediaMaxBytes;
+const conversationMediaMaxBytes = defaultConversationMediaMaxBytes;
+const conversationVideoMaxBytes = videoConversationMediaMaxBytes;
 const conversationVoiceMaxSeconds = 60;
 const allowedConversationImageMimeTypes = new Set(['image/jpeg', 'image/png']);
 const allowedConversationDocumentMimeTypes = new Set([
@@ -2751,7 +2753,7 @@ export function classifyConversationIncomingFile(file: File): ConversationIncomi
       ok: false,
       error: isVideoFile
         ? 'Vídeo excede o limite de 10 MB permitido para envio por WhatsApp.'
-        : 'Arquivo excede o limite interno do CRM de 10 MB para envio por WhatsApp.',
+        : 'Arquivo excede o limite de 10 MB permitido.',
     };
   }
 

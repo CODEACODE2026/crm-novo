@@ -1524,6 +1524,61 @@ describe('WhatsAppService', () => {
     });
   });
 
+  it.each([
+    ['9 MB', 9 * 1024 * 1024],
+    ['10 MB', 10 * 1024 * 1024],
+  ] as const)(
+    'accepts %s MP4 conversation media under the 10 MB video limit',
+    async (_label, size) => {
+      const { service, provider } = serviceFactory({
+        mediaStorageOverrides: {
+          storeOutboundMedia: vi.fn().mockResolvedValue({
+            storageKey: `${connection().id}/${conversationMessage().id}/dddddddd-dddd-4ddd-8ddd-dddddddddddd`,
+            mimeType: 'video/mp4',
+            sizeBytes: size,
+          }),
+        },
+        prismaOverrides: {
+          whatsAppConversation: {
+            findUnique: vi.fn().mockResolvedValue(
+              conversation({
+                whatsAppConnection: connection({
+                  status: 'CONNECTED',
+                  connected: true,
+                  loggedIn: true,
+                }),
+              }),
+            ),
+            update: vi.fn().mockResolvedValue(conversation()),
+            findMany: vi.fn().mockResolvedValue([]),
+            count: vi.fn().mockResolvedValue(0),
+            aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+            create: vi.fn().mockResolvedValue(conversation()),
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
+        },
+      });
+
+      await service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.from('mp4-bytes'),
+          mimetype: 'video/mp4',
+          originalname: 'video.mp4',
+          size,
+        },
+        requestId: `video-size-${size}`,
+      });
+
+      expect(provider.sendVideo).toHaveBeenCalledWith(
+        'instance-token',
+        expect.objectContaining({
+          mimeType: 'video/mp4',
+          videoDataUrl: expect.stringMatching(/^data:video\/mp4;base64,/),
+        }),
+      );
+    },
+  );
+
   it('converts browser WebM voice recording to OGG and sends it as PTT audio', async () => {
     const webmBuffer = Buffer.from('webm-opus-bytes');
     const oggBuffer = Buffer.from('ogg-opus-bytes');
@@ -2568,6 +2623,42 @@ describe('WhatsAppService', () => {
           size: WhatsAppService.conversationMediaMaxBytes + 1,
         },
         requestId: 'large-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'application/zip',
+          originalname: 'grande.zip',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-zip-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'image/jpeg',
+          originalname: 'grande.jpg',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-image-request-id',
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    await expect(
+      service.sendConversationMediaMessage(conversation().id, {
+        file: {
+          buffer: Buffer.alloc(1),
+          mimetype: 'audio/mpeg',
+          originalname: 'grande.mp3',
+          size: WhatsAppService.conversationMediaMaxBytes + 1,
+        },
+        requestId: 'large-audio-request-id',
       }),
     ).rejects.toThrow(BadRequestException);
 
@@ -7134,6 +7225,55 @@ describe('WhatsAppService', () => {
     });
     expect(result.buffer.equals(localData)).toBe(true);
     expect(JSON.stringify(result)).not.toContain('storageKey');
+  });
+
+  it('downloads local outbound VIDEO at the 10 MB media limit', async () => {
+    const localData = Buffer.alloc(WhatsAppService.conversationVideoMaxBytes, 'v');
+    const { service, provider, mediaStorage } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(localData),
+        isSafeStorageKey: vi.fn().mockReturnValue(true),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'message-video',
+              type: 'VIDEO',
+              mediaMimeType: 'video/mp4',
+              mediaFileName: 'video.mp4',
+              mediaSizeBytes: localData.length,
+              rawMetadata: {
+                localMedia: {
+                  storageKey: `${connection().id}/message-video/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+                  mimeType: 'video/mp4',
+                  sizeBytes: localData.length,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    const result = await service.downloadConversationMessageMedia(
+      conversation().id,
+      'message-video',
+    );
+
+    expect(mediaStorage.read).toHaveBeenCalledWith(
+      `${connection().id}/message-video/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    expect(provider.downloadMedia).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      contentLength: localData.length,
+      disposition: 'inline',
+      fileName: 'video.mp4',
+      mimetype: 'video/mp4',
+    });
   });
 
   it('falls back to provider download when local metadata exists but the local file is missing', async () => {

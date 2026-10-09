@@ -74,6 +74,15 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     ).toBeLessThan(controllerSource.indexOf("@Get('conversations/:id')"));
   });
 
+  it('keeps media upload multipart size aligned to the video ceiling', () => {
+    expect(controllerSource).toContain(
+      'limits: { fileSize: WhatsAppService.conversationUploadMaxBytes }',
+    );
+    expect(controllerSource).toContain(
+      'limits: { fileSize: WhatsAppService.conversationVoiceMaxBytes }',
+    );
+  });
+
   it('routes conversation inbox operations to the service', async () => {
     const service = {
       listConversations: vi.fn().mockResolvedValue({ items: [] }),

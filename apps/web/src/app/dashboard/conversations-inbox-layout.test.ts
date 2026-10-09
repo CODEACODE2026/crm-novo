@@ -171,7 +171,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('readConversation.unreadCount');
     expect(conversationsSource).toContain('mergeConversationById(current, readConversation)');
     expect(conversationsSource).toContain(
-      'if (activeConversationIdRef.current === readConversation.id)',
+      'activeConversationIdRef.current === readConversation.id',
     );
     expect(conversationsSource).toContain('updateConversationSummaryAfterRead');
     expect(conversationsSource).toContain('resolveWhatsAppConversation(selectedConversation.id)');
@@ -202,6 +202,36 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('conversationMessagesRealtimeFallbackPollingMs');
     expect(conversationsSource).toContain('conversationListPollingMs');
     expect(conversationsSource).toContain('conversationMessagesPollingMs');
+  });
+
+  it('auto-marks visible active inbound realtime messages without flooding read requests', () => {
+    expect(conversationsSource).toContain('shouldAutoReadRealtimeMessage');
+    expect(conversationsSource).toContain("event.type === 'message.created'");
+    expect(conversationsSource).toContain("messageDirection === 'INBOUND'");
+    expect(conversationsSource).toContain("document.visibilityState === 'visible'");
+    expect(conversationsSource).toContain('document.hasFocus()');
+    expect(conversationsSource).toContain('activeConversationReadDebounceMs');
+    expect(conversationsSource).toContain('pendingReadTimeoutsRef');
+    expect(conversationsSource).toContain('readInFlightConversationIdsRef');
+    expect(conversationsSource).toContain('readRetryConversationIdsRef');
+    expect(conversationsSource).toContain('readConversation.unreadCount > 0');
+    expect(conversationsSource).toContain('shouldRetryActiveConversationRead');
+    expect(conversationsSource).toContain('activeConversation.unreadCount > 0');
+    expect(conversationsSource).toContain(
+      'activeConversationIdRef.current === readConversation.id',
+    );
+    expect(conversationsSource).toContain('activeConversationIdRef.current === conversationId');
+  });
+
+  it('waits for tab visibility and cleans up read visibility listeners', () => {
+    expect(conversationsSource).toContain('shouldReadVisibleConversationOnReturn');
+    expect(conversationsSource).toContain("document.addEventListener('visibilitychange'");
+    expect(conversationsSource).toContain("window.addEventListener('focus'");
+    expect(conversationsSource).toContain("window.addEventListener('blur'");
+    expect(conversationsSource).toContain("document.removeEventListener('visibilitychange'");
+    expect(conversationsSource).toContain("window.removeEventListener('focus'");
+    expect(conversationsSource).toContain("window.removeEventListener('blur'");
+    expect(conversationsSource).toContain('clearPendingReadTimeouts()');
   });
 
   it('opens selected conversations at the bottom only after the initial messages render', () => {

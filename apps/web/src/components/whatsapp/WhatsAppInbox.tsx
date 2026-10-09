@@ -109,6 +109,7 @@ const conversationListPollingMs = 10000;
 const conversationMessagesPollingMs = 4000;
 const conversationListRealtimeFallbackPollingMs = 60000;
 const conversationMessagesRealtimeFallbackPollingMs = 30000;
+const activeConversationReadDebounceMs = 180;
 const conversationMediaMaxBytes = 10 * 1024 * 1024;
 const conversationVoiceMaxSeconds = 60;
 const allowedConversationAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
@@ -210,10 +211,17 @@ export function WhatsAppInbox({
   const retryingMessagesRef = useRef(new Set<string>());
   const startingConversationRef = useRef(false);
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
+  const pendingReadTimeoutsRef = useRef(new Map<string, number>());
+  const readInFlightConversationIdsRef = useRef(new Set<string>());
+  const readRetryConversationIdsRef = useRef(new Set<string>());
+  const activeConversationReadSchedulerRef = useRef<(conversationId: string) => void>(() => {});
   const conversationListQueryKeyRef = useRef('');
   const olderMessagesLoadedRef = useRef(false);
   const olderMessagesLoadingRef = useRef(false);
   const messagesRef = useRef<WhatsAppConversationMessage[]>([]);
+  const conversationsRef = useRef<WhatsAppConversation[]>([]);
+  const selectedConversationRef = useRef<WhatsAppConversation | null>(null);
+  const summaryRef = useRef<WhatsAppConversationSummary | null>(null);
   const targetHighlightTimeoutRef = useRef<number | null>(null);
   const openMessageSearchGenerationRef = useRef(0);
   const messageSearchRequestKeyRef = useRef('');
@@ -221,6 +229,18 @@ export function WhatsAppInbox({
   const messageSearchIndexRef = useRef(0);
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversation;
+  }, [selectedConversation]);
+
+  useEffect(() => {
+    summaryRef.current = summary;
+  }, [summary]);
 
   const loadConversations = useCallback(
     async ({
@@ -316,7 +336,7 @@ export function WhatsAppInbox({
           page: firstConversationPage,
           pageSize: conversationMessagesPageSize,
         });
-        if (activeConversationIdRef.current !== conversationId) return;
+        if (activeConversationIdRef.current !== conversationId) return null;
         const mergedMessages = replace
           ? mergeConversationMessages([], payload.items)
           : mergeConversationMessages(messagesRef.current, payload.items);
@@ -339,8 +359,10 @@ export function WhatsAppInbox({
             }
           });
         }
+        return mergedMessages;
       } catch (err) {
         setMessagesError(conversationErrorMessage(err, 'Falha ao carregar mensagens.'));
+        return null;
       } finally {
         if (!silent) {
           setMessagesLoading(false);
@@ -694,6 +716,149 @@ export function WhatsAppInbox({
     void loadStartConversationConnections();
   }, [loadStartConversationConnections]);
 
+  const isAppVisibleAndFocused = useCallback(
+    () => document.visibilityState === 'visible' && document.hasFocus(),
+    [],
+  );
+
+  const applyReadConversation = useCallback(
+    (
+      readConversation: WhatsAppConversation,
+      unreadBeforeRead: number,
+      { updateSelected = true }: { updateSelected?: boolean } = {},
+    ) => {
+      setConversations((current) => {
+        const next = mergeConversationById(current, readConversation);
+        conversationsRef.current = next;
+        return next;
+      });
+
+      if (updateSelected && activeConversationIdRef.current === readConversation.id) {
+        setSelectedConversation(readConversation);
+        selectedConversationRef.current = readConversation;
+      }
+
+      setSummary((current) => {
+        const next = updateConversationSummaryAfterRead(
+          current,
+          unreadBeforeRead,
+          readConversation.unreadCount,
+        );
+        if (next !== current) {
+          summaryRef.current = next;
+          onSummaryChange(next);
+        }
+        return next;
+      });
+    },
+    [onSummaryChange],
+  );
+
+  const clearPendingReadTimeout = useCallback((conversationId: string) => {
+    const timeout = pendingReadTimeoutsRef.current.get(conversationId);
+    if (timeout === undefined) return;
+    window.clearTimeout(timeout);
+    pendingReadTimeoutsRef.current.delete(conversationId);
+  }, []);
+
+  const clearPendingReadTimeouts = useCallback(() => {
+    for (const timeout of pendingReadTimeoutsRef.current.values()) {
+      window.clearTimeout(timeout);
+    }
+    pendingReadTimeoutsRef.current.clear();
+  }, []);
+
+  const runActiveConversationRead = useCallback(
+    async (conversationId: string) => {
+      clearPendingReadTimeout(conversationId);
+
+      if (activeConversationIdRef.current !== conversationId || !isAppVisibleAndFocused()) return;
+
+      if (readInFlightConversationIdsRef.current.has(conversationId)) {
+        readRetryConversationIdsRef.current.add(conversationId);
+        return;
+      }
+
+      readInFlightConversationIdsRef.current.add(conversationId);
+      lastReadConversationRef.current = conversationId;
+
+      try {
+        const detail = await getWhatsAppConversation(conversationId);
+        setConversations((current) => {
+          const next = mergeConversationById(current, detail);
+          conversationsRef.current = next;
+          return next;
+        });
+        if (activeConversationIdRef.current === detail.id) {
+          setSelectedConversation(detail);
+          selectedConversationRef.current = detail;
+        }
+
+        if (
+          activeConversationIdRef.current !== conversationId ||
+          !isAppVisibleAndFocused() ||
+          detail.unreadCount <= 0
+        ) {
+          return;
+        }
+
+        const readConversation = await markWhatsAppConversationRead(detail.id);
+        applyReadConversation(readConversation, detail.unreadCount);
+
+        if (
+          readConversation.unreadCount > 0 &&
+          activeConversationIdRef.current === conversationId &&
+          isAppVisibleAndFocused()
+        ) {
+          readRetryConversationIdsRef.current.add(conversationId);
+        }
+      } catch {
+        readRetryConversationIdsRef.current.delete(conversationId);
+      } finally {
+        readInFlightConversationIdsRef.current.delete(conversationId);
+        lastReadConversationRef.current = null;
+
+        const retryRequested = readRetryConversationIdsRef.current.delete(conversationId);
+        const activeConversation =
+          selectedConversationRef.current?.id === conversationId
+            ? selectedConversationRef.current
+            : (conversationsRef.current.find(
+                (conversation) => conversation.id === conversationId,
+              ) ?? null);
+
+        if (
+          shouldRetryActiveConversationRead({
+            activeConversation,
+            activeConversationId: activeConversationIdRef.current,
+            conversationId,
+            focused: document.hasFocus(),
+            retryRequested,
+            visible: document.visibilityState === 'visible',
+          })
+        ) {
+          activeConversationReadSchedulerRef.current(conversationId);
+        }
+      }
+    },
+    [applyReadConversation, clearPendingReadTimeout, isAppVisibleAndFocused],
+  );
+
+  const scheduleActiveConversationRead = useCallback(
+    (conversationId: string, delayMs = activeConversationReadDebounceMs) => {
+      if (activeConversationIdRef.current !== conversationId || !isAppVisibleAndFocused()) return;
+
+      clearPendingReadTimeout(conversationId);
+      const timeout = window.setTimeout(() => {
+        pendingReadTimeoutsRef.current.delete(conversationId);
+        void runActiveConversationRead(conversationId);
+      }, delayMs);
+      pendingReadTimeoutsRef.current.set(conversationId, timeout);
+    },
+    [clearPendingReadTimeout, isAppVisibleAndFocused, runActiveConversationRead],
+  );
+
+  activeConversationReadSchedulerRef.current = scheduleActiveConversationRead;
+
   const scheduleRealtimeListRefresh = useCallback(() => {
     if (realtimeListRefreshTimeoutRef.current !== null) {
       window.clearTimeout(realtimeListRefreshTimeoutRef.current);
@@ -709,7 +874,24 @@ export function WhatsAppInbox({
     (event: WhatsAppRealtimeEvent) => {
       if (event.type === 'message.created' || event.type === 'message.updated') {
         if (activeConversationIdRef.current === event.conversationId) {
-          void loadMessages(event.conversationId, { silent: true });
+          void (async () => {
+            const loadedMessages = await loadMessages(event.conversationId, { silent: true });
+            const createdMessage = event.messageId
+              ? loadedMessages?.find((message) => message.id === event.messageId)
+              : null;
+            if (
+              shouldAutoReadRealtimeMessage({
+                activeConversationId: activeConversationIdRef.current,
+                conversationId: event.conversationId,
+                eventType: event.type,
+                messageDirection: createdMessage?.direction ?? null,
+                visible: document.visibilityState === 'visible',
+                focused: document.hasFocus(),
+              })
+            ) {
+              scheduleActiveConversationRead(event.conversationId);
+            }
+          })();
         }
         scheduleRealtimeListRefresh();
         return;
@@ -719,13 +901,60 @@ export function WhatsAppInbox({
         scheduleRealtimeListRefresh();
       }
     },
-    [loadMessages, scheduleRealtimeListRefresh],
+    [loadMessages, scheduleActiveConversationRead, scheduleRealtimeListRefresh],
   );
 
   useWhatsAppRealtime({
     onConnectedChange: setRealtimeConnected,
     onEvent: handleRealtimeEvent,
   });
+
+  useEffect(() => {
+    const scheduleVisibleActiveConversationRead = () => {
+      const conversationId = activeConversationIdRef.current;
+      const activeConversation = conversationId
+        ? ((selectedConversationRef.current?.id === conversationId
+            ? selectedConversationRef.current
+            : conversationsRef.current.find(
+                (conversation) => conversation.id === conversationId,
+              )) ?? null)
+        : null;
+
+      if (
+        conversationId &&
+        shouldReadVisibleConversationOnReturn({
+          activeConversation,
+          activeConversationId: conversationId,
+          visible: document.visibilityState === 'visible',
+          focused: document.hasFocus(),
+        })
+      ) {
+        scheduleActiveConversationRead(conversationId);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        clearPendingReadTimeouts();
+        return;
+      }
+
+      scheduleVisibleActiveConversationRead();
+    };
+    const handleFocus = () => scheduleVisibleActiveConversationRead();
+    const handleBlur = () => clearPendingReadTimeouts();
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+      clearPendingReadTimeouts();
+    };
+  }, [clearPendingReadTimeouts, scheduleActiveConversationRead]);
 
   useEffect(() => {
     const delay = realtimeConnected
@@ -924,32 +1153,8 @@ export function WhatsAppInbox({
       setSelectedConversation(detail);
       setConversations((current) => mergeConversationById(current, detail));
 
-      if (detail.unreadCount > 0 && lastReadConversationRef.current !== detail.id) {
-        const unreadBeforeRead = detail.unreadCount;
-        lastReadConversationRef.current = detail.id;
-        try {
-          const readConversation = await markWhatsAppConversationRead(detail.id);
-          setConversations((current) => mergeConversationById(current, readConversation));
-          if (activeConversationIdRef.current === readConversation.id) {
-            setSelectedConversation(readConversation);
-          }
-
-          setSummary((current) => {
-            const next = updateConversationSummaryAfterRead(
-              current,
-              unreadBeforeRead,
-              readConversation.unreadCount,
-            );
-            if (next !== current) {
-              onSummaryChange(next);
-            }
-            return next;
-          });
-        } catch {
-          if (lastReadConversationRef.current === detail.id) {
-            lastReadConversationRef.current = null;
-          }
-        }
+      if (detail.unreadCount > 0) {
+        scheduleActiveConversationRead(detail.id);
       }
 
       if (detail.client?.id) {
@@ -3924,6 +4129,76 @@ export function updateConversationSummaryAfterRead(
         : summary.totalUnreadConversations,
     totalUnreadMessages: Math.max(0, summary.totalUnreadMessages - readDelta),
   };
+}
+
+export function shouldAutoReadRealtimeMessage({
+  activeConversationId,
+  conversationId,
+  eventType,
+  messageDirection,
+  visible,
+  focused,
+}: {
+  activeConversationId: string | null;
+  conversationId: string;
+  eventType: WhatsAppRealtimeEvent['type'];
+  messageDirection: WhatsAppConversationMessage['direction'] | null;
+  visible: boolean;
+  focused: boolean;
+}) {
+  return (
+    eventType === 'message.created' &&
+    activeConversationId === conversationId &&
+    messageDirection === 'INBOUND' &&
+    visible &&
+    focused
+  );
+}
+
+export function shouldReadVisibleConversationOnReturn({
+  activeConversation,
+  activeConversationId,
+  visible,
+  focused,
+}: {
+  activeConversation: WhatsAppConversation | null;
+  activeConversationId: string | null;
+  visible: boolean;
+  focused: boolean;
+}) {
+  return Boolean(
+    activeConversation &&
+    activeConversation.id === activeConversationId &&
+    activeConversation.unreadCount > 0 &&
+    visible &&
+    focused,
+  );
+}
+
+export function shouldRetryActiveConversationRead({
+  activeConversation,
+  activeConversationId,
+  conversationId,
+  retryRequested,
+  visible,
+  focused,
+}: {
+  activeConversation: WhatsAppConversation | null;
+  activeConversationId: string | null;
+  conversationId: string;
+  retryRequested: boolean;
+  visible: boolean;
+  focused: boolean;
+}) {
+  return Boolean(
+    retryRequested &&
+    activeConversation &&
+    activeConversation.id === conversationId &&
+    activeConversation.id === activeConversationId &&
+    activeConversation.unreadCount > 0 &&
+    visible &&
+    focused,
+  );
 }
 
 function compareMessageSearchResultsByTime(

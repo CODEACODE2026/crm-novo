@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   isRenderableConversationMessage,
   mergeConversationById,
+  shouldAutoReadRealtimeMessage,
+  shouldReadVisibleConversationOnReturn,
+  shouldRetryActiveConversationRead,
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
 import type { WhatsAppConversation, WhatsAppConversationMessage } from '../../lib/crm-api';
@@ -144,5 +147,157 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toBe(true);
     expect(isRenderableConversationMessage(message({ type: 'VIDEO', text: null }))).toBe(true);
     expect(isRenderableConversationMessage(message({ type: 'LOCATION', text: null }))).toBe(true);
+  });
+
+  it('auto-read only accepts active visible focused inbound message.created events', () => {
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'a',
+        conversationId: 'a',
+        eventType: 'message.created',
+        messageDirection: 'INBOUND',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'a',
+        conversationId: 'a',
+        eventType: 'message.created',
+        messageDirection: 'OUTBOUND',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'a',
+        conversationId: 'b',
+        eventType: 'message.created',
+        messageDirection: 'INBOUND',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'a',
+        conversationId: 'a',
+        eventType: 'message.updated',
+        messageDirection: 'INBOUND',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'a',
+        conversationId: 'a',
+        eventType: 'message.created',
+        messageDirection: 'INBOUND',
+        visible: false,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoReadRealtimeMessage({
+        activeConversationId: 'a',
+        conversationId: 'a',
+        eventType: 'message.created',
+        messageDirection: 'INBOUND',
+        visible: true,
+        focused: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('marks visible active conversations on return only when unread remains', () => {
+    expect(
+      shouldReadVisibleConversationOnReturn({
+        activeConversation: conversation('a', { unreadCount: 2 }),
+        activeConversationId: 'a',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldReadVisibleConversationOnReturn({
+        activeConversation: conversation('a', { unreadCount: 0 }),
+        activeConversationId: 'a',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReadVisibleConversationOnReturn({
+        activeConversation: conversation('a', { unreadCount: 2 }),
+        activeConversationId: 'a',
+        visible: false,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReadVisibleConversationOnReturn({
+        activeConversation: conversation('a', { unreadCount: 2 }),
+        activeConversationId: 'b',
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('retries active reads only when a retry is requested and unread remains visible', () => {
+    expect(
+      shouldRetryActiveConversationRead({
+        activeConversation: conversation('a', { unreadCount: 1 }),
+        activeConversationId: 'a',
+        conversationId: 'a',
+        retryRequested: true,
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetryActiveConversationRead({
+        activeConversation: conversation('a', { unreadCount: 0 }),
+        activeConversationId: 'a',
+        conversationId: 'a',
+        retryRequested: true,
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryActiveConversationRead({
+        activeConversation: conversation('a', { unreadCount: 1 }),
+        activeConversationId: 'b',
+        conversationId: 'a',
+        retryRequested: true,
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryActiveConversationRead({
+        activeConversation: conversation('a', { unreadCount: 1 }),
+        activeConversationId: 'a',
+        conversationId: 'a',
+        retryRequested: true,
+        visible: true,
+        focused: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryActiveConversationRead({
+        activeConversation: conversation('a', { unreadCount: 1 }),
+        activeConversationId: 'a',
+        conversationId: 'a',
+        retryRequested: false,
+        visible: true,
+        focused: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -717,6 +717,8 @@ model WhatsAppMessage {
   deliveredAt              DateTime?
   readAt                   DateTime?
   failedAt                 DateTime?
+  deletedAt                DateTime?
+  deletedForEveryone       Boolean                              @default(false)
   isFromMe                 Boolean                              @default(false)
   rawMetadata              Json?
   createdAt                DateTime                             @default(now())

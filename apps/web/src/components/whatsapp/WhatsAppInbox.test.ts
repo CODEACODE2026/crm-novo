@@ -12,6 +12,7 @@ import {
   createConversationComposerMedia,
   disposeConversationComposerMedia,
   conversationMessageCaption,
+  isDeleteEligibleConversationMessage,
   isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
   isTechnicalVideoPlaceholder,
@@ -72,6 +73,9 @@ function message(
     deliveredAt: null,
     readAt: null,
     failedAt: null,
+    deleted: false,
+    deletedAt: null,
+    deletedForEveryone: false,
     isFromMe: false,
     providerMessageId: 'provider-message-1',
     replyTo: null,
@@ -657,6 +661,49 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toBe('Meu vídeo');
   });
 
+  it('keeps deleted tombstones renderable while hiding media captions and reactions in source', () => {
+    const deleted = message({
+      direction: 'OUTBOUND',
+      type: 'IMAGE',
+      text: null,
+      deleted: true,
+      deletedAt: '2026-10-10T12:35:00.000Z',
+      deletedForEveryone: true,
+      mediaAvailable: true,
+      mediaFileName: 'foto.png',
+      reactions: [reaction({ emoji: '❤️' })],
+      retryAction: 'RETRY',
+    });
+
+    expect(isRenderableConversationMessage(deleted)).toBe(true);
+    expect(conversationMessageCaption(deleted)).toBe('');
+    expect(isDeleteEligibleConversationMessage(deleted)).toBe(false);
+    expect(whatsAppInboxSource).toContain('Mensagem apagada');
+    expect(whatsAppInboxSource).toContain('!message.deleted ? <ConversationReactionSummary');
+    expect(whatsAppInboxSource).toContain('!message.deleted ? (');
+  });
+
+  it('shows delete action only for outbound provider-backed messages with confirmation UX', () => {
+    expect(
+      isDeleteEligibleConversationMessage(
+        message({ direction: 'OUTBOUND', providerMessageId: 'provider-id' }),
+      ),
+    ).toBe(true);
+    expect(
+      isDeleteEligibleConversationMessage(
+        message({ direction: 'INBOUND', providerMessageId: 'provider-id' }),
+      ),
+    ).toBe(false);
+    expect(
+      isDeleteEligibleConversationMessage(
+        message({ direction: 'OUTBOUND', providerMessageId: null }),
+      ),
+    ).toBe(false);
+    expect(whatsAppInboxSource).toContain('Apagar esta mensagem?');
+    expect(whatsAppInboxSource).toContain('deleteWhatsAppConversationMessage');
+    expect(globalStylesSource).toContain('.conversation-delete-confirm');
+  });
+
   it('auto-read only accepts active visible focused inbound message.created events', () => {
     expect(
       shouldAutoReadRealtimeMessage({
@@ -1041,5 +1088,41 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       ['❤️', 2],
       ['😂', 1],
     ]);
+  });
+
+  it('replaces stale message state with a deleted realtime tombstone', () => {
+    const stale = message({
+      id: 'message-delete',
+      direction: 'OUTBOUND',
+      type: 'DOCUMENT',
+      text: 'contrato secreto',
+      mediaFileName: 'Contrato sigiloso.pdf',
+      mediaMimeType: 'application/pdf',
+      mediaSizeBytes: 123,
+      mediaAvailable: true,
+      retryAction: 'RETRY',
+      reactions: [reaction({ emoji: '❤️', isFromMe: true })],
+    });
+    const tombstone = message({
+      id: 'message-delete',
+      direction: 'OUTBOUND',
+      type: 'DOCUMENT',
+      text: null,
+      deleted: true,
+      deletedAt: '2026-10-10T12:35:00.000Z',
+      deletedForEveryone: true,
+      mediaFileName: null,
+      mediaMimeType: null,
+      mediaSizeBytes: null,
+      mediaAvailable: false,
+      retryAction: null,
+      reactions: [],
+    });
+    const merged = mergeConversationMessages([stale], [tombstone]);
+
+    expect(merged).toEqual([tombstone]);
+    expect(JSON.stringify(merged)).not.toContain('contrato secreto');
+    expect(JSON.stringify(merged)).not.toContain('Contrato sigiloso.pdf');
+    expect(JSON.stringify(merged)).not.toContain('❤️');
   });
 });

@@ -12,6 +12,7 @@ import {
   createReceivablePix,
   createReceivablesPix,
   createWhatsAppRealtimeEventSource,
+  deleteWhatsAppConversationMessage,
   deleteClient,
   formatCurrency,
   formatDate,
@@ -1419,6 +1420,7 @@ describe('CRM UI formatters', () => {
     await getWhatsAppConversationMessagesAround('conversation-id', 'message-id', { limit: 15 });
     await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', '❤️');
     await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', null);
+    await deleteWhatsAppConversationMessage('conversation-id', 'message-id');
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1530,6 +1532,11 @@ describe('CRM UI formatters', () => {
         method: 'PUT',
         body: JSON.stringify({ emoji: null }),
       }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      15,
+      expect.stringContaining('/whatsapp/conversations/conversation-id/messages/message-id'),
+      expect.objectContaining({ method: 'DELETE' }),
     );
   });
 

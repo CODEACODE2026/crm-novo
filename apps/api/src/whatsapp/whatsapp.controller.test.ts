@@ -121,6 +121,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
       updateConversationMessageReaction: vi.fn().mockResolvedValue({ id: 'message-id' }),
+      deleteConversationMessage: vi.fn().mockResolvedValue({ id: 'deleted-message-id' }),
       retryConversationMessage: vi.fn().mockResolvedValue({ id: 'retry-message-id' }),
       sendConversationMediaMessage: vi.fn().mockResolvedValue({ id: 'media-message-id' }),
       sendConversationVoiceMessage: vi.fn().mockResolvedValue({ id: 'voice-message-id' }),
@@ -177,6 +178,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(
       subject.updateConversationMessageReaction('conversation-id', 'message-id', { emoji: '❤️' }),
     ).resolves.toEqual({ id: 'message-id' });
+    await expect(
+      subject.deleteConversationMessage('conversation-id', 'message-id'),
+    ).resolves.toEqual({ id: 'deleted-message-id' });
     await expect(
       subject.retryConversationMessage('99999999-9999-4999-8999-999999999999'),
     ).resolves.toEqual({ id: 'retry-message-id' });
@@ -254,6 +258,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       'message-id',
       { emoji: '❤️' },
     );
+    expect(service.deleteConversationMessage).toHaveBeenCalledWith('conversation-id', 'message-id');
     expect(service.retryConversationMessage).toHaveBeenCalledWith(
       '99999999-9999-4999-8999-999999999999',
     );

@@ -2847,7 +2847,36 @@ a {
   z-index: 8;
 }
 
+.conversation-delete-action-wrap {
+  position: absolute;
+  top: 6px;
+  right: 74px;
+  z-index: 9;
+}
+
 .conversation-reaction-action {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px rgb(15 23 42 / 16%);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    color 0.15s ease;
+}
+
+.conversation-delete-action {
   display: inline-grid;
   width: 30px;
   height: 30px;
@@ -2871,14 +2900,18 @@ a {
 
 .conversation-bubble:hover .conversation-reply-action,
 .conversation-bubble:hover .conversation-reaction-action,
+.conversation-bubble:hover .conversation-delete-action,
 .conversation-reply-action:focus-visible,
 .conversation-reaction-action:focus-visible,
-.conversation-reaction-action[aria-expanded='true'] {
+.conversation-delete-action:focus-visible,
+.conversation-reaction-action[aria-expanded='true'],
+.conversation-delete-action[aria-expanded='true'] {
   opacity: 1;
 }
 
 .conversation-reply-action:hover,
-.conversation-reaction-action:hover {
+.conversation-reaction-action:hover,
+.conversation-delete-action:hover {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   color: var(--accent);
@@ -2886,9 +2919,58 @@ a {
   transform: translateY(-1px);
 }
 
-.conversation-reaction-action:disabled {
+.conversation-reaction-action:disabled,
+.conversation-delete-action:disabled {
   cursor: wait;
   opacity: 0.76;
+}
+
+.conversation-delete-confirm {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  width: 190px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  padding: 10px;
+}
+
+.conversation-delete-confirm span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.conversation-delete-confirm div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.conversation-delete-confirm button {
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 8px;
+}
+
+.conversation-delete-confirm button:last-child {
+  border-color: rgb(255 107 107 / 42%);
+  background: rgb(255 107 107 / 10%);
+  color: var(--danger);
+}
+
+.conversation-message-deleted {
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .conversation-reaction-picker {

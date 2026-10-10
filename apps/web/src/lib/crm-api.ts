@@ -733,6 +733,9 @@ export interface WhatsAppConversationMessage {
   deliveredAt: string | null;
   readAt: string | null;
   failedAt: string | null;
+  deleted: boolean;
+  deletedAt: string | null;
+  deletedForEveryone: boolean;
   isFromMe: boolean;
   providerMessageId: string | null;
   replyToMessageId: string | null;
@@ -744,6 +747,9 @@ export interface WhatsAppConversationMessage {
     type: WhatsAppConversationMessageType;
     text: string | null;
     mediaFileName: string | null;
+    deleted: boolean;
+    deletedAt: string | null;
+    deletedForEveryone: boolean;
   } | null;
   mediaMimeType: string | null;
   mediaFileName: string | null;
@@ -2653,6 +2659,13 @@ export function updateWhatsAppConversationMessageReaction(
       method: 'PUT',
       body: JSON.stringify({ emoji }),
     },
+  );
+}
+
+export function deleteWhatsAppConversationMessage(conversationId: string, messageId: string) {
+  return apiFetch<WhatsAppConversationMessage>(
+    `/whatsapp/conversations/${conversationId}/messages/${messageId}`,
+    { method: 'DELETE' },
   );
 }
 

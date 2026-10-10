@@ -132,6 +132,11 @@ export type SendReactionInput = {
   participant?: string | null;
 };
 
+export type DeleteMessageInput = {
+  phone: string;
+  providerMessageId: string;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -151,6 +156,7 @@ export interface WhatsAppProvider {
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput): Promise<void>;
   sendReaction(instanceToken: string, input: SendReactionInput): Promise<void>;
+  deleteMessage(instanceToken: string, input: DeleteMessageInput): Promise<void>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

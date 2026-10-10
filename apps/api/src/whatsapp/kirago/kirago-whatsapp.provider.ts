@@ -8,6 +8,7 @@ import { KiragoProviderError } from './kirago-provider.error';
 import type {
   DownloadMediaInput,
   MarkMessagesAsReadInput,
+  DeleteMessageInput,
   ProvisionConnectionInput,
   RemoteConnectionLookupInput,
   SendButtonsInput,
@@ -283,6 +284,21 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       throw new KiragoProviderError(
         'WHATSAPP_PROVIDER_ERROR',
         'Falha ao reagir mensagem na Kirago.',
+        response.code,
+      );
+    }
+  }
+
+  async deleteMessage(instanceToken: string, input: DeleteMessageInput) {
+    const response = await this.instanceClient.deleteMessage(instanceToken, {
+      Phone: input.phone,
+      Id: input.providerMessageId,
+    });
+
+    if (response.success !== true || response.code !== 200) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao apagar mensagem na Kirago.',
         response.code,
       );
     }

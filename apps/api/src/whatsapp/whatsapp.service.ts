@@ -136,6 +136,8 @@ const whatsappMessageQuoteSelect = {
   type: true,
   text: true,
   mediaFileName: true,
+  deletedAt: true,
+  deletedForEveryone: true,
 } satisfies Prisma.WhatsAppMessageSelect;
 const whatsappMessageReplyInclude = {
   replyTo: { select: whatsappMessageQuoteSelect },
@@ -325,7 +327,7 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
 
 type WhatsAppConversationMessageQuote = Pick<
   WhatsAppMessage,
-  'id' | 'direction' | 'type' | 'text' | 'mediaFileName'
+  'id' | 'direction' | 'type' | 'text' | 'mediaFileName' | 'deletedAt' | 'deletedForEveryone'
 >;
 
 type WhatsAppConversationMessageForPresenter = WhatsAppMessage & {
@@ -343,6 +345,8 @@ type WhatsAppReplyTargetMessage = Pick<
   | 'type'
   | 'text'
   | 'mediaFileName'
+  | 'deletedAt'
+  | 'deletedForEveryone'
 >;
 
 type ResolvedWhatsAppReplyTarget = {
@@ -1011,6 +1015,8 @@ export class WhatsAppService {
     const where: Prisma.WhatsAppMessageWhereInput = {
       ...(query.conversationId ? { conversationId: query.conversationId } : {}),
       type: 'TEXT',
+      deletedAt: null,
+      deletedForEveryone: false,
       text: { not: null, contains: q, mode: 'insensitive' },
     };
 
@@ -1127,6 +1133,13 @@ export class WhatsAppService {
       throw new BadRequestException({
         code: 'MESSAGE_CONVERSATION_MISMATCH',
         message: 'Mensagem nao pertence a conversa informada.',
+      });
+    }
+
+    if (message.deletedAt || message.deletedForEveryone) {
+      throw new BadRequestException({
+        code: 'MESSAGE_DELETED',
+        message: 'Midia indisponivel para mensagem apagada.',
       });
     }
 
@@ -1460,6 +1473,10 @@ export class WhatsAppService {
       throw new BadRequestException('Mensagem WhatsApp ainda nao possui id do provider.');
     }
 
+    if (target.deletedAt || target.deletedForEveryone) {
+      throw new ConflictException('Mensagem apagada nao pode receber reacao.');
+    }
+
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
 
     await this.mapConnectionProviderError(connection, () =>
@@ -1504,6 +1521,68 @@ export class WhatsAppService {
         where: { id: target.id },
         include: whatsappMessageReplyInclude,
       });
+    });
+
+    this.emitMessageUpdated(conversation.id, target.id);
+    return this.presentConversationMessage(updated);
+  }
+
+  async deleteConversationMessage(conversationId: string, messageId: string) {
+    const target = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, conversationId },
+      include: {
+        conversation: { include: { whatsAppConnection: true } },
+        ...whatsappMessageReplyInclude,
+      },
+    });
+
+    if (!target) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada nesta conversa.');
+    }
+
+    const conversation = target.conversation;
+    const connection = conversation.whatsAppConnection;
+
+    if (
+      target.conversationId !== conversation.id ||
+      target.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
+      target.provider !== conversation.provider
+    ) {
+      throw new BadRequestException('Mensagem WhatsApp nao pertence a esta conversa.');
+    }
+
+    if (target.deletedAt || target.deletedForEveryone) {
+      return this.presentConversationMessage(target);
+    }
+
+    if (target.direction !== 'OUTBOUND') {
+      throw new ConflictException('Somente mensagens enviadas pelo CRM podem ser apagadas.');
+    }
+
+    if (!target.providerMessageId) {
+      throw new BadRequestException('Mensagem WhatsApp ainda nao possui id do provider.');
+    }
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+
+    await this.mapConnectionProviderError(connection, () =>
+      this.provider.deleteMessage(instanceToken, {
+        phone: conversation.phoneNormalized,
+        providerMessageId: target.providerMessageId!,
+      }),
+    );
+
+    const updated = await this.prisma.whatsAppMessage.update({
+      where: { id: target.id },
+      data: {
+        deletedAt: new Date(),
+        deletedForEveryone: true,
+      },
+      include: whatsappMessageReplyInclude,
     });
 
     this.emitMessageUpdated(conversation.id, target.id);
@@ -3665,6 +3744,8 @@ export class WhatsAppService {
         type: true,
         text: true,
         mediaFileName: true,
+        deletedAt: true,
+        deletedForEveryone: true,
       },
     });
 
@@ -4211,6 +4292,8 @@ export class WhatsAppService {
         type: true,
         text: true,
         mediaFileName: true,
+        deletedAt: true,
+        deletedForEveryone: true,
       },
     });
 
@@ -5607,36 +5690,50 @@ export class WhatsAppService {
   }
 
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {
+    const deleted = Boolean(message.deletedAt || message.deletedForEveryone);
+
     return {
       id: message.id,
       direction: message.direction,
       type: message.type,
-      text: message.text,
+      text: deleted ? null : message.text,
       status: message.status,
       sentAt: message.sentAt,
       deliveredAt: message.deliveredAt,
       readAt: message.readAt,
       failedAt: message.failedAt,
+      deleted,
+      deletedAt: message.deletedAt,
+      deletedForEveryone: message.deletedForEveryone,
       isFromMe: message.isFromMe,
       providerMessageId: message.providerMessageId,
       replyToMessageId: message.replyToMessageId,
       replyToProviderMessageId: message.replyToProviderMessageId,
-      quotedText: message.quotedText,
+      quotedText: deleted ? null : message.quotedText,
       replyTo: message.replyTo
         ? {
             id: message.replyTo.id,
             direction: message.replyTo.direction,
             type: message.replyTo.type,
-            text: message.replyTo.text,
-            mediaFileName: message.replyTo.mediaFileName,
+            text:
+              message.replyTo.deletedAt || message.replyTo.deletedForEveryone
+                ? null
+                : message.replyTo.text,
+            mediaFileName:
+              message.replyTo.deletedAt || message.replyTo.deletedForEveryone
+                ? null
+                : message.replyTo.mediaFileName,
+            deleted: Boolean(message.replyTo.deletedAt || message.replyTo.deletedForEveryone),
+            deletedAt: message.replyTo.deletedAt,
+            deletedForEveryone: message.replyTo.deletedForEveryone,
           }
         : null,
-      mediaMimeType: message.mediaMimeType,
-      mediaFileName: message.mediaFileName,
-      mediaSizeBytes: message.mediaSizeBytes,
-      mediaDurationSeconds: message.mediaDurationSeconds,
-      reactions: this.presentMessageReactions(message.reactions ?? []),
-      mediaAvailable: this.hasAvailableMedia(message),
+      mediaMimeType: deleted ? null : message.mediaMimeType,
+      mediaFileName: deleted ? null : message.mediaFileName,
+      mediaSizeBytes: deleted ? null : message.mediaSizeBytes,
+      mediaDurationSeconds: deleted ? null : message.mediaDurationSeconds,
+      reactions: deleted ? [] : this.presentMessageReactions(message.reactions ?? []),
+      mediaAvailable: deleted ? false : this.hasAvailableMedia(message),
       retryAction: this.conversationMessageRetryAction(message),
       messageDispatchId: message.messageDispatchId,
       createdAt: message.createdAt,
@@ -5698,6 +5795,10 @@ export class WhatsAppService {
   }
 
   private conversationMessageRetryAction(message: WhatsAppConversationMessageForPresenter) {
+    if (message.deletedAt || message.deletedForEveryone) {
+      return null;
+    }
+
     if (message.direction !== 'OUTBOUND' || message.status !== 'FAILED') {
       return null;
     }
@@ -5978,7 +6079,16 @@ export class WhatsAppService {
     return '[Mensagem]';
   }
 
-  private whatsAppQuotePreview(message: Pick<WhatsAppMessage, 'type' | 'text' | 'mediaFileName'>) {
+  private whatsAppQuotePreview(
+    message: Pick<
+      WhatsAppMessage,
+      'type' | 'text' | 'mediaFileName' | 'deletedAt' | 'deletedForEveryone'
+    >,
+  ) {
+    if (message.deletedAt || message.deletedForEveryone) {
+      return 'Mensagem apagada';
+    }
+
     const text = message.text?.trim();
 
     if (text) {
@@ -6210,6 +6320,10 @@ export class WhatsAppService {
   }
 
   private hasAvailableMedia(message: WhatsAppConversationMessageForPresenter) {
+    if (message.deletedAt || message.deletedForEveryone) {
+      return false;
+    }
+
     const type = this.supportedDownloadMediaType(message.type);
 
     return Boolean(

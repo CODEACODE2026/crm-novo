@@ -3,6 +3,7 @@ import {
   Body,
   Catch,
   Controller,
+  Delete,
   ExceptionFilter,
   Get,
   Headers,
@@ -187,6 +188,14 @@ export class WhatsAppController {
     @Body() dto: UpdateWhatsAppMessageReactionDto,
   ) {
     return this.whatsAppService.updateConversationMessageReaction(conversationId, messageId, dto);
+  }
+
+  @Delete('conversations/:conversationId/messages/:messageId')
+  deleteConversationMessage(
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.whatsAppService.deleteConversationMessage(conversationId, messageId);
   }
 
   @Post('messages/:id/retry')

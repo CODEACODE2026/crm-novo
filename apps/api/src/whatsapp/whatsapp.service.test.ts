@@ -256,6 +256,8 @@ function conversationMessage(overrides: Record<string, unknown> = {}) {
     deliveredAt: null,
     readAt: null,
     failedAt: null,
+    deletedAt: null,
+    deletedForEveryone: false,
     isFromMe: false,
     rawMetadata: null,
     createdAt: now,
@@ -605,6 +607,7 @@ function serviceFactory({
     sendVideo: vi.fn().mockResolvedValue({ providerMessageId: 'provider-video-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     sendReaction: vi.fn().mockResolvedValue(undefined),
+    deleteMessage: vi.fn().mockResolvedValue(undefined),
     markMessagesAsRead: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn().mockResolvedValue({
       dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
@@ -7808,6 +7811,338 @@ describe('WhatsAppService', () => {
     expect(missingTargetProvider.sendReaction).not.toHaveBeenCalled();
   });
 
+  it('deletes outbound provider messages provider-first and emits only message.updated', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+      text: 'Conteudo sensivel',
+      reactions: [{ id: 'reaction-id', emoji: '❤️', reactorKey: 'crm:self', isFromMe: true }],
+    });
+    const updated = conversationMessage({
+      ...target,
+      deletedAt: now,
+      deletedForEveryone: true,
+      reactions: target.reactions,
+    });
+    const { service, provider, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUnique: vi.fn().mockResolvedValue(updated),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(updated),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(updated),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.deleteConversationMessage(connectedConversation.id, target.id);
+
+    expect(provider.deleteMessage).toHaveBeenCalledWith('instance-token', {
+      phone: connectedConversation.phoneNormalized,
+      providerMessageId: 'provider-outbound',
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+      where: { id: target.id },
+      data: {
+        deletedAt: expect.any(Date),
+        deletedForEveryone: true,
+      },
+      include: expect.any(Object),
+    });
+    expect(result).toMatchObject({
+      id: target.id,
+      deleted: true,
+      text: null,
+      mediaAvailable: false,
+      retryAction: null,
+      reactions: [],
+    });
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+  });
+
+  it('keeps outbound messages intact when provider delete fails', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+    });
+    const { service, prisma } = serviceFactory({
+      providerOverrides: {
+        deleteMessage: vi.fn().mockRejectedValue(new Error('provider failed')),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUnique: vi.fn().mockResolvedValue(target),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(target),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(
+      service.deleteConversationMessage(connectedConversation.id, target.id),
+    ).rejects.toThrow();
+
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects inbound and providerless delete candidates before provider call', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const { service: inboundService, provider: inboundProvider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(
+            conversationMessage({
+              direction: 'INBOUND',
+              providerMessageId: 'provider-inbound',
+              conversation: connectedConversation,
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      inboundService.deleteConversationMessage(connectedConversation.id, 'message-id'),
+    ).rejects.toThrow(ConflictException);
+    expect(inboundProvider.deleteMessage).not.toHaveBeenCalled();
+
+    const { service: providerlessService, provider: providerlessProvider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(
+            conversationMessage({
+              direction: 'OUTBOUND',
+              providerMessageId: null,
+              conversation: connectedConversation,
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      providerlessService.deleteConversationMessage(connectedConversation.id, 'message-id'),
+    ).rejects.toThrow(BadRequestException);
+    expect(providerlessProvider.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns already deleted messages idempotently without calling the provider', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-outbound',
+      deletedAt: now,
+      deletedForEveryone: true,
+      conversation: connectedConversation,
+    });
+    const { service, provider, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          update: vi.fn().mockResolvedValue(target),
+        },
+      },
+    });
+
+    const result = await service.deleteConversationMessage(connectedConversation.id, target.id);
+
+    expect(provider.deleteMessage).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: target.id, deleted: true, text: null });
+  });
+
+  it('does not allow reactions on deleted messages', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(
+            conversationMessage({
+              deletedAt: now,
+              deletedForEveryone: true,
+              conversation: connectedConversation,
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      service.updateConversationMessageReaction(connectedConversation.id, 'message-id', {
+        emoji: '👍',
+      }),
+    ).rejects.toThrow(ConflictException);
+    expect(provider.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['TEXT', 'IMAGE', 'AUDIO', 'DOCUMENT', 'VIDEO'] as const)(
+    'returns a masked tombstone after deleting %s messages',
+    async (type) => {
+      const connectedConversation = conversation({
+        whatsAppConnection: connection({
+          status: 'CONNECTED',
+          connected: true,
+          loggedIn: true,
+        }),
+      });
+      const target = conversationMessage({
+        direction: 'OUTBOUND',
+        providerMessageId: `provider-${type.toLowerCase()}`,
+        conversation: connectedConversation,
+        type,
+        text: type === 'TEXT' ? 'palavra-unica-delete-final' : 'caption antiga',
+        mediaMimeType: type === 'TEXT' ? null : 'application/octet-stream',
+        mediaFileName: type === 'DOCUMENT' ? 'Contrato sigiloso.pdf' : null,
+        mediaSizeBytes: type === 'TEXT' ? null : 123,
+        mediaDurationSeconds: type === 'AUDIO' || type === 'VIDEO' ? 7 : null,
+        rawMetadata:
+          type === 'TEXT'
+            ? null
+            : {
+                localMedia: {
+                  storageKey: `${connection().id}/message-${type.toLowerCase()}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+                  mimeType: 'application/octet-stream',
+                  sizeBytes: 123,
+                },
+              },
+        reactions: [
+          {
+            id: 'reaction-id',
+            messageId: 'message-id',
+            whatsAppConnectionId: connection().id,
+            provider: 'KIRAGO',
+            emoji: '❤️',
+            reactorKey: 'crm:self',
+            isFromMe: true,
+            providerReactionId: null,
+            participant: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      });
+      const updated = conversationMessage({
+        ...target,
+        deletedAt: now,
+        deletedForEveryone: true,
+      });
+      const { service } = serviceFactory({
+        prismaOverrides: {
+          whatsAppMessage: {
+            findFirst: vi.fn().mockResolvedValue(target),
+            update: vi.fn().mockResolvedValue(updated),
+          },
+        },
+      });
+
+      const result = await service.deleteConversationMessage(connectedConversation.id, target.id);
+
+      expect(result).toMatchObject({
+        deleted: true,
+        deletedAt: now,
+        deletedForEveryone: true,
+        text: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+        mediaSizeBytes: null,
+        mediaDurationSeconds: null,
+        mediaAvailable: false,
+        reactions: [],
+        retryAction: null,
+      });
+      expect(JSON.stringify(result)).not.toContain('palavra-unica-delete-final');
+      expect(JSON.stringify(result)).not.toContain('caption antiga');
+      expect(JSON.stringify(result)).not.toContain('Contrato sigiloso.pdf');
+      expect(JSON.stringify(result)).not.toContain('storageKey');
+    },
+  );
+
+  it('blocks private media download for deleted tombstones before storage or provider access', async () => {
+    const { service, provider, mediaStorage } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              id: 'message-image',
+              type: 'IMAGE',
+              deletedAt: now,
+              deletedForEveryone: true,
+              rawMetadata: {
+                localMedia: {
+                  storageKey: `${connection().id}/message-image/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+                  mimeType: 'image/jpeg',
+                  sizeBytes: 10,
+                },
+                mediaDownload: {
+                  Url: 'https://mmg.whatsapp.net/image',
+                  MediaKey: 'secret-media-key',
+                  Mimetype: 'image/jpeg',
+                  FileSHA256: 'secret-file-sha',
+                  FileLength: 10,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      service.downloadConversationMessageMedia(conversation().id, 'message-image'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MESSAGE_DELETED' }),
+    });
+    expect(mediaStorage.read).not.toHaveBeenCalled();
+    expect(provider.downloadMedia).not.toHaveBeenCalled();
+  });
+
   it('uses id as the tie-break for same-timestamp message cursors', async () => {
     const cursorCreatedAt = new Date('2026-10-03T10:00:00.000Z');
     const { service, prisma } = serviceFactory({
@@ -7924,6 +8259,8 @@ describe('WhatsAppService', () => {
       where: {
         conversationId: conversation().id,
         type: 'TEXT',
+        deletedAt: null,
+        deletedForEveryone: false,
         text: { not: null, contains: 'bruno', mode: 'insensitive' },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -7939,6 +8276,40 @@ describe('WhatsAppService', () => {
       snippet: 'Bruno, combinado.',
     });
     expect(JSON.stringify(result.items[0])).not.toContain('rawMetadata');
+  });
+
+  it('excludes deleted text messages from search by tombstone invariant', async () => {
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+        },
+      },
+    });
+
+    const result = await service.searchConversationMessages({
+      conversationId: conversation().id,
+      q: 'palavra-unica-delete-final',
+      page: 1,
+      limit: 10,
+    });
+    const findManyArgs = (prisma.whatsAppMessage.findMany as MockWithCalls).mock.calls[0]?.[0] as {
+      where?: Record<string, unknown>;
+    };
+
+    expect(findManyArgs.where).toMatchObject({
+      conversationId: conversation().id,
+      type: 'TEXT',
+      deletedAt: null,
+      deletedForEveryone: false,
+      text: {
+        not: null,
+        contains: 'palavra-unica-delete-final',
+        mode: 'insensitive',
+      },
+    });
+    expect(result.items).toEqual([]);
   });
 
   it('keeps global message search compatible when conversationId is omitted', async () => {

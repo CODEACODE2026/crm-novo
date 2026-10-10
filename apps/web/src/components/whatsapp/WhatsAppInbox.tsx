@@ -55,6 +55,7 @@ import {
 import {
   ApiError,
   createClient,
+  deleteWhatsAppConversationMessage,
   downloadWhatsAppConversationMedia,
   formatCurrency,
   getClient,
@@ -230,6 +231,9 @@ export function WhatsAppInbox({
   const [reactionErrors, setReactionErrors] = useState<Record<string, string>>({});
   const [reactingMessageIds, setReactingMessageIds] = useState<Set<string>>(new Set());
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null);
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
+  const [deletingMessageIds, setDeletingMessageIds] = useState<Set<string>>(new Set());
+  const [deleteConfirmMessageId, setDeleteConfirmMessageId] = useState<string | null>(null);
   const [clientError, setClientError] = useState('');
   const [linkClientError, setLinkClientError] = useState('');
   const [guestClientCreateError, setGuestClientCreateError] = useState('');
@@ -283,6 +287,7 @@ export function WhatsAppInbox({
   const sendingRef = useRef(false);
   const retryingMessagesRef = useRef(new Set<string>());
   const reactingMessagesRef = useRef(new Set<string>());
+  const deletingMessagesRef = useRef(new Set<string>());
   const startingConversationRef = useRef(false);
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
   const pendingReadTimeoutsRef = useRef(new Map<string, number>());
@@ -1590,6 +1595,9 @@ export function WhatsAppInbox({
       const failedMessage: WhatsAppConversationMessage = {
         id: `local-failed-${failedAt}`,
         createdAt: failedAt,
+        deleted: false,
+        deletedAt: null,
+        deletedForEveryone: false,
         direction: 'OUTBOUND',
         deliveredAt: null,
         failedAt,
@@ -1612,6 +1620,9 @@ export function WhatsAppInbox({
               type: replyToSend.type,
               text: replyToSend.text,
               mediaFileName: replyToSend.mediaFileName,
+              deleted: replyToSend.deleted,
+              deletedAt: replyToSend.deletedAt,
+              deletedForEveryone: replyToSend.deletedForEveryone,
             }
           : null,
         replyToMessageId: replyToSend?.id ?? null,
@@ -1885,6 +1896,7 @@ export function WhatsAppInbox({
 
   async function updateConversationReaction(message: WhatsAppConversationMessage, emoji: string) {
     if (!selectedConversation) return;
+    if (message.deleted) return;
     if (reactingMessagesRef.current.has(message.id)) return;
 
     const nextEmoji = nextOwnReactionEmoji(message, emoji);
@@ -1913,6 +1925,41 @@ export function WhatsAppInbox({
     } finally {
       reactingMessagesRef.current.delete(message.id);
       setReactingMessageIds(new Set(reactingMessagesRef.current));
+    }
+  }
+
+  async function deleteConversationMessage(message: WhatsAppConversationMessage) {
+    if (!selectedConversation) return;
+    if (!isDeleteEligibleConversationMessage(message)) return;
+    if (deletingMessagesRef.current.has(message.id)) return;
+
+    deletingMessagesRef.current.add(message.id);
+    setDeletingMessageIds(new Set(deletingMessagesRef.current));
+    setDeleteErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+
+    try {
+      const updated = await deleteWhatsAppConversationMessage(selectedConversation.id, message.id);
+      setMessages((current) => mergeConversationMessages(current, [updated]));
+      setDeleteConfirmMessageId(null);
+      setReactionPickerMessageId((current) => (current === message.id ? null : current));
+      if (replyTarget?.id === message.id) {
+        setReplyTarget(updated);
+      }
+    } catch (err) {
+      setDeleteErrors((current) => ({
+        ...current,
+        [message.id]: conversationErrorMessage(
+          err,
+          'Não foi possível apagar esta mensagem no WhatsApp.',
+        ),
+      }));
+    } finally {
+      deletingMessagesRef.current.delete(message.id);
+      setDeletingMessageIds(new Set(deletingMessagesRef.current));
     }
   }
 
@@ -2160,6 +2207,9 @@ export function WhatsAppInbox({
                 reactionErrors={reactionErrors}
                 reactionPickerMessageId={reactionPickerMessageId}
                 reactingMessageIds={reactingMessageIds}
+                deleteConfirmMessageId={deleteConfirmMessageId}
+                deleteErrors={deleteErrors}
+                deletingMessageIds={deletingMessageIds}
                 retryErrors={retryErrors}
                 retryingMessageIds={retryingMessageIds}
                 scrollRef={messagesScrollRef}
@@ -2175,6 +2225,8 @@ export function WhatsAppInbox({
                 onQuoteClick={(message) => void jumpToQuotedMessage(message)}
                 onReaction={(message, emoji) => void updateConversationReaction(message, emoji)}
                 onReactionPickerChange={setReactionPickerMessageId}
+                onDelete={(message) => void deleteConversationMessage(message)}
+                onDeleteConfirmChange={setDeleteConfirmMessageId}
                 onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
               />
@@ -2656,6 +2708,9 @@ function ConversationMessages({
   messages,
   messagesEndRef,
   olderError,
+  deleteConfirmMessageId,
+  deleteErrors,
+  deletingMessageIds,
   retryErrors,
   retryingMessageIds,
   onJumpToBottom,
@@ -2664,6 +2719,8 @@ function ConversationMessages({
   onQuoteClick,
   onReaction,
   onReactionPickerChange,
+  onDelete,
+  onDeleteConfirmChange,
   onReply,
   onRetry,
   reactionErrors,
@@ -2682,6 +2739,9 @@ function ConversationMessages({
   messages: WhatsAppConversationMessage[];
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   olderError: string;
+  deleteConfirmMessageId: string | null;
+  deleteErrors: Record<string, string>;
+  deletingMessageIds: Set<string>;
   retryErrors: Record<string, string>;
   retryingMessageIds: Set<string>;
   onJumpToBottom: () => void;
@@ -2690,6 +2750,8 @@ function ConversationMessages({
   onQuoteClick: (message: WhatsAppConversationMessage) => void;
   onReaction: (message: WhatsAppConversationMessage, emoji: string) => void;
   onReactionPickerChange: (messageId: string | null) => void;
+  onDelete: (message: WhatsAppConversationMessage) => void;
+  onDeleteConfirmChange: (messageId: string | null) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   reactionErrors: Record<string, string>;
@@ -2746,6 +2808,9 @@ function ConversationMessages({
                     conversationId={conversationId}
                     highlighted={targetMessageId === message.id}
                     message={message}
+                    deleteConfirmOpen={deleteConfirmMessageId === message.id}
+                    deleteError={deleteErrors[message.id] ?? ''}
+                    deleting={deletingMessageIds.has(message.id)}
                     reactionError={reactionErrors[message.id] ?? ''}
                     reactionPickerOpen={reactionPickerMessageId === message.id}
                     reacting={reactingMessageIds.has(message.id)}
@@ -2755,6 +2820,8 @@ function ConversationMessages({
                     onQuoteClick={onQuoteClick}
                     onReaction={onReaction}
                     onReactionPickerChange={onReactionPickerChange}
+                    onDelete={onDelete}
+                    onDeleteConfirmChange={onDeleteConfirmChange}
                     onReply={onReply}
                     onRetry={onRetry}
                   />
@@ -2790,6 +2857,10 @@ function ConversationDateSeparator({ label }: { label: string }) {
 }
 
 export function isRenderableConversationMessage(message: WhatsAppConversationMessage) {
+  if (message.deleted) {
+    return true;
+  }
+
   if (message.text?.trim()) {
     return true;
   }
@@ -2805,6 +2876,10 @@ export function isRenderableConversationMessage(message: WhatsAppConversationMes
     message.type === 'DOCUMENT' ||
     message.type === 'LOCATION'
   );
+}
+
+export function isDeleteEligibleConversationMessage(message: WhatsAppConversationMessage) {
+  return message.direction === 'OUTBOUND' && Boolean(message.providerMessageId) && !message.deleted;
 }
 
 export function classifyConversationIncomingFile(file: File): ConversationIncomingFileResult {
@@ -2910,6 +2985,9 @@ function isAllowedConversationDocument(mimeType: string, extension: string) {
 
 function ConversationBubble({
   conversationId,
+  deleteConfirmOpen,
+  deleteError,
+  deleting,
   highlighted,
   message,
   reactionError,
@@ -2921,10 +2999,15 @@ function ConversationBubble({
   onQuoteClick,
   onReaction,
   onReactionPickerChange,
+  onDelete,
+  onDeleteConfirmChange,
   onReply,
   onRetry,
 }: {
   conversationId: string;
+  deleteConfirmOpen: boolean;
+  deleteError: string;
+  deleting: boolean;
   highlighted: boolean;
   message: WhatsAppConversationMessage;
   reactionError: string;
@@ -2936,11 +3019,14 @@ function ConversationBubble({
   onQuoteClick: (message: WhatsAppConversationMessage) => void;
   onReaction: (message: WhatsAppConversationMessage, emoji: string) => void;
   onReactionPickerChange: (messageId: string | null) => void;
+  onDelete: (message: WhatsAppConversationMessage) => void;
+  onDeleteConfirmChange: (messageId: string | null) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
   const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const deleteEligible = isDeleteEligibleConversationMessage(message);
 
   if (!isRenderableConversationMessage(message)) {
     return null;
@@ -2972,47 +3058,100 @@ function ConversationBubble({
         >
           <Reply aria-hidden="true" size={14} />
         </button>
-        <div className="conversation-reaction-action-wrap">
-          <button
-            ref={reactionTriggerRef}
-            className="conversation-reaction-action"
-            type="button"
-            title="Reagir"
-            aria-label="Reagir à mensagem"
-            aria-expanded={reactionPickerOpen}
-            disabled={reacting}
-            onClick={() => onReactionPickerChange(reactionPickerOpen ? null : message.id)}
-          >
-            {reacting ? (
-              <Loader2 aria-hidden="true" size={14} />
-            ) : (
-              <SmilePlus aria-hidden="true" size={14} />
-            )}
-          </button>
-          <ConversationReactionPickerPortal
-            message={message}
-            open={reactionPickerOpen}
-            reacting={reacting}
-            triggerRef={reactionTriggerRef}
-            onClose={() => onReactionPickerChange(null)}
-            onReaction={onReaction}
-          />
-        </div>
+        {deleteEligible ? (
+          <div className="conversation-delete-action-wrap">
+            <button
+              className="conversation-delete-action"
+              type="button"
+              title="Apagar"
+              aria-label="Apagar mensagem"
+              aria-expanded={deleteConfirmOpen}
+              disabled={deleting}
+              onClick={() => onDeleteConfirmChange(deleteConfirmOpen ? null : message.id)}
+            >
+              {deleting ? (
+                <Loader2 aria-hidden="true" size={14} />
+              ) : (
+                <Trash2 aria-hidden="true" size={14} />
+              )}
+            </button>
+            {deleteConfirmOpen ? (
+              <div
+                className="conversation-delete-confirm"
+                role="dialog"
+                aria-label="Apagar mensagem"
+              >
+                <span>Apagar esta mensagem?</span>
+                <div>
+                  <button
+                    type="button"
+                    disabled={deleting}
+                    onClick={() => onDeleteConfirmChange(null)}
+                  >
+                    Cancelar
+                  </button>
+                  <button type="button" disabled={deleting} onClick={() => onDelete(message)}>
+                    {deleting ? 'Apagando...' : 'Apagar'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {!message.deleted ? (
+          <div className="conversation-reaction-action-wrap">
+            <button
+              ref={reactionTriggerRef}
+              className="conversation-reaction-action"
+              type="button"
+              title="Reagir"
+              aria-label="Reagir à mensagem"
+              aria-expanded={reactionPickerOpen}
+              disabled={reacting}
+              onClick={() => onReactionPickerChange(reactionPickerOpen ? null : message.id)}
+            >
+              {reacting ? (
+                <Loader2 aria-hidden="true" size={14} />
+              ) : (
+                <SmilePlus aria-hidden="true" size={14} />
+              )}
+            </button>
+            <ConversationReactionPickerPortal
+              message={message}
+              open={reactionPickerOpen}
+              reacting={reacting}
+              triggerRef={reactionTriggerRef}
+              onClose={() => onReactionPickerChange(null)}
+              onReaction={onReaction}
+            />
+          </div>
+        ) : null}
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
-        {text ? <p>{renderHighlightedSearchText(text, searchTerm)}</p> : null}
-        <ConversationMediaContent conversationId={conversationId} message={message} />
+        {message.deleted ? (
+          <p className="conversation-message-deleted">Mensagem apagada</p>
+        ) : text ? (
+          <p>{renderHighlightedSearchText(text, searchTerm)}</p>
+        ) : null}
+        {!message.deleted ? (
+          <ConversationMediaContent conversationId={conversationId} message={message} />
+        ) : null}
         {caption ? <span className="conversation-caption">{caption}</span> : null}
-        <ConversationReactionSummary reactions={message.reactions} />
+        {!message.deleted ? <ConversationReactionSummary reactions={message.reactions} /> : null}
         {reactionError ? (
           <div className="conversation-reaction-error" role="alert">
             {reactionError}
+          </div>
+        ) : null}
+        {deleteError ? (
+          <div className="conversation-reaction-error" role="alert">
+            {deleteError}
           </div>
         ) : null}
         <footer>
           <span>{conversationMessageTime(message)}</span>
           {outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}
         </footer>
-        {message.status === 'FAILED' && outbound ? (
+        {!message.deleted && message.status === 'FAILED' && outbound ? (
           <div className="conversation-message-failure">
             <strong>Falhou ao enviar</strong>
             {retryError ? <span>{retryError}</span> : null}
@@ -5287,17 +5426,20 @@ export function isTechnicalVideoPlaceholder(text: string | null | undefined) {
 }
 
 function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
+  if (message.deleted) return 'Mensagem apagada';
   if (message.type === 'TEXT') return message.text || '';
   return conversationMessagePlaceholder(message.type);
 }
 
 export function conversationMessageCaption(message: WhatsAppConversationMessage) {
+  if (message.deleted) return '';
   if (message.type === 'TEXT') return '';
   if (message.type === 'VIDEO' && isTechnicalVideoPlaceholder(message.text)) return '';
   return message.text?.trim() || '';
 }
 
 function conversationMessageQuotePreview(message: WhatsAppConversationMessage) {
+  if (message.deleted) return 'Mensagem apagada';
   const text = message.text?.trim();
   if (text) return text.slice(0, 160);
   if (message.type === 'IMAGE') return 'Imagem';
@@ -5310,11 +5452,16 @@ function conversationMessageQuotePreview(message: WhatsAppConversationMessage) {
 
 function conversationReplyFallbackPreview(message: WhatsAppConversationMessage) {
   if (message.replyTo) {
+    if (message.replyTo.deleted) return 'Mensagem apagada';
+
     return conversationMessageQuotePreview({
       ...message,
       text: message.replyTo.text,
       type: message.replyTo.type,
       mediaFileName: message.replyTo.mediaFileName,
+      deleted: message.replyTo.deleted,
+      deletedAt: message.replyTo.deletedAt,
+      deletedForEveryone: message.replyTo.deletedForEveryone,
     });
   }
 

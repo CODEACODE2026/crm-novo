@@ -98,6 +98,10 @@ describe('Kirago clients', () => {
       Id: 'provider-message-id',
       Body: '❤️',
     });
+    await client.deleteMessage('instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-message-id',
+    });
 
     expect(request).toHaveBeenNthCalledWith(1, '/session/connect', {
       method: 'POST',
@@ -181,6 +185,15 @@ describe('Kirago clients', () => {
         Phone: '5544999999999',
         Id: 'provider-message-id',
         Body: '❤️',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(9, '/chat/delete', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Id: 'provider-message-id',
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

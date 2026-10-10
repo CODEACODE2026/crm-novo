@@ -96,6 +96,10 @@ export type KiragoReactionData = {
   Details?: unknown;
 };
 
+export type KiragoDeleteMessageData = {
+  Details?: unknown;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -294,6 +298,15 @@ export class KiragoInstanceClient {
     payload: { Phone: string; Id: string; Body: string; Participant?: string },
   ) {
     return this.http.request<KiragoEnvelope<KiragoReactionData>>('/chat/react', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  deleteMessage(instanceToken: string, payload: { Phone: string; Id: string }) {
+    return this.http.request<KiragoEnvelope<KiragoDeleteMessageData>>('/chat/delete', {
       method: 'POST',
       headers: { token: instanceToken },
       body: payload,

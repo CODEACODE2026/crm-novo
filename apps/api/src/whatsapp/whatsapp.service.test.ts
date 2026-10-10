@@ -3718,7 +3718,9 @@ describe('WhatsAppService', () => {
 
     await service.receiveWebhook(kiragoMediaPayload('imageMessage'));
 
-    expect(log).not.toHaveBeenCalled();
+    const output = (log as MockWithCalls).mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_WEBHOOK_RAW_PROBE]');
+    expect(output).not.toContain('[WHATSAPP_MEDIA_DEBUG]');
   });
 
   it('emits redacted IMAGE media debug structure when the flag is enabled', async () => {
@@ -3731,8 +3733,10 @@ describe('WhatsAppService', () => {
 
     await service.receiveWebhook(kiragoMediaPayload('imageMessage'));
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const output = String((log as MockWithCalls).mock.calls[0]?.[0]);
+    const output =
+      (log as MockWithCalls).mock.calls
+        .map((call) => String(call[0]))
+        .find((entry) => entry.includes('[WHATSAPP_MEDIA_DEBUG]')) ?? '';
     const parsed = JSON.parse(output.replace('[WHATSAPP_MEDIA_DEBUG] ', '')) as Record<
       string,
       unknown
@@ -3789,8 +3793,10 @@ describe('WhatsAppService', () => {
 
     await service.receiveWebhook(kiragoMediaPayload('documentMessage'));
 
-    expect(log).toHaveBeenCalledTimes(1);
-    const output = String((log as MockWithCalls).mock.calls[0]?.[0]);
+    const output =
+      (log as MockWithCalls).mock.calls
+        .map((call) => String(call[0]))
+        .find((entry) => entry.includes('[WHATSAPP_MEDIA_DEBUG]')) ?? '';
     const parsed = JSON.parse(output.replace('[WHATSAPP_MEDIA_DEBUG] ', '')) as Record<
       string,
       unknown
@@ -3833,7 +3839,9 @@ describe('WhatsAppService', () => {
       event: { Info: { ID: 'text-id' }, Message: { conversation: 'Texto completo' } },
     });
 
-    expect(log).not.toHaveBeenCalled();
+    const output = (log as MockWithCalls).mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_WEBHOOK_RAW_PROBE]');
+    expect(output).not.toContain('[WHATSAPP_MEDIA_DEBUG]');
   });
 
   it('creates a pending contact from an unknown incoming webhook', async () => {
@@ -4435,19 +4443,50 @@ describe('WhatsAppService', () => {
     expect(missingPhone.prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
   });
 
-  it('keeps normal Message webhooks on the existing path without probe logging', async () => {
+  it('logs raw structure for normal Message webhooks without changing ignored flow', async () => {
     const { service, normalizer } = serviceFactory();
     const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     normalizer.normalize.mockReturnValue(null);
 
-    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toEqual({
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        token: 'secret-token',
+        phone: '5511999999999',
+        event: {
+          Info: { Type: 'message', Sender: '5511999999999@s.whatsapp.net' },
+          Message: {
+            conversation: 'texto privado',
+            imageMessage: {
+              URL: 'https://media.example.test/private?token=secret-token',
+              Data: 'data:image/jpeg;base64,abcdef',
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({
       received: true,
       processed: false,
       reason: 'ignored_event',
     });
 
-    expect(normalizer.normalize).toHaveBeenCalledWith({ type: 'Message' });
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Kirago webhook probe'));
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_WEBHOOK_RAW_PROBE]');
+    expect(output).toContain('type=Message');
+    expect(output).toContain('infoType=message');
+    expect(output).toContain('messageType=imageMessage');
+    expect(output).toContain('hasMessage=true');
+    expect(output).toContain('hasInfo=true');
+    expect(output).toContain('hasMedia=true');
+    expect(output).toContain('topLevelKeys=');
+    expect(output).toContain('[redacted-key]');
+    expect(output).not.toContain('[WHATSAPP_PRESENCE_PROBE]');
+    expect(output).not.toContain('5511999999999');
+    expect(output).not.toContain('secret-token');
+    expect(output).not.toContain('media.example.test');
+    expect(output).not.toContain('base64');
+    expect(output).not.toContain('texto privado');
+    expect(normalizer.normalize).toHaveBeenCalled();
     log.mockRestore();
   });
 
@@ -4469,7 +4508,10 @@ describe('WhatsAppService', () => {
       reason: 'ignored_event',
     });
 
-    expect(String(log.mock.calls[0]?.[0] ?? '')).toContain(
+    const legacyProbe = log.mock.calls
+      .map((call) => String(call[0]))
+      .find((entry) => entry.includes('Kirago webhook probe'));
+    expect(legacyProbe).toContain(
       'Kirago webhook probe type=Status event=message_status status=delivered',
     );
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
@@ -4494,7 +4536,10 @@ describe('WhatsAppService', () => {
       userID: 'kirago-user-123456',
     });
 
-    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const output =
+      log.mock.calls
+        .map((call) => String(call[0]))
+        .find((entry) => entry.includes('Kirago webhook probe')) ?? '';
     expect(output).toContain('status=READ');
     expect(output).toContain('messageId=ABCDEF...7890');
     expect(output).toContain('providerUserId=kirago...3456');
@@ -4523,7 +4568,8 @@ describe('WhatsAppService', () => {
       },
     });
 
-    const output = String(log.mock.calls[0]?.[0] ?? '');
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_WEBHOOK_RAW_PROBE]');
     expect(output).toContain('Kirago webhook probe');
     expect(output).not.toContain('5544999999999');
     expect(output).not.toContain('secret-token');
@@ -4551,7 +4597,9 @@ describe('WhatsAppService', () => {
       reason: 'ignored_event',
     });
 
-    expect(String(log.mock.calls[0]?.[0] ?? '')).toContain('Kirago webhook probe');
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_WEBHOOK_RAW_PROBE]');
+    expect(output).toContain('Kirago webhook probe');
     log.mockRestore();
   });
 
@@ -4569,6 +4617,24 @@ describe('WhatsAppService', () => {
         phone: '5511999999999',
         event: {
           Type: 'presence',
+          State: 'composing',
+          Media: 'audio',
+          chat: '5511888888888@s.whatsapp.net',
+          chatId: '5511888888888@s.whatsapp.net',
+          remoteJid: '5511777777777@s.whatsapp.net',
+          sender: {
+            id: '5511999999999@s.whatsapp.net',
+            kind: 'contact',
+          },
+          phone: '5511999999999',
+          participant: {
+            lid: '123456789012345@lid',
+          },
+          from: {
+            jid: '5511666666666@s.whatsapp.net',
+          },
+          jid: '5511555555555@s.whatsapp.net',
+          id: 'presence-event-id-123456',
           Info: {
             ID: 'presence-event-id-123456',
             Sender: '5511999999999@s.whatsapp.net',
@@ -4599,10 +4665,25 @@ describe('WhatsAppService', () => {
 
     const output = log.mock.calls.map((call) => String(call[0])).join('\n');
     expect(output).toContain('[WHATSAPP_PRESENCE_PROBE]');
+    expect(output).not.toContain('[WHATSAPP_WEBHOOK_RAW_PROBE]');
     expect(output).toContain('type=Presence');
     expect(output).toContain('eventType=presence');
     expect(output).toContain('state=composing');
     expect(output).toContain('media=audio');
+    expect(output).toContain('eventKeys=');
+    expect(output).toContain('eventChat=');
+    expect(output).toContain('eventChatId=');
+    expect(output).toContain('eventRemoteJid=');
+    expect(output).toContain('eventPhone=551199...9999');
+    expect(output).toContain('eventJid=');
+    expect(output).toContain('eventIdRaw=');
+    expect(output).toContain('eventState=composing');
+    expect(output).toContain('eventMedia=audio');
+    expect(output).toContain('eventTypeRaw=presence');
+    expect(output).toContain('eventSenderKeys=id,kind');
+    expect(output).toContain('eventParticipantKeys=lid');
+    expect(output).toContain('eventFromKeys=jid');
+    expect(output).toContain('eventPhoneKeys=none');
     expect(output).toContain('hasPresence=true');
     expect(output).toContain('hasState=true');
     expect(output).toContain('hasMedia=true');
@@ -4611,6 +4692,10 @@ describe('WhatsAppService', () => {
     expect(output).toContain('[redacted-key]');
     expect(output).not.toContain('5511999999999');
     expect(output).not.toContain('123456789012345@lid');
+    expect(output).not.toContain('5511888888888@s.whatsapp.net');
+    expect(output).not.toContain('5511777777777@s.whatsapp.net');
+    expect(output).not.toContain('5511666666666@s.whatsapp.net');
+    expect(output).not.toContain('5511555555555@s.whatsapp.net');
     expect(output).not.toContain('secret-token');
     expect(output).not.toContain('base64');
     expect(output).not.toContain('media.example.test');

@@ -447,11 +447,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       "const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;",
     );
     expect(conversationsSource).toContain(
-      "const hasAvailableInlineMedia =\n    (message.type === 'IMAGE' || message.type === 'AUDIO') && message.mediaAvailable;",
+      'const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);',
     );
     expect(conversationsSource).toContain(
       "const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);",
     );
+    expect(conversationsSource).toContain('function isAvailableInlineConversationMedia');
+    expect(conversationsSource).toContain("message.type === 'VIDEO'");
+    expect(conversationsSource).toContain('function isTechnicalVideoPlaceholder');
     expect(conversationsSource).toContain('function useMediaVisibility(enabled: boolean)');
     expect(conversationsSource).toContain('new IntersectionObserver');
     expect(conversationsSource).toContain("rootMargin: '240px 0px'");

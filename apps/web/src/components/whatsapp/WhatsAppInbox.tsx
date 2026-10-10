@@ -2868,8 +2868,7 @@ function ConversationBubble({
   }
 
   const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;
-  const hasAvailableInlineMedia =
-    (message.type === 'IMAGE' || message.type === 'AUDIO') && message.mediaAvailable;
+  const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
 
@@ -4959,13 +4958,25 @@ function conversationMediaUnavailableText(type: WhatsAppConversationMessageType)
   return conversationMessagePlaceholder(type);
 }
 
+export function isAvailableInlineConversationMedia(message: WhatsAppConversationMessage) {
+  return (
+    (message.type === 'IMAGE' || message.type === 'AUDIO' || message.type === 'VIDEO') &&
+    message.mediaAvailable
+  );
+}
+
+export function isTechnicalVideoPlaceholder(text: string | null | undefined) {
+  return text?.trim().toLowerCase() === ':video:';
+}
+
 function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
   if (message.type === 'TEXT') return message.text || '';
   return conversationMessagePlaceholder(message.type);
 }
 
-function conversationMessageCaption(message: WhatsAppConversationMessage) {
+export function conversationMessageCaption(message: WhatsAppConversationMessage) {
   if (message.type === 'TEXT') return '';
+  if (message.type === 'VIDEO' && isTechnicalVideoPlaceholder(message.text)) return '';
   return message.text?.trim() || '';
 }
 

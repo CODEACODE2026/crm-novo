@@ -3429,7 +3429,10 @@ export class WhatsAppService {
   ) {
     return (
       normalizedMessageType === 'TEXT' &&
-      (existing.type === 'IMAGE' || existing.type === 'DOCUMENT' || existing.type === 'AUDIO') &&
+      (existing.type === 'IMAGE' ||
+        existing.type === 'DOCUMENT' ||
+        existing.type === 'AUDIO' ||
+        existing.type === 'VIDEO') &&
       this.isManualOutboundMediaMessage(existing)
     );
   }

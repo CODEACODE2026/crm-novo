@@ -6,7 +6,10 @@ import {
   conversationVideoAccept,
   createConversationComposerMedia,
   disposeConversationComposerMedia,
+  conversationMessageCaption,
+  isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
+  isTechnicalVideoPlaceholder,
   mergeConversationById,
   mergeConversationLists,
   nextConversationListRequestGeneration,
@@ -609,6 +612,22 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toBe(true);
     expect(isRenderableConversationMessage(message({ type: 'VIDEO', text: null }))).toBe(true);
     expect(isRenderableConversationMessage(message({ type: 'LOCATION', text: null }))).toBe(true);
+  });
+
+  it('treats available VIDEO as inline media and hides technical video placeholders', () => {
+    expect(
+      isAvailableInlineConversationMedia(
+        message({ type: 'VIDEO', mediaAvailable: true, mediaMimeType: 'video/mp4' }),
+      ),
+    ).toBe(true);
+    expect(isTechnicalVideoPlaceholder(':video:')).toBe(true);
+    expect(isTechnicalVideoPlaceholder(' :VIDEO: ')).toBe(true);
+    expect(conversationMessageCaption(message({ type: 'VIDEO', text: ':video:' }))).toBe('');
+    expect(
+      conversationMessageCaption(
+        message({ type: 'VIDEO', text: 'Meu vídeo', mediaAvailable: true }),
+      ),
+    ).toBe('Meu vídeo');
   });
 
   it('auto-read only accepts active visible focused inbound message.created events', () => {

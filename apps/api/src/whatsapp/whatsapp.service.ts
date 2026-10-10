@@ -159,6 +159,17 @@ type PreparedConversationMedia = {
   durationSeconds: number | null;
 };
 
+type NormalizedInboundReaction = {
+  providerReactionId: string | null;
+  targetProviderMessageId: string | null;
+  emoji: string | null;
+  isFromMe: boolean;
+  targetFromMe: boolean | null;
+  remoteJid: string | null;
+  remove: boolean;
+  senderTimestampMS: string | null;
+};
+
 type ConversationMediaDownload = Omit<DownloadMediaInput, 'type'>;
 
 type ConversationLocalMedia = {
@@ -2596,9 +2607,8 @@ export class WhatsAppService {
       return { received: true, ...(await this.processMessageReceiptWebhook(normalized)) };
     }
 
-    if (this.isKiragoReactionProbePayload(payload, normalized)) {
-      this.logKiragoReactionProbe(payload, normalized);
-      return { received: true, processed: false, reason: 'reaction_probe_logged' };
+    if (this.isKiragoReactionPayload(payload, normalized)) {
+      return { received: true, ...(await this.processInboundReactionWebhook(payload, normalized)) };
     }
 
     if (normalized.isGroup) {
@@ -2894,7 +2904,7 @@ export class WhatsAppService {
     );
   }
 
-  private isKiragoReactionProbePayload(payload: unknown, normalized: NormalizedWhatsAppMessage) {
+  private isKiragoReactionPayload(payload: unknown, normalized: NormalizedWhatsAppMessage) {
     if (normalized.messageType === 'reaction') {
       return true;
     }
@@ -2917,106 +2927,182 @@ export class WhatsAppService {
     return Boolean(infoType?.includes('reaction'));
   }
 
-  private logKiragoReactionProbe(payload: unknown, normalized: NormalizedWhatsAppMessage) {
-    try {
-      const body = this.asRecord(payload);
+  private normalizeInboundReactionPayload(
+    payload: unknown,
+    normalized: NormalizedWhatsAppMessage,
+  ): NormalizedInboundReaction | null {
+    const body = this.asRecord(payload);
 
-      if (!body) {
-        return;
+    if (!body) {
+      return null;
+    }
+
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+    const data = this.asRecord(body.data);
+    const reaction =
+      this.asRecord(message?.reactionMessage) ??
+      this.asRecord(body.reactionMessage) ??
+      this.asRecord(event?.reactionMessage) ??
+      this.asRecord(data?.reactionMessage);
+    const reactionKey = this.asRecord(reaction?.key) ?? this.asRecord(reaction?.Key);
+    const emoji = this.reactionTextValue(reaction);
+    const explicitRemove = this.booleanLike(
+      this.firstProbeRawValue(reaction, ['remove', 'Remove', 'unreact', 'Unreact']),
+    );
+    const remove = explicitRemove === true || !emoji;
+
+    return {
+      providerReactionId: this.stringValue(info?.ID ?? info?.id ?? normalized.messageId),
+      targetProviderMessageId: this.stringValue(this.firstProbeRawValue(reactionKey, ['ID', 'id'])),
+      emoji,
+      isFromMe: normalized.direction === 'OUTGOING',
+      targetFromMe: this.booleanLike(this.firstProbeRawValue(reactionKey, ['fromMe', 'FromMe'])),
+      remoteJid: this.stringValue(
+        this.firstProbeRawValue(reactionKey, ['remoteJID', 'remoteJid', 'RemoteJID', 'RemoteJid']),
+      ),
+      remove,
+      senderTimestampMS: this.stringValue(
+        this.firstProbeRawValue(reaction, ['senderTimestampMS', 'SenderTimestampMS']),
+      ),
+    };
+  }
+
+  private async processInboundReactionWebhook(
+    payload: unknown,
+    normalized: NormalizedWhatsAppMessage,
+  ) {
+    if (normalized.isGroup) {
+      return { processed: false, reason: 'ignored_group_reaction' };
+    }
+
+    const reaction = this.normalizeInboundReactionPayload(payload, normalized);
+
+    if (!reaction?.targetProviderMessageId) {
+      this.logger.log('Kirago reaction_target_not_found target=unknown reason=missing_target');
+      return { processed: false, reason: 'reaction_target_not_found' };
+    }
+
+    const connection = await this.findConnectionForWebhook(normalized);
+
+    if (!connection) {
+      return { processed: false, reason: 'connection_not_found' };
+    }
+
+    if (reaction.isFromMe) {
+      this.logger.log(
+        `Kirago reaction_ignored_self providerReactionId=${this.maskProbeId(
+          reaction.providerReactionId,
+        )} target=${this.maskProbeId(reaction.targetProviderMessageId)}`,
+      );
+      return { processed: false, reason: 'reaction_ignored_self' };
+    }
+
+    const target = await this.prisma.whatsAppMessage.findFirst({
+      where: {
+        provider: 'KIRAGO',
+        whatsAppConnectionId: connection.id,
+        providerMessageId: reaction.targetProviderMessageId,
+      },
+      include: whatsappMessageReplyInclude,
+    });
+
+    if (!target) {
+      this.logger.log(
+        `Kirago reaction_target_not_found connection=${connection.id} target=${this.maskProbeId(
+          reaction.targetProviderMessageId,
+        )}`,
+      );
+      return { processed: false, reason: 'reaction_target_not_found' };
+    }
+
+    const reactorKey = this.contactReactionKey();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (reaction.remove) {
+        await tx.whatsAppMessageReaction.deleteMany({
+          where: { messageId: target.id, reactorKey },
+        });
+      } else if (reaction.emoji) {
+        await tx.whatsAppMessageReaction.upsert({
+          where: { messageId_reactorKey: { messageId: target.id, reactorKey } },
+          create: {
+            messageId: target.id,
+            whatsAppConnectionId: target.whatsAppConnectionId,
+            provider: target.provider,
+            emoji: reaction.emoji,
+            reactorKey,
+            isFromMe: false,
+            providerReactionId: reaction.providerReactionId,
+            participant: null,
+          },
+          update: {
+            emoji: reaction.emoji,
+            isFromMe: false,
+            providerReactionId: reaction.providerReactionId,
+            participant: null,
+          },
+        });
       }
 
-      const event = this.asRecord(body.event);
-      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-      const data = this.asRecord(body.data);
-      const reaction =
-        this.asRecord(message?.reactionMessage) ??
-        this.asRecord(body.reactionMessage) ??
-        this.asRecord(event?.reactionMessage) ??
-        this.asRecord(data?.reactionMessage);
-      const reactionKey = this.asRecord(reaction?.key) ?? this.asRecord(reaction?.Key);
-      const context =
-        this.asRecord(reaction?.contextInfo) ??
-        this.asRecord(reaction?.ContextInfo) ??
-        this.asRecord(message?.contextInfo);
-      const emoji = this.firstProbeValue(reaction, [
-        'text',
-        'Text',
-        'emoji',
-        'Emoji',
-        'reaction',
-        'Reaction',
-      ]);
-      const removeValue =
-        this.firstProbeValue(reaction, ['remove', 'Remove', 'unreact', 'Unreact']) ??
-        (this.hasAnyOwnValue(reaction, ['text', 'Text']) && !emoji ? 'true' : null);
+      return tx.whatsAppMessage.findUniqueOrThrow({
+        where: { id: target.id },
+        include: whatsappMessageReplyInclude,
+      });
+    });
 
-      this.logger.log(
-        [
-          '[WHATSAPP_REACTION_PROBE]',
-          `type=${this.safeProbeValue(body.type) ?? 'unknown'}`,
-          `infoType=${this.safeProbeNonSensitiveValue(info?.Type) ?? 'unknown'}`,
-          `messageType=${normalized.messageType}`,
-          `eventMessageId=${this.maskProbeId(info?.ID ?? info?.id ?? normalized.messageId)}`,
-          `targetMessageId=${this.maskProbeId(
-            this.firstProbeRawValue(reaction, [
-              'targetMessageId',
-              'TargetMessageId',
-              'messageId',
-              'MessageId',
-              'stanzaId',
-              'StanzaId',
-              'id',
-              'ID',
-            ]) ??
-              this.firstProbeRawValue(reactionKey, [
-                'id',
-                'ID',
-                'messageId',
-                'MessageId',
-                'stanzaId',
-                'StanzaId',
-              ]) ??
-              this.firstProbeRawValue(context, ['stanzaId', 'StanzaId']),
-          )}`,
-          `emoji=${emoji ?? 'unknown'}`,
-          `remove=${removeValue ?? 'unknown'}`,
-          `isFromMe=${normalized.direction === 'OUTGOING'}`,
-          `sender=${this.maskProbeId(
-            info?.Sender ??
-              info?.sender ??
-              this.firstProbeRawValue(reactionKey, ['participant', 'Participant']) ??
-              this.firstProbeRawValue(context, ['participant', 'Participant']),
-          )}`,
-          `chat=${this.maskProbeId(
-            info?.Chat ??
-              info?.chat ??
-              this.firstProbeRawValue(reactionKey, ['remoteJid', 'RemoteJid']),
-          )}`,
-          `phone=${this.maskProbeId(normalized.phone)}`,
-          `participant=${this.maskProbeId(
-            this.firstProbeRawValue(reaction, ['participant', 'Participant']) ??
-              this.firstProbeRawValue(reactionKey, ['participant', 'Participant']) ??
-              this.firstProbeRawValue(context, ['participant', 'Participant']),
-          )}`,
-          `providerReactionId=${this.maskProbeId(
-            this.firstProbeRawValue(reaction, [
-              'id',
-              'ID',
-              'reactionId',
-              'ReactionId',
-              'providerReactionId',
-              'ProviderReactionId',
-            ]) ?? info?.ID,
-          )}`,
-          `reactionKeys=${this.safeObjectKeys(reaction).join(',') || 'none'}`,
-          `reactionKeyKeys=${this.safeObjectKeys(reactionKey).join(',') || 'none'}`,
-          `contextKeys=${this.safeObjectKeys(context).join(',') || 'none'}`,
-        ].join(' '),
-      );
-    } catch {
-      return;
+    this.emitMessageUpdated(target.conversationId, target.id);
+    this.logger.log(
+      `Kirago reaction_processed action=${reaction.remove ? 'remove' : 'upsert'} target=${this.maskProbeId(
+        reaction.targetProviderMessageId,
+      )} providerReactionId=${this.maskProbeId(reaction.providerReactionId)}`,
+    );
+
+    return {
+      processed: true,
+      action: reaction.remove ? 'reaction_removed' : 'reaction_upserted',
+      message: this.presentConversationMessage(updated),
+    };
+  }
+
+  private reactionTextValue(source: Record<string, unknown> | null) {
+    const value = this.firstProbeRawValue(source, ['text', 'Text']);
+
+    if (typeof value !== 'string') {
+      return null;
     }
+
+    const normalized = value.trim();
+    return normalized || null;
+  }
+
+  private booleanLike(value: unknown) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+
+      if (['true', '1', 'yes'].includes(normalized)) {
+        return true;
+      }
+
+      if (['false', '0', 'no'].includes(normalized)) {
+        return false;
+      }
+    }
+
+    return null;
+  }
+
+  private stringValue(value: unknown) {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return null;
+    }
+
+    const normalized = String(value).trim();
+    return normalized || null;
   }
 
   private firstProbeValue(source: Record<string, unknown> | null, keys: readonly string[]) {
@@ -5510,6 +5596,10 @@ export class WhatsAppService {
 
   private ownReactionKey() {
     return 'crm:self';
+  }
+
+  private contactReactionKey() {
+    return 'contact';
   }
 
   private isAllowedReactionEmoji(value: string): value is AllowedWhatsAppReactionEmoji {

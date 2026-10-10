@@ -4551,11 +4551,43 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
-  it('logs inbound reaction-like webhooks with a dedicated sanitized marker', async () => {
-    const { service, prisma, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  it('persists contact inbound reaction from the confirmed Kirago reactionMessage shape', async () => {
+    const target = conversationMessage({ providerMessageId: 'target-provider-message-id' });
+    const updated = conversationMessage({
+      ...target,
+      reactions: [
+        {
+          id: 'reaction-id',
+          messageId: target.id,
+          whatsAppConnectionId: target.whatsAppConnectionId,
+          provider: 'KIRAGO',
+          emoji: '❤️',
+          reactorKey: 'contact',
+          isFromMe: false,
+          providerReactionId: 'reaction-event-id',
+          participant: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
+    const { service, prisma, normalizer, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(updated),
+          findUnique: vi.fn().mockResolvedValue(updated),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(target),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
     normalizer.normalize.mockReturnValue(
       normalizedInbound('', {
+        phone: null,
         messageId: 'reaction-event-id',
         messageType: 'reaction',
         text: null,
@@ -4570,50 +4602,368 @@ describe('WhatsAppService', () => {
             ID: 'reaction-event-id',
             Type: 'reaction',
             IsFromMe: false,
-            Chat: '5544999999999@s.whatsapp.net',
-            Sender: '5544888888888@s.whatsapp.net',
+            Chat: '999999999999999@lid',
+            Sender: '888888888888888@lid',
           },
           Message: {
             reactionMessage: {
-              text: '😂',
               key: {
-                id: 'target-provider-message-id',
-                remoteJid: '5544999999999@s.whatsapp.net',
-                participant: '5544888888888@s.whatsapp.net',
+                ID: 'target-provider-message-id',
+                fromMe: false,
+                remoteJID: '999999999999999@lid',
               },
+              senderTimestampMS: '1760055000000',
+              text: '❤️',
             },
           },
         },
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       received: true,
-      processed: false,
-      reason: 'reaction_probe_logged',
+      processed: true,
+      action: 'reaction_upserted',
+      message: expect.objectContaining({
+        reactions: [
+          expect.objectContaining({ emoji: '❤️', reactorKey: 'contact', isFromMe: false }),
+        ],
+      }),
     });
 
-    const output = String(
-      log.mock.calls.find((call) => String(call[0]).includes('WHATSAPP_REACTION_PROBE'))?.[0] ?? '',
-    );
-    expect(output).toContain('[WHATSAPP_REACTION_PROBE]');
-    expect(output).toContain('messageType=reaction');
-    expect(output).toContain('emoji=😂');
-    expect(output).toContain('reactionKeys=key,text');
-    expect(output).not.toContain('5544999999999@s.whatsapp.net');
-    expect(output).not.toContain('5544888888888@s.whatsapp.net');
-    expect(output).not.toContain('target-provider-message-id');
+    expect(prisma.whatsAppMessage.findFirst).toHaveBeenCalledWith({
+      where: {
+        provider: 'KIRAGO',
+        whatsAppConnectionId: connection().id,
+        providerMessageId: 'target-provider-message-id',
+      },
+      include: expect.any(Object),
+    });
+    expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenCalledWith({
+      where: { messageId_reactorKey: { messageId: target.id, reactorKey: 'contact' } },
+      create: {
+        messageId: target.id,
+        whatsAppConnectionId: target.whatsAppConnectionId,
+        provider: 'KIRAGO',
+        emoji: '❤️',
+        reactorKey: 'contact',
+        isFromMe: false,
+        providerReactionId: 'reaction-event-id',
+        participant: null,
+      },
+      update: {
+        emoji: '❤️',
+        isFromMe: false,
+        providerReactionId: 'reaction-event-id',
+        participant: null,
+      },
+    });
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-    expect(prisma.whatsAppMessageReaction.upsert).not.toHaveBeenCalled();
-    log.mockRestore();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(target.conversationId, target.id);
   });
 
-  it('does not persist reaction-like webhooks as text or technical conversation messages', async () => {
-    const { service, prisma, normalizer, realtime } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  it.each([
+    ['IMAGE target', { type: 'IMAGE', text: null, mediaMimeType: 'image/jpeg' }],
+    ['VIDEO target', { type: 'VIDEO', text: null, mediaMimeType: 'video/mp4' }],
+    [
+      'reply target',
+      {
+        type: 'TEXT',
+        replyToMessageId: '77777777-7777-4777-8777-777777777777',
+        replyToProviderMessageId: 'quoted-provider-id',
+        quotedText: 'Mensagem citada',
+      },
+    ],
+  ])(
+    'persists contact reactions for %s without depending on message text',
+    async (_name, targetData) => {
+      const target = conversationMessage({
+        ...targetData,
+        providerMessageId: 'target-provider-message-id',
+      });
+      const { service, prisma, normalizer } = serviceFactory({
+        prismaOverrides: {
+          whatsAppMessage: {
+            findFirst: vi.fn().mockResolvedValue(target),
+            findUniqueOrThrow: vi.fn().mockResolvedValue(
+              conversationMessage({
+                ...target,
+                reactions: [
+                  {
+                    id: 'reaction-id',
+                    messageId: target.id,
+                    whatsAppConnectionId: target.whatsAppConnectionId,
+                    provider: 'KIRAGO',
+                    emoji: '❤️',
+                    reactorKey: 'contact',
+                    isFromMe: false,
+                    providerReactionId: 'reaction-event-id',
+                    participant: null,
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                ],
+              }),
+            ),
+            findUnique: vi.fn(),
+            findMany: vi.fn().mockResolvedValue([]),
+            count: vi.fn().mockResolvedValue(0),
+            create: vi.fn(),
+            update: vi.fn(),
+            updateMany: vi.fn(),
+          },
+        },
+      });
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound('', {
+          messageId: 'reaction-event-id',
+          messageType: 'reaction',
+          text: null,
+        }),
+      );
+
+      await expect(
+        service.receiveWebhook({
+          type: 'Message',
+          event: {
+            Info: { ID: 'reaction-event-id', Type: 'reaction', IsFromMe: false },
+            Message: {
+              reactionMessage: {
+                key: {
+                  ID: 'target-provider-message-id',
+                  fromMe: false,
+                  remoteJID: '999999999999999@lid',
+                },
+                senderTimestampMS: '1760055000000',
+                text: '❤️',
+              },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ processed: true, action: 'reaction_upserted' });
+
+      expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { messageId_reactorKey: { messageId: target.id, reactorKey: 'contact' } },
+        }),
+      );
+    },
+  );
+
+  it('changes the same contact reaction when Kirago sends a new providerReactionId', async () => {
+    const target = conversationMessage({ providerMessageId: 'target-provider-message-id' });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(
+            conversationMessage({
+              ...target,
+              reactions: [
+                {
+                  id: 'reaction-id',
+                  messageId: target.id,
+                  whatsAppConnectionId: target.whatsAppConnectionId,
+                  provider: 'KIRAGO',
+                  emoji: '😂',
+                  reactorKey: 'contact',
+                  isFromMe: false,
+                  providerReactionId: 'reaction-event-b',
+                  participant: null,
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              ],
+            }),
+          ),
+          findUnique: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
     normalizer.normalize.mockReturnValue(
-      normalizedInbound('ignored text', {
-        messageId: 'reaction-like-info-type',
+      normalizedInbound('', { messageId: 'reaction-event-b', messageType: 'reaction', text: null }),
+    );
+
+    await service.receiveWebhook({
+      type: 'Message',
+      event: {
+        Info: { ID: 'reaction-event-b', Type: 'reaction', IsFromMe: false },
+        Message: {
+          reactionMessage: {
+            key: { ID: 'target-provider-message-id', fromMe: false, remoteJID: '999@lid' },
+            senderTimestampMS: '1760055000001',
+            text: '😂',
+          },
+        },
+      },
+    });
+
+    expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { messageId_reactorKey: { messageId: target.id, reactorKey: 'contact' } },
+        update: expect.objectContaining({
+          emoji: '😂',
+          providerReactionId: 'reaction-event-b',
+        }),
+      }),
+    );
+  });
+
+  it('removes only the contact reaction by target message and reactor key', async () => {
+    const target = conversationMessage({ providerMessageId: 'target-provider-message-id' });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi
+            .fn()
+            .mockResolvedValue(conversationMessage({ ...target, reactions: [] })),
+          findUnique: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', { messageId: 'remove-event-id', messageType: 'reaction', text: null }),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: { ID: 'remove-event-id', Type: 'reaction', IsFromMe: false },
+          Message: {
+            reactionMessage: {
+              key: { ID: 'target-provider-message-id', fromMe: false, remoteJID: '999@lid' },
+              senderTimestampMS: '1760055000002',
+              text: '',
+              remove: true,
+            },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ processed: true, action: 'reaction_removed' });
+
+    expect(prisma.whatsAppMessageReaction.deleteMany).toHaveBeenCalledWith({
+      where: { messageId: target.id, reactorKey: 'contact' },
+    });
+    expect(prisma.whatsAppMessageReaction.upsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps duplicate add, change and remove deliveries idempotent', async () => {
+    const target = conversationMessage({ providerMessageId: 'target-provider-message-id' });
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(target),
+          findUnique: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: 'reaction-event-id',
         messageType: 'reaction',
+        text: null,
+      }),
+    );
+    const addPayload = {
+      type: 'Message',
+      event: {
+        Info: { ID: 'reaction-event-id', Type: 'reaction', IsFromMe: false },
+        Message: {
+          reactionMessage: {
+            key: { ID: 'target-provider-message-id', fromMe: false, remoteJID: '999@lid' },
+            senderTimestampMS: '1760055000000',
+            text: '❤️',
+          },
+        },
+      },
+    };
+
+    await service.receiveWebhook(addPayload);
+    await service.receiveWebhook(addPayload);
+
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', { messageId: 'change-event-id', messageType: 'reaction', text: null }),
+    );
+    const changePayload = {
+      type: 'Message',
+      event: {
+        Info: { ID: 'change-event-id', Type: 'reaction', IsFromMe: false },
+        Message: {
+          reactionMessage: {
+            key: { ID: 'target-provider-message-id', fromMe: false, remoteJID: '999@lid' },
+            senderTimestampMS: '1760055000001',
+            text: '😂',
+          },
+        },
+      },
+    };
+
+    await service.receiveWebhook(changePayload);
+    await service.receiveWebhook(changePayload);
+
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', { messageId: 'remove-event-id', messageType: 'reaction', text: null }),
+    );
+    const removePayload = {
+      type: 'Message',
+      event: {
+        Info: { ID: 'remove-event-id', Type: 'reaction', IsFromMe: false },
+        Message: {
+          reactionMessage: {
+            key: { ID: 'target-provider-message-id', fromMe: false, remoteJID: '999@lid' },
+            senderTimestampMS: '1760055000002',
+            text: '',
+            remove: true,
+          },
+        },
+      },
+    };
+
+    await service.receiveWebhook(removePayload);
+    await service.receiveWebhook(removePayload);
+
+    expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenCalledTimes(4);
+    expect(prisma.whatsAppMessageReaction.deleteMany).toHaveBeenCalledTimes(2);
+    expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { messageId_reactorKey: { messageId: target.id, reactorKey: 'contact' } },
+        update: expect.objectContaining({
+          emoji: '😂',
+          providerReactionId: 'change-event-id',
+        }),
+      }),
+    );
+  });
+
+  it('ignores unknown targets and self reaction echoes without creating messages or contact reactions', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: 'reaction-event-id',
+        messageType: 'reaction',
+        text: null,
       }),
     );
 
@@ -4621,19 +4971,46 @@ describe('WhatsAppService', () => {
       service.receiveWebhook({
         type: 'Message',
         event: {
-          Info: { ID: 'reaction-like-info-type', Type: 'reactionMessage', IsFromMe: false },
-          Message: { conversation: 'ignored text' },
+          Info: { ID: 'reaction-event-id', Type: 'reaction', IsFromMe: false },
+          Message: {
+            reactionMessage: {
+              key: { ID: 'missing-target-id', fromMe: false, remoteJID: '999@lid' },
+              senderTimestampMS: '1760055000000',
+              text: '❤️',
+            },
+          },
         },
       }),
-    ).resolves.toMatchObject({ processed: false, reason: 'reaction_probe_logged' });
+    ).resolves.toMatchObject({ processed: false, reason: 'reaction_target_not_found' });
+
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: 'self-reaction-event-id',
+        messageType: 'reaction',
+        text: null,
+        direction: 'OUTGOING',
+      }),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: { ID: 'self-reaction-event-id', Type: 'reaction', IsFromMe: true },
+          Message: {
+            reactionMessage: {
+              key: { ID: 'target-provider-message-id', fromMe: true, remoteJID: '999@lid' },
+              senderTimestampMS: '1760055000000',
+              text: '❤️',
+            },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ processed: false, reason: 'reaction_ignored_self' });
 
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessageReaction.upsert).not.toHaveBeenCalled();
-    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
-    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
-    log.mockRestore();
   });
 
   it('keeps normal inbound Message webhooks on the existing persistence path', async () => {
@@ -4648,28 +5025,27 @@ describe('WhatsAppService', () => {
 
     expect(prisma.whatsAppInboundMessage.create).toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
-    expect(log.mock.calls.some((call) => String(call[0]).includes('WHATSAPP_REACTION_PROBE'))).toBe(
+    expect(log.mock.calls.some((call) => String(call[0]).includes('reaction_processed'))).toBe(
       false,
     );
     log.mockRestore();
   });
 
-  it('does not log reaction probe entries for ReadReceipt webhooks', async () => {
+  it('keeps ReadReceipt webhooks out of the reaction parser', async () => {
     const { service, normalizer } = serviceFactory();
     const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     normalizer.normalize.mockReturnValue(normalizedReceipt());
 
     await service.receiveWebhook({ type: 'ReadReceipt' });
 
-    expect(log.mock.calls.some((call) => String(call[0]).includes('WHATSAPP_REACTION_PROBE'))).toBe(
+    expect(log.mock.calls.some((call) => String(call[0]).includes('reaction_processed'))).toBe(
       false,
     );
     log.mockRestore();
   });
 
-  it('does not throw when reaction probe fields are absent', async () => {
+  it('does not throw or create messages when reaction target fields are absent', async () => {
     const { service, prisma, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     normalizer.normalize.mockReturnValue(
       normalizedInbound('', {
         phone: null,
@@ -4687,12 +5063,10 @@ describe('WhatsAppService', () => {
           Message: { reactionMessage: {} },
         },
       }),
-    ).resolves.toMatchObject({ processed: false, reason: 'reaction_probe_logged' });
+    ).resolves.toMatchObject({ processed: false, reason: 'reaction_target_not_found' });
 
-    expect(String(log.mock.calls[0]?.[0] ?? '')).toContain('[WHATSAPP_REACTION_PROBE]');
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-    log.mockRestore();
   });
 
   it('updates outbound messages to DELIVERED from Kirago ReadReceipt', async () => {

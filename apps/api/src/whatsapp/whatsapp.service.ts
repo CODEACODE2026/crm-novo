@@ -2596,6 +2596,11 @@ export class WhatsAppService {
       return { received: true, ...(await this.processMessageReceiptWebhook(normalized)) };
     }
 
+    if (this.isKiragoReactionProbePayload(payload, normalized)) {
+      this.logKiragoReactionProbe(payload, normalized);
+      return { received: true, processed: false, reason: 'reaction_probe_logged' };
+    }
+
     if (normalized.isGroup) {
       return { received: true, processed: false, reason: 'ignored_group' };
     }
@@ -2887,6 +2892,149 @@ export class WhatsAppService {
         'Played',
       ]),
     );
+  }
+
+  private isKiragoReactionProbePayload(payload: unknown, normalized: NormalizedWhatsAppMessage) {
+    if (normalized.messageType === 'reaction') {
+      return true;
+    }
+
+    const body = this.asRecord(payload);
+
+    if (!body || body.type !== 'Message') {
+      return false;
+    }
+
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+
+    if (this.asRecord(message?.reactionMessage)) {
+      return true;
+    }
+
+    const infoType = this.safeProbeValue(info?.Type)?.toLowerCase();
+    return Boolean(infoType?.includes('reaction'));
+  }
+
+  private logKiragoReactionProbe(payload: unknown, normalized: NormalizedWhatsAppMessage) {
+    try {
+      const body = this.asRecord(payload);
+
+      if (!body) {
+        return;
+      }
+
+      const event = this.asRecord(body.event);
+      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+      const data = this.asRecord(body.data);
+      const reaction =
+        this.asRecord(message?.reactionMessage) ??
+        this.asRecord(body.reactionMessage) ??
+        this.asRecord(event?.reactionMessage) ??
+        this.asRecord(data?.reactionMessage);
+      const reactionKey = this.asRecord(reaction?.key) ?? this.asRecord(reaction?.Key);
+      const context =
+        this.asRecord(reaction?.contextInfo) ??
+        this.asRecord(reaction?.ContextInfo) ??
+        this.asRecord(message?.contextInfo);
+      const emoji = this.firstProbeValue(reaction, [
+        'text',
+        'Text',
+        'emoji',
+        'Emoji',
+        'reaction',
+        'Reaction',
+      ]);
+      const removeValue =
+        this.firstProbeValue(reaction, ['remove', 'Remove', 'unreact', 'Unreact']) ??
+        (this.hasAnyOwnValue(reaction, ['text', 'Text']) && !emoji ? 'true' : null);
+
+      this.logger.log(
+        [
+          '[WHATSAPP_REACTION_PROBE]',
+          `type=${this.safeProbeValue(body.type) ?? 'unknown'}`,
+          `infoType=${this.safeProbeNonSensitiveValue(info?.Type) ?? 'unknown'}`,
+          `messageType=${normalized.messageType}`,
+          `eventMessageId=${this.maskProbeId(info?.ID ?? info?.id ?? normalized.messageId)}`,
+          `targetMessageId=${this.maskProbeId(
+            this.firstProbeRawValue(reaction, [
+              'targetMessageId',
+              'TargetMessageId',
+              'messageId',
+              'MessageId',
+              'stanzaId',
+              'StanzaId',
+              'id',
+              'ID',
+            ]) ??
+              this.firstProbeRawValue(reactionKey, [
+                'id',
+                'ID',
+                'messageId',
+                'MessageId',
+                'stanzaId',
+                'StanzaId',
+              ]) ??
+              this.firstProbeRawValue(context, ['stanzaId', 'StanzaId']),
+          )}`,
+          `emoji=${emoji ?? 'unknown'}`,
+          `remove=${removeValue ?? 'unknown'}`,
+          `isFromMe=${normalized.direction === 'OUTGOING'}`,
+          `sender=${this.maskProbeId(
+            info?.Sender ??
+              info?.sender ??
+              this.firstProbeRawValue(reactionKey, ['participant', 'Participant']) ??
+              this.firstProbeRawValue(context, ['participant', 'Participant']),
+          )}`,
+          `chat=${this.maskProbeId(
+            info?.Chat ??
+              info?.chat ??
+              this.firstProbeRawValue(reactionKey, ['remoteJid', 'RemoteJid']),
+          )}`,
+          `phone=${this.maskProbeId(normalized.phone)}`,
+          `participant=${this.maskProbeId(
+            this.firstProbeRawValue(reaction, ['participant', 'Participant']) ??
+              this.firstProbeRawValue(reactionKey, ['participant', 'Participant']) ??
+              this.firstProbeRawValue(context, ['participant', 'Participant']),
+          )}`,
+          `providerReactionId=${this.maskProbeId(
+            this.firstProbeRawValue(reaction, [
+              'id',
+              'ID',
+              'reactionId',
+              'ReactionId',
+              'providerReactionId',
+              'ProviderReactionId',
+            ]) ?? info?.ID,
+          )}`,
+          `reactionKeys=${this.safeObjectKeys(reaction).join(',') || 'none'}`,
+          `reactionKeyKeys=${this.safeObjectKeys(reactionKey).join(',') || 'none'}`,
+          `contextKeys=${this.safeObjectKeys(context).join(',') || 'none'}`,
+        ].join(' '),
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private firstProbeValue(source: Record<string, unknown> | null, keys: readonly string[]) {
+    return this.safeProbeNonSensitiveValue(this.firstProbeRawValue(source, keys));
+  }
+
+  private firstProbeRawValue(source: Record<string, unknown> | null, keys: readonly string[]) {
+    if (!source) {
+      return null;
+    }
+
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        return source[key];
+      }
+    }
+
+    return null;
   }
 
   private safeProbeValue(value: unknown) {

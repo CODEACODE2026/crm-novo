@@ -4551,6 +4551,150 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
+  it('logs inbound reaction-like webhooks with a dedicated sanitized marker', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: 'reaction-event-id',
+        messageType: 'reaction',
+        text: null,
+      }),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: {
+            ID: 'reaction-event-id',
+            Type: 'reaction',
+            IsFromMe: false,
+            Chat: '5544999999999@s.whatsapp.net',
+            Sender: '5544888888888@s.whatsapp.net',
+          },
+          Message: {
+            reactionMessage: {
+              text: '😂',
+              key: {
+                id: 'target-provider-message-id',
+                remoteJid: '5544999999999@s.whatsapp.net',
+                participant: '5544888888888@s.whatsapp.net',
+              },
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'reaction_probe_logged',
+    });
+
+    const output = String(
+      log.mock.calls.find((call) => String(call[0]).includes('WHATSAPP_REACTION_PROBE'))?.[0] ?? '',
+    );
+    expect(output).toContain('[WHATSAPP_REACTION_PROBE]');
+    expect(output).toContain('messageType=reaction');
+    expect(output).toContain('emoji=😂');
+    expect(output).toContain('reactionKeys=key,text');
+    expect(output).not.toContain('5544999999999@s.whatsapp.net');
+    expect(output).not.toContain('5544888888888@s.whatsapp.net');
+    expect(output).not.toContain('target-provider-message-id');
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessageReaction.upsert).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('does not persist reaction-like webhooks as text or technical conversation messages', async () => {
+    const { service, prisma, normalizer, realtime } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('ignored text', {
+        messageId: 'reaction-like-info-type',
+        messageType: 'reaction',
+      }),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: { ID: 'reaction-like-info-type', Type: 'reactionMessage', IsFromMe: false },
+          Message: { conversation: 'ignored text' },
+        },
+      }),
+    ).resolves.toMatchObject({ processed: false, reason: 'reaction_probe_logged' });
+
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessageReaction.upsert).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('keeps normal inbound Message webhooks on the existing persistence path', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(normalizedInbound('Mensagem normal'));
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      action: 'client_exists',
+      conversation: expect.objectContaining({ action: 'conversation_message_persisted' }),
+    });
+
+    expect(prisma.whatsAppInboundMessage.create).toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
+    expect(log.mock.calls.some((call) => String(call[0]).includes('WHATSAPP_REACTION_PROBE'))).toBe(
+      false,
+    );
+    log.mockRestore();
+  });
+
+  it('does not log reaction probe entries for ReadReceipt webhooks', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(normalizedReceipt());
+
+    await service.receiveWebhook({ type: 'ReadReceipt' });
+
+    expect(log.mock.calls.some((call) => String(call[0]).includes('WHATSAPP_REACTION_PROBE'))).toBe(
+      false,
+    );
+    log.mockRestore();
+  });
+
+  it('does not throw when reaction probe fields are absent', async () => {
+    const { service, prisma, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        phone: null,
+        messageId: null,
+        messageType: 'reaction',
+        text: null,
+      }),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: { Type: 'reaction' },
+          Message: { reactionMessage: {} },
+        },
+      }),
+    ).resolves.toMatchObject({ processed: false, reason: 'reaction_probe_logged' });
+
+    expect(String(log.mock.calls[0]?.[0] ?? '')).toContain('[WHATSAPP_REACTION_PROBE]');
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
   it('updates outbound messages to DELIVERED from Kirago ReadReceipt', async () => {
     const receiptAt = new Date('2026-10-08T21:21:18.000Z');
     const existing = conversationMessage({

@@ -57,6 +57,7 @@ import {
   startWhatsAppConversation,
   testPaymentProviderCredential,
   markWhatsAppConversationRead,
+  updateWhatsAppConversationMessageReaction,
   updateClient,
   updateMessageTemplate,
 } from './crm-api';
@@ -1416,6 +1417,8 @@ describe('CRM UI formatters', () => {
       pageSize: 10,
     });
     await getWhatsAppConversationMessagesAround('conversation-id', 'message-id', { limit: 15 });
+    await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', '❤️');
+    await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', null);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1507,6 +1510,26 @@ describe('CRM UI formatters', () => {
         '/whatsapp/conversations/conversation-id/messages/around/message-id?limit=15',
       ),
       expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      13,
+      expect.stringContaining(
+        '/whatsapp/conversations/conversation-id/messages/message-id/reaction',
+      ),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ emoji: '❤️' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      14,
+      expect.stringContaining(
+        '/whatsapp/conversations/conversation-id/messages/message-id/reaction',
+      ),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ emoji: null }),
+      }),
     );
   });
 

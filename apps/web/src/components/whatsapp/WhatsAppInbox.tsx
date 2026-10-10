@@ -32,6 +32,7 @@ import {
   Reply,
   Search,
   Send,
+  SmilePlus,
   Square,
   Trash2,
   Upload,
@@ -70,6 +71,7 @@ import {
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
   startWhatsAppConversation,
+  updateWhatsAppConversationMessageReaction,
   type Client,
   type ClientOption,
   type ClientPayload,
@@ -168,6 +170,7 @@ export const conversationVideoAccept = 'video/mp4';
 const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
+export const allowedWhatsAppReactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const;
 
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
@@ -218,6 +221,9 @@ export function WhatsAppInbox({
   const [sendError, setSendError] = useState('');
   const [retryErrors, setRetryErrors] = useState<Record<string, string>>({});
   const [retryingMessageIds, setRetryingMessageIds] = useState<Set<string>>(new Set());
+  const [reactionErrors, setReactionErrors] = useState<Record<string, string>>({});
+  const [reactingMessageIds, setReactingMessageIds] = useState<Set<string>>(new Set());
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null);
   const [clientError, setClientError] = useState('');
   const [linkClientError, setLinkClientError] = useState('');
   const [guestClientCreateError, setGuestClientCreateError] = useState('');
@@ -270,6 +276,7 @@ export function WhatsAppInbox({
   const pendingComposerFocusRef = useRef(false);
   const sendingRef = useRef(false);
   const retryingMessagesRef = useRef(new Set<string>());
+  const reactingMessagesRef = useRef(new Set<string>());
   const startingConversationRef = useRef(false);
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
   const pendingReadTimeoutsRef = useRef(new Map<string, number>());
@@ -1591,6 +1598,7 @@ export function WhatsAppInbox({
         providerMessageId: null,
         quotedText: replyToSend ? conversationMessageQuotePreview(replyToSend) : null,
         readAt: null,
+        reactions: [],
         replyTo: replyToSend
           ? {
               id: replyToSend.id,
@@ -1869,6 +1877,39 @@ export function WhatsAppInbox({
     }
   }
 
+  async function updateConversationReaction(message: WhatsAppConversationMessage, emoji: string) {
+    if (!selectedConversation) return;
+    if (reactingMessagesRef.current.has(message.id)) return;
+
+    const nextEmoji = nextOwnReactionEmoji(message, emoji);
+
+    reactingMessagesRef.current.add(message.id);
+    setReactingMessageIds(new Set(reactingMessagesRef.current));
+    setReactionErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+
+    try {
+      const updated = await updateWhatsAppConversationMessageReaction(
+        selectedConversation.id,
+        message.id,
+        nextEmoji,
+      );
+      setMessages((current) => mergeConversationMessages(current, [updated]));
+      setReactionPickerMessageId(null);
+    } catch (err) {
+      setReactionErrors((current) => ({
+        ...current,
+        [message.id]: conversationErrorMessage(err, 'Falha ao atualizar reação.'),
+      }));
+    } finally {
+      reactingMessagesRef.current.delete(message.id);
+      setReactingMessageIds(new Set(reactingMessagesRef.current));
+    }
+  }
+
   async function retryGuestClientLink(clientOption: ClientOption) {
     if (!guestClientCreateConversation || creatingGuestClient) return;
 
@@ -2110,6 +2151,9 @@ export function WhatsAppInbox({
                 messagesEndRef={messagesEndRef}
                 hasNewer={hasNewerMessages}
                 olderError={olderMessagesError}
+                reactionErrors={reactionErrors}
+                reactionPickerMessageId={reactionPickerMessageId}
+                reactingMessageIds={reactingMessageIds}
                 retryErrors={retryErrors}
                 retryingMessageIds={retryingMessageIds}
                 scrollRef={messagesScrollRef}
@@ -2123,6 +2167,8 @@ export function WhatsAppInbox({
                 onLoadLatest={() => void loadLatestMessages()}
                 onLoadOlder={() => void loadOlderMessages()}
                 onQuoteClick={(message) => void jumpToQuotedMessage(message)}
+                onReaction={(message, emoji) => void updateConversationReaction(message, emoji)}
+                onReactionPickerChange={setReactionPickerMessageId}
                 onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
               />
@@ -2610,8 +2656,13 @@ function ConversationMessages({
   onLoadLatest,
   onLoadOlder,
   onQuoteClick,
+  onReaction,
+  onReactionPickerChange,
   onReply,
   onRetry,
+  reactionErrors,
+  reactionPickerMessageId,
+  reactingMessageIds,
   scrollRef,
   showNewMessageNotice,
   targetMessageId,
@@ -2631,8 +2682,13 @@ function ConversationMessages({
   onLoadLatest: () => void;
   onLoadOlder: () => void;
   onQuoteClick: (message: WhatsAppConversationMessage) => void;
+  onReaction: (message: WhatsAppConversationMessage, emoji: string) => void;
+  onReactionPickerChange: (messageId: string | null) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
+  reactionErrors: Record<string, string>;
+  reactionPickerMessageId: string | null;
+  reactingMessageIds: Set<string>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   showNewMessageNotice: boolean;
   targetMessageId: string | null;
@@ -2684,10 +2740,15 @@ function ConversationMessages({
                     conversationId={conversationId}
                     highlighted={targetMessageId === message.id}
                     message={message}
+                    reactionError={reactionErrors[message.id] ?? ''}
+                    reactionPickerOpen={reactionPickerMessageId === message.id}
+                    reacting={reactingMessageIds.has(message.id)}
                     retryError={retryErrors[message.id] ?? ''}
                     retrying={retryingMessageIds.has(message.id)}
                     searchTerm={targetMessageId === message.id ? targetSearchTerm : ''}
                     onQuoteClick={onQuoteClick}
+                    onReaction={onReaction}
+                    onReactionPickerChange={onReactionPickerChange}
                     onReply={onReply}
                     onRetry={onRetry}
                   />
@@ -2845,20 +2906,30 @@ function ConversationBubble({
   conversationId,
   highlighted,
   message,
+  reactionError,
+  reactionPickerOpen,
+  reacting,
   retryError,
   retrying,
   searchTerm,
   onQuoteClick,
+  onReaction,
+  onReactionPickerChange,
   onReply,
   onRetry,
 }: {
   conversationId: string;
   highlighted: boolean;
   message: WhatsAppConversationMessage;
+  reactionError: string;
+  reactionPickerOpen: boolean;
+  reacting: boolean;
   retryError: string;
   retrying: boolean;
   searchTerm: string;
   onQuoteClick: (message: WhatsAppConversationMessage) => void;
+  onReaction: (message: WhatsAppConversationMessage, emoji: string) => void;
+  onReactionPickerChange: (messageId: string | null) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
@@ -2893,10 +2964,55 @@ function ConversationBubble({
         >
           <Reply aria-hidden="true" size={14} />
         </button>
+        <div className="conversation-reaction-action-wrap">
+          <button
+            className="conversation-reaction-action"
+            type="button"
+            title="Reagir"
+            aria-label="Reagir à mensagem"
+            aria-expanded={reactionPickerOpen}
+            disabled={reacting}
+            onClick={() => onReactionPickerChange(reactionPickerOpen ? null : message.id)}
+          >
+            {reacting ? (
+              <Loader2 aria-hidden="true" size={14} />
+            ) : (
+              <SmilePlus aria-hidden="true" size={14} />
+            )}
+          </button>
+          {reactionPickerOpen ? (
+            <div className="conversation-reaction-picker" role="menu">
+              {allowedWhatsAppReactionEmojis.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  role="menuitem"
+                  className={
+                    message.reactions.some(
+                      (reaction) => reaction.isFromMe && reaction.emoji === emoji,
+                    )
+                      ? 'active'
+                      : ''
+                  }
+                  disabled={reacting}
+                  onClick={() => onReaction(message, emoji)}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
         {text ? <p>{renderHighlightedSearchText(text, searchTerm)}</p> : null}
         <ConversationMediaContent conversationId={conversationId} message={message} />
         {caption ? <span className="conversation-caption">{caption}</span> : null}
+        <ConversationReactionSummary reactions={message.reactions} />
+        {reactionError ? (
+          <div className="conversation-reaction-error" role="alert">
+            {reactionError}
+          </div>
+        ) : null}
         <footer>
           <span>{conversationMessageTime(message)}</span>
           {outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}
@@ -2956,6 +3072,44 @@ function ConversationQuote({
       <span>{preview}</span>
     </button>
   );
+}
+
+function ConversationReactionSummary({
+  reactions,
+}: {
+  reactions: WhatsAppConversationMessage['reactions'];
+}) {
+  const counts = summarizeConversationReactions(reactions);
+
+  if (!counts.length) {
+    return null;
+  }
+
+  return (
+    <div className="conversation-reaction-summary">
+      {counts.map(([emoji, count]) => (
+        <span key={emoji}>
+          {emoji} {count}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function nextOwnReactionEmoji(message: WhatsAppConversationMessage, emoji: string) {
+  const ownReaction = message.reactions.find((reaction) => reaction.isFromMe);
+  return ownReaction?.emoji === emoji ? null : emoji;
+}
+
+export function summarizeConversationReactions(
+  reactions: WhatsAppConversationMessage['reactions'],
+) {
+  const counts = reactions.reduce<Record<string, number>>((acc, reaction) => {
+    acc[reaction.emoji] = (acc[reaction.emoji] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return Object.entries(counts);
 }
 
 function useMediaVisibility(enabled: boolean) {
@@ -4528,7 +4682,7 @@ function clientOptionFromClient(client: Client): ClientOption {
   };
 }
 
-function mergeConversationMessages(
+export function mergeConversationMessages(
   current: WhatsAppConversationMessage[],
   incoming: WhatsAppConversationMessage[],
 ) {

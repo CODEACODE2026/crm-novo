@@ -259,6 +259,7 @@ function conversationMessage(overrides: Record<string, unknown> = {}) {
     isFromMe: false,
     rawMetadata: null,
     createdAt: now,
+    reactions: [],
     ...overrides,
   };
 }
@@ -503,7 +504,24 @@ function serviceFactory({
       update: vi.fn((args: { data?: Record<string, unknown> }) =>
         Promise.resolve(conversationMessage(args.data ?? {})),
       ),
+      findUniqueOrThrow: vi.fn().mockResolvedValue(conversationMessage()),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    whatsAppMessageReaction: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      upsert: vi.fn().mockResolvedValue({
+        id: 'reaction-id',
+        messageId: conversationMessage().id,
+        whatsAppConnectionId: connection().id,
+        provider: 'KIRAGO',
+        emoji: '❤️',
+        reactorKey: 'crm:self',
+        isFromMe: true,
+        providerReactionId: null,
+        participant: null,
+        createdAt: now,
+        updatedAt: now,
+      }),
     },
     $transaction: vi.fn(async (input: unknown) => {
       if (Array.isArray(input)) {
@@ -563,6 +581,7 @@ function serviceFactory({
         },
         whatsAppConversation: prisma.whatsAppConversation,
         whatsAppMessage: prisma.whatsAppMessage,
+        whatsAppMessageReaction: prisma.whatsAppMessageReaction,
       });
     }),
     ...prismaOverrides,
@@ -585,6 +604,7 @@ function serviceFactory({
     sendAudio: vi.fn().mockResolvedValue({ providerMessageId: 'provider-audio-id' }),
     sendVideo: vi.fn().mockResolvedValue({ providerMessageId: 'provider-video-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
+    sendReaction: vi.fn().mockResolvedValue(undefined),
     markMessagesAsRead: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn().mockResolvedValue({
       dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
@@ -6958,6 +6978,316 @@ describe('WhatsAppService', () => {
       nextPage: null,
       nextCursor: { createdAt: message97.createdAt, id: message97.id },
     });
+  });
+
+  it('sends and persists an own reaction for inbound conversation messages', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'INBOUND',
+      providerMessageId: 'provider-inbound',
+      conversation: connectedConversation,
+    });
+    const updated = conversationMessage({
+      ...target,
+      reactions: [
+        {
+          id: 'reaction-id',
+          messageId: target.id,
+          whatsAppConnectionId: target.whatsAppConnectionId,
+          provider: 'KIRAGO',
+          emoji: '❤️',
+          reactorKey: 'crm:self',
+          isFromMe: true,
+          providerReactionId: null,
+          participant: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
+    const { service, provider, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(updated),
+          findUnique: vi.fn().mockResolvedValue(updated),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(updated),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.updateConversationMessageReaction(
+      connectedConversation.id,
+      target.id,
+      { emoji: '❤️' },
+    );
+
+    expect(provider.sendReaction).toHaveBeenCalledWith('instance-token', {
+      phone: connectedConversation.phoneNormalized,
+      providerMessageId: 'provider-inbound',
+      isOwnMessage: false,
+      emoji: '❤️',
+    });
+    expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenCalledWith({
+      where: { messageId_reactorKey: { messageId: target.id, reactorKey: 'crm:self' } },
+      create: {
+        messageId: target.id,
+        whatsAppConnectionId: target.whatsAppConnectionId,
+        provider: 'KIRAGO',
+        emoji: '❤️',
+        reactorKey: 'crm:self',
+        isFromMe: true,
+      },
+      update: {
+        emoji: '❤️',
+        isFromMe: true,
+        participant: null,
+      },
+    });
+    expect(result.reactions).toEqual([
+      expect.objectContaining({ emoji: '❤️', isFromMe: true, reactorKey: 'crm:self' }),
+    ]);
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
+  });
+
+  it('uses outbound direction for the provider own-message reaction id rule and removes own reaction', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+    });
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue({ ...target, reactions: [] }),
+          findUnique: vi.fn().mockResolvedValue({ ...target, reactions: [] }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(target),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.updateConversationMessageReaction(
+      connectedConversation.id,
+      target.id,
+      { emoji: null },
+    );
+
+    expect(provider.sendReaction).toHaveBeenCalledWith('instance-token', {
+      phone: connectedConversation.phoneNormalized,
+      providerMessageId: 'provider-outbound',
+      isOwnMessage: true,
+      emoji: null,
+    });
+    expect(prisma.whatsAppMessageReaction.deleteMany).toHaveBeenCalledWith({
+      where: { messageId: target.id, reactorKey: 'crm:self' },
+    });
+    expect(result.reactions).toEqual([]);
+  });
+
+  it('does not persist reaction changes when the provider rejects the request', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'INBOUND',
+      providerMessageId: 'provider-inbound',
+      conversation: connectedConversation,
+    });
+    const { service, prisma } = serviceFactory({
+      providerOverrides: {
+        sendReaction: vi.fn().mockRejectedValue(new Error('provider failed')),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUnique: vi.fn().mockResolvedValue(target),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(target),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(
+      service.updateConversationMessageReaction(connectedConversation.id, target.id, {
+        emoji: null,
+      }),
+    ).rejects.toThrow();
+
+    expect(prisma.whatsAppMessageReaction.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessageReaction.upsert).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('changes only the crm self reaction and preserves other reactors', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const ownReaction = {
+      id: 'reaction-own',
+      messageId: 'message-id',
+      whatsAppConnectionId: connection().id,
+      provider: 'KIRAGO',
+      emoji: '❤️',
+      reactorKey: 'crm:self',
+      isFromMe: true,
+      providerReactionId: null,
+      participant: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const contactReaction = {
+      id: 'reaction-contact',
+      messageId: 'message-id',
+      whatsAppConnectionId: connection().id,
+      provider: 'KIRAGO',
+      emoji: '🙏',
+      reactorKey: 'contact:future',
+      isFromMe: false,
+      providerReactionId: null,
+      participant: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const target = conversationMessage({
+      direction: 'INBOUND',
+      providerMessageId: 'provider-inbound',
+      conversation: connectedConversation,
+      reactions: [ownReaction, contactReaction],
+    });
+    const updated = conversationMessage({
+      ...target,
+      reactions: [{ ...ownReaction, emoji: '😂' }, contactReaction],
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(updated),
+          findUnique: vi.fn().mockResolvedValue(updated),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+          update: vi.fn().mockResolvedValue(updated),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.updateConversationMessageReaction(
+      connectedConversation.id,
+      target.id,
+      { emoji: '😂' },
+    );
+
+    expect(prisma.whatsAppMessageReaction.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { messageId_reactorKey: { messageId: target.id, reactorKey: 'crm:self' } },
+        update: expect.objectContaining({ emoji: '😂', isFromMe: true, participant: null }),
+      }),
+    );
+    expect(result.reactions).toEqual([
+      expect.objectContaining({ emoji: '😂', reactorKey: 'crm:self', isFromMe: true }),
+      expect.objectContaining({ emoji: '🙏', reactorKey: 'contact:future', isFromMe: false }),
+    ]);
+  });
+
+  it('rejects invalid reactions, missing provider ids and wrong conversation targets before provider call', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const { service: invalidService, provider: invalidProvider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(
+            conversationMessage({
+              conversation: connectedConversation,
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      invalidService.updateConversationMessageReaction(connectedConversation.id, 'message-id', {
+        emoji: '🔥' as never,
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(invalidProvider.sendReaction).not.toHaveBeenCalled();
+
+    const { service: missingProviderIdService, provider: missingProviderIdProvider } =
+      serviceFactory({
+        prismaOverrides: {
+          whatsAppMessage: {
+            findFirst: vi.fn().mockResolvedValue(
+              conversationMessage({
+                providerMessageId: null,
+                conversation: connectedConversation,
+              }),
+            ),
+          },
+        },
+      });
+
+    await expect(
+      missingProviderIdService.updateConversationMessageReaction(
+        connectedConversation.id,
+        'message-id',
+        { emoji: '👍' },
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(missingProviderIdProvider.sendReaction).not.toHaveBeenCalled();
+
+    const { service: missingTargetService, provider: missingTargetProvider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await expect(
+      missingTargetService.updateConversationMessageReaction('wrong-conversation', 'message-id', {
+        emoji: '👍',
+      }),
+    ).rejects.toThrow(NotFoundException);
+    expect(missingTargetProvider.sendReaction).not.toHaveBeenCalled();
   });
 
   it('uses id as the tie-break for same-timestamp message cursors', async () => {

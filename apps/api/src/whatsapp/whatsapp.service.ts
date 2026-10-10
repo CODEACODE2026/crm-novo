@@ -23,6 +23,7 @@ import {
   WhatsAppConnection,
   WhatsAppConnectionStatus,
   WhatsAppMessage,
+  WhatsAppMessageReaction,
 } from '@prisma/client';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -72,6 +73,11 @@ import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
+import {
+  allowedWhatsAppReactionEmojis,
+  type AllowedWhatsAppReactionEmoji,
+  UpdateWhatsAppMessageReactionDto,
+} from './dto/update-whatsapp-message-reaction.dto';
 import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
@@ -133,6 +139,7 @@ const whatsappMessageQuoteSelect = {
 } satisfies Prisma.WhatsAppMessageSelect;
 const whatsappMessageReplyInclude = {
   replyTo: { select: whatsappMessageQuoteSelect },
+  reactions: { orderBy: { createdAt: 'asc' } },
 } satisfies Prisma.WhatsAppMessageInclude;
 
 type ConversationMediaUploadFile = {
@@ -312,6 +319,7 @@ type WhatsAppConversationMessageQuote = Pick<
 
 type WhatsAppConversationMessageForPresenter = WhatsAppMessage & {
   replyTo?: WhatsAppConversationMessageQuote | null;
+  reactions?: WhatsAppMessageReaction[];
 };
 
 type WhatsAppReplyTargetMessage = Pick<
@@ -1397,6 +1405,98 @@ export class WhatsAppService {
         messageId: pending.id,
       });
     }
+  }
+
+  async updateConversationMessageReaction(
+    conversationId: string,
+    messageId: string,
+    dto: UpdateWhatsAppMessageReactionDto,
+  ) {
+    const emoji = dto.emoji ?? null;
+
+    if (emoji !== null && !this.isAllowedReactionEmoji(emoji)) {
+      throw new BadRequestException('Reacao WhatsApp invalida.');
+    }
+
+    const target = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, conversationId },
+      include: {
+        conversation: { include: { whatsAppConnection: true } },
+        ...whatsappMessageReplyInclude,
+      },
+    });
+
+    if (!target) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada nesta conversa.');
+    }
+
+    const conversation = target.conversation;
+    const connection = conversation.whatsAppConnection;
+
+    if (
+      target.conversationId !== conversation.id ||
+      target.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
+      target.provider !== conversation.provider
+    ) {
+      throw new BadRequestException('Mensagem WhatsApp nao pertence a esta conversa.');
+    }
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    if (!target.providerMessageId) {
+      throw new BadRequestException('Mensagem WhatsApp ainda nao possui id do provider.');
+    }
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+
+    await this.mapConnectionProviderError(connection, () =>
+      this.provider.sendReaction(instanceToken, {
+        phone: conversation.phoneNormalized,
+        providerMessageId: target.providerMessageId!,
+        isOwnMessage: target.direction === 'OUTBOUND',
+        emoji,
+      }),
+    );
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (emoji === null) {
+        await tx.whatsAppMessageReaction.deleteMany({
+          where: { messageId: target.id, reactorKey: this.ownReactionKey() },
+        });
+      } else {
+        await tx.whatsAppMessageReaction.upsert({
+          where: {
+            messageId_reactorKey: {
+              messageId: target.id,
+              reactorKey: this.ownReactionKey(),
+            },
+          },
+          create: {
+            messageId: target.id,
+            whatsAppConnectionId: target.whatsAppConnectionId,
+            provider: target.provider,
+            emoji,
+            reactorKey: this.ownReactionKey(),
+            isFromMe: true,
+          },
+          update: {
+            emoji,
+            isFromMe: true,
+            participant: null,
+          },
+        });
+      }
+
+      return tx.whatsAppMessage.findUniqueOrThrow({
+        where: { id: target.id },
+        include: whatsappMessageReplyInclude,
+      });
+    });
+
+    this.emitMessageUpdated(conversation.id, target.id);
+    return this.presentConversationMessage(updated);
   }
 
   async sendConversationMediaMessage(
@@ -5260,6 +5360,14 @@ export class WhatsAppService {
     return normalized || null;
   }
 
+  private ownReactionKey() {
+    return 'crm:self';
+  }
+
+  private isAllowedReactionEmoji(value: string): value is AllowedWhatsAppReactionEmoji {
+    return (allowedWhatsAppReactionEmojis as readonly string[]).includes(value);
+  }
+
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {
     return {
       id: message.id,
@@ -5289,11 +5397,23 @@ export class WhatsAppService {
       mediaFileName: message.mediaFileName,
       mediaSizeBytes: message.mediaSizeBytes,
       mediaDurationSeconds: message.mediaDurationSeconds,
+      reactions: this.presentMessageReactions(message.reactions ?? []),
       mediaAvailable: this.hasAvailableMedia(message),
       retryAction: this.conversationMessageRetryAction(message),
       messageDispatchId: message.messageDispatchId,
       createdAt: message.createdAt,
     };
+  }
+
+  private presentMessageReactions(reactions: WhatsAppMessageReaction[]) {
+    return reactions.map((reaction) => ({
+      id: reaction.id,
+      emoji: reaction.emoji,
+      reactorKey: reaction.reactorKey,
+      isFromMe: reaction.isFromMe,
+      createdAt: reaction.createdAt,
+      updatedAt: reaction.updatedAt,
+    }));
   }
 
   private presentConversationMessageSearchResult(

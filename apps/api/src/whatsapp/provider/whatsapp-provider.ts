@@ -124,6 +124,14 @@ export type MarkMessagesAsReadInput = {
   phone: string;
 };
 
+export type SendReactionInput = {
+  phone: string;
+  providerMessageId: string;
+  isOwnMessage: boolean;
+  emoji: string | null;
+  participant?: string | null;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -142,6 +150,7 @@ export interface WhatsAppProvider {
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput): Promise<void>;
+  sendReaction(instanceToken: string, input: SendReactionInput): Promise<void>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

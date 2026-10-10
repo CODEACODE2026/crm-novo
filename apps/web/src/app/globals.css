@@ -2840,15 +2840,106 @@ a {
     color 0.15s ease;
 }
 
+.conversation-reaction-action-wrap {
+  position: absolute;
+  top: 6px;
+  right: 40px;
+  z-index: 3;
+}
+
+.conversation-reaction-action {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 12%);
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    color 0.15s ease;
+}
+
 .conversation-bubble:hover .conversation-reply-action,
-.conversation-reply-action:focus-visible {
+.conversation-bubble:hover .conversation-reaction-action,
+.conversation-reply-action:focus-visible,
+.conversation-reaction-action:focus-visible,
+.conversation-reaction-action[aria-expanded='true'] {
   opacity: 1;
 }
 
-.conversation-reply-action:hover {
+.conversation-reply-action:hover,
+.conversation-reaction-action:hover {
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   color: var(--accent);
   transform: translateY(-1px);
+}
+
+.conversation-reaction-action:disabled {
+  cursor: wait;
+  opacity: 0.76;
+}
+
+.conversation-reaction-picker {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  display: flex;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 4px;
+}
+
+.conversation-reaction-picker button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.conversation-reaction-picker button:hover,
+.conversation-reaction-picker button.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.conversation-reaction-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.conversation-reaction-summary span {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+.conversation-reaction-error {
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .conversation-quote {

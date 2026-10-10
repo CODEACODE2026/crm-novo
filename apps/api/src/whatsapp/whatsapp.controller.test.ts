@@ -120,6 +120,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       getConversationMessagesAround: vi.fn().mockResolvedValue({ items: [] }),
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
+      updateConversationMessageReaction: vi.fn().mockResolvedValue({ id: 'message-id' }),
       retryConversationMessage: vi.fn().mockResolvedValue({ id: 'retry-message-id' }),
       sendConversationMediaMessage: vi.fn().mockResolvedValue({ id: 'media-message-id' }),
       sendConversationVoiceMessage: vi.fn().mockResolvedValue({ id: 'voice-message-id' }),
@@ -172,6 +173,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         body: 'Ola',
         requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
       }),
+    ).resolves.toEqual({ id: 'message-id' });
+    await expect(
+      subject.updateConversationMessageReaction('conversation-id', 'message-id', { emoji: '❤️' }),
     ).resolves.toEqual({ id: 'message-id' });
     await expect(
       subject.retryConversationMessage('99999999-9999-4999-8999-999999999999'),
@@ -245,6 +249,11 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       body: 'Ola',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
     });
+    expect(service.updateConversationMessageReaction).toHaveBeenCalledWith(
+      'conversation-id',
+      'message-id',
+      { emoji: '❤️' },
+    );
     expect(service.retryConversationMessage).toHaveBeenCalledWith(
       '99999999-9999-4999-8999-999999999999',
     );

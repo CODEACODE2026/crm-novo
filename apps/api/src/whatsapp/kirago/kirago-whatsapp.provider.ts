@@ -14,6 +14,7 @@ import type {
   SendDocumentInput,
   SendImageInput,
   SendAudioInput,
+  SendReactionInput,
   SendTextInput,
   SendVideoInput,
   WhatsAppProvider,
@@ -268,6 +269,31 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
         response.code,
       );
     }
+  }
+
+  async sendReaction(instanceToken: string, input: SendReactionInput) {
+    const response = await this.instanceClient.react(instanceToken, {
+      Phone: input.phone,
+      Id: this.reactionMessageId(input.providerMessageId, input.isOwnMessage),
+      Body: input.emoji ?? 'remove',
+      ...(input.participant ? { Participant: input.participant } : {}),
+    });
+
+    if (response.success === false) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao reagir mensagem na Kirago.',
+        response.code,
+      );
+    }
+  }
+
+  private reactionMessageId(providerMessageId: string, isOwnMessage: boolean) {
+    if (!isOwnMessage || providerMessageId.startsWith('me:')) {
+      return providerMessageId;
+    }
+
+    return `me:${providerMessageId}`;
   }
 
   private kiragoMessageId(requestId: string) {

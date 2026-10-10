@@ -10,6 +10,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -38,6 +39,7 @@ import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
+import { UpdateWhatsAppMessageReactionDto } from './dto/update-whatsapp-message-reaction.dto';
 import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
@@ -176,6 +178,15 @@ export class WhatsAppController {
     @Body() dto: SendWhatsAppConversationMessageDto,
   ) {
     return this.whatsAppService.sendConversationTextMessage(id, dto);
+  }
+
+  @Put('conversations/:conversationId/messages/:messageId/reaction')
+  updateConversationMessageReaction(
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: UpdateWhatsAppMessageReactionDto,
+  ) {
+    return this.whatsAppService.updateConversationMessageReaction(conversationId, messageId, dto);
   }
 
   @Post('messages/:id/retry')

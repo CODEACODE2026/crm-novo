@@ -392,26 +392,27 @@ model ClientReference {
 }
 
 model WhatsAppConnection {
-  id                     String                   @id @default(uuid()) @db.Uuid
+  id                     String                    @id @default(uuid()) @db.Uuid
   name                   String
-  provider               WhatsAppProvider         @default(KIRAGO)
+  provider               WhatsAppProvider          @default(KIRAGO)
   providerUserId         String?
   providerInstanceName   String?
   providerTokenEncrypted String
   phone                  String?
-  status                 WhatsAppConnectionStatus @default(DISCONNECTED)
-  connected              Boolean                  @default(false)
-  loggedIn               Boolean                  @default(false)
-  webhookConfigured      Boolean                  @default(false)
+  status                 WhatsAppConnectionStatus  @default(DISCONNECTED)
+  connected              Boolean                   @default(false)
+  loggedIn               Boolean                   @default(false)
+  webhookConfigured      Boolean                   @default(false)
   lastStatusAt           DateTime?
   connectedAt            DateTime?
-  createdAt              DateTime                 @default(now())
-  updatedAt              DateTime                 @updatedAt
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
   messageDispatches      MessageDispatch[]
   pendingContacts        WhatsAppPendingContact[]
   inboundMessages        WhatsAppInboundMessage[]
   conversations          WhatsAppConversation[]
   conversationMessages   WhatsAppMessage[]
+  messageReactions       WhatsAppMessageReaction[]
 
   @@index([provider])
   @@index([providerInstanceName])
@@ -694,36 +695,37 @@ model WhatsAppConversation {
 }
 
 model WhatsAppMessage {
-  id                   String                               @id @default(uuid()) @db.Uuid
-  conversationId       String                               @db.Uuid
-  whatsAppConnectionId String                               @db.Uuid
-  provider             WhatsAppProvider                     @default(KIRAGO)
-  providerMessageId    String?
-  requestId            String?
-  messageDispatchId    String?                              @db.Uuid
-  replyToMessageId     String?                              @db.Uuid
+  id                       String                               @id @default(uuid()) @db.Uuid
+  conversationId           String                               @db.Uuid
+  whatsAppConnectionId     String                               @db.Uuid
+  provider                 WhatsAppProvider                     @default(KIRAGO)
+  providerMessageId        String?
+  requestId                String?
+  messageDispatchId        String?                              @db.Uuid
+  replyToMessageId         String?                              @db.Uuid
   replyToProviderMessageId String?
-  quotedText           String?
-  direction            WhatsAppConversationMessageDirection
-  type                 WhatsAppConversationMessageType
-  text                 String?
-  mediaMimeType        String?
-  mediaFileName        String?
-  mediaSizeBytes       Int?
-  mediaDurationSeconds Int?
-  status               WhatsAppConversationMessageStatus
-  sentAt               DateTime?
-  deliveredAt          DateTime?
-  readAt               DateTime?
-  failedAt             DateTime?
-  isFromMe             Boolean                              @default(false)
-  rawMetadata          Json?
-  createdAt            DateTime                             @default(now())
-  conversation         WhatsAppConversation                 @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  whatsAppConnection   WhatsAppConnection                   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
-  messageDispatch      MessageDispatch?                     @relation(fields: [messageDispatchId], references: [id], onDelete: SetNull)
-  replyTo              WhatsAppMessage?                     @relation("WhatsAppMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
-  replies              WhatsAppMessage[]                    @relation("WhatsAppMessageReplies")
+  quotedText               String?
+  direction                WhatsAppConversationMessageDirection
+  type                     WhatsAppConversationMessageType
+  text                     String?
+  mediaMimeType            String?
+  mediaFileName            String?
+  mediaSizeBytes           Int?
+  mediaDurationSeconds     Int?
+  status                   WhatsAppConversationMessageStatus
+  sentAt                   DateTime?
+  deliveredAt              DateTime?
+  readAt                   DateTime?
+  failedAt                 DateTime?
+  isFromMe                 Boolean                              @default(false)
+  rawMetadata              Json?
+  createdAt                DateTime                             @default(now())
+  conversation             WhatsAppConversation                 @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  whatsAppConnection       WhatsAppConnection                   @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  messageDispatch          MessageDispatch?                     @relation(fields: [messageDispatchId], references: [id], onDelete: SetNull)
+  replyTo                  WhatsAppMessage?                     @relation("WhatsAppMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies                  WhatsAppMessage[]                    @relation("WhatsAppMessageReplies")
+  reactions                WhatsAppMessageReaction[]
 
   @@unique([provider, whatsAppConnectionId, providerMessageId])
   @@unique([whatsAppConnectionId, requestId])
@@ -732,6 +734,29 @@ model WhatsAppMessage {
   @@index([replyToMessageId])
   @@index([provider, whatsAppConnectionId, replyToProviderMessageId], map: "whatsapp_messages_reply_provider_msg_idx")
   @@map("whatsapp_messages")
+}
+
+model WhatsAppMessageReaction {
+  id                   String             @id @default(uuid()) @db.Uuid
+  messageId            String             @db.Uuid
+  whatsAppConnectionId String             @db.Uuid
+  provider             WhatsAppProvider   @default(KIRAGO)
+  emoji                String
+  reactorKey           String
+  isFromMe             Boolean            @default(false)
+  providerReactionId   String?
+  participant          String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  message              WhatsAppMessage    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  whatsAppConnection   WhatsAppConnection @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+
+  @@unique([messageId, reactorKey])
+  @@unique([provider, whatsAppConnectionId, providerReactionId])
+  @@index([messageId])
+  @@index([whatsAppConnectionId])
+  @@index([providerReactionId])
+  @@map("whatsapp_message_reactions")
 }
 
 model BillingResponse {

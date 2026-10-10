@@ -93,6 +93,11 @@ describe('Kirago clients', () => {
       FileSHA256: 'file-sha',
       FileLength: 123,
     });
+    await client.react('instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-message-id',
+      Body: '❤️',
+    });
 
     expect(request).toHaveBeenNthCalledWith(1, '/session/connect', {
       method: 'POST',
@@ -166,6 +171,16 @@ describe('Kirago clients', () => {
         Mimetype: 'image/jpeg',
         FileSHA256: 'file-sha',
         FileLength: 123,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(8, '/chat/react', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Id: 'provider-message-id',
+        Body: '❤️',
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

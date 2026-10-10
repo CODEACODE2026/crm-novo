@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   advanceConversationListGeneration,
+  allowedWhatsAppReactionEmojis,
   classifyConversationIncomingFile,
   conversationComposerActionMode,
   conversationVideoAccept,
@@ -12,12 +13,15 @@ import {
   isTechnicalVideoPlaceholder,
   mergeConversationById,
   mergeConversationLists,
+  mergeConversationMessages,
+  nextOwnReactionEmoji,
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
   shouldAutoReadRealtimeMessage,
   shouldApplyConversationListResponse,
   shouldReadVisibleConversationOnReturn,
   shouldRetryActiveConversationRead,
+  summarizeConversationReactions,
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
 import type { WhatsAppConversation, WhatsAppConversationMessage } from '../../lib/crm-api';
@@ -70,10 +74,25 @@ function message(
     mediaFileName: null,
     mediaSizeBytes: null,
     mediaDurationSeconds: null,
+    reactions: [],
     mediaAvailable: false,
     retryAction: null,
     messageDispatchId: null,
     createdAt: '2026-10-08T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function reaction(
+  overrides: Partial<WhatsAppConversationMessage['reactions'][number]> = {},
+): WhatsAppConversationMessage['reactions'][number] {
+  return {
+    id: 'reaction-1',
+    emoji: '❤️',
+    reactorKey: 'crm:self',
+    isFromMe: true,
+    createdAt: '2026-10-08T12:01:00.000Z',
+    updatedAt: '2026-10-08T12:01:00.000Z',
     ...overrides,
   };
 }
@@ -891,5 +910,57 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
         focused: true,
       }),
     ).toBe(false);
+  });
+
+  it('keeps reaction UI constrained to the MVP emoji allowlist', () => {
+    expect([...allowedWhatsAppReactionEmojis]).toEqual(['👍', '❤️', '😂', '😮', '😢', '🙏']);
+  });
+
+  it('maps own reaction clicks to change or remove semantics without touching contact reactions', () => {
+    const withOwnHeart = message({
+      reactions: [
+        reaction({ emoji: '❤️', isFromMe: true, reactorKey: 'crm:self' }),
+        reaction({ id: 'reaction-contact', emoji: '😂', isFromMe: false, reactorKey: 'contact' }),
+      ],
+    });
+
+    expect(nextOwnReactionEmoji(withOwnHeart, '❤️')).toBeNull();
+    expect(nextOwnReactionEmoji(withOwnHeart, '😂')).toBe('😂');
+    expect(
+      nextOwnReactionEmoji(
+        message({
+          reactions: [reaction({ emoji: '🙏', isFromMe: false, reactorKey: 'contact' })],
+        }),
+        '👍',
+      ),
+    ).toBe('👍');
+  });
+
+  it('summarizes reactions for compact bubble rendering and replaces stale realtime state', () => {
+    const stale = message({
+      id: 'message-reaction',
+      reactions: [reaction({ emoji: '❤️', isFromMe: true })],
+    });
+    const updated = message({
+      id: 'message-reaction',
+      reactions: [reaction({ id: 'reaction-updated', emoji: '😂', isFromMe: true })],
+    });
+    const merged = mergeConversationMessages([stale], [updated]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.reactions).toEqual([
+      expect.objectContaining({ emoji: '😂', isFromMe: true }),
+    ]);
+    expect(JSON.stringify(merged)).not.toContain('❤️');
+    expect(
+      summarizeConversationReactions([
+        reaction({ emoji: '❤️' }),
+        reaction({ id: 'reaction-2', emoji: '❤️', reactorKey: 'contact', isFromMe: false }),
+        reaction({ id: 'reaction-3', emoji: '😂', reactorKey: 'other', isFromMe: false }),
+      ]),
+    ).toEqual([
+      ['❤️', 2],
+      ['😂', 1],
+    ]);
   });
 });

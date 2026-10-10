@@ -268,6 +268,90 @@ describe('Kirago dependency injection', () => {
     });
   });
 
+  it('maps inbound and outbound reactions to the confirmed Kirago payload', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const react = vi.spyOn(instanceClient, 'react').mockResolvedValue({
+      code: 200,
+      data: { Details: 'reacted' },
+      success: true,
+    });
+
+    await provider.sendReaction('instance-token', {
+      phone: '5544999999999',
+      providerMessageId: 'provider-inbound',
+      isOwnMessage: false,
+      emoji: '❤️',
+    });
+    await provider.sendReaction('instance-token', {
+      phone: '5544999999999',
+      providerMessageId: 'provider-outbound',
+      isOwnMessage: true,
+      emoji: '😂',
+    });
+    await provider.sendReaction('instance-token', {
+      phone: '5544999999999',
+      providerMessageId: 'me:already-prefixed',
+      isOwnMessage: true,
+      emoji: '🙏',
+    });
+    await provider.sendReaction('instance-token', {
+      phone: '5544999999999',
+      providerMessageId: 'provider-remove',
+      isOwnMessage: false,
+      emoji: null,
+    });
+
+    expect(react).toHaveBeenNthCalledWith(1, 'instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-inbound',
+      Body: '❤️',
+    });
+    expect(react).toHaveBeenNthCalledWith(2, 'instance-token', {
+      Phone: '5544999999999',
+      Id: 'me:provider-outbound',
+      Body: '😂',
+    });
+    expect(react).toHaveBeenNthCalledWith(3, 'instance-token', {
+      Phone: '5544999999999',
+      Id: 'me:already-prefixed',
+      Body: '🙏',
+    });
+    expect(react).toHaveBeenNthCalledWith(4, 'instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-remove',
+      Body: 'remove',
+    });
+  });
+
+  it('does not send Participant for private reactions and reports provider failure', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const react = vi.spyOn(instanceClient, 'react').mockResolvedValue({
+      code: 500,
+      data: { Details: 'failed' },
+      success: false,
+    });
+
+    await expect(
+      provider.sendReaction('instance-token', {
+        phone: '5544999999999',
+        providerMessageId: 'provider-id',
+        isOwnMessage: false,
+        emoji: '👍',
+      }),
+    ).rejects.toThrow('Falha ao reagir mensagem na Kirago.');
+    expect(react).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-id',
+      Body: '👍',
+    });
+  });
+
   it('logs only safe Kirago media send response shape when debug is enabled', async () => {
     process.env.WHATSAPP_MEDIA_SEND_DEBUG = 'true';
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });

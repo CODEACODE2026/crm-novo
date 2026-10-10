@@ -749,10 +749,20 @@ export interface WhatsAppConversationMessage {
   mediaFileName: string | null;
   mediaSizeBytes: number | null;
   mediaDurationSeconds: number | null;
+  reactions: WhatsAppMessageReaction[];
   mediaAvailable: boolean;
   retryAction: 'RETRY' | 'SELECT_FILE_AGAIN' | 'RECORD_AGAIN' | null;
   messageDispatchId: string | null;
   createdAt: string;
+}
+
+export interface WhatsAppMessageReaction {
+  id: string;
+  emoji: string;
+  reactorKey: string;
+  isFromMe: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PaginatedWhatsAppConversations {
@@ -2630,6 +2640,20 @@ export function sendWhatsAppConversationMessage(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function updateWhatsAppConversationMessageReaction(
+  conversationId: string,
+  messageId: string,
+  emoji: string | null,
+) {
+  return apiFetch<WhatsAppConversationMessage>(
+    `/whatsapp/conversations/${conversationId}/messages/${messageId}/reaction`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ emoji }),
+    },
+  );
 }
 
 export function sendWhatsAppConversationMedia(

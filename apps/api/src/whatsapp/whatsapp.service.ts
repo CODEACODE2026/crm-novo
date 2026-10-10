@@ -2756,6 +2756,7 @@ export class WhatsAppService {
     }
 
     if (!normalized) {
+      this.logKiragoUnknownEventProbe(payload);
       return { received: true, processed: false, reason: 'ignored_event' };
     }
 
@@ -3052,6 +3053,108 @@ export class WhatsAppService {
     );
   }
 
+  private logKiragoUnknownEventProbe(payload: unknown) {
+    try {
+      const body = this.asRecord(payload);
+
+      if (!body || !this.shouldLogKiragoUnknownEventProbe(body)) {
+        return;
+      }
+
+      const event = this.asRecord(body.event);
+      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+      const data = this.asRecord(body.data);
+      const presence = this.firstRecord([body, event, data], ['presence', 'Presence']);
+      const chatPresence = this.firstRecord(
+        [body, event, data],
+        ['chatPresence', 'ChatPresence', 'chat_presence', 'Chat_Presence'],
+      );
+
+      this.logger.log(
+        `[WHATSAPP_UNKNOWN_EVENT_PROBE] ${JSON.stringify({
+          type: this.safeProbeNonSensitiveValue(body.type),
+          infoType: this.safeProbeNonSensitiveValue(info?.Type ?? info?.type),
+          eventType: this.safeProbeNonSensitiveValue(
+            event?.Type ?? event?.type ?? (typeof body.event === 'string' ? body.event : null),
+          ),
+          topLevelKeys: this.safeObjectKeys(body),
+          infoKeys: this.safeObjectKeys(info),
+          messageKeys: this.safeObjectKeys(message),
+          eventKeys: this.safeObjectKeys(event),
+          presenceKeys: this.safeObjectKeys(presence),
+          chatPresenceKeys: this.safeObjectKeys(chatPresence),
+          hasPresence: Boolean(presence),
+          hasChatPresence: Boolean(chatPresence),
+          state: this.firstProbeValueFromRecords([body, event, info, data], ['state', 'State']),
+          media: this.firstProbeValueFromRecords([body, event, info, data], ['media', 'Media']),
+          isFromMe: this.booleanLike(
+            this.firstProbeRawValueFromRecords([body, event, info, data], ['isFromMe', 'IsFromMe']),
+          ),
+        })}`,
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private shouldLogKiragoUnknownEventProbe(body: Record<string, unknown>) {
+    const type = this.safeProbeValue(body.type);
+
+    if (type === 'ReadReceipt' || type === 'presence_probe_logged') {
+      return false;
+    }
+
+    if (this.isRawKiragoReactionPayload(body)) {
+      return false;
+    }
+
+    if (type === 'Message' && this.hasRawRenderableMessageContent(body)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private isRawKiragoReactionPayload(body: Record<string, unknown>) {
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+    const data = this.asRecord(body.data);
+
+    if (
+      this.asRecord(message?.reactionMessage) ||
+      this.asRecord(body.reactionMessage) ||
+      this.asRecord(event?.reactionMessage) ||
+      this.asRecord(data?.reactionMessage)
+    ) {
+      return true;
+    }
+
+    const infoType = this.safeProbeValue(info?.Type ?? info?.type)?.toLowerCase();
+    return Boolean(infoType?.includes('reaction'));
+  }
+
+  private hasRawRenderableMessageContent(body: Record<string, unknown>) {
+    const event = this.asRecord(body.event);
+    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+
+    if (!message) {
+      return false;
+    }
+
+    return (
+      this.hasAnyOwnValue(message, [
+        'conversation',
+        'extendedTextMessage',
+        'imageMessage',
+        'documentMessage',
+        'audioMessage',
+        'videoMessage',
+      ]) || this.safeProbeValue(message.conversation) !== null
+    );
+  }
+
   private isKiragoReactionPayload(payload: unknown, normalized: NormalizedWhatsAppMessage) {
     if (normalized.messageType === 'reaction') {
       return true;
@@ -3257,6 +3360,13 @@ export class WhatsAppService {
     return this.safeProbeNonSensitiveValue(this.firstProbeRawValue(source, keys));
   }
 
+  private firstProbeValueFromRecords(
+    sources: readonly (Record<string, unknown> | null)[],
+    keys: readonly string[],
+  ) {
+    return this.safeProbeNonSensitiveValue(this.firstProbeRawValueFromRecords(sources, keys));
+  }
+
   private firstProbeRawValue(source: Record<string, unknown> | null, keys: readonly string[]) {
     if (!source) {
       return null;
@@ -3269,6 +3379,30 @@ export class WhatsAppService {
     }
 
     return null;
+  }
+
+  private firstProbeRawValueFromRecords(
+    sources: readonly (Record<string, unknown> | null)[],
+    keys: readonly string[],
+  ) {
+    for (const source of sources) {
+      const value = this.firstProbeRawValue(source, keys);
+
+      if (value !== null) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  private firstRecord(
+    sources: readonly (Record<string, unknown> | null)[],
+    keys: readonly string[],
+  ) {
+    const value = this.firstProbeRawValueFromRecords(sources, keys);
+
+    return this.asRecord(value);
   }
 
   private safeProbeValue(value: unknown) {

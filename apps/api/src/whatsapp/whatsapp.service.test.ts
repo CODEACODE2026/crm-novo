@@ -4467,6 +4467,7 @@ describe('WhatsAppService', () => {
 
     const output = log.mock.calls.map((call) => String(call[0])).join('\n');
     expect(output).not.toContain('texto privado');
+    expect(output).not.toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
     expect(normalizer.normalize).toHaveBeenCalledWith(payload);
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
@@ -4501,6 +4502,65 @@ describe('WhatsAppService', () => {
       'Kirago webhook probe type=Status event=message_status status=delivered',
     );
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('logs sanitized unknown event probes before returning ignored_event', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ChatPresence',
+        token: 'secret-token',
+        phone: '5544999999999',
+        event: {
+          Type: 'presence',
+          Chat: '123456789012345@lid',
+          IsFromMe: false,
+          State: 'composing',
+          Media: 'audio',
+          SenderAlt: '5511999999999@s.whatsapp.net',
+        },
+        chatPresence: {
+          state: 'composing',
+          participant: '123456789012345@lid',
+        },
+        Message: {
+          conversation: 'texto privado',
+          imageMessage: {
+            URL: 'https://media.example.test/private?token=secret-token',
+            Data: 'data:image/jpeg;base64,abcdef',
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
+    expect(output).toContain('"type":"ChatPresence"');
+    expect(output).toContain('"eventType":"presence"');
+    expect(output).toContain('"hasChatPresence":true');
+    expect(output).toContain('"state":"composing"');
+    expect(output).toContain('"media":"audio"');
+    expect(output).toContain('"isFromMe":false');
+    expect(output).not.toContain('5544999999999');
+    expect(output).not.toContain('123456789012345@lid');
+    expect(output).not.toContain('secret-token');
+    expect(output).not.toContain('texto privado');
+    expect(output).not.toContain('media.example.test');
+    expect(output).not.toContain('base64');
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
     log.mockRestore();
   });
 
@@ -4587,7 +4647,7 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
-  it('keeps ChatPresence ignored safely without diagnostic probe logging', async () => {
+  it('keeps ChatPresence ignored safely with only the unknown event probe', async () => {
     const { service, normalizer, prisma, realtime } = serviceFactory();
     const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     normalizer.normalize.mockReturnValue(null);
@@ -4620,6 +4680,7 @@ describe('WhatsAppService', () => {
     });
 
     const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
     expect(output).not.toContain('123456789012345@lid');
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
@@ -4680,6 +4741,8 @@ describe('WhatsAppService', () => {
       reason: 'ignored_event',
     });
 
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).not.toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
     log.mockRestore();
   });
 
@@ -4705,14 +4768,14 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
-  it('keeps sparse chat_presence-like payloads ignored after removing inbound presence probes', async () => {
+  it('keeps presence_probe_logged payloads out of the unknown event probe', async () => {
     const { service, normalizer } = serviceFactory();
     const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     normalizer.normalize.mockReturnValue(null);
 
     await expect(
       service.receiveWebhook({
-        type: 'Message',
+        type: 'presence_probe_logged',
         event: {
           Info: {
             Type: 'chat_presence',
@@ -4727,7 +4790,24 @@ describe('WhatsAppService', () => {
       reason: 'ignored_event',
     });
 
-    expect(log).not.toHaveBeenCalled();
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).not.toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
+    log.mockRestore();
+  });
+
+  it('keeps logger failures from breaking ignored unknown events', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {
+      throw new Error('logger down');
+    });
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(service.receiveWebhook({ type: 'UnknownEvent' })).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
     log.mockRestore();
   });
 

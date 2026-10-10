@@ -2742,12 +2742,6 @@ export class WhatsAppService {
       throw new BadRequestException('Payload invalido.');
     }
 
-    const isPresenceProbeCandidate = this.isKiragoPresenceProbeCandidate(payload);
-
-    if (!isPresenceProbeCandidate) {
-      this.logKiragoRawWebhookProbe(payload);
-    }
-
     this.logKiragoWebhookProbe(payload);
     this.logMediaDebugPayload(payload);
 
@@ -2759,11 +2753,6 @@ export class WhatsAppService {
 
     if (normalized && this.isKiragoReactionPayload(payload, normalized)) {
       return { received: true, ...(await this.processInboundReactionWebhook(payload, normalized)) };
-    }
-
-    if (isPresenceProbeCandidate) {
-      this.logKiragoPresenceProbe(payload);
-      return { received: true, processed: false, reason: 'presence_probe_logged' };
     }
 
     if (!normalized) {
@@ -2817,302 +2806,6 @@ export class WhatsAppService {
       clients,
     );
     return { received: true, ...legacyResult, conversation: conversationResult };
-  }
-
-  private isKiragoPresenceProbeCandidate(payload: unknown) {
-    const body = this.asRecord(payload);
-
-    if (!body) {
-      return false;
-    }
-
-    const event = this.asRecord(body.event);
-    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-    const data = this.asRecord(body.data);
-    const presence = this.presenceProbeObject(body, event, info, data);
-    const type = this.presenceProbeText(body.type).toLowerCase();
-    const infoType = this.presenceProbeText(info?.Type ?? info?.type).toLowerCase();
-    const eventType = this.presenceProbeText(event?.Type ?? event?.type).toLowerCase();
-    const state = this.presenceProbeText(
-      this.firstProbeRawValue(body, ['state', 'State']) ??
-        this.firstProbeRawValue(event, ['state', 'State']) ??
-        this.firstProbeRawValue(info, ['state', 'State']) ??
-        this.firstProbeRawValue(data, ['state', 'State']) ??
-        this.firstProbeRawValue(presence, ['state', 'State']),
-    ).toLowerCase();
-    const presenceText = this.presenceProbeText(
-      this.firstProbeRawValue(body, ['presence', 'Presence']) ??
-        this.firstProbeRawValue(event, ['presence', 'Presence']) ??
-        this.firstProbeRawValue(data, ['presence', 'Presence']),
-    ).toLowerCase();
-    const media = this.presenceProbeText(
-      this.firstProbeRawValue(body, ['media', 'Media']) ??
-        this.firstProbeRawValue(event, ['media', 'Media']) ??
-        this.firstProbeRawValue(info, ['media', 'Media']) ??
-        this.firstProbeRawValue(data, ['media', 'Media']) ??
-        this.firstProbeRawValue(presence, ['media', 'Media']),
-    ).toLowerCase();
-
-    if (type === 'readreceipt' || infoType === 'readreceipt' || eventType === 'readreceipt') {
-      return false;
-    }
-
-    if (
-      infoType === 'reaction' ||
-      eventType === 'reaction' ||
-      (message && this.hasAnyOwnValue(message, ['reactionMessage']))
-    ) {
-      return false;
-    }
-
-    const textSignals = [type, infoType, eventType, state, presenceText].filter(Boolean);
-    const hasPresenceObject = Boolean(presence);
-    const hasPresenceKey = [body, event, info, data].some((record) =>
-      this.hasAnyOwnValue(record, ['Presence', 'presence', 'ChatPresence', 'chatPresence']),
-    );
-    const hasPresenceText = textSignals.some((value) =>
-      /presence|composing|paused|typing/.test(value),
-    );
-    const hasMediaAudio = media === 'audio';
-    const hasKnownState = ['composing', 'paused', 'recording'].includes(state);
-    const hasKnownStateContext =
-      hasKnownState &&
-      (hasPresenceObject ||
-        hasPresenceKey ||
-        hasPresenceText ||
-        hasMediaAudio ||
-        /presence|typing/.test(type));
-
-    return hasPresenceObject || hasPresenceKey || hasPresenceText || hasKnownStateContext;
-  }
-
-  private logKiragoPresenceProbe(payload: unknown) {
-    try {
-      const body = this.asRecord(payload);
-
-      if (!body) {
-        return;
-      }
-
-      const event = this.asRecord(body.event);
-      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-      const data = this.asRecord(body.data);
-      const presence = this.presenceProbeObject(body, event, info, data);
-      const context =
-        this.asRecord(message?.contextInfo) ??
-        this.asRecord(message?.ContextInfo) ??
-        this.asRecord(presence?.contextInfo) ??
-        this.asRecord(presence?.ContextInfo);
-      const state =
-        this.firstProbeValue(body, ['state', 'State']) ??
-        this.firstProbeValue(event, ['state', 'State']) ??
-        this.firstProbeValue(info, ['state', 'State']) ??
-        this.firstProbeValue(data, ['state', 'State']) ??
-        this.firstProbeValue(presence, ['state', 'State']);
-      const media =
-        this.firstProbeValue(body, ['media', 'Media']) ??
-        this.firstProbeValue(event, ['media', 'Media']) ??
-        this.firstProbeValue(info, ['media', 'Media']) ??
-        this.firstProbeValue(data, ['media', 'Media']) ??
-        this.firstProbeValue(presence, ['media', 'Media']);
-      const eventChat = this.firstProbeRawValue(event, ['chat', 'Chat']);
-      const eventChatId = this.firstProbeRawValue(event, ['chatId', 'ChatId', 'chatID', 'ChatID']);
-      const eventRemoteJid = this.firstProbeRawValue(event, [
-        'remoteJid',
-        'remoteJID',
-        'RemoteJid',
-        'RemoteJID',
-      ]);
-      const eventSender = this.firstProbeRawValue(event, ['sender', 'Sender']);
-      const eventPhone = this.firstProbeRawValue(event, ['phone', 'Phone']);
-      const eventParticipant = this.firstProbeRawValue(event, ['participant', 'Participant']);
-      const eventFrom = this.firstProbeRawValue(event, ['from', 'From']);
-      const eventJid = this.firstProbeRawValue(event, ['jid', 'JID']);
-      const eventId = this.firstProbeRawValue(event, ['id', 'ID']);
-      const eventState = this.firstProbeRawValue(event, ['state', 'State']);
-      const eventMedia = this.firstProbeRawValue(event, ['media', 'Media']);
-      const eventType = this.firstProbeRawValue(event, ['type', 'Type']);
-
-      this.logger.log(
-        [
-          '[WHATSAPP_PRESENCE_PROBE]',
-          `type=${this.firstProbeValue(body, ['type', 'Type']) ?? 'unknown'}`,
-          `infoType=${this.firstProbeValue(info, ['Type', 'type']) ?? 'unknown'}`,
-          `event=${this.firstProbeValue(body, ['event']) ?? 'object'}`,
-          `eventType=${this.firstProbeValue(event, ['Type', 'type']) ?? 'unknown'}`,
-          `state=${state ?? 'unknown'}`,
-          `presence=${this.firstProbeValue(body, ['presence', 'Presence']) ?? this.firstProbeValue(event, ['presence', 'Presence']) ?? 'object'}`,
-          `media=${media ?? 'unknown'}`,
-          `isFromMe=${this.firstProbeValue(info, ['IsFromMe', 'isFromMe']) ?? 'unknown'}`,
-          `sender=${this.maskProbeId(this.firstProbeRawValue(info, ['Sender', 'sender']) ?? eventSender)}`,
-          `chat=${this.maskProbeId(this.firstProbeRawValue(info, ['Chat', 'chat']) ?? eventChat ?? eventChatId)}`,
-          `phone=${this.maskProbeId(this.firstProbeRawValue(body, ['phone', 'Phone']) ?? this.firstProbeRawValue(info, ['Phone', 'phone']) ?? eventPhone)}`,
-          `participant=${this.maskProbeId(this.firstProbeRawValue(info, ['Participant', 'participant']) ?? eventParticipant)}`,
-          `remoteJid=${this.maskProbeId(this.firstProbeRawValue(info, ['RemoteJid', 'remoteJid', 'remoteJID']) ?? this.firstProbeRawValue(body, ['remoteJid', 'remoteJID']) ?? eventRemoteJid ?? eventJid)}`,
-          `eventId=${this.maskProbeId(this.firstProbeRawValue(info, ['ID', 'id']) ?? eventId ?? this.firstProbeRawValue(body, ['ID', 'id']))}`,
-          `eventChat=${this.maskProbeId(eventChat)}`,
-          `eventChatId=${this.maskProbeId(eventChatId)}`,
-          `eventRemoteJid=${this.maskProbeId(eventRemoteJid)}`,
-          `eventSender=${this.maskProbeId(eventSender)}`,
-          `eventPhone=${this.maskProbeId(eventPhone)}`,
-          `eventParticipant=${this.maskProbeId(eventParticipant)}`,
-          `eventFrom=${this.maskProbeId(eventFrom)}`,
-          `eventJid=${this.maskProbeId(eventJid)}`,
-          `eventIdRaw=${this.maskProbeId(eventId)}`,
-          `eventState=${this.firstProbeValue(event, ['state', 'State']) ?? 'unknown'}`,
-          `eventMedia=${this.firstProbeValue(event, ['media', 'Media']) ?? 'unknown'}`,
-          `eventTypeRaw=${this.firstProbeValue(event, ['type', 'Type']) ?? 'unknown'}`,
-          `topLevelKeys=${this.safeObjectKeys(body).join(',') || 'none'}`,
-          `eventKeys=${this.safeObjectKeys(event).join(',') || 'none'}`,
-          `infoKeys=${this.safeObjectKeys(info).join(',') || 'none'}`,
-          `presenceKeys=${this.safeObjectKeys(presence).join(',') || 'none'}`,
-          `messageKeys=${this.safeObjectKeys(message).join(',') || 'none'}`,
-          `contextKeys=${this.safeObjectKeys(context).join(',') || 'none'}`,
-          `eventChatKeys=${this.eventProbeObjectKeys(event, ['chat', 'Chat']).join(',') || 'none'}`,
-          `eventChatIdKeys=${this.eventProbeObjectKeys(event, ['chatId', 'ChatId', 'chatID', 'ChatID']).join(',') || 'none'}`,
-          `eventSenderKeys=${this.eventProbeObjectKeys(event, ['sender', 'Sender']).join(',') || 'none'}`,
-          `eventPhoneKeys=${this.eventProbeObjectKeys(event, ['phone', 'Phone']).join(',') || 'none'}`,
-          `eventParticipantKeys=${this.eventProbeObjectKeys(event, ['participant', 'Participant']).join(',') || 'none'}`,
-          `eventFromKeys=${this.eventProbeObjectKeys(event, ['from', 'From']).join(',') || 'none'}`,
-          `eventJidKeys=${this.eventProbeObjectKeys(event, ['jid', 'JID']).join(',') || 'none'}`,
-          `eventRemoteJidKeys=${this.eventProbeObjectKeys(event, ['remoteJid', 'remoteJID', 'RemoteJid', 'RemoteJID']).join(',') || 'none'}`,
-          `eventIdKeys=${this.eventProbeObjectKeys(event, ['id', 'ID']).join(',') || 'none'}`,
-          `eventStateKeys=${this.safeObjectKeys(eventState).join(',') || 'none'}`,
-          `eventMediaKeys=${this.safeObjectKeys(eventMedia).join(',') || 'none'}`,
-          `eventTypeKeys=${this.safeObjectKeys(eventType).join(',') || 'none'}`,
-          `hasPresence=${Boolean(presence)}`,
-          `hasState=${Boolean(state)}`,
-          `hasMedia=${Boolean(media)}`,
-        ].join(' '),
-      );
-    } catch {
-      return;
-    }
-  }
-
-  private presenceProbeObject(
-    body: Record<string, unknown> | null,
-    event: Record<string, unknown> | null,
-    info: Record<string, unknown> | null,
-    data: Record<string, unknown> | null,
-  ) {
-    return (
-      this.asRecord(body?.Presence) ??
-      this.asRecord(body?.presence) ??
-      this.asRecord(body?.ChatPresence) ??
-      this.asRecord(body?.chatPresence) ??
-      this.asRecord(event?.Presence) ??
-      this.asRecord(event?.presence) ??
-      this.asRecord(event?.ChatPresence) ??
-      this.asRecord(event?.chatPresence) ??
-      this.asRecord(info?.Presence) ??
-      this.asRecord(info?.presence) ??
-      this.asRecord(data?.Presence) ??
-      this.asRecord(data?.presence) ??
-      null
-    );
-  }
-
-  private presenceProbeText(value: unknown) {
-    return this.safeProbeValue(value) ?? '';
-  }
-
-  private eventProbeObjectKeys(event: Record<string, unknown> | null, keys: readonly string[]) {
-    return this.safeObjectKeys(this.firstProbeRawValue(event, keys));
-  }
-
-  private logKiragoRawWebhookProbe(payload: unknown) {
-    try {
-      const body = this.asRecord(payload);
-
-      if (!body) {
-        return;
-      }
-
-      const event = this.asRecord(body.event);
-      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-      const presence = this.asRecord(body.Presence) ?? this.asRecord(body.presence);
-      const chatPresence =
-        this.asRecord(body.ChatPresence) ??
-        this.asRecord(body.chatPresence) ??
-        this.asRecord(event?.ChatPresence) ??
-        this.asRecord(event?.chatPresence);
-      const state =
-        this.firstProbeValue(body, ['state', 'State']) ??
-        this.firstProbeValue(event, ['state', 'State']) ??
-        this.firstProbeValue(info, ['state', 'State']) ??
-        this.firstProbeValue(presence, ['state', 'State']) ??
-        this.firstProbeValue(chatPresence, ['state', 'State']);
-      const media =
-        this.firstProbeValue(body, ['media', 'Media']) ??
-        this.firstProbeValue(event, ['media', 'Media']) ??
-        this.firstProbeValue(info, ['media', 'Media']) ??
-        this.firstProbeValue(presence, ['media', 'Media']) ??
-        this.firstProbeValue(chatPresence, ['media', 'Media']);
-      const presenceValue =
-        this.firstProbeValue(body, ['presence', 'Presence']) ??
-        this.firstProbeValue(event, ['presence', 'Presence']);
-
-      this.logger.log(
-        [
-          '[WHATSAPP_WEBHOOK_RAW_PROBE]',
-          `timestamp=${this.rawWebhookProbeTimestamp()}`,
-          `topLevelKeys=${this.safeObjectKeys(body).join(',') || 'none'}`,
-          `type=${this.firstProbeValue(body, ['type', 'Type']) ?? 'unknown'}`,
-          `event=${this.firstProbeValue(body, ['event']) ?? 'object'}`,
-          `eventType=${this.firstProbeValue(event, ['Type', 'type']) ?? 'unknown'}`,
-          `infoType=${this.firstProbeValue(info, ['Type', 'type']) ?? 'unknown'}`,
-          `messageType=${this.rawWebhookProbeMessageType(message)}`,
-          `hasMessage=${Boolean(message)}`,
-          `hasInfo=${Boolean(info)}`,
-          `hasPresence=${Boolean(presence)}`,
-          `hasChatPresence=${Boolean(chatPresence)}`,
-          `hasState=${Boolean(state)}`,
-          `hasMedia=${Boolean(media) || this.rawWebhookMessageHasMedia(message)}`,
-          `state=${state ?? 'unknown'}`,
-          `presence=${presenceValue ?? 'unknown'}`,
-          `media=${media ?? 'unknown'}`,
-          `infoKeys=${this.safeObjectKeys(info).join(',') || 'none'}`,
-          `messageKeys=${this.safeObjectKeys(message).join(',') || 'none'}`,
-          `presenceKeys=${this.safeObjectKeys(presence).join(',') || 'none'}`,
-          `chatPresenceKeys=${this.safeObjectKeys(chatPresence).join(',') || 'none'}`,
-        ].join(' '),
-      );
-    } catch {
-      return;
-    }
-  }
-
-  private rawWebhookProbeTimestamp() {
-    const now = new Date();
-    const offsetMinutes = -now.getTimezoneOffset();
-    const offsetSign = offsetMinutes >= 0 ? '+' : '-';
-    const absoluteOffset = Math.abs(offsetMinutes);
-    const offsetHours = String(Math.floor(absoluteOffset / 60)).padStart(2, '0');
-    const offsetRestMinutes = String(absoluteOffset % 60).padStart(2, '0');
-    const localIso = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
-      .toISOString()
-      .replace('Z', '');
-
-    return `${localIso}${offsetSign}${offsetHours}:${offsetRestMinutes}`;
-  }
-
-  private rawWebhookProbeMessageType(message: Record<string, unknown> | null) {
-    const keys = this.safeObjectKeys(message);
-    const typeKey = keys.find((key) => /message$/i.test(key)) ?? keys[0];
-
-    return typeKey ?? 'unknown';
-  }
-
-  private rawWebhookMessageHasMedia(message: Record<string, unknown> | null) {
-    if (!message) {
-      return false;
-    }
-
-    return this.safeObjectKeys(message).some((key) => /^(image|audio|video|document)/i.test(key));
   }
 
   private logMediaDebugPayload(payload: unknown) {
@@ -3590,7 +3283,7 @@ export class WhatsAppService {
   private maskProbeId(value: unknown) {
     const normalized = this.safeProbeValue(value);
 
-    if (!normalized || this.looksUnsafeProbeValue(normalized)) {
+    if (!normalized || this.looksSensitiveProbeValue(normalized)) {
       return 'unknown';
     }
 
@@ -3611,14 +3304,9 @@ export class WhatsAppService {
     return normalized;
   }
 
-  private looksUnsafeProbeValue(value: string) {
-    return /^https?:\/\//i.test(value) || /base64/i.test(value) || /token/i.test(value);
-  }
-
   private looksSensitiveProbeValue(value: string) {
     return (
       /^\+?\d{10,15}$/.test(value) ||
-      /@(?:s\.whatsapp\.net|lid)$/i.test(value) ||
       /^https?:\/\//i.test(value) ||
       /base64/i.test(value) ||
       /token/i.test(value) ||

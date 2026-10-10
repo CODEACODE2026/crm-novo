@@ -20,11 +20,15 @@ import {
 const soundEnabledStorageKey = 'crm.whatsapp.messageSoundEnabled';
 const notificationSoundPath = '/sounds/message-notification.ogg';
 const notifiedMessageCacheLimit = 200;
+export const inboundConversationPresenceTtlMs = 6000;
 
 type WhatsAppRealtimeHandler = (event: WhatsAppRealtimeEvent) => void;
+export type InboundConversationPresenceState = 'recording_audio';
+export type InboundConversationPresenceMap = Record<string, InboundConversationPresenceState>;
 
 export interface WhatsAppRealtimeContextValue {
   activeConversationId: string | null;
+  conversationPresence: InboundConversationPresenceMap;
   refreshSummary: () => Promise<WhatsAppConversationSummary | null>;
   realtimeConnected: boolean;
   setActiveConversationId: (conversationId: string | null) => void;
@@ -62,7 +66,11 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [soundEnabled, setSoundEnabledState] = useState(true);
   const [activeConversationId, setActiveConversationIdState] = useState<string | null>(null);
+  const [conversationPresence, setConversationPresence] = useState<InboundConversationPresenceMap>(
+    {},
+  );
   const handlersRef = useRef(new Set<WhatsAppRealtimeHandler>());
+  const conversationPresenceTimeoutsRef = useRef<Record<string, number>>({});
   const activeConversationIdRef = useRef<string | null>(null);
   const soundEnabledRef = useRef(true);
   const enabledRef = useRef(enabled);
@@ -120,10 +128,54 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
     void audio.play().catch(() => undefined);
   }, []);
 
+  const clearConversationPresenceTimer = useCallback((conversationId: string) => {
+    const timeoutId = conversationPresenceTimeoutsRef.current[conversationId];
+
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      delete conversationPresenceTimeoutsRef.current[conversationId];
+    }
+  }, []);
+
+  const clearConversationPresence = useCallback(
+    (conversationId: string) => {
+      clearConversationPresenceTimer(conversationId);
+      setConversationPresence((current) =>
+        removeInboundConversationPresence(current, conversationId),
+      );
+    },
+    [clearConversationPresenceTimer],
+  );
+
+  const applyConversationPresenceEvent = useCallback(
+    (event: WhatsAppRealtimeEvent) => {
+      if (event.type !== 'conversation.presence') return;
+
+      if (event.state !== 'recording_audio') {
+        clearConversationPresence(event.conversationId);
+        return;
+      }
+
+      clearConversationPresenceTimer(event.conversationId);
+      setConversationPresence((current) =>
+        setInboundConversationPresence(current, event.conversationId, 'recording_audio'),
+      );
+      conversationPresenceTimeoutsRef.current[event.conversationId] = window.setTimeout(() => {
+        clearConversationPresence(event.conversationId);
+      }, inboundConversationPresenceTtlMs);
+    },
+    [clearConversationPresence, clearConversationPresenceTimer],
+  );
+
   const handleRealtimeEvent = useCallback(
     (event: WhatsAppRealtimeEvent) => {
       for (const handler of handlersRef.current) {
         handler(event);
+      }
+
+      if (event.type === 'conversation.presence') {
+        applyConversationPresenceEvent(event);
+        return;
       }
 
       if (event.type === 'message.created' || event.type === 'conversation.updated') {
@@ -146,7 +198,7 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
         playNotificationSound();
       }
     },
-    [playNotificationSound, refreshSummary],
+    [applyConversationPresenceEvent, playNotificationSound, refreshSummary],
   );
 
   useEffect(() => {
@@ -154,8 +206,10 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
     if (!enabled) {
       setRealtimeConnected(false);
       setSummary(null);
+      setConversationPresence({});
+      Object.keys(conversationPresenceTimeoutsRef.current).forEach(clearConversationPresenceTimer);
     }
-  }, [enabled]);
+  }, [clearConversationPresenceTimer, enabled]);
 
   useEffect(() => {
     try {
@@ -213,6 +267,7 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
     eventSource.addEventListener('message.created', handleMessage);
     eventSource.addEventListener('message.updated', handleMessage);
     eventSource.addEventListener('conversation.updated', handleMessage);
+    eventSource.addEventListener('conversation.presence', handleMessage);
 
     return () => {
       eventSource.removeEventListener('open', handleOpen);
@@ -220,14 +275,17 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
       eventSource.removeEventListener('message.created', handleMessage);
       eventSource.removeEventListener('message.updated', handleMessage);
       eventSource.removeEventListener('conversation.updated', handleMessage);
+      eventSource.removeEventListener('conversation.presence', handleMessage);
       eventSource.close();
       setRealtimeConnected(false);
+      Object.keys(conversationPresenceTimeoutsRef.current).forEach(clearConversationPresenceTimer);
     };
-  }, [enabled, handleRealtimeEvent, refreshSummary]);
+  }, [clearConversationPresenceTimer, enabled, handleRealtimeEvent, refreshSummary]);
 
   return useMemo(
     () => ({
       activeConversationId,
+      conversationPresence,
       refreshSummary,
       realtimeConnected,
       setActiveConversationId,
@@ -239,6 +297,7 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
     }),
     [
       activeConversationId,
+      conversationPresence,
       refreshSummary,
       realtimeConnected,
       setActiveConversationId,
@@ -281,6 +340,31 @@ export function shouldNotifyWhatsAppSound({
 export function formatUnreadBadge(value: number | null | undefined) {
   if (!value || value <= 0) return null;
   return value > 99 ? '99+' : String(value);
+}
+
+export function setInboundConversationPresence(
+  current: InboundConversationPresenceMap,
+  conversationId: string,
+  state: InboundConversationPresenceState,
+) {
+  if (current[conversationId] === state) return current;
+
+  return { ...current, [conversationId]: state };
+}
+
+export function removeInboundConversationPresence(
+  current: InboundConversationPresenceMap,
+  conversationId: string,
+) {
+  if (!current[conversationId]) return current;
+
+  const next = { ...current };
+  delete next[conversationId];
+  return next;
+}
+
+export function conversationPresenceLabel(state: InboundConversationPresenceState | undefined) {
+  return state === 'recording_audio' ? 'gravando áudio...' : null;
 }
 
 export function createLimitedMessageIdCache(limit: number) {

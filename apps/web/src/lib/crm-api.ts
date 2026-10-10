@@ -830,7 +830,7 @@ export interface StartWhatsAppConversationResult {
 }
 
 export type WhatsAppRealtimeEventType =
-  'conversation.updated' | 'message.created' | 'message.updated';
+  'conversation.presence' | 'conversation.updated' | 'message.created' | 'message.updated';
 
 export interface WhatsAppRealtimeEvent {
   type: WhatsAppRealtimeEventType;
@@ -838,6 +838,7 @@ export interface WhatsAppRealtimeEvent {
   direction?: WhatsAppConversationMessageDirection;
   messageId?: string;
   occurredAt: string;
+  state?: 'recording_audio' | null;
 }
 
 export interface BillingSummary {

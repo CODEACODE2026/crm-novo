@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
 export type WhatsAppRealtimeEventType =
-  'conversation.updated' | 'message.created' | 'message.updated';
+  'conversation.presence' | 'conversation.updated' | 'message.created' | 'message.updated';
 
 export interface WhatsAppRealtimeEvent {
   type: WhatsAppRealtimeEventType;
@@ -10,6 +10,7 @@ export interface WhatsAppRealtimeEvent {
   direction?: 'INBOUND' | 'OUTBOUND';
   messageId?: string;
   occurredAt: string;
+  state?: 'recording_audio' | null;
 }
 
 interface WhatsAppRealtimeSubscriber {
@@ -78,6 +79,15 @@ export class WhatsAppRealtimeService implements OnModuleDestroy {
       type: 'message.updated',
       conversationId,
       messageId,
+      occurredAt: new Date().toISOString(),
+    });
+  }
+
+  emitConversationPresence(conversationId: string, state: 'recording_audio' | null) {
+    this.emit({
+      type: 'conversation.presence',
+      conversationId,
+      state,
       occurredAt: new Date().toISOString(),
     });
   }

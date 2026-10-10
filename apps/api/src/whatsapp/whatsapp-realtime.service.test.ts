@@ -67,6 +67,25 @@ describe('WhatsAppRealtimeService', () => {
     expect(writes).not.toContain('"direction"');
   });
 
+  it('broadcasts sanitized ephemeral conversation presence events', () => {
+    const service = new WhatsAppRealtimeService();
+    const { request, response } = sseClient();
+
+    service.subscribe(request as never, response as never);
+    service.emitConversationPresence('conversation-1', 'recording_audio');
+    service.emitConversationPresence('conversation-1', null);
+
+    const writes = response.write.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(writes).toContain('event: conversation.presence');
+    expect(writes).toContain('"conversationId":"conversation-1"');
+    expect(writes).toContain('"state":"recording_audio"');
+    expect(writes).toContain('"state":null');
+    expect(writes).not.toContain('phone');
+    expect(writes).not.toContain('jid');
+    expect(writes).not.toContain('lid');
+    expect(writes).not.toContain('token');
+  });
+
   it('sends heartbeat pings without message payload data', () => {
     vi.useFakeTimers();
     const service = new WhatsAppRealtimeService();

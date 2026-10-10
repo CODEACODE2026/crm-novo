@@ -2370,6 +2370,14 @@ a {
   font-size: 12px;
 }
 
+.conversation-presence-label {
+  display: block;
+  margin-top: 2px;
+  color: var(--success);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
 .conversation-search {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -2691,7 +2699,8 @@ a {
 }
 
 .conversation-header-main h3,
-.conversation-header-main p {
+.conversation-header-main p,
+.conversation-presence-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -64,9 +64,27 @@ export type NormalizedWhatsAppReceipt = {
   receivedAt: Date;
 };
 
+export type NormalizedWhatsAppChatPresence = {
+  kind: 'CHAT_PRESENCE';
+  provider: 'KIRAGO';
+  instanceName: string | null;
+  providerUserId: string | null;
+  state: string | null;
+  media: string | null;
+  isFromMe: boolean;
+  isGroup: boolean;
+  chat: string | null;
+  sender: string | null;
+  senderAlt: string | null;
+  recipientAlt: string | null;
+  addressingMode: string | null;
+  receivedAt: Date;
+};
+
 export type NormalizedKiragoWebhook =
   | NormalizedWhatsAppMessage
-  | (NormalizedWhatsAppReceipt & Partial<Omit<NormalizedWhatsAppMessage, 'kind'>>);
+  | (NormalizedWhatsAppReceipt & Partial<Omit<NormalizedWhatsAppMessage, 'kind'>>)
+  | (NormalizedWhatsAppChatPresence & Partial<Omit<NormalizedWhatsAppMessage, 'kind'>>);
 
 type RecordValue = Record<string, unknown>;
 
@@ -99,6 +117,10 @@ export class KiragoWebhookNormalizer {
 
     if (body.type === 'ReadReceipt') {
       return this.normalizeReceipt(body, receivedAt);
+    }
+
+    if (body.type === 'ChatPresence') {
+      return this.normalizeChatPresence(body, receivedAt);
     }
 
     if (body.type !== 'Message') {
@@ -162,6 +184,30 @@ export class KiragoWebhookNormalizer {
     }
 
     return null;
+  }
+
+  private normalizeChatPresence(
+    body: RecordValue,
+    receivedAt: Date,
+  ): NormalizedWhatsAppChatPresence {
+    const event = asRecord(body.event);
+
+    return {
+      kind: 'CHAT_PRESENCE',
+      provider: 'KIRAGO',
+      instanceName: stringOrNull(body.instanceName),
+      providerUserId: stringOrNull(body.userID),
+      state: normalizeLowerString(event?.State),
+      media: normalizeLowerString(event?.Media),
+      isFromMe: event?.IsFromMe === true,
+      isGroup: event?.IsGroup === true,
+      chat: stringOrNull(event?.Chat),
+      sender: stringOrNull(event?.Sender),
+      senderAlt: stringOrNull(event?.SenderAlt),
+      recipientAlt: stringOrNull(event?.RecipientAlt),
+      addressingMode: stringOrNull(event?.AddressingMode),
+      receivedAt,
+    };
   }
 
   private extractReceiptMessageIds(value: unknown) {
@@ -537,6 +583,10 @@ function asRecord(value: unknown): RecordValue | null {
 
 function stringOrNull(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeLowerString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
 }
 
 function numberOrNull(value: unknown) {

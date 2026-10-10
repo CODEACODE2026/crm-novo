@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  conversationPresenceLabel,
   createLimitedMessageIdCache,
   createSummaryRefreshController,
   formatUnreadBadge,
+  inboundConversationPresenceTtlMs,
+  type InboundConversationPresenceMap,
+  removeInboundConversationPresence,
   shouldNotifyWhatsAppSound,
+  setInboundConversationPresence,
 } from './WhatsAppRealtimeProvider';
 import type { WhatsAppConversationSummary } from '../../lib/crm-api';
 
@@ -25,6 +30,22 @@ describe('WhatsApp realtime provider helpers', () => {
     expect(formatUnreadBadge(7)).toBe('7');
     expect(formatUnreadBadge(99)).toBe('99');
     expect(formatUnreadBadge(100)).toBe('99+');
+  });
+
+  it('reduces inbound conversation presence without creating paused state', () => {
+    const empty: InboundConversationPresenceMap = {};
+    const recording = setInboundConversationPresence(empty, 'conversation-a', 'recording_audio');
+    expect(recording).toEqual({ 'conversation-a': 'recording_audio' });
+    expect(conversationPresenceLabel(recording['conversation-a'])).toBe('gravando áudio...');
+    expect(setInboundConversationPresence(recording, 'conversation-a', 'recording_audio')).toBe(
+      recording,
+    );
+
+    const cleared = removeInboundConversationPresence(recording, 'conversation-a');
+    expect(cleared).toEqual({});
+    expect(removeInboundConversationPresence(cleared, 'conversation-a')).toBe(cleared);
+    expect(conversationPresenceLabel(cleared['conversation-a'])).toBeNull();
+    expect(inboundConversationPresenceTtlMs).toBe(6000);
   });
 
   it('notifies only for real inbound message.created events with a message id', () => {
@@ -50,6 +71,18 @@ describe('WhatsApp realtime provider helpers', () => {
         soundEnabled: true,
         targetConversationId: 'conversation-1',
         type: 'message.created',
+        visible: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldNotifyWhatsAppSound({
+        activeConversationId: null,
+        direction: 'INBOUND',
+        focused: true,
+        messageId: 'message-1',
+        soundEnabled: true,
+        targetConversationId: 'conversation-1',
+        type: 'conversation.presence',
         visible: true,
       }),
     ).toBe(false);

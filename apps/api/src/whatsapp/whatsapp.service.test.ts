@@ -128,6 +128,26 @@ function normalizedReceipt(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function normalizedChatPresence(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: 'CHAT_PRESENCE',
+    provider: 'KIRAGO',
+    instanceName: 'CRM Principal',
+    providerUserId: 'kirago-user',
+    state: 'composing',
+    media: 'audio',
+    isFromMe: false,
+    isGroup: false,
+    chat: '123456789012345@lid',
+    sender: '123456789012345@lid',
+    senderAlt: '5544999999999@s.whatsapp.net',
+    recipientAlt: '5544888888888@s.whatsapp.net',
+    addressingMode: 'lid',
+    receivedAt: now,
+    ...overrides,
+  };
+}
+
 function kiragoMediaPayload(mediaType: 'imageMessage' | 'documentMessage') {
   const media =
     mediaType === 'imageMessage'
@@ -490,6 +510,7 @@ function serviceFactory({
     },
     whatsAppConversation: {
       findUnique: vi.fn().mockResolvedValue(null),
+      findFirst: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
       aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
@@ -660,6 +681,7 @@ function serviceFactory({
   };
   const realtime = {
     emitConversationUpdated: vi.fn(),
+    emitConversationPresence: vi.fn(),
     emitMessageCreated: vi.fn(),
     emitMessageUpdated: vi.fn(),
     ...realtimeOverrides,
@@ -713,7 +735,7 @@ describe('WhatsAppService', () => {
     expect(provider.provisionConnection).toHaveBeenCalledWith(
       expect.objectContaining({
         webhookUrl: 'https://crm.example.com/whatsapp/webhook/kirago',
-        events: ['Message', 'ReadReceipt'],
+        events: ['Message', 'ReadReceipt', 'ChatPresence'],
       }),
     );
     expect(providerPayload.name).toMatch(/^crm-novo-crm-principal-[a-f0-9]{6}$/);
@@ -739,7 +761,7 @@ describe('WhatsAppService', () => {
     expect(provider.configureWebhook).toHaveBeenCalledWith(
       'instance-token',
       'https://crm.example.com/whatsapp/webhook/kirago',
-      ['Message', 'ReadReceipt'],
+      ['Message', 'ReadReceipt', 'ChatPresence'],
     );
   });
 
@@ -753,7 +775,7 @@ describe('WhatsAppService', () => {
     expect(provider.configureWebhook).toHaveBeenCalledWith(
       'instance-token',
       'https://crm.example.com/whatsapp/webhook/kirago?kirago_webhook_token=strong-webhook-token',
-      ['Message', 'ReadReceipt'],
+      ['Message', 'ReadReceipt', 'ChatPresence'],
     );
   });
 
@@ -4439,256 +4461,163 @@ describe('WhatsAppService', () => {
     expect(missingPhone.prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
   });
 
-  it('keeps normal Message webhooks on the existing ignored path without diagnostic probe logging', async () => {
-    const { service, normalizer, prisma, realtime } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-    const payload = {
-      type: 'Message',
-      token: 'secret-token',
-      phone: '5511999999999',
-      event: {
-        Info: { Type: 'message', Sender: '5511999999999@s.whatsapp.net' },
-        Message: {
-          conversation: 'texto privado',
-          imageMessage: {
-            URL: 'https://media.example.test/private?token=secret-token',
-            Data: 'data:image/jpeg;base64,abcdef',
-          },
+  it('emits inbound recording_audio presence for real private ChatPresence audio', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(conversation()),
+          create: vi.fn(),
+          update: vi.fn(),
         },
       },
-    };
+    });
+    normalizer.normalize.mockReturnValue(normalizedChatPresence());
 
-    await expect(service.receiveWebhook(payload)).resolves.toEqual({
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
       received: true,
-      processed: false,
-      reason: 'ignored_event',
+      processed: true,
+      action: 'presence_recording_audio',
     });
 
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).not.toContain('texto privado');
-    expect(output).not.toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
-    expect(normalizer.normalize).toHaveBeenCalledWith(payload);
-    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
-    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
-    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
-    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
-    log.mockRestore();
-  });
-
-  it('logs sanitized non-Message webhook probes without changing ignored flow', async () => {
-    const { service, normalizer, prisma } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: 'Status',
-        event: 'message_status',
-        status: 'delivered',
-        instanceName: 'crm-novo-main',
+    expect(prisma.whatsAppConversation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          whatsAppConnectionId: connection().id,
+          phoneNormalized: { in: expect.arrayContaining(['5544999999999']) },
+        }),
       }),
-    ).resolves.toEqual({
-      received: true,
-      processed: false,
-      reason: 'ignored_event',
-    });
-
-    const legacyProbe = log.mock.calls
-      .map((call) => String(call[0]))
-      .find((entry) => entry.includes('Kirago webhook probe'));
-    expect(legacyProbe).toContain(
-      'Kirago webhook probe type=Status event=message_status status=delivered',
     );
-    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
-    log.mockRestore();
-  });
-
-  it('logs sanitized unknown event probes before returning ignored_event', async () => {
-    const { service, normalizer, prisma, realtime } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: 'ChatPresence',
-        token: 'secret-token',
-        phone: '5544999999999',
-        event: {
-          Type: 'presence',
-          Chat: '123456789012345@lid',
-          IsFromMe: false,
-          State: 'composing',
-          Media: 'audio',
-          SenderAlt: '5511999999999@s.whatsapp.net',
-        },
-        chatPresence: {
-          state: 'composing',
-          participant: '123456789012345@lid',
-        },
-        Message: {
-          conversation: 'texto privado',
-          imageMessage: {
-            URL: 'https://media.example.test/private?token=secret-token',
-            Data: 'data:image/jpeg;base64,abcdef',
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      received: true,
-      processed: false,
-      reason: 'ignored_event',
-    });
-
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
-    expect(output).toContain('"type":"ChatPresence"');
-    expect(output).toContain('"eventType":"presence"');
-    expect(output).toContain('"hasChatPresence":true');
-    expect(output).toContain('"state":"composing"');
-    expect(output).toContain('"media":"audio"');
-    expect(output).toContain('"isFromMe":false');
-    expect(output).not.toContain('5544999999999');
-    expect(output).not.toContain('123456789012345@lid');
-    expect(output).not.toContain('secret-token');
-    expect(output).not.toContain('texto privado');
-    expect(output).not.toContain('media.example.test');
-    expect(output).not.toContain('base64');
+    expect(realtime.emitConversationPresence).toHaveBeenCalledWith(
+      conversation().id,
+      'recording_audio',
+    );
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
     expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
-    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
     expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
-    log.mockRestore();
   });
 
-  it('masks provider message ids in receipt-like probe logs', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'Message',
-      event: {
-        Info: {
-          ID: 'ABCDEF1234567890',
-          Status: 'READ',
-          Timestamp: '2026-10-08T20:00:00.000Z',
-        },
-      },
-      instanceName: 'crm-novo-main',
-      userID: 'kirago-user-123456',
-    });
-
-    const output =
-      log.mock.calls
-        .map((call) => String(call[0]))
-        .find((entry) => entry.includes('Kirago webhook probe')) ?? '';
-    expect(output).toContain('status=READ');
-    expect(output).toContain('messageId=ABCDEF...7890');
-    expect(output).toContain('providerUserId=kirago...3456');
-    expect(output).not.toContain('ABCDEF1234567890');
-    expect(output).not.toContain('kirago-user-123456');
-    log.mockRestore();
-  });
-
-  it('does not leak phone, text, token, media URL, base64 or contact names in probe logs', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await service.receiveWebhook({
-      type: 'Status',
-      status: 'read',
-      phone: '5544999999999',
-      token: 'secret-token',
-      contactName: 'Cliente Sigiloso',
-      Message: {
-        conversation: 'texto privado',
-        imageMessage: {
-          URL: 'https://media.example.test/private?token=secret-token',
-          Data: 'data:image/jpeg;base64,abcdef',
+  it('clears inbound ChatPresence on paused and keeps isolated paused idempotent', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(conversation()),
+          create: vi.fn(),
+          update: vi.fn(),
         },
       },
     });
-
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).toContain('Kirago webhook probe');
-    expect(output).not.toContain('5544999999999');
-    expect(output).not.toContain('secret-token');
-    expect(output).not.toContain('Cliente Sigiloso');
-    expect(output).not.toContain('texto privado');
-    expect(output).not.toContain('media.example.test');
-    expect(output).not.toContain('base64');
-    log.mockRestore();
-  });
-
-  it('handles malformed object payloads defensively in operational probe extraction', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: ['Status'],
-        event: { Info: { ID: { nested: true }, Status: ['READ'] } },
-        data: { id: null, status: { nested: true } },
+    normalizer.normalize.mockReturnValue(
+      normalizedChatPresence({
+        state: 'paused',
+        media: null,
       }),
-    ).resolves.toEqual({
+    );
+
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
       received: true,
-      processed: false,
-      reason: 'ignored_event',
+      processed: true,
+      action: 'presence_cleared',
+    });
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      received: true,
+      processed: true,
+      action: 'presence_cleared',
     });
 
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).toContain('Kirago webhook probe');
-    log.mockRestore();
-  });
-
-  it('keeps ChatPresence ignored safely with only the unknown event probe', async () => {
-    const { service, normalizer, prisma, realtime } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: 'ChatPresence',
-        instanceName: 'crm-novo-main',
-        userID: 'kirago-user-123456',
-        token: 'secret-token',
-        phone: '5511999999999',
-        event: {
-          AddressingMode: 'lid',
-          BroadcastListOwner: '',
-          BroadcastRecipients: [],
-          Chat: '123456789012345@lid',
-          IsFromMe: false,
-          IsGroup: false,
-          State: 'composing',
-          Media: 'audio',
-          RecipientAlt: '5511888888888@s.whatsapp.net',
-          Sender: '123456789012345@lid',
-          SenderAlt: '5511999999999@s.whatsapp.net',
-        },
-      }),
-    ).resolves.toEqual({
-      received: true,
-      processed: false,
-      reason: 'ignored_event',
-    });
-
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
-    expect(output).not.toContain('123456789012345@lid');
+    expect(realtime.emitConversationPresence).toHaveBeenNthCalledWith(1, conversation().id, null);
+    expect(realtime.emitConversationPresence).toHaveBeenNthCalledWith(2, conversation().id, null);
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
-    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
-    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
-    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
-    log.mockRestore();
+  });
+
+  it('keeps duplicate composing presence idempotent without persistence side effects', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(conversation()),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(normalizedChatPresence());
+
+    await service.receiveWebhook({ type: 'ChatPresence' });
+    await service.receiveWebhook({ type: 'ChatPresence' });
+
+    expect(realtime.emitConversationPresence).toHaveBeenNthCalledWith(
+      1,
+      conversation().id,
+      'recording_audio',
+    );
+    expect(realtime.emitConversationPresence).toHaveBeenNthCalledWith(
+      2,
+      conversation().id,
+      'recording_audio',
+    );
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+  });
+
+  it('ignores self, group, unsupported text and unknown ChatPresence states safely', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    normalizer.normalize
+      .mockReturnValueOnce(normalizedChatPresence({ isFromMe: true }))
+      .mockReturnValueOnce(normalizedChatPresence({ isGroup: true }))
+      .mockReturnValueOnce(normalizedChatPresence({ media: null }))
+      .mockReturnValueOnce(normalizedChatPresence({ state: 'available', media: null }));
+
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      processed: false,
+      reason: 'ignored_self_presence',
+    });
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      processed: false,
+      reason: 'ignored_group_presence',
+    });
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      processed: false,
+      reason: 'unsupported_text_presence',
+    });
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      processed: false,
+      reason: 'unsupported_presence_state',
+    });
+
+    expect(prisma.whatsAppConnection.findFirst).not.toHaveBeenCalled();
+    expect(realtime.emitConversationPresence).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('does not create conversations or messages when ChatPresence conversation is not found', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(normalizedChatPresence());
+
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      reason: 'presence_conversation_not_found',
+    });
+
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(realtime.emitConversationPresence).not.toHaveBeenCalled();
   });
 
   it('keeps ReadReceipt, reaction and normal text messages on their existing paths', async () => {
@@ -4736,73 +4665,6 @@ describe('WhatsAppService', () => {
         },
       }),
     ).resolves.toEqual({
-      received: true,
-      processed: false,
-      reason: 'ignored_event',
-    });
-
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).not.toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
-    log.mockRestore();
-  });
-
-  it('keeps unknown non-presence payloads ignored when the normalizer returns null', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: 'Message',
-        state: 'queued',
-        event: {
-          Info: { ID: 'unknown-event-id', Type: 'message_status' },
-        },
-      }),
-    ).resolves.toEqual({
-      received: true,
-      processed: false,
-      reason: 'ignored_event',
-    });
-
-    log.mockRestore();
-  });
-
-  it('keeps presence_probe_logged payloads out of the unknown event probe', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(
-      service.receiveWebhook({
-        type: 'presence_probe_logged',
-        event: {
-          Info: {
-            Type: 'chat_presence',
-            Sender: '5511999999999@s.whatsapp.net',
-            Participant: '123456789012345@lid',
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      received: true,
-      processed: false,
-      reason: 'ignored_event',
-    });
-
-    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
-    expect(output).not.toContain('[WHATSAPP_UNKNOWN_EVENT_PROBE]');
-    log.mockRestore();
-  });
-
-  it('keeps logger failures from breaking ignored unknown events', async () => {
-    const { service, normalizer } = serviceFactory();
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {
-      throw new Error('logger down');
-    });
-    normalizer.normalize.mockReturnValue(null);
-
-    await expect(service.receiveWebhook({ type: 'UnknownEvent' })).resolves.toEqual({
       received: true,
       processed: false,
       reason: 'ignored_event',

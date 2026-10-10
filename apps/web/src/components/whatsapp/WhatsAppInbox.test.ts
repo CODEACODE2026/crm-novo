@@ -187,6 +187,16 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('onVoiceRecordingChangeRef.current(false)');
   });
 
+  it('wires inbound recording presence to the active conversation header only', () => {
+    expect(whatsAppInboxSource).toContain('conversationPresenceLabel');
+    expect(whatsAppInboxSource).toContain('conversationPresence[selectedConversation.id]');
+    expect(whatsAppInboxSource).toContain('presence={conversationPresenceLabel');
+    expect(whatsAppInboxSource).toContain("event.type === 'conversation.presence'");
+    expect(whatsAppInboxSource).toContain('className="conversation-presence-label"');
+    expect(globalStylesSource).toContain('.conversation-presence-label');
+    expect(whatsAppInboxSource).not.toContain('digitando...');
+  });
+
   it('classifies incoming composer files with the same media rules used by upload', () => {
     expect(
       classifyConversationIncomingFile(new File(['image'], 'print.png', { type: 'image/png' })),

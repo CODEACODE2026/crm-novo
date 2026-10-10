@@ -43,6 +43,81 @@ function payload(overrides: Record<string, unknown> = {}) {
 describe('KiragoWebhookNormalizer', () => {
   const normalizer = new KiragoWebhookNormalizer();
 
+  it('normalizes the confirmed ChatPresence audio composing payload', () => {
+    const result = normalizer.normalize(
+      {
+        type: 'ChatPresence',
+        instanceName: 'CRM Principal',
+        userID: 'kirago-user',
+        event: {
+          AddressingMode: 'lid',
+          BroadcastListOwner: '',
+          BroadcastRecipients: [],
+          Chat: '123456789012345@lid',
+          IsFromMe: false,
+          IsGroup: false,
+          Media: 'audio',
+          RecipientAlt: '5544888888888@s.whatsapp.net',
+          Sender: '123456789012345@lid',
+          SenderAlt: '5544999999999@s.whatsapp.net',
+          State: 'composing',
+        },
+      },
+      receivedAt,
+    );
+
+    expect(result).toEqual({
+      kind: 'CHAT_PRESENCE',
+      provider: 'KIRAGO',
+      instanceName: 'CRM Principal',
+      providerUserId: 'kirago-user',
+      state: 'composing',
+      media: 'audio',
+      isFromMe: false,
+      isGroup: false,
+      chat: '123456789012345@lid',
+      sender: '123456789012345@lid',
+      senderAlt: '5544999999999@s.whatsapp.net',
+      recipientAlt: '5544888888888@s.whatsapp.net',
+      addressingMode: 'lid',
+      receivedAt,
+    });
+  });
+
+  it('normalizes the confirmed ChatPresence paused payload', () => {
+    const result = normalizer.normalize(
+      {
+        type: 'ChatPresence',
+        instanceName: 'CRM Principal',
+        userID: 'kirago-user',
+        event: {
+          AddressingMode: 'lid',
+          BroadcastListOwner: '',
+          BroadcastRecipients: [],
+          Chat: '123456789012345@lid',
+          IsFromMe: false,
+          IsGroup: false,
+          Media: null,
+          RecipientAlt: '5544888888888@s.whatsapp.net',
+          Sender: '123456789012345@lid',
+          SenderAlt: '5544999999999@s.whatsapp.net',
+          State: 'paused',
+        },
+      },
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      kind: 'CHAT_PRESENCE',
+      state: 'paused',
+      media: null,
+      isFromMe: false,
+      isGroup: false,
+      chat: '123456789012345@lid',
+      senderAlt: '5544999999999@s.whatsapp.net',
+    });
+  });
+
   it('normalizes an incoming text Message payload', () => {
     const result = normalizer.normalize(payload(), receivedAt);
 

@@ -45,6 +45,7 @@ import {
   KiragoWebhookNormalizer,
   type NormalizedKiragoWebhook,
   type NormalizedMessageType,
+  type NormalizedWhatsAppChatPresence,
   type NormalizedWhatsAppReceipt,
   type NormalizedWhatsAppMessage,
 } from './kirago/kirago-webhook-normalizer';
@@ -85,7 +86,7 @@ import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 
-const providerEvents = ['Message', 'ReadReceipt'];
+const providerEvents = ['Message', 'ReadReceipt', 'ChatPresence'];
 const messagePreviewLimit = 80;
 const quotedTextLimit = 240;
 const pageSizeLimit = 100;
@@ -429,6 +430,18 @@ export class WhatsAppService {
     } catch (error) {
       this.logger.warn(
         `Falha ao emitir evento WhatsApp message.updated conversation=${conversationId} message=${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  private emitConversationPresence(conversationId: string, state: 'recording_audio' | null) {
+    try {
+      this.realtime?.emitConversationPresence(conversationId, state);
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao emitir evento WhatsApp conversation.presence conversation=${conversationId} message=${
           error instanceof Error ? error.message : 'unknown'
         }`,
       );
@@ -2742,7 +2755,6 @@ export class WhatsAppService {
       throw new BadRequestException('Payload invalido.');
     }
 
-    this.logKiragoWebhookProbe(payload);
     this.logMediaDebugPayload(payload);
 
     const normalized = this.normalizer.normalize(payload);
@@ -2751,12 +2763,15 @@ export class WhatsAppService {
       return { received: true, ...(await this.processMessageReceiptWebhook(normalized)) };
     }
 
+    if (normalized?.kind === 'CHAT_PRESENCE') {
+      return { received: true, ...(await this.processChatPresenceWebhook(normalized)) };
+    }
+
     if (normalized && this.isKiragoReactionPayload(payload, normalized)) {
       return { received: true, ...(await this.processInboundReactionWebhook(payload, normalized)) };
     }
 
     if (!normalized) {
-      this.logKiragoUnknownEventProbe(payload);
       return { received: true, processed: false, reason: 'ignored_event' };
     }
 
@@ -2954,207 +2969,6 @@ export class WhatsAppService {
     return typeof value === 'string' && value.trim() ? value : null;
   }
 
-  private logKiragoWebhookProbe(payload: unknown) {
-    try {
-      const body = this.asRecord(payload);
-
-      if (!body || !this.shouldLogKiragoWebhookProbe(body)) {
-        return;
-      }
-
-      const event = this.asRecord(body.event);
-      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-      const data = this.asRecord(body.data);
-
-      this.logger.log(
-        [
-          'Kirago webhook probe',
-          `type=${this.safeProbeValue(body.type) ?? 'unknown'}`,
-          `event=${this.safeProbeValue(body.event) ?? this.safeProbeValue(event?.type) ?? 'unknown'}`,
-          `status=${
-            this.safeProbeValue(body.status) ??
-            this.safeProbeValue(body.Status) ??
-            this.safeProbeValue(info?.Status) ??
-            this.safeProbeValue(info?.status) ??
-            this.safeProbeValue(data?.status) ??
-            'unknown'
-          }`,
-          `ack=${
-            this.safeProbeValue(body.ack) ??
-            this.safeProbeValue(body.Ack) ??
-            this.safeProbeValue(info?.Ack) ??
-            this.safeProbeValue(info?.ack) ??
-            this.safeProbeValue(data?.ack) ??
-            'unknown'
-          }`,
-          `receipt=${
-            this.safeProbeNonSensitiveValue(body.receipt) ??
-            this.safeProbeNonSensitiveValue(body.Receipt) ??
-            this.safeProbeNonSensitiveValue(info?.Receipt) ??
-            this.safeProbeNonSensitiveValue(info?.receipt) ??
-            this.safeProbeNonSensitiveValue(data?.receipt) ??
-            'unknown'
-          }`,
-          `messageId=${this.maskProbeId(
-            info?.ID ??
-              info?.id ??
-              message?.ID ??
-              message?.id ??
-              data?.ID ??
-              data?.id ??
-              body.ID ??
-              body.id,
-          )}`,
-          `instance=${this.safeProbeValue(body.instanceName) ?? 'unknown'}`,
-          `providerUserId=${this.maskProbeId(body.userID ?? body.providerUserId)}`,
-          `timestamp=${
-            this.safeProbeValue(body.timestamp) ??
-            this.safeProbeValue(body.Timestamp) ??
-            this.safeProbeValue(info?.Timestamp) ??
-            this.safeProbeValue(data?.timestamp) ??
-            'unknown'
-          }`,
-        ].join(' '),
-      );
-    } catch {
-      return;
-    }
-  }
-
-  private shouldLogKiragoWebhookProbe(body: Record<string, unknown>) {
-    const type = this.safeProbeValue(body.type);
-
-    if (type === 'ReadReceipt') {
-      return false;
-    }
-
-    if (type !== 'Message') {
-      return true;
-    }
-
-    const event = this.asRecord(body.event);
-    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-    const data = this.asRecord(body.data);
-
-    return [body, info, data].some((record) =>
-      this.hasAnyOwnValue(record, [
-        'status',
-        'Status',
-        'ack',
-        'Ack',
-        'receipt',
-        'Receipt',
-        'message_status',
-        'MessageStatus',
-        'played',
-        'Played',
-      ]),
-    );
-  }
-
-  private logKiragoUnknownEventProbe(payload: unknown) {
-    try {
-      const body = this.asRecord(payload);
-
-      if (!body || !this.shouldLogKiragoUnknownEventProbe(body)) {
-        return;
-      }
-
-      const event = this.asRecord(body.event);
-      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-      const data = this.asRecord(body.data);
-      const presence = this.firstRecord([body, event, data], ['presence', 'Presence']);
-      const chatPresence = this.firstRecord(
-        [body, event, data],
-        ['chatPresence', 'ChatPresence', 'chat_presence', 'Chat_Presence'],
-      );
-
-      this.logger.log(
-        `[WHATSAPP_UNKNOWN_EVENT_PROBE] ${JSON.stringify({
-          type: this.safeProbeNonSensitiveValue(body.type),
-          infoType: this.safeProbeNonSensitiveValue(info?.Type ?? info?.type),
-          eventType: this.safeProbeNonSensitiveValue(
-            event?.Type ?? event?.type ?? (typeof body.event === 'string' ? body.event : null),
-          ),
-          topLevelKeys: this.safeObjectKeys(body),
-          infoKeys: this.safeObjectKeys(info),
-          messageKeys: this.safeObjectKeys(message),
-          eventKeys: this.safeObjectKeys(event),
-          presenceKeys: this.safeObjectKeys(presence),
-          chatPresenceKeys: this.safeObjectKeys(chatPresence),
-          hasPresence: Boolean(presence),
-          hasChatPresence: Boolean(chatPresence),
-          state: this.firstProbeValueFromRecords([body, event, info, data], ['state', 'State']),
-          media: this.firstProbeValueFromRecords([body, event, info, data], ['media', 'Media']),
-          isFromMe: this.booleanLike(
-            this.firstProbeRawValueFromRecords([body, event, info, data], ['isFromMe', 'IsFromMe']),
-          ),
-        })}`,
-      );
-    } catch {
-      return;
-    }
-  }
-
-  private shouldLogKiragoUnknownEventProbe(body: Record<string, unknown>) {
-    const type = this.safeProbeValue(body.type);
-
-    if (type === 'ReadReceipt' || type === 'presence_probe_logged') {
-      return false;
-    }
-
-    if (this.isRawKiragoReactionPayload(body)) {
-      return false;
-    }
-
-    if (type === 'Message' && this.hasRawRenderableMessageContent(body)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  private isRawKiragoReactionPayload(body: Record<string, unknown>) {
-    const event = this.asRecord(body.event);
-    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
-    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-    const data = this.asRecord(body.data);
-
-    if (
-      this.asRecord(message?.reactionMessage) ||
-      this.asRecord(body.reactionMessage) ||
-      this.asRecord(event?.reactionMessage) ||
-      this.asRecord(data?.reactionMessage)
-    ) {
-      return true;
-    }
-
-    const infoType = this.safeProbeValue(info?.Type ?? info?.type)?.toLowerCase();
-    return Boolean(infoType?.includes('reaction'));
-  }
-
-  private hasRawRenderableMessageContent(body: Record<string, unknown>) {
-    const event = this.asRecord(body.event);
-    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
-
-    if (!message) {
-      return false;
-    }
-
-    return (
-      this.hasAnyOwnValue(message, [
-        'conversation',
-        'extendedTextMessage',
-        'imageMessage',
-        'documentMessage',
-        'audioMessage',
-        'videoMessage',
-      ]) || this.safeProbeValue(message.conversation) !== null
-    );
-  }
-
   private isKiragoReactionPayload(payload: unknown, normalized: NormalizedWhatsAppMessage) {
     if (normalized.messageType === 'reaction') {
       return true;
@@ -3314,6 +3128,57 @@ export class WhatsAppService {
       action: reaction.remove ? 'reaction_removed' : 'reaction_upserted',
       message: this.presentConversationMessage(updated),
     };
+  }
+
+  private async processChatPresenceWebhook(normalized: NormalizedWhatsAppChatPresence) {
+    if (normalized.isGroup) {
+      this.logger.log('Kirago chat_presence ignored_group_presence');
+      return { processed: false, reason: 'ignored_group_presence' };
+    }
+
+    if (normalized.isFromMe) {
+      this.logger.log('Kirago chat_presence ignored_self_presence');
+      return { processed: false, reason: 'ignored_self_presence' };
+    }
+
+    if (normalized.state === 'composing' && normalized.media !== 'audio') {
+      this.logger.log(
+        `Kirago chat_presence unsupported_text_presence media=${
+          this.safeProbeNonSensitiveValue(normalized.media) ?? 'none'
+        }`,
+      );
+      return { processed: false, reason: 'unsupported_text_presence' };
+    }
+
+    if (normalized.state !== 'composing' && normalized.state !== 'paused') {
+      this.logger.log(
+        `Kirago chat_presence unsupported_presence_state state=${
+          this.safeProbeNonSensitiveValue(normalized.state) ?? 'unknown'
+        }`,
+      );
+      return { processed: false, reason: 'unsupported_presence_state' };
+    }
+
+    const connection = await this.findConnectionForWebhook(normalized);
+
+    if (!connection) {
+      return { processed: false, reason: 'connection_not_found' };
+    }
+
+    const conversation = await this.findConversationForChatPresence(connection.id, normalized);
+
+    if (!conversation) {
+      this.logger.log('Kirago chat_presence_conversation_not_found');
+      return { processed: false, reason: 'presence_conversation_not_found' };
+    }
+
+    if (normalized.state === 'paused') {
+      this.emitConversationPresence(conversation.id, null);
+      return { processed: true, action: 'presence_cleared' };
+    }
+
+    this.emitConversationPresence(conversation.id, 'recording_audio');
+    return { processed: true, action: 'presence_recording_audio' };
   }
 
   private reactionTextValue(source: Record<string, unknown> | null) {
@@ -4171,6 +4036,70 @@ export class WhatsAppService {
       where: { provider: 'KIRAGO', OR: filters },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  private async findConversationForChatPresence(
+    connectionId: string,
+    normalized: NormalizedWhatsAppChatPresence,
+  ) {
+    const phones = this.chatPresencePhoneCandidates(normalized);
+
+    if (!phones.length) {
+      return null;
+    }
+
+    return this.prisma.whatsAppConversation.findFirst({
+      where: {
+        whatsAppConnectionId: connectionId,
+        phoneNormalized: { in: phones },
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true },
+    });
+  }
+
+  private chatPresencePhoneCandidates(normalized: NormalizedWhatsAppChatPresence) {
+    const candidates =
+      normalized.isFromMe === true
+        ? [normalized.recipientAlt, normalized.chat, normalized.senderAlt, normalized.sender]
+        : [normalized.senderAlt, normalized.sender, normalized.chat, normalized.recipientAlt];
+    const phones = new Set<string>();
+
+    for (const candidate of candidates) {
+      const phone = this.tryNormalizeProviderJidPhone(candidate);
+
+      if (!phone) {
+        continue;
+      }
+
+      phones.add(phone);
+
+      const legacyVariant = brazilLegacyMobileVariant(phone);
+      if (legacyVariant) {
+        phones.add(legacyVariant);
+      }
+
+      const canonicalVariant = brazilCanonicalMobileToLegacyVariant(phone);
+      if (canonicalVariant) {
+        phones.add(canonicalVariant);
+      }
+    }
+
+    return [...phones];
+  }
+
+  private tryNormalizeProviderJidPhone(value: string | null) {
+    if (!value) {
+      return null;
+    }
+
+    const raw = value.trim();
+
+    if (!raw || /@lid$/i.test(raw) || /@g\.us$/i.test(raw)) {
+      return null;
+    }
+
+    return this.tryNormalizePhone(raw.replace(/@s\.whatsapp\.net$/i, '').split(':')[0] ?? raw);
   }
 
   private buildConversationWhere(

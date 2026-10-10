@@ -94,7 +94,7 @@ import {
 } from '../../lib/crm-api';
 import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
 import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
-import { useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
+import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
 
 type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
@@ -265,6 +265,7 @@ export function WhatsAppInbox({
   const [guestClientCreatePlansLoading, setGuestClientCreatePlansLoading] = useState(false);
   const [newMessageNotice, setNewMessageNotice] = useState(false);
   const {
+    conversationPresence,
     realtimeConnected,
     setActiveConversationId: setGlobalActiveConversationId,
     subscribe: subscribeRealtime,
@@ -1137,6 +1138,10 @@ export function WhatsAppInbox({
           })();
         }
         scheduleRealtimeListRefresh();
+        return;
+      }
+
+      if (event.type === 'conversation.presence') {
         return;
       }
 
@@ -2285,6 +2290,7 @@ export function WhatsAppInbox({
               <ConversationHeader
                 conversation={selectedConversation}
                 opening={opening}
+                presence={conversationPresenceLabel(conversationPresence[selectedConversation.id])}
                 resolving={resolving}
                 onBack={() => setMobileMode('list')}
                 onOpenClientPanel={() => setMobileClientOpen(true)}
@@ -2771,6 +2777,7 @@ function ConversationListItem({
 function ConversationHeader({
   conversation,
   opening,
+  presence,
   resolving,
   onBack,
   onOpenClientPanel,
@@ -2779,6 +2786,7 @@ function ConversationHeader({
 }: {
   conversation: WhatsAppConversation;
   opening: boolean;
+  presence: string | null;
   resolving: boolean;
   onBack: () => void;
   onOpenClientPanel: () => void;
@@ -2800,6 +2808,7 @@ function ConversationHeader({
         <div>
           <h3>{conversation.displayName}</h3>
           <p>{instanceLabel ? `${phoneLabel} · ${instanceLabel}` : phoneLabel}</p>
+          {presence ? <small className="conversation-presence-label">{presence}</small> : null}
           <div className="conversation-header-badges">
             <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
               {conversation.client ? 'Cliente' : 'Avulso'}

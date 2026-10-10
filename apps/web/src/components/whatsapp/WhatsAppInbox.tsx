@@ -7,11 +7,14 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -171,6 +174,9 @@ const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream'
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
 export const allowedWhatsAppReactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const;
+const reactionPickerViewportGap = 12;
+const reactionPickerOffset = 8;
+const reactionPickerDefaultSize = { width: 284, height: 52 };
 
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
@@ -2934,6 +2940,8 @@ function ConversationBubble({
   onRetry: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
+  const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
+
   if (!isRenderableConversationMessage(message)) {
     return null;
   }
@@ -2966,6 +2974,7 @@ function ConversationBubble({
         </button>
         <div className="conversation-reaction-action-wrap">
           <button
+            ref={reactionTriggerRef}
             className="conversation-reaction-action"
             type="button"
             title="Reagir"
@@ -2980,28 +2989,14 @@ function ConversationBubble({
               <SmilePlus aria-hidden="true" size={14} />
             )}
           </button>
-          {reactionPickerOpen ? (
-            <div className="conversation-reaction-picker" role="menu">
-              {allowedWhatsAppReactionEmojis.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  role="menuitem"
-                  className={
-                    message.reactions.some(
-                      (reaction) => reaction.isFromMe && reaction.emoji === emoji,
-                    )
-                      ? 'active'
-                      : ''
-                  }
-                  disabled={reacting}
-                  onClick={() => onReaction(message, emoji)}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <ConversationReactionPickerPortal
+            message={message}
+            open={reactionPickerOpen}
+            reacting={reacting}
+            triggerRef={reactionTriggerRef}
+            onClose={() => onReactionPickerChange(null)}
+            onReaction={onReaction}
+          />
         </div>
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
         {text ? <p>{renderHighlightedSearchText(text, searchTerm)}</p> : null}
@@ -3039,6 +3034,174 @@ function ConversationBubble({
         ) : null}
       </div>
     </article>
+  );
+}
+
+type ReactionPickerPosition = {
+  left: number;
+  top: number;
+  placement: 'top' | 'bottom';
+  maxWidth: number;
+};
+
+export function calculateReactionPickerPosition({
+  triggerRect,
+  viewportWidth,
+  viewportHeight,
+  pickerWidth = reactionPickerDefaultSize.width,
+  pickerHeight = reactionPickerDefaultSize.height,
+}: {
+  triggerRect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom' | 'width' | 'height'>;
+  viewportWidth: number;
+  viewportHeight: number;
+  pickerWidth?: number;
+  pickerHeight?: number;
+}): ReactionPickerPosition {
+  const availableWidth = Math.max(0, viewportWidth - reactionPickerViewportGap * 2);
+  const effectivePickerWidth = Math.min(pickerWidth, availableWidth);
+  const hasRoomBelow =
+    viewportHeight - triggerRect.bottom >=
+    pickerHeight + reactionPickerOffset + reactionPickerViewportGap;
+  const hasRoomAbove =
+    triggerRect.top >= pickerHeight + reactionPickerOffset + reactionPickerViewportGap;
+  const placement = hasRoomBelow || !hasRoomAbove ? 'bottom' : 'top';
+  const preferredLeft = triggerRect.left + triggerRect.width / 2 - effectivePickerWidth / 2;
+  const minLeft = reactionPickerViewportGap;
+  const maxLeft = Math.max(
+    minLeft,
+    viewportWidth - effectivePickerWidth - reactionPickerViewportGap,
+  );
+  const left = Math.min(Math.max(preferredLeft, minLeft), maxLeft);
+  const unclampedTop =
+    placement === 'bottom'
+      ? triggerRect.bottom + reactionPickerOffset
+      : triggerRect.top - pickerHeight - reactionPickerOffset;
+  const minTop = reactionPickerViewportGap;
+  const maxTop = Math.max(minTop, viewportHeight - pickerHeight - reactionPickerViewportGap);
+  const top = Math.min(Math.max(unclampedTop, minTop), maxTop);
+
+  return {
+    left: Math.round(left),
+    top: Math.round(top),
+    placement,
+    maxWidth: Math.round(effectivePickerWidth),
+  };
+}
+
+function ConversationReactionPickerPortal({
+  message,
+  open,
+  reacting,
+  triggerRef,
+  onClose,
+  onReaction,
+}: {
+  message: WhatsAppConversationMessage;
+  open: boolean;
+  reacting: boolean;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  onReaction: (message: WhatsAppConversationMessage, emoji: string) => void;
+}) {
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<ReactionPickerPosition | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+
+    function updatePosition() {
+      const trigger = triggerRef.current;
+
+      if (!trigger) return;
+
+      const pickerRect = pickerRef.current?.getBoundingClientRect();
+      setPosition(
+        calculateReactionPickerPosition({
+          triggerRect: trigger.getBoundingClientRect(),
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          pickerWidth: pickerRect?.width || reactionPickerDefaultSize.width,
+          pickerHeight: pickerRect?.height || reactionPickerDefaultSize.height,
+        }),
+      );
+    }
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open, triggerRef]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+
+      if (!target) return;
+      if (pickerRef.current?.contains(target) || triggerRef.current?.contains(target)) {
+        return;
+      }
+
+      onClose();
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, open, triggerRef]);
+
+  if (!open) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      ref={pickerRef}
+      className={`conversation-reaction-picker ${position?.placement ?? 'bottom'}`}
+      role="menu"
+      aria-label="Selecionar reação"
+      style={{
+        left: position ? `${position.left}px` : '-9999px',
+        top: position ? `${position.top}px` : '-9999px',
+        maxWidth: position ? `${position.maxWidth}px` : undefined,
+      }}
+    >
+      {allowedWhatsAppReactionEmojis.map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          role="menuitem"
+          className={
+            message.reactions.some((reaction) => reaction.isFromMe && reaction.emoji === emoji)
+              ? 'active'
+              : ''
+          }
+          disabled={reacting}
+          onClick={() => onReaction(message, emoji)}
+        >
+          {emoji}
+        </button>
+      ))}
+    </div>,
+    document.body,
   );
 }
 

@@ -2844,23 +2844,26 @@ a {
   position: absolute;
   top: 6px;
   right: 40px;
-  z-index: 3;
+  z-index: 8;
 }
 
 .conversation-reaction-action {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
   opacity: 0;
-  box-shadow: 0 8px 18px rgb(0 0 0 / 12%);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px rgb(15 23 42 / 16%);
   transition:
     background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
     opacity 0.15s ease,
     transform 0.15s ease,
     color 0.15s ease;
@@ -2876,8 +2879,10 @@ a {
 
 .conversation-reply-action:hover,
 .conversation-reaction-action:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   color: var(--accent);
+  box-shadow: 0 14px 28px rgb(15 23 42 / 18%);
   transform: translateY(-1px);
 }
 
@@ -2887,34 +2892,76 @@ a {
 }
 
 .conversation-reaction-picker {
-  position: absolute;
-  top: 34px;
-  right: 0;
+  position: fixed;
+  z-index: 1200;
   display: flex;
-  gap: 3px;
-  border: 1px solid var(--border);
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 999px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  padding: 4px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow:
+    0 18px 42px rgb(15 23 42 / 20%),
+    0 2px 8px rgb(15 23 42 / 10%);
+  backdrop-filter: blur(14px);
+  padding: 6px;
+  transform-origin: top center;
+  animation: conversationReactionPickerIn 0.14s ease-out;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+
+.conversation-reaction-picker::-webkit-scrollbar {
+  display: none;
 }
 
 .conversation-reaction-picker button {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
   place-items: center;
   border: 0;
   border-radius: 999px;
   background: transparent;
+  color: inherit;
   cursor: pointer;
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1;
+  transition:
+    background 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.14s ease;
 }
 
 .conversation-reaction-picker button:hover,
 .conversation-reaction-picker button.active {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+.conversation-reaction-picker button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 56%, transparent);
+  outline-offset: 2px;
+}
+
+.conversation-reaction-picker.top {
+  transform-origin: bottom center;
+}
+
+@keyframes conversationReactionPickerIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .conversation-reaction-summary {

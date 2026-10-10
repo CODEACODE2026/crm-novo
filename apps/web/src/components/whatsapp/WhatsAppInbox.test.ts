@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
   advanceConversationListGeneration,
   allowedWhatsAppReactionEmojis,
+  calculateReactionPickerPosition,
   classifyConversationIncomingFile,
   conversationComposerActionMode,
   conversationVideoAccept,
@@ -25,6 +29,10 @@ import {
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
 import type { WhatsAppConversation, WhatsAppConversationMessage } from '../../lib/crm-api';
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
+const globalStylesSource = readFileSync(join(currentDir, '../../app/globals.css'), 'utf8');
 
 function conversation(
   id: string,
@@ -914,6 +922,77 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
   it('keeps reaction UI constrained to the MVP emoji allowlist', () => {
     expect([...allowedWhatsAppReactionEmojis]).toEqual(['👍', '❤️', '😂', '😮', '😢', '🙏']);
+  });
+
+  it('positions the reaction picker inside the viewport and flips above near the bottom edge', () => {
+    expect(
+      calculateReactionPickerPosition({
+        triggerRect: {
+          left: 320,
+          right: 350,
+          top: 220,
+          bottom: 250,
+          width: 30,
+          height: 30,
+        },
+        viewportWidth: 720,
+        viewportHeight: 640,
+        pickerWidth: 260,
+        pickerHeight: 48,
+      }),
+    ).toMatchObject({ left: 205, top: 258, placement: 'bottom' });
+
+    expect(
+      calculateReactionPickerPosition({
+        triggerRect: {
+          left: 680,
+          right: 710,
+          top: 590,
+          bottom: 620,
+          width: 30,
+          height: 30,
+        },
+        viewportWidth: 720,
+        viewportHeight: 640,
+        pickerWidth: 260,
+        pickerHeight: 48,
+      }),
+    ).toMatchObject({ left: 448, top: 534, placement: 'top' });
+  });
+
+  it('keeps the reaction picker portal safe with outside click, escape and listener cleanup', () => {
+    expect(whatsAppInboxSource).toContain("import { createPortal } from 'react-dom'");
+    expect(whatsAppInboxSource).toContain('createPortal(');
+    expect(whatsAppInboxSource).toContain('document.body');
+    expect(whatsAppInboxSource).toContain('if (!open) {');
+    expect(whatsAppInboxSource).toContain("window.addEventListener('resize', updatePosition)");
+    expect(whatsAppInboxSource).toContain(
+      "window.addEventListener('scroll', updatePosition, true)",
+    );
+    expect(whatsAppInboxSource).toContain("window.removeEventListener('resize', updatePosition)");
+    expect(whatsAppInboxSource).toContain(
+      "window.removeEventListener('scroll', updatePosition, true)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "document.addEventListener('pointerdown', handlePointerDown)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "document.removeEventListener('pointerdown', handlePointerDown)",
+    );
+    expect(whatsAppInboxSource).toContain("document.addEventListener('keydown', handleKeyDown)");
+    expect(whatsAppInboxSource).toContain("document.removeEventListener('keydown', handleKeyDown)");
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain('pickerRef.current?.contains(target)');
+    expect(whatsAppInboxSource).toContain('triggerRef.current?.contains(target)');
+  });
+
+  it('keeps reaction picker CSS fixed, layered and mobile-safe', () => {
+    expect(globalStylesSource).toContain('.conversation-reaction-picker {');
+    expect(globalStylesSource).toContain('position: fixed;');
+    expect(globalStylesSource).toContain('z-index: 1200;');
+    expect(globalStylesSource).toContain('overflow-x: auto;');
+    expect(globalStylesSource).toContain('scrollbar-width: none;');
+    expect(globalStylesSource).toContain('.conversation-reaction-picker.top');
   });
 
   it('maps own reaction clicks to change or remove semantics without touching contact reactions', () => {

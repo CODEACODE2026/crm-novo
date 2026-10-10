@@ -4555,6 +4555,205 @@ describe('WhatsAppService', () => {
     log.mockRestore();
   });
 
+  it('logs sanitized inbound presence-like candidates and ignores them safely', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Presence',
+        instanceName: 'crm-novo-main',
+        userID: 'kirago-user-123456',
+        token: 'secret-token',
+        phone: '5511999999999',
+        event: {
+          Type: 'presence',
+          Info: {
+            ID: 'presence-event-id-123456',
+            Sender: '5511999999999@s.whatsapp.net',
+            Chat: '5511888888888@s.whatsapp.net',
+            Participant: '123456789012345@lid',
+            RemoteJid: '5511777777777@s.whatsapp.net',
+            IsFromMe: false,
+          },
+          Presence: {
+            state: 'composing',
+            media: 'audio',
+            contextInfo: { stanzaId: 'message-secret-id' },
+          },
+        },
+        Message: {
+          conversation: 'texto que nao deve vazar',
+          imageMessage: {
+            URL: 'https://media.example.test/private?token=secret-token',
+            Data: 'data:image/jpeg;base64,abcdef',
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'presence_probe_logged',
+    });
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_PRESENCE_PROBE]');
+    expect(output).toContain('type=Presence');
+    expect(output).toContain('eventType=presence');
+    expect(output).toContain('state=composing');
+    expect(output).toContain('media=audio');
+    expect(output).toContain('hasPresence=true');
+    expect(output).toContain('hasState=true');
+    expect(output).toContain('hasMedia=true');
+    expect(output).toContain('presenceKeys=contextInfo,media,state');
+    expect(output).toContain('topLevelKeys=');
+    expect(output).toContain('[redacted-key]');
+    expect(output).not.toContain('5511999999999');
+    expect(output).not.toContain('123456789012345@lid');
+    expect(output).not.toContain('secret-token');
+    expect(output).not.toContain('base64');
+    expect(output).not.toContain('media.example.test');
+    expect(output).not.toContain('texto que nao deve vazar');
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('does not let probe extraction failures break webhook handling', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {
+      throw new Error('logger unavailable');
+    });
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ChatPresence',
+        presence: { state: 'paused' },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'presence_probe_logged',
+    });
+
+    log.mockRestore();
+  });
+
+  it('does not send ReadReceipt, reaction or normal text messages to the presence probe', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+
+    normalizer.normalize.mockReturnValueOnce(normalizedReceipt());
+    await service.receiveWebhook({ type: 'ReadReceipt', state: 'Read' });
+
+    normalizer.normalize.mockReturnValueOnce(
+      normalizedInbound('', {
+        messageId: 'reaction-event-id',
+        messageType: 'reaction',
+        text: null,
+      }),
+    );
+    await service.receiveWebhook({
+      type: 'Message',
+      event: {
+        Info: { ID: 'reaction-event-id', Type: 'reaction', IsFromMe: false },
+        Message: {
+          reactionMessage: {
+            text: '❤️',
+            key: { ID: 'missing-target-id', remoteJid: '5511999999999@s.whatsapp.net' },
+          },
+        },
+      },
+    });
+
+    normalizer.normalize.mockReturnValueOnce(normalizedInbound('Ola'));
+    await service.receiveWebhook({ type: 'Message' });
+
+    normalizer.normalize.mockReturnValueOnce(null);
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: { ID: 'raw-reaction-event-id', Type: 'reaction', IsFromMe: false },
+          Message: {
+            reactionMessage: {
+              text: 'ok',
+              key: { ID: 'target-id', remoteJid: '5511999999999@s.whatsapp.net' },
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).not.toContain('[WHATSAPP_PRESENCE_PROBE]');
+    log.mockRestore();
+  });
+
+  it('keeps unknown non-presence payloads ignored when the normalizer returns null', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        state: 'queued',
+        event: {
+          Info: { ID: 'unknown-event-id', Type: 'message_status' },
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'ignored_event',
+    });
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).not.toContain('[WHATSAPP_PRESENCE_PROBE]');
+    log.mockRestore();
+  });
+
+  it('keeps sparse presence-like payloads safe and free of full phone or lid values', async () => {
+    const { service, normalizer } = serviceFactory();
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    normalizer.normalize.mockReturnValue(null);
+
+    await expect(
+      service.receiveWebhook({
+        type: 'Message',
+        event: {
+          Info: {
+            Type: 'chat_presence',
+            Sender: '5511999999999@s.whatsapp.net',
+            Participant: '123456789012345@lid',
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      received: true,
+      processed: false,
+      reason: 'presence_probe_logged',
+    });
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('[WHATSAPP_PRESENCE_PROBE]');
+    expect(output).toContain('infoType=chat_presence');
+    expect(output).not.toContain('5511999999999');
+    expect(output).not.toContain('123456789012345@lid');
+    log.mockRestore();
+  });
+
   it('persists contact inbound reaction from the confirmed Kirago reactionMessage shape', async () => {
     const target = conversationMessage({ providerMessageId: 'target-provider-message-id' });
     const updated = conversationMessage({

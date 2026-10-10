@@ -2747,16 +2747,21 @@ export class WhatsAppService {
 
     const normalized = this.normalizer.normalize(payload);
 
-    if (!normalized) {
-      return { received: true, processed: false, reason: 'ignored_event' };
-    }
-
-    if (normalized.kind === 'MESSAGE_RECEIPT') {
+    if (normalized?.kind === 'MESSAGE_RECEIPT') {
       return { received: true, ...(await this.processMessageReceiptWebhook(normalized)) };
     }
 
-    if (this.isKiragoReactionPayload(payload, normalized)) {
+    if (normalized && this.isKiragoReactionPayload(payload, normalized)) {
       return { received: true, ...(await this.processInboundReactionWebhook(payload, normalized)) };
+    }
+
+    if (this.isKiragoPresenceProbeCandidate(payload)) {
+      this.logKiragoPresenceProbe(payload);
+      return { received: true, processed: false, reason: 'presence_probe_logged' };
+    }
+
+    if (!normalized) {
+      return { received: true, processed: false, reason: 'ignored_event' };
     }
 
     if (normalized.isGroup) {
@@ -2806,6 +2811,164 @@ export class WhatsAppService {
       clients,
     );
     return { received: true, ...legacyResult, conversation: conversationResult };
+  }
+
+  private isKiragoPresenceProbeCandidate(payload: unknown) {
+    const body = this.asRecord(payload);
+
+    if (!body) {
+      return false;
+    }
+
+    const event = this.asRecord(body.event);
+    const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+    const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+    const data = this.asRecord(body.data);
+    const presence = this.presenceProbeObject(body, event, info, data);
+    const type = this.presenceProbeText(body.type).toLowerCase();
+    const infoType = this.presenceProbeText(info?.Type ?? info?.type).toLowerCase();
+    const eventType = this.presenceProbeText(event?.Type ?? event?.type).toLowerCase();
+    const state = this.presenceProbeText(
+      this.firstProbeRawValue(body, ['state', 'State']) ??
+        this.firstProbeRawValue(event, ['state', 'State']) ??
+        this.firstProbeRawValue(info, ['state', 'State']) ??
+        this.firstProbeRawValue(data, ['state', 'State']) ??
+        this.firstProbeRawValue(presence, ['state', 'State']),
+    ).toLowerCase();
+    const presenceText = this.presenceProbeText(
+      this.firstProbeRawValue(body, ['presence', 'Presence']) ??
+        this.firstProbeRawValue(event, ['presence', 'Presence']) ??
+        this.firstProbeRawValue(data, ['presence', 'Presence']),
+    ).toLowerCase();
+    const media = this.presenceProbeText(
+      this.firstProbeRawValue(body, ['media', 'Media']) ??
+        this.firstProbeRawValue(event, ['media', 'Media']) ??
+        this.firstProbeRawValue(info, ['media', 'Media']) ??
+        this.firstProbeRawValue(data, ['media', 'Media']) ??
+        this.firstProbeRawValue(presence, ['media', 'Media']),
+    ).toLowerCase();
+
+    if (type === 'readreceipt' || infoType === 'readreceipt' || eventType === 'readreceipt') {
+      return false;
+    }
+
+    if (
+      infoType === 'reaction' ||
+      eventType === 'reaction' ||
+      (message && this.hasAnyOwnValue(message, ['reactionMessage']))
+    ) {
+      return false;
+    }
+
+    const textSignals = [type, infoType, eventType, state, presenceText].filter(Boolean);
+    const hasPresenceObject = Boolean(presence);
+    const hasPresenceKey = [body, event, info, data].some((record) =>
+      this.hasAnyOwnValue(record, ['Presence', 'presence', 'ChatPresence', 'chatPresence']),
+    );
+    const hasPresenceText = textSignals.some((value) =>
+      /presence|composing|paused|typing/.test(value),
+    );
+    const hasMediaAudio = media === 'audio';
+    const hasKnownState = ['composing', 'paused', 'recording'].includes(state);
+    const hasKnownStateContext =
+      hasKnownState &&
+      (hasPresenceObject ||
+        hasPresenceKey ||
+        hasPresenceText ||
+        hasMediaAudio ||
+        /presence|typing/.test(type));
+
+    return hasPresenceObject || hasPresenceKey || hasPresenceText || hasKnownStateContext;
+  }
+
+  private logKiragoPresenceProbe(payload: unknown) {
+    try {
+      const body = this.asRecord(payload);
+
+      if (!body) {
+        return;
+      }
+
+      const event = this.asRecord(body.event);
+      const info = this.asRecord(body.Info) ?? this.asRecord(event?.Info);
+      const message = this.asRecord(body.Message) ?? this.asRecord(event?.Message);
+      const data = this.asRecord(body.data);
+      const presence = this.presenceProbeObject(body, event, info, data);
+      const context =
+        this.asRecord(message?.contextInfo) ??
+        this.asRecord(message?.ContextInfo) ??
+        this.asRecord(presence?.contextInfo) ??
+        this.asRecord(presence?.ContextInfo);
+      const state =
+        this.firstProbeValue(body, ['state', 'State']) ??
+        this.firstProbeValue(event, ['state', 'State']) ??
+        this.firstProbeValue(info, ['state', 'State']) ??
+        this.firstProbeValue(data, ['state', 'State']) ??
+        this.firstProbeValue(presence, ['state', 'State']);
+      const media =
+        this.firstProbeValue(body, ['media', 'Media']) ??
+        this.firstProbeValue(event, ['media', 'Media']) ??
+        this.firstProbeValue(info, ['media', 'Media']) ??
+        this.firstProbeValue(data, ['media', 'Media']) ??
+        this.firstProbeValue(presence, ['media', 'Media']);
+
+      this.logger.log(
+        [
+          '[WHATSAPP_PRESENCE_PROBE]',
+          `type=${this.firstProbeValue(body, ['type', 'Type']) ?? 'unknown'}`,
+          `infoType=${this.firstProbeValue(info, ['Type', 'type']) ?? 'unknown'}`,
+          `event=${this.firstProbeValue(body, ['event']) ?? 'object'}`,
+          `eventType=${this.firstProbeValue(event, ['Type', 'type']) ?? 'unknown'}`,
+          `state=${state ?? 'unknown'}`,
+          `presence=${this.firstProbeValue(body, ['presence', 'Presence']) ?? this.firstProbeValue(event, ['presence', 'Presence']) ?? 'object'}`,
+          `media=${media ?? 'unknown'}`,
+          `isFromMe=${this.firstProbeValue(info, ['IsFromMe', 'isFromMe']) ?? 'unknown'}`,
+          `sender=${this.maskProbeId(this.firstProbeRawValue(info, ['Sender', 'sender']))}`,
+          `chat=${this.maskProbeId(this.firstProbeRawValue(info, ['Chat', 'chat']))}`,
+          `phone=${this.maskProbeId(this.firstProbeRawValue(body, ['phone', 'Phone']) ?? this.firstProbeRawValue(info, ['Phone', 'phone']))}`,
+          `participant=${this.maskProbeId(this.firstProbeRawValue(info, ['Participant', 'participant']))}`,
+          `remoteJid=${this.maskProbeId(this.firstProbeRawValue(info, ['RemoteJid', 'remoteJid', 'remoteJID']) ?? this.firstProbeRawValue(body, ['remoteJid', 'remoteJID']))}`,
+          `eventId=${this.maskProbeId(this.firstProbeRawValue(info, ['ID', 'id']) ?? this.firstProbeRawValue(event, ['ID', 'id']) ?? this.firstProbeRawValue(body, ['ID', 'id']))}`,
+          `topLevelKeys=${this.safeObjectKeys(body).join(',') || 'none'}`,
+          `infoKeys=${this.safeObjectKeys(info).join(',') || 'none'}`,
+          `presenceKeys=${this.safeObjectKeys(presence).join(',') || 'none'}`,
+          `messageKeys=${this.safeObjectKeys(message).join(',') || 'none'}`,
+          `contextKeys=${this.safeObjectKeys(context).join(',') || 'none'}`,
+          `hasPresence=${Boolean(presence)}`,
+          `hasState=${Boolean(state)}`,
+          `hasMedia=${Boolean(media)}`,
+        ].join(' '),
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private presenceProbeObject(
+    body: Record<string, unknown> | null,
+    event: Record<string, unknown> | null,
+    info: Record<string, unknown> | null,
+    data: Record<string, unknown> | null,
+  ) {
+    return (
+      this.asRecord(body?.Presence) ??
+      this.asRecord(body?.presence) ??
+      this.asRecord(body?.ChatPresence) ??
+      this.asRecord(body?.chatPresence) ??
+      this.asRecord(event?.Presence) ??
+      this.asRecord(event?.presence) ??
+      this.asRecord(event?.ChatPresence) ??
+      this.asRecord(event?.chatPresence) ??
+      this.asRecord(info?.Presence) ??
+      this.asRecord(info?.presence) ??
+      this.asRecord(data?.Presence) ??
+      this.asRecord(data?.presence) ??
+      null
+    );
+  }
+
+  private presenceProbeText(value: unknown) {
+    return this.safeProbeValue(value) ?? '';
   }
 
   private logMediaDebugPayload(payload: unknown) {

@@ -120,6 +120,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       getConversationMessagesAround: vi.fn().mockResolvedValue({ items: [] }),
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
+      setConversationPresence: vi.fn().mockResolvedValue({ success: true }),
       updateConversationMessageReaction: vi.fn().mockResolvedValue({ id: 'message-id' }),
       deleteConversationMessage: vi.fn().mockResolvedValue({ id: 'deleted-message-id' }),
       retryConversationMessage: vi.fn().mockResolvedValue({ id: 'retry-message-id' }),
@@ -175,6 +176,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
       }),
     ).resolves.toEqual({ id: 'message-id' });
+    await expect(
+      subject.setConversationPresence('conversation-id', { state: 'composing', media: 'audio' }),
+    ).resolves.toEqual({ success: true });
     await expect(
       subject.updateConversationMessageReaction('conversation-id', 'message-id', { emoji: '❤️' }),
     ).resolves.toEqual({ id: 'message-id' });

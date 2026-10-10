@@ -608,6 +608,7 @@ function serviceFactory({
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     sendReaction: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
+    setChatPresence: vi.fn().mockResolvedValue(undefined),
     markMessagesAsRead: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn().mockResolvedValue({
       dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
@@ -7499,6 +7500,183 @@ describe('WhatsAppService', () => {
       nextPage: null,
       nextCursor: { createdAt: message97.createdAt, id: message97.id },
     });
+  });
+
+  it('sets text conversation presence through the provider without persisting chat events', async () => {
+    const targetConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider, prisma, realtime } = serviceFactory({
+      currentConnection: targetConversation.whatsAppConnection,
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(targetConversation),
+        },
+      },
+    });
+
+    await expect(
+      service.setConversationPresence(targetConversation.id, { state: 'composing' }),
+    ).resolves.toEqual({ success: true });
+
+    expect(provider.setChatPresence).toHaveBeenCalledWith('instance-token', {
+      phone: targetConversation.phoneNormalized,
+      state: 'composing',
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
+  });
+
+  it('sets paused conversation presence without media', async () => {
+    const targetConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(targetConversation),
+        },
+      },
+    });
+
+    await expect(
+      service.setConversationPresence(targetConversation.id, { state: 'paused' }),
+    ).resolves.toEqual({ success: true });
+
+    expect(provider.setChatPresence).toHaveBeenCalledWith('instance-token', {
+      phone: targetConversation.phoneNormalized,
+      state: 'paused',
+    });
+  });
+
+  it('sets audio composing conversation presence', async () => {
+    const targetConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(targetConversation),
+        },
+      },
+    });
+
+    await expect(
+      service.setConversationPresence(targetConversation.id, {
+        state: 'composing',
+        media: 'audio',
+      }),
+    ).resolves.toEqual({ success: true });
+
+    expect(provider.setChatPresence).toHaveBeenCalledWith('instance-token', {
+      phone: targetConversation.phoneNormalized,
+      state: 'composing',
+      media: 'audio',
+    });
+  });
+
+  it('rejects invalid conversation presence state and media before provider calls', async () => {
+    const { service, provider } = serviceFactory();
+
+    await expect(
+      service.setConversationPresence(conversation().id, { state: 'typing' as never }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.setConversationPresence(conversation().id, {
+        state: 'composing',
+        media: 'video' as never,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.setConversationPresence(conversation().id, { state: 'paused', media: 'audio' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(provider.setChatPresence).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing conversation, unusable connection, invalid provider and missing phone', async () => {
+    const usableConnection = connection({ status: 'CONNECTED', connected: true, loggedIn: true });
+    const { service: missingService } = serviceFactory({
+      prismaOverrides: { whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(null) } },
+    });
+    await expect(
+      missingService.setConversationPresence(conversation().id, { state: 'composing' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const { service: unusableService } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'DISCONNECTED',
+                connected: false,
+                loggedIn: false,
+              }),
+            }),
+          ),
+        },
+      },
+    });
+    await expect(
+      unusableService.setConversationPresence(conversation().id, { state: 'composing' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    const { service: invalidProviderService } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              provider: 'OTHER',
+              whatsAppConnection: { ...usableConnection, provider: 'OTHER' },
+            }),
+          ),
+        },
+      },
+    });
+    await expect(
+      invalidProviderService.setConversationPresence(conversation().id, { state: 'composing' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const { service: missingPhoneService } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              phoneNormalized: '',
+              whatsAppConnection: usableConnection,
+            }),
+          ),
+        },
+      },
+    });
+    await expect(
+      missingPhoneService.setConversationPresence(conversation().id, { state: 'composing' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('treats provider presence failure as best effort', async () => {
+    const targetConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider, realtime } = serviceFactory({
+      providerOverrides: { setChatPresence: vi.fn().mockRejectedValue(new Error('kirago down')) },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(targetConversation),
+        },
+      },
+    });
+
+    await expect(
+      service.setConversationPresence(targetConversation.id, { state: 'composing' }),
+    ).resolves.toEqual({ success: false });
+
+    expect(provider.setChatPresence).toHaveBeenCalledTimes(1);
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
   });
 
   it('sends and persists an own reaction for inbound conversation messages', async () => {

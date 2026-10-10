@@ -39,6 +39,7 @@ import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-cont
 import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { SetWhatsAppConversationPresenceDto } from './dto/set-whatsapp-conversation-presence.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { UpdateWhatsAppMessageReactionDto } from './dto/update-whatsapp-message-reaction.dto';
 import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
@@ -179,6 +180,14 @@ export class WhatsAppController {
     @Body() dto: SendWhatsAppConversationMessageDto,
   ) {
     return this.whatsAppService.sendConversationTextMessage(id, dto);
+  }
+
+  @Put('conversations/:conversationId/presence')
+  setConversationPresence(
+    @Param('conversationId') conversationId: string,
+    @Body() dto: SetWhatsAppConversationPresenceDto,
+  ) {
+    return this.whatsAppService.setConversationPresence(conversationId, dto);
   }
 
   @Put('conversations/:conversationId/messages/:messageId/reaction')

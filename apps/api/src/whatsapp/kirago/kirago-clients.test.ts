@@ -102,6 +102,19 @@ describe('Kirago clients', () => {
       Phone: '5544999999999',
       Id: 'provider-message-id',
     });
+    await client.setPresence('instance-token', {
+      Phone: '5544999999999',
+      State: 'composing',
+    });
+    await client.setPresence('instance-token', {
+      Phone: '5544999999999',
+      State: 'paused',
+    });
+    await client.setPresence('instance-token', {
+      Phone: '5544999999999',
+      State: 'composing',
+      Media: 'audio',
+    });
 
     expect(request).toHaveBeenNthCalledWith(1, '/session/connect', {
       method: 'POST',
@@ -194,6 +207,34 @@ describe('Kirago clients', () => {
       body: {
         Phone: '5544999999999',
         Id: 'provider-message-id',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(10, '/chat/presence', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        State: 'composing',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(11, '/chat/presence', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        State: 'paused',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(12, '/chat/presence', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        State: 'composing',
+        Media: 'audio',
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

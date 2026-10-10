@@ -20,6 +20,7 @@ import {
   mergeConversationLists,
   mergeConversationMessages,
   nextOwnReactionEmoji,
+  nextConversationPresenceState,
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
   shouldAutoReadRealtimeMessage,
@@ -110,6 +111,82 @@ function reaction(
 }
 
 describe('WhatsAppInbox unread reconciliation helpers', () => {
+  it('dedupes outbound presence state transitions locally', () => {
+    expect(nextConversationPresenceState(undefined, 'composing:text')).toBe('composing:text');
+    expect(nextConversationPresenceState(undefined, 'paused')).toBeNull();
+    expect(nextConversationPresenceState('composing:text', 'composing:text')).toBeNull();
+    expect(nextConversationPresenceState('composing:text', 'paused')).toBe('paused');
+    expect(nextConversationPresenceState('paused', 'paused')).toBeNull();
+    expect(nextConversationPresenceState('composing:text', 'composing:audio')).toBe(
+      'composing:audio',
+    );
+    expect(nextConversationPresenceState('composing:audio', 'paused')).toBe('paused');
+  });
+
+  it('keeps repeated typing local until a meaningful state change happens', () => {
+    let state: 'paused' | 'composing:text' | 'composing:audio' | undefined;
+    const sent: string[] = [];
+
+    for (const character of 'Olá tudo bem, gostaria de saber...') {
+      expect(character.length).toBe(1);
+      const next = nextConversationPresenceState(state, 'composing:text');
+      if (next) {
+        sent.push(next);
+        state = next;
+      }
+    }
+
+    const paused = nextConversationPresenceState(state, 'paused');
+    if (paused) {
+      sent.push(paused);
+      state = paused;
+    }
+
+    const resumed = nextConversationPresenceState(state, 'composing:text');
+    if (resumed) {
+      sent.push(resumed);
+      state = resumed;
+    }
+
+    const audio = nextConversationPresenceState(state, 'composing:audio');
+    if (audio) {
+      sent.push(audio);
+      state = audio;
+    }
+
+    const audioPaused = nextConversationPresenceState(state, 'paused');
+    if (audioPaused) sent.push(audioPaused);
+
+    expect(sent).toEqual([
+      'composing:text',
+      'paused',
+      'composing:text',
+      'composing:audio',
+      'paused',
+    ]);
+  });
+
+  it('wires outbound presence to typing, cleanup, send, conversation switch and audio recording', () => {
+    expect(whatsAppInboxSource).toContain('conversationPresencePauseDelayMs = 3000');
+    expect(whatsAppInboxSource).toContain(
+      "void sendConversationPresence(conversationId, 'composing')",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "void sendConversationPresence(conversationId, 'composing', 'audio')",
+    );
+    expect(whatsAppInboxSource).toContain('setWhatsAppConversationPresence(conversationId');
+    expect(whatsAppInboxSource).toContain(
+      'noteTextComposerActivity(selectedConversation.id, value)',
+    );
+    expect(whatsAppInboxSource).toContain('pauseConversationPresence(selectedConversation.id)');
+    expect(whatsAppInboxSource).toContain(
+      'onBlur={() => pauseConversationPresence(selectedConversation.id)}',
+    );
+    expect(whatsAppInboxSource).toContain('document.visibilityState ===');
+    expect(whatsAppInboxSource).toContain('onVoiceRecordingChangeRef.current(true)');
+    expect(whatsAppInboxSource).toContain('onVoiceRecordingChangeRef.current(false)');
+  });
+
   it('classifies incoming composer files with the same media rules used by upload', () => {
     expect(
       classifyConversationIncomingFile(new File(['image'], 'print.png', { type: 'image/png' })),

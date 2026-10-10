@@ -2648,6 +2648,21 @@ export function sendWhatsAppConversationMessage(
   });
 }
 
+export type WhatsAppConversationPresencePayload = {
+  state: 'composing' | 'paused';
+  media?: 'audio' | null;
+};
+
+export function setWhatsAppConversationPresence(
+  id: string,
+  payload: WhatsAppConversationPresencePayload,
+) {
+  return apiFetch<{ success: boolean }>(`/whatsapp/conversations/${id}/presence`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function updateWhatsAppConversationMessageReaction(
   conversationId: string,
   messageId: string,

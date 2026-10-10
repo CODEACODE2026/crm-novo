@@ -8,6 +8,7 @@ import { KiragoProviderError } from './kirago-provider.error';
 import type {
   DownloadMediaInput,
   MarkMessagesAsReadInput,
+  ChatPresenceInput,
   DeleteMessageInput,
   ProvisionConnectionInput,
   RemoteConnectionLookupInput,
@@ -299,6 +300,22 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       throw new KiragoProviderError(
         'WHATSAPP_PROVIDER_ERROR',
         'Falha ao apagar mensagem na Kirago.',
+        response.code,
+      );
+    }
+  }
+
+  async setChatPresence(instanceToken: string, input: ChatPresenceInput) {
+    const response = await this.instanceClient.setPresence(instanceToken, {
+      Phone: input.phone,
+      State: input.state,
+      ...(input.state === 'composing' && input.media === 'audio' ? { Media: 'audio' } : {}),
+    });
+
+    if (response.success !== true || response.code !== 200) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao atualizar presence na Kirago.',
         response.code,
       );
     }

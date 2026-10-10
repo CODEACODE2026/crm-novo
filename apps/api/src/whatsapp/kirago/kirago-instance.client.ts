@@ -100,6 +100,10 @@ export type KiragoDeleteMessageData = {
   Details?: unknown;
 };
 
+export type KiragoPresenceData = {
+  Details?: unknown;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -307,6 +311,18 @@ export class KiragoInstanceClient {
 
   deleteMessage(instanceToken: string, payload: { Phone: string; Id: string }) {
     return this.http.request<KiragoEnvelope<KiragoDeleteMessageData>>('/chat/delete', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  setPresence(
+    instanceToken: string,
+    payload: { Phone: string; State: 'composing' | 'paused'; Media?: 'audio' },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoPresenceData>>('/chat/presence', {
       method: 'POST',
       headers: { token: instanceToken },
       body: payload,

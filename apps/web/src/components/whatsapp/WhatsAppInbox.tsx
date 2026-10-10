@@ -74,6 +74,7 @@ import {
   sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
+  setWhatsAppConversationPresence,
   startWhatsAppConversation,
   updateWhatsAppConversationMessageReaction,
   type Client,
@@ -178,6 +179,18 @@ export const allowedWhatsAppReactionEmojis = ['👍', '❤️', '😂', '😮', 
 const reactionPickerViewportGap = 12;
 const reactionPickerOffset = 8;
 const reactionPickerDefaultSize = { width: 284, height: 52 };
+const conversationPresencePauseDelayMs = 3000;
+
+type ConversationPresenceKind = 'text' | 'audio';
+type ConversationPresenceState = 'paused' | `composing:${ConversationPresenceKind}`;
+
+export function nextConversationPresenceState(
+  current: ConversationPresenceState | undefined,
+  next: ConversationPresenceState,
+) {
+  if (current === undefined && next === 'paused') return null;
+  return current === next ? null : next;
+}
 
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
@@ -308,6 +321,8 @@ export function WhatsAppInbox({
   const messageSearchResultsRef = useRef<WhatsAppMessageSearchResult[]>([]);
   const messageSearchIndexRef = useRef(0);
   const chatDropDepthRef = useRef(0);
+  const presenceStatesRef = useRef<Record<string, ConversationPresenceState>>({});
+  const presencePauseTimeoutsRef = useRef<Record<string, number>>({});
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
 
@@ -333,6 +348,118 @@ export function WhatsAppInbox({
       return null;
     });
   }, [selectedConversation?.id]);
+
+  const sendConversationPresence = useCallback(
+    async (
+      conversationId: string,
+      state: 'composing' | 'paused',
+      media?: 'audio',
+      { force = false }: { force?: boolean } = {},
+    ) => {
+      const nextState: ConversationPresenceState =
+        state === 'paused' ? 'paused' : media === 'audio' ? 'composing:audio' : 'composing:text';
+      const transition = force
+        ? nextState
+        : nextConversationPresenceState(presenceStatesRef.current[conversationId], nextState);
+
+      if (!transition) return;
+
+      presenceStatesRef.current[conversationId] = transition;
+
+      try {
+        await setWhatsAppConversationPresence(conversationId, {
+          state,
+          ...(state === 'composing' && media ? { media } : {}),
+        });
+      } catch {
+        // Presence is best effort; composer and message send must keep working.
+      }
+    },
+    [],
+  );
+
+  const clearPresencePauseTimer = useCallback((conversationId: string) => {
+    const timeoutId = presencePauseTimeoutsRef.current[conversationId];
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      delete presencePauseTimeoutsRef.current[conversationId];
+    }
+  }, []);
+
+  const pauseConversationPresence = useCallback(
+    (conversationId: string, options: { force?: boolean } = {}) => {
+      clearPresencePauseTimer(conversationId);
+      void sendConversationPresence(conversationId, 'paused', undefined, options);
+    },
+    [clearPresencePauseTimer, sendConversationPresence],
+  );
+
+  const scheduleTextPresencePause = useCallback(
+    (conversationId: string) => {
+      clearPresencePauseTimer(conversationId);
+      presencePauseTimeoutsRef.current[conversationId] = window.setTimeout(() => {
+        delete presencePauseTimeoutsRef.current[conversationId];
+        void sendConversationPresence(conversationId, 'paused');
+      }, conversationPresencePauseDelayMs);
+    },
+    [clearPresencePauseTimer, sendConversationPresence],
+  );
+
+  const noteTextComposerActivity = useCallback(
+    (conversationId: string, value: string) => {
+      if (!value.trim()) {
+        pauseConversationPresence(conversationId);
+        return;
+      }
+
+      void sendConversationPresence(conversationId, 'composing');
+      scheduleTextPresencePause(conversationId);
+    },
+    [pauseConversationPresence, scheduleTextPresencePause, sendConversationPresence],
+  );
+
+  const noteAudioRecordingPresence = useCallback(
+    (conversationId: string, recording: boolean) => {
+      if (recording) {
+        clearPresencePauseTimer(conversationId);
+        void sendConversationPresence(conversationId, 'composing', 'audio');
+        return;
+      }
+
+      pauseConversationPresence(conversationId);
+    },
+    [clearPresencePauseTimer, pauseConversationPresence, sendConversationPresence],
+  );
+
+  useEffect(() => {
+    const previousConversation = selectedConversationRef.current;
+    return () => {
+      const conversationId = previousConversation?.id;
+      if (conversationId) {
+        pauseConversationPresence(conversationId);
+      }
+    };
+  }, [pauseConversationPresence, selectedConversation?.id]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && selectedConversationRef.current?.id) {
+        pauseConversationPresence(selectedConversationRef.current.id);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleVisibilityChange);
+      Object.keys(presencePauseTimeoutsRef.current).forEach(clearPresencePauseTimer);
+      if (selectedConversationRef.current?.id) {
+        pauseConversationPresence(selectedConversationRef.current.id);
+      }
+    };
+  }, [clearPresencePauseTimer, pauseConversationPresence]);
 
   const loadConversations = useCallback(
     async ({
@@ -1538,6 +1665,7 @@ export function WhatsAppInbox({
     sendingRef.current = true;
     setSending(true);
     setSendError('');
+    pauseConversationPresence(selectedConversation.id);
     if (!bodyOverride && !mediaToSend) {
       setDrafts((current) =>
         (current[selectedConversation.id] ?? '').trim() === body
@@ -1653,6 +1781,7 @@ export function WhatsAppInbox({
     sendingRef.current = true;
     setSending(true);
     setSendError('');
+    pauseConversationPresence(selectedConversation.id);
 
     try {
       const message = await sendWhatsAppConversationVoice(selectedConversation.id, {
@@ -2244,12 +2373,17 @@ export function WhatsAppInbox({
                     ...current,
                     [selectedConversation.id]: value,
                   }));
+                  noteTextComposerActivity(selectedConversation.id, value);
                 }}
+                onBlur={() => pauseConversationPresence(selectedConversation.id)}
                 onRemoveMedia={clearComposerMedia}
                 onCancelReply={() => setReplyTarget(null)}
                 onSelectMedia={selectComposerMedia}
                 onSend={() => void sendCurrentMessage()}
                 onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
+                onVoiceRecordingChange={(recording) =>
+                  noteAudioRecordingPresence(selectedConversation.id, recording)
+                }
               />
             </>
           ) : (
@@ -4052,11 +4186,13 @@ function ConversationComposer({
   selectedMedia,
   sending,
   onChange,
+  onBlur,
   onCancelReply,
   onRemoveMedia,
   onSelectMedia,
   onSend,
   onSendVoice,
+  onVoiceRecordingChange,
 }: {
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   conversationId: string;
@@ -4066,11 +4202,13 @@ function ConversationComposer({
   selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
   onChange: (value: string) => void;
+  onBlur: () => void;
   onCancelReply: () => void;
   onRemoveMedia: () => void;
   onSelectMedia: (kind: ConversationComposerMedia['kind'], file: File) => void;
   onSend: () => void;
   onSendVoice: (voice: ConversationVoiceDraft) => Promise<void>;
+  onVoiceRecordingChange: (recording: boolean) => void;
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -4090,6 +4228,7 @@ function ConversationComposer({
   const stoppingVoiceRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const voiceSendingRef = useRef(false);
+  const onVoiceRecordingChangeRef = useRef(onVoiceRecordingChange);
   const hasText = Boolean(draft.trim());
   const hasSendableContent = Boolean(hasText || selectedMedia);
   const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);
@@ -4098,8 +4237,13 @@ function ConversationComposer({
   const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
 
   useEffect(() => {
+    onVoiceRecordingChangeRef.current = onVoiceRecordingChange;
+  }, [onVoiceRecordingChange]);
+
+  useEffect(() => {
     return () => {
       cancelVoiceRecording();
+      onVoiceRecordingChangeRef.current(false);
     };
   }, [conversationId]);
 
@@ -4139,6 +4283,7 @@ function ConversationComposer({
     clearVoiceTimers();
     stopVoiceTracks();
     setRecording(false);
+    onVoiceRecordingChangeRef.current(false);
     mediaRecorderRef.current = null;
     stoppingVoiceRef.current = false;
 
@@ -4272,6 +4417,7 @@ function ConversationComposer({
       };
       recorder.onerror = () => {
         setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
+        onVoiceRecordingChangeRef.current(false);
         finishRecording(true);
       };
       recorder.onstop = () => {
@@ -4280,6 +4426,7 @@ function ConversationComposer({
 
       recorder.start();
       setRecording(true);
+      onVoiceRecordingChangeRef.current(true);
       recordingTimerRef.current = window.setInterval(() => {
         if (!recordingStartedAtRef.current) return;
         setVoiceSeconds(
@@ -4296,6 +4443,7 @@ function ConversationComposer({
       clearVoiceTimers();
       stopVoiceTracks();
       setRecording(false);
+      onVoiceRecordingChangeRef.current(false);
       setVoiceError('Não foi possível acessar o microfone. Verifique a permissão do navegador.');
     }
   }
@@ -4514,6 +4662,7 @@ function ConversationComposer({
           rows={2}
           value={draft}
           onChange={(event) => onChange(event.target.value)}
+          onBlur={onBlur}
           onKeyDown={(event) => {
             if (event.key === 'Escape' && replyTarget) {
               event.preventDefault();

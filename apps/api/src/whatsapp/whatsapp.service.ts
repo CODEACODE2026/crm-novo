@@ -52,6 +52,7 @@ import {
   WHATSAPP_PROVIDER,
   type DownloadMediaType,
   type DownloadMediaInput,
+  type ChatPresenceInput,
   type SendTextInput,
   type WhatsAppProvider,
 } from './provider/whatsapp-provider';
@@ -72,6 +73,7 @@ import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-cont
 import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { SetWhatsAppConversationPresenceDto } from './dto/set-whatsapp-conversation-presence.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import {
   allowedWhatsAppReactionEmojis,
@@ -1429,6 +1431,73 @@ export class WhatsAppService {
         messageId: pending.id,
       });
     }
+  }
+
+  async setConversationPresence(id: string, dto: SetWhatsAppConversationPresenceDto) {
+    const state = dto.state;
+    const media = dto.media ?? undefined;
+
+    if (state !== 'composing' && state !== 'paused') {
+      throw new BadRequestException('Estado de presence WhatsApp invalido.');
+    }
+
+    if (media !== undefined && media !== 'audio') {
+      throw new BadRequestException('Midia de presence WhatsApp invalida.');
+    }
+
+    if (state === 'paused' && media !== undefined) {
+      throw new BadRequestException('Presence paused nao aceita midia.');
+    }
+
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      include: { whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    if (conversation.provider !== 'KIRAGO') {
+      throw new BadRequestException('Provider WhatsApp da conversa nao suportado para presence.');
+    }
+
+    if (!conversation.phoneNormalized) {
+      throw new BadRequestException('Conversa WhatsApp sem telefone disponivel.');
+    }
+
+    const connection = conversation.whatsAppConnection;
+
+    if (
+      connection.id !== conversation.whatsAppConnectionId ||
+      connection.provider !== conversation.provider
+    ) {
+      throw new BadRequestException('Conexao WhatsApp invalida para esta conversa.');
+    }
+
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+    }
+
+    const input: ChatPresenceInput = {
+      phone: conversation.phoneNormalized,
+      state,
+      ...(state === 'composing' && media === 'audio' ? { media: 'audio' } : {}),
+    };
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+
+    try {
+      await this.mapConnectionProviderError(connection, () =>
+        this.provider.setChatPresence(instanceToken, input),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `WhatsApp presence provider failed conversation=${conversation.id} connection=${connection.id} state=${state} media=${media ?? 'none'} message=${this.sanitizeError(error)}`,
+      );
+      return { success: false };
+    }
+
+    return { success: true };
   }
 
   async updateConversationMessageReaction(

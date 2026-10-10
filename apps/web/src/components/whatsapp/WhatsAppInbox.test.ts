@@ -704,6 +704,18 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-delete-confirm');
   });
 
+  it('keeps message actions outside the bubble so short messages stay compact', () => {
+    expect(whatsAppInboxSource).toContain('className={`conversation-message-actions');
+    expect(whatsAppInboxSource).toContain('{outbound ? actionRail : null}');
+    expect(whatsAppInboxSource).toContain('{!outbound ? actionRail : null}');
+    expect(globalStylesSource).toContain('.conversation-message-actions');
+    expect(globalStylesSource).toContain('flex: 0 0 auto;');
+    expect(globalStylesSource).toContain('pointer-events: none;');
+    expect(globalStylesSource).toContain('.conversation-bubble-row.outbound .conversation-bubble');
+    expect(globalStylesSource).toContain('.conversation-bubble-row.inbound .conversation-bubble');
+    expect(globalStylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
+  });
+
   it('auto-read only accepts active visible focused inbound message.created events', () => {
     expect(
       shouldAutoReadRealtimeMessage({

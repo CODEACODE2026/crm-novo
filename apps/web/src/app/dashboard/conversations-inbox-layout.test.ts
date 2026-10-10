@@ -1031,6 +1031,6 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversations-view.mobile-mode-chat .conversation-list-panel');
     expect(stylesSource).toContain('height: 100dvh;');
     expect(stylesSource).toContain('min-height: 0;');
-    expect(stylesSource).toContain('max-width: 88%;');
+    expect(stylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
   });
 });

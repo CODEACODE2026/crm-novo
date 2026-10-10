@@ -2778,6 +2778,9 @@ a {
 
 .conversation-bubble-row {
   display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .conversation-bubble-row.target-highlight .conversation-bubble {
@@ -2787,6 +2790,10 @@ a {
 
 .conversation-bubble-row.outbound {
   justify-content: flex-end;
+}
+
+.conversation-bubble-row.inbound {
+  justify-content: flex-start;
 }
 
 .conversation-bubble {
@@ -2818,53 +2825,66 @@ a {
   white-space: pre-wrap;
 }
 
-.conversation-reply-action {
-  position: absolute;
-  top: 6px;
-  right: 6px;
+.conversation-message-actions {
+  position: relative;
+  z-index: 12;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.conversation-message-actions.inbound {
+  order: 2;
+}
+
+.conversation-message-actions.outbound {
+  order: 1;
+}
+
+.conversation-bubble-row.inbound .conversation-bubble {
+  order: 1;
+}
+
+.conversation-bubble-row.outbound .conversation-bubble {
+  order: 2;
+}
+
+.conversation-bubble-row:hover .conversation-message-actions,
+.conversation-bubble-row:focus-within .conversation-message-actions,
+.conversation-message-actions:has([aria-expanded='true']) {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.conversation-reaction-action-wrap {
+  position: relative;
+  z-index: 8;
+}
+
+.conversation-delete-action-wrap {
+  position: relative;
+  z-index: 9;
+}
+
+.conversation-reply-action,
+.conversation-reaction-action {
   display: inline-grid;
   width: 28px;
   height: 28px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  color: var(--text-secondary);
-  cursor: pointer;
-  opacity: 0;
-  box-shadow: 0 8px 18px rgb(0 0 0 / 12%);
-  transition:
-    background 0.15s ease,
-    opacity 0.15s ease,
-    transform 0.15s ease,
-    color 0.15s ease;
-}
-
-.conversation-reaction-action-wrap {
-  position: absolute;
-  top: 6px;
-  right: 40px;
-  z-index: 8;
-}
-
-.conversation-delete-action-wrap {
-  position: absolute;
-  top: 6px;
-  right: 74px;
-  z-index: 9;
-}
-
-.conversation-reaction-action {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
-  opacity: 0;
   backdrop-filter: blur(10px);
   box-shadow: 0 10px 24px rgb(15 23 42 / 16%);
   transition:
@@ -2878,15 +2898,14 @@ a {
 
 .conversation-delete-action {
   display: inline-grid;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
-  opacity: 0;
   backdrop-filter: blur(10px);
   box-shadow: 0 10px 24px rgb(15 23 42 / 16%);
   transition:
@@ -2896,17 +2915,6 @@ a {
     opacity 0.15s ease,
     transform 0.15s ease,
     color 0.15s ease;
-}
-
-.conversation-bubble:hover .conversation-reply-action,
-.conversation-bubble:hover .conversation-reaction-action,
-.conversation-bubble:hover .conversation-delete-action,
-.conversation-reply-action:focus-visible,
-.conversation-reaction-action:focus-visible,
-.conversation-delete-action:focus-visible,
-.conversation-reaction-action[aria-expanded='true'],
-.conversation-delete-action[aria-expanded='true'] {
-  opacity: 1;
 }
 
 .conversation-reply-action:hover,
@@ -2927,8 +2935,9 @@ a {
 
 .conversation-delete-confirm {
   position: absolute;
-  top: 36px;
-  right: 0;
+  top: 34px;
+  right: auto;
+  left: 0;
   width: 190px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: var(--radius-md);
@@ -2936,6 +2945,11 @@ a {
   box-shadow: var(--shadow-lg);
   color: var(--text);
   padding: 10px;
+}
+
+.conversation-message-actions.inbound .conversation-delete-confirm {
+  right: 0;
+  left: auto;
 }
 
 .conversation-delete-confirm span {
@@ -12771,7 +12785,18 @@ tbody tr:hover,
   }
 
   .conversation-bubble {
-    max-width: 88%;
+    max-width: min(88%, calc(100% - 100px));
+  }
+
+  .conversation-message-actions {
+    opacity: 0.86;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  .conversation-message-actions:focus-within,
+  .conversation-message-actions:has([aria-expanded='true']) {
+    opacity: 1;
   }
 
   .conversation-quote {
@@ -12780,7 +12805,7 @@ tbody tr:hover,
   }
 
   .conversation-bubble.has-image-media {
-    max-width: 92%;
+    max-width: min(92%, calc(100% - 100px));
     padding: 3px;
   }
 

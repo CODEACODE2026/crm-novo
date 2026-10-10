@@ -3036,6 +3036,86 @@ function ConversationBubble({
   const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
+  const actionRail = (
+    <div
+      className={`conversation-message-actions ${outbound ? 'outbound' : 'inbound'}`}
+      aria-label="Acoes da mensagem"
+    >
+      <button
+        className="conversation-reply-action"
+        type="button"
+        title="Responder"
+        aria-label="Responder mensagem"
+        onClick={() => onReply(message)}
+      >
+        <Reply aria-hidden="true" size={14} />
+      </button>
+      {deleteEligible ? (
+        <div className="conversation-delete-action-wrap">
+          <button
+            className="conversation-delete-action"
+            type="button"
+            title="Apagar"
+            aria-label="Apagar mensagem"
+            aria-expanded={deleteConfirmOpen}
+            disabled={deleting}
+            onClick={() => onDeleteConfirmChange(deleteConfirmOpen ? null : message.id)}
+          >
+            {deleting ? (
+              <Loader2 aria-hidden="true" size={14} />
+            ) : (
+              <Trash2 aria-hidden="true" size={14} />
+            )}
+          </button>
+          {deleteConfirmOpen ? (
+            <div className="conversation-delete-confirm" role="dialog" aria-label="Apagar mensagem">
+              <span>Apagar esta mensagem?</span>
+              <div>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => onDeleteConfirmChange(null)}
+                >
+                  Cancelar
+                </button>
+                <button type="button" disabled={deleting} onClick={() => onDelete(message)}>
+                  {deleting ? 'Apagando...' : 'Apagar'}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {!message.deleted ? (
+        <div className="conversation-reaction-action-wrap">
+          <button
+            ref={reactionTriggerRef}
+            className="conversation-reaction-action"
+            type="button"
+            title="Reagir"
+            aria-label="Reagir à mensagem"
+            aria-expanded={reactionPickerOpen}
+            disabled={reacting}
+            onClick={() => onReactionPickerChange(reactionPickerOpen ? null : message.id)}
+          >
+            {reacting ? (
+              <Loader2 aria-hidden="true" size={14} />
+            ) : (
+              <SmilePlus aria-hidden="true" size={14} />
+            )}
+          </button>
+          <ConversationReactionPickerPortal
+            message={message}
+            open={reactionPickerOpen}
+            reacting={reacting}
+            triggerRef={reactionTriggerRef}
+            onClose={() => onReactionPickerChange(null)}
+            onReaction={onReaction}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <article
@@ -3044,88 +3124,12 @@ function ConversationBubble({
       }`}
       data-message-id={message.id}
     >
+      {outbound ? actionRail : null}
       <div
         className={`conversation-bubble ${outbound ? 'outbound' : 'inbound'} ${
           hasAvailableImage ? 'has-image-media' : ''
         }`}
       >
-        <button
-          className="conversation-reply-action"
-          type="button"
-          title="Responder"
-          aria-label="Responder mensagem"
-          onClick={() => onReply(message)}
-        >
-          <Reply aria-hidden="true" size={14} />
-        </button>
-        {deleteEligible ? (
-          <div className="conversation-delete-action-wrap">
-            <button
-              className="conversation-delete-action"
-              type="button"
-              title="Apagar"
-              aria-label="Apagar mensagem"
-              aria-expanded={deleteConfirmOpen}
-              disabled={deleting}
-              onClick={() => onDeleteConfirmChange(deleteConfirmOpen ? null : message.id)}
-            >
-              {deleting ? (
-                <Loader2 aria-hidden="true" size={14} />
-              ) : (
-                <Trash2 aria-hidden="true" size={14} />
-              )}
-            </button>
-            {deleteConfirmOpen ? (
-              <div
-                className="conversation-delete-confirm"
-                role="dialog"
-                aria-label="Apagar mensagem"
-              >
-                <span>Apagar esta mensagem?</span>
-                <div>
-                  <button
-                    type="button"
-                    disabled={deleting}
-                    onClick={() => onDeleteConfirmChange(null)}
-                  >
-                    Cancelar
-                  </button>
-                  <button type="button" disabled={deleting} onClick={() => onDelete(message)}>
-                    {deleting ? 'Apagando...' : 'Apagar'}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {!message.deleted ? (
-          <div className="conversation-reaction-action-wrap">
-            <button
-              ref={reactionTriggerRef}
-              className="conversation-reaction-action"
-              type="button"
-              title="Reagir"
-              aria-label="Reagir à mensagem"
-              aria-expanded={reactionPickerOpen}
-              disabled={reacting}
-              onClick={() => onReactionPickerChange(reactionPickerOpen ? null : message.id)}
-            >
-              {reacting ? (
-                <Loader2 aria-hidden="true" size={14} />
-              ) : (
-                <SmilePlus aria-hidden="true" size={14} />
-              )}
-            </button>
-            <ConversationReactionPickerPortal
-              message={message}
-              open={reactionPickerOpen}
-              reacting={reacting}
-              triggerRef={reactionTriggerRef}
-              onClose={() => onReactionPickerChange(null)}
-              onReaction={onReaction}
-            />
-          </div>
-        ) : null}
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
         {message.deleted ? (
           <p className="conversation-message-deleted">Mensagem apagada</p>
@@ -3172,6 +3176,7 @@ function ConversationBubble({
           </div>
         ) : null}
       </div>
+      {!outbound ? actionRail : null}
     </article>
   );
 }

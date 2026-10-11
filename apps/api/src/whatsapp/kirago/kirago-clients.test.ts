@@ -10,12 +10,12 @@ describe('Kirago clients', () => {
       { request } as never,
     );
 
-    await client.createUser({ name: 'CRM', token: 'instance-token', events: 'Message' });
+    await client.createUser({ name: 'CRM', token: 'instance-token', events: ['Message'] });
 
     expect(request).toHaveBeenCalledWith('/admin/users', {
       method: 'POST',
       headers: { Authorization: 'Bearer admin-token' },
-      body: { name: 'CRM', token: 'instance-token', events: 'Message' },
+      body: { name: 'CRM', token: 'instance-token', events: ['Message'] },
       authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
     });
   });
@@ -373,7 +373,31 @@ describe('Kirago clients', () => {
       body: {
         webhook: 'https://crm.example.com/whatsapp/webhook/kirago',
         events: ['Message'],
-        active: true,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
+  it('updates the instance webhook through the Kirago webhook endpoint', async () => {
+    const request = vi.fn().mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.example.com/whatsapp/webhook/kirago' },
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.updateWebhook(
+      'instance-token',
+      'https://crm.example.com/whatsapp/webhook/kirago',
+      ['Message', 'ReadReceipt', 'ChatPresence'],
+    );
+
+    expect(request).toHaveBeenCalledWith('/webhook', {
+      method: 'PUT',
+      headers: { token: 'instance-token' },
+      body: {
+        webhook: 'https://crm.example.com/whatsapp/webhook/kirago',
+        events: ['Message', 'ReadReceipt', 'ChatPresence'],
+        Active: true,
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

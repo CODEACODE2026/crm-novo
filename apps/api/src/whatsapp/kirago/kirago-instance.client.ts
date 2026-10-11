@@ -34,7 +34,9 @@ export type KiragoWebhookData = {
   WebhookURL?: string;
   events?: string[];
   Events?: string[];
+  subscribe?: string[];
   active?: boolean;
+  Active?: boolean;
 };
 
 export type KiragoSendTextData = {
@@ -108,7 +110,7 @@ export type KiragoPresenceData = {
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
 
-  connect(instanceToken: string, events: string[]) {
+  connect(instanceToken: string, events: readonly string[]) {
     return this.http.request<KiragoEnvelope<unknown>>('/session/connect', {
       method: 'POST',
       headers: { token: instanceToken },
@@ -148,17 +150,26 @@ export class KiragoInstanceClient {
   }
 
   getWebhook(instanceToken: string) {
-    return this.http.request<KiragoEnvelope<KiragoWebhookData>>('/webhook', {
+    return this.http.request<KiragoEnvelope<KiragoWebhookData | KiragoWebhookData[]>>('/webhook', {
       headers: { token: instanceToken },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   }
 
-  configureWebhook(instanceToken: string, webhook: string, events: string[]) {
+  configureWebhook(instanceToken: string, webhook: string, events: readonly string[]) {
     return this.http.request<KiragoEnvelope<KiragoWebhookData>>('/webhook', {
       method: 'POST',
       headers: { token: instanceToken },
-      body: { webhook, events, active: true },
+      body: { webhook, events },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  updateWebhook(instanceToken: string, webhook: string, events: readonly string[]) {
+    return this.http.request<KiragoEnvelope<KiragoWebhookData>>('/webhook', {
+      method: 'PUT',
+      headers: { token: instanceToken },
+      body: { webhook, events, Active: true },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   }

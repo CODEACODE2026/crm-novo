@@ -85,8 +85,9 @@ import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
+import { requiredWhatsAppProviderEvents } from './provider/whatsapp-provider';
 
-const providerEvents = ['Message', 'ReadReceipt', 'ChatPresence'];
+const providerEvents = requiredWhatsAppProviderEvents;
 const messagePreviewLimit = 80;
 const quotedTextLimit = 240;
 const pageSizeLimit = 100;

@@ -7,14 +7,14 @@ export type KiragoCreateUserPayload = {
   name: string;
   token: string;
   webhook?: string;
-  events?: string;
+  events?: readonly string[];
 };
 
 export type KiragoUserData = {
   id?: string;
   name?: string;
   webhook?: string;
-  events?: string;
+  events?: string | string[];
   connected?: boolean;
   loggedIn?: boolean;
   jid?: string;

@@ -8,7 +8,7 @@ export type ProvisionConnectionInput = {
   name: string;
   instanceToken: string;
   webhookUrl: string;
-  events: string[];
+  events: readonly string[];
 };
 
 export type ProvisionConnectionResult = {
@@ -152,7 +152,11 @@ export interface WhatsAppProvider {
   getStatus(instanceToken: string): Promise<ProviderStatus>;
   getQrCode(instanceToken: string): Promise<string | null>;
   getWebhook(instanceToken: string): Promise<unknown>;
-  configureWebhook(instanceToken: string, webhookUrl: string, events: string[]): Promise<void>;
+  configureWebhook(
+    instanceToken: string,
+    webhookUrl: string,
+    events: readonly string[],
+  ): Promise<void>;
   sendText(instanceToken: string, input: SendTextInput): Promise<SendTextResult>;
   sendImage(instanceToken: string, input: SendImageInput): Promise<SendImageResult>;
   sendDocument(instanceToken: string, input: SendDocumentInput): Promise<SendDocumentResult>;
@@ -169,3 +173,4 @@ export interface WhatsAppProvider {
 }
 
 export const WHATSAPP_PROVIDER = Symbol('WHATSAPP_PROVIDER');
+export const requiredWhatsAppProviderEvents = ['Message', 'ReadReceipt', 'ChatPresence'] as const;

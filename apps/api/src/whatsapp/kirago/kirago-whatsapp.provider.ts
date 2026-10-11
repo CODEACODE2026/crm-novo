@@ -21,8 +21,8 @@ import type {
   SendVideoInput,
   WhatsAppProvider,
 } from '../provider/whatsapp-provider';
+import { requiredWhatsAppProviderEvents } from '../provider/whatsapp-provider';
 
-const defaultEvents = ['Message', 'ReadReceipt'];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 @Injectable()
@@ -45,7 +45,7 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       name: input.name,
       token: input.instanceToken,
       webhook: input.webhookUrl,
-      events: input.events[0] ?? 'Message',
+      events: input.events.length ? input.events : requiredWhatsAppProviderEvents,
     });
 
     return {
@@ -86,7 +86,7 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
   }
 
   async connect(instanceToken: string) {
-    await this.instanceClient.connect(instanceToken, defaultEvents);
+    await this.instanceClient.connect(instanceToken, requiredWhatsAppProviderEvents);
   }
 
   async disconnect(instanceToken: string) {
@@ -131,8 +131,40 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     return this.instanceClient.getWebhook(instanceToken);
   }
 
-  async configureWebhook(instanceToken: string, webhookUrl: string, events: string[]) {
+  async configureWebhook(instanceToken: string, webhookUrl: string, events: readonly string[]) {
+    const current = await this.instanceClient.getWebhook(instanceToken).catch((error) => {
+      if (error instanceof KiragoProviderError && error.code === 'KIRAGO_RESOURCE_NOT_FOUND') {
+        return null;
+      }
+
+      throw error;
+    });
+    const hasExistingWebhook = Boolean(this.webhookUrlFromResponse(current?.data));
+
+    if (hasExistingWebhook) {
+      await this.instanceClient.updateWebhook(instanceToken, webhookUrl, events);
+      return;
+    }
+
     await this.instanceClient.configureWebhook(instanceToken, webhookUrl, events);
+  }
+
+  private webhookUrlFromResponse(data: unknown): string | null {
+    if (Array.isArray(data)) {
+      return data.map((item) => this.webhookUrlFromResponse(item)).find(Boolean) ?? null;
+    }
+
+    const record = this.asRecord(data);
+    const nestedData = record?.data;
+    const nestedWebhook: string | null =
+      nestedData && nestedData !== data ? this.webhookUrlFromResponse(nestedData) : null;
+    if (nestedWebhook) {
+      return nestedWebhook;
+    }
+
+    const value = record?.WebhookURL ?? record?.webhookurl ?? record?.webhook;
+
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
   async sendText(instanceToken: string, input: SendTextInput) {

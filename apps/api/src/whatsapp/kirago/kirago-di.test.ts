@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KiragoAdminClient } from './kirago-admin.client';
 import { KiragoHttpClient } from './kirago-http.client';
 import { KiragoInstanceClient } from './kirago-instance.client';
+import { KiragoProviderError } from './kirago-provider.error';
 import { KiragoWhatsAppProvider } from './kirago-whatsapp.provider';
 
 @Module({
@@ -46,14 +47,14 @@ describe('Kirago dependency injection', () => {
       name: 'CRM Novo',
       instanceToken: 'instance-token',
       webhookUrl: 'https://crm.test/webhook',
-      events: ['Message'],
+      events: ['Message', 'ReadReceipt', 'ChatPresence'],
     });
 
     expect(createUser).toHaveBeenCalledWith({
       name: 'CRM Novo',
       token: 'instance-token',
       webhook: 'https://crm.test/webhook',
-      events: 'Message',
+      events: ['Message', 'ReadReceipt', 'ChatPresence'],
     });
     expect(result).toEqual({ providerUserId: 'kirago-user-id', webhookConfigured: true });
   });
@@ -74,6 +75,185 @@ describe('Kirago dependency injection', () => {
 
     expect(getUser).toHaveBeenCalledWith('kirago-user-id');
     expect(result).toEqual({ exists: true });
+  });
+
+  it('connects with the full CRM event subscription including ChatPresence', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const connect = vi.spyOn(instanceClient, 'connect').mockResolvedValue({ success: true });
+
+    await provider.connect('instance-token');
+
+    expect(connect).toHaveBeenCalledWith('instance-token', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+  });
+
+  it('updates an existing Kirago webhook instead of creating duplicates', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'getWebhook').mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.test/webhook' },
+    });
+    const configureWebhook = vi.spyOn(instanceClient, 'configureWebhook');
+    const updateWebhook = vi.spyOn(instanceClient, 'updateWebhook').mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.test/webhook' },
+    });
+
+    await provider.configureWebhook('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+
+    expect(configureWebhook).not.toHaveBeenCalled();
+    expect(updateWebhook).toHaveBeenCalledWith('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+  });
+
+  it('updates when Kirago returns webhook data in a list envelope', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'getWebhook').mockResolvedValue({
+      success: true,
+      data: [{ webhook: 'https://crm.test/webhook', subscribe: ['Message'] }],
+    });
+    const configureWebhook = vi.spyOn(instanceClient, 'configureWebhook');
+    const updateWebhook = vi.spyOn(instanceClient, 'updateWebhook').mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.test/webhook' },
+    });
+
+    await provider.configureWebhook('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+
+    expect(configureWebhook).not.toHaveBeenCalled();
+    expect(updateWebhook).toHaveBeenCalledWith('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+  });
+
+  it('creates a Kirago webhook when the instance has no configured webhook yet', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'getWebhook').mockResolvedValue({ success: true, data: {} });
+    const configureWebhook = vi.spyOn(instanceClient, 'configureWebhook').mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.test/webhook' },
+    });
+    const updateWebhook = vi.spyOn(instanceClient, 'updateWebhook');
+
+    await provider.configureWebhook('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+
+    expect(updateWebhook).not.toHaveBeenCalled();
+    expect(configureWebhook).toHaveBeenCalledWith('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+  });
+
+  it('does not treat arbitrary URL objects as an existing Kirago webhook', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'getWebhook').mockResolvedValue({
+      success: true,
+      data: { url: 'https://crm.test/not-a-webhook-contract' } as never,
+    });
+    const configureWebhook = vi.spyOn(instanceClient, 'configureWebhook').mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.test/webhook' },
+    });
+    const updateWebhook = vi.spyOn(instanceClient, 'updateWebhook');
+
+    await provider.configureWebhook('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+
+    expect(updateWebhook).not.toHaveBeenCalled();
+    expect(configureWebhook).toHaveBeenCalledWith('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+  });
+
+  it('creates a Kirago webhook only when GET returns resource not found', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'getWebhook').mockRejectedValue(
+      new KiragoProviderError('KIRAGO_RESOURCE_NOT_FOUND', 'Webhook nao encontrado.'),
+    );
+    const configureWebhook = vi.spyOn(instanceClient, 'configureWebhook').mockResolvedValue({
+      success: true,
+      data: { WebhookURL: 'https://crm.test/webhook' },
+    });
+    const updateWebhook = vi.spyOn(instanceClient, 'updateWebhook');
+
+    await provider.configureWebhook('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+
+    expect(updateWebhook).not.toHaveBeenCalled();
+    expect(configureWebhook).toHaveBeenCalledWith('instance-token', 'https://crm.test/webhook', [
+      'Message',
+      'ReadReceipt',
+      'ChatPresence',
+    ]);
+  });
+
+  it('does not create a Kirago webhook when GET fails unexpectedly', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const error = new KiragoProviderError('KIRAGO_TIMEOUT', 'Kirago timeout.');
+    vi.spyOn(instanceClient, 'getWebhook').mockRejectedValue(error);
+    const configureWebhook = vi.spyOn(instanceClient, 'configureWebhook');
+    const updateWebhook = vi.spyOn(instanceClient, 'updateWebhook');
+
+    await expect(
+      provider.configureWebhook('instance-token', 'https://crm.test/webhook', [
+        'Message',
+        'ReadReceipt',
+        'ChatPresence',
+      ]),
+    ).rejects.toBe(error);
+
+    expect(updateWebhook).not.toHaveBeenCalled();
+    expect(configureWebhook).not.toHaveBeenCalled();
   });
 
   it('normalizes lowercase Kirago v1.11 status payloads', async () => {

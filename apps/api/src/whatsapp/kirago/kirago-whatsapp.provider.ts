@@ -11,6 +11,7 @@ import type {
   ChatPresenceInput,
   DeleteMessageInput,
   ProvisionConnectionInput,
+  ResolveUserLidResult,
   RemoteConnectionLookupInput,
   SendButtonsInput,
   SendDocumentInput,
@@ -350,6 +351,26 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
         'Falha ao atualizar presence na Kirago.',
         response.code,
       );
+    }
+  }
+
+  async resolveUserLid(instanceToken: string, phone: string): Promise<ResolveUserLidResult> {
+    try {
+      const response = await this.instanceClient.userLid(instanceToken, phone);
+      const data = response.data;
+      const jid = this.stringValue(data?.jid ?? data?.JID);
+      const lid = this.stringValue(data?.lid ?? data?.LID);
+
+      return {
+        ...(jid ? { jid } : {}),
+        ...(lid ? { lid } : {}),
+      };
+    } catch (error) {
+      if (error instanceof KiragoProviderError && error.code === 'KIRAGO_RESOURCE_NOT_FOUND') {
+        return {};
+      }
+
+      throw error;
     }
   }
 

@@ -106,6 +106,13 @@ export type KiragoPresenceData = {
   Details?: unknown;
 };
 
+export type KiragoUserLidData = {
+  jid?: string;
+  JID?: string;
+  lid?: string;
+  LID?: string;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -292,6 +299,16 @@ export class KiragoInstanceClient {
       body: { Phone: phone },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
+  }
+
+  userLid(instanceToken: string, phone: string) {
+    return this.http.request<KiragoEnvelope<KiragoUserLidData>>(
+      `/user/lid/${encodeURIComponent(phone)}`,
+      {
+        headers: { token: instanceToken },
+        authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+      },
+    );
   }
 
   markRead(

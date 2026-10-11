@@ -143,6 +143,11 @@ export type ChatPresenceInput = {
   media?: 'audio';
 };
 
+export type ResolveUserLidResult = {
+  jid?: string;
+  lid?: string;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -168,6 +173,7 @@ export interface WhatsAppProvider {
   sendReaction(instanceToken: string, input: SendReactionInput): Promise<void>;
   deleteMessage(instanceToken: string, input: DeleteMessageInput): Promise<void>;
   setChatPresence(instanceToken: string, input: ChatPresenceInput): Promise<void>;
+  resolveUserLid(instanceToken: string, phone: string): Promise<ResolveUserLidResult>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

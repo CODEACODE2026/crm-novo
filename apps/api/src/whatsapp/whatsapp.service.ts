@@ -363,6 +363,7 @@ type InboundConversationPresenceState = 'typing' | 'recording_audio';
 type ConversationPresenceState = InboundConversationPresenceState | null;
 const chatPresenceLidConversationCacheTtlMs = 24 * 60 * 60 * 1000;
 const chatPresenceLidConversationCacheMaxEntries = 1000;
+const chatPresenceRemoteLidLookupConversationLimit = 10;
 
 @Injectable()
 export class WhatsAppService {
@@ -380,6 +381,11 @@ export class WhatsAppService {
     string,
     { conversationId: string; expiresAt: number }
   >();
+  private readonly chatPresencePhoneLidCache = new Map<
+    string,
+    { lid: string; expiresAt: number }
+  >();
+  private readonly chatPresenceRemoteLidLookupInFlight = new Map<string, Promise<string | null>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -3177,7 +3183,7 @@ export class WhatsAppService {
       return { processed: false, reason: 'connection_not_found' };
     }
 
-    const conversation = await this.findConversationForChatPresence(connection.id, normalized);
+    const conversation = await this.findConversationForChatPresence(connection, normalized);
 
     if (!conversation) {
       this.logger.log('Kirago chat_presence_conversation_not_found');
@@ -4075,7 +4081,7 @@ export class WhatsAppService {
   }
 
   private async findConversationForChatPresence(
-    connectionId: string,
+    connection: WhatsAppConnection,
     normalized: NormalizedWhatsAppChatPresence,
   ) {
     const phones = this.chatPresencePhoneCandidates(normalized);
@@ -4083,7 +4089,7 @@ export class WhatsAppService {
     if (phones.length) {
       const conversation = await this.prisma.whatsAppConversation.findFirst({
         where: {
-          whatsAppConnectionId: connectionId,
+          whatsAppConnectionId: connection.id,
           phoneNormalized: { in: phones },
         },
         orderBy: { updatedAt: 'desc' },
@@ -4095,10 +4101,7 @@ export class WhatsAppService {
       }
     }
 
-    const conversationId = await this.findConversationIdForChatPresenceLid(
-      connectionId,
-      normalized,
-    );
+    const conversationId = await this.findConversationIdForChatPresenceLid(connection, normalized);
 
     return conversationId ? { id: conversationId } : null;
   }
@@ -4134,7 +4137,7 @@ export class WhatsAppService {
   }
 
   private async findConversationIdForChatPresenceLid(
-    connectionId: string,
+    connection: WhatsAppConnection,
     normalized: NormalizedWhatsAppChatPresence,
   ) {
     const lids = this.chatPresenceLidCandidates(normalized);
@@ -4143,7 +4146,7 @@ export class WhatsAppService {
       return null;
     }
 
-    const cached = this.getCachedChatPresenceLidConversation(connectionId, lids);
+    const cached = this.getCachedChatPresenceLidConversation(connection.id, lids);
     if (cached) {
       return cached;
     }
@@ -4151,7 +4154,7 @@ export class WhatsAppService {
     const recentMessages = await this.prisma.whatsAppMessage.findMany({
       where: {
         provider: 'KIRAGO',
-        whatsAppConnectionId: connectionId,
+        whatsAppConnectionId: connection.id,
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -4164,9 +4167,92 @@ export class WhatsAppService {
     for (const message of recentMessages) {
       if (this.rawMetadataHasProviderLid(message.rawMetadata, lids)) {
         for (const lid of lids) {
-          this.cacheChatPresenceLidConversation(connectionId, lid, message.conversationId);
+          this.cacheChatPresenceLidConversation(connection.id, lid, message.conversationId);
         }
         return message.conversationId;
+      }
+    }
+
+    const lookupKey = this.chatPresenceRemoteLidLookupInFlightKey(connection.id, lids);
+    const inFlight = this.chatPresenceRemoteLidLookupInFlight.get(lookupKey);
+
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const lookup = this.findConversationIdForChatPresenceLidByProviderLookup(
+      connection,
+      lids,
+    ).finally(() => {
+      this.chatPresenceRemoteLidLookupInFlight.delete(lookupKey);
+    });
+    this.chatPresenceRemoteLidLookupInFlight.set(lookupKey, lookup);
+
+    return lookup;
+  }
+
+  private async findConversationIdForChatPresenceLidByProviderLookup(
+    connection: WhatsAppConnection,
+    lids: string[],
+  ) {
+    const candidates = await this.prisma.whatsAppConversation.findMany({
+      where: {
+        provider: 'KIRAGO',
+        whatsAppConnectionId: connection.id,
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: chatPresenceRemoteLidLookupConversationLimit,
+      select: {
+        id: true,
+        phoneNormalized: true,
+      },
+    });
+
+    if (!candidates.length) {
+      return null;
+    }
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+
+    for (const candidate of candidates) {
+      const phone = candidate.phoneNormalized;
+
+      if (!phone) {
+        continue;
+      }
+
+      const cachedLid = this.getCachedChatPresencePhoneLid(connection.id, phone);
+      if (cachedLid) {
+        if (lids.includes(cachedLid)) {
+          this.cacheChatPresenceLidConversation(connection.id, cachedLid, candidate.id);
+          return candidate.id;
+        }
+        continue;
+      }
+
+      let resolvedLid: string | null = null;
+
+      try {
+        const resolved = await this.provider.resolveUserLid(instanceToken, phone);
+        resolvedLid = this.normalizeProviderLid(resolved.lid);
+      } catch (error) {
+        this.logger.warn(
+          `Kirago chat_presence lid_lookup_failed connection=${connection.id} phone=${this.maskPhone(
+            phone,
+          )} code=${this.safeKiragoProviderCode(error)} message=${this.sanitizeError(error)}`,
+        );
+        return null;
+      }
+
+      if (!resolvedLid) {
+        continue;
+      }
+
+      this.cacheChatPresencePhoneLid(connection.id, phone, resolvedLid);
+
+      if (lids.includes(resolvedLid)) {
+        this.cacheChatPresenceLidConversation(connection.id, resolvedLid, candidate.id);
+        return candidate.id;
       }
     }
 
@@ -4255,9 +4341,54 @@ export class WhatsAppService {
     }
   }
 
+  private getCachedChatPresencePhoneLid(connectionId: string, phone: string) {
+    const key = this.chatPresencePhoneLidCacheKey(connectionId, phone);
+    const cached = this.chatPresencePhoneLidCache.get(key);
+
+    if (!cached) {
+      return null;
+    }
+
+    if (cached.expiresAt <= Date.now()) {
+      this.chatPresencePhoneLidCache.delete(key);
+      return null;
+    }
+
+    return cached.lid;
+  }
+
+  private cacheChatPresencePhoneLid(connectionId: string, phone: string, lid: string) {
+    const normalizedLid = this.normalizeProviderLid(lid);
+
+    if (!phone || !normalizedLid) {
+      return;
+    }
+
+    this.pruneChatPresencePhoneLidCache();
+    this.chatPresencePhoneLidCache.set(this.chatPresencePhoneLidCacheKey(connectionId, phone), {
+      lid: normalizedLid,
+      expiresAt: Date.now() + chatPresenceLidConversationCacheTtlMs,
+    });
+
+    if (this.chatPresencePhoneLidCache.size > chatPresenceLidConversationCacheMaxEntries) {
+      const oldestKey = this.chatPresencePhoneLidCache.keys().next().value;
+      if (oldestKey) {
+        this.chatPresencePhoneLidCache.delete(oldestKey);
+      }
+    }
+  }
+
   private chatPresenceLidCacheKey(connectionId: string, lid: string) {
     const normalizedLid = this.normalizeProviderLid(lid);
     return `${connectionId}:${normalizedLid ?? lid}`;
+  }
+
+  private chatPresencePhoneLidCacheKey(connectionId: string, phone: string) {
+    return `${connectionId}:${phone}`;
+  }
+
+  private chatPresenceRemoteLidLookupInFlightKey(connectionId: string, lids: string[]) {
+    return `${connectionId}:${lids.join('|')}`;
   }
 
   private pruneChatPresenceLidConversationCache() {
@@ -4266,6 +4397,16 @@ export class WhatsAppService {
     for (const [key, value] of this.chatPresenceLidConversationCache) {
       if (value.expiresAt <= now) {
         this.chatPresenceLidConversationCache.delete(key);
+      }
+    }
+  }
+
+  private pruneChatPresencePhoneLidCache() {
+    const now = Date.now();
+
+    for (const [key, value] of this.chatPresencePhoneLidCache) {
+      if (value.expiresAt <= now) {
+        this.chatPresencePhoneLidCache.delete(key);
       }
     }
   }
@@ -4293,6 +4434,10 @@ export class WhatsAppService {
 
     const raw = value.trim().toLowerCase();
     return raw && /@lid$/i.test(raw) ? raw : null;
+  }
+
+  private safeKiragoProviderCode(error: unknown) {
+    return error instanceof KiragoProviderError ? error.code : 'unknown';
   }
 
   private tryNormalizeProviderJidPhone(value: string | null) {

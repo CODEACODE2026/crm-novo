@@ -273,6 +273,25 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('resolves a user LID with the instance token in the URL contract', async () => {
+    const request = vi.fn().mockResolvedValue({
+      success: true,
+      data: { jid: '5511999999999@s.whatsapp.net', lid: '1234567890@lid' },
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    const result = await client.userLid('instance-token', '5511999999999');
+
+    expect(result.data).toEqual({
+      jid: '5511999999999@s.whatsapp.net',
+      lid: '1234567890@lid',
+    });
+    expect(request).toHaveBeenCalledWith('/user/lid/5511999999999', {
+      headers: { token: 'instance-token' },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('sends PIX buttons with the instance bearer token, not the admin token', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
     const client = new KiragoInstanceClient({ request } as never);

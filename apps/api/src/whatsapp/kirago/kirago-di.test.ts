@@ -93,6 +93,40 @@ describe('Kirago dependency injection', () => {
     ]);
   });
 
+  it('returns only jid and lid when resolving a user LID', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const userLid = vi.spyOn(instanceClient, 'userLid').mockResolvedValue({
+      success: true,
+      data: {
+        jid: '5511999999999@s.whatsapp.net',
+        lid: '1234567890@lid',
+      },
+    });
+
+    const result = await provider.resolveUserLid('instance-token', '5511999999999');
+
+    expect(userLid).toHaveBeenCalledWith('instance-token', '5511999999999');
+    expect(result).toEqual({
+      jid: '5511999999999@s.whatsapp.net',
+      lid: '1234567890@lid',
+    });
+  });
+
+  it('returns an empty LID lookup result when Kirago reports not found', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    vi.spyOn(instanceClient, 'userLid').mockRejectedValue(
+      new KiragoProviderError('KIRAGO_RESOURCE_NOT_FOUND', 'Recurso Kirago nao encontrado.', 404),
+    );
+
+    await expect(provider.resolveUserLid('instance-token', '5511999999999')).resolves.toEqual({});
+  });
+
   it('updates an existing Kirago webhook instead of creating duplicates', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

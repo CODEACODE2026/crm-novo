@@ -34,6 +34,10 @@ import type { WhatsAppConversation, WhatsAppConversationMessage } from '../../li
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
+const whatsAppRealtimeProviderSource = readFileSync(
+  join(currentDir, 'WhatsAppRealtimeProvider.tsx'),
+  'utf8',
+);
 const globalStylesSource = readFileSync(join(currentDir, '../../app/globals.css'), 'utf8');
 
 function conversation(
@@ -194,7 +198,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain("event.type === 'conversation.presence'");
     expect(whatsAppInboxSource).toContain('className="conversation-presence-label"');
     expect(globalStylesSource).toContain('.conversation-presence-label');
-    expect(whatsAppInboxSource).not.toContain('digitando...');
+    expect(whatsAppRealtimeProviderSource).toContain('digitando...');
   });
 
   it('classifies incoming composer files with the same media rules used by upload', () => {

@@ -359,6 +359,11 @@ type ResolvedWhatsAppReplyTarget = {
   quotedText: string;
 };
 
+type InboundConversationPresenceState = 'typing' | 'recording_audio';
+type ConversationPresenceState = InboundConversationPresenceState | null;
+const chatPresenceLidConversationCacheTtlMs = 24 * 60 * 60 * 1000;
+const chatPresenceLidConversationCacheMaxEntries = 1000;
+
 @Injectable()
 export class WhatsAppService {
   static readonly conversationMediaMaxBytes = defaultConversationMediaMaxBytes;
@@ -370,6 +375,10 @@ export class WhatsAppService {
   private readonly markReadInFlight = new Map<
     string,
     Promise<ReturnType<WhatsAppService['presentConversation']>>
+  >();
+  private readonly chatPresenceLidConversationCache = new Map<
+    string,
+    { conversationId: string; expiresAt: number }
   >();
 
   constructor(
@@ -437,7 +446,7 @@ export class WhatsAppService {
     }
   }
 
-  private emitConversationPresence(conversationId: string, state: 'recording_audio' | null) {
+  private emitConversationPresence(conversationId: string, state: ConversationPresenceState) {
     try {
       this.realtime?.emitConversationPresence(conversationId, state);
     } catch (error) {
@@ -3142,15 +3151,6 @@ export class WhatsAppService {
       return { processed: false, reason: 'ignored_self_presence' };
     }
 
-    if (normalized.state === 'composing' && normalized.media !== 'audio') {
-      this.logger.log(
-        `Kirago chat_presence unsupported_text_presence media=${
-          this.safeProbeNonSensitiveValue(normalized.media) ?? 'none'
-        }`,
-      );
-      return { processed: false, reason: 'unsupported_text_presence' };
-    }
-
     if (normalized.state !== 'composing' && normalized.state !== 'paused') {
       this.logger.log(
         `Kirago chat_presence unsupported_presence_state state=${
@@ -3158,6 +3158,17 @@ export class WhatsAppService {
         }`,
       );
       return { processed: false, reason: 'unsupported_presence_state' };
+    }
+
+    const presenceState = this.inboundConversationPresenceState(normalized);
+
+    if (normalized.state === 'composing' && presenceState === null) {
+      this.logger.log(
+        `Kirago chat_presence unsupported_presence_media media=${
+          this.safeProbeNonSensitiveValue(normalized.media) ?? 'none'
+        }`,
+      );
+      return { processed: false, reason: 'unsupported_presence_media' };
     }
 
     const connection = await this.findConnectionForWebhook(normalized);
@@ -3178,8 +3189,25 @@ export class WhatsAppService {
       return { processed: true, action: 'presence_cleared' };
     }
 
-    this.emitConversationPresence(conversation.id, 'recording_audio');
-    return { processed: true, action: 'presence_recording_audio' };
+    this.emitConversationPresence(conversation.id, presenceState);
+    return {
+      processed: true,
+      action: presenceState === 'typing' ? 'presence_typing' : 'presence_recording_audio',
+    };
+  }
+
+  private inboundConversationPresenceState(
+    normalized: NormalizedWhatsAppChatPresence,
+  ): InboundConversationPresenceState | null {
+    if (normalized.state !== 'composing') {
+      return null;
+    }
+
+    if (!normalized.media) {
+      return 'typing';
+    }
+
+    return normalized.media === 'audio' ? 'recording_audio' : null;
   }
 
   private reactionTextValue(source: Record<string, unknown> | null) {
@@ -3617,6 +3645,12 @@ export class WhatsAppService {
         });
 
         if (existingMessage) {
+          this.rememberChatPresenceLidConversation(
+            connection.id,
+            normalized,
+            existingMessage.conversationId,
+          );
+
           if (normalized.direction === 'OUTGOING') {
             const reconciled = await this.reconcileOutgoingConversationMessage(
               tx,
@@ -3645,6 +3679,7 @@ export class WhatsAppService {
           normalized,
           matchedClientId,
         });
+        this.rememberChatPresenceLidConversation(connection.id, normalized, conversation.id);
         const sentAt = normalized.messageTimestamp ?? normalized.receivedAt ?? new Date();
         const direction = normalized.direction === 'OUTGOING' ? 'OUTBOUND' : 'INBOUND';
         const messageType = this.toConversationMessageType(normalized.messageType);
@@ -4045,18 +4080,27 @@ export class WhatsAppService {
   ) {
     const phones = this.chatPresencePhoneCandidates(normalized);
 
-    if (!phones.length) {
-      return null;
+    if (phones.length) {
+      const conversation = await this.prisma.whatsAppConversation.findFirst({
+        where: {
+          whatsAppConnectionId: connectionId,
+          phoneNormalized: { in: phones },
+        },
+        orderBy: { updatedAt: 'desc' },
+        select: { id: true },
+      });
+
+      if (conversation) {
+        return conversation;
+      }
     }
 
-    return this.prisma.whatsAppConversation.findFirst({
-      where: {
-        whatsAppConnectionId: connectionId,
-        phoneNormalized: { in: phones },
-      },
-      orderBy: { updatedAt: 'desc' },
-      select: { id: true },
-    });
+    const conversationId = await this.findConversationIdForChatPresenceLid(
+      connectionId,
+      normalized,
+    );
+
+    return conversationId ? { id: conversationId } : null;
   }
 
   private chatPresencePhoneCandidates(normalized: NormalizedWhatsAppChatPresence) {
@@ -4087,6 +4131,168 @@ export class WhatsAppService {
     }
 
     return [...phones];
+  }
+
+  private async findConversationIdForChatPresenceLid(
+    connectionId: string,
+    normalized: NormalizedWhatsAppChatPresence,
+  ) {
+    const lids = this.chatPresenceLidCandidates(normalized);
+
+    if (!lids.length) {
+      return null;
+    }
+
+    const cached = this.getCachedChatPresenceLidConversation(connectionId, lids);
+    if (cached) {
+      return cached;
+    }
+
+    const recentMessages = await this.prisma.whatsAppMessage.findMany({
+      where: {
+        provider: 'KIRAGO',
+        whatsAppConnectionId: connectionId,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        conversationId: true,
+        rawMetadata: true,
+      },
+    });
+
+    for (const message of recentMessages) {
+      if (this.rawMetadataHasProviderLid(message.rawMetadata, lids)) {
+        for (const lid of lids) {
+          this.cacheChatPresenceLidConversation(connectionId, lid, message.conversationId);
+        }
+        return message.conversationId;
+      }
+    }
+
+    return null;
+  }
+
+  private chatPresenceLidCandidates(normalized: NormalizedWhatsAppChatPresence) {
+    const candidates =
+      normalized.isFromMe === true
+        ? [normalized.recipientAlt, normalized.chat, normalized.senderAlt, normalized.sender]
+        : [normalized.senderAlt, normalized.sender, normalized.chat, normalized.recipientAlt];
+    const lids = new Set<string>();
+
+    for (const candidate of candidates) {
+      const lid = this.normalizeProviderLid(candidate);
+
+      if (lid) {
+        lids.add(lid);
+      }
+    }
+
+    return [...lids];
+  }
+
+  private rememberChatPresenceLidConversation(
+    connectionId: string,
+    normalized: NormalizedWhatsAppMessage,
+    conversationId: string,
+  ) {
+    if (normalized.direction === 'OUTGOING' || normalized.isGroup) {
+      return;
+    }
+
+    for (const lid of normalized.providerJids?.lids ?? []) {
+      this.cacheChatPresenceLidConversation(connectionId, lid, conversationId);
+    }
+  }
+
+  private getCachedChatPresenceLidConversation(connectionId: string, lids: string[]) {
+    const now = Date.now();
+
+    for (const lid of lids) {
+      const key = this.chatPresenceLidCacheKey(connectionId, lid);
+      const cached = this.chatPresenceLidConversationCache.get(key);
+
+      if (!cached) {
+        continue;
+      }
+
+      if (cached.expiresAt <= now) {
+        this.chatPresenceLidConversationCache.delete(key);
+        continue;
+      }
+
+      return cached.conversationId;
+    }
+
+    return null;
+  }
+
+  private cacheChatPresenceLidConversation(
+    connectionId: string,
+    lid: string,
+    conversationId: string,
+  ) {
+    const normalizedLid = this.normalizeProviderLid(lid);
+
+    if (!normalizedLid) {
+      return;
+    }
+
+    this.pruneChatPresenceLidConversationCache();
+    this.chatPresenceLidConversationCache.set(
+      this.chatPresenceLidCacheKey(connectionId, normalizedLid),
+      {
+        conversationId,
+        expiresAt: Date.now() + chatPresenceLidConversationCacheTtlMs,
+      },
+    );
+
+    if (this.chatPresenceLidConversationCache.size > chatPresenceLidConversationCacheMaxEntries) {
+      const oldestKey = this.chatPresenceLidConversationCache.keys().next().value;
+      if (oldestKey) {
+        this.chatPresenceLidConversationCache.delete(oldestKey);
+      }
+    }
+  }
+
+  private chatPresenceLidCacheKey(connectionId: string, lid: string) {
+    const normalizedLid = this.normalizeProviderLid(lid);
+    return `${connectionId}:${normalizedLid ?? lid}`;
+  }
+
+  private pruneChatPresenceLidConversationCache() {
+    const now = Date.now();
+
+    for (const [key, value] of this.chatPresenceLidConversationCache) {
+      if (value.expiresAt <= now) {
+        this.chatPresenceLidConversationCache.delete(key);
+      }
+    }
+  }
+
+  private rawMetadataHasProviderLid(rawMetadata: Prisma.JsonValue | null, lids: string[]) {
+    const metadata = this.rawMetadataObject(rawMetadata);
+    if (metadata.isFromMe === true || metadata.isGroup === true) {
+      return false;
+    }
+
+    const providerJids = this.asRecord(metadata.providerJids);
+    const metadataLids = Array.isArray(providerJids?.lids)
+      ? providerJids.lids
+          .map((value) => this.normalizeProviderLid(value))
+          .filter((value): value is string => Boolean(value))
+      : [];
+
+    return metadataLids.some((lid) => lids.includes(lid));
+  }
+
+  private normalizeProviderLid(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const raw = value.trim().toLowerCase();
+    return raw && /@lid$/i.test(raw) ? raw : null;
   }
 
   private tryNormalizeProviderJidPhone(value: string | null) {
@@ -6289,6 +6495,12 @@ export class WhatsAppService {
       metadata.mediaDownload = normalized.mediaDownloadMetadata;
     }
 
+    if (normalized.providerJids?.lids.length) {
+      metadata.providerJids = {
+        lids: normalized.providerJids.lids,
+      };
+    }
+
     if (normalized.replyContext) {
       metadata.replyContext = {
         providerMessageId: normalized.replyContext.providerMessageId,
@@ -6334,15 +6546,52 @@ export class WhatsAppService {
       return { rawMetadata: next };
     }
 
-    if (!normalized.mediaDownloadMetadata || this.mediaDownloadFromRawMetadata(current)) {
+    const currentMetadata = this.rawMetadataObject(current);
+    const rawMetadata: Record<string, Prisma.JsonValue | Prisma.InputJsonValue> = {
+      ...currentMetadata,
+    };
+    let changed = false;
+
+    if (normalized.providerJids?.lids.length) {
+      const currentProviderJids = this.asRecord(currentMetadata.providerJids);
+      const currentLids = Array.isArray(currentProviderJids?.lids)
+        ? currentProviderJids.lids
+            .map((value) => this.normalizeProviderLid(value))
+            .filter((value): value is string => Boolean(value))
+        : [];
+      const lids = [
+        ...new Set([
+          ...currentLids,
+          ...normalized.providerJids.lids
+            .map((value) => this.normalizeProviderLid(value))
+            .filter((value): value is string => Boolean(value)),
+        ]),
+      ];
+
+      if (
+        lids.length &&
+        (currentLids.length !== lids.length ||
+          currentLids.some((lid, index) => lid !== lids[index]))
+      ) {
+        rawMetadata.providerJids = { ...currentProviderJids, lids };
+        changed = true;
+      }
+    }
+
+    if (
+      normalized.mediaDownloadMetadata &&
+      !Object.prototype.hasOwnProperty.call(currentMetadata, 'mediaDownload')
+    ) {
+      rawMetadata.mediaDownload = normalized.mediaDownloadMetadata;
+      changed = true;
+    }
+
+    if (!changed) {
       return {};
     }
 
     return {
-      rawMetadata: {
-        ...this.rawMetadataObject(current),
-        mediaDownload: normalized.mediaDownloadMetadata,
-      } as Prisma.InputJsonValue,
+      rawMetadata: rawMetadata as Prisma.InputJsonValue,
     };
   }
 

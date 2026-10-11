@@ -10,7 +10,7 @@ export interface WhatsAppRealtimeEvent {
   direction?: 'INBOUND' | 'OUTBOUND';
   messageId?: string;
   occurredAt: string;
-  state?: 'recording_audio' | null;
+  state?: 'typing' | 'recording_audio' | null;
 }
 
 interface WhatsAppRealtimeSubscriber {
@@ -83,7 +83,7 @@ export class WhatsAppRealtimeService implements OnModuleDestroy {
     });
   }
 
-  emitConversationPresence(conversationId: string, state: 'recording_audio' | null) {
+  emitConversationPresence(conversationId: string, state: 'typing' | 'recording_audio' | null) {
     this.emit({
       type: 'conversation.presence',
       conversationId,

@@ -34,6 +34,10 @@ describe('WhatsApp realtime provider helpers', () => {
 
   it('reduces inbound conversation presence without creating paused state', () => {
     const empty: InboundConversationPresenceMap = {};
+    const typing = setInboundConversationPresence(empty, 'conversation-a', 'typing');
+    expect(typing).toEqual({ 'conversation-a': 'typing' });
+    expect(conversationPresenceLabel(typing['conversation-a'])).toBe('digitando...');
+
     const recording = setInboundConversationPresence(empty, 'conversation-a', 'recording_audio');
     expect(recording).toEqual({ 'conversation-a': 'recording_audio' });
     expect(conversationPresenceLabel(recording['conversation-a'])).toBe('gravando áudio...');
@@ -45,6 +49,27 @@ describe('WhatsApp realtime provider helpers', () => {
     expect(cleared).toEqual({});
     expect(removeInboundConversationPresence(cleared, 'conversation-a')).toBe(cleared);
     expect(conversationPresenceLabel(cleared['conversation-a'])).toBeNull();
+    expect(inboundConversationPresenceTtlMs).toBe(6000);
+  });
+
+  it('keeps inbound typing state isolated per conversation until TTL cleanup removes only the target', () => {
+    const first: InboundConversationPresenceMap = {};
+    const withTyping = setInboundConversationPresence(first, 'conversation-a', 'typing');
+    const withRecording = setInboundConversationPresence(
+      withTyping,
+      'conversation-b',
+      'recording_audio',
+    );
+
+    expect(withRecording).toEqual({
+      'conversation-a': 'typing',
+      'conversation-b': 'recording_audio',
+    });
+    expect(conversationPresenceLabel(withRecording['conversation-a'])).toBe('digitando...');
+    expect(conversationPresenceLabel(withRecording['conversation-b'])).toBe('gravando áudio...');
+
+    const clearedTyping = removeInboundConversationPresence(withRecording, 'conversation-a');
+    expect(clearedTyping).toEqual({ 'conversation-b': 'recording_audio' });
     expect(inboundConversationPresenceTtlMs).toBe(6000);
   });
 

@@ -838,7 +838,7 @@ export interface WhatsAppRealtimeEvent {
   direction?: WhatsAppConversationMessageDirection;
   messageId?: string;
   occurredAt: string;
-  state?: 'recording_audio' | null;
+  state?: 'typing' | 'recording_audio' | null;
 }
 
 export interface BillingSummary {

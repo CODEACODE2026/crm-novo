@@ -109,6 +109,7 @@ function normalizedInbound(text: string, overrides: Record<string, unknown> = {}
     mediaMetadata: null,
     mediaDownloadMetadata: null,
     replyContext: null,
+    providerJids: null,
     ...overrides,
   };
 }
@@ -4499,6 +4500,361 @@ describe('WhatsAppService', () => {
     expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
   });
 
+  it('emits inbound typing presence for real private ChatPresence text', async () => {
+    const { service, normalizer, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(conversation()),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(normalizedChatPresence({ media: null }));
+
+    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
+      received: true,
+      processed: true,
+      action: 'presence_typing',
+    });
+
+    expect(realtime.emitConversationPresence).toHaveBeenCalledWith(conversation().id, 'typing');
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+  });
+
+  it('resolves LID-only text ChatPresence from a normal message seen in the same connection', async () => {
+    const realNormalizer = new KiragoWebhookNormalizer();
+    const { service, prisma, normalizer, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+    normalizer.normalize.mockImplementation((payloadValue: unknown) =>
+      realNormalizer.normalize(payloadValue, now),
+    );
+
+    await service.receiveWebhook({
+      type: 'Message',
+      instanceName: 'CRM Principal',
+      userID: 'kirago-user',
+      isGroup: false,
+      jid: {
+        contact: { lid: '123456789012345@lid', pn: '+55 (44) 99999-9999' },
+        chat: { lid: '123456789012345@lid', pn: '+55 (44) 99999-9999' },
+        sender: { lid: '123456789012345@lid', pn: '+55 (44) 99999-9999' },
+      },
+      event: {
+        Info: {
+          ID: 'lid-normal-message-1',
+          PushName: 'Cliente LID',
+          Timestamp: 1789088400,
+          IsFromMe: false,
+          IsGroup: false,
+          SenderAlt: '+55 (44) 99999-9999',
+          Chat: '123456789012345@lid',
+          Sender: '123456789012345@lid',
+          Type: 'text',
+        },
+        Message: { conversation: 'Mensagem normal com LID' },
+      },
+    });
+    const messageCreateArgs = (prisma.whatsAppMessage.create as MockWithCalls).mock
+      .calls[0]?.[0] as {
+      data?: { rawMetadata?: unknown };
+    };
+
+    expect(messageCreateArgs.data?.rawMetadata).toMatchObject({
+      providerJids: { lids: ['123456789012345@lid'] },
+    });
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ChatPresence',
+        instanceName: 'CRM Principal',
+        userID: 'kirago-user',
+        event: {
+          Chat: '123456789012345@lid',
+          Sender: '123456789012345@lid',
+          SenderAlt: '',
+          RecipientAlt: '',
+          IsFromMe: false,
+          IsGroup: false,
+          State: 'composing',
+          Media: '',
+        },
+      }),
+    ).resolves.toMatchObject({
+      received: true,
+      processed: true,
+      action: 'presence_typing',
+    });
+
+    expect(realtime.emitConversationPresence).toHaveBeenLastCalledWith(conversation().id, 'typing');
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+  });
+
+  it('merges provider LIDs into existing rawMetadata without overwriting manual metadata', () => {
+    const { service } = serviceFactory();
+    const privateService = service as unknown as {
+      reconciledRawMetadataUpdate: (
+        current: Prisma.JsonValue | null,
+        normalized: ReturnType<typeof normalizedInbound>,
+      ) => { rawMetadata?: Record<string, unknown> };
+    };
+
+    const result = privateService.reconciledRawMetadataUpdate(
+      {
+        source: 'manual_outbound_media_send',
+        localMedia: { storageKey: 'local-key', mimeType: 'image/jpeg' },
+        replyContext: { providerMessageId: 'quoted-message-id', quotedText: 'texto citado' },
+        mediaDownload: { provider: 'KIRAGO', status: 'ready' },
+        providerJids: { lids: ['old-lid@lid'], source: 'previous' },
+      },
+      normalizedInbound('Mensagem reconciliada', {
+        providerJids: { lids: ['NEW-LID@LID', 'old-lid@lid'] },
+        mediaDownloadMetadata: { provider: 'KIRAGO', status: 'new-ignored' },
+      }),
+    );
+
+    expect(result.rawMetadata).toMatchObject({
+      source: 'manual_outbound_media_send',
+      localMedia: { storageKey: 'local-key', mimeType: 'image/jpeg' },
+      replyContext: { providerMessageId: 'quoted-message-id', quotedText: 'texto citado' },
+      mediaDownload: { provider: 'KIRAGO', status: 'ready' },
+      providerJids: {
+        source: 'previous',
+        lids: ['old-lid@lid', 'new-lid@lid'],
+      },
+    });
+  });
+
+  it('does not resolve LID presence across another WhatsApp connection', async () => {
+    const realNormalizer = new KiragoWebhookNormalizer();
+    const otherConnection = connection({
+      id: '22222222-2222-4222-8222-222222222222',
+      providerUserId: 'kirago-user-2',
+    });
+    const { service, prisma, normalizer, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+    normalizer.normalize.mockImplementation((payloadValue: unknown) =>
+      realNormalizer.normalize(payloadValue, now),
+    );
+
+    await service.receiveWebhook({
+      type: 'Message',
+      instanceName: 'CRM Principal',
+      userID: 'kirago-user',
+      isGroup: false,
+      jid: {
+        contact: { lid: '987654321@lid', pn: '+55 (44) 99999-9999' },
+        chat: { lid: '987654321@lid', pn: '+55 (44) 99999-9999' },
+        sender: { lid: '987654321@lid', pn: '+55 (44) 99999-9999' },
+      },
+      event: {
+        Info: {
+          ID: 'lid-normal-message-2',
+          PushName: 'Cliente LID',
+          Timestamp: 1789088400,
+          IsFromMe: false,
+          IsGroup: false,
+          SenderAlt: '+55 (44) 99999-9999',
+          Chat: '987654321@lid',
+          Sender: '987654321@lid',
+          Type: 'text',
+        },
+        Message: { conversation: 'Mensagem normal com LID' },
+      },
+    });
+
+    vi.mocked(prisma.whatsAppConnection.findFirst).mockResolvedValue(otherConnection);
+    vi.mocked(realtime.emitConversationPresence).mockClear();
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ChatPresence',
+        instanceName: 'CRM Outra',
+        userID: 'kirago-user-2',
+        event: {
+          Chat: '987654321@lid',
+          Sender: '987654321@lid',
+          SenderAlt: '',
+          RecipientAlt: '',
+          IsFromMe: false,
+          IsGroup: false,
+          State: 'composing',
+          Media: '',
+        },
+      }),
+    ).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      reason: 'presence_conversation_not_found',
+    });
+
+    expect(realtime.emitConversationPresence).not.toHaveBeenCalled();
+  });
+
+  it('safely ignores unknown LID-only ChatPresence without creating records', async () => {
+    const realNormalizer = new KiragoWebhookNormalizer();
+    const { service, prisma, normalizer, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+    });
+    normalizer.normalize.mockImplementation((payloadValue: unknown) =>
+      realNormalizer.normalize(payloadValue, now),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ChatPresence',
+        instanceName: 'CRM Principal',
+        userID: 'kirago-user',
+        event: {
+          Chat: 'unknown-lid@lid',
+          Sender: 'unknown-lid@lid',
+          SenderAlt: '',
+          RecipientAlt: '',
+          IsFromMe: false,
+          IsGroup: false,
+          State: 'composing',
+          Media: '',
+        },
+      }),
+    ).resolves.toMatchObject({
+      received: true,
+      processed: false,
+      reason: 'presence_conversation_not_found',
+    });
+
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          provider: 'KIRAGO',
+          whatsAppConnectionId: connection().id,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        select: {
+          conversationId: true,
+          rawMetadata: true,
+        },
+      }),
+    );
+    expect(realtime.emitConversationPresence).not.toHaveBeenCalled();
+  });
+
+  it('resolves fallback LID only from complete private inbound metadata in the current connection', async () => {
+    const realNormalizer = new KiragoWebhookNormalizer();
+    const fallbackConversation = conversation({ id: 'fallback-conversation-id' });
+    const { service, normalizer, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+        whatsAppMessage: {
+          findMany: vi.fn().mockResolvedValue([
+            conversationMessage({
+              conversationId: 'outbound-wrong-conversation-id',
+              rawMetadata: {
+                isFromMe: true,
+                isGroup: false,
+                providerJids: { lids: ['123456789012345@lid'] },
+              },
+            }),
+            conversationMessage({
+              conversationId: 'group-wrong-conversation-id',
+              rawMetadata: {
+                isFromMe: false,
+                isGroup: true,
+                providerJids: { lids: ['123456789012345@lid'] },
+              },
+            }),
+            conversationMessage({
+              conversationId: 'substring-wrong-conversation-id',
+              rawMetadata: {
+                isFromMe: false,
+                isGroup: false,
+                providerJids: { lids: ['x123456789012345@lid'] },
+              },
+            }),
+            conversationMessage({
+              conversationId: fallbackConversation.id,
+              rawMetadata: {
+                isFromMe: false,
+                isGroup: false,
+                providerJids: { lids: ['123456789012345@lid'] },
+              },
+            }),
+          ]),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(conversationMessage()),
+          findFirst: vi.fn().mockResolvedValue(null),
+          count: vi.fn().mockResolvedValue(0),
+          findUnique: vi.fn().mockResolvedValue(conversationMessage()),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(conversationMessage()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+    normalizer.normalize.mockImplementation((payloadValue: unknown) =>
+      realNormalizer.normalize(payloadValue, now),
+    );
+
+    await expect(
+      service.receiveWebhook({
+        type: 'ChatPresence',
+        instanceName: 'CRM Principal',
+        userID: 'kirago-user',
+        event: {
+          Chat: ' 123456789012345@LID ',
+          Sender: ' 123456789012345@LID ',
+          SenderAlt: '',
+          RecipientAlt: '',
+          IsFromMe: false,
+          IsGroup: false,
+          State: 'composing',
+          Media: '',
+        },
+      }),
+    ).resolves.toMatchObject({
+      received: true,
+      processed: true,
+      action: 'presence_typing',
+    });
+
+    expect(realtime.emitConversationPresence).toHaveBeenCalledWith(
+      fallbackConversation.id,
+      'typing',
+    );
+  });
+
   it('clears inbound ChatPresence on paused and keeps isolated paused idempotent', async () => {
     const { service, normalizer, prisma, realtime } = serviceFactory({
       prismaOverrides: {
@@ -4565,12 +4921,12 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
   });
 
-  it('ignores self, group, unsupported text and unknown ChatPresence states safely', async () => {
+  it('ignores self, group, unsupported media and unknown ChatPresence states safely', async () => {
     const { service, normalizer, prisma, realtime } = serviceFactory();
     normalizer.normalize
       .mockReturnValueOnce(normalizedChatPresence({ isFromMe: true }))
       .mockReturnValueOnce(normalizedChatPresence({ isGroup: true }))
-      .mockReturnValueOnce(normalizedChatPresence({ media: null }))
+      .mockReturnValueOnce(normalizedChatPresence({ media: 'video' }))
       .mockReturnValueOnce(normalizedChatPresence({ state: 'available', media: null }));
 
     await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
@@ -4583,7 +4939,7 @@ describe('WhatsAppService', () => {
     });
     await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
       processed: false,
-      reason: 'unsupported_text_presence',
+      reason: 'unsupported_presence_media',
     });
     await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
       processed: false,

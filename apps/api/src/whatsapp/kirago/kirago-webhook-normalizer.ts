@@ -33,6 +33,10 @@ export type NormalizedReplyContext = {
   quotedText: string | null;
 };
 
+export type NormalizedProviderJids = {
+  lids: string[];
+};
+
 export type NormalizedWhatsAppMessage = {
   kind: 'MESSAGE';
   provider: 'KIRAGO';
@@ -50,6 +54,7 @@ export type NormalizedWhatsAppMessage = {
   mediaMetadata: Record<string, unknown> | null;
   mediaDownloadMetadata: NormalizedMediaDownloadMetadata | null;
   replyContext: NormalizedReplyContext | null;
+  providerJids: NormalizedProviderJids | null;
 };
 
 export type NormalizedWhatsAppReceipt = {
@@ -152,6 +157,7 @@ export class KiragoWebhookNormalizer {
       mediaMetadata: this.extractMediaMetadata(message, messageType),
       mediaDownloadMetadata: this.extractMediaDownloadMetadata(message, messageType),
       replyContext: this.extractReplyContext(message, messageType),
+      providerJids: this.extractProviderJids(body, info),
     };
   }
 
@@ -291,6 +297,47 @@ export class KiragoWebhookNormalizer {
     }
 
     return null;
+  }
+
+  private extractProviderJids(
+    body: RecordValue,
+    info: RecordValue | null,
+  ): NormalizedProviderJids | null {
+    const jid = asRecord(body.jid);
+    const lids = this.uniqueJids([
+      asRecord(jid?.chat)?.lid,
+      asRecord(jid?.contact)?.lid,
+      asRecord(jid?.sender)?.lid,
+      asRecord(jid?.chat)?.raw,
+      asRecord(jid?.contact)?.jid,
+      asRecord(jid?.sender)?.raw,
+      info?.Chat,
+      info?.Sender,
+    ]);
+
+    return lids.length ? { lids } : null;
+  }
+
+  private uniqueJids(values: unknown[]) {
+    const seen = new Set<string>();
+
+    for (const value of values) {
+      const jid = this.normalizeLidJid(value);
+      if (jid) {
+        seen.add(jid);
+      }
+    }
+
+    return [...seen];
+  }
+
+  private normalizeLidJid(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const raw = value.trim().toLowerCase();
+    return raw && /@lid$/i.test(raw) ? raw : null;
   }
 
   private tryNormalizeProviderPhone(value: unknown) {

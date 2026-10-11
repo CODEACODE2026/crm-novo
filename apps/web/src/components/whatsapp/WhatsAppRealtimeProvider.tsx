@@ -23,7 +23,7 @@ const notifiedMessageCacheLimit = 200;
 export const inboundConversationPresenceTtlMs = 6000;
 
 type WhatsAppRealtimeHandler = (event: WhatsAppRealtimeEvent) => void;
-export type InboundConversationPresenceState = 'recording_audio';
+export type InboundConversationPresenceState = 'typing' | 'recording_audio';
 export type InboundConversationPresenceMap = Record<string, InboundConversationPresenceState>;
 
 export interface WhatsAppRealtimeContextValue {
@@ -151,14 +151,15 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
     (event: WhatsAppRealtimeEvent) => {
       if (event.type !== 'conversation.presence') return;
 
-      if (event.state !== 'recording_audio') {
+      if (event.state !== 'typing' && event.state !== 'recording_audio') {
         clearConversationPresence(event.conversationId);
         return;
       }
 
+      const presenceState = event.state;
       clearConversationPresenceTimer(event.conversationId);
       setConversationPresence((current) =>
-        setInboundConversationPresence(current, event.conversationId, 'recording_audio'),
+        setInboundConversationPresence(current, event.conversationId, presenceState),
       );
       conversationPresenceTimeoutsRef.current[event.conversationId] = window.setTimeout(() => {
         clearConversationPresence(event.conversationId);
@@ -364,6 +365,7 @@ export function removeInboundConversationPresence(
 }
 
 export function conversationPresenceLabel(state: InboundConversationPresenceState | undefined) {
+  if (state === 'typing') return 'digitando...';
   return state === 'recording_audio' ? 'gravando áudio...' : null;
 }
 

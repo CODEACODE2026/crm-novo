@@ -149,22 +149,6 @@ function normalizedChatPresence(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function attachPresenceDiagLogger(service: WhatsAppService) {
-  const log = vi.fn();
-  const warn = vi.fn();
-  (service as unknown as { logger: { log: typeof log; warn: typeof warn } }).logger.log = log;
-  (service as unknown as { logger: { log: typeof log; warn: typeof warn } }).logger.warn = warn;
-
-  return {
-    log,
-    warn,
-    messages: () =>
-      log.mock.calls
-        .map((call) => String(call[0]))
-        .filter((message) => message.includes('[WHATSAPP_PRESENCE_DIAG]')),
-  };
-}
-
 function kiragoMediaPayload(mediaType: 'imageMessage' | 'documentMessage') {
   const media =
     mediaType === 'imageMessage'
@@ -4542,100 +4526,6 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
   });
 
-  it('logs sanitized ChatPresence diagnostics for direct phone resolution and realtime emit', async () => {
-    const { service, normalizer } = serviceFactory({
-      prismaOverrides: {
-        whatsAppConversation: {
-          findFirst: vi.fn().mockResolvedValue(conversation()),
-          create: vi.fn(),
-          update: vi.fn(),
-        },
-      },
-    });
-    const diag = attachPresenceDiagLogger(service);
-    normalizer.normalize.mockReturnValue(normalizedChatPresence({ media: null }));
-
-    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
-      received: true,
-      processed: true,
-      action: 'presence_typing',
-    });
-
-    const messages = diag.messages();
-    const joined = messages.join('\n');
-    expect(joined).toContain('stage=received');
-    expect(joined).toContain('stage=connection found=true');
-    expect(joined).toContain('stage=phone_candidates');
-    expect(joined).toContain('foundDirectPhone=true');
-    expect(joined).toContain('stage=conversation_resolved found=true');
-    expect(joined).toContain('resolutionSource=direct_phone');
-    expect(joined).toContain('stage=realtime_emit');
-    expect(joined).toContain('stage=realtime_emit_done');
-    expect(joined).toContain('lid=123***345@lid');
-    expect(joined).not.toContain('123456789012345@lid');
-    expect(joined).not.toContain('5544999999999');
-    expect(joined).not.toContain('instance-token');
-    expect(joined).not.toContain('encrypted-token');
-  });
-
-  it('logs ChatPresence safe ignore diagnostics for self and group events', async () => {
-    const { service, normalizer } = serviceFactory();
-    const diag = attachPresenceDiagLogger(service);
-    normalizer.normalize.mockReturnValueOnce(normalizedChatPresence({ isFromMe: true }));
-    normalizer.normalize.mockReturnValueOnce(normalizedChatPresence({ isGroup: true }));
-
-    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
-      received: true,
-      processed: false,
-      reason: 'ignored_self_presence',
-    });
-    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
-      received: true,
-      processed: false,
-      reason: 'ignored_group_presence',
-    });
-
-    const joined = diag.messages().join('\n');
-    expect(joined).toContain('stage=finished reason=ignored_self_presence');
-    expect(joined).toContain('stage=finished reason=ignored_group_presence');
-  });
-
-  it('keeps ChatPresence webhook behavior when diagnostic logger fails', async () => {
-    const { service, normalizer, realtime } = serviceFactory({
-      prismaOverrides: {
-        whatsAppConversation: {
-          findFirst: vi.fn().mockResolvedValue(conversation()),
-          create: vi.fn(),
-          update: vi.fn(),
-        },
-      },
-    });
-    const throwingLog = vi.fn(() => {
-      throw new Error('logger unavailable');
-    });
-    const throwingWarn = vi.fn(() => {
-      throw new Error('logger warn unavailable');
-    });
-    (
-      service as unknown as {
-        logger: { log: typeof throwingLog; warn: typeof throwingWarn };
-      }
-    ).logger.log = throwingLog;
-    (
-      service as unknown as {
-        logger: { log: typeof throwingLog; warn: typeof throwingWarn };
-      }
-    ).logger.warn = throwingWarn;
-    normalizer.normalize.mockReturnValue(normalizedChatPresence({ media: null }));
-
-    await expect(service.receiveWebhook({ type: 'ChatPresence' })).resolves.toMatchObject({
-      received: true,
-      processed: true,
-      action: 'presence_typing',
-    });
-    expect(realtime.emitConversationPresence).toHaveBeenCalledWith(conversation().id, 'typing');
-  });
-
   it('resolves LID-only text ChatPresence from a normal message seen in the same connection', async () => {
     const realNormalizer = new KiragoWebhookNormalizer();
     const { service, prisma, normalizer, realtime } = serviceFactory({
@@ -4686,7 +4576,6 @@ describe('WhatsAppService', () => {
     expect(messageCreateArgs.data?.rawMetadata).toMatchObject({
       providerJids: { lids: ['123456789012345@lid'] },
     });
-    const diag = attachPresenceDiagLogger(service);
 
     await expect(
       service.receiveWebhook({
@@ -4710,9 +4599,6 @@ describe('WhatsAppService', () => {
       action: 'presence_typing',
     });
 
-    const joined = diag.messages().join('\n');
-    expect(joined).toContain('stage=lid_cache lid=123***345@lid hit=true');
-    expect(joined).toContain('resolutionSource=lid_cache');
     expect(realtime.emitConversationPresence).toHaveBeenLastCalledWith(conversation().id, 'typing');
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
   });
@@ -4842,7 +4728,6 @@ describe('WhatsAppService', () => {
     normalizer.normalize.mockImplementation((payloadValue: unknown) =>
       realNormalizer.normalize(payloadValue, now),
     );
-    const diag = attachPresenceDiagLogger(service);
 
     await expect(
       service.receiveWebhook({
@@ -4884,11 +4769,6 @@ describe('WhatsAppService', () => {
         },
       }),
     );
-    const joined = diag.messages().join('\n');
-    expect(joined).toContain('stage=metadata_fallback rows_scanned=0 match=false');
-    expect(joined).toContain('stage=remote_lookup_start candidateCount=0');
-    expect(joined).toContain('stage=conversation_resolved found=false');
-    expect(joined).toContain('stage=finished reason=presence_conversation_not_found');
     expect(realtime.emitConversationPresence).not.toHaveBeenCalled();
   });
 
@@ -4951,7 +4831,6 @@ describe('WhatsAppService', () => {
     normalizer.normalize.mockImplementation((payloadValue: unknown) =>
       realNormalizer.normalize(payloadValue, now),
     );
-    const diag = attachPresenceDiagLogger(service);
 
     await expect(
       service.receiveWebhook({
@@ -4979,10 +4858,6 @@ describe('WhatsAppService', () => {
       fallbackConversation.id,
       'typing',
     );
-    const joined = diag.messages().join('\n');
-    expect(joined).toContain('stage=metadata_fallback rows_scanned=4 match=true');
-    expect(joined).toContain('conversationId=fallback-conversation-id');
-    expect(joined).toContain('resolutionSource=metadata');
   });
 
   it('resolves LID-only ChatPresence through the provider user lid endpoint on cache miss', async () => {
@@ -5015,7 +4890,6 @@ describe('WhatsAppService', () => {
     normalizer.normalize.mockImplementation((payloadValue: unknown) =>
       realNormalizer.normalize(payloadValue, now),
     );
-    const diag = attachPresenceDiagLogger(service);
 
     await expect(
       service.receiveWebhook({
@@ -5055,13 +4929,6 @@ describe('WhatsAppService', () => {
       candidateConversation.id,
       'typing',
     );
-    const joined = diag.messages().join('\n');
-    expect(joined).toContain('stage=remote_lookup_start candidateCount=1');
-    expect(joined).toContain('phone=5544*****9999');
-    expect(joined).toContain('stage=remote_lookup_result success=true');
-    expect(joined).toContain('returnedLid=123***345@lid');
-    expect(joined).toContain('match=true');
-    expect(joined).toContain('resolutionSource=remote_lid');
   });
 
   it('requires exact LID match and stops provider lookup at the first matching candidate', async () => {

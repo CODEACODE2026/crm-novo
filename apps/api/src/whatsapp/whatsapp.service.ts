@@ -361,15 +361,9 @@ type ResolvedWhatsAppReplyTarget = {
 
 type InboundConversationPresenceState = 'typing' | 'recording_audio';
 type ConversationPresenceState = InboundConversationPresenceState | null;
-type ChatPresenceResolutionSource = 'direct_phone' | 'lid_cache' | 'metadata' | 'remote_lid';
-type ChatPresenceConversationResolution = {
-  id: string;
-  resolutionSource: ChatPresenceResolutionSource;
-};
 const chatPresenceLidConversationCacheTtlMs = 24 * 60 * 60 * 1000;
 const chatPresenceLidConversationCacheMaxEntries = 1000;
 const chatPresenceRemoteLidLookupConversationLimit = 10;
-const chatPresenceDiagMarker = '[WHATSAPP_PRESENCE_DIAG]';
 
 @Injectable()
 export class WhatsAppService {
@@ -391,10 +385,7 @@ export class WhatsAppService {
     string,
     { lid: string; expiresAt: number }
   >();
-  private readonly chatPresenceRemoteLidLookupInFlight = new Map<
-    string,
-    Promise<ChatPresenceConversationResolution | null>
-  >();
+  private readonly chatPresenceRemoteLidLookupInFlight = new Map<string, Promise<string | null>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -461,38 +452,11 @@ export class WhatsAppService {
     }
   }
 
-  private emitConversationPresence(
-    conversationId: string,
-    state: ConversationPresenceState,
-    diag = false,
-  ) {
-    if (diag) {
-      this.logChatPresenceDiag({
-        stage: 'realtime_emit',
-        conversationId,
-        state: state ?? 'null',
-      });
-    }
-
+  private emitConversationPresence(conversationId: string, state: ConversationPresenceState) {
     try {
       this.realtime?.emitConversationPresence(conversationId, state);
-      if (diag) {
-        this.logChatPresenceDiag({
-          stage: 'realtime_emit_done',
-          conversationId,
-          success: true,
-        });
-      }
     } catch (error) {
-      if (diag) {
-        this.logChatPresenceDiag({
-          stage: 'realtime_emit_error',
-          conversationId,
-          success: false,
-          message: this.sanitizeError(error),
-        });
-      }
-      this.safeLoggerWarn(
+      this.logger.warn(
         `Falha ao emitir evento WhatsApp conversation.presence conversation=${conversationId} message=${
           error instanceof Error ? error.message : 'unknown'
         }`,
@@ -3183,103 +3147,55 @@ export class WhatsAppService {
   }
 
   private async processChatPresenceWebhook(normalized: NormalizedWhatsAppChatPresence) {
-    this.logChatPresenceDiag({
-      stage: 'received',
-      state: this.safeProbeNonSensitiveValue(normalized.state) ?? 'unknown',
-      media: this.safeProbeNonSensitiveValue(normalized.media) ?? 'none',
-      isFromMe: normalized.isFromMe,
-      isGroup: normalized.isGroup,
-      instanceName: this.safeProbeNonSensitiveValue(normalized.instanceName) ?? 'unknown',
-      providerUserId: this.maskProbeId(normalized.providerUserId),
-      lid: this.maskChatPresenceLid(this.primaryChatPresenceLid(normalized)),
-    });
-
     if (normalized.isGroup) {
-      this.safeLoggerLog('Kirago chat_presence ignored_group_presence');
-      this.logChatPresenceDiag({
-        stage: 'finished',
-        reason: 'ignored_group_presence',
-      });
+      this.logger.log('Kirago chat_presence ignored_group_presence');
       return { processed: false, reason: 'ignored_group_presence' };
     }
 
     if (normalized.isFromMe) {
-      this.safeLoggerLog('Kirago chat_presence ignored_self_presence');
-      this.logChatPresenceDiag({
-        stage: 'finished',
-        reason: 'ignored_self_presence',
-      });
+      this.logger.log('Kirago chat_presence ignored_self_presence');
       return { processed: false, reason: 'ignored_self_presence' };
     }
 
     if (normalized.state !== 'composing' && normalized.state !== 'paused') {
-      this.safeLoggerLog(
+      this.logger.log(
         `Kirago chat_presence unsupported_presence_state state=${
           this.safeProbeNonSensitiveValue(normalized.state) ?? 'unknown'
         }`,
       );
-      this.logChatPresenceDiag({
-        stage: 'finished',
-        reason: 'unsupported_presence_state',
-      });
       return { processed: false, reason: 'unsupported_presence_state' };
     }
 
     const presenceState = this.inboundConversationPresenceState(normalized);
 
     if (normalized.state === 'composing' && presenceState === null) {
-      this.safeLoggerLog(
+      this.logger.log(
         `Kirago chat_presence unsupported_presence_media media=${
           this.safeProbeNonSensitiveValue(normalized.media) ?? 'none'
         }`,
       );
-      this.logChatPresenceDiag({
-        stage: 'finished',
-        reason: 'unsupported_presence_media',
-      });
       return { processed: false, reason: 'unsupported_presence_media' };
     }
 
     const connection = await this.findConnectionForWebhook(normalized);
-    this.logChatPresenceDiag({
-      stage: 'connection',
-      found: Boolean(connection),
-      connectionId: connection?.id ?? 'none',
-      provider: connection?.provider ?? 'none',
-      matchSource: this.chatPresenceConnectionMatchSource(normalized),
-    });
 
     if (!connection) {
-      this.logChatPresenceDiag({
-        stage: 'finished',
-        reason: 'connection_not_found',
-      });
       return { processed: false, reason: 'connection_not_found' };
     }
 
     const conversation = await this.findConversationForChatPresence(connection, normalized);
-    this.logChatPresenceDiag({
-      stage: 'conversation_resolved',
-      found: Boolean(conversation),
-      conversationId: conversation?.id ?? 'none',
-      resolutionSource: conversation?.resolutionSource ?? 'none',
-    });
 
     if (!conversation) {
-      this.safeLoggerLog('Kirago chat_presence_conversation_not_found');
-      this.logChatPresenceDiag({
-        stage: 'finished',
-        reason: 'presence_conversation_not_found',
-      });
+      this.logger.log('Kirago chat_presence_conversation_not_found');
       return { processed: false, reason: 'presence_conversation_not_found' };
     }
 
     if (normalized.state === 'paused') {
-      this.emitConversationPresence(conversation.id, null, true);
+      this.emitConversationPresence(conversation.id, null);
       return { processed: true, action: 'presence_cleared' };
     }
 
-    this.emitConversationPresence(conversation.id, presenceState, true);
+    this.emitConversationPresence(conversation.id, presenceState);
     return {
       processed: true,
       action: presenceState === 'typing' ? 'presence_typing' : 'presence_recording_audio',
@@ -3410,73 +3326,6 @@ export class WhatsAppService {
     }
 
     return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
-  }
-
-  private primaryChatPresenceLid(normalized: NormalizedWhatsAppChatPresence) {
-    return this.chatPresenceLidCandidates(normalized)[0] ?? null;
-  }
-
-  private maskChatPresenceLid(value: unknown) {
-    const lid = this.normalizeProviderLid(value);
-
-    if (!lid) {
-      return 'none';
-    }
-
-    const [local, domain] = lid.split('@');
-    if (!local || !domain) {
-      return 'unknown';
-    }
-
-    if (local.length <= 6) {
-      return `${local.slice(0, 2)}***@${domain}`;
-    }
-
-    return `${local.slice(0, 3)}***${local.slice(-3)}@${domain}`;
-  }
-
-  private logChatPresenceDiag(fields: Record<string, unknown>) {
-    const details = Object.entries(fields)
-      .map(([key, value]) => `${key}=${this.safeChatPresenceDiagValue(value)}`)
-      .join(' ');
-
-    this.safeLoggerLog(`${chatPresenceDiagMarker} ${details}`);
-  }
-
-  private safeChatPresenceDiagValue(value: unknown) {
-    if (value === null || value === undefined) {
-      return 'none';
-    }
-
-    if (typeof value === 'boolean') {
-      return value ? 'true' : 'false';
-    }
-
-    if (typeof value === 'number') {
-      return Number.isFinite(value) ? String(value) : 'unknown';
-    }
-
-    if (typeof value === 'string') {
-      return value.trim().replace(/\s+/g, '_').slice(0, 160) || 'none';
-    }
-
-    return 'unknown';
-  }
-
-  private safeLoggerLog(message: string) {
-    try {
-      this.logger.log(message);
-    } catch {
-      // Diagnostic logging must never change webhook behavior.
-    }
-  }
-
-  private safeLoggerWarn(message: string) {
-    try {
-      this.logger.warn(message);
-    } catch {
-      // Diagnostic logging must never change webhook behavior.
-    }
   }
 
   private safeProbeNonSensitiveValue(value: unknown) {
@@ -4234,7 +4083,7 @@ export class WhatsAppService {
   private async findConversationForChatPresence(
     connection: WhatsAppConnection,
     normalized: NormalizedWhatsAppChatPresence,
-  ): Promise<ChatPresenceConversationResolution | null> {
+  ) {
     const phones = this.chatPresencePhoneCandidates(normalized);
 
     if (phones.length) {
@@ -4246,28 +4095,15 @@ export class WhatsAppService {
         orderBy: { updatedAt: 'desc' },
         select: { id: true },
       });
-      this.logChatPresenceDiag({
-        stage: 'phone_candidates',
-        count: phones.length,
-        sourceFields: this.chatPresenceCandidateSourceFields(normalized).join(','),
-        foundDirectPhone: Boolean(conversation),
-      });
 
       if (conversation) {
-        return { id: conversation.id, resolutionSource: 'direct_phone' };
+        return conversation;
       }
-    } else {
-      this.logChatPresenceDiag({
-        stage: 'phone_candidates',
-        count: 0,
-        sourceFields: this.chatPresenceCandidateSourceFields(normalized).join(','),
-        foundDirectPhone: false,
-      });
     }
 
-    const lidResolution = await this.findConversationIdForChatPresenceLid(connection, normalized);
+    const conversationId = await this.findConversationIdForChatPresenceLid(connection, normalized);
 
-    return lidResolution;
+    return conversationId ? { id: conversationId } : null;
   }
 
   private chatPresencePhoneCandidates(normalized: NormalizedWhatsAppChatPresence) {
@@ -4300,55 +4136,19 @@ export class WhatsAppService {
     return [...phones];
   }
 
-  private chatPresenceCandidateSourceFields(normalized: NormalizedWhatsAppChatPresence) {
-    return normalized.isFromMe === true
-      ? ['recipientAlt', 'chat', 'senderAlt', 'sender']
-      : ['senderAlt', 'sender', 'chat', 'recipientAlt'];
-  }
-
-  private chatPresenceConnectionMatchSource(
-    normalized: Pick<NormalizedWhatsAppChatPresence, 'providerUserId' | 'instanceName'>,
-  ) {
-    if (normalized.providerUserId) {
-      return 'providerUserId';
-    }
-
-    if (normalized.instanceName) {
-      return 'instanceName';
-    }
-
-    return 'none';
-  }
-
   private async findConversationIdForChatPresenceLid(
     connection: WhatsAppConnection,
     normalized: NormalizedWhatsAppChatPresence,
-  ): Promise<ChatPresenceConversationResolution | null> {
+  ) {
     const lids = this.chatPresenceLidCandidates(normalized);
 
     if (!lids.length) {
-      this.logChatPresenceDiag({
-        stage: 'lid_cache',
-        lid: 'none',
-        hit: false,
-      });
-      this.logChatPresenceDiag({
-        stage: 'metadata_fallback',
-        rows_scanned: 0,
-        match: false,
-      });
       return null;
     }
 
     const cached = this.getCachedChatPresenceLidConversation(connection.id, lids);
-    this.logChatPresenceDiag({
-      stage: 'lid_cache',
-      lid: this.maskChatPresenceLid(lids[0]),
-      hit: Boolean(cached),
-      conversationId: cached ?? 'none',
-    });
     if (cached) {
-      return { id: cached, resolutionSource: 'lid_cache' };
+      return cached;
     }
 
     const recentMessages = await this.prisma.whatsAppMessage.findMany({
@@ -4369,20 +4169,9 @@ export class WhatsAppService {
         for (const lid of lids) {
           this.cacheChatPresenceLidConversation(connection.id, lid, message.conversationId);
         }
-        this.logChatPresenceDiag({
-          stage: 'metadata_fallback',
-          rows_scanned: recentMessages.length,
-          match: true,
-          conversationId: message.conversationId,
-        });
-        return { id: message.conversationId, resolutionSource: 'metadata' };
+        return message.conversationId;
       }
     }
-    this.logChatPresenceDiag({
-      stage: 'metadata_fallback',
-      rows_scanned: recentMessages.length,
-      match: false,
-    });
 
     const lookupKey = this.chatPresenceRemoteLidLookupInFlightKey(connection.id, lids);
     const inFlight = this.chatPresenceRemoteLidLookupInFlight.get(lookupKey);
@@ -4405,7 +4194,7 @@ export class WhatsAppService {
   private async findConversationIdForChatPresenceLidByProviderLookup(
     connection: WhatsAppConnection,
     lids: string[],
-  ): Promise<ChatPresenceConversationResolution | null> {
+  ) {
     const candidates = await this.prisma.whatsAppConversation.findMany({
       where: {
         provider: 'KIRAGO',
@@ -4420,43 +4209,23 @@ export class WhatsAppService {
     });
 
     if (!candidates.length) {
-      this.logChatPresenceDiag({
-        stage: 'remote_lookup_start',
-        candidateCount: 0,
-        currentCandidateIndex: 'none',
-        phone: 'none',
-      });
       return null;
     }
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
 
-    for (const [index, candidate] of candidates.entries()) {
+    for (const candidate of candidates) {
       const phone = candidate.phoneNormalized;
 
       if (!phone) {
         continue;
       }
-      this.logChatPresenceDiag({
-        stage: 'remote_lookup_start',
-        candidateCount: candidates.length,
-        currentCandidateIndex: index,
-        phone: this.maskPhone(phone),
-      });
 
       const cachedLid = this.getCachedChatPresencePhoneLid(connection.id, phone);
       if (cachedLid) {
-        const cachedMatch = lids.includes(cachedLid);
-        this.logChatPresenceDiag({
-          stage: 'remote_lookup_result',
-          success: true,
-          returnedLid: this.maskChatPresenceLid(cachedLid),
-          match: cachedMatch,
-          source: 'phone_lid_cache',
-        });
-        if (cachedMatch) {
+        if (lids.includes(cachedLid)) {
           this.cacheChatPresenceLidConversation(connection.id, cachedLid, candidate.id);
-          return { id: candidate.id, resolutionSource: 'remote_lid' };
+          return candidate.id;
         }
         continue;
       }
@@ -4467,28 +4236,13 @@ export class WhatsAppService {
         const resolved = await this.provider.resolveUserLid(instanceToken, phone);
         resolvedLid = this.normalizeProviderLid(resolved.lid);
       } catch (error) {
-        this.safeLoggerWarn(
+        this.logger.warn(
           `Kirago chat_presence lid_lookup_failed connection=${connection.id} phone=${this.maskPhone(
             phone,
           )} code=${this.safeKiragoProviderCode(error)} message=${this.sanitizeError(error)}`,
         );
-        this.logChatPresenceDiag({
-          stage: 'remote_lookup_result',
-          success: false,
-          returnedLid: 'none',
-          match: false,
-          code: this.safeKiragoProviderCode(error),
-        });
         return null;
       }
-
-      const matched = Boolean(resolvedLid && lids.includes(resolvedLid));
-      this.logChatPresenceDiag({
-        stage: 'remote_lookup_result',
-        success: Boolean(resolvedLid),
-        returnedLid: this.maskChatPresenceLid(resolvedLid),
-        match: matched,
-      });
 
       if (!resolvedLid) {
         continue;
@@ -4496,9 +4250,9 @@ export class WhatsAppService {
 
       this.cacheChatPresencePhoneLid(connection.id, phone, resolvedLid);
 
-      if (matched) {
+      if (lids.includes(resolvedLid)) {
         this.cacheChatPresenceLidConversation(connection.id, resolvedLid, candidate.id);
-        return { id: candidate.id, resolutionSource: 'remote_lid' };
+        return candidate.id;
       }
     }
 

@@ -4152,6 +4152,17 @@ a {
   font-size: 12px;
 }
 
+.conversation-reference-pix > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.conversation-reference-pix small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .conversation-reference-status {
   display: inline-flex;
   align-items: center;

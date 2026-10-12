@@ -75,6 +75,8 @@ import {
   listWhatsAppConversations,
   markWhatsAppConversationRead,
   createReceivablePix,
+  previewReceivablePixReplacement,
+  replaceReceivablePix,
   resolveWhatsAppConversation,
   retryWhatsAppConversationMessage,
   searchWhatsAppConversationMessages,
@@ -212,6 +214,13 @@ type ConversationContactInfoState = {
   receivables: Receivable[];
   pixIntent: PaymentIntent | null;
   notice: string;
+};
+export type ContactPixState = 'NO_PIX' | 'ACTIVE_PIX' | 'EXPIRED_PIX';
+export type ContactPixReplacementPayload = {
+  provider: PaymentIntent['provider'];
+  expectedCurrentIntentId: string;
+  reason: string;
+  idempotencyKey: string;
 };
 
 export function nextConversationPresenceState(
@@ -2250,6 +2259,63 @@ export function WhatsAppInbox({
     }
   }
 
+  async function recreateContactReceivablePix(
+    receivable: Receivable,
+    currentIntent: PaymentIntent,
+  ) {
+    if (contactPixReceivableId) return;
+
+    const replacementPayload = contactPixReplacementPayload(receivable, currentIntent);
+    if (!replacementPayload) return;
+
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    setContactPixReceivableId(receivable.id);
+    setContactInfo((current) => ({ ...current, error: '', notice: '' }));
+
+    try {
+      const preview = await previewReceivablePixReplacement(receivable.id, {
+        provider: currentIntent.provider,
+      });
+      if (selectedConversationRef.current?.id !== conversationId) return;
+      if (preview.currentIntent?.id !== currentIntent.id) {
+        throw new Error('PIX atual mudou. Recarregue as informações do contato antes de recriar.');
+      }
+      if (!preview.replaceable) {
+        throw new Error(
+          preview.blockers.map((blocker) => blocker.message).join(' ') ||
+            'Este PIX não pode ser recriado agora.',
+        );
+      }
+      const confirmed = window.confirm(`${preview.warning}\n\nConfirmar novo PIX?`);
+      if (!confirmed) return;
+      if (selectedConversationRef.current?.id !== conversationId) return;
+
+      const intent = await replaceReceivablePix(receivable.id, replacementPayload);
+      if (selectedConversationRef.current?.id !== conversationId) return;
+
+      setContactInfo((current) => ({
+        ...current,
+        pixIntent: intent,
+        notice: 'PIX recriado com sucesso',
+      }));
+      await loadContactInfo(selectedConversationRef.current, {
+        silent: true,
+        preserveNotice: true,
+      });
+    } catch (err) {
+      if (selectedConversationRef.current?.id !== conversationId) return;
+
+      setContactInfo((current) => ({
+        ...current,
+        error: conversationErrorMessage(err, 'Não foi possível recriar o PIX.'),
+      }));
+    } finally {
+      setContactPixReceivableId(null);
+    }
+  }
+
   async function copyContactPix(intent: PaymentIntent) {
     if (!intent.pixCopyPaste) return;
 
@@ -2726,6 +2792,9 @@ export function WhatsAppInbox({
           onClose={() => setContactPanelOpen(false)}
           onCreateClient={(conversation) => void openGuestClientCreate(conversation)}
           onGeneratePix={(receivable) => void generateContactReceivablePix(receivable)}
+          onRecreatePix={(receivable, intent) =>
+            void recreateContactReceivablePix(receivable, intent)
+          }
           onLinkClient={(client) => void linkSelectedConversationToClient(client)}
           onOpenClient={(clientId) => void onOpenClient(clientId)}
           onCopyPix={(intent) => void copyContactPix(intent)}
@@ -5231,6 +5300,7 @@ function ConversationClientPanel({
   onCopyPix,
   onCreateClient,
   onGeneratePix,
+  onRecreatePix,
   onLinkClient,
   onOpenClient,
 }: {
@@ -5245,6 +5315,7 @@ function ConversationClientPanel({
   onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
   onGeneratePix: (receivable: Receivable) => void;
+  onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
@@ -5276,6 +5347,7 @@ function ConversationClientPanel({
           onCopyPix={onCopyPix}
           onCreateClient={onCreateClient}
           onGeneratePix={onGeneratePix}
+          onRecreatePix={onRecreatePix}
           onLinkClient={onLinkClient}
           onOpenClient={onOpenClient}
         />
@@ -5294,6 +5366,7 @@ function ConversationClientPanelContent({
   onCopyPix,
   onCreateClient,
   onGeneratePix,
+  onRecreatePix,
   onLinkClient,
   onOpenClient,
 }: {
@@ -5306,6 +5379,7 @@ function ConversationClientPanelContent({
   onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
   onGeneratePix: (receivable: Receivable) => void;
+  onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
@@ -5400,6 +5474,7 @@ function ConversationClientPanelContent({
           receivables={contactInfo.receivables}
           onCopyPix={onCopyPix}
           onGeneratePix={onGeneratePix}
+          onRecreatePix={onRecreatePix}
           onOpenClient={onOpenClient}
         />
       </div>
@@ -5559,6 +5634,7 @@ function ConversationReferenceList({
   receivables,
   onCopyPix,
   onGeneratePix,
+  onRecreatePix,
   onOpenClient,
 }: {
   client: Client;
@@ -5567,6 +5643,7 @@ function ConversationReferenceList({
   receivables: Receivable[];
   onCopyPix: (intent: PaymentIntent) => void;
   onGeneratePix: (receivable: Receivable) => void;
+  onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
   onOpenClient: (clientId: string) => void;
 }) {
   const references = sortContactReferences(client.references ?? []);
@@ -5589,6 +5666,7 @@ function ConversationReferenceList({
               reference={reference}
               onCopyPix={onCopyPix}
               onGeneratePix={onGeneratePix}
+              onRecreatePix={onRecreatePix}
               onOpenClient={onOpenClient}
             />
           ))}
@@ -5611,6 +5689,7 @@ function ConversationReferenceCard({
   reference,
   onCopyPix,
   onGeneratePix,
+  onRecreatePix,
   onOpenClient,
 }: {
   clientId: string;
@@ -5620,6 +5699,7 @@ function ConversationReferenceCard({
   reference: ClientReference;
   onCopyPix: (intent: PaymentIntent) => void;
   onGeneratePix: (receivable: Receivable) => void;
+  onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
   onOpenClient: (clientId: string) => void;
 }) {
   const openReceivable = contactOpenReceivable(receivables);
@@ -5629,6 +5709,8 @@ function ConversationReferenceCard({
       ? pixIntent
       : null;
   const visiblePix = generatedPix ?? activePix;
+  const pixState = classifyContactPixState(visiblePix);
+  const canActOnPix = contactReceivableAllowsPixAction(openReceivable);
   const isCanceled = reference.status === 'CANCELADO';
   const actionLabel = isCanceled ? 'Reativar' : 'Renovar';
 
@@ -5668,11 +5750,19 @@ function ConversationReferenceCard({
       {reference.notes ? <p className="conversation-reference-note">{reference.notes}</p> : null}
       {visiblePix ? (
         <div className="conversation-reference-pix">
-          <span>
-            PIX {paymentIntentStatusText(visiblePix.status)}
-            {visiblePix.provider ? ` · ${visiblePix.provider}` : ''}
-          </span>
-          {visiblePix.pixCopyPaste ? (
+          <div>
+            <span>
+              PIX {paymentIntentStatusText(visiblePix.status)}
+              {visiblePix.provider ? ` · ${visiblePix.provider}` : ''}
+            </span>
+            {visiblePix.expiresAt ? (
+              <small>
+                {pixState === 'EXPIRED_PIX' ? 'PIX expirado em ' : 'PIX válido até '}
+                {formatDateTime(visiblePix.expiresAt)}
+              </small>
+            ) : null}
+          </div>
+          {pixState === 'ACTIVE_PIX' && visiblePix.pixCopyPaste ? (
             <Button
               icon={QrCode}
               size="sm"
@@ -5682,10 +5772,21 @@ function ConversationReferenceCard({
               Copiar PIX
             </Button>
           ) : null}
+          {canActOnPix && openReceivable && pixState === 'EXPIRED_PIX' ? (
+            <Button
+              icon={RefreshCw}
+              loading={pixBusyReceivableId === openReceivable.id}
+              size="sm"
+              variant="primary"
+              onClick={() => onRecreatePix(openReceivable, visiblePix)}
+            >
+              Recriar PIX
+            </Button>
+          ) : null}
         </div>
       ) : null}
       <div className="conversation-reference-actions">
-        {openReceivable && !visiblePix ? (
+        {canActOnPix && openReceivable && pixState === 'NO_PIX' ? (
           <Button
             icon={QrCode}
             loading={pixBusyReceivableId === openReceivable.id}
@@ -5753,6 +5854,43 @@ export function contactOpenReceivable(receivables: Receivable[]) {
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
 }
 
+export function classifyContactPixState(
+  intent: PaymentIntent | null | undefined,
+  now = Date.now(),
+): ContactPixState {
+  if (!intent) return 'NO_PIX';
+  if (intent.status === 'EXPIRED') return 'EXPIRED_PIX';
+  if (
+    intent.status === 'WAITING_PAYMENT' &&
+    intent.expiresAt &&
+    Date.parse(intent.expiresAt) <= now
+  ) {
+    return 'EXPIRED_PIX';
+  }
+  if (intent.status === 'CREATED' || intent.status === 'WAITING_PAYMENT') {
+    return 'ACTIVE_PIX';
+  }
+  return 'NO_PIX';
+}
+
+export function contactReceivableAllowsPixAction(receivable: Receivable | null | undefined) {
+  return Boolean(receivable && receivable.status !== 'PAGO' && receivable.status !== 'CANCELADO');
+}
+
+export function contactPixReplacementPayload(
+  receivable: Receivable,
+  currentIntent: PaymentIntent,
+): ContactPixReplacementPayload | null {
+  if (currentIntent.receivableId !== receivable.id) return null;
+
+  return {
+    provider: currentIntent.provider,
+    expectedCurrentIntentId: currentIntent.id,
+    reason: 'QR expirado',
+    idempotencyKey: `contact-info-pix-replace:${receivable.id}:${currentIntent.id}:${currentIntent.provider}`,
+  };
+}
+
 function receivableStatusText(status: Receivable['displayStatus']) {
   if (status === 'PENDENTE') return 'EM ABERTO';
   return status;
@@ -5771,6 +5909,10 @@ function paymentIntentStatusText(status: PaymentIntent['status']) {
   };
 
   return labels[status];
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString('pt-BR');
 }
 
 function GuestConversationClientModal({

@@ -6,8 +6,11 @@ import {
   advanceConversationListGeneration,
   allowedWhatsAppReactionEmojis,
   calculateReactionPickerPosition,
+  classifyContactPixState,
   classifyConversationIncomingFile,
   contactOpenReceivable,
+  contactPixReplacementPayload,
+  contactReceivableAllowsPixAction,
   contactReceivablesForReference,
   conversationComposerActionMode,
   conversationInitials,
@@ -36,6 +39,7 @@ import {
 } from './WhatsAppInbox';
 import type {
   ClientReference,
+  PaymentIntent,
   Receivable,
   WhatsAppConversation,
   WhatsAppConversationMessage,
@@ -177,6 +181,31 @@ function receivable(id: string, overrides: Partial<Receivable> = {}): Receivable
   };
 }
 
+function paymentIntent(id: string, overrides: Partial<PaymentIntent> = {}): PaymentIntent {
+  return {
+    id,
+    amount: '100.00',
+    blockchainTxId: null,
+    createdAt: '2026-10-01T12:00:00.000Z',
+    expiresAt: '2026-10-12T12:30:00.000Z',
+    externalDepixId: null,
+    externalStatus: null,
+    failureCode: null,
+    failureMessage: null,
+    lastSyncAt: null,
+    paidAt: null,
+    paymentGroupId: null,
+    pixCopyPaste: '000201',
+    provider: 'FASTPAY',
+    providerTransactionId: 'tx-1',
+    qrCodeData: null,
+    receivableId: 'open-1',
+    status: 'WAITING_PAYMENT',
+    updatedAt: '2026-10-01T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('WhatsAppInbox unread reconciliation helpers', () => {
   it('builds WhatsApp-style avatar initials and falls back for missing names', () => {
     expect(conversationInitials(conversation('1', { displayName: 'Maria Silva' }))).toBe('MS');
@@ -231,6 +260,15 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('ConversationReferenceCard');
     expect(whatsAppInboxSource).toContain('Gerar PIX');
     expect(whatsAppInboxSource).toContain('createReceivablePix(receivable.id)');
+    expect(whatsAppInboxSource).toContain('Recriar PIX');
+    expect(whatsAppInboxSource).toContain('previewReceivablePixReplacement(receivable.id');
+    expect(whatsAppInboxSource).toContain('window.confirm(`${preview.warning}');
+    expect(whatsAppInboxSource).toContain('replaceReceivablePix(receivable.id');
+    expect(whatsAppInboxSource).toContain(
+      'contactPixReplacementPayload(receivable, currentIntent)',
+    );
+    expect(whatsAppInboxSource).toContain('PIX recriado com sucesso');
+    expect(whatsAppInboxSource).toContain('preserveNotice: true');
     expect(whatsAppInboxSource).toContain("reference.status === 'CANCELADO'");
     expect(whatsAppInboxSource).toContain("isCanceled ? 'Reativar' : 'Renovar'");
     expect(globalStylesSource).toContain('.conversation-contact-drawer');
@@ -263,6 +301,70 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toEqual([openForFirst, paidForFirst]);
     expect(contactOpenReceivable([paidForFirst])).toBeUndefined();
     expect(contactOpenReceivable([openForFirst, openForSecond])).toBe(openForSecond);
+  });
+
+  it('classifies drawer PIX state from status and expiration instead of copy-paste alone', () => {
+    const now = Date.parse('2026-10-12T12:00:00.000Z');
+
+    expect(classifyContactPixState(null, now)).toBe('NO_PIX');
+    expect(
+      classifyContactPixState(
+        paymentIntent('active', { expiresAt: '2026-10-12T12:30:00.000Z' }),
+        now,
+      ),
+    ).toBe('ACTIVE_PIX');
+    expect(
+      classifyContactPixState(
+        paymentIntent('created', { expiresAt: '2026-10-12T12:30:00.000Z', status: 'CREATED' }),
+        now,
+      ),
+    ).toBe('ACTIVE_PIX');
+    expect(
+      classifyContactPixState(
+        paymentIntent('expired-time', { expiresAt: '2026-10-12T11:59:59.000Z' }),
+        now,
+      ),
+    ).toBe('EXPIRED_PIX');
+    expect(
+      classifyContactPixState(
+        paymentIntent('expired-status', { status: 'EXPIRED', expiresAt: null }),
+        now,
+      ),
+    ).toBe('EXPIRED_PIX');
+    expect(classifyContactPixState(paymentIntent('paid', { status: 'PAID' }), now)).toBe('NO_PIX');
+    expect(classifyContactPixState(paymentIntent('canceled', { status: 'CANCELED' }), now)).toBe(
+      'NO_PIX',
+    );
+  });
+
+  it('builds the contact PIX replacement payload from the selected receivable and current intent', () => {
+    const currentReceivable = receivable('open-1');
+    const currentIntent = paymentIntent('intent-1', {
+      provider: 'FASTPIX',
+      receivableId: currentReceivable.id,
+    });
+
+    expect(contactPixReplacementPayload(currentReceivable, currentIntent)).toEqual({
+      provider: 'FASTPIX',
+      expectedCurrentIntentId: 'intent-1',
+      reason: 'QR expirado',
+      idempotencyKey: 'contact-info-pix-replace:open-1:intent-1:FASTPIX',
+    });
+    expect(
+      contactPixReplacementPayload(
+        receivable('other-reference-receivable'),
+        paymentIntent('intent-2', { receivableId: 'open-1' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('blocks PIX actions for paid and canceled receivables', () => {
+    expect(contactReceivableAllowsPixAction(receivable('open', { status: 'PENDENTE' }))).toBe(true);
+    expect(contactReceivableAllowsPixAction(receivable('paid', { status: 'PAGO' }))).toBe(false);
+    expect(contactReceivableAllowsPixAction(receivable('canceled', { status: 'CANCELADO' }))).toBe(
+      false,
+    );
+    expect(contactReceivableAllowsPixAction(null)).toBe(false);
   });
 
   it('sorts contact references without treating canceled as renewal candidates', () => {

@@ -292,6 +292,31 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('requests a user avatar with the instance token and preview contract', async () => {
+    const request = vi.fn().mockResolvedValue({
+      success: true,
+      data: { URL: 'https://pps.whatsapp.net/avatar.jpg', ID: '1645308319', Type: 'preview' },
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    const result = await client.userAvatar('instance-token', {
+      Phone: '5491155553934',
+      Preview: true,
+    });
+
+    expect(result.data).toEqual({
+      URL: 'https://pps.whatsapp.net/avatar.jpg',
+      ID: '1645308319',
+      Type: 'preview',
+    });
+    expect(request).toHaveBeenCalledWith('/user/avatar', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: { Phone: '5491155553934', Preview: true },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('sends PIX buttons with the instance bearer token, not the admin token', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
     const client = new KiragoInstanceClient({ request } as never);

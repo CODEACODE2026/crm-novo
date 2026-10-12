@@ -148,6 +148,17 @@ export type ResolveUserLidResult = {
   lid?: string;
 };
 
+export type GetUserAvatarInput = {
+  phone: string;
+  preview: boolean;
+};
+
+export type GetUserAvatarResult = {
+  url: string | null;
+  id?: string | null;
+  type?: string | null;
+};
+
 export interface WhatsAppProvider {
   provisionConnection(input: ProvisionConnectionInput): Promise<ProvisionConnectionResult>;
   findRemoteConnection(input: RemoteConnectionLookupInput): Promise<RemoteConnectionLookupResult>;
@@ -174,6 +185,7 @@ export interface WhatsAppProvider {
   deleteMessage(instanceToken: string, input: DeleteMessageInput): Promise<void>;
   setChatPresence(instanceToken: string, input: ChatPresenceInput): Promise<void>;
   resolveUserLid(instanceToken: string, phone: string): Promise<ResolveUserLidResult>;
+  getUserAvatar(instanceToken: string, input: GetUserAvatarInput): Promise<GetUserAvatarResult>;
   checkPhone(instanceToken: string, phone: string): Promise<unknown>;
   health(): Promise<{ online: boolean; version?: string | null }>;
 }

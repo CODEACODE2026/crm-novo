@@ -39,6 +39,7 @@ import {
   Square,
   Trash2,
   Upload,
+  User,
   UserCheck,
   UserRoundPlus,
   X,
@@ -60,6 +61,7 @@ import {
   formatCurrency,
   getClient,
   getWhatsAppConversation,
+  getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
   linkWhatsAppConversationClient,
   listClientOptions,
@@ -82,6 +84,7 @@ import {
   type ClientPayload,
   type Plan,
   type WhatsAppConnection,
+  type WhatsAppConversationAvatar,
   type WhatsAppConversation,
   type WhatsAppConversationMessage,
   type WhatsAppConversationMessageStatus,
@@ -183,6 +186,11 @@ const conversationPresencePauseDelayMs = 3000;
 
 type ConversationPresenceKind = 'text' | 'audio';
 type ConversationPresenceState = 'paused' | `composing:${ConversationPresenceKind}`;
+type ConversationAvatarState = {
+  loading: boolean;
+  response: WhatsAppConversationAvatar | null;
+  failedUrl: string | null;
+};
 
 export function nextConversationPresenceState(
   current: ConversationPresenceState | undefined,
@@ -198,6 +206,8 @@ const conversationFilters = [
   { id: 'clients', label: 'Clientes' },
   { id: 'guests', label: 'Avulsos' },
 ] satisfies Array<{ id: ConversationFilter; label: string }>;
+const avatarClientCacheTtlMs = 55 * 60 * 1000;
+const avatarClientConcurrency = 4;
 
 export function WhatsAppInbox({
   onOpenClient,
@@ -290,6 +300,9 @@ export function WhatsAppInbox({
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
   const [messageSearchLoadingMore, setMessageSearchLoadingMore] = useState(false);
   const [messageSearchError, setMessageSearchError] = useState('');
+  const [conversationAvatars, setConversationAvatars] = useState<
+    Record<string, ConversationAvatarState>
+  >({});
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -318,6 +331,11 @@ export function WhatsAppInbox({
   const summaryRef = useRef<WhatsAppConversationSummary | null>(null);
   const targetHighlightTimeoutRef = useRef<number | null>(null);
   const openMessageSearchGenerationRef = useRef(0);
+  const avatarCacheRef = useRef(
+    new Map<string, { response: WhatsAppConversationAvatar; expiresAt: number }>(),
+  );
+  const avatarInFlightRef = useRef(new Map<string, Promise<WhatsAppConversationAvatar>>());
+  const avatarMountedRef = useRef(true);
   const messageSearchRequestKeyRef = useRef('');
   const messageSearchResultsRef = useRef<WhatsAppMessageSearchResult[]>([]);
   const messageSearchIndexRef = useRef(0);
@@ -327,6 +345,97 @@ export function WhatsAppInbox({
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
 
+  const fetchConversationAvatar = useCallback((conversationId: string) => {
+    const cached = avatarCacheRef.current.get(conversationId);
+    const nowMs = Date.now();
+
+    if (cached && cached.expiresAt > nowMs) {
+      if (avatarMountedRef.current) {
+        setConversationAvatars((current) => ({
+          ...current,
+          [conversationId]: {
+            loading: false,
+            response: cached.response,
+            failedUrl:
+              current[conversationId]?.failedUrl === cached.response.url
+                ? (current[conversationId]?.failedUrl ?? null)
+                : null,
+          },
+        }));
+      }
+      return Promise.resolve(cached.response);
+    }
+
+    if (cached) {
+      avatarCacheRef.current.delete(conversationId);
+    }
+
+    const existing = avatarInFlightRef.current.get(conversationId);
+    if (existing) {
+      return existing;
+    }
+
+    if (avatarMountedRef.current) {
+      setConversationAvatars((current) => ({
+        ...current,
+        [conversationId]: {
+          loading: true,
+          response: current[conversationId]?.response ?? null,
+          failedUrl: current[conversationId]?.failedUrl ?? null,
+        },
+      }));
+    }
+
+    const request = getWhatsAppConversationAvatar(conversationId)
+      .catch(() => ({ available: false, url: null }))
+      .then((response) => {
+        avatarCacheRef.current.set(conversationId, {
+          response,
+          expiresAt: Date.now() + avatarClientCacheTtlMs,
+        });
+        if (avatarMountedRef.current) {
+          setConversationAvatars((current) => ({
+            ...current,
+            [conversationId]: {
+              loading: false,
+              response,
+              failedUrl:
+                current[conversationId]?.failedUrl === response.url
+                  ? (current[conversationId]?.failedUrl ?? null)
+                  : null,
+            },
+          }));
+        }
+        return response;
+      })
+      .finally(() => {
+        avatarInFlightRef.current.delete(conversationId);
+      });
+
+    avatarInFlightRef.current.set(conversationId, request);
+    return request;
+  }, []);
+
+  const handleAvatarImageError = useCallback((conversationId: string, url: string) => {
+    if (!avatarMountedRef.current) return;
+    setConversationAvatars((current) => ({
+      ...current,
+      [conversationId]: {
+        loading: false,
+        response: current[conversationId]?.response ?? { available: false, url: null },
+        failedUrl: url,
+      },
+    }));
+  }, []);
+
+  useEffect(() => {
+    avatarMountedRef.current = true;
+
+    return () => {
+      avatarMountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
@@ -334,6 +443,35 @@ export function WhatsAppInbox({
   useEffect(() => {
     selectedConversationRef.current = selectedConversation;
   }, [selectedConversation]);
+
+  useEffect(() => {
+    const ids = Array.from(
+      new Set([
+        ...conversations.map((conversation) => conversation.id),
+        ...(selectedConversation ? [selectedConversation.id] : []),
+      ]),
+    );
+    let cancelled = false;
+    let cursor = 0;
+
+    async function loadNext(): Promise<void> {
+      if (cancelled) return;
+      const conversationId = ids[cursor];
+      cursor += 1;
+      if (!conversationId) return;
+      await fetchConversationAvatar(conversationId);
+      return loadNext();
+    }
+
+    const workers = Array.from({ length: Math.min(avatarClientConcurrency, ids.length) }, () =>
+      loadNext(),
+    );
+    void Promise.all(workers);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversations, fetchConversationAvatar, selectedConversation]);
 
   useEffect(() => {
     summaryRef.current = summary;
@@ -2258,9 +2396,11 @@ export function WhatsAppInbox({
           loadMoreError={listLoadMoreError}
           loading={listLoading}
           loadingMore={listLoadingMore}
+          avatars={conversationAvatars}
           searchInput={searchInput}
           selectedId={selectedConversation?.id ?? null}
           statusFilter={statusFilter}
+          onAvatarError={handleAvatarImageError}
           onFilterChange={setFilter}
           onLoadMore={() => void loadMoreConversations()}
           onSearchChange={setSearchInput}
@@ -2289,9 +2429,11 @@ export function WhatsAppInbox({
               ) : null}
               <ConversationHeader
                 conversation={selectedConversation}
+                avatar={conversationAvatars[selectedConversation.id]}
                 opening={opening}
                 presence={conversationPresenceLabel(conversationPresence[selectedConversation.id])}
                 resolving={resolving}
+                onAvatarError={handleAvatarImageError}
                 onBack={() => setMobileMode('list')}
                 onOpenClientPanel={() => setMobileClientOpen(true)}
                 onResolve={() => void resolveSelectedConversation()}
@@ -2625,9 +2767,11 @@ function ConversationList({
   loadMoreError,
   loading,
   loadingMore,
+  avatars,
   searchInput,
   selectedId,
   statusFilter,
+  onAvatarError,
   onFilterChange,
   onLoadMore,
   onSearchChange,
@@ -2641,9 +2785,11 @@ function ConversationList({
   loadMoreError: string;
   loading: boolean;
   loadingMore: boolean;
+  avatars: Record<string, ConversationAvatarState>;
   searchInput: string;
   selectedId: string | null;
   statusFilter: WhatsAppConversationStatus | '';
+  onAvatarError: (conversationId: string, url: string) => void;
   onFilterChange: (filter: ConversationFilter) => void;
   onLoadMore: () => void;
   onSearchChange: (search: string) => void;
@@ -2701,9 +2847,11 @@ function ConversationList({
       <div className="conversation-list-items">
         {conversations.map((conversation) => (
           <ConversationListItem
+            avatar={avatars[conversation.id]}
             conversation={conversation}
             key={conversation.id}
             selected={selectedId === conversation.id}
+            onAvatarError={onAvatarError}
             onSelect={onSelect}
           />
         ))}
@@ -2731,13 +2879,58 @@ function ConversationList({
   );
 }
 
+function ConversationAvatar({
+  avatar,
+  conversation,
+  size,
+  onImageError,
+}: {
+  avatar?: ConversationAvatarState | undefined;
+  conversation: WhatsAppConversation;
+  size?: 'large';
+  onImageError: (conversationId: string, url: string) => void;
+}) {
+  const url = avatar?.response?.available ? avatar.response.url : null;
+  const showImage = Boolean(url && avatar?.failedUrl !== url);
+  const initials = conversationInitials(conversation);
+
+  return (
+    <span
+      aria-hidden="true"
+      className={`conversation-avatar${size === 'large' ? ' large' : ''}${
+        avatar?.loading ? ' loading' : ''
+      }${showImage ? ' has-image' : ''}`}
+    >
+      {showImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          alt=""
+          draggable={false}
+          src={url ?? undefined}
+          onError={() => {
+            if (url) onImageError(conversation.id, url);
+          }}
+        />
+      ) : initials ? (
+        initials
+      ) : (
+        <User size={size === 'large' ? 20 : 18} />
+      )}
+    </span>
+  );
+}
+
 function ConversationListItem({
+  avatar,
   conversation,
   selected,
+  onAvatarError,
   onSelect,
 }: {
+  avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
   selected: boolean;
+  onAvatarError: (conversationId: string, url: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
 }) {
   return (
@@ -2747,7 +2940,11 @@ function ConversationListItem({
       type="button"
       onClick={() => onSelect(conversation)}
     >
-      <span className="conversation-avatar">{conversationInitial(conversation)}</span>
+      <ConversationAvatar
+        avatar={avatar}
+        conversation={conversation}
+        onImageError={onAvatarError}
+      />
       <span className="conversation-list-copy">
         <span className="conversation-list-title-row">
           <strong>{conversation.displayName}</strong>
@@ -2775,19 +2972,23 @@ function ConversationListItem({
 }
 
 function ConversationHeader({
+  avatar,
   conversation,
   opening,
   presence,
   resolving,
+  onAvatarError,
   onBack,
   onOpenClientPanel,
   onResolve,
   onToggleSearch,
 }: {
+  avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
   opening: boolean;
   presence: string | null;
   resolving: boolean;
+  onAvatarError: (conversationId: string, url: string) => void;
   onBack: () => void;
   onOpenClientPanel: () => void;
   onResolve: () => void;
@@ -2804,7 +3005,12 @@ function ConversationHeader({
         <span>Voltar</span>
       </button>
       <div className="conversation-header-main">
-        <span className="conversation-avatar large">{conversationInitial(conversation)}</span>
+        <ConversationAvatar
+          avatar={avatar}
+          conversation={conversation}
+          size="large"
+          onImageError={onAvatarError}
+        />
         <div>
           <h3>{conversation.displayName}</h3>
           <p>{instanceLabel ? `${phoneLabel} · ${instanceLabel}` : phoneLabel}</p>
@@ -5403,8 +5609,13 @@ function isTechnicalInstanceName(value: string) {
   return /(?:^|-)crm-novo(?:-|$)/i.test(value) || /^[a-f0-9-]{20,}$/i.test(value);
 }
 
-function conversationInitial(conversation: WhatsAppConversation) {
-  return (conversation.displayName || conversation.phone || '?').slice(0, 1).toUpperCase();
+export function conversationInitials(conversation: Pick<WhatsAppConversation, 'displayName'>) {
+  const name = conversation.displayName.trim().replace(/\s+/g, ' ');
+  if (!name) return '';
+  const parts = name.split(' ').filter(Boolean);
+  const first = parts[0]?.[0] ?? '';
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
+  return `${first}${last}`.toUpperCase().slice(0, 2);
 }
 
 function conversationDateLabel(value: string | null) {

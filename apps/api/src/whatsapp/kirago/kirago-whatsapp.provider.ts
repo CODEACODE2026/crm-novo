@@ -7,6 +7,8 @@ import { KiragoHttpClient } from './kirago-http.client';
 import { KiragoProviderError } from './kirago-provider.error';
 import type {
   DownloadMediaInput,
+  GetUserAvatarInput,
+  GetUserAvatarResult,
   MarkMessagesAsReadInput,
   ChatPresenceInput,
   DeleteMessageInput,
@@ -374,6 +376,34 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     }
   }
 
+  async getUserAvatar(
+    instanceToken: string,
+    input: GetUserAvatarInput,
+  ): Promise<GetUserAvatarResult> {
+    try {
+      const response = await this.instanceClient.userAvatar(instanceToken, {
+        Phone: input.phone,
+        Preview: input.preview,
+      });
+      const data = response.data;
+      const url = this.publicUrlValue(data?.URL ?? data?.url);
+      const id = this.stringValue(data?.ID ?? data?.Id ?? data?.id);
+      const type = this.stringValue(data?.Type ?? data?.type);
+
+      return {
+        url,
+        ...(id ? { id } : {}),
+        ...(type ? { type } : {}),
+      };
+    } catch (error) {
+      if (error instanceof KiragoProviderError) {
+        return { url: null };
+      }
+
+      throw error;
+    }
+  }
+
   private reactionMessageId(providerMessageId: string, isOwnMessage: boolean) {
     if (!isOwnMessage || providerMessageId.startsWith('me:')) {
       return providerMessageId;
@@ -592,6 +622,19 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
 
   private stringValue(value: unknown) {
     return typeof value === 'string' ? value.trim().toLowerCase() : null;
+  }
+
+  private publicUrlValue(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed || !/^https:\/\//i.test(trimmed)) {
+      return null;
+    }
+
+    return trimmed;
   }
 
   private phoneFromStatus(

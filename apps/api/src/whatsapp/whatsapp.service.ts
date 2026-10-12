@@ -53,6 +53,7 @@ import {
   WHATSAPP_PROVIDER,
   type DownloadMediaType,
   type DownloadMediaInput,
+  type GetUserAvatarResult,
   type ChatPresenceInput,
   type SendTextInput,
   type WhatsAppProvider,
@@ -364,6 +365,17 @@ type ConversationPresenceState = InboundConversationPresenceState | null;
 const chatPresenceLidConversationCacheTtlMs = 24 * 60 * 60 * 1000;
 const chatPresenceLidConversationCacheMaxEntries = 1000;
 const chatPresenceRemoteLidLookupConversationLimit = 10;
+const avatarPositiveCacheTtlMs = 60 * 60 * 1000;
+const avatarNegativeCacheTtlMs = 10 * 60 * 1000;
+
+type WhatsAppConversationAvatarResponse = {
+  available: boolean;
+  url: string | null;
+};
+
+type WhatsAppAvatarCacheValue = GetUserAvatarResult & {
+  expiresAt: number;
+};
 
 @Injectable()
 export class WhatsAppService {
@@ -386,6 +398,8 @@ export class WhatsAppService {
     { lid: string; expiresAt: number }
   >();
   private readonly chatPresenceRemoteLidLookupInFlight = new Map<string, Promise<string | null>>();
+  private readonly avatarCache = new Map<string, WhatsAppAvatarCacheValue>();
+  private readonly avatarInFlight = new Map<string, Promise<GetUserAvatarResult>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -960,6 +974,43 @@ export class WhatsAppService {
     }
 
     return this.presentConversation(conversation);
+  }
+
+  async getConversationAvatar(id: string): Promise<WhatsAppConversationAvatarResponse> {
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      include: { whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const phone = this.tryNormalizePhone(conversation.phoneNormalized);
+
+    if (!phone) {
+      return { available: false, url: null };
+    }
+
+    const cacheKey = this.avatarCacheKey(conversation.whatsAppConnectionId, phone);
+    const nowMs = Date.now();
+    const cached = this.avatarCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > nowMs) {
+      return this.presentAvatarResult(cached);
+    }
+
+    if (cached) {
+      this.avatarCache.delete(cacheKey);
+    }
+
+    const result = await this.getConversationAvatarFromProvider(
+      cacheKey,
+      conversation.whatsAppConnection,
+      phone,
+    );
+
+    return this.presentAvatarResult(result);
   }
 
   async listConversationMessages(id: string, query: ListWhatsAppConversationMessagesDto) {
@@ -4511,6 +4562,61 @@ export class WhatsAppService {
         },
       },
     });
+  }
+
+  private async getConversationAvatarFromProvider(
+    cacheKey: string,
+    connection: WhatsAppConnection,
+    phone: string,
+  ) {
+    const inFlight = this.avatarInFlight.get(cacheKey);
+
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = this.fetchConversationAvatar(connection, phone)
+      .then((result) => {
+        this.avatarCache.set(cacheKey, {
+          ...result,
+          expiresAt:
+            Date.now() + (result.url ? avatarPositiveCacheTtlMs : avatarNegativeCacheTtlMs),
+        });
+        return result;
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `WhatsApp avatar provider failed conversationConnection=${connection.id} status=${this.sanitizeError(error)}`,
+        );
+        const result = { url: null };
+        this.avatarCache.set(cacheKey, {
+          ...result,
+          expiresAt: Date.now() + avatarNegativeCacheTtlMs,
+        });
+        return result;
+      })
+      .finally(() => {
+        this.avatarInFlight.delete(cacheKey);
+      });
+
+    this.avatarInFlight.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async fetchConversationAvatar(connection: WhatsAppConnection, phone: string) {
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    return this.provider.getUserAvatar(instanceToken, { phone, preview: true });
+  }
+
+  private presentAvatarResult(result: Pick<GetUserAvatarResult, 'url'>) {
+    return {
+      available: Boolean(result.url),
+      url: result.url ?? null,
+    };
+  }
+
+  private avatarCacheKey(connectionId: string, phone: string) {
+    return `${connectionId}:${phone}`;
   }
 
   private async findConversationForReadInTransaction(tx: Prisma.TransactionClient, id: string) {

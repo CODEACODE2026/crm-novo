@@ -283,6 +283,11 @@ export class WhatsAppController {
     return this.whatsAppService.linkConversationClient(id, dto, request.user.id);
   }
 
+  @Get('conversations/:conversationId/avatar')
+  getConversationAvatar(@Param('conversationId') conversationId: string) {
+    return this.whatsAppService.getConversationAvatar(conversationId);
+  }
+
   @Get('conversations/:id')
   getConversation(@Param('id') id: string) {
     return this.whatsAppService.getConversation(id);

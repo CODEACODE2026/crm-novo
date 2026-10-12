@@ -723,6 +723,11 @@ export interface WhatsAppConversationSummary {
   totalUnreadMessages: number;
 }
 
+export interface WhatsAppConversationAvatar {
+  available: boolean;
+  url: string | null;
+}
+
 export interface WhatsAppConversationMessage {
   id: string;
   direction: WhatsAppConversationMessageDirection;
@@ -2580,6 +2585,10 @@ export function listWhatsAppConversations(
 
 export function getWhatsAppConversation(id: string) {
   return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}`);
+}
+
+export function getWhatsAppConversationAvatar(id: string) {
+  return apiFetch<WhatsAppConversationAvatar>(`/whatsapp/conversations/${id}/avatar`);
 }
 
 export function listWhatsAppConversationMessages(

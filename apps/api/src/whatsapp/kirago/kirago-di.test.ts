@@ -127,6 +127,56 @@ describe('Kirago dependency injection', () => {
     await expect(provider.resolveUserLid('instance-token', '5511999999999')).resolves.toEqual({});
   });
 
+  it('normalizes avatar responses without exposing raw Kirago payload fields', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const userAvatar = vi.spyOn(instanceClient, 'userAvatar').mockResolvedValue({
+      success: true,
+      data: {
+        URL: 'https://pps.whatsapp.net/avatar.jpg',
+        ID: '1645308319',
+        Type: 'preview',
+        DirectPath: '/v/private',
+      },
+    });
+
+    await expect(
+      provider.getUserAvatar('instance-token', { phone: '5491155553934', preview: true }),
+    ).resolves.toEqual({
+      url: 'https://pps.whatsapp.net/avatar.jpg',
+      id: '1645308319',
+      type: 'preview',
+    });
+    expect(userAvatar).toHaveBeenCalledWith('instance-token', {
+      Phone: '5491155553934',
+      Preview: true,
+    });
+  });
+
+  it('treats missing avatar URL and provider avatar failures as unavailable', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+
+    vi.spyOn(instanceClient, 'userAvatar').mockResolvedValueOnce({
+      success: true,
+      data: { ID: '1645308319', Type: 'preview' },
+    });
+    await expect(
+      provider.getUserAvatar('instance-token', { phone: '5491155553934', preview: true }),
+    ).resolves.toEqual({ url: null, id: '1645308319', type: 'preview' });
+
+    vi.spyOn(instanceClient, 'userAvatar').mockRejectedValueOnce(
+      new KiragoProviderError('KIRAGO_TIMEOUT', 'Tempo limite da Kirago excedido.', 504),
+    );
+    await expect(
+      provider.getUserAvatar('instance-token', { phone: '5491155553934', preview: true }),
+    ).resolves.toEqual({ url: null });
+  });
+
   it('updates an existing Kirago webhook instead of creating duplicates', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

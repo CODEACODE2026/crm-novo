@@ -113,6 +113,17 @@ export type KiragoUserLidData = {
   LID?: string;
 };
 
+export type KiragoUserAvatarData = {
+  URL?: string;
+  url?: string;
+  Id?: string;
+  ID?: string;
+  id?: string;
+  Type?: string;
+  type?: string;
+  DirectPath?: string;
+};
+
 @Injectable()
 export class KiragoInstanceClient {
   constructor(@Inject(KiragoHttpClient) private readonly http: KiragoHttpClient) {}
@@ -297,6 +308,15 @@ export class KiragoInstanceClient {
       method: 'POST',
       headers: { token: instanceToken },
       body: { Phone: phone },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  userAvatar(instanceToken: string, payload: { Phone: string; Preview: boolean }) {
+    return this.http.request<KiragoEnvelope<KiragoUserAvatarData>>('/user/avatar', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   }

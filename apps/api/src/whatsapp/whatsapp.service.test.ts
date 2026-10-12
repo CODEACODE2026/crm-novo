@@ -632,6 +632,11 @@ function serviceFactory({
     deleteMessage: vi.fn().mockResolvedValue(undefined),
     setChatPresence: vi.fn().mockResolvedValue(undefined),
     resolveUserLid: vi.fn().mockResolvedValue({}),
+    getUserAvatar: vi.fn().mockResolvedValue({
+      url: 'https://pps.whatsapp.net/avatar.jpg',
+      id: 'avatar-id',
+      type: 'preview',
+    }),
     markMessagesAsRead: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn().mockResolvedValue({
       dataUrl: `data:image/jpeg;base64,${Buffer.from('image-bytes').toString('base64')}`,
@@ -716,6 +721,145 @@ function serviceFactory({
 }
 
 describe('WhatsAppService', () => {
+  it('returns a normalized conversation avatar using the conversation phone and instance token', async () => {
+    const current = conversation();
+    const { service, provider, encryption, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(current),
+        },
+      },
+    });
+
+    const result = await service.getConversationAvatar(current.id);
+
+    expect(result).toEqual({
+      available: true,
+      url: 'https://pps.whatsapp.net/avatar.jpg',
+    });
+    expect(encryption.decrypt).toHaveBeenCalledWith('encrypted-token');
+    expect(provider.getUserAvatar).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      preview: true,
+    });
+    expect(prisma.whatsAppConversation.findUnique).toHaveBeenCalledWith({
+      where: { id: current.id },
+      include: { whatsAppConnection: true },
+    });
+  });
+
+  it('returns unavailable for missing conversations and missing avatar URLs without a fatal provider error', async () => {
+    const missing = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await expect(missing.service.getConversationAvatar(conversation().id)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    const withoutAvatar = serviceFactory({
+      providerOverrides: { getUserAvatar: vi.fn().mockResolvedValue({ url: null }) },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    await expect(withoutAvatar.service.getConversationAvatar(conversation().id)).resolves.toEqual({
+      available: false,
+      url: null,
+    });
+  });
+
+  it('negative-caches provider failures and dedupes concurrent avatar requests', async () => {
+    const providerGetUserAvatar = vi.fn(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ url: 'https://pps.whatsapp.net/avatar.jpg' }), 1),
+        ),
+    );
+    const { service, provider } = serviceFactory({
+      providerOverrides: { getUserAvatar: providerGetUserAvatar },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation()),
+        },
+      },
+    });
+
+    const [first, second] = await Promise.all([
+      service.getConversationAvatar(conversation().id),
+      service.getConversationAvatar(conversation().id),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(provider.getUserAvatar).toHaveBeenCalledTimes(1);
+
+    await service.getConversationAvatar(conversation().id);
+    expect(provider.getUserAvatar).toHaveBeenCalledTimes(1);
+
+    const failing = serviceFactory({
+      providerOverrides: { getUserAvatar: vi.fn().mockRejectedValue(new Error('timeout')) },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ id: 'avatar-failure' })),
+        },
+      },
+    });
+
+    await expect(failing.service.getConversationAvatar('avatar-failure')).resolves.toEqual({
+      available: false,
+      url: null,
+    });
+    await failing.service.getConversationAvatar('avatar-failure');
+    expect(failing.provider.getUserAvatar).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not collide avatar cache entries for the same phone in different connections', async () => {
+    const providerGetUserAvatar = vi
+      .fn()
+      .mockResolvedValueOnce({ url: 'https://pps.whatsapp.net/one.jpg' })
+      .mockResolvedValueOnce({ url: 'https://pps.whatsapp.net/two.jpg' });
+    const firstConnection = connection({ id: 'connection-one' });
+    const secondConnection = connection({ id: 'connection-two' });
+    const { service } = serviceFactory({
+      providerOverrides: { getUserAvatar: providerGetUserAvatar },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(
+              conversation({
+                whatsAppConnectionId: firstConnection.id,
+                whatsAppConnection: firstConnection,
+              }),
+            )
+            .mockResolvedValueOnce(
+              conversation({
+                whatsAppConnectionId: secondConnection.id,
+                whatsAppConnection: secondConnection,
+              }),
+            ),
+        },
+      },
+    });
+
+    await expect(service.getConversationAvatar('first')).resolves.toEqual({
+      available: true,
+      url: 'https://pps.whatsapp.net/one.jpg',
+    });
+    await expect(service.getConversationAvatar('second')).resolves.toEqual({
+      available: true,
+      url: 'https://pps.whatsapp.net/two.jpg',
+    });
+    expect(providerGetUserAvatar).toHaveBeenCalledTimes(2);
+  });
+
   it('provisions a connection without exposing the generated token', async () => {
     const { service, provider, encryption, prisma } = serviceFactory({ currentConnection: null });
 

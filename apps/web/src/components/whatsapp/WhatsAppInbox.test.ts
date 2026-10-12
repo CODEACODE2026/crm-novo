@@ -8,6 +8,7 @@ import {
   calculateReactionPickerPosition,
   classifyConversationIncomingFile,
   conversationComposerActionMode,
+  conversationInitials,
   conversationVideoAccept,
   createConversationComposerMedia,
   disposeConversationComposerMedia,
@@ -115,6 +116,26 @@ function reaction(
 }
 
 describe('WhatsAppInbox unread reconciliation helpers', () => {
+  it('builds WhatsApp-style avatar initials and falls back for missing names', () => {
+    expect(conversationInitials(conversation('1', { displayName: 'Maria Silva' }))).toBe('MS');
+    expect(conversationInitials(conversation('1', { displayName: '  João   ' }))).toBe('J');
+    expect(conversationInitials(conversation('1', { displayName: 'Ana Maria Souza' }))).toBe('AS');
+    expect(conversationInitials(conversation('1', { displayName: '' }))).toBe('');
+  });
+
+  it('wires conversation avatars into sidebar and header with image error fallback', () => {
+    expect(whatsAppInboxSource).toContain('getWhatsAppConversationAvatar');
+    expect(whatsAppInboxSource).toContain('avatarClientCacheTtlMs');
+    expect(whatsAppInboxSource).toContain('avatarClientConcurrency = 4');
+    expect(whatsAppInboxSource).toContain('avatarInFlightRef');
+    expect(whatsAppInboxSource).toContain('<ConversationAvatar');
+    expect(whatsAppInboxSource).toContain('onError={() =>');
+    expect(whatsAppInboxSource).toContain('conversation-unread-badge');
+    expect(whatsAppInboxSource).toContain('conversation-presence-label');
+    expect(globalStylesSource).toContain('.conversation-avatar.has-image');
+    expect(globalStylesSource).toContain('object-fit: cover');
+  });
+
   it('dedupes outbound presence state transitions locally', () => {
     expect(nextConversationPresenceState(undefined, 'composing:text')).toBe('composing:text');
     expect(nextConversationPresenceState(undefined, 'paused')).toBeNull();

@@ -136,6 +136,21 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('object-fit: cover');
   });
 
+  it('wires avatar preview lightbox without adding another avatar fetch path', () => {
+    expect(whatsAppInboxSource).toContain('WhatsAppAvatarPreview');
+    expect(whatsAppInboxSource).toContain('aria-label="Ver foto de perfil"');
+    expect(whatsAppInboxSource).toContain('aria-modal="true"');
+    expect(whatsAppInboxSource).toContain('role="dialog"');
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain('document.body.style.overflow =');
+    expect(whatsAppInboxSource).toContain('event.target === event.currentTarget');
+    expect(whatsAppInboxSource).toContain('onMouseDown={(event) => event.stopPropagation()}');
+    expect(whatsAppInboxSource).toContain('handleAvatarPreviewImageError');
+    expect(whatsAppInboxSource).not.toContain('Preview: false');
+    expect(globalStylesSource).toContain('.whatsapp-avatar-preview-backdrop');
+    expect(globalStylesSource).toContain('max-height: 80vh');
+  });
+
   it('dedupes outbound presence state transitions locally', () => {
     expect(nextConversationPresenceState(undefined, 'composing:text')).toBe('composing:text');
     expect(nextConversationPresenceState(undefined, 'paused')).toBeNull();

@@ -191,6 +191,11 @@ type ConversationAvatarState = {
   response: WhatsAppConversationAvatar | null;
   failedUrl: string | null;
 };
+type ConversationAvatarPreview = {
+  conversationId: string;
+  name: string;
+  url: string;
+};
 
 export function nextConversationPresenceState(
   current: ConversationPresenceState | undefined,
@@ -303,6 +308,7 @@ export function WhatsAppInbox({
   const [conversationAvatars, setConversationAvatars] = useState<
     Record<string, ConversationAvatarState>
   >({});
+  const [avatarPreview, setAvatarPreview] = useState<ConversationAvatarPreview | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -427,6 +433,20 @@ export function WhatsAppInbox({
       },
     }));
   }, []);
+
+  const openAvatarPreview = useCallback((conversation: WhatsAppConversation, url: string) => {
+    setAvatarPreview({ conversationId: conversation.id, name: conversation.displayName, url });
+  }, []);
+
+  const closeAvatarPreview = useCallback(() => {
+    setAvatarPreview(null);
+  }, []);
+
+  const handleAvatarPreviewImageError = useCallback(() => {
+    if (!avatarPreview) return;
+    handleAvatarImageError(avatarPreview.conversationId, avatarPreview.url);
+    setAvatarPreview(null);
+  }, [avatarPreview, handleAvatarImageError]);
 
   useEffect(() => {
     avatarMountedRef.current = true;
@@ -2387,6 +2407,15 @@ export function WhatsAppInbox({
         />
       ) : null}
 
+      {avatarPreview ? (
+        <WhatsAppAvatarPreview
+          name={avatarPreview.name}
+          url={avatarPreview.url}
+          onClose={closeAvatarPreview}
+          onImageError={handleAvatarPreviewImageError}
+        />
+      ) : null}
+
       <div className="conversations-shell">
         <ConversationList
           conversations={conversations}
@@ -2401,6 +2430,7 @@ export function WhatsAppInbox({
           selectedId={selectedConversation?.id ?? null}
           statusFilter={statusFilter}
           onAvatarError={handleAvatarImageError}
+          onAvatarPreview={openAvatarPreview}
           onFilterChange={setFilter}
           onLoadMore={() => void loadMoreConversations()}
           onSearchChange={setSearchInput}
@@ -2434,6 +2464,7 @@ export function WhatsAppInbox({
                 presence={conversationPresenceLabel(conversationPresence[selectedConversation.id])}
                 resolving={resolving}
                 onAvatarError={handleAvatarImageError}
+                onAvatarPreview={openAvatarPreview}
                 onBack={() => setMobileMode('list')}
                 onOpenClientPanel={() => setMobileClientOpen(true)}
                 onResolve={() => void resolveSelectedConversation()}
@@ -2759,6 +2790,74 @@ function StartConversationModal({
   );
 }
 
+function WhatsAppAvatarPreview({
+  name,
+  url,
+  onClose,
+  onImageError,
+}: {
+  name: string;
+  url: string;
+  onClose: () => void;
+  onImageError: () => void;
+}) {
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    }
+
+    document.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="whatsapp-avatar-preview-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        aria-label={`Foto de perfil de ${name || 'contato'}`}
+        aria-modal="true"
+        className="whatsapp-avatar-preview"
+        role="dialog"
+      >
+        <IconButton
+          ref={closeButtonRef}
+          icon={X}
+          label="Fechar foto de perfil"
+          className="whatsapp-avatar-preview-close"
+          onClick={onClose}
+        />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          alt={name ? `Foto de perfil de ${name}` : 'Foto de perfil'}
+          draggable={false}
+          src={url}
+          onError={onImageError}
+          onMouseDown={(event) => event.stopPropagation()}
+        />
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function ConversationList({
   conversations,
   filter,
@@ -2772,6 +2871,7 @@ function ConversationList({
   selectedId,
   statusFilter,
   onAvatarError,
+  onAvatarPreview,
   onFilterChange,
   onLoadMore,
   onSearchChange,
@@ -2790,6 +2890,7 @@ function ConversationList({
   selectedId: string | null;
   statusFilter: WhatsAppConversationStatus | '';
   onAvatarError: (conversationId: string, url: string) => void;
+  onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onFilterChange: (filter: ConversationFilter) => void;
   onLoadMore: () => void;
   onSearchChange: (search: string) => void;
@@ -2852,6 +2953,7 @@ function ConversationList({
             key={conversation.id}
             selected={selectedId === conversation.id}
             onAvatarError={onAvatarError}
+            onAvatarPreview={onAvatarPreview}
             onSelect={onSelect}
           />
         ))}
@@ -2884,38 +2986,60 @@ function ConversationAvatar({
   conversation,
   size,
   onImageError,
+  onPreview,
 }: {
   avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
   size?: 'large';
   onImageError: (conversationId: string, url: string) => void;
+  onPreview?: (conversation: WhatsAppConversation, url: string) => void;
 }) {
   const url = avatar?.response?.available ? avatar.response.url : null;
   const showImage = Boolean(url && avatar?.failedUrl !== url);
   const initials = conversationInitials(conversation);
+  const canPreview = Boolean(showImage && url && onPreview);
+
+  function openPreview(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (url) onPreview?.(conversation, url);
+  }
+
+  const content = showImage ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      alt=""
+      draggable={false}
+      src={url ?? undefined}
+      onError={() => {
+        if (url) onImageError(conversation.id, url);
+      }}
+    />
+  ) : initials ? (
+    initials
+  ) : (
+    <User size={size === 'large' ? 20 : 18} />
+  );
+
+  const className = `conversation-avatar${size === 'large' ? ' large' : ''}${
+    avatar?.loading ? ' loading' : ''
+  }${showImage ? ' has-image' : ''}${canPreview ? ' is-clickable' : ''}`;
+
+  if (canPreview) {
+    return (
+      <button
+        aria-label="Ver foto de perfil"
+        className={className}
+        type="button"
+        onClick={openPreview}
+      >
+        {content}
+      </button>
+    );
+  }
 
   return (
-    <span
-      aria-hidden="true"
-      className={`conversation-avatar${size === 'large' ? ' large' : ''}${
-        avatar?.loading ? ' loading' : ''
-      }${showImage ? ' has-image' : ''}`}
-    >
-      {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          alt=""
-          draggable={false}
-          src={url ?? undefined}
-          onError={() => {
-            if (url) onImageError(conversation.id, url);
-          }}
-        />
-      ) : initials ? (
-        initials
-      ) : (
-        <User size={size === 'large' ? 20 : 18} />
-      )}
+    <span aria-hidden="true" className={className}>
+      {content}
     </span>
   );
 }
@@ -2925,27 +3049,32 @@ function ConversationListItem({
   conversation,
   selected,
   onAvatarError,
+  onAvatarPreview,
   onSelect,
 }: {
   avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
   selected: boolean;
   onAvatarError: (conversationId: string, url: string) => void;
+  onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
 }) {
   return (
-    <button
+    <div
       aria-current={selected ? 'true' : undefined}
       className={`conversation-list-item ${selected ? 'active' : ''}`}
-      type="button"
-      onClick={() => onSelect(conversation)}
     >
       <ConversationAvatar
         avatar={avatar}
         conversation={conversation}
         onImageError={onAvatarError}
+        onPreview={onAvatarPreview}
       />
-      <span className="conversation-list-copy">
+      <button
+        className="conversation-list-main"
+        type="button"
+        onClick={() => onSelect(conversation)}
+      >
         <span className="conversation-list-title-row">
           <strong>{conversation.displayName}</strong>
           <small>
@@ -2966,8 +3095,8 @@ function ConversationListItem({
             {conversation.client ? 'Cliente' : 'Avulso'}
           </span>
         </span>
-      </span>
-    </button>
+      </button>
+    </div>
   );
 }
 
@@ -2978,6 +3107,7 @@ function ConversationHeader({
   presence,
   resolving,
   onAvatarError,
+  onAvatarPreview,
   onBack,
   onOpenClientPanel,
   onResolve,
@@ -2989,6 +3119,7 @@ function ConversationHeader({
   presence: string | null;
   resolving: boolean;
   onAvatarError: (conversationId: string, url: string) => void;
+  onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onBack: () => void;
   onOpenClientPanel: () => void;
   onResolve: () => void;
@@ -3010,6 +3141,7 @@ function ConversationHeader({
           conversation={conversation}
           size="large"
           onImageError={onAvatarError}
+          onPreview={onAvatarPreview}
         />
         <div>
           <h3>{conversation.displayName}</h3>

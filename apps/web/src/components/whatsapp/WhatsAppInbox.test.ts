@@ -7,6 +7,8 @@ import {
   allowedWhatsAppReactionEmojis,
   calculateReactionPickerPosition,
   classifyConversationIncomingFile,
+  contactOpenReceivable,
+  contactReceivablesForReference,
   conversationComposerActionMode,
   conversationInitials,
   conversationVideoAccept,
@@ -28,10 +30,16 @@ import {
   shouldApplyConversationListResponse,
   shouldReadVisibleConversationOnReturn,
   shouldRetryActiveConversationRead,
+  sortContactReferences,
   summarizeConversationReactions,
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
-import type { WhatsAppConversation, WhatsAppConversationMessage } from '../../lib/crm-api';
+import type {
+  ClientReference,
+  Receivable,
+  WhatsAppConversation,
+  WhatsAppConversationMessage,
+} from '../../lib/crm-api';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
@@ -115,6 +123,60 @@ function reaction(
   };
 }
 
+function contactReference(id: string, overrides: Partial<ClientReference> = {}): ClientReference {
+  return {
+    id,
+    billingAnchorDay: 10,
+    billingNoticeDays: 5,
+    canceledAt: null,
+    canceledByUserId: null,
+    cancellationReason: null,
+    clientId: 'client-1',
+    createdAt: '2026-10-01T12:00:00.000Z',
+    dueDate: '2026-10-10',
+    inactivatedAt: null,
+    inactivatedByUserId: null,
+    inactivationReason: null,
+    notes: null,
+    plan: {
+      id: 'plan-1',
+      active: true,
+      defaultValue: '100.00',
+      durationMonths: 1,
+      name: 'Mensal',
+    },
+    planId: 'plan-1',
+    recurringValue: '100.00',
+    reference: `ref-${id}`,
+    status: 'ATIVO',
+    updatedAt: '2026-10-01T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function receivable(id: string, overrides: Partial<Receivable> = {}): Receivable {
+  return {
+    id,
+    amount: '100.00',
+    canceledAt: null,
+    cancelReason: null,
+    clientId: 'client-1',
+    clientReferenceId: 'reference-1',
+    createdAt: '2026-10-01T12:00:00.000Z',
+    description: `Cobrança ${id}`,
+    displayStatus: 'PENDENTE',
+    dueDate: '2026-10-10',
+    paidAt: null,
+    paymentIntents: [],
+    purpose: 'RENEWAL',
+    renewalId: null,
+    sourceKind: 'RECEIVABLE',
+    status: 'PENDENTE',
+    updatedAt: '2026-10-01T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('WhatsAppInbox unread reconciliation helpers', () => {
   it('builds WhatsApp-style avatar initials and falls back for missing names', () => {
     expect(conversationInitials(conversation('1', { displayName: 'Maria Silva' }))).toBe('MS');
@@ -154,6 +216,63 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('height: 100%');
     expect(globalStylesSource).toContain('max-height: 80vh');
     expect(globalStylesSource).toContain('height: min(calc(100vw - 32px), 75vh)');
+  });
+
+  it('wires the contact info drawer with references and existing PIX flow actions', () => {
+    expect(whatsAppInboxSource).toContain('conversation-contact-name-button');
+    expect(whatsAppInboxSource).toContain('conversation-contact-drawer');
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain('listReceivables({');
+    expect(whatsAppInboxSource).toContain('clientReferenceId: reference.id');
+    expect(whatsAppInboxSource).toContain('pageSize: 20');
+    expect(whatsAppInboxSource).not.toContain('clientId: conversation.client.id');
+    expect(whatsAppInboxSource).not.toContain('pageSize: 100');
+    expect(whatsAppInboxSource).toContain('ConversationReferenceList');
+    expect(whatsAppInboxSource).toContain('ConversationReferenceCard');
+    expect(whatsAppInboxSource).toContain('Gerar PIX');
+    expect(whatsAppInboxSource).toContain('createReceivablePix(receivable.id)');
+    expect(whatsAppInboxSource).toContain("reference.status === 'CANCELADO'");
+    expect(whatsAppInboxSource).toContain("isCanceled ? 'Reativar' : 'Renovar'");
+    expect(globalStylesSource).toContain('.conversation-contact-drawer');
+    expect(globalStylesSource).toContain('.conversation-reference-card');
+    expect(globalStylesSource).toContain('width: min(430px, calc(100vw - 24px))');
+    expect(globalStylesSource).toContain('width: min(100vw, 440px)');
+  });
+
+  it('maps receivables to references by clientReferenceId and picks only valid open charges', () => {
+    const openForFirst = receivable('open-1', {
+      clientReferenceId: 'reference-1',
+      dueDate: '2026-10-12',
+      displayStatus: 'PENDENTE',
+      status: 'PENDENTE',
+    });
+    const paidForFirst = receivable('paid-1', {
+      clientReferenceId: 'reference-1',
+      displayStatus: 'PAGO',
+      status: 'PAGO',
+    });
+    const openForSecond = receivable('open-2', {
+      clientReferenceId: 'reference-2',
+      dueDate: '2026-10-01',
+      displayStatus: 'VENCIDO',
+      status: 'PENDENTE',
+    });
+
+    expect(
+      contactReceivablesForReference([openForFirst, paidForFirst, openForSecond], 'reference-1'),
+    ).toEqual([openForFirst, paidForFirst]);
+    expect(contactOpenReceivable([paidForFirst])).toBeUndefined();
+    expect(contactOpenReceivable([openForFirst, openForSecond])).toBe(openForSecond);
+  });
+
+  it('sorts contact references without treating canceled as renewal candidates', () => {
+    const canceled = contactReference('canceled', { status: 'CANCELADO' });
+    const active = contactReference('active', { status: 'ATIVO', dueDate: '2026-10-20' });
+    const pending = contactReference('pending', { status: 'PENDENTE_PAGAMENTO' });
+
+    expect(
+      sortContactReferences([canceled, pending, active]).map((reference) => reference.id),
+    ).toEqual(['active', 'pending', 'canceled']);
   });
 
   it('dedupes outbound presence state transitions locally', () => {

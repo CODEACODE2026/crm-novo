@@ -30,7 +30,7 @@ const mobileConversationMediaSource =
   mobileConversationMediaStart >= 0
     ? stylesSource.slice(
         mobileConversationMediaStart,
-        stylesSource.indexOf('.conversation-client-drawer', mobileConversationMediaStart),
+        stylesSource.indexOf('.conversation-contact-drawer', mobileConversationMediaStart),
       )
     : '';
 const mobileConversationComposerBlock =
@@ -55,7 +55,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(dashboardSource).toContain('WhatsAppRealtimeProvider');
   });
 
-  it('keeps the desktop inbox as list, chat and client context columns', () => {
+  it('keeps the desktop inbox as list, chat and on-demand contact drawer', () => {
     expect(conversationsSource).toContain('className="conversations-shell"');
     expect(conversationsSource).toContain('ConversationList');
     expect(conversationsSource).toContain('ConversationMessages');
@@ -70,12 +70,13 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-rows: auto minmax(0, 1fr);');
     expect(stylesSource).toContain('height: 100%;');
     expect(stylesSource).toContain(
-      'grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);',
+      'grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr);',
     );
     expect(stylesSource).toContain(
       'grid-template-columns: minmax(292px, 0.94fr) minmax(0, 1.16fr);',
     );
     expect(stylesSource).toContain('.conversation-client-panel');
+    expect(stylesSource).toContain('.conversation-contact-drawer-backdrop');
   });
 
   it('renders search, initial filters, unread summary, and empty/error states', () => {
@@ -832,15 +833,15 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('lets guest conversations create a client or link to an existing client', () => {
-    expect(conversationsSource).toContain('Dados do cliente');
+    expect(conversationsSource).toContain('Cliente');
     expect(conversationsSource).toContain('Abrir cliente');
-    expect(conversationsSource).toContain('Contato avulso');
+    expect(conversationsSource).toContain('Contato não vinculado');
     expect(conversationsSource).toContain('<dd>{conversation.displayName}</dd>');
     expect(conversationsSource).not.toContain(
       '<dd>{conversation.contactName ?? conversation.displayName}</dd>',
     );
-    expect(conversationsSource).toContain('const pendingAmount = (client.receivables ?? [])');
-    expect(conversationsSource).toContain('<dd>{formatCurrency(pendingAmount)}</dd>');
+    expect(conversationsSource).toContain('ConversationReferenceList');
+    expect(conversationsSource).toContain('listReceivables({');
     expect(conversationsSource).toContain('const instanceLabel = conversationInstanceLabel');
     expect(conversationsSource).toContain('linkWhatsAppConversationClient(selectedConversation.id');
     expect(conversationsSource).toContain('Vincular a cliente');
@@ -848,7 +849,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('O telefone desta conversa é diferente');
     expect(conversationsSource).toContain('Esta conversa já está vinculada a outro cliente.');
     expect(conversationsSource).toContain('setConversations((current) =>');
-    expect(conversationsSource).toContain('setClientDetail(await getClient(linked.client.id))');
+    expect(conversationsSource).toContain('void loadContactInfo(linked)');
     expect(conversationsSource).toContain('Cadastrar cliente');
     expect(conversationsSource).toContain('GuestConversationClientModal');
     expect(conversationsSource).toContain('initialValues={{ phone: conversationPhone }}');
@@ -870,7 +871,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       "{conversation.instanceName ?? 'Instância WhatsApp'}",
     );
     expect(conversationsSource).not.toContain('conversation.contactName');
-    expect(conversationsSource).not.toContain('Gerar PIX');
+    expect(conversationsSource).toContain('Gerar PIX');
+    expect(conversationsSource).toContain('createReceivablePix(receivable.id)');
+    expect(conversationsSource).toContain("reference.status === 'CANCELADO'");
     expect(stylesSource).toContain('.conversation-link-client');
     expect(stylesSource).toContain('.conversation-link-actions');
     expect(stylesSource).toContain(
@@ -1026,7 +1029,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain("mobileMode, setMobileMode] = useState<'list' | 'chat'>");
     expect(conversationsSource).toContain("setMobileMode('chat')");
     expect(conversationsSource).toContain("setMobileMode('list')");
-    expect(conversationsSource).toContain('conversation-client-drawer');
+    expect(conversationsSource).toContain('conversation-contact-drawer');
     expect(stylesSource).toContain('.conversations-view.mobile-mode-list .conversation-chat-panel');
     expect(stylesSource).toContain('.conversations-view.mobile-mode-chat .conversation-list-panel');
     expect(stylesSource).toContain('height: 100dvh;');

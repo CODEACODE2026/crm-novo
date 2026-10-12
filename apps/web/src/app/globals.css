@@ -2310,7 +2310,7 @@ a {
 
 .conversations-shell {
   display: grid;
-  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr) minmax(250px, 0.66fr);
+  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr);
   height: 100%;
   max-height: 100%;
   min-height: 0;
@@ -2361,6 +2361,30 @@ a {
 .conversation-context-card h3,
 .conversation-header h3 {
   margin: 0;
+}
+
+.conversation-contact-name-button {
+  display: block;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.17em;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-contact-name-button:hover,
+.conversation-contact-name-button:focus-visible {
+  color: var(--accent);
+  outline: none;
 }
 
 .conversation-panel-header span,
@@ -2755,6 +2779,7 @@ a {
 }
 
 .conversation-header-main h3,
+.conversation-contact-name-button,
 .conversation-header-main p,
 .conversation-presence-label {
   overflow: hidden;
@@ -3993,6 +4018,179 @@ a {
   border-left: 1px solid var(--border);
   padding: 13px;
   overflow-y: auto;
+}
+
+.conversation-contact-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(15 23 42 / 22%);
+}
+
+.conversation-contact-drawer {
+  width: min(430px, calc(100vw - 24px));
+  max-width: 100%;
+  background: var(--surface);
+  box-shadow: -18px 0 48px rgb(15 23 42 / 22%);
+}
+
+.conversation-contact-drawer-header,
+.conversation-contact-section-title,
+.conversation-reference-card-header,
+.conversation-reference-actions,
+.conversation-reference-pix {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conversation-contact-drawer-header {
+  margin-bottom: 14px;
+}
+
+.conversation-contact-drawer-header h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+}
+
+.conversation-contact-info,
+.conversation-contact-section,
+.conversation-reference-list,
+.conversation-reference-card {
+  display: grid;
+  gap: 12px;
+}
+
+.conversation-contact-profile {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+.conversation-contact-profile-avatar {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.conversation-contact-profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.conversation-contact-profile h3,
+.conversation-contact-profile p {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-contact-profile p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation-contact-section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.conversation-contact-section-title > span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.conversation-contact-section-title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation-reference-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.conversation-reference-card-header strong,
+.conversation-reference-card-header span {
+  display: block;
+}
+
+.conversation-reference-card-header > div {
+  min-width: 0;
+}
+
+.conversation-reference-card-header strong,
+.conversation-reference-card-header span,
+.conversation-reference-note,
+.conversation-reference-pix span {
+  overflow-wrap: anywhere;
+}
+
+.conversation-reference-card-header span,
+.conversation-reference-note,
+.conversation-reference-pix span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation-reference-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.conversation-reference-status.status-ativo,
+.conversation-reference-status.finance-pago {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+}
+
+.conversation-reference-status.status-cancelado,
+.conversation-reference-status.finance-cancelado,
+.conversation-reference-status.finance-vencido {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.conversation-reference-status.status-pendente_pagamento,
+.conversation-reference-status.finance-pendente {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.conversation-loading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .conversation-context-card {
@@ -9885,6 +10083,10 @@ tbody tr:hover,
     display: none;
   }
 
+  .conversation-contact-drawer {
+    display: block;
+  }
+
   .conversation-mobile-context {
     display: inline-flex;
   }
@@ -12844,6 +13046,11 @@ tbody tr:hover,
     line-height: 1.08;
   }
 
+  .conversation-contact-name-button {
+    font-size: 14px;
+    line-height: 1.08;
+  }
+
   .conversation-header p {
     margin-top: 1px;
     font-size: 10.5px;
@@ -13020,6 +13227,10 @@ tbody tr:hover,
 
   .conversation-client-drawer .modal {
     width: min(100%, calc(100vw - 20px));
+  }
+
+  .conversation-contact-drawer {
+    width: min(100vw, 440px);
   }
 
   .client-detail-view {

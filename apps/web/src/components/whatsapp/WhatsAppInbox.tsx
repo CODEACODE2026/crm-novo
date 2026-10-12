@@ -32,6 +32,8 @@ import {
   Pause,
   Play,
   Plus,
+  QrCode,
+  RefreshCw,
   Reply,
   Search,
   Send,
@@ -59,17 +61,20 @@ import {
   deleteWhatsAppConversationMessage,
   downloadWhatsAppConversationMedia,
   formatCurrency,
+  formatDate,
   getClient,
   getWhatsAppConversation,
   getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
   linkWhatsAppConversationClient,
   listClientOptions,
+  listReceivables,
   listPlans,
   listWhatsAppConnections,
   listWhatsAppConversationMessages,
   listWhatsAppConversations,
   markWhatsAppConversationRead,
+  createReceivablePix,
   resolveWhatsAppConversation,
   retryWhatsAppConversationMessage,
   searchWhatsAppConversationMessages,
@@ -80,9 +85,12 @@ import {
   startWhatsAppConversation,
   updateWhatsAppConversationMessageReaction,
   type Client,
+  type ClientReference,
   type ClientOption,
   type ClientPayload,
+  type PaymentIntent,
   type Plan,
+  type Receivable,
   type WhatsAppConnection,
   type WhatsAppConversationAvatar,
   type WhatsAppConversation,
@@ -196,6 +204,15 @@ type ConversationAvatarPreview = {
   name: string;
   url: string;
 };
+type ConversationContactInfoState = {
+  conversationId: string | null;
+  loading: boolean;
+  error: string;
+  client: Client | null;
+  receivables: Receivable[];
+  pixIntent: PaymentIntent | null;
+  notice: string;
+};
 
 export function nextConversationPresenceState(
   current: ConversationPresenceState | undefined,
@@ -230,7 +247,17 @@ export function WhatsAppInbox({
   );
   const [messages, setMessages] = useState<WhatsAppConversationMessage[]>([]);
   const [whatsAppConnections, setWhatsAppConnections] = useState<WhatsAppConnection[]>([]);
-  const [clientDetail, setClientDetail] = useState<Client | null>(null);
+  const [contactPanelOpen, setContactPanelOpen] = useState(false);
+  const [contactInfo, setContactInfo] = useState<ConversationContactInfoState>({
+    conversationId: null,
+    loading: false,
+    error: '',
+    client: null,
+    receivables: [],
+    pixIntent: null,
+    notice: '',
+  });
+  const [contactPixReceivableId, setContactPixReceivableId] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ConversationFilter>('all');
@@ -262,14 +289,12 @@ export function WhatsAppInbox({
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
   const [deletingMessageIds, setDeletingMessageIds] = useState<Set<string>>(new Set());
   const [deleteConfirmMessageId, setDeleteConfirmMessageId] = useState<string | null>(null);
-  const [clientError, setClientError] = useState('');
   const [linkClientError, setLinkClientError] = useState('');
   const [guestClientCreateError, setGuestClientCreateError] = useState('');
   const [guestClientDuplicate, setGuestClientDuplicate] = useState<ClientOption | null>(null);
   const [guestClientCreatedUnlinked, setGuestClientCreatedUnlinked] = useState<ClientOption | null>(
     null,
   );
-  const [mobileClientOpen, setMobileClientOpen] = useState(false);
   const [mobileMode, setMobileMode] = useState<'list' | 'chat'>('list');
   const [startConversationOpen, setStartConversationOpen] = useState(false);
   const [startingConversation, setStartingConversation] = useState(false);
@@ -1258,6 +1283,105 @@ export function WhatsAppInbox({
 
   activeConversationReadSchedulerRef.current = scheduleActiveConversationRead;
 
+  const loadContactInfo = useCallback(
+    async (
+      conversation: WhatsAppConversation | null = selectedConversationRef.current,
+      options: { silent?: boolean; preserveNotice?: boolean } = {},
+    ) => {
+      if (!conversation) return;
+
+      if (!conversation.client?.id) {
+        setContactInfo((current) => ({
+          ...current,
+          conversationId: conversation.id,
+          loading: false,
+          error: '',
+          client: null,
+          receivables: [],
+          pixIntent: options.preserveNotice ? current.pixIntent : null,
+          notice: options.preserveNotice ? current.notice : '',
+        }));
+        return;
+      }
+
+      if (!options.silent) {
+        setContactInfo((current) => ({
+          ...current,
+          conversationId: conversation.id,
+          loading: true,
+          error: '',
+          client: current.conversationId === conversation.id ? current.client : null,
+          receivables: current.conversationId === conversation.id ? current.receivables : [],
+          pixIntent: options.preserveNotice ? current.pixIntent : null,
+          notice: options.preserveNotice ? current.notice : '',
+        }));
+      }
+
+      try {
+        const client = await getClient(conversation.client.id);
+        if (activeConversationIdRef.current !== conversation.id) return;
+
+        const referenceReceivables = await Promise.all(
+          (client.references ?? []).map((reference) =>
+            listReceivables({
+              clientReferenceId: reference.id,
+              page: 1,
+              pageSize: 20,
+              sort: 'dueDateAsc',
+            }),
+          ),
+        );
+
+        if (activeConversationIdRef.current !== conversation.id) return;
+
+        const receivables = referenceReceivables
+          .flatMap((payload) => payload.items)
+          .filter((receivable) => receivable.sourceKind !== 'LEGACY_IMPORT');
+
+        setContactInfo((current) => ({
+          conversationId: conversation.id,
+          loading: false,
+          error: '',
+          client,
+          receivables,
+          pixIntent:
+            options.preserveNotice && current.conversationId === conversation.id
+              ? current.pixIntent
+              : null,
+          notice:
+            options.preserveNotice && current.conversationId === conversation.id
+              ? current.notice
+              : '',
+        }));
+      } catch (err) {
+        if (activeConversationIdRef.current !== conversation.id) return;
+        setContactInfo((current) => ({
+          ...current,
+          conversationId: conversation.id,
+          loading: false,
+          error: conversationErrorMessage(err, 'Falha ao carregar informações do contato.'),
+        }));
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!contactPanelOpen) return;
+    void loadContactInfo(selectedConversation);
+  }, [contactPanelOpen, loadContactInfo, selectedConversation?.id]);
+
+  useEffect(() => {
+    if (!contactPanelOpen) return undefined;
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setContactPanelOpen(false);
+    }
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [contactPanelOpen]);
+
   const scheduleRealtimeListRefresh = useCallback(() => {
     if (realtimeListRefreshTimeoutRef.current !== null) {
       window.clearTimeout(realtimeListRefreshTimeoutRef.current);
@@ -1624,8 +1748,6 @@ export function WhatsAppInbox({
     pendingInitialScrollConversationRef.current = conversation.id;
     setSelectedConversation(conversation);
     setMessages([]);
-    setClientDetail(null);
-    setClientError('');
     setLinkClientError('');
     setGuestClientCreateError('');
     setGuestClientDuplicate(null);
@@ -1662,13 +1784,7 @@ export function WhatsAppInbox({
         scheduleActiveConversationRead(detail.id);
       }
 
-      if (detail.client?.id) {
-        try {
-          setClientDetail(await getClient(detail.client.id));
-        } catch (err) {
-          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
-        }
-      }
+      if (contactPanelOpen) void loadContactInfo(detail);
     } catch (err) {
       setMessagesError(conversationErrorMessage(err, 'Falha ao abrir conversa.'));
     } finally {
@@ -1719,7 +1835,6 @@ export function WhatsAppInbox({
               : null,
           },
     );
-    setClientDetail(null);
     setLinkClientError('');
     setSendError('');
     setNewMessageNotice(false);
@@ -1749,13 +1864,7 @@ export function WhatsAppInbox({
       setHasNewerMessages(Boolean(context.pagination.hasNewer));
       setTargetMessageId(context.targetId);
       setTargetSearchTerm(term);
-      if (detail.client?.id) {
-        try {
-          setClientDetail(await getClient(detail.client.id));
-        } catch (err) {
-          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
-        }
-      }
+      if (contactPanelOpen) void loadContactInfo(detail);
     } catch (err) {
       setMessagesError(conversationErrorMessage(err, 'Falha ao abrir resultado da busca.'));
     } finally {
@@ -2053,7 +2162,6 @@ export function WhatsAppInbox({
 
     setLinkingClient(true);
     setLinkClientError('');
-    setClientError('');
 
     try {
       const linked = await linkWhatsAppConversationClient(selectedConversation.id, {
@@ -2067,11 +2175,7 @@ export function WhatsAppInbox({
       );
 
       if (linked.client?.id) {
-        try {
-          setClientDetail(await getClient(linked.client.id));
-        } catch (err) {
-          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
-        }
+        if (contactPanelOpen) void loadContactInfo(linked);
       }
     } catch (err) {
       setLinkClientError(linkClientErrorMessage(err));
@@ -2092,11 +2196,7 @@ export function WhatsAppInbox({
     );
 
     if (linked.client?.id) {
-      try {
-        setClientDetail(await getClient(linked.client.id));
-      } catch (err) {
-        setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
-      }
+      if (contactPanelOpen) void loadContactInfo(linked);
     }
 
     return linked;
@@ -2110,6 +2210,57 @@ export function WhatsAppInbox({
 
     if (!guestClientCreatePlans.length) {
       await loadGuestClientCreatePlans();
+    }
+  }
+
+  async function generateContactReceivablePix(receivable: Receivable) {
+    if (contactPixReceivableId) return;
+
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    setContactPixReceivableId(receivable.id);
+    setContactInfo((current) => ({ ...current, error: '', notice: '' }));
+
+    try {
+      const intent = await createReceivablePix(receivable.id);
+      if (selectedConversationRef.current?.id !== conversationId) return;
+
+      setContactInfo((current) => ({
+        ...current,
+        pixIntent: intent,
+        notice:
+          intent.status === 'WAITING_PAYMENT'
+            ? 'PIX disponível para esta cobrança.'
+            : 'PIX registrado para esta cobrança.',
+      }));
+      await loadContactInfo(selectedConversationRef.current, {
+        silent: true,
+        preserveNotice: true,
+      });
+    } catch (err) {
+      if (selectedConversationRef.current?.id !== conversationId) return;
+
+      setContactInfo((current) => ({
+        ...current,
+        error: conversationErrorMessage(err, 'Não foi possível gerar o PIX.'),
+      }));
+    } finally {
+      setContactPixReceivableId(null);
+    }
+  }
+
+  async function copyContactPix(intent: PaymentIntent) {
+    if (!intent.pixCopyPaste) return;
+
+    try {
+      await navigator.clipboard.writeText(intent.pixCopyPaste);
+      setContactInfo((current) => ({ ...current, notice: 'PIX copiado.' }));
+    } catch {
+      setContactInfo((current) => ({
+        ...current,
+        error: 'Não foi possível copiar o PIX. Copie o código manualmente.',
+      }));
     }
   }
 
@@ -2155,7 +2306,6 @@ export function WhatsAppInbox({
         if (activeConversationIdRef.current === linked.id) {
           setGuestClientCreateConversation(null);
           setGuestClientCreatedUnlinked(null);
-          setMobileClientOpen(false);
           await loadConversations({ silent: true });
         }
       } catch (err) {
@@ -2267,7 +2417,6 @@ export function WhatsAppInbox({
         setGuestClientCreateConversation(null);
         setGuestClientCreatedUnlinked(null);
         setGuestClientDuplicate(null);
-        setMobileClientOpen(false);
         await loadConversations({ silent: true });
       }
     } catch (err) {
@@ -2317,21 +2466,13 @@ export function WhatsAppInbox({
       pendingInitialScrollConversationRef.current = result.conversation.id;
       pendingSendScrollConversationRef.current = result.conversation.id;
       setSelectedConversation(result.conversation);
-      setClientDetail(null);
-      setClientError('');
       setMessagesError('');
       setSendError('');
       setLinkClientError('');
       setNewMessageNotice(false);
       setMobileMode('chat');
 
-      if (result.conversation.client?.id) {
-        try {
-          setClientDetail(await getClient(result.conversation.client.id));
-        } catch (err) {
-          setClientError(conversationErrorMessage(err, 'Falha ao carregar cliente.'));
-        }
-      }
+      if (contactPanelOpen) void loadContactInfo(result.conversation);
 
       await loadConversations({ silent: true });
       await loadMessages(result.conversation.id, { replace: true, silent: true });
@@ -2466,7 +2607,7 @@ export function WhatsAppInbox({
                 onAvatarError={handleAvatarImageError}
                 onAvatarPreview={openAvatarPreview}
                 onBack={() => setMobileMode('list')}
-                onOpenClientPanel={() => setMobileClientOpen(true)}
+                onOpenClientPanel={() => setContactPanelOpen(true)}
                 onResolve={() => void resolveSelectedConversation()}
                 onToggleSearch={() => {
                   if (messageSearchOpen) {
@@ -2575,16 +2716,19 @@ export function WhatsAppInbox({
         </section>
 
         <ConversationClientPanel
-          client={clientDetail}
-          clientError={clientError}
+          avatar={selectedConversation ? conversationAvatars[selectedConversation.id] : undefined}
+          contactInfo={contactInfo}
+          pixBusyReceivableId={contactPixReceivableId}
           conversation={selectedConversation}
           linkClientError={linkClientError}
           linkingClient={linkingClient}
-          mobileOpen={mobileClientOpen}
-          onCloseMobile={() => setMobileClientOpen(false)}
+          open={contactPanelOpen}
+          onClose={() => setContactPanelOpen(false)}
           onCreateClient={(conversation) => void openGuestClientCreate(conversation)}
+          onGeneratePix={(receivable) => void generateContactReceivablePix(receivable)}
           onLinkClient={(client) => void linkSelectedConversationToClient(client)}
           onOpenClient={(clientId) => void onOpenClient(clientId)}
+          onCopyPix={(intent) => void copyContactPix(intent)}
         />
       </div>
     </section>
@@ -3144,7 +3288,13 @@ function ConversationHeader({
           onPreview={onAvatarPreview}
         />
         <div>
-          <h3>{conversation.displayName}</h3>
+          <button
+            className="conversation-contact-name-button"
+            type="button"
+            onClick={onOpenClientPanel}
+          >
+            {conversation.displayName}
+          </button>
           <p>{instanceLabel ? `${phoneLabel} · ${instanceLabel}` : phoneLabel}</p>
           {presence ? <small className="conversation-presence-label">{presence}</small> : null}
           <div className="conversation-header-badges">
@@ -5070,88 +5220,99 @@ function ConversationComposer({
 }
 
 function ConversationClientPanel({
-  client,
-  clientError,
+  avatar,
+  contactInfo,
   conversation,
   linkClientError,
   linkingClient,
-  mobileOpen,
-  onCloseMobile,
+  open,
+  pixBusyReceivableId,
+  onClose,
+  onCopyPix,
   onCreateClient,
+  onGeneratePix,
   onLinkClient,
   onOpenClient,
 }: {
-  client: Client | null;
-  clientError: string;
+  avatar?: ConversationAvatarState | undefined;
+  contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
   linkClientError: string;
   linkingClient: boolean;
-  mobileOpen: boolean;
-  onCloseMobile: () => void;
+  open: boolean;
+  pixBusyReceivableId: string | null;
+  onClose: () => void;
+  onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
+  onGeneratePix: (receivable: Receivable) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
+  if (!open) return null;
+
   return (
-    <>
-      <aside className="conversation-client-panel" aria-label="Contexto do cliente">
+    <div className="conversation-contact-drawer-backdrop" role="presentation" onMouseDown={onClose}>
+      <aside
+        className="conversation-client-panel conversation-contact-drawer"
+        aria-label="Informações do contato"
+        aria-modal="true"
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="conversation-contact-drawer-header">
+          <div>
+            <span className="metric-label">Atendimento</span>
+            <h2 id="conversation-client-panel-title">Contato</h2>
+          </div>
+          <IconButton icon={X} label="Fechar informações do contato" onClick={onClose} />
+        </header>
         <ConversationClientPanelContent
-          client={client}
-          clientError={clientError}
+          avatar={avatar}
+          contactInfo={contactInfo}
           conversation={conversation}
           linkClientError={linkClientError}
           linkingClient={linkingClient}
+          pixBusyReceivableId={pixBusyReceivableId}
+          onCopyPix={onCopyPix}
           onCreateClient={onCreateClient}
+          onGeneratePix={onGeneratePix}
           onLinkClient={onLinkClient}
           onOpenClient={onOpenClient}
         />
       </aside>
-      {mobileOpen ? (
-        <div className="modal-backdrop conversation-client-drawer" role="presentation">
-          <section className="modal" aria-labelledby="conversation-client-panel-title">
-            <header className="modal-header">
-              <h2 id="conversation-client-panel-title">Contexto</h2>
-              <IconButton icon={X} label="Fechar contexto" onClick={onCloseMobile} />
-            </header>
-            <ConversationClientPanelContent
-              client={client}
-              clientError={clientError}
-              conversation={conversation}
-              linkClientError={linkClientError}
-              linkingClient={linkingClient}
-              onCreateClient={onCreateClient}
-              onLinkClient={onLinkClient}
-              onOpenClient={onOpenClient}
-            />
-          </section>
-        </div>
-      ) : null}
-    </>
+    </div>
   );
 }
 
 function ConversationClientPanelContent({
-  client,
-  clientError,
+  avatar,
+  contactInfo,
   conversation,
   linkClientError,
   linkingClient,
+  pixBusyReceivableId,
+  onCopyPix,
   onCreateClient,
+  onGeneratePix,
   onLinkClient,
   onOpenClient,
 }: {
-  client: Client | null;
-  clientError: string;
+  avatar?: ConversationAvatarState | undefined;
+  contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
   linkClientError: string;
   linkingClient: boolean;
+  pixBusyReceivableId: string | null;
+  onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
+  onGeneratePix: (receivable: Receivable) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
 }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
+  const client = contactInfo.client;
 
   useEffect(() => {
     setLinkOpen(false);
@@ -5168,58 +5329,84 @@ function ConversationClientPanelContent({
     );
   }
 
-  if (clientError) {
-    return <div className="notice danger conversation-notice">{clientError}</div>;
-  }
+  const phoneLabel =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
 
   if (client) {
-    const pendingAmount = (client.receivables ?? [])
-      ?.filter(
-        (receivable) =>
-          receivable.displayStatus === 'PENDENTE' || receivable.displayStatus === 'VENCIDO',
-      )
-      .reduce((total, receivable) => total + Number(receivable.amount), 0);
-
     return (
-      <div className="conversation-context-card">
-        <span className="conversation-kind client">Cliente</span>
-        <h3>Dados do cliente</h3>
-        <dl className="detail-list">
-          <div>
-            <dt>Nome</dt>
-            <dd>{client.name}</dd>
+      <div className="conversation-context-card conversation-contact-info">
+        <ConversationContactHeader
+          avatar={avatar}
+          conversation={conversation}
+          linkedClient={client}
+        />
+        {contactInfo.loading ? (
+          <div className="conversation-loading-row">
+            <Loader2 aria-hidden="true" size={15} />
+            Carregando informações...
           </div>
-          <div>
-            <dt>Telefone</dt>
-            <dd>{normalizeWhatsAppDisplayPhone(client.phoneNormalized) ?? client.phone}</dd>
+        ) : null}
+        {contactInfo.error ? (
+          <div className="notice danger conversation-notice" role="alert">
+            {contactInfo.error}
           </div>
-          <div>
-            <dt>E-mail</dt>
-            <dd>{client.email ?? '-'}</dd>
+        ) : null}
+        {contactInfo.notice ? (
+          <div className="notice success conversation-notice">{contactInfo.notice}</div>
+        ) : null}
+        <section className="conversation-contact-section">
+          <div className="conversation-contact-section-title">
+            <span>Cliente</span>
+            <Button
+              icon={ArrowRight}
+              size="sm"
+              variant="secondary"
+              onClick={() => onOpenClient(client.id)}
+            >
+              Abrir cliente
+            </Button>
           </div>
-          <div>
-            <dt>Status</dt>
-            <dd>{client.status}</dd>
-          </div>
-          <div>
-            <dt>Referências</dt>
-            <dd>{client.references?.length ?? 0}</dd>
-          </div>
-          <div>
-            <dt>Total a receber</dt>
-            <dd>{formatCurrency(pendingAmount)}</dd>
-          </div>
-        </dl>
-        <Button icon={ArrowRight} variant="primary" onClick={() => onOpenClient(client.id)}>
-          Abrir cliente
-        </Button>
+          <dl className="detail-list">
+            <div>
+              <dt>Nome</dt>
+              <dd>{client.name}</dd>
+            </div>
+            <div>
+              <dt>Telefone</dt>
+              <dd>{normalizeWhatsAppDisplayPhone(client.phoneNormalized) ?? client.phone}</dd>
+            </div>
+            <div>
+              <dt>E-mail</dt>
+              <dd>{client.email ?? '-'}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>
+                <ConversationStatusBadge status={client.status} />
+              </dd>
+            </div>
+            {client.notes ? (
+              <div>
+                <dt>Observação</dt>
+                <dd>{client.notes}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </section>
+        <ConversationReferenceList
+          client={client}
+          pixBusyReceivableId={pixBusyReceivableId}
+          pixIntent={contactInfo.pixIntent}
+          receivables={contactInfo.receivables}
+          onCopyPix={onCopyPix}
+          onGeneratePix={onGeneratePix}
+          onOpenClient={onOpenClient}
+        />
       </div>
     );
   }
 
   const instanceLabel = conversationInstanceLabel(conversation.instanceName);
-  const conversationPhone =
-    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
   const selectedClientPhone = selectedClient?.phoneNormalized
     ? formatNormalizedBrazilPhone(selectedClient.phoneNormalized)
     : '-';
@@ -5228,25 +5415,29 @@ function ConversationClientPanelContent({
     selectedClient?.phoneNormalized !== conversation.phoneNormalized;
 
   return (
-    <div className="conversation-context-card">
-      <span className="conversation-kind guest">Avulso</span>
-      <h3>Contato avulso</h3>
-      <dl className="detail-list">
-        <div>
-          <dt>Nome</dt>
-          <dd>{conversation.displayName}</dd>
+    <div className="conversation-context-card conversation-contact-info">
+      <ConversationContactHeader avatar={avatar} conversation={conversation} linkedClient={null} />
+      <section className="conversation-contact-section">
+        <div className="conversation-contact-section-title">
+          <span>Contato não vinculado</span>
         </div>
-        <div>
-          <dt>Telefone</dt>
-          <dd>{conversationPhone}</dd>
-        </div>
-        {instanceLabel ? (
+        <dl className="detail-list">
           <div>
-            <dt>Instância</dt>
-            <dd>{instanceLabel}</dd>
+            <dt>Nome</dt>
+            <dd>{conversation.displayName}</dd>
           </div>
-        ) : null}
-      </dl>
+          <div>
+            <dt>Telefone</dt>
+            <dd>{phoneLabel}</dd>
+          </div>
+          {instanceLabel ? (
+            <div>
+              <dt>Instância</dt>
+              <dd>{instanceLabel}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </section>
       <div className="conversation-link-client">
         <Button
           icon={UserRoundPlus}
@@ -5284,7 +5475,7 @@ function ConversationClientPanelContent({
                 <dl className="detail-list compact">
                   <div>
                     <dt>Telefone da conversa</dt>
-                    <dd>{conversationPhone}</dd>
+                    <dd>{phoneLabel}</dd>
                   </div>
                   <div>
                     <dt>Telefone do cliente</dt>
@@ -5330,6 +5521,256 @@ function ConversationClientPanelContent({
       </div>
     </div>
   );
+}
+
+function ConversationContactHeader({
+  avatar,
+  conversation,
+  linkedClient,
+}: {
+  avatar?: ConversationAvatarState | undefined;
+  conversation: WhatsAppConversation;
+  linkedClient: Client | null;
+}) {
+  const phoneLabel =
+    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const imageUrl = avatar?.response?.available ? avatar.response.url : null;
+
+  return (
+    <section className="conversation-contact-profile">
+      <span className={`conversation-contact-profile-avatar${imageUrl ? ' has-image' : ''}`}>
+        {imageUrl ? <img alt="" src={imageUrl} /> : conversationInitials(conversation)}
+      </span>
+      <div>
+        <h3>{conversation.displayName}</h3>
+        <p>{phoneLabel}</p>
+        <span className={`conversation-kind ${linkedClient ? 'client' : 'guest'}`}>
+          {linkedClient ? `Cliente vinculado: ${linkedClient.name}` : 'Contato não vinculado'}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function ConversationReferenceList({
+  client,
+  pixBusyReceivableId,
+  pixIntent,
+  receivables,
+  onCopyPix,
+  onGeneratePix,
+  onOpenClient,
+}: {
+  client: Client;
+  pixBusyReceivableId: string | null;
+  pixIntent: PaymentIntent | null;
+  receivables: Receivable[];
+  onCopyPix: (intent: PaymentIntent) => void;
+  onGeneratePix: (receivable: Receivable) => void;
+  onOpenClient: (clientId: string) => void;
+}) {
+  const references = sortContactReferences(client.references ?? []);
+
+  return (
+    <section className="conversation-contact-section">
+      <div className="conversation-contact-section-title">
+        <span>Referências</span>
+        <small>{references.length}</small>
+      </div>
+      {references.length ? (
+        <div className="conversation-reference-list">
+          {references.map((reference) => (
+            <ConversationReferenceCard
+              key={reference.id}
+              clientId={client.id}
+              pixBusyReceivableId={pixBusyReceivableId}
+              pixIntent={pixIntent}
+              receivables={contactReceivablesForReference(receivables, reference.id)}
+              reference={reference}
+              onCopyPix={onCopyPix}
+              onGeneratePix={onGeneratePix}
+              onOpenClient={onOpenClient}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="conversation-empty-panel">
+          <Info aria-hidden="true" size={22} />
+          <span>Nenhuma referência cadastrada.</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ConversationReferenceCard({
+  clientId,
+  pixBusyReceivableId,
+  pixIntent,
+  receivables,
+  reference,
+  onCopyPix,
+  onGeneratePix,
+  onOpenClient,
+}: {
+  clientId: string;
+  pixBusyReceivableId: string | null;
+  pixIntent: PaymentIntent | null;
+  receivables: Receivable[];
+  reference: ClientReference;
+  onCopyPix: (intent: PaymentIntent) => void;
+  onGeneratePix: (receivable: Receivable) => void;
+  onOpenClient: (clientId: string) => void;
+}) {
+  const openReceivable = contactOpenReceivable(receivables);
+  const activePix = openReceivable?.activePix ?? null;
+  const generatedPix =
+    pixIntent && pixIntent.receivableId && pixIntent.receivableId === openReceivable?.id
+      ? pixIntent
+      : null;
+  const visiblePix = generatedPix ?? activePix;
+  const isCanceled = reference.status === 'CANCELADO';
+  const actionLabel = isCanceled ? 'Reativar' : 'Renovar';
+
+  return (
+    <article className="conversation-reference-card">
+      <div className="conversation-reference-card-header">
+        <div>
+          <strong>{reference.reference}</strong>
+          <span>{reference.plan?.name ?? 'Plano não informado'}</span>
+        </div>
+        <ConversationStatusBadge status={reference.status} />
+      </div>
+      <dl className="detail-list compact">
+        <div>
+          <dt>Valor</dt>
+          <dd>{formatCurrency(reference.recurringValue)}</dd>
+        </div>
+        <div>
+          <dt>Vencimento</dt>
+          <dd>{formatDate(reference.dueDate)}</dd>
+        </div>
+        <div>
+          <dt>Dia base</dt>
+          <dd>{reference.billingAnchorDay}</dd>
+        </div>
+        <div>
+          <dt>Situação financeira</dt>
+          <dd>
+            {openReceivable ? (
+              <ConversationReceivableStatusBadge status={openReceivable.displayStatus} />
+            ) : (
+              'Sem cobrança em aberto'
+            )}
+          </dd>
+        </div>
+      </dl>
+      {reference.notes ? <p className="conversation-reference-note">{reference.notes}</p> : null}
+      {visiblePix ? (
+        <div className="conversation-reference-pix">
+          <span>
+            PIX {paymentIntentStatusText(visiblePix.status)}
+            {visiblePix.provider ? ` · ${visiblePix.provider}` : ''}
+          </span>
+          {visiblePix.pixCopyPaste ? (
+            <Button
+              icon={QrCode}
+              size="sm"
+              variant="secondary"
+              onClick={() => onCopyPix(visiblePix)}
+            >
+              Copiar PIX
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="conversation-reference-actions">
+        {openReceivable && !visiblePix ? (
+          <Button
+            icon={QrCode}
+            loading={pixBusyReceivableId === openReceivable.id}
+            size="sm"
+            variant="primary"
+            onClick={() => onGeneratePix(openReceivable)}
+          >
+            Gerar PIX
+          </Button>
+        ) : null}
+        <Button
+          icon={isCanceled ? RefreshCw : ArrowRight}
+          size="sm"
+          variant="secondary"
+          onClick={() => onOpenClient(clientId)}
+        >
+          {actionLabel}
+        </Button>
+        <Button icon={ArrowRight} size="sm" variant="ghost" onClick={() => onOpenClient(clientId)}>
+          Abrir
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+function ConversationStatusBadge({ status }: { status: Client['status'] }) {
+  return (
+    <span className={`conversation-reference-status status-${status.toLowerCase()}`}>{status}</span>
+  );
+}
+
+function ConversationReceivableStatusBadge({ status }: { status: Receivable['displayStatus'] }) {
+  return (
+    <span className={`conversation-reference-status finance-${status.toLowerCase()}`}>
+      {receivableStatusText(status)}
+    </span>
+  );
+}
+
+export function sortContactReferences(references: ClientReference[]) {
+  const rank: Record<Client['status'], number> = {
+    ATIVO: 0,
+    PENDENTE_PAGAMENTO: 1,
+    INATIVO: 2,
+    CANCELADO: 3,
+  };
+
+  return [...references].sort((a, b) => {
+    const statusDiff = rank[a.status] - rank[b.status];
+    if (statusDiff !== 0) return statusDiff;
+    return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+  });
+}
+
+export function contactReceivablesForReference(receivables: Receivable[], referenceId: string) {
+  return receivables.filter((receivable) => receivable.clientReferenceId === referenceId);
+}
+
+export function contactOpenReceivable(receivables: Receivable[]) {
+  return receivables
+    .filter(
+      (receivable) => receivable.displayStatus === 'VENCIDO' || receivable.status === 'PENDENTE',
+    )
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+}
+
+function receivableStatusText(status: Receivable['displayStatus']) {
+  if (status === 'PENDENTE') return 'EM ABERTO';
+  return status;
+}
+
+function paymentIntentStatusText(status: PaymentIntent['status']) {
+  const labels: Record<PaymentIntent['status'], string> = {
+    CANCELED: 'cancelado',
+    CREATED: 'criado',
+    EXPIRED: 'expirado',
+    FAILED: 'com falha',
+    PAID: 'pago',
+    REFUNDED: 'estornado',
+    SUPERSEDED: 'substituído',
+    WAITING_PAYMENT: 'aguardando pagamento',
+  };
+
+  return labels[status];
 }
 
 function GuestConversationClientModal({

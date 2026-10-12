@@ -4114,6 +4114,73 @@ a {
   padding-top: 12px;
 }
 
+.conversation-financial-summary {
+  gap: 10px;
+}
+
+.conversation-financial-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.conversation-financial-grid div,
+.conversation-financial-empty {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 9px;
+}
+
+.conversation-financial-grid span,
+.conversation-financial-empty span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.conversation-financial-grid strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.conversation-financial-grid small,
+.conversation-financial-empty small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.conversation-financial-grid .is-overdue strong,
+.conversation-financial-alert {
+  color: var(--danger);
+}
+
+.conversation-financial-alert {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 9px;
+}
+
+.conversation-reference-status.finance-summary-current {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+}
+
+.conversation-reference-status.finance-summary-pending {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.conversation-reference-status.finance-summary-overdue {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
 .conversation-contact-section-title > span {
   color: var(--text);
   font-size: 12px;

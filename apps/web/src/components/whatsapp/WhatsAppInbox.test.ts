@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   advanceConversationListGeneration,
   allowedWhatsAppReactionEmojis,
+  buildContactFinancialSummary,
   calculateReactionPickerPosition,
   classifyContactPixState,
   classifyConversationIncomingFile,
@@ -13,6 +14,7 @@ import {
   contactPixCanSendWhatsApp,
   contactPixReplacementPayload,
   contactPixWhatsAppButtonLabel,
+  contactReceivablePaginationPages,
   contactReceivableAllowsPixAction,
   contactRelevantReceivable,
   contactReceivablesForReference,
@@ -260,12 +262,13 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('conversation-contact-drawer');
     expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
     expect(whatsAppInboxSource).toContain('listReceivables({');
-    expect(whatsAppInboxSource).toContain('clientReferenceId: reference.id');
-    expect(whatsAppInboxSource).toContain('pageSize: 20');
-    expect(whatsAppInboxSource).not.toContain('clientId: conversation.client.id');
-    expect(whatsAppInboxSource).not.toContain('pageSize: 100');
+    expect(whatsAppInboxSource).toContain('listContactReceivables(client.id)');
+    expect(whatsAppInboxSource).toContain('listReceivables({ clientId, page: 1, pageSize })');
+    expect(whatsAppInboxSource).toContain('contactReceivablePaginationPages({');
     expect(whatsAppInboxSource).toContain('ConversationReferenceList');
     expect(whatsAppInboxSource).toContain('ConversationReferenceCard');
+    expect(whatsAppInboxSource).toContain('buildContactFinancialSummary(client.references ?? []');
+    expect(whatsAppInboxSource).toContain('financialSummary ? <ConversationFinancialSummary');
     expect(whatsAppInboxSource).toContain('Gerar PIX');
     expect(whatsAppInboxSource).toContain('createReceivablePix(receivable.id)');
     expect(whatsAppInboxSource).toContain('Recriar PIX');
@@ -306,8 +309,191 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('Abrir cliente');
     expect(globalStylesSource).toContain('.conversation-contact-drawer');
     expect(globalStylesSource).toContain('.conversation-reference-card');
+    expect(globalStylesSource).toContain('.conversation-financial-summary');
     expect(globalStylesSource).toContain('width: min(430px, calc(100vw - 24px))');
     expect(globalStylesSource).toContain('width: min(100vw, 440px)');
+  });
+
+  it('builds an empty contact financial summary without inventing zero-value cards', () => {
+    const summary = buildContactFinancialSummary([contactReference('reference-1')], []);
+
+    expect(summary).toMatchObject({
+      activeReferenceCount: 1,
+      lastPayment: null,
+      nextDueDate: null,
+      oldestOverdueDays: null,
+      openAmount: 0,
+      openCount: 0,
+      overdueAmount: 0,
+      overdueCount: 0,
+      state: 'CURRENT',
+    });
+  });
+
+  it('summarizes one open receivable without counting paid or canceled charges as open', () => {
+    const open = receivable('open-1', {
+      amount: '49.90',
+      dueDate: '2026-10-15',
+      displayStatus: 'PENDENTE',
+      status: 'PENDENTE',
+    });
+    const paid = receivable('paid-1', {
+      amount: '80.00',
+      displayStatus: 'PAGO',
+      paidAt: '2026-10-10',
+      status: 'PAGO',
+    });
+    const canceled = receivable('canceled-1', {
+      amount: '70.00',
+      displayStatus: 'CANCELADO',
+      status: 'CANCELADO',
+    });
+
+    const summary = buildContactFinancialSummary(
+      [contactReference('reference-1')],
+      [open, paid, canceled],
+      Date.parse('2026-10-12T12:00:00.000Z'),
+    );
+
+    expect(summary.openAmount).toBe(49.9);
+    expect(summary.openCount).toBe(1);
+    expect(summary.overdueAmount).toBe(0);
+    expect(summary.overdueCount).toBe(0);
+    expect(summary.nextDueDate).toBe('2026-10-15');
+    expect(summary.lastPayment).toEqual({ amount: '80.00', paidAt: '2026-10-10' });
+    expect(summary.state).toBe('PENDING');
+  });
+
+  it('summarizes overdue receivables using existing display status and oldest due date', () => {
+    const overdueOld = receivable('overdue-old', {
+      amount: '40.00',
+      dueDate: '2026-09-30',
+      displayStatus: 'VENCIDO',
+      status: 'PENDENTE',
+    });
+    const overdueRecent = receivable('overdue-recent', {
+      amount: '49.80',
+      dueDate: '2026-10-10',
+      displayStatus: 'VENCIDO',
+      status: 'PENDENTE',
+    });
+
+    const summary = buildContactFinancialSummary(
+      [contactReference('reference-1')],
+      [overdueRecent, overdueOld],
+      Date.parse('2026-10-12T12:00:00.000Z'),
+    );
+
+    expect(summary.openAmount).toBe(89.8);
+    expect(summary.openCount).toBe(2);
+    expect(summary.overdueAmount).toBe(89.8);
+    expect(summary.overdueCount).toBe(2);
+    expect(summary.oldestOverdueDays).toBe(12);
+    expect(summary.state).toBe('OVERDUE');
+  });
+
+  it('picks the nearest future due date across multiple open receivables', () => {
+    const summary = buildContactFinancialSummary(
+      [contactReference('reference-1')],
+      [
+        receivable('future-late', { dueDate: '2026-10-20' }),
+        receivable('future-soon', { dueDate: '2026-10-15' }),
+        receivable('paid-future', {
+          dueDate: '2026-10-13',
+          displayStatus: 'PAGO',
+          paidAt: '2026-10-11',
+          status: 'PAGO',
+        }),
+      ],
+      Date.parse('2026-10-12T12:00:00.000Z'),
+    );
+
+    expect(summary.nextDueDate).toBe('2026-10-15');
+    expect(summary.openAmount).toBe(200);
+    expect(summary.openCount).toBe(2);
+  });
+
+  it('counts only active references in the contact financial summary', () => {
+    const summary = buildContactFinancialSummary(
+      [
+        contactReference('active-1', { status: 'ATIVO' }),
+        contactReference('active-2', { status: 'ATIVO' }),
+        contactReference('inactive', { status: 'INATIVO' }),
+        contactReference('canceled', { status: 'CANCELADO' }),
+      ],
+      [],
+    );
+
+    expect(summary.activeReferenceCount).toBe(2);
+  });
+
+  it('uses last payment only when paidAt is available', () => {
+    const summary = buildContactFinancialSummary(
+      [contactReference('reference-1')],
+      [
+        receivable('paid-without-date', {
+          amount: '10.00',
+          displayStatus: 'PAGO',
+          paidAt: null,
+          status: 'PAGO',
+        }),
+        receivable('paid-old', {
+          amount: '20.00',
+          displayStatus: 'PAGO',
+          paidAt: '2026-10-01',
+          status: 'PAGO',
+        }),
+        receivable('paid-new', {
+          amount: '30.00',
+          displayStatus: 'PAGO',
+          paidAt: '2026-10-10',
+          status: 'PAGO',
+        }),
+      ],
+    );
+
+    expect(summary.lastPayment).toEqual({ amount: '30.00', paidAt: '2026-10-10' });
+  });
+
+  it('does not surface invalid dates as next due or overdue days', () => {
+    const summary = buildContactFinancialSummary(
+      [contactReference('reference-1')],
+      [
+        receivable('invalid-next-due', {
+          dueDate: 'not-a-date',
+          displayStatus: 'PENDENTE',
+          status: 'PENDENTE',
+        }),
+        receivable('invalid-overdue', {
+          dueDate: '2026-13-99',
+          displayStatus: 'VENCIDO',
+          status: 'PENDENTE',
+        }),
+      ],
+      Date.parse('2026-10-12T12:00:00.000Z'),
+    );
+
+    expect(summary.nextDueDate).toBeNull();
+    expect(summary.oldestOverdueDays).toBeNull();
+    expect(summary.overdueCount).toBe(1);
+    expect(summary.state).toBe('OVERDUE');
+  });
+
+  it('builds finite receivable pagination page lists from official metadata', () => {
+    expect(contactReceivablePaginationPages({ loadedCount: 10, total: 10, totalPages: 1 })).toEqual(
+      [],
+    );
+    expect(
+      contactReceivablePaginationPages({ loadedCount: 100, total: 250, totalPages: 3 }),
+    ).toEqual([2, 3]);
+    expect(
+      contactReceivablePaginationPages({
+        currentPage: 2,
+        loadedCount: 200,
+        total: 250,
+        totalPages: 3,
+      }),
+    ).toEqual([3]);
   });
 
   it('maps receivables to references by clientReferenceId and picks only valid open charges', () => {

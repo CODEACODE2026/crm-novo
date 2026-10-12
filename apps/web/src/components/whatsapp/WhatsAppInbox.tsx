@@ -240,6 +240,18 @@ type ConversationContactInfoState = {
   pixIntent: PaymentIntent | null;
   notice: string;
 };
+export type ContactFinancialSummaryState = 'CURRENT' | 'PENDING' | 'OVERDUE';
+export type ContactFinancialSummary = {
+  activeReferenceCount: number;
+  lastPayment: { amount: string; paidAt: string } | null;
+  nextDueDate: string | null;
+  oldestOverdueDays: number | null;
+  openAmount: number;
+  openCount: number;
+  overdueAmount: number;
+  overdueCount: number;
+  state: ContactFinancialSummaryState;
+};
 export type ContactPixState = 'NO_PIX' | 'ACTIVE_PIX' | 'EXPIRED_PIX';
 export type ContactPixReplacementPayload = {
   provider: PaymentIntent['provider'];
@@ -1406,22 +1418,8 @@ export function WhatsAppInbox({
         const client = await getClient(conversation.client.id);
         if (activeConversationIdRef.current !== conversation.id) return;
 
-        const referenceReceivables = await Promise.all(
-          (client.references ?? []).map((reference) =>
-            listReceivables({
-              clientReferenceId: reference.id,
-              page: 1,
-              pageSize: 20,
-              sort: 'dueDateAsc',
-            }),
-          ),
-        );
-
+        const receivables = await listContactReceivables(client.id);
         if (activeConversationIdRef.current !== conversation.id) return;
-
-        const receivables = referenceReceivables
-          .flatMap((payload) => payload.items)
-          .filter((receivable) => receivable.sourceKind !== 'LEGACY_IMPORT');
 
         setContactInfo((current) => ({
           conversationId: conversation.id,
@@ -5702,6 +5700,9 @@ function ConversationClientPanelContent({
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
   const client = contactInfo.client;
+  const financialSummary = client
+    ? buildContactFinancialSummary(client.references ?? [], contactInfo.receivables)
+    : null;
 
   useEffect(() => {
     setLinkOpen(false);
@@ -5782,6 +5783,7 @@ function ConversationClientPanelContent({
             ) : null}
           </dl>
         </section>
+        {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
         <ConversationReferenceList
           client={client}
           lifecycleBusyReferenceId={lifecycleBusyReferenceId}
@@ -5945,6 +5947,75 @@ function ConversationContactHeader({
           {linkedClient ? `Cliente vinculado: ${linkedClient.name}` : 'Contato não vinculado'}
         </span>
       </div>
+    </section>
+  );
+}
+
+function ConversationFinancialSummary({ summary }: { summary: ContactFinancialSummary }) {
+  const stateLabel = contactFinancialStateLabel(summary.state);
+  const hasOpenReceivables = summary.openCount > 0;
+  const overdueAlert = contactOverdueAlert(summary);
+
+  return (
+    <section className="conversation-contact-section conversation-financial-summary">
+      <div className="conversation-contact-section-title">
+        <span>Situação financeira</span>
+        <span
+          className={`conversation-reference-status finance-summary-${summary.state.toLowerCase()}`}
+        >
+          {stateLabel}
+        </span>
+      </div>
+      {overdueAlert ? (
+        <div className="conversation-financial-alert" role="note">
+          {overdueAlert}
+        </div>
+      ) : null}
+      {hasOpenReceivables ? (
+        <div className="conversation-financial-grid">
+          <div>
+            <span>Em aberto</span>
+            <strong>{formatCurrency(summary.openAmount)}</strong>
+            <small>{contactChargeCountLabel(summary.openCount, false)}</small>
+          </div>
+          {summary.overdueCount > 0 ? (
+            <div className="is-overdue">
+              <span>Vencido</span>
+              <strong>{formatCurrency(summary.overdueAmount)}</strong>
+              <small>{contactChargeCountLabel(summary.overdueCount, true)}</small>
+            </div>
+          ) : null}
+          {summary.nextDueDate ? (
+            <div>
+              <span>Próx. vencimento</span>
+              <strong>{formatDate(summary.nextDueDate)}</strong>
+            </div>
+          ) : null}
+          <div>
+            <span>Referências ativas</span>
+            <strong>{summary.activeReferenceCount}</strong>
+            <small>{contactReferenceCountLabel(summary.activeReferenceCount)}</small>
+          </div>
+          {summary.lastPayment ? (
+            <div>
+              <span>Último pagamento</span>
+              <strong>{formatDate(summary.lastPayment.paidAt)}</strong>
+              <small>{formatCurrency(summary.lastPayment.amount)}</small>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="conversation-financial-empty">
+          <span>Nenhuma cobrança em aberto</span>
+          <small>{contactReferenceCountLabel(summary.activeReferenceCount)}</small>
+          {summary.lastPayment ? (
+            <small>
+              Último pagamento: {formatDate(summary.lastPayment.paidAt)} ·{' '}
+              {formatCurrency(summary.lastPayment.amount)}
+            </small>
+          ) : null}
+        </div>
+      )}
     </section>
   );
 }
@@ -6291,6 +6362,46 @@ export function contactReceivablesForReference(receivables: Receivable[], refere
   return receivables.filter((receivable) => receivable.clientReferenceId === referenceId);
 }
 
+async function listContactReceivables(clientId: string) {
+  const pageSize = 100;
+  const firstPage = await listReceivables({ clientId, page: 1, pageSize });
+  const items = [...firstPage.items];
+
+  for (const page of contactReceivablePaginationPages({
+    loadedCount: items.length,
+    total: firstPage.pagination.total,
+    totalPages: firstPage.pagination.totalPages,
+  })) {
+    const payload = await listReceivables({ clientId, page, pageSize });
+    items.push(...payload.items);
+    if (items.length >= firstPage.pagination.total) break;
+  }
+
+  return items.filter((receivable) => receivable.sourceKind !== 'LEGACY_IMPORT');
+}
+
+export function contactReceivablePaginationPages({
+  currentPage = 1,
+  loadedCount,
+  total,
+  totalPages,
+}: {
+  currentPage?: number;
+  loadedCount: number;
+  total: number;
+  totalPages: number;
+}) {
+  if (loadedCount >= total) return [];
+
+  const lastPage = Math.max(currentPage, totalPages);
+  const pages: number[] = [];
+  for (let page = currentPage + 1; page <= lastPage; page += 1) {
+    pages.push(page);
+  }
+
+  return pages;
+}
+
 export function contactOpenReceivable(receivables: Receivable[]) {
   return receivables
     .filter(
@@ -6329,6 +6440,140 @@ export function classifyContactPixState(
 
 export function contactReceivableAllowsPixAction(receivable: Receivable | null | undefined) {
   return Boolean(receivable && receivable.status !== 'PAGO' && receivable.status !== 'CANCELADO');
+}
+
+export function buildContactFinancialSummary(
+  references: ClientReference[],
+  receivables: Receivable[],
+  now = Date.now(),
+): ContactFinancialSummary {
+  const activeReferenceCount = references.filter(
+    (reference) => reference.status === 'ATIVO',
+  ).length;
+  const officialReceivables = receivables.filter(
+    (receivable) => receivable.sourceKind !== 'LEGACY_IMPORT',
+  );
+  const openReceivables = officialReceivables.filter((receivable) =>
+    contactReceivableAllowsPixAction(receivable),
+  );
+  const overdueReceivables = openReceivables.filter(
+    (receivable) => receivable.displayStatus === 'VENCIDO',
+  );
+  const todayKey = contactDateKey(new Date(now).toISOString());
+  const nextDueDate =
+    todayKey === null
+      ? null
+      : (openReceivables
+          .map((receivable) => ({ receivable, dueDateKey: contactDateKey(receivable.dueDate) }))
+          .filter(
+            (item): item is { receivable: Receivable; dueDateKey: string } =>
+              item.receivable.displayStatus !== 'VENCIDO' &&
+              item.dueDateKey !== null &&
+              item.dueDateKey > todayKey,
+          )
+          .sort((a, b) => a.dueDateKey.localeCompare(b.dueDateKey))[0]?.receivable.dueDate ?? null);
+  const lastPayment =
+    officialReceivables
+      .map((receivable) => ({ receivable, paidAtKey: contactDateKey(receivable.paidAt) }))
+      .filter(
+        (item): item is { receivable: Receivable; paidAtKey: string } =>
+          item.receivable.status === 'PAGO' && item.paidAtKey !== null,
+      )
+      .sort((a, b) => b.paidAtKey.localeCompare(a.paidAtKey))[0]?.receivable ?? null;
+  const oldestOverdue = overdueReceivables
+    .map((receivable) => ({ receivable, dueDateKey: contactDateKey(receivable.dueDate) }))
+    .filter(
+      (item): item is { receivable: Receivable; dueDateKey: string } => item.dueDateKey !== null,
+    )
+    .sort((a, b) => a.dueDateKey.localeCompare(b.dueDateKey))[0];
+  const oldestOverdueDays =
+    oldestOverdue && todayKey
+      ? Math.max(0, contactDateDiffDays(oldestOverdue.dueDateKey, todayKey))
+      : null;
+
+  return {
+    activeReferenceCount,
+    lastPayment: lastPayment ? { amount: lastPayment.amount, paidAt: lastPayment.paidAt! } : null,
+    nextDueDate,
+    oldestOverdueDays,
+    openAmount: contactReceivableAmount(openReceivables),
+    openCount: openReceivables.length,
+    overdueAmount: contactReceivableAmount(overdueReceivables),
+    overdueCount: overdueReceivables.length,
+    state:
+      overdueReceivables.length > 0
+        ? 'OVERDUE'
+        : openReceivables.length > 0
+          ? 'PENDING'
+          : 'CURRENT',
+  };
+}
+
+function contactReceivableAmount(receivables: Receivable[]) {
+  return receivables.reduce((total, receivable) => total + Number(receivable.amount || 0), 0);
+}
+
+function contactDateKey(value: string | null | undefined) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value ?? '');
+  if (!match) return null;
+
+  const [, year, month, day] = match;
+  const timestamp = Date.UTC(Number(year), Number(month) - 1, Number(day));
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() !== Number(month) - 1 ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return null;
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+function contactDateDiffDays(startKey: string, endKey: string) {
+  const start = Date.UTC(
+    Number(startKey.slice(0, 4)),
+    Number(startKey.slice(5, 7)) - 1,
+    Number(startKey.slice(8, 10)),
+  );
+  const end = Date.UTC(
+    Number(endKey.slice(0, 4)),
+    Number(endKey.slice(5, 7)) - 1,
+    Number(endKey.slice(8, 10)),
+  );
+
+  return Math.floor((end - start) / 86_400_000);
+}
+
+function contactFinancialStateLabel(state: ContactFinancialSummaryState) {
+  const labels: Record<ContactFinancialSummaryState, string> = {
+    CURRENT: 'EM DIA',
+    OVERDUE: 'EM ATRASO',
+    PENDING: 'PENDENTE',
+  };
+
+  return labels[state];
+}
+
+function contactChargeCountLabel(count: number, overdue: boolean) {
+  const noun = count === 1 ? 'cobrança' : 'cobranças';
+  return overdue ? `${count} ${noun} vencida${count === 1 ? '' : 's'}` : `${count} ${noun}`;
+}
+
+function contactReferenceCountLabel(count: number) {
+  return `${count} ${count === 1 ? 'referência ativa' : 'referências ativas'}`;
+}
+
+function contactOverdueAlert(summary: ContactFinancialSummary) {
+  if (summary.overdueCount === 0) return '';
+
+  const base = `${contactChargeCountLabel(summary.overdueCount, true)} · ${formatCurrency(
+    summary.overdueAmount,
+  )}`;
+  if (!summary.oldestOverdueDays) return base;
+
+  return `${base} · mais antiga há ${summary.oldestOverdueDays} dias`;
 }
 
 export function contactPixCanSendWhatsApp(

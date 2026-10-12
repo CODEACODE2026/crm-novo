@@ -148,7 +148,12 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('handleAvatarPreviewImageError');
     expect(whatsAppInboxSource).not.toContain('Preview: false');
     expect(globalStylesSource).toContain('.whatsapp-avatar-preview-backdrop');
+    expect(globalStylesSource).toContain('width: min(80vw, 700px)');
+    expect(globalStylesSource).toContain('height: min(80vw, 700px)');
+    expect(globalStylesSource).toContain('width: 100%');
+    expect(globalStylesSource).toContain('height: 100%');
     expect(globalStylesSource).toContain('max-height: 80vh');
+    expect(globalStylesSource).toContain('height: min(calc(100vw - 32px), 75vh)');
   });
 
   it('dedupes outbound presence state transitions locally', () => {

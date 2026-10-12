@@ -420,6 +420,27 @@ function replaceDashboardQuery(params: Record<string, string | null | undefined>
   window.history.replaceState(null, '', `${url.pathname}${query ? `?${query}` : ''}`);
 }
 
+function buildExactDashboardQueryPath(
+  pathname: string,
+  params: Record<string, string | null | undefined>,
+) {
+  const nextParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === '') return;
+    nextParams.set(key, value);
+  });
+
+  const query = nextParams.toString();
+  return `${pathname}${query ? `?${query}` : ''}`;
+}
+
+function replaceDashboardQueryExactly(params: Record<string, string | null | undefined>) {
+  if (typeof window === 'undefined') return;
+
+  const url = new URL(window.location.href);
+  window.history.replaceState(null, '', buildExactDashboardQueryPath(url.pathname, params));
+}
+
 function setWhatsAppReceivableQuery({
   clientId,
   contactPanelOpen,
@@ -445,16 +466,10 @@ function setWhatsAppReceivableQuery({
 }
 
 function setWhatsAppRestoreQuery(context: WhatsAppReturnContext) {
-  replaceDashboardQuery({
-    clientId: null,
-    contactPanel: context.contactPanelOpen ? 'open' : null,
-    conversationId: context.conversationId,
-    receivableId: null,
-    returnContactPanel: null,
-    returnConversationId: null,
-    returnView: null,
-    tab: null,
+  replaceDashboardQueryExactly({
     view: 'conversations',
+    conversationId: context.conversationId,
+    contactPanel: context.contactPanelOpen ? 'open' : null,
   });
 }
 

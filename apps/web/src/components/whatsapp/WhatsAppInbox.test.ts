@@ -8,11 +8,13 @@ import {
   calculateReactionPickerPosition,
   classifyContactPixState,
   classifyConversationIncomingFile,
+  contactReferenceActionMatrix,
   contactOpenReceivable,
   contactPixCanSendWhatsApp,
   contactPixReplacementPayload,
   contactPixWhatsAppButtonLabel,
   contactReceivableAllowsPixAction,
+  contactRelevantReceivable,
   contactReceivablesForReference,
   conversationComposerActionMode,
   conversationInitials,
@@ -51,6 +53,10 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
 const whatsAppRealtimeProviderSource = readFileSync(
   join(currentDir, 'WhatsAppRealtimeProvider.tsx'),
+  'utf8',
+);
+const referenceLifecycleModalsSource = readFileSync(
+  join(currentDir, '../clients/reference-lifecycle-modals.tsx'),
   'utf8',
 );
 const globalStylesSource = readFileSync(join(currentDir, '../../app/globals.css'), 'utf8');
@@ -285,7 +291,16 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).not.toContain('phoneNormalized: conversation.phoneNormalized');
     expect(whatsAppInboxSource).toContain('preserveNotice: true');
     expect(whatsAppInboxSource).toContain("reference.status === 'CANCELADO'");
-    expect(whatsAppInboxSource).toContain("isCanceled ? 'Reativar' : 'Renovar'");
+    expect(whatsAppInboxSource).toContain('ReferenceRenewalModal');
+    expect(whatsAppInboxSource).toContain('ReferenceReactivationModal');
+    expect(referenceLifecycleModalsSource).toContain('previewReferenceRenewal(reference.id');
+    expect(referenceLifecycleModalsSource).toContain('PENDING_REACTIVATION_EXISTS');
+    expect(whatsAppInboxSource).toContain('confirmReferenceRenewal(target.reference.id');
+    expect(whatsAppInboxSource).toContain('createReferenceReactivation(target.reference.id');
+    expect(whatsAppInboxSource).toContain(
+      "onOpenClient(clientId, { tab: 'receivables', receivable })",
+    );
+    expect(whatsAppInboxSource).toContain('Abrir cliente');
     expect(globalStylesSource).toContain('.conversation-contact-drawer');
     expect(globalStylesSource).toContain('.conversation-reference-card');
     expect(globalStylesSource).toContain('width: min(430px, calc(100vw - 24px))');
@@ -316,6 +331,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toEqual([openForFirst, paidForFirst]);
     expect(contactOpenReceivable([paidForFirst])).toBeUndefined();
     expect(contactOpenReceivable([openForFirst, openForSecond])).toBe(openForSecond);
+    expect(contactRelevantReceivable([paidForFirst])).toBe(paidForFirst);
+    expect(contactRelevantReceivable([paidForFirst, openForFirst])).toBe(openForFirst);
   });
 
   it('classifies drawer PIX state from status and expiration instead of copy-paste alone', () => {
@@ -380,6 +397,103 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       false,
     );
     expect(contactReceivableAllowsPixAction(null)).toBe(false);
+  });
+
+  it('builds the quick action matrix by reference and PIX state', () => {
+    const now = Date.parse('2026-10-12T12:00:00.000Z');
+    const activeReference = contactReference('active', { status: 'ATIVO' });
+    const canceledReference = contactReference('canceled', { status: 'CANCELADO' });
+    const inactiveReference = contactReference('inactive', { status: 'INATIVO' });
+    const openReceivable = receivable('open-1');
+    const activePix = paymentIntent('intent-1', {
+      receivableId: openReceivable.id,
+      status: 'WAITING_PAYMENT',
+    });
+
+    expect(contactReferenceActionMatrix(activeReference, openReceivable, null, now)).toMatchObject({
+      generatePix: true,
+      primary: 'GENERATE_PIX',
+      renew: true,
+      viewReceivable: true,
+    });
+    expect(
+      contactReferenceActionMatrix(activeReference, openReceivable, activePix, now),
+    ).toMatchObject({
+      copyPix: true,
+      primary: 'SEND_PIX_WHATSAPP',
+      sendPixWhatsApp: true,
+      viewReceivable: true,
+    });
+    expect(
+      contactReferenceActionMatrix(
+        activeReference,
+        openReceivable,
+        paymentIntent('expired', {
+          expiresAt: '2026-10-12T11:59:59.000Z',
+          receivableId: openReceivable.id,
+        }),
+        now,
+      ),
+    ).toMatchObject({
+      primary: 'RECREATE_PIX',
+      recreatePix: true,
+      sendPixWhatsApp: false,
+    });
+    expect(
+      contactReferenceActionMatrix(canceledReference, openReceivable, null, now),
+    ).toMatchObject({
+      primary: 'REACTIVATE',
+      reactivate: true,
+      renew: false,
+    });
+    expect(
+      contactReferenceActionMatrix(inactiveReference, openReceivable, null, now),
+    ).toMatchObject({
+      generatePix: false,
+      primary: null,
+      reactivate: false,
+      renew: false,
+    });
+    expect(
+      contactReferenceActionMatrix(
+        activeReference,
+        receivable('paid', { status: 'PAGO' }),
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      generatePix: false,
+      primary: null,
+      viewReceivable: true,
+    });
+    expect(
+      contactReferenceActionMatrix(
+        activeReference,
+        openReceivable,
+        paymentIntent('canceled-intent', {
+          receivableId: openReceivable.id,
+          status: 'CANCELED',
+        }),
+        now,
+      ),
+    ).toMatchObject({
+      copyPix: false,
+      sendPixWhatsApp: false,
+    });
+    expect(
+      contactReferenceActionMatrix(
+        activeReference,
+        openReceivable,
+        paymentIntent('superseded-intent', {
+          receivableId: openReceivable.id,
+          status: 'SUPERSEDED',
+        }),
+        now,
+      ),
+    ).toMatchObject({
+      copyPix: false,
+      sendPixWhatsApp: false,
+    });
   });
 
   it('allows WhatsApp PIX sending only for the current active receivable intent', () => {

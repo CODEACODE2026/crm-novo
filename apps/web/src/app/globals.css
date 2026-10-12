@@ -4047,6 +4047,11 @@ a {
   gap: 10px;
 }
 
+.conversation-reference-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
 .conversation-contact-drawer-header {
   margin-bottom: 14px;
 }
@@ -4158,6 +4163,10 @@ a {
   gap: 2px;
 }
 
+.conversation-reference-pix {
+  flex-wrap: wrap;
+}
+
 .conversation-reference-pix small {
   color: var(--text-secondary);
   font-size: 11px;
@@ -4215,6 +4224,10 @@ a {
 
 .conversation-notice {
   margin: 0;
+}
+
+.conversation-lifecycle-modal {
+  width: min(560px, calc(100vw - 24px));
 }
 
 .start-conversation-modal {

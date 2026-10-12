@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
+const referenceLifecycleModalsSource = readFileSync(
+  join(currentDir, '../../components/clients/reference-lifecycle-modals.tsx'),
+  'utf8',
+);
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const referencesTabSource = dashboardSource.slice(
   dashboardSource.indexOf("{detailTab === 'references' ? ("),
@@ -151,9 +155,11 @@ describe('client reference presentation source', () => {
     expect(dashboardSource).toContain(
       'setRenewalTarget({ client, reference: selectedReference });',
     );
-    expect(dashboardSource).toContain('function ReactivationModal');
+    expect(dashboardSource).toContain('ReferenceReactivationModal');
+    expect(dashboardSource).toContain('ReferenceRenewalModal');
+    expect(referenceLifecycleModalsSource).toContain('function ReferenceReactivationModal');
     expect(dashboardSource).toContain('createReferenceReactivation(target.reference.id, payload)');
-    expect(dashboardSource).toContain('previewReferenceRenewal(reference.id, {');
+    expect(referenceLifecycleModalsSource).toContain('previewReferenceRenewal(reference.id, {');
     expect(dashboardSource).toContain('confirmReferenceRenewal(target.reference.id, payload)');
   });
 
@@ -167,18 +173,26 @@ describe('client reference presentation source', () => {
   });
 
   it('documents that reactivation waits for payment and does not generate PIX automatically', () => {
-    expect(dashboardSource).toContain('A referência permanece CANCELADA até o pagamento');
-    expect(dashboardSource).toContain('Nenhum PIX ou WhatsApp será gerado automaticamente');
+    expect(referenceLifecycleModalsSource).toContain(
+      'A referência permanece CANCELADA até o pagamento',
+    );
+    expect(referenceLifecycleModalsSource).toContain(
+      'Nenhum PIX ou WhatsApp será gerado automaticamente',
+    );
     expect(dashboardSource).toContain('gere o PIX manualmente em Cobranças/PIX');
   });
 
   it('recovers pending reactivation conflicts without creating another charge', () => {
-    expect(dashboardSource).toContain('pendingReactivationFromError(err)');
-    expect(dashboardSource).toContain("payload.code !== 'PENDING_REACTIVATION_EXISTS'");
-    expect(dashboardSource).toContain('Já existe reativação aguardando pagamento.');
-    expect(dashboardSource).toContain('Nenhuma nova reativação ou conta a receber foi criada.');
-    expect(dashboardSource).toContain('Ir para Cobranças/PIX');
-    expect(dashboardSource).toContain('Ver ou gerar PIX');
+    expect(referenceLifecycleModalsSource).toContain('pendingReactivationFromError(err)');
+    expect(referenceLifecycleModalsSource).toContain(
+      "payload.code !== 'PENDING_REACTIVATION_EXISTS'",
+    );
+    expect(referenceLifecycleModalsSource).toContain('Já existe reativação aguardando pagamento.');
+    expect(referenceLifecycleModalsSource).toContain(
+      'Nenhuma nova reativação ou conta a receber foi criada.',
+    );
+    expect(referenceLifecycleModalsSource).toContain('Ir para Cobranças/PIX');
+    expect(referenceLifecycleModalsSource).toContain('Ver ou gerar PIX');
     expect(dashboardSource).toContain('setPixReceivable(detailTabRequest.receivable)');
   });
 

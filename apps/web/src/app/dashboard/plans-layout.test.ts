@@ -14,6 +14,10 @@ const clientFormSource = readFileSync(
   join(currentDir, '../../components/clients/client-form.tsx'),
   'utf8',
 );
+const referenceLifecycleModalsSource = readFileSync(
+  join(currentDir, '../../components/clients/reference-lifecycle-modals.tsx'),
+  'utf8',
+);
 
 function sourceOccurrences(source: string, value: string) {
   return source.split(value).length - 1;
@@ -136,12 +140,19 @@ describe('plans UI 2.0 presentation source', () => {
       "import { sortPlansByDuration } from '../../lib/plan-utils';",
     );
     expect(
-      sourceOccurrences(dashboardSource, 'const sortedPlans = sortPlansByDuration(plans);'),
+      sourceOccurrences(dashboardSource, 'const sortedPlans = sortPlansByDuration(plans);') +
+        sourceOccurrences(
+          referenceLifecycleModalsSource,
+          'const sortedPlans = sortPlansByDuration(plans);',
+        ),
     ).toBe(6);
     expect(dashboardSource).toContain(
       'plans.filter((plan) => plan.active || plan.id === editingClient?.planId)',
     );
-    expect(sourceOccurrences(dashboardSource, '{sortedPlans.map((plan) => (')).toBe(6);
+    expect(
+      sourceOccurrences(dashboardSource, '{sortedPlans.map((plan) => (') +
+        sourceOccurrences(referenceLifecycleModalsSource, '{sortedPlans.map((plan) => ('),
+    ).toBe(6);
     expect(dashboardSource).toContain('plans={selectableClientPlans}');
     expect(clientFormSource).toContain(
       "import { sortPlansByDuration } from '../../lib/plan-utils';",

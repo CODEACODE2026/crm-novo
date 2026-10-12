@@ -58,6 +58,8 @@ import {
 import {
   ApiError,
   createClient,
+  confirmReferenceRenewal,
+  createReferenceReactivation,
   deleteWhatsAppConversationMessage,
   downloadWhatsAppConversationMedia,
   formatCurrency,
@@ -106,6 +108,11 @@ import {
   type WhatsAppConversationSummary,
   type WhatsAppRealtimeEvent,
 } from '../../lib/crm-api';
+import {
+  ReferenceReactivationModal,
+  ReferenceRenewalModal,
+  type ReferenceLifecycleTarget,
+} from '../clients/reference-lifecycle-modals';
 import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
 import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
 import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
@@ -127,6 +134,11 @@ type ConversationVoiceDraft = {
   file: File;
   previewUrl: string;
   requestId: string;
+};
+
+type ConversationOpenClientOptions = {
+  receivable?: Receivable;
+  tab?: 'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more';
 };
 
 const conversationsPageSize = 20;
@@ -246,7 +258,7 @@ export function WhatsAppInbox({
   onSummaryChange,
   onSummaryRefreshRequest,
 }: {
-  onOpenClient: (clientId: string) => Promise<void>;
+  onOpenClient: (clientId: string, options?: ConversationOpenClientOptions) => Promise<void>;
   onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
   onSummaryRefreshRequest: () => Promise<WhatsAppConversationSummary | null>;
 }) {
@@ -271,6 +283,16 @@ export function WhatsAppInbox({
   const [contactPixWhatsAppIntentIds, setContactPixWhatsAppIntentIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [contactLifecyclePlans, setContactLifecyclePlans] = useState<Plan[]>([]);
+  const [contactLifecyclePlansLoading, setContactLifecyclePlansLoading] = useState(false);
+  const [contactRenewalTarget, setContactRenewalTarget] = useState<ReferenceLifecycleTarget | null>(
+    null,
+  );
+  const [contactReactivationTarget, setContactReactivationTarget] =
+    useState<ReferenceLifecycleTarget | null>(null);
+  const [contactLifecycleBusyReferenceId, setContactLifecycleBusyReferenceId] = useState<
+    string | null
+  >(null);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ConversationFilter>('all');
@@ -2377,6 +2399,113 @@ export function WhatsAppInbox({
     }
   }
 
+  async function ensureContactLifecyclePlans() {
+    if (contactLifecyclePlans.length) return contactLifecyclePlans;
+
+    setContactLifecyclePlansLoading(true);
+    try {
+      const plans = await listPlans();
+      setContactLifecyclePlans(plans);
+      return plans;
+    } finally {
+      setContactLifecyclePlansLoading(false);
+    }
+  }
+
+  async function openContactRenewal(reference: ClientReference) {
+    const client = contactInfo.client;
+    if (!client || reference.status !== 'ATIVO') return;
+
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    setContactLifecycleBusyReferenceId(reference.id);
+    setContactInfo((current) => ({ ...current, error: '', notice: '' }));
+
+    try {
+      await ensureContactLifecyclePlans();
+      if (selectedConversationRef.current?.id !== conversationId) return;
+      setContactRenewalTarget({ client, reference });
+    } catch (err) {
+      if (selectedConversationRef.current?.id !== conversationId) return;
+      setContactInfo((current) => ({
+        ...current,
+        error: conversationErrorMessage(err, 'Não foi possível abrir a renovação.'),
+      }));
+    } finally {
+      setContactLifecycleBusyReferenceId(null);
+    }
+  }
+
+  async function openContactReactivation(reference: ClientReference) {
+    const client = contactInfo.client;
+    if (!client || reference.status !== 'CANCELADO') return;
+
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    setContactLifecycleBusyReferenceId(reference.id);
+    setContactInfo((current) => ({ ...current, error: '', notice: '' }));
+
+    try {
+      await ensureContactLifecyclePlans();
+      if (selectedConversationRef.current?.id !== conversationId) return;
+      setContactReactivationTarget({ client, reference });
+    } catch (err) {
+      if (selectedConversationRef.current?.id !== conversationId) return;
+      setContactInfo((current) => ({
+        ...current,
+        error: conversationErrorMessage(err, 'Não foi possível abrir a reativação.'),
+      }));
+    } finally {
+      setContactLifecycleBusyReferenceId(null);
+    }
+  }
+
+  async function confirmContactRenewal(
+    target: ReferenceLifecycleTarget,
+    payload: { planId: string; amount: number; idempotencyKey: string },
+  ) {
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    const result = await confirmReferenceRenewal(target.reference.id, payload);
+    if (selectedConversationRef.current?.id !== conversationId) return;
+
+    setContactRenewalTarget(null);
+    setContactInfo((current) => ({
+      ...current,
+      notice: `Referência ${target.reference.reference} renovada. Novo vencimento: ${formatDate(result.newDueDate)}.`,
+      error: '',
+    }));
+    await loadContactInfo(selectedConversationRef.current, { silent: true, preserveNotice: true });
+  }
+
+  async function confirmContactReactivation(
+    target: ReferenceLifecycleTarget,
+    payload: { planId: string; amount: number; activationDate: string; idempotencyKey: string },
+  ) {
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    const result = await createReferenceReactivation(target.reference.id, payload);
+    if (selectedConversationRef.current?.id !== conversationId) return;
+
+    setContactReactivationTarget(null);
+    setContactInfo((current) => ({
+      ...current,
+      notice: `Reativação de ${target.reference.reference} criada e aguardando pagamento. A referência continua CANCELADA.`,
+      error: '',
+      pixIntent:
+        result.receivable.activePix ?? result.receivable.paymentIntents?.[0] ?? current.pixIntent,
+    }));
+    await loadContactInfo(selectedConversationRef.current, { silent: true, preserveNotice: true });
+  }
+
+  async function openContactReceivable(clientId: string, receivable: Receivable) {
+    await onOpenClient(clientId, { tab: 'receivables', receivable });
+  }
+
   async function findDuplicateClientByPhone(phone: string, fallbackPhoneNormalized: string) {
     const expectedDigits = phoneDigits(phone) || phoneDigits(fallbackPhoneNormalized);
     if (!expectedDigits) return null;
@@ -2661,6 +2790,28 @@ export function WhatsAppInbox({
         />
       ) : null}
 
+      {contactRenewalTarget ? (
+        <ReferenceRenewalModal
+          modalClassName="conversation-lifecycle-modal"
+          plans={contactLifecyclePlans.filter(
+            (plan) => plan.active || plan.id === contactRenewalTarget.reference.planId,
+          )}
+          target={contactRenewalTarget}
+          onClose={() => setContactRenewalTarget(null)}
+          onConfirm={(payload) => confirmContactRenewal(contactRenewalTarget, payload)}
+        />
+      ) : null}
+
+      {contactReactivationTarget ? (
+        <ReferenceReactivationModal
+          modalClassName="conversation-lifecycle-modal"
+          plans={contactLifecyclePlans.filter((plan) => plan.active)}
+          target={contactReactivationTarget}
+          onClose={() => setContactReactivationTarget(null)}
+          onConfirm={(payload) => confirmContactReactivation(contactReactivationTarget, payload)}
+        />
+      ) : null}
+
       {avatarPreview ? (
         <WhatsAppAvatarPreview
           name={avatarPreview.name}
@@ -2847,8 +2998,15 @@ export function WhatsAppInbox({
             void sendContactPixWhatsApp(receivable, intent)
           }
           onLinkClient={(client) => void linkSelectedConversationToClient(client)}
+          onReactivateReference={(reference) => void openContactReactivation(reference)}
+          onRenewReference={(reference) => void openContactRenewal(reference)}
           onOpenClient={(clientId) => void onOpenClient(clientId)}
+          onViewReceivable={(clientId, receivable) =>
+            void openContactReceivable(clientId, receivable)
+          }
           onCopyPix={(intent) => void copyContactPix(intent)}
+          lifecycleBusyReferenceId={contactLifecycleBusyReferenceId}
+          lifecyclePlansLoading={contactLifecyclePlansLoading}
         />
       </div>
     </section>
@@ -5345,6 +5503,8 @@ function ConversationClientPanel({
   conversation,
   linkClientError,
   linkingClient,
+  lifecycleBusyReferenceId,
+  lifecyclePlansLoading,
   open,
   pixBusyReceivableId,
   pixWhatsAppBusyIntentIds,
@@ -5353,15 +5513,20 @@ function ConversationClientPanel({
   onCreateClient,
   onGeneratePix,
   onRecreatePix,
+  onReactivateReference,
   onSendPixWhatsApp,
+  onRenewReference,
   onLinkClient,
   onOpenClient,
+  onViewReceivable,
 }: {
   avatar?: ConversationAvatarState | undefined;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
   linkClientError: string;
   linkingClient: boolean;
+  lifecycleBusyReferenceId: string | null;
+  lifecyclePlansLoading: boolean;
   open: boolean;
   pixBusyReceivableId: string | null;
   pixWhatsAppBusyIntentIds: ReadonlySet<string>;
@@ -5370,9 +5535,12 @@ function ConversationClientPanel({
   onCreateClient: (conversation: WhatsAppConversation) => void;
   onGeneratePix: (receivable: Receivable) => void;
   onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
+  onReactivateReference: (reference: ClientReference) => void;
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
+  onRenewReference: (reference: ClientReference) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
+  onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
   if (!open) return null;
 
@@ -5398,15 +5566,20 @@ function ConversationClientPanel({
           conversation={conversation}
           linkClientError={linkClientError}
           linkingClient={linkingClient}
+          lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+          lifecyclePlansLoading={lifecyclePlansLoading}
           pixBusyReceivableId={pixBusyReceivableId}
           pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
           onCopyPix={onCopyPix}
           onCreateClient={onCreateClient}
           onGeneratePix={onGeneratePix}
           onRecreatePix={onRecreatePix}
+          onReactivateReference={onReactivateReference}
           onSendPixWhatsApp={onSendPixWhatsApp}
+          onRenewReference={onRenewReference}
           onLinkClient={onLinkClient}
           onOpenClient={onOpenClient}
+          onViewReceivable={onViewReceivable}
         />
       </aside>
     </div>
@@ -5419,30 +5592,40 @@ function ConversationClientPanelContent({
   conversation,
   linkClientError,
   linkingClient,
+  lifecycleBusyReferenceId,
+  lifecyclePlansLoading,
   pixBusyReceivableId,
   pixWhatsAppBusyIntentIds,
   onCopyPix,
   onCreateClient,
   onGeneratePix,
   onRecreatePix,
+  onReactivateReference,
   onSendPixWhatsApp,
+  onRenewReference,
   onLinkClient,
   onOpenClient,
+  onViewReceivable,
 }: {
   avatar?: ConversationAvatarState | undefined;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
   linkClientError: string;
   linkingClient: boolean;
+  lifecycleBusyReferenceId: string | null;
+  lifecyclePlansLoading: boolean;
   pixBusyReceivableId: string | null;
   pixWhatsAppBusyIntentIds: ReadonlySet<string>;
   onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
   onGeneratePix: (receivable: Receivable) => void;
   onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
+  onReactivateReference: (reference: ClientReference) => void;
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
+  onRenewReference: (reference: ClientReference) => void;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
+  onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
@@ -5530,6 +5713,8 @@ function ConversationClientPanelContent({
         </section>
         <ConversationReferenceList
           client={client}
+          lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+          lifecyclePlansLoading={lifecyclePlansLoading}
           pixBusyReceivableId={pixBusyReceivableId}
           pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
           pixIntent={contactInfo.pixIntent}
@@ -5537,8 +5722,11 @@ function ConversationClientPanelContent({
           onCopyPix={onCopyPix}
           onGeneratePix={onGeneratePix}
           onRecreatePix={onRecreatePix}
+          onReactivateReference={onReactivateReference}
           onSendPixWhatsApp={onSendPixWhatsApp}
+          onRenewReference={onRenewReference}
           onOpenClient={onOpenClient}
+          onViewReceivable={onViewReceivable}
         />
       </div>
     );
@@ -5692,6 +5880,8 @@ function ConversationContactHeader({
 
 function ConversationReferenceList({
   client,
+  lifecycleBusyReferenceId,
+  lifecyclePlansLoading,
   pixBusyReceivableId,
   pixWhatsAppBusyIntentIds,
   pixIntent,
@@ -5699,10 +5889,15 @@ function ConversationReferenceList({
   onCopyPix,
   onGeneratePix,
   onRecreatePix,
+  onReactivateReference,
   onSendPixWhatsApp,
+  onRenewReference,
   onOpenClient,
+  onViewReceivable,
 }: {
   client: Client;
+  lifecycleBusyReferenceId: string | null;
+  lifecyclePlansLoading: boolean;
   pixBusyReceivableId: string | null;
   pixWhatsAppBusyIntentIds: ReadonlySet<string>;
   pixIntent: PaymentIntent | null;
@@ -5710,8 +5905,11 @@ function ConversationReferenceList({
   onCopyPix: (intent: PaymentIntent) => void;
   onGeneratePix: (receivable: Receivable) => void;
   onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
+  onReactivateReference: (reference: ClientReference) => void;
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
+  onRenewReference: (reference: ClientReference) => void;
   onOpenClient: (clientId: string) => void;
+  onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
   const references = sortContactReferences(client.references ?? []);
 
@@ -5727,6 +5925,8 @@ function ConversationReferenceList({
             <ConversationReferenceCard
               key={reference.id}
               clientId={client.id}
+              lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+              lifecyclePlansLoading={lifecyclePlansLoading}
               pixBusyReceivableId={pixBusyReceivableId}
               pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
               pixIntent={pixIntent}
@@ -5735,8 +5935,11 @@ function ConversationReferenceList({
               onCopyPix={onCopyPix}
               onGeneratePix={onGeneratePix}
               onRecreatePix={onRecreatePix}
+              onReactivateReference={onReactivateReference}
               onSendPixWhatsApp={onSendPixWhatsApp}
+              onRenewReference={onRenewReference}
               onOpenClient={onOpenClient}
+              onViewReceivable={onViewReceivable}
             />
           ))}
         </div>
@@ -5752,6 +5955,8 @@ function ConversationReferenceList({
 
 function ConversationReferenceCard({
   clientId,
+  lifecycleBusyReferenceId,
+  lifecyclePlansLoading,
   pixBusyReceivableId,
   pixWhatsAppBusyIntentIds,
   pixIntent,
@@ -5760,10 +5965,15 @@ function ConversationReferenceCard({
   onCopyPix,
   onGeneratePix,
   onRecreatePix,
+  onReactivateReference,
   onSendPixWhatsApp,
+  onRenewReference,
   onOpenClient,
+  onViewReceivable,
 }: {
   clientId: string;
+  lifecycleBusyReferenceId: string | null;
+  lifecyclePlansLoading: boolean;
   pixBusyReceivableId: string | null;
   pixWhatsAppBusyIntentIds: ReadonlySet<string>;
   pixIntent: PaymentIntent | null;
@@ -5772,10 +5982,14 @@ function ConversationReferenceCard({
   onCopyPix: (intent: PaymentIntent) => void;
   onGeneratePix: (receivable: Receivable) => void;
   onRecreatePix: (receivable: Receivable, intent: PaymentIntent) => void;
+  onReactivateReference: (reference: ClientReference) => void;
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
+  onRenewReference: (reference: ClientReference) => void;
   onOpenClient: (clientId: string) => void;
+  onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
   const openReceivable = contactOpenReceivable(receivables);
+  const relevantReceivable = contactRelevantReceivable(receivables);
   const activePix = openReceivable?.activePix ?? null;
   const generatedPix =
     pixIntent && pixIntent.receivableId && pixIntent.receivableId === openReceivable?.id
@@ -5786,8 +6000,12 @@ function ConversationReferenceCard({
   const canActOnPix = contactReceivableAllowsPixAction(openReceivable);
   const canSendPixWhatsApp = contactPixCanSendWhatsApp(openReceivable, visiblePix);
   const pixWhatsAppSending = visiblePix ? pixWhatsAppBusyIntentIds.has(visiblePix.id) : false;
-  const isCanceled = reference.status === 'CANCELADO';
-  const actionLabel = isCanceled ? 'Reativar' : 'Renovar';
+  const actions = contactReferenceActionMatrix(
+    reference,
+    openReceivable ?? relevantReceivable,
+    visiblePix,
+  );
+  const lifecycleBusy = lifecycleBusyReferenceId === reference.id || lifecyclePlansLoading;
 
   return (
     <article className="conversation-reference-card">
@@ -5841,7 +6059,7 @@ function ConversationReferenceCard({
             <Button
               icon={QrCode}
               size="sm"
-              variant="secondary"
+              variant={actions.primary === 'COPY_PIX' ? 'primary' : 'secondary'}
               onClick={() => onCopyPix(visiblePix)}
             >
               Copiar PIX
@@ -5852,7 +6070,7 @@ function ConversationReferenceCard({
               disabled={pixWhatsAppSending}
               icon={Send}
               size="sm"
-              variant="primary"
+              variant={actions.primary === 'SEND_PIX_WHATSAPP' ? 'primary' : 'secondary'}
               onClick={() => onSendPixWhatsApp(openReceivable, visiblePix)}
             >
               {contactPixWhatsAppButtonLabel(pixWhatsAppSending)}
@@ -5883,16 +6101,40 @@ function ConversationReferenceCard({
             Gerar PIX
           </Button>
         ) : null}
-        <Button
-          icon={isCanceled ? RefreshCw : ArrowRight}
-          size="sm"
-          variant="secondary"
-          onClick={() => onOpenClient(clientId)}
-        >
-          {actionLabel}
-        </Button>
+        {actions.viewReceivable && relevantReceivable ? (
+          <Button
+            icon={Eye}
+            size="sm"
+            variant="secondary"
+            onClick={() => onViewReceivable(clientId, relevantReceivable)}
+          >
+            Ver cobrança
+          </Button>
+        ) : null}
+        {actions.renew ? (
+          <Button
+            icon={RefreshCw}
+            loading={lifecycleBusy}
+            size="sm"
+            variant="secondary"
+            onClick={() => onRenewReference(reference)}
+          >
+            Renovar
+          </Button>
+        ) : null}
+        {actions.reactivate ? (
+          <Button
+            icon={RefreshCw}
+            loading={lifecycleBusy}
+            size="sm"
+            variant="primary"
+            onClick={() => onReactivateReference(reference)}
+          >
+            Reativar
+          </Button>
+        ) : null}
         <Button icon={ArrowRight} size="sm" variant="ghost" onClick={() => onOpenClient(clientId)}>
-          Abrir
+          Abrir cliente
         </Button>
       </div>
     </article>
@@ -5928,6 +6170,52 @@ export function sortContactReferences(references: ClientReference[]) {
   });
 }
 
+export type ContactReferencePrimaryAction =
+  'GENERATE_PIX' | 'RECREATE_PIX' | 'SEND_PIX_WHATSAPP' | 'COPY_PIX' | 'REACTIVATE' | null;
+
+export function contactReferenceActionMatrix(
+  reference: Pick<ClientReference, 'status'>,
+  receivable: Receivable | null | undefined,
+  intent: PaymentIntent | null | undefined,
+  now = Date.now(),
+) {
+  const pixState = classifyContactPixState(intent, now);
+  const canActOnPix = contactReceivableAllowsPixAction(receivable);
+  const canSendPixWhatsApp = contactPixCanSendWhatsApp(receivable, intent, now);
+  const canCopyPix = Boolean(intent?.pixCopyPaste && pixState === 'ACTIVE_PIX' && canActOnPix);
+  const canGeneratePix = Boolean(
+    reference.status === 'ATIVO' && canActOnPix && pixState === 'NO_PIX',
+  );
+  const canRecreatePix = Boolean(
+    reference.status === 'ATIVO' && canActOnPix && pixState === 'EXPIRED_PIX',
+  );
+  const canRenew = reference.status === 'ATIVO';
+  const canReactivate = reference.status === 'CANCELADO';
+  const viewReceivable = Boolean(receivable && receivable.sourceKind !== 'LEGACY_IMPORT');
+  const primary: ContactReferencePrimaryAction = canReactivate
+    ? 'REACTIVATE'
+    : canRecreatePix
+      ? 'RECREATE_PIX'
+      : canSendPixWhatsApp
+        ? 'SEND_PIX_WHATSAPP'
+        : canCopyPix
+          ? 'COPY_PIX'
+          : canGeneratePix
+            ? 'GENERATE_PIX'
+            : null;
+
+  return {
+    copyPix: canCopyPix,
+    generatePix: canGeneratePix,
+    primary,
+    reactivate: canReactivate,
+    recreatePix: canRecreatePix,
+    renew: canRenew,
+    sendPixWhatsApp: canSendPixWhatsApp,
+    viewReceivable,
+  };
+}
+
 export function contactReceivablesForReference(receivables: Receivable[], referenceId: string) {
   return receivables.filter((receivable) => receivable.clientReferenceId === referenceId);
 }
@@ -5938,6 +6226,15 @@ export function contactOpenReceivable(receivables: Receivable[]) {
       (receivable) => receivable.displayStatus === 'VENCIDO' || receivable.status === 'PENDENTE',
     )
     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+}
+
+export function contactRelevantReceivable(receivables: Receivable[]) {
+  return (
+    contactOpenReceivable(receivables) ??
+    [...receivables]
+      .filter((receivable) => receivable.sourceKind !== 'LEGACY_IMPORT')
+      .sort((a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime())[0]
+  );
 }
 
 export function classifyContactPixState(

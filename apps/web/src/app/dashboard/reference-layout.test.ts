@@ -196,6 +196,23 @@ describe('client reference presentation source', () => {
     expect(dashboardSource).toContain('setPixReceivable(detailTabRequest.receivable)');
   });
 
+  it('preserves WhatsApp return context when opening a reference receivable', () => {
+    expect(dashboardSource).toContain('type WhatsAppReturnContext');
+    expect(dashboardSource).toContain('setWhatsAppReceivableQuery({');
+    expect(dashboardSource).toContain("returnView: 'conversations'");
+    expect(dashboardSource).toContain('returnConversationId: conversationId');
+    expect(dashboardSource).toContain("returnContactPanel: contactPanelOpen ? 'open' : null");
+    expect(dashboardSource).toContain('dashboardUrlReturnContext(params)');
+    expect(dashboardSource).toContain('getReceivable(restoredReceivableId)');
+    expect(dashboardSource).toContain(
+      'setPixReceivableReturnContext(detailTabRequest.returnContext ?? null)',
+    );
+    expect(dashboardSource).toContain('function closePixReceivable()');
+    expect(dashboardSource).toContain('onReturnToWhatsApp(returnContext)');
+    expect(dashboardSource).not.toContain('returnTo=');
+    expect(dashboardSource).not.toContain('router.back()');
+  });
+
   it('keeps semantic status badge tones available', () => {
     expect(stylesSource).toContain('.status-ativo');
     expect(stylesSource).toContain('.status-pendente_pagamento');

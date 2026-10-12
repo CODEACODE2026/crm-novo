@@ -137,8 +137,20 @@ type ConversationVoiceDraft = {
 };
 
 type ConversationOpenClientOptions = {
+  origin?: {
+    contactPanelOpen?: boolean;
+    conversationId: string;
+    kind: 'whatsapp';
+  };
   receivable?: Receivable;
   tab?: 'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more';
+};
+
+type ConversationRestoreRequest = {
+  contactPanelOpen?: boolean;
+  conversationId: string;
+  sequence: number;
+  view: 'conversations';
 };
 
 const conversationsPageSize = 20;
@@ -257,10 +269,12 @@ export function WhatsAppInbox({
   onOpenClient,
   onSummaryChange,
   onSummaryRefreshRequest,
+  restoreRequest,
 }: {
   onOpenClient: (clientId: string, options?: ConversationOpenClientOptions) => Promise<void>;
   onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
   onSummaryRefreshRequest: () => Promise<WhatsAppConversationSummary | null>;
+  restoreRequest?: ConversationRestoreRequest | null;
 }) {
   const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
   const [summary, setSummary] = useState<WhatsAppConversationSummary | null>(null);
@@ -1168,6 +1182,41 @@ export function WhatsAppInbox({
   }, [loadConversations]);
 
   useEffect(() => {
+    const request = restoreRequest;
+    if (!request?.conversationId) return undefined;
+
+    let active = true;
+    const restoreConversationId = request.conversationId;
+    const restoreContactPanelOpen = Boolean(request.contactPanelOpen);
+
+    async function restoreConversation() {
+      const existingConversation =
+        conversations.find((conversation) => conversation.id === restoreConversationId) ?? null;
+
+      try {
+        const conversation =
+          existingConversation ?? (await getWhatsAppConversation(restoreConversationId));
+        if (!active) return;
+
+        setConversations((current) => mergeConversationById(current, conversation));
+        await selectConversation(conversation, {
+          openContactPanel: restoreContactPanelOpen,
+        });
+      } catch (err) {
+        if (active) {
+          setMessagesError(conversationErrorMessage(err, 'Falha ao restaurar conversa.'));
+        }
+      }
+    }
+
+    void restoreConversation();
+
+    return () => {
+      active = false;
+    };
+  }, [restoreRequest?.sequence]);
+
+  useEffect(() => {
     void loadStartConversationConnections();
   }, [loadStartConversationConnections]);
 
@@ -1777,7 +1826,10 @@ export function WhatsAppInbox({
     handleIncomingFileList(files);
   }
 
-  async function selectConversation(conversation: WhatsAppConversation) {
+  async function selectConversation(
+    conversation: WhatsAppConversation,
+    options: { openContactPanel?: boolean } = {},
+  ) {
     openMessageSearchGenerationRef.current += 1;
     resetMessageSearch();
     activeConversationIdRef.current = conversation.id;
@@ -1820,7 +1872,12 @@ export function WhatsAppInbox({
         scheduleActiveConversationRead(detail.id);
       }
 
-      if (contactPanelOpen) void loadContactInfo(detail);
+      if (options.openContactPanel) {
+        setContactPanelOpen(true);
+        void loadContactInfo(detail);
+      } else if (contactPanelOpen) {
+        void loadContactInfo(detail);
+      }
     } catch (err) {
       setMessagesError(conversationErrorMessage(err, 'Falha ao abrir conversa.'));
     } finally {
@@ -2503,7 +2560,21 @@ export function WhatsAppInbox({
   }
 
   async function openContactReceivable(clientId: string, receivable: Receivable) {
-    await onOpenClient(clientId, { tab: 'receivables', receivable });
+    const conversationId = selectedConversationRef.current?.id;
+
+    await onOpenClient(clientId, {
+      ...(conversationId
+        ? {
+            origin: {
+              contactPanelOpen,
+              conversationId,
+              kind: 'whatsapp' as const,
+            },
+          }
+        : {}),
+      tab: 'receivables',
+      receivable,
+    });
   }
 
   async function findDuplicateClientByPhone(phone: string, fallbackPhoneNormalized: string) {

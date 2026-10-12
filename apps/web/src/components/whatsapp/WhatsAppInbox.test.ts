@@ -297,9 +297,12 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(referenceLifecycleModalsSource).toContain('PENDING_REACTIVATION_EXISTS');
     expect(whatsAppInboxSource).toContain('confirmReferenceRenewal(target.reference.id');
     expect(whatsAppInboxSource).toContain('createReferenceReactivation(target.reference.id');
-    expect(whatsAppInboxSource).toContain(
-      "onOpenClient(clientId, { tab: 'receivables', receivable })",
-    );
+    expect(whatsAppInboxSource).toContain("kind: 'whatsapp' as const");
+    expect(whatsAppInboxSource).toContain('conversationId');
+    expect(whatsAppInboxSource).toContain('contactPanelOpen');
+    expect(whatsAppInboxSource).toContain("tab: 'receivables'");
+    expect(whatsAppInboxSource).toContain('if (!request?.conversationId) return undefined');
+    expect(whatsAppInboxSource).toContain('openContactPanel: restoreContactPanelOpen');
     expect(whatsAppInboxSource).toContain('Abrir cliente');
     expect(globalStylesSource).toContain('.conversation-contact-drawer');
     expect(globalStylesSource).toContain('.conversation-reference-card');

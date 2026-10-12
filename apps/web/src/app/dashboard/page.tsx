@@ -159,6 +159,7 @@ import {
   getReport,
   getFinancialSummary,
   getPaymentIntentsSummary,
+  getReceivable,
   getReceivablesSummary,
   getWhatsAppConnection,
   getWhatsAppPendingContact,
@@ -364,8 +365,20 @@ type ClientDetailTab = 'overview' | 'references' | 'receivables' | 'messages' | 
 type ClientDetailTabRequest = {
   tab: ClientDetailTab;
   receivable?: Receivable;
+  returnContext?: WhatsAppReturnContext;
   sequence: number;
 };
+
+type WhatsAppReturnContext = {
+  contactPanelOpen?: boolean;
+  conversationId: string;
+  view: 'conversations';
+};
+
+type WhatsAppRestoreRequest = WhatsAppReturnContext & {
+  sequence: number;
+};
+
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses';
 type FinanceQuickFilterId =
   'today' | 'pendingToday' | 'receivedToday' | 'overdue' | 'nextSevenDays';
@@ -389,6 +402,83 @@ const navItems = [
 const futureNavItems = [{ label: 'Renovações', icon: RefreshCcw }];
 const listPageSize = 10;
 const clientFinancePageSize = 20;
+
+function replaceDashboardQuery(params: Record<string, string | null | undefined>) {
+  if (typeof window === 'undefined') return;
+
+  const url = new URL(window.location.href);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === '') {
+      url.searchParams.delete(key);
+      return;
+    }
+
+    url.searchParams.set(key, value);
+  });
+
+  const query = url.searchParams.toString();
+  window.history.replaceState(null, '', `${url.pathname}${query ? `?${query}` : ''}`);
+}
+
+function setWhatsAppReceivableQuery({
+  clientId,
+  contactPanelOpen,
+  conversationId,
+  receivableId,
+}: {
+  clientId: string;
+  contactPanelOpen: boolean;
+  conversationId: string;
+  receivableId: string;
+}) {
+  replaceDashboardQuery({
+    clientId,
+    contactPanel: null,
+    conversationId: null,
+    receivableId,
+    returnContactPanel: contactPanelOpen ? 'open' : null,
+    returnConversationId: conversationId,
+    returnView: 'conversations',
+    tab: 'receivables',
+    view: 'clients',
+  });
+}
+
+function setWhatsAppRestoreQuery(context: WhatsAppReturnContext) {
+  replaceDashboardQuery({
+    clientId: null,
+    contactPanel: context.contactPanelOpen ? 'open' : null,
+    conversationId: context.conversationId,
+    receivableId: null,
+    returnContactPanel: null,
+    returnConversationId: null,
+    returnView: null,
+    tab: null,
+    view: 'conversations',
+  });
+}
+
+function clearWhatsAppRestoreQuery() {
+  replaceDashboardQuery({
+    contactPanel: null,
+    conversationId: null,
+    view: null,
+  });
+}
+
+function dashboardUrlReturnContext(params: URLSearchParams): WhatsAppReturnContext | null {
+  if (params.get('returnView') !== 'conversations') return null;
+
+  const conversationId = params.get('returnConversationId')?.trim();
+  if (!conversationId) return null;
+
+  return {
+    contactPanelOpen: params.get('returnContactPanel') === 'open',
+    conversationId,
+    view: 'conversations',
+  };
+}
+
 const monthNamesPt = [
   'Janeiro',
   'Fevereiro',
@@ -490,6 +580,8 @@ export default function DashboardPage() {
     useState<SettingsBillingTab>('rules');
   const [clientDetailTabRequest, setClientDetailTabRequest] =
     useState<ClientDetailTabRequest | null>(null);
+  const [whatsAppRestoreRequest, setWhatsAppRestoreRequest] =
+    useState<WhatsAppRestoreRequest | null>(null);
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
   const [reactivationTarget, setReactivationTarget] = useState<ReactivationTarget | null>(null);
   const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
@@ -587,6 +679,73 @@ export default function DashboardPage() {
     }
   }, [loadData, loadingSession, user]);
 
+  useEffect(() => {
+    if (loadingSession || !user || typeof window === 'undefined') return undefined;
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedView = params.get('view');
+    let active = true;
+
+    if (requestedView === 'conversations') {
+      const conversationId = params.get('conversationId')?.trim();
+      if (conversationId) {
+        setWhatsAppRestoreRequest({
+          contactPanelOpen: params.get('contactPanel') === 'open',
+          conversationId,
+          sequence: Date.now(),
+          view: 'conversations',
+        });
+      }
+      setView('conversations');
+      return undefined;
+    }
+
+    if (requestedView !== 'clients' || params.get('tab') !== 'receivables') {
+      return undefined;
+    }
+
+    const clientId = params.get('clientId')?.trim();
+    const receivableId = params.get('receivableId')?.trim();
+    if (!clientId || !receivableId) return undefined;
+
+    const restoredClientId = clientId;
+    const restoredReceivableId = receivableId;
+    const returnContext = dashboardUrlReturnContext(params);
+
+    async function restoreClientReceivable() {
+      try {
+        const [client, receivable] = await Promise.all([
+          getClient(restoredClientId),
+          getReceivable(restoredReceivableId),
+        ]);
+        if (!active) return;
+
+        setSelectedClient(client);
+        setClientDetailTabRequest({
+          receivable,
+          ...(returnContext ? { returnContext } : {}),
+          sequence: Date.now(),
+          tab: 'receivables',
+        });
+        setView('clients');
+      } catch (err) {
+        if (active) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Não foi possível restaurar a cobrança selecionada.',
+          );
+        }
+      }
+    }
+
+    void restoreClientReceivable();
+
+    return () => {
+      active = false;
+    };
+  }, [loadingSession, user]);
+
   async function reloadAfterMutation() {
     await loadData();
     setClientFormOpen(false);
@@ -631,7 +790,20 @@ export default function DashboardPage() {
       setSettingsInitialSection('overview');
     }
 
+    clearWhatsAppRestoreQuery();
+
     setView(nextView);
+  }
+
+  function restoreWhatsAppContext(context: WhatsAppReturnContext) {
+    setWhatsAppRestoreRequest({
+      ...context,
+      sequence: Date.now(),
+    });
+    setClientDetailTabRequest(null);
+    setSelectedClient(null);
+    setWhatsAppRestoreQuery(context);
+    setView('conversations');
   }
 
   async function handleReferenceStatusChange(
@@ -961,6 +1133,7 @@ export default function DashboardPage() {
               setSelectedClient(detailed);
               await loadData();
             }}
+            onReturnToWhatsApp={restoreWhatsAppContext}
             onWhatsAppSent={async (clientId) => {
               const detailed = await getClient(clientId);
               setSelectedClient(detailed);
@@ -994,17 +1167,35 @@ export default function DashboardPage() {
         ) : null}
         {view === 'conversations' ? (
           <WhatsAppInbox
+            restoreRequest={whatsAppRestoreRequest}
             onSummaryChange={whatsappRealtime.setSummary}
             onSummaryRefreshRequest={whatsappRealtime.refreshSummary}
             onOpenClient={async (clientId, options) => {
               const client = await getClient(clientId);
               setSelectedClient(client);
               if (options?.tab) {
+                const returnContext =
+                  options.origin?.kind === 'whatsapp'
+                    ? {
+                        contactPanelOpen: Boolean(options.origin.contactPanelOpen),
+                        conversationId: options.origin.conversationId,
+                        view: 'conversations' as const,
+                      }
+                    : null;
                 setClientDetailTabRequest({
                   ...(options.receivable ? { receivable: options.receivable } : {}),
+                  ...(returnContext ? { returnContext } : {}),
                   sequence: Date.now(),
                   tab: options.tab,
                 });
+                if (options.receivable && returnContext) {
+                  setWhatsAppReceivableQuery({
+                    clientId,
+                    contactPanelOpen: Boolean(returnContext.contactPanelOpen),
+                    conversationId: returnContext.conversationId,
+                    receivableId: options.receivable.id,
+                  });
+                }
               }
               setView('clients');
             }}
@@ -7375,6 +7566,7 @@ function ClientsView({
   onCreateReference,
   onUpdateReference,
   onReferenceStatusChange,
+  onReturnToWhatsApp,
   onRemoveClient,
   onRemoveReference,
   onSelect,
@@ -7419,6 +7611,7 @@ function ClientsView({
     status: ClientStatus,
     reason?: string,
   ) => void;
+  onReturnToWhatsApp: (context: WhatsAppReturnContext) => void;
   onRemoveClient: (client: Client) => void;
   onRemoveReference: (reference: ClientReference) => void;
   onSelect: (client: Client) => void | Promise<void>;
@@ -7478,6 +7671,8 @@ function ClientsView({
   const [clientFinanceError, setClientFinanceError] = useState('');
   const [paymentReceivable, setPaymentReceivable] = useState<Receivable | null>(null);
   const [pixReceivable, setPixReceivable] = useState<Receivable | null>(null);
+  const [pixReceivableReturnContext, setPixReceivableReturnContext] =
+    useState<WhatsAppReturnContext | null>(null);
   const [paymentReceivables, setPaymentReceivables] = useState<Receivable[] | null>(null);
   const [pixReceivables, setPixReceivables] = useState<Receivable[] | null>(null);
   const [cancelingReceivable, setCancelingReceivable] = useState<Receivable | null>(null);
@@ -7701,6 +7896,7 @@ function ClientsView({
     setReferenceStatusModal(null);
     setPaymentReceivable(null);
     setPixReceivable(null);
+    setPixReceivableReturnContext(null);
     setPaymentReceivables(null);
     setPixReceivables(null);
     setCancelingReceivable(null);
@@ -7743,6 +7939,7 @@ function ClientsView({
       setClientFinanceReferenceId(detailTabRequest.receivable.clientReferenceId ?? '');
       setClientFinanceStatus('');
       setClientFinancePage(1);
+      setPixReceivableReturnContext(detailTabRequest.returnContext ?? null);
       setPixReceivable(detailTabRequest.receivable);
     }
   }, [detailTabRequest, selectedClientId]);
@@ -7858,6 +8055,21 @@ function ClientsView({
         ? [...new Set([...current, receivable.id])]
         : current.filter((id) => id !== receivable.id),
     );
+  }
+
+  function openClientPixReceivable(receivable: Receivable) {
+    setPixReceivableReturnContext(null);
+    setPixReceivable(receivable);
+  }
+
+  function closePixReceivable() {
+    const returnContext = pixReceivableReturnContext;
+    setPixReceivable(null);
+    setPixReceivableReturnContext(null);
+
+    if (returnContext) {
+      onReturnToWhatsApp(returnContext);
+    }
   }
 
   return (
@@ -9045,7 +9257,7 @@ function ClientsView({
                                       }
                                       icon={QrCode}
                                       label="Gerar ou ver PIX"
-                                      onClick={() => setPixReceivable(receivable)}
+                                      onClick={() => openClientPixReceivable(receivable)}
                                     />
                                     <ActionMenu
                                       items={[
@@ -9053,7 +9265,7 @@ function ClientsView({
                                           disabled: receivable.status !== 'PENDENTE',
                                           icon: QrCode,
                                           label: 'Gerar PIX',
-                                          onSelect: () => setPixReceivable(receivable),
+                                          onSelect: () => openClientPixReceivable(receivable),
                                         },
                                         {
                                           disabled: receivable.status !== 'PENDENTE',
@@ -9385,7 +9597,7 @@ function ClientsView({
         {pixReceivable ? (
           <PixReceivableModal
             receivable={pixReceivable}
-            onClose={() => setPixReceivable(null)}
+            onClose={closePixReceivable}
             onChanged={async (message) => {
               await refreshClientFinance(message);
             }}

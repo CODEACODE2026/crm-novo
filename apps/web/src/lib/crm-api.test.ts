@@ -20,6 +20,7 @@ import {
   getFinancialSummary,
   getPaymentIntentsSummary,
   getReferralSummary,
+  getReceivable,
   getReceivablesSummary,
   getWhatsAppConversation,
   getWhatsAppConversationMessagesAround,
@@ -939,6 +940,24 @@ describe('CRM UI formatters', () => {
       expect.stringContaining(
         '/receivables/summary?search=Bruno&startDate=2026-09-01&endDate=2026-09-30',
       ),
+      expect.any(Object),
+    );
+  });
+
+  it('fetches a single receivable by id for URL-restored PIX details', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ id: 'receivable-id' }), {
+          status: 200,
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getReceivable('receivable-id');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/receivables/receivable-id'),
       expect.any(Object),
     );
   });

@@ -2176,6 +2176,10 @@ export function listReceivables(
   return apiFetch<PaginatedReceivables>(`/receivables${query ? `?${query}` : ''}`);
 }
 
+export function getReceivable(id: string) {
+  return apiFetch<Receivable>(`/receivables/${id}`);
+}
+
 export function getReceivablesSummary(
   filters: {
     clientId?: string;

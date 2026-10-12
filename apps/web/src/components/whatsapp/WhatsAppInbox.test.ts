@@ -9,7 +9,9 @@ import {
   classifyContactPixState,
   classifyConversationIncomingFile,
   contactOpenReceivable,
+  contactPixCanSendWhatsApp,
   contactPixReplacementPayload,
+  contactPixWhatsAppButtonLabel,
   contactReceivableAllowsPixAction,
   contactReceivablesForReference,
   conversationComposerActionMode,
@@ -268,6 +270,19 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       'contactPixReplacementPayload(receivable, currentIntent)',
     );
     expect(whatsAppInboxSource).toContain('PIX recriado com sucesso');
+    expect(whatsAppInboxSource).toContain('Enviar no WhatsApp');
+    expect(whatsAppInboxSource).toContain('sendPaymentIntentWhatsApp(intent.id)');
+    expect(whatsAppInboxSource).toContain('contactPixCanSendWhatsApp(openReceivable, visiblePix)');
+    expect(whatsAppInboxSource).toContain('contactPixWhatsAppIntentIdsRef.current.has(intent.id)');
+    expect(whatsAppInboxSource).toContain('contactPixWhatsAppIntentIdsRef.current.add(intent.id)');
+    expect(whatsAppInboxSource).toContain(
+      'contactPixWhatsAppIntentIdsRef.current.delete(intent.id)',
+    );
+    expect(whatsAppInboxSource).toContain('pixWhatsAppBusyIntentIds.has(visiblePix.id)');
+    expect(whatsAppInboxSource).toContain('disabled={pixWhatsAppSending}');
+    expect(whatsAppInboxSource).toContain('contactPixWhatsAppButtonLabel(pixWhatsAppSending)');
+    expect(whatsAppInboxSource).not.toContain('pixCopyPaste: visiblePix.pixCopyPaste');
+    expect(whatsAppInboxSource).not.toContain('phoneNormalized: conversation.phoneNormalized');
     expect(whatsAppInboxSource).toContain('preserveNotice: true');
     expect(whatsAppInboxSource).toContain("reference.status === 'CANCELADO'");
     expect(whatsAppInboxSource).toContain("isCanceled ? 'Reativar' : 'Renovar'");
@@ -365,6 +380,98 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       false,
     );
     expect(contactReceivableAllowsPixAction(null)).toBe(false);
+  });
+
+  it('allows WhatsApp PIX sending only for the current active receivable intent', () => {
+    const now = Date.parse('2026-10-12T12:00:00.000Z');
+    const currentReceivable = receivable('open-1');
+    const currentIntent = paymentIntent('intent-1', {
+      pixCopyPaste: '000201',
+      receivableId: currentReceivable.id,
+      status: 'WAITING_PAYMENT',
+    });
+
+    expect(contactPixCanSendWhatsApp(currentReceivable, currentIntent, now)).toBe(true);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('created', { receivableId: currentReceivable.id, status: 'CREATED' }),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('expired', {
+          expiresAt: '2026-10-12T11:59:59.000Z',
+          receivableId: currentReceivable.id,
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('missing-payload', {
+          pixCopyPaste: null,
+          receivableId: currentReceivable.id,
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('other-receivable', { receivableId: 'receivable-from-another-reference' }),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(receivable('paid', { status: 'PAGO' }), currentIntent, now),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        receivable('canceled', { status: 'CANCELADO' }),
+        currentIntent,
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('paid-intent', {
+          paidAt: '2026-10-12T12:05:00.000Z',
+          receivableId: currentReceivable.id,
+          status: 'PAID',
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('canceled-intent', {
+          receivableId: currentReceivable.id,
+          status: 'CANCELED',
+        }),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      contactPixCanSendWhatsApp(
+        currentReceivable,
+        paymentIntent('superseded', {
+          receivableId: currentReceivable.id,
+          status: 'SUPERSEDED',
+        }),
+        now,
+      ),
+    ).toBe(false);
+  });
+
+  it('labels WhatsApp PIX sending by the intent loading state', () => {
+    expect(contactPixWhatsAppButtonLabel(false)).toBe('Enviar no WhatsApp');
+    expect(contactPixWhatsAppButtonLabel(true)).toBe('Enviando...');
   });
 
   it('sorts contact references without treating canceled as renewal candidates', () => {

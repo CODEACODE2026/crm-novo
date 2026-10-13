@@ -1836,7 +1836,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-quick-reply-menu');
     expect(globalStylesSource).toContain('max-height: min(360px, calc(100dvh - 160px))');
     expect(globalStylesSource).toContain('@media');
-    expect(globalStylesSource).toContain('bottom: calc(86px + env(safe-area-inset-bottom))');
+    expect(globalStylesSource).toContain('bottom: calc(72px + env(safe-area-inset-bottom))');
   });
 
   it('wires slash quick replies to keyboard navigation without changing reply or attachment state', () => {
@@ -1873,9 +1873,11 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(slashKeyDownSource).not.toContain('onCancelReply');
     expect(slashKeyDownSource).not.toContain('onRemoveMedia');
     expect(globalStylesSource).toContain('position: fixed;');
-    expect(globalStylesSource).toContain(
-      'max-height: min(58dvh, calc(100dvh - 148px - env(safe-area-inset-bottom)))',
-    );
+    expect(globalStylesSource).toContain('max-height: min(38dvh, 280px)');
+    expect(globalStylesSource).toContain('-webkit-overflow-scrolling: touch');
+    expect(globalStylesSource).toContain('overscroll-behavior: contain');
+    expect(globalStylesSource).toContain('min-height: 52px');
+    expect(globalStylesSource).toContain('-webkit-line-clamp: 2');
     expect(globalStylesSource).toContain('env(safe-area-inset-bottom)');
     expect(globalStylesSource).toContain('env(safe-area-inset-left)');
     expect(globalStylesSource).toContain('env(safe-area-inset-right)');

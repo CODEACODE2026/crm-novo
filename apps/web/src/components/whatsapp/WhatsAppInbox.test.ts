@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import {
   advanceConversationListGeneration,
@@ -10,6 +12,7 @@ import {
   calculateReactionPickerPosition,
   classifyContactPixState,
   classifyConversationIncomingFile,
+  ConversationPixCopyAction,
   contactReferenceActionMatrix,
   contactOpenReceivable,
   contactPixCanSendWhatsApp,
@@ -21,10 +24,12 @@ import {
   contactReceivablesForReference,
   conversationComposerActionMode,
   conversationInitials,
+  conversationPixCopyButtonLabel,
   conversationVideoAccept,
   createConversationComposerMedia,
   disposeConversationComposerMedia,
   conversationMessageCaption,
+  isConversationPixCopyEligible,
   isDeleteEligibleConversationMessage,
   isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
@@ -36,11 +41,13 @@ import {
   nextConversationPresenceState,
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
+  resolveConversationPixCopyAction,
   shouldAutoReadRealtimeMessage,
   shouldApplyConversationListResponse,
   shouldReadVisibleConversationOnReturn,
   shouldRetryActiveConversationRead,
   sortContactReferences,
+  stopConversationPixCopyEvent,
   summarizeConversationReactions,
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
@@ -53,6 +60,7 @@ import type {
   WhatsAppConversation,
   WhatsAppConversationMessage,
 } from '../../lib/crm-api';
+import type { ConversationPixCopyCache, ConversationPixCopyInFlight } from './WhatsAppInbox';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
@@ -248,6 +256,14 @@ function paymentIntent(id: string, overrides: Partial<PaymentIntent> = {}): Paym
   };
 }
 
+function pixCopyCache(): ConversationPixCopyCache {
+  return new Map();
+}
+
+function pixCopyInFlight(): ConversationPixCopyInFlight {
+  return new Map();
+}
+
 describe('WhatsAppInbox unread reconciliation helpers', () => {
   it('builds WhatsApp-style avatar initials and falls back for missing names', () => {
     expect(conversationInitials(conversation('1', { displayName: 'Maria Silva' }))).toBe('MS');
@@ -287,6 +303,300 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('height: 100%');
     expect(globalStylesSource).toContain('max-height: 80vh');
     expect(globalStylesSource).toContain('height: min(calc(100vw - 32px), 75vh)');
+  });
+
+  it('detects PIX copy eligibility only from pixContext', () => {
+    expect(
+      isConversationPixCopyEligible(
+        message({
+          direction: 'OUTBOUND',
+          text: 'PIX\nValor: R$ 30,00',
+          pixContext: {
+            amount: '30.00',
+            buttonLabel: 'Copiar Chave PIX',
+            paymentIntentId: 'intent-1',
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(isConversationPixCopyEligible(message({ text: 'PIX\ntexto comum' }))).toBe(false);
+  });
+
+  it('keeps PIX messages renderable through their body text without making empty pixContext renderable', () => {
+    expect(
+      isRenderableConversationMessage(
+        message({
+          direction: 'OUTBOUND',
+          text: 'PIX\nValor: R$ 30,00',
+          pixContext: {
+            amount: '30.00',
+            buttonLabel: 'Copiar Chave PIX',
+            paymentIntentId: 'intent-1',
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isRenderableConversationMessage(
+        message({
+          direction: 'OUTBOUND',
+          text: null,
+          pixContext: {
+            amount: '30.00',
+            buttonLabel: 'Copiar Chave PIX',
+            paymentIntentId: 'intent-1',
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('labels the PIX copy button without exposing the PIX payload', () => {
+    expect(conversationPixCopyButtonLabel(' Copiar Chave PIX ')).toBe('Copiar Chave PIX');
+    expect(conversationPixCopyButtonLabel('', { status: 'loading' })).toBe('Copiando...');
+    expect(conversationPixCopyButtonLabel('', { status: 'success' })).toBe('PIX copiado');
+    expect(conversationPixCopyButtonLabel('', { status: 'expired' })).toBe('PIX expirado');
+    expect(conversationPixCopyButtonLabel('', { status: 'unavailable' })).toBe('PIX indisponível');
+    expect(conversationPixCopyButtonLabel('', { status: 'fetch_error' })).toBe(
+      'Não foi possível carregar o PIX',
+    );
+    expect(conversationPixCopyButtonLabel('', { status: 'copy_error' })).toBe(
+      'Não foi possível copiar o PIX',
+    );
+  });
+
+  it('renders the PIX copy action from pixContext without leaking the copy-paste payload', () => {
+    const onCopyPix = vi.fn();
+    const html = renderToStaticMarkup(
+      createElement(ConversationPixCopyAction, {
+        message: message({
+          direction: 'OUTBOUND',
+          text: 'PIX\nValor: R$ 30,00',
+          pixContext: {
+            amount: '30.00',
+            buttonLabel: 'Copiar <Chave> PIX',
+            paymentIntentId: 'intent-1',
+          },
+        }),
+        onCopyPix,
+      }),
+    );
+
+    expect(html).toContain('class="conversation-pix-copy"');
+    expect(html).toContain('type="button"');
+    expect(html).toContain('aria-label="Copiar chave PIX"');
+    expect(html).toContain('Copiar &lt;Chave&gt; PIX');
+    expect(html).not.toContain('PIX-COPY-SECRET');
+    expect(html).not.toContain('pixCopyPaste');
+    expect(html).not.toContain('data-pix');
+    expect(onCopyPix).not.toHaveBeenCalled();
+  });
+
+  it('does not render a PIX copy action for regular messages or PIX-looking text without pixContext', () => {
+    const onCopyPix = vi.fn();
+
+    expect(
+      renderToStaticMarkup(
+        createElement(ConversationPixCopyAction, {
+          message: message({ text: 'PIX\nValor: R$ 30,00' }),
+          onCopyPix,
+        }),
+      ),
+    ).toBe('');
+    expect(
+      renderToStaticMarkup(
+        createElement(ConversationPixCopyAction, {
+          message: message({ text: 'Mensagem comum' }),
+          onCopyPix,
+        }),
+      ),
+    ).toBe('');
+  });
+
+  it('stops PIX copy click propagation before delegating to the action', () => {
+    const event = {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+
+    stopConversationPixCopyEvent(event);
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves PIX copy lazily and copies only available payloads', async () => {
+    const fetchPixCopy = vi.fn().mockResolvedValue({
+      available: true,
+      expiresAt: '2099-10-10T00:30:00.000Z',
+      isExpired: false,
+      pixCopyPaste: 'PIX-COPY-SECRET',
+      status: 'WAITING_PAYMENT',
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const cache = pixCopyCache();
+    const inFlight = pixCopyInFlight();
+
+    expect(fetchPixCopy).not.toHaveBeenCalled();
+    await expect(
+      resolveConversationPixCopyAction({
+        cache,
+        fetchPixCopy,
+        inFlight,
+        paymentIntentId: 'intent-1',
+        writeText,
+      }),
+    ).resolves.toEqual({ status: 'success' });
+
+    expect(fetchPixCopy).toHaveBeenCalledWith('intent-1');
+    expect(writeText).toHaveBeenCalledWith('PIX-COPY-SECRET');
+  });
+
+  it('does not copy expired, unavailable, failed fetch, or failed clipboard PIX payloads', async () => {
+    const expiredFetch = vi.fn().mockResolvedValue({
+      available: false,
+      expiresAt: '2026-10-10T00:30:00.000Z',
+      isExpired: true,
+      pixCopyPaste: null,
+      status: 'EXPIRED',
+    });
+    const unavailableFetch = vi.fn().mockResolvedValue({
+      available: false,
+      expiresAt: null,
+      isExpired: false,
+      pixCopyPaste: null,
+      status: 'WAITING_PAYMENT',
+    });
+    const rejectedFetch = vi.fn().mockRejectedValue(new Error('offline'));
+    const rejectedClipboardFetch = vi.fn().mockResolvedValue({
+      available: true,
+      expiresAt: null,
+      isExpired: false,
+      pixCopyPaste: 'PIX-COPY-SECRET',
+      status: 'WAITING_PAYMENT',
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      resolveConversationPixCopyAction({
+        cache: pixCopyCache(),
+        fetchPixCopy: expiredFetch,
+        inFlight: pixCopyInFlight(),
+        paymentIntentId: 'expired',
+        writeText,
+      }),
+    ).resolves.toEqual({ status: 'expired' });
+    await expect(
+      resolveConversationPixCopyAction({
+        cache: pixCopyCache(),
+        fetchPixCopy: unavailableFetch,
+        inFlight: pixCopyInFlight(),
+        paymentIntentId: 'unavailable',
+        writeText,
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
+    await expect(
+      resolveConversationPixCopyAction({
+        cache: pixCopyCache(),
+        fetchPixCopy: rejectedFetch,
+        inFlight: pixCopyInFlight(),
+        paymentIntentId: 'fetch-error',
+        writeText,
+      }),
+    ).resolves.toEqual({ status: 'fetch_error' });
+    await expect(
+      resolveConversationPixCopyAction({
+        cache: pixCopyCache(),
+        fetchPixCopy: rejectedClipboardFetch,
+        inFlight: pixCopyInFlight(),
+        paymentIntentId: 'copy-error',
+        writeText: vi.fn().mockRejectedValue(new Error('denied')),
+      }),
+    ).resolves.toEqual({ status: 'copy_error' });
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('dedupes in-flight PIX copy requests and reuses cached endpoint results', async () => {
+    let resolveFetch: (value: {
+      available: boolean;
+      expiresAt: string | null;
+      isExpired: boolean;
+      pixCopyPaste: string | null;
+      status: 'WAITING_PAYMENT';
+    }) => void = () => {};
+    const fetchPixCopy = vi.fn(
+      () =>
+        new Promise<{
+          available: boolean;
+          expiresAt: string | null;
+          isExpired: boolean;
+          pixCopyPaste: string | null;
+          status: 'WAITING_PAYMENT';
+        }>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const cache = pixCopyCache();
+    const inFlight = pixCopyInFlight();
+
+    const first = resolveConversationPixCopyAction({
+      cache,
+      fetchPixCopy,
+      inFlight,
+      paymentIntentId: 'intent-1',
+      writeText,
+    });
+    const second = resolveConversationPixCopyAction({
+      cache,
+      fetchPixCopy,
+      inFlight,
+      paymentIntentId: 'intent-1',
+      writeText,
+    });
+
+    expect(fetchPixCopy).toHaveBeenCalledTimes(1);
+    resolveFetch?.({
+      available: true,
+      expiresAt: null,
+      isExpired: false,
+      pixCopyPaste: 'PIX-COPY-SECRET',
+      status: 'WAITING_PAYMENT',
+    });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { status: 'success' },
+      { status: 'success' },
+    ]);
+
+    await resolveConversationPixCopyAction({
+      cache,
+      fetchPixCopy,
+      inFlight,
+      paymentIntentId: 'intent-1',
+      writeText,
+    });
+
+    expect(fetchPixCopy).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledTimes(2);
+  });
+
+  it('wires the PIX copy action inside message bubbles without rendering PIX payloads', () => {
+    expect(whatsAppInboxSource).toContain('getPaymentIntentPixCopy');
+    expect(whatsAppInboxSource).toContain('ConversationPixCopyAction');
+    expect(whatsAppInboxSource).toContain('message.pixContext?.paymentIntentId');
+    expect(whatsAppInboxSource).toContain('navigator.clipboard.writeText(value)');
+    expect(whatsAppInboxSource).toContain('pixCopyCacheRef');
+    expect(whatsAppInboxSource).toContain('pixCopyInFlightRef');
+    expect(whatsAppInboxSource).toContain('pixCopyMountedRef');
+    expect(whatsAppInboxSource).toContain('if (!pixCopyMountedRef.current) return;');
+    expect(whatsAppInboxSource).toContain('stopConversationPixCopyEvent(event)');
+    expect(whatsAppInboxSource).toContain('aria-label="Copiar chave PIX"');
+    expect(whatsAppInboxSource).toContain('type="button"');
+    expect(whatsAppInboxSource).not.toContain('data-pix');
+    expect(globalStylesSource).toContain('.conversation-pix-copy');
+    expect(globalStylesSource).toContain('width: 100%');
+    expect(globalStylesSource).toContain('min-height: 36px');
   });
 
   it('wires the contact info drawer with references and existing PIX flow actions', () => {

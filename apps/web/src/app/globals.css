@@ -2956,6 +2956,75 @@ a {
   white-space: pre-wrap;
 }
 
+.conversation-pix-copy {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.conversation-pix-copy-action {
+  display: inline-flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  padding: 8px 10px;
+  text-align: center;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.conversation-pix-copy-action:hover:not(:disabled),
+.conversation-pix-copy-action:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-strong);
+}
+
+.conversation-pix-copy-action:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.conversation-pix-copy-action.expired,
+.conversation-pix-copy-action.unavailable,
+.conversation-pix-copy-action.fetch_error,
+.conversation-pix-copy-action.copy_error {
+  background: rgb(255 107 107 / 8%);
+  color: var(--danger);
+}
+
+.conversation-pix-copy-feedback {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.conversation-pix-copy-feedback.success {
+  color: var(--success);
+}
+
+.conversation-pix-copy-feedback.expired,
+.conversation-pix-copy-feedback.unavailable,
+.conversation-pix-copy-feedback.fetch_error,
+.conversation-pix-copy-feedback.copy_error {
+  color: var(--danger);
+}
+
 .conversation-message-actions {
   position: relative;
   z-index: 12;

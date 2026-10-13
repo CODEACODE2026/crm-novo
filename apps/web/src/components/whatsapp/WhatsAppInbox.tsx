@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  default as React,
   Fragment,
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent,
@@ -19,6 +20,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CircleCheck,
+  Copy,
   Download,
   Eye,
   FileAudio,
@@ -65,6 +67,7 @@ import {
   formatCurrency,
   formatDate,
   getClient,
+  getPaymentIntentPixCopy,
   getWhatsAppConversation,
   getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
@@ -95,6 +98,7 @@ import {
   type ClientOption,
   type ClientPayload,
   type PaymentIntent,
+  type PaymentIntentPixCopyResult,
   type Plan,
   type Receivable,
   type Renewal,
@@ -295,6 +299,99 @@ const conversationFilters = [
 ] satisfies Array<{ id: ConversationFilter; label: string }>;
 const avatarClientCacheTtlMs = 55 * 60 * 1000;
 const avatarClientConcurrency = 4;
+
+export type ConversationPixCopyOutcomeStatus =
+  'copy_error' | 'expired' | 'fetch_error' | 'success' | 'unavailable';
+
+export type ConversationPixCopyButtonStatus = ConversationPixCopyOutcomeStatus | 'idle' | 'loading';
+
+export type ConversationPixCopyState = {
+  status: ConversationPixCopyButtonStatus;
+};
+
+export type ConversationPixCopyOutcome = {
+  status: ConversationPixCopyOutcomeStatus;
+};
+
+export type ConversationPixCopyCache = Map<string, PaymentIntentPixCopyResult>;
+export type ConversationPixCopyInFlight = Map<string, Promise<ConversationPixCopyOutcome>>;
+
+export async function resolveConversationPixCopyAction({
+  cache,
+  fetchPixCopy,
+  inFlight,
+  paymentIntentId,
+  writeText,
+}: {
+  cache: ConversationPixCopyCache;
+  fetchPixCopy: (paymentIntentId: string) => Promise<PaymentIntentPixCopyResult>;
+  inFlight: ConversationPixCopyInFlight;
+  paymentIntentId: string;
+  writeText: (value: string) => Promise<void>;
+}): Promise<ConversationPixCopyOutcome> {
+  const existing = inFlight.get(paymentIntentId);
+
+  if (existing) {
+    return existing;
+  }
+
+  const request = (async () => {
+    let result = cache.get(paymentIntentId);
+
+    if (!result) {
+      try {
+        result = await fetchPixCopy(paymentIntentId);
+        cache.set(paymentIntentId, result);
+      } catch {
+        return { status: 'fetch_error' as const };
+      }
+    }
+
+    if (result.isExpired) {
+      return { status: 'expired' as const };
+    }
+
+    if (!result.available || !result.pixCopyPaste) {
+      return { status: 'unavailable' as const };
+    }
+
+    try {
+      await writeText(result.pixCopyPaste);
+      return { status: 'success' as const };
+    } catch {
+      return { status: 'copy_error' as const };
+    }
+  })().finally(() => {
+    inFlight.delete(paymentIntentId);
+  });
+
+  inFlight.set(paymentIntentId, request);
+  return request;
+}
+
+export function isConversationPixCopyEligible(message: WhatsAppConversationMessage) {
+  return Boolean(message.pixContext?.paymentIntentId);
+}
+
+export function conversationPixCopyButtonLabel(
+  buttonLabel: string | null | undefined,
+  state?: ConversationPixCopyState,
+) {
+  if (state?.status === 'loading') return 'Copiando...';
+  if (state?.status === 'success') return 'PIX copiado';
+  if (state?.status === 'expired') return 'PIX expirado';
+  if (state?.status === 'unavailable') return 'PIX indisponível';
+  if (state?.status === 'fetch_error') return 'Não foi possível carregar o PIX';
+  if (state?.status === 'copy_error') return 'Não foi possível copiar o PIX';
+  return buttonLabel?.trim() || 'Copiar Chave PIX';
+}
+
+export function stopConversationPixCopyEvent(
+  event: Pick<ReactMouseEvent<HTMLButtonElement>, 'preventDefault' | 'stopPropagation'>,
+) {
+  event.preventDefault();
+  event.stopPropagation();
+}
 
 export function WhatsAppInbox({
   onConversationLocationChange,
@@ -3771,6 +3868,74 @@ function ConversationMessages({
   targetSearchTerm: string;
 }) {
   const renderableMessages = messages.filter(isRenderableConversationMessage);
+  const pixCopyCacheRef = useRef<ConversationPixCopyCache>(new Map());
+  const pixCopyInFlightRef = useRef<ConversationPixCopyInFlight>(new Map());
+  const pixCopyFeedbackTimersRef = useRef<Map<string, number>>(new Map());
+  const pixCopyMountedRef = useRef(true);
+  const [pixCopyStates, setPixCopyStates] = useState<Record<string, ConversationPixCopyState>>({});
+
+  useEffect(() => {
+    const timers = pixCopyFeedbackTimersRef.current;
+
+    return () => {
+      pixCopyMountedRef.current = false;
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
+  const setPixCopyState = useCallback(
+    (paymentIntentId: string, state: ConversationPixCopyState, reset = false) => {
+      if (!pixCopyMountedRef.current) return;
+
+      const currentTimer = pixCopyFeedbackTimersRef.current.get(paymentIntentId);
+
+      if (currentTimer) {
+        window.clearTimeout(currentTimer);
+        pixCopyFeedbackTimersRef.current.delete(paymentIntentId);
+      }
+
+      setPixCopyStates((current) => ({ ...current, [paymentIntentId]: state }));
+
+      if (reset) {
+        const timer = window.setTimeout(() => {
+          setPixCopyStates((current) => {
+            const next = { ...current };
+            delete next[paymentIntentId];
+            return next;
+          });
+          pixCopyFeedbackTimersRef.current.delete(paymentIntentId);
+        }, 2400);
+        pixCopyFeedbackTimersRef.current.set(paymentIntentId, timer);
+      }
+    },
+    [],
+  );
+
+  const handlePixCopy = useCallback(
+    async (message: WhatsAppConversationMessage) => {
+      const paymentIntentId = message.pixContext?.paymentIntentId;
+
+      if (!paymentIntentId) return;
+
+      if (!navigator.clipboard?.writeText) {
+        setPixCopyState(paymentIntentId, { status: 'copy_error' }, true);
+        return;
+      }
+
+      setPixCopyState(paymentIntentId, { status: 'loading' });
+      const outcome = await resolveConversationPixCopyAction({
+        cache: pixCopyCacheRef.current,
+        fetchPixCopy: getPaymentIntentPixCopy,
+        inFlight: pixCopyInFlightRef.current,
+        paymentIntentId,
+        writeText: (value) => navigator.clipboard.writeText(value),
+      });
+
+      setPixCopyState(paymentIntentId, { status: outcome.status }, true);
+    },
+    [setPixCopyState],
+  );
 
   return (
     <div className="conversation-messages-wrap">
@@ -3824,7 +3989,15 @@ function ConversationMessages({
                     reacting={reactingMessageIds.has(message.id)}
                     retryError={retryErrors[message.id] ?? ''}
                     retrying={retryingMessageIds.has(message.id)}
+                    pixCopyState={
+                      message.pixContext?.paymentIntentId
+                        ? pixCopyStates[message.pixContext.paymentIntentId]
+                        : undefined
+                    }
                     searchTerm={targetMessageId === message.id ? targetSearchTerm : ''}
+                    onCopyPix={(message) => {
+                      void handlePixCopy(message);
+                    }}
                     onQuoteClick={onQuoteClick}
                     onReaction={onReaction}
                     onReactionPickerChange={onReactionPickerChange}
@@ -4003,7 +4176,9 @@ function ConversationBubble({
   reacting,
   retryError,
   retrying,
+  pixCopyState,
   searchTerm,
+  onCopyPix,
   onQuoteClick,
   onReaction,
   onReactionPickerChange,
@@ -4023,7 +4198,9 @@ function ConversationBubble({
   reacting: boolean;
   retryError: string;
   retrying: boolean;
+  pixCopyState?: ConversationPixCopyState | undefined;
   searchTerm: string;
+  onCopyPix: (message: WhatsAppConversationMessage) => void;
   onQuoteClick: (message: WhatsAppConversationMessage) => void;
   onReaction: (message: WhatsAppConversationMessage, emoji: string) => void;
   onReactionPickerChange: (messageId: string | null) => void;
@@ -4148,6 +4325,9 @@ function ConversationBubble({
           <ConversationMediaContent conversationId={conversationId} message={message} />
         ) : null}
         {caption ? <span className="conversation-caption">{caption}</span> : null}
+        {!message.deleted ? (
+          <ConversationPixCopyAction message={message} state={pixCopyState} onCopyPix={onCopyPix} />
+        ) : null}
         {!message.deleted ? <ConversationReactionSummary reactions={message.reactions} /> : null}
         {reactionError ? (
           <div className="conversation-reaction-error" role="alert">
@@ -4386,6 +4566,50 @@ function ConversationQuote({
       </strong>
       <span>{preview}</span>
     </button>
+  );
+}
+
+export function ConversationPixCopyAction({
+  message,
+  state,
+  onCopyPix,
+}: {
+  message: WhatsAppConversationMessage;
+  state?: ConversationPixCopyState | undefined;
+  onCopyPix: (message: WhatsAppConversationMessage) => void;
+}) {
+  if (!isConversationPixCopyEligible(message)) {
+    return null;
+  }
+
+  const loading = state?.status === 'loading';
+  const feedback =
+    state && state.status !== 'idle' && state.status !== 'loading'
+      ? conversationPixCopyButtonLabel(message.pixContext?.buttonLabel, state)
+      : '';
+  const label = conversationPixCopyButtonLabel(message.pixContext?.buttonLabel, state);
+
+  return (
+    <div className="conversation-pix-copy">
+      <button
+        aria-label="Copiar chave PIX"
+        className={`conversation-pix-copy-action ${state?.status ?? 'idle'}`}
+        disabled={loading}
+        type="button"
+        onClick={(event) => {
+          stopConversationPixCopyEvent(event);
+          onCopyPix(message);
+        }}
+      >
+        {loading ? <Loader2 aria-hidden="true" size={15} /> : <Copy aria-hidden="true" size={15} />}
+        <span>{label}</span>
+      </button>
+      {feedback ? (
+        <span className={`conversation-pix-copy-feedback ${state?.status}`} role="status">
+          {feedback}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

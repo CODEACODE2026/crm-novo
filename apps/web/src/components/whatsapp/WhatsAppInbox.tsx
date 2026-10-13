@@ -91,6 +91,7 @@ import {
   sendWhatsAppConversationVoice,
   setWhatsAppConversationPresence,
   startWhatsAppConversation,
+  updateClient,
   updateWhatsAppConversationMessageReaction,
   type Client,
   type ClientEvent,
@@ -2585,6 +2586,43 @@ export function WhatsAppInbox({
     }
   }
 
+  async function saveContactInternalNotes(clientId: string, notes: string) {
+    const conversationId = selectedConversationRef.current?.id ?? null;
+    if (!conversationId) return;
+
+    setContactInfo((current) => ({ ...current, error: '', notice: '' }));
+
+    try {
+      const updatedClient = await updateClient(clientId, { notes: notes.trim() });
+      if (selectedConversationRef.current?.id !== conversationId) return;
+
+      setContactInfo((current) => ({
+        ...current,
+        client:
+          current.client?.id === updatedClient.id
+            ? {
+                ...current.client,
+                notes: updatedClient.notes,
+                updatedAt: updatedClient.updatedAt,
+              }
+            : current.client,
+        notice: 'Nota salva.',
+      }));
+      await loadContactInfo(selectedConversationRef.current, {
+        silent: true,
+        preserveNotice: true,
+      });
+    } catch (err) {
+      if (selectedConversationRef.current?.id === conversationId) {
+        setContactInfo((current) => ({
+          ...current,
+          error: conversationErrorMessage(err, 'Não foi possível salvar a nota interna.'),
+        }));
+      }
+      throw err;
+    }
+  }
+
   async function ensureContactLifecyclePlans() {
     if (contactLifecyclePlans.length) return contactLifecyclePlans;
 
@@ -3200,6 +3238,7 @@ export function WhatsAppInbox({
           onLinkClient={(client) => void linkSelectedConversationToClient(client)}
           onReactivateReference={(reference) => void openContactReactivation(reference)}
           onRenewReference={(reference) => void openContactRenewal(reference)}
+          onSaveInternalNotes={(clientId, notes) => saveContactInternalNotes(clientId, notes)}
           onOpenClient={(clientId) => void onOpenClient(clientId)}
           onViewReceivable={(clientId, receivable) =>
             void openContactReceivable(clientId, receivable)
@@ -5843,6 +5882,7 @@ function ConversationClientPanel({
   onReactivateReference,
   onSendPixWhatsApp,
   onRenewReference,
+  onSaveInternalNotes,
   onLinkClient,
   onOpenClient,
   onViewReceivable,
@@ -5865,6 +5905,7 @@ function ConversationClientPanel({
   onReactivateReference: (reference: ClientReference) => void;
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
   onRenewReference: (reference: ClientReference) => void;
+  onSaveInternalNotes: (clientId: string, notes: string) => Promise<void>;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
@@ -5904,6 +5945,7 @@ function ConversationClientPanel({
           onReactivateReference={onReactivateReference}
           onSendPixWhatsApp={onSendPixWhatsApp}
           onRenewReference={onRenewReference}
+          onSaveInternalNotes={onSaveInternalNotes}
           onLinkClient={onLinkClient}
           onOpenClient={onOpenClient}
           onViewReceivable={onViewReceivable}
@@ -5930,6 +5972,7 @@ function ConversationClientPanelContent({
   onReactivateReference,
   onSendPixWhatsApp,
   onRenewReference,
+  onSaveInternalNotes,
   onLinkClient,
   onOpenClient,
   onViewReceivable,
@@ -5950,6 +5993,7 @@ function ConversationClientPanelContent({
   onReactivateReference: (reference: ClientReference) => void;
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
   onRenewReference: (reference: ClientReference) => void;
+  onSaveInternalNotes: (clientId: string, notes: string) => Promise<void>;
   onLinkClient: (client: ClientOption) => void;
   onOpenClient: (clientId: string) => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
@@ -5957,7 +6001,15 @@ function ConversationClientPanelContent({
   const [linkOpen, setLinkOpen] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
+  const [notesEditing, setNotesEditing] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesError, setNotesError] = useState('');
   const client = contactInfo.client;
+  const notesContextRef = useRef({
+    clientId: client?.id ?? null,
+    conversationId: conversation?.id ?? null,
+  });
   const financialSummary = client
     ? buildContactFinancialSummary(client.references ?? [], contactInfo.receivables)
     : null;
@@ -5970,10 +6022,62 @@ function ConversationClientPanelContent({
     : [];
 
   useEffect(() => {
+    notesContextRef.current = {
+      clientId: client?.id ?? null,
+      conversationId: conversation?.id ?? null,
+    };
+  });
+
+  useEffect(() => {
     setLinkOpen(false);
     setSelectedClientId('');
     setSelectedClient(null);
+    setNotesEditing(false);
+    setNotesDraft(client?.notes ?? '');
+    setNotesSaving(false);
+    setNotesError('');
   }, [conversation?.id, client?.id]);
+
+  useEffect(() => {
+    if (!notesEditing) setNotesDraft(client?.notes ?? '');
+  }, [client?.notes, notesEditing]);
+
+  async function saveInternalNotes() {
+    if (!client || notesSaving) return;
+
+    const requestContext = {
+      clientId: client.id,
+      conversationId: conversation?.id ?? null,
+    };
+    setNotesSaving(true);
+    setNotesError('');
+    try {
+      await onSaveInternalNotes(client.id, notesDraft);
+      const currentContext = notesContextRef.current;
+      if (
+        currentContext.clientId === requestContext.clientId &&
+        currentContext.conversationId === requestContext.conversationId
+      ) {
+        setNotesEditing(false);
+      }
+    } catch (err) {
+      const currentContext = notesContextRef.current;
+      if (
+        currentContext.clientId === requestContext.clientId &&
+        currentContext.conversationId === requestContext.conversationId
+      ) {
+        setNotesError(conversationErrorMessage(err, 'Não foi possível salvar a nota interna.'));
+      }
+    } finally {
+      const currentContext = notesContextRef.current;
+      if (
+        currentContext.clientId === requestContext.clientId &&
+        currentContext.conversationId === requestContext.conversationId
+      ) {
+        setNotesSaving(false);
+      }
+    }
+  }
 
   if (!conversation) {
     return (
@@ -6040,13 +6144,62 @@ function ConversationClientPanelContent({
                 <ConversationStatusBadge status={client.status} />
               </dd>
             </div>
-            {client.notes ? (
-              <div>
-                <dt>Observação</dt>
-                <dd>{client.notes}</dd>
-              </div>
-            ) : null}
           </dl>
+        </section>
+        <section className="conversation-contact-section conversation-internal-notes">
+          <div className="conversation-contact-section-title">
+            <span>Notas internas</span>
+            {!notesEditing ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setNotesDraft(client.notes ?? '');
+                  setNotesError('');
+                  setNotesEditing(true);
+                }}
+              >
+                {client.notes ? 'Editar' : 'Adicionar nota'}
+              </Button>
+            ) : null}
+          </div>
+          {notesEditing ? (
+            <div className="conversation-internal-notes-editor">
+              <textarea
+                aria-label="Nota interna do cliente"
+                value={notesDraft}
+                onChange={(event) => setNotesDraft(event.target.value)}
+                disabled={notesSaving}
+                rows={4}
+              />
+              {notesError ? (
+                <div className="error-message" role="alert">
+                  {notesError}
+                </div>
+              ) : null}
+              <div className="conversation-internal-notes-actions">
+                <Button size="sm" onClick={() => void saveInternalNotes()} disabled={notesSaving}>
+                  {notesSaving ? 'Salvando...' : 'Salvar'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setNotesDraft(client.notes ?? '');
+                    setNotesError('');
+                    setNotesEditing(false);
+                  }}
+                  disabled={notesSaving}
+                >
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className={!client.notes ? 'muted-value' : ''}>
+              {client.notes ?? 'Nenhuma nota interna'}
+            </p>
+          )}
         </section>
         {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
         <ConversationRecentActivity

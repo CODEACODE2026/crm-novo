@@ -664,6 +664,33 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('width: min(100vw, 440px)');
   });
 
+  it('keeps contact internal notes on the client update path only', () => {
+    expect(whatsAppInboxSource).toContain('Notas internas');
+    expect(whatsAppInboxSource).toContain('Nenhuma nota interna');
+    expect(whatsAppInboxSource).toContain('Adicionar nota');
+    expect(whatsAppInboxSource).toContain("{client.notes ? 'Editar' : 'Adicionar nota'}");
+    expect(whatsAppInboxSource).toContain('aria-label="Nota interna do cliente"');
+    expect(whatsAppInboxSource).toContain('updateClient(clientId, { notes: notes.trim() })');
+    expect(whatsAppInboxSource).toContain('await loadContactInfo(selectedConversationRef.current');
+    expect(whatsAppInboxSource).toContain('silent: true');
+    expect(whatsAppInboxSource).toContain('preserveNotice: true');
+    expect(whatsAppInboxSource).toContain("notice: 'Nota salva.'");
+    expect(whatsAppInboxSource).toContain("setNotesDraft(client.notes ?? '')");
+    expect(whatsAppInboxSource).toContain('disabled={notesSaving}');
+    expect(whatsAppInboxSource).toContain('notesContextRef');
+    expect(whatsAppInboxSource).toContain('currentContext.clientId === requestContext.clientId');
+    expect(whatsAppInboxSource).toContain(
+      'currentContext.conversationId === requestContext.conversationId',
+    );
+    expect(whatsAppInboxSource).not.toContain('dangerouslySetInnerHTML');
+    expect(whatsAppInboxSource).not.toContain('sendWhatsAppMessage(notes');
+    expect(whatsAppInboxSource).not.toContain('sendWhatsAppConversationMessage(notes');
+    expect(whatsAppInboxSource).not.toContain('sendPaymentIntentWhatsApp(notes');
+    expect(globalStylesSource).toContain('.conversation-internal-notes');
+    expect(globalStylesSource).toContain('.conversation-internal-notes-editor');
+    expect(globalStylesSource).toContain('white-space: pre-wrap');
+  });
+
   it('builds no contact recent activity when sources are empty or client is absent', () => {
     expect(buildContactRecentActivity({ receivables: [], renewals: [], clientEvents: [] })).toEqual(
       [],

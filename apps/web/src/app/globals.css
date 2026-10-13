@@ -4359,6 +4359,39 @@ a {
   font-size: 12px;
 }
 
+.conversation-internal-notes {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.conversation-internal-notes p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.conversation-internal-notes-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.conversation-internal-notes-editor textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.conversation-internal-notes-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .conversation-reference-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

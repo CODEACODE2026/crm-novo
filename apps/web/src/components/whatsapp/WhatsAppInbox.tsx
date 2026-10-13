@@ -29,6 +29,7 @@ import {
   Image as ImageIcon,
   Info,
   Loader2,
+  MessageSquareText,
   MessagesSquare,
   Mic,
   Pause,
@@ -123,6 +124,13 @@ import {
 import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
 import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
 import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
+import {
+  WHATSAPP_QUICK_REPLIES,
+  applyWhatsAppQuickReply,
+  filterWhatsAppQuickReplies,
+  whatsAppQuickReplyPreview,
+  type WhatsAppQuickReply,
+} from './whatsapp-quick-replies';
 
 type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
@@ -5352,6 +5360,8 @@ function ConversationComposer({
   onVoiceRecordingChange: (recording: boolean) => void;
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [quickReplyMenuOpen, setQuickReplyMenuOpen] = useState(false);
+  const [quickReplySearch, setQuickReplySearch] = useState('');
   const [recording, setRecording] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<ConversationVoiceDraft | null>(null);
   const [voiceError, setVoiceError] = useState('');
@@ -5360,6 +5370,8 @@ function ConversationComposer({
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const quickReplyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const quickReplyMenuRef = useRef<HTMLDivElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
   const maxDurationTimeoutRef = useRef<number | null>(null);
@@ -5376,6 +5388,7 @@ function ConversationComposer({
   const shouldShowSendAction = actionMode === 'SEND';
   const canSend = hasSendableContent && !sending;
   const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
+  const visibleQuickReplies = filterWhatsAppQuickReplies(WHATSAPP_QUICK_REPLIES, quickReplySearch);
 
   useEffect(() => {
     onVoiceRecordingChangeRef.current = onVoiceRecordingChange;
@@ -5388,10 +5401,68 @@ function ConversationComposer({
     };
   }, [conversationId]);
 
+  useEffect(() => {
+    if (!quickReplyMenuOpen) return undefined;
+
+    function closeOnPointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      if (
+        !quickReplyMenuRef.current?.contains(target) &&
+        !quickReplyButtonRef.current?.contains(target)
+      ) {
+        setQuickReplyMenuOpen(false);
+      }
+    }
+
+    function closeOnKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setQuickReplyMenuOpen(false);
+        quickReplyButtonRef.current?.focus();
+      }
+    }
+
+    document.addEventListener('pointerdown', closeOnPointerDown, true);
+    document.addEventListener('keydown', closeOnKeyDown, true);
+
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown, true);
+      document.removeEventListener('keydown', closeOnKeyDown, true);
+    };
+  }, [quickReplyMenuOpen]);
+
   function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
     if (!file) return;
     onSelectMedia(kind, file);
     setAttachmentMenuOpen(false);
+  }
+
+  function toggleQuickReplies() {
+    setAttachmentMenuOpen(false);
+    setQuickReplyMenuOpen((current) => !current);
+  }
+
+  function applyQuickReply(reply: WhatsAppQuickReply) {
+    const textarea = composerRef.current;
+    const result = applyWhatsAppQuickReply(
+      draft,
+      reply.text,
+      textarea
+        ? {
+            end: textarea.selectionEnd,
+            start: textarea.selectionStart,
+          }
+        : null,
+    );
+
+    onChange(result.text);
+    setQuickReplyMenuOpen(false);
+    setQuickReplySearch('');
+
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(result.cursor, result.cursor);
+    });
   }
 
   function clearVoicePreview() {
@@ -5729,7 +5800,10 @@ function ConversationComposer({
             icon={Plus}
             label="Anexar arquivo"
             disabled={recording || sending}
-            onClick={() => setAttachmentMenuOpen((current) => !current)}
+            onClick={() => {
+              setQuickReplyMenuOpen(false);
+              setAttachmentMenuOpen((current) => !current);
+            }}
           />
           {attachmentMenuOpen ? (
             <div className="conversation-attach-menu">
@@ -5791,6 +5865,56 @@ function ConversationComposer({
               event.target.value = '';
             }}
           />
+        </div>
+        <div className="conversation-quick-reply-control">
+          <IconButton
+            ref={quickReplyButtonRef}
+            icon={MessageSquareText}
+            label="Respostas rápidas"
+            disabled={recording || sending}
+            onClick={toggleQuickReplies}
+          />
+          {quickReplyMenuOpen ? (
+            <div className="conversation-quick-reply-menu" ref={quickReplyMenuRef}>
+              <label className="conversation-quick-reply-search">
+                <span className="sr-only">Buscar respostas rápidas</span>
+                <Search aria-hidden="true" size={14} />
+                <input
+                  autoFocus
+                  placeholder="Buscar..."
+                  type="search"
+                  value={quickReplySearch}
+                  onChange={(event) => setQuickReplySearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                    }
+                  }}
+                />
+              </label>
+              <div className="conversation-quick-reply-list" role="listbox">
+                {visibleQuickReplies.length ? (
+                  visibleQuickReplies.map((reply) => (
+                    <button
+                      key={reply.id}
+                      className="conversation-quick-reply-option"
+                      type="button"
+                      aria-selected="false"
+                      role="option"
+                      onClick={() => applyQuickReply(reply)}
+                    >
+                      <strong>{reply.label}</strong>
+                      <small>{whatsAppQuickReplyPreview(reply.text)}</small>
+                    </button>
+                  ))
+                ) : (
+                  <span className="conversation-quick-reply-empty">
+                    Nenhuma resposta encontrada.
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
       <label>

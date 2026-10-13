@@ -51,6 +51,12 @@ import {
   summarizeConversationReactions,
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
+import {
+  WHATSAPP_QUICK_REPLIES,
+  applyWhatsAppQuickReply,
+  filterWhatsAppQuickReplies,
+  whatsAppQuickReplyPreview,
+} from './whatsapp-quick-replies';
 import type {
   ClientEvent,
   ClientReference,
@@ -66,6 +72,10 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
 const whatsAppRealtimeProviderSource = readFileSync(
   join(currentDir, 'WhatsAppRealtimeProvider.tsx'),
+  'utf8',
+);
+const whatsAppQuickRepliesSource = readFileSync(
+  join(currentDir, 'whatsapp-quick-replies.ts'),
   'utf8',
 );
 const referenceLifecycleModalsSource = readFileSync(
@@ -1681,6 +1691,130 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
     createObjectURL.mockRestore();
     revokeObjectURL.mockRestore();
+  });
+
+  it('defines editable local quick replies without backend or financial automation hooks', () => {
+    expect(WHATSAPP_QUICK_REPLIES).toEqual([
+      {
+        id: 'greeting',
+        label: 'Saudação',
+        text: 'Olá! Tudo bem? Como posso ajudar?',
+      },
+      {
+        id: 'waiting-payment',
+        label: 'Aguardando pagamento',
+        text: 'Olá! Ficamos no aguardo do pagamento. Assim que for identificado, damos continuidade.',
+      },
+      {
+        id: 'expired-pix',
+        label: 'PIX expirado',
+        text: 'Esse PIX expirou. Posso gerar uma nova cobrança para você.',
+      },
+      {
+        id: 'payment-confirmed',
+        label: 'Pagamento confirmado',
+        text: 'Pagamento confirmado. Obrigado!',
+      },
+      {
+        id: 'follow-up',
+        label: 'Retorno',
+        text: 'Assim que eu tiver uma atualização, retorno por aqui.',
+      },
+      {
+        id: 'closing',
+        label: 'Encerramento',
+        text: 'Qualquer dúvida, estou à disposição.',
+      },
+    ]);
+    expect(whatsAppQuickRepliesSource).not.toContain('sendPaymentIntentWhatsApp');
+    expect(whatsAppQuickRepliesSource).not.toContain('createReceivablePix');
+    expect(whatsAppQuickRepliesSource).not.toContain('localStorage');
+    expect(whatsAppQuickRepliesSource).not.toContain('sessionStorage');
+    expect(whatsAppQuickRepliesSource).not.toContain('dangerouslySetInnerHTML');
+  });
+
+  it('filters and previews quick replies by label or text', () => {
+    const replies = [...WHATSAPP_QUICK_REPLIES];
+
+    expect(filterWhatsAppQuickReplies(replies, '')).toBe(replies);
+    expect(filterWhatsAppQuickReplies(replies, 'pix').map((reply) => reply.id)).toEqual([
+      'expired-pix',
+    ]);
+    expect(filterWhatsAppQuickReplies(replies, 'ATUALIZAÇÃO').map((reply) => reply.id)).toEqual([
+      'follow-up',
+    ]);
+    expect(replies).toEqual(WHATSAPP_QUICK_REPLIES);
+    expect(whatsAppQuickReplyPreview('Mensagem curta')).toBe('Mensagem curta');
+    expect(whatsAppQuickReplyPreview('A'.repeat(70), 12)).toBe('AAAAAAAAA...');
+    expect(whatsAppQuickReplyPreview('Linha 1\nLinha 2', 20)).toBe('Linha 1 Linha 2');
+  });
+
+  it('applies quick replies without losing existing composer text', () => {
+    expect(applyWhatsAppQuickReply('', 'Olá!')).toEqual({ cursor: 4, text: 'Olá!' });
+    expect(applyWhatsAppQuickReply('Texto existente', 'Olá!')).toEqual({
+      cursor: 'Texto existente\nOlá!'.length,
+      text: 'Texto existente\nOlá!',
+    });
+    expect(applyWhatsAppQuickReply('Antes depois', 'Olá!', { start: 6, end: 6 })).toEqual({
+      cursor: 'Antes\nOlá!'.length,
+      text: 'Antes\nOlá!\ndepois',
+    });
+    expect(applyWhatsAppQuickReply('Antes depois', 'Olá!', { start: 6, end: 12 })).toEqual({
+      cursor: 'Antes\nOlá!'.length,
+      text: 'Antes\nOlá!',
+    });
+    expect(
+      applyWhatsAppQuickReply('Texto existente  ', 'Olá!', {
+        end: undefined,
+        start: undefined,
+      } as unknown as { end: number; start: number }),
+    ).toEqual({
+      cursor: 'Texto existente\nOlá!'.length,
+      text: 'Texto existente\nOlá!',
+    });
+    expect(applyWhatsAppQuickReply('Texto', '<img src=x onerror=alert(1)>')).toEqual({
+      cursor: 'Texto\n<img src=x onerror=alert(1)>'.length,
+      text: 'Texto\n<img src=x onerror=alert(1)>',
+    });
+  });
+
+  it('wires quick replies into the existing composer without sending automatically', () => {
+    const applyQuickReplyStart = whatsAppInboxSource.indexOf('function applyQuickReply(');
+    const clearVoicePreviewStart = whatsAppInboxSource.indexOf(
+      'function clearVoicePreview()',
+      applyQuickReplyStart,
+    );
+    const applyQuickReplySource = whatsAppInboxSource.slice(
+      applyQuickReplyStart,
+      clearVoicePreviewStart,
+    );
+
+    expect(whatsAppInboxSource).toContain('icon={MessageSquareText}');
+    expect(whatsAppInboxSource).toContain('label="Respostas rápidas"');
+    expect(whatsAppInboxSource).toContain('className="conversation-quick-reply-menu"');
+    expect(whatsAppInboxSource).toContain('filterWhatsAppQuickReplies(');
+    expect(whatsAppInboxSource).toContain('applyWhatsAppQuickReply(');
+    expect(whatsAppInboxSource).toContain('onClick={() => applyQuickReply(reply)}');
+    expect(whatsAppInboxSource).toContain('composerRef.current?.focus()');
+    expect(whatsAppInboxSource).toContain('composerRef.current?.setSelectionRange');
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain("event.key === 'Enter'");
+    expect(whatsAppInboxSource).toContain('setAttachmentMenuOpen(false)');
+    expect(whatsAppInboxSource).toContain('role="listbox"');
+    expect(whatsAppInboxSource).toContain('role="option"');
+    expect(applyQuickReplySource).toContain('onChange(result.text)');
+    expect(applyQuickReplySource).toContain('setQuickReplyMenuOpen(false)');
+    expect(applyQuickReplySource).not.toContain('onSend');
+    expect(applyQuickReplySource).not.toContain('sendCurrentMessage');
+    expect(applyQuickReplySource).not.toContain('sendWhatsAppConversationMessage');
+    expect(applyQuickReplySource).not.toContain('sendPaymentIntentWhatsApp');
+    expect(applyQuickReplySource).not.toContain('setReplyTarget');
+    expect(applyQuickReplySource).not.toContain('setSelectedMedia');
+    expect(applyQuickReplySource).not.toContain('onRemoveMedia');
+    expect(globalStylesSource).toContain('.conversation-quick-reply-menu');
+    expect(globalStylesSource).toContain('max-height: min(360px, calc(100dvh - 160px))');
+    expect(globalStylesSource).toContain('@media');
+    expect(globalStylesSource).toContain('width: min(300px, calc(100vw - 20px))');
   });
 
   it('removes the sidebar unread badge immediately when read returns zero', () => {

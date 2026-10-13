@@ -3993,6 +3993,11 @@ a {
   align-self: end;
 }
 
+.conversation-quick-reply-control {
+  position: relative;
+  align-self: end;
+}
+
 .conversation-attach-menu {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -4022,6 +4027,94 @@ a {
 
 .conversation-attach-menu button:hover {
   background: var(--surface-soft);
+}
+
+.conversation-quick-reply-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 6;
+  display: grid;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(360px, calc(100dvh - 160px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.conversation-quick-reply-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 8px 10px;
+}
+
+.conversation-quick-reply-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  outline: 0;
+}
+
+.conversation-quick-reply-list {
+  display: grid;
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.conversation-quick-reply-option {
+  display: grid;
+  gap: 3px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.conversation-quick-reply-option:last-child {
+  border-bottom: 0;
+}
+
+.conversation-quick-reply-option:hover,
+.conversation-quick-reply-option:focus-visible {
+  background: var(--surface-soft);
+  outline: 0;
+}
+
+.conversation-quick-reply-option strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-quick-reply-option small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-quick-reply-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 12px;
 }
 
 .conversation-composer label {
@@ -13512,6 +13605,18 @@ tbody tr:hover,
 
   .conversation-attach-menu {
     min-width: 136px;
+  }
+
+  .conversation-quick-reply-menu {
+    left: auto;
+    right: 0;
+    width: min(300px, calc(100vw - 20px));
+    max-height: min(340px, calc(100dvh - 150px));
+  }
+
+  .conversation-quick-reply-option {
+    min-height: 48px;
+    padding: 10px;
   }
 
   .conversation-client-drawer .modal {

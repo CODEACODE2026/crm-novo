@@ -29,7 +29,6 @@ import {
   Image as ImageIcon,
   Info,
   Loader2,
-  MessageSquareText,
   MessagesSquare,
   Mic,
   Pause,
@@ -127,7 +126,6 @@ import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealti
 import {
   WHATSAPP_QUICK_REPLIES,
   applyWhatsAppSlashQuickReply,
-  applyWhatsAppQuickReply,
   filterWhatsAppQuickReplies,
   whatsAppQuickReplySlashQuery,
   whatsAppQuickReplyPreview,
@@ -5362,8 +5360,6 @@ function ConversationComposer({
   onVoiceRecordingChange: (recording: boolean) => void;
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
-  const [quickReplyMenuOpen, setQuickReplyMenuOpen] = useState(false);
-  const [quickReplySearch, setQuickReplySearch] = useState('');
   const [quickReplyActiveIndex, setQuickReplyActiveIndex] = useState(0);
   const [quickReplySlashDismissedDraft, setQuickReplySlashDismissedDraft] = useState<string | null>(
     null,
@@ -5376,7 +5372,6 @@ function ConversationComposer({
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
-  const quickReplyButtonRef = useRef<HTMLButtonElement | null>(null);
   const quickReplyMenuRef = useRef<HTMLDivElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
@@ -5397,8 +5392,8 @@ function ConversationComposer({
   const quickReplySlashQuery = whatsAppQuickReplySlashQuery(draft);
   const quickReplySlashMenuOpen =
     quickReplySlashQuery !== null && quickReplySlashDismissedDraft !== draft;
-  const quickReplyMenuVisible = quickReplyMenuOpen || quickReplySlashMenuOpen;
-  const quickReplyQuery = quickReplySlashMenuOpen ? (quickReplySlashQuery ?? '') : quickReplySearch;
+  const quickReplyMenuVisible = quickReplySlashMenuOpen;
+  const quickReplyQuery = quickReplySlashQuery ?? '';
   const visibleQuickReplies = filterWhatsAppQuickReplies(WHATSAPP_QUICK_REPLIES, quickReplyQuery);
   const activeQuickReply =
     quickReplyActiveIndex >= 0 ? visibleQuickReplies[quickReplyActiveIndex] : undefined;
@@ -5422,11 +5417,7 @@ function ConversationComposer({
 
     function closeOnPointerDown(event: PointerEvent) {
       const target = event.target as Node;
-      if (
-        !quickReplyMenuRef.current?.contains(target) &&
-        !quickReplyButtonRef.current?.contains(target)
-      ) {
-        setQuickReplyMenuOpen(false);
+      if (!quickReplyMenuRef.current?.contains(target)) {
         if (quickReplySlashMenuOpen) {
           setQuickReplySlashDismissedDraft(draft);
         }
@@ -5436,13 +5427,8 @@ function ConversationComposer({
     function closeOnKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setQuickReplyMenuOpen(false);
-        if (quickReplySlashMenuOpen) {
-          setQuickReplySlashDismissedDraft(draft);
-          composerRef.current?.focus();
-        } else {
-          quickReplyButtonRef.current?.focus();
-        }
+        setQuickReplySlashDismissedDraft(draft);
+        composerRef.current?.focus();
       }
     }
 
@@ -5480,29 +5466,10 @@ function ConversationComposer({
     setAttachmentMenuOpen(false);
   }
 
-  function toggleQuickReplies() {
-    setAttachmentMenuOpen(false);
-    setQuickReplyMenuOpen((current) => !current);
-  }
-
   function applyQuickReply(reply: WhatsAppQuickReply) {
-    const textarea = composerRef.current;
-    const result = quickReplySlashMenuOpen
-      ? applyWhatsAppSlashQuickReply(reply.text)
-      : applyWhatsAppQuickReply(
-          draft,
-          reply.text,
-          textarea
-            ? {
-                end: textarea.selectionEnd,
-                start: textarea.selectionStart,
-              }
-            : null,
-        );
+    const result = applyWhatsAppSlashQuickReply(reply.text);
 
     onChange(result.text);
-    setQuickReplyMenuOpen(false);
-    setQuickReplySearch('');
     setQuickReplySlashDismissedDraft(null);
 
     window.requestAnimationFrame(() => {
@@ -5867,7 +5834,6 @@ function ConversationComposer({
             label="Anexar arquivo"
             disabled={recording || sending}
             onClick={() => {
-              setQuickReplyMenuOpen(false);
               setAttachmentMenuOpen((current) => !current);
             }}
           />
@@ -5932,72 +5898,39 @@ function ConversationComposer({
             }}
           />
         </div>
-        <div className="conversation-quick-reply-control">
-          <IconButton
-            ref={quickReplyButtonRef}
-            aria-expanded={quickReplyMenuOpen}
-            aria-haspopup="listbox"
-            icon={MessageSquareText}
-            label="Respostas rápidas"
-            disabled={recording || sending}
-            onClick={toggleQuickReplies}
-          />
-          {quickReplyMenuVisible ? (
-            <div
-              className={`conversation-quick-reply-menu ${
-                quickReplySlashMenuOpen ? 'conversation-quick-reply-menu-slash' : ''
-              }`.trim()}
-              ref={quickReplyMenuRef}
-            >
-              {!quickReplySlashMenuOpen ? (
-                <label className="conversation-quick-reply-search">
-                  <span className="sr-only">Buscar respostas rápidas</span>
-                  <Search aria-hidden="true" size={14} />
-                  <input
-                    autoFocus
-                    placeholder="Buscar..."
-                    type="search"
-                    value={quickReplySearch}
-                    onChange={(event) => setQuickReplySearch(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                      }
-                    }}
-                  />
-                </label>
-              ) : null}
-              <div
-                aria-activedescendant={activeQuickReplyId}
-                className="conversation-quick-reply-list"
-                id="conversation-quick-reply-list"
-                role="listbox"
-              >
-                {visibleQuickReplies.length ? (
-                  visibleQuickReplies.map((reply, index) => (
-                    <button
-                      key={reply.id}
-                      id={`conversation-quick-reply-${reply.id}`}
-                      className="conversation-quick-reply-option"
-                      type="button"
-                      aria-selected={index === quickReplyActiveIndex}
-                      role="option"
-                      onClick={() => applyQuickReply(reply)}
-                    >
-                      <strong>{reply.label}</strong>
-                      <small>{whatsAppQuickReplyPreview(reply.text)}</small>
-                    </button>
-                  ))
-                ) : (
-                  <span className="conversation-quick-reply-empty">
-                    Nenhuma resposta encontrada.
-                  </span>
-                )}
-              </div>
-            </div>
-          ) : null}
-        </div>
       </div>
+      {quickReplyMenuVisible ? (
+        <div
+          className="conversation-quick-reply-menu conversation-quick-reply-menu-slash"
+          ref={quickReplyMenuRef}
+        >
+          <div
+            aria-activedescendant={activeQuickReplyId}
+            className="conversation-quick-reply-list"
+            id="conversation-quick-reply-list"
+            role="listbox"
+          >
+            {visibleQuickReplies.length ? (
+              visibleQuickReplies.map((reply, index) => (
+                <button
+                  key={reply.id}
+                  id={`conversation-quick-reply-${reply.id}`}
+                  className="conversation-quick-reply-option"
+                  type="button"
+                  aria-selected={index === quickReplyActiveIndex}
+                  role="option"
+                  onClick={() => applyQuickReply(reply)}
+                >
+                  <strong>{reply.label}</strong>
+                  <small>{whatsAppQuickReplyPreview(reply.text)}</small>
+                </button>
+              ))
+            ) : (
+              <span className="conversation-quick-reply-empty">Nenhuma resposta encontrada.</span>
+            )}
+          </div>
+        </div>
+      ) : null}
       <label>
         <span className="sr-only">Digite uma mensagem</span>
         <textarea

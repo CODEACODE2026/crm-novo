@@ -1794,7 +1794,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     });
   });
 
-  it('wires quick replies into the existing composer without sending automatically', () => {
+  it('keeps quick replies slash-only without sending automatically', () => {
     const applyQuickReplyStart = whatsAppInboxSource.indexOf('function applyQuickReply(');
     const clearVoicePreviewStart = whatsAppInboxSource.indexOf(
       'function clearVoicePreview()',
@@ -1805,11 +1805,17 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       clearVoicePreviewStart,
     );
 
-    expect(whatsAppInboxSource).toContain('icon={MessageSquareText}');
-    expect(whatsAppInboxSource).toContain('label="Respostas rápidas"');
-    expect(whatsAppInboxSource).toContain('className={`conversation-quick-reply-menu');
+    expect(whatsAppInboxSource).not.toContain('MessageSquareText');
+    expect(whatsAppInboxSource).not.toContain('label="Respostas rápidas"');
+    expect(whatsAppInboxSource).not.toContain('quickReplyButtonRef');
+    expect(whatsAppInboxSource).not.toContain('quickReplyMenuOpen');
+    expect(whatsAppInboxSource).not.toContain('quickReplySearch');
+    expect(whatsAppInboxSource).not.toContain('conversation-quick-reply-search');
+    expect(whatsAppInboxSource).toContain(
+      'className="conversation-quick-reply-menu conversation-quick-reply-menu-slash"',
+    );
     expect(whatsAppInboxSource).toContain('filterWhatsAppQuickReplies(');
-    expect(whatsAppInboxSource).toContain('applyWhatsAppQuickReply(');
+    expect(whatsAppInboxSource).not.toContain('applyWhatsAppQuickReply(');
     expect(whatsAppInboxSource).toContain('onClick={() => applyQuickReply(reply)}');
     expect(whatsAppInboxSource).toContain('composerRef.current?.focus()');
     expect(whatsAppInboxSource).toContain('composerRef.current?.setSelectionRange');
@@ -1819,7 +1825,6 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('role="listbox"');
     expect(whatsAppInboxSource).toContain('role="option"');
     expect(applyQuickReplySource).toContain('onChange(result.text)');
-    expect(applyQuickReplySource).toContain('setQuickReplyMenuOpen(false)');
     expect(applyQuickReplySource).toContain('applyWhatsAppSlashQuickReply(reply.text)');
     expect(applyQuickReplySource).not.toContain('onSend');
     expect(applyQuickReplySource).not.toContain('sendCurrentMessage');
@@ -1831,7 +1836,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-quick-reply-menu');
     expect(globalStylesSource).toContain('max-height: min(360px, calc(100dvh - 160px))');
     expect(globalStylesSource).toContain('@media');
-    expect(globalStylesSource).toContain('bottom: calc(76px + env(safe-area-inset-bottom))');
+    expect(globalStylesSource).toContain('bottom: calc(86px + env(safe-area-inset-bottom))');
   });
 
   it('wires slash quick replies to keyboard navigation without changing reply or attachment state', () => {
@@ -1851,7 +1856,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
     expect(whatsAppInboxSource).toContain('whatsAppQuickReplySlashQuery(draft)');
     expect(whatsAppInboxSource).toContain('quickReplySlashMenuOpen');
-    expect(whatsAppInboxSource).toContain('quickReplySlashMenuOpen ? (quickReplySlashQuery ??');
+    expect(whatsAppInboxSource).toContain("const quickReplyQuery = quickReplySlashQuery ?? ''");
     expect(whatsAppInboxSource).toContain('conversation-quick-reply-menu-slash');
     expect(whatsAppInboxSource).toContain('aria-activedescendant');
     expect(whatsAppInboxSource).toContain('aria-expanded={quickReplySlashMenuOpen}');
@@ -1868,8 +1873,12 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(slashKeyDownSource).not.toContain('onCancelReply');
     expect(slashKeyDownSource).not.toContain('onRemoveMedia');
     expect(globalStylesSource).toContain('position: fixed;');
-    expect(globalStylesSource).toContain('max-height: min(45dvh, 320px)');
+    expect(globalStylesSource).toContain(
+      'max-height: min(58dvh, calc(100dvh - 148px - env(safe-area-inset-bottom)))',
+    );
     expect(globalStylesSource).toContain('env(safe-area-inset-bottom)');
+    expect(globalStylesSource).toContain('env(safe-area-inset-left)');
+    expect(globalStylesSource).toContain('env(safe-area-inset-right)');
     expect(globalStylesSource).toContain(".conversation-quick-reply-option[aria-selected='true']");
   });
 

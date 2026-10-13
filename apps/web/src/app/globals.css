@@ -3846,6 +3846,7 @@ a {
   display: grid;
   box-sizing: border-box;
   flex: 0 0 auto;
+  position: relative;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
@@ -3993,11 +3994,6 @@ a {
   align-self: end;
 }
 
-.conversation-quick-reply-control {
-  position: relative;
-  align-self: end;
-}
-
 .conversation-attach-menu {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -4032,10 +4028,11 @@ a {
 .conversation-quick-reply-menu {
   position: absolute;
   bottom: calc(100% + 8px);
-  left: 0;
+  left: 56px;
   z-index: 6;
   display: grid;
-  width: min(320px, calc(100vw - 24px));
+  grid-template-rows: minmax(0, 1fr);
+  width: min(380px, calc(100% - 120px));
   max-height: min(360px, calc(100dvh - 160px));
   overflow: hidden;
   border: 1px solid var(--border);
@@ -4044,28 +4041,9 @@ a {
   box-shadow: var(--shadow);
 }
 
-.conversation-quick-reply-search {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-secondary);
-  padding: 8px 10px;
-}
-
-.conversation-quick-reply-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  outline: 0;
-}
-
 .conversation-quick-reply-list {
   display: grid;
+  min-height: 0;
   max-height: 300px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -4097,7 +4075,7 @@ a {
 
 .conversation-quick-reply-option strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4106,10 +4084,12 @@ a {
 .conversation-quick-reply-option small {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 11px;
+  display: -webkit-box;
+  font-size: 12px;
   line-height: 1.35;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .conversation-quick-reply-empty {
@@ -13610,16 +13590,20 @@ tbody tr:hover,
 
   .conversation-quick-reply-menu {
     position: fixed;
-    right: max(10px, env(safe-area-inset-right));
-    bottom: calc(76px + env(safe-area-inset-bottom));
-    left: max(10px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(86px + env(safe-area-inset-bottom));
+    left: max(12px, env(safe-area-inset-left));
     width: auto;
-    max-height: min(45dvh, 320px);
+    max-height: min(58dvh, calc(100dvh - 148px - env(safe-area-inset-bottom)));
+  }
+
+  .conversation-quick-reply-list {
+    max-height: inherit;
   }
 
   .conversation-quick-reply-option {
-    min-height: 48px;
-    padding: 10px;
+    min-height: 56px;
+    padding: 12px;
   }
 
   .conversation-client-drawer .modal {

@@ -4029,7 +4029,7 @@ a {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 56px;
-  z-index: 6;
+  z-index: 1300;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   width: min(380px, calc(100% - 120px));
@@ -4039,6 +4039,10 @@ a {
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.conversation-composer.has-slash-quick-reply-menu {
+  z-index: 1300;
 }
 
 .conversation-quick-reply-list {
@@ -13492,6 +13496,16 @@ tbody tr:hover,
     opacity: 1;
   }
 
+  :root[data-conversation-quick-reply-menu='open'] .conversation-message-actions {
+    z-index: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  :root[data-conversation-quick-reply-menu='open'] .conversation-reaction-picker {
+    display: none;
+  }
+
   .conversation-quote {
     max-width: min(100%, 72vw);
     padding: 6px 8px 6px 11px;
@@ -13591,11 +13605,13 @@ tbody tr:hover,
 
   .conversation-quick-reply-menu {
     position: fixed;
+    top: var(--conversation-quick-reply-menu-top, auto);
     right: max(10px, env(safe-area-inset-right));
-    bottom: calc(72px + env(safe-area-inset-bottom));
+    bottom: auto;
     left: max(10px, env(safe-area-inset-left));
+    z-index: 1300;
     width: auto;
-    max-height: min(38dvh, 280px);
+    max-height: var(--conversation-quick-reply-menu-max-height, min(38dvh, 280px));
   }
 
   .conversation-quick-reply-list {

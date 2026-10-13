@@ -237,6 +237,10 @@ export const allowedWhatsAppReactionEmojis = ['👍', '❤️', '😂', '😮', 
 const reactionPickerViewportGap = 12;
 const reactionPickerOffset = 8;
 const reactionPickerDefaultSize = { width: 284, height: 52 };
+const quickReplyMenuViewportGap = 10;
+const quickReplyMenuComposerGap = 8;
+const quickReplyMenuMobileMaxHeight = 280;
+const quickReplyMenuMobileMinHeight = 112;
 const conversationPresencePauseDelayMs = 3000;
 
 type ConversationPresenceKind = 'text' | 'audio';
@@ -4471,6 +4475,69 @@ export function calculateReactionPickerPosition({
   };
 }
 
+type QuickReplyMenuViewportPosition = {
+  top: number;
+  maxHeight: number;
+};
+
+export function calculateQuickReplyMenuViewportPosition({
+  composerRect,
+  viewportHeight,
+  viewportOffsetTop = 0,
+  viewportGap = quickReplyMenuViewportGap,
+  composerGap = quickReplyMenuComposerGap,
+  maxHeight = quickReplyMenuMobileMaxHeight,
+  minHeight = quickReplyMenuMobileMinHeight,
+}: {
+  composerRect: Pick<DOMRect, 'top'> | null;
+  viewportHeight: number;
+  viewportOffsetTop?: number;
+  viewportGap?: number;
+  composerGap?: number;
+  maxHeight?: number;
+  minHeight?: number;
+}): QuickReplyMenuViewportPosition {
+  const safeViewportGap = Math.max(
+    0,
+    Number.isFinite(viewportGap) ? viewportGap : quickReplyMenuViewportGap,
+  );
+  const safeComposerGap = Math.max(
+    0,
+    Number.isFinite(composerGap) ? composerGap : quickReplyMenuComposerGap,
+  );
+  const safeViewportHeight = Math.max(
+    1,
+    Number.isFinite(viewportHeight) ? viewportHeight : quickReplyMenuMobileMinHeight,
+  );
+  const viewportCapacity = Math.max(1, safeViewportHeight - safeViewportGap * 2);
+  const safeMinHeight = Math.max(
+    1,
+    Math.min(
+      Number.isFinite(minHeight) ? minHeight : quickReplyMenuMobileMinHeight,
+      viewportCapacity,
+    ),
+  );
+  const safeMaxHeight = Math.max(
+    safeMinHeight,
+    Number.isFinite(maxHeight) ? maxHeight : quickReplyMenuMobileMaxHeight,
+  );
+  const viewportTop = Math.max(0, Number.isFinite(viewportOffsetTop) ? viewportOffsetTop : 0);
+  const viewportBottom = viewportTop + safeViewportHeight;
+  const composerTop =
+    composerRect && Number.isFinite(composerRect.top)
+      ? Math.max(viewportTop, Math.min(composerRect.top, viewportBottom))
+      : viewportBottom;
+  const menuBottom = Math.max(viewportTop + safeMinHeight, composerTop - safeComposerGap);
+  const availableHeight = Math.max(safeMinHeight, menuBottom - viewportTop - safeViewportGap * 2);
+  const effectiveMaxHeight = Math.max(safeMinHeight, Math.min(safeMaxHeight, availableHeight));
+  const top = Math.max(viewportTop + safeViewportGap, menuBottom - effectiveMaxHeight);
+
+  return {
+    top: Math.round(top),
+    maxHeight: Math.round(Math.max(1, menuBottom - top)),
+  };
+}
+
 function ConversationReactionPickerPortal({
   message,
   open,
@@ -5372,6 +5439,7 @@ function ConversationComposer({
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const composerContainerRef = useRef<HTMLFormElement | null>(null);
   const quickReplyMenuRef = useRef<HTMLDivElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
@@ -5383,6 +5451,8 @@ function ConversationComposer({
   const streamRef = useRef<MediaStream | null>(null);
   const voiceSendingRef = useRef(false);
   const onVoiceRecordingChangeRef = useRef(onVoiceRecordingChange);
+  const [quickReplyMenuViewportStyle, setQuickReplyMenuViewportStyle] =
+    useState<React.CSSProperties>({});
   const hasText = Boolean(draft.trim());
   const hasSendableContent = Boolean(hasText || selectedMedia);
   const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);
@@ -5440,6 +5510,61 @@ function ConversationComposer({
       document.removeEventListener('keydown', closeOnKeyDown, true);
     };
   }, [composerRef, draft, quickReplyMenuVisible, quickReplySlashMenuOpen]);
+
+  useLayoutEffect(() => {
+    if (!quickReplyMenuVisible) {
+      setQuickReplyMenuViewportStyle({});
+      return undefined;
+    }
+
+    function updateQuickReplyMenuViewportStyle() {
+      const visualViewport = window.visualViewport;
+      const position = calculateQuickReplyMenuViewportPosition({
+        composerRect: composerContainerRef.current?.getBoundingClientRect() ?? null,
+        viewportHeight: visualViewport?.height ?? window.innerHeight,
+        viewportOffsetTop: visualViewport?.offsetTop ?? 0,
+      });
+
+      setQuickReplyMenuViewportStyle({
+        '--conversation-quick-reply-menu-top': `${position.top}px`,
+        '--conversation-quick-reply-menu-max-height': `${position.maxHeight}px`,
+      } as React.CSSProperties);
+    }
+
+    updateQuickReplyMenuViewportStyle();
+
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener('resize', updateQuickReplyMenuViewportStyle);
+    visualViewport?.addEventListener('scroll', updateQuickReplyMenuViewportStyle);
+    window.addEventListener('resize', updateQuickReplyMenuViewportStyle);
+    window.addEventListener('orientationchange', updateQuickReplyMenuViewportStyle);
+
+    return () => {
+      visualViewport?.removeEventListener('resize', updateQuickReplyMenuViewportStyle);
+      visualViewport?.removeEventListener('scroll', updateQuickReplyMenuViewportStyle);
+      window.removeEventListener('resize', updateQuickReplyMenuViewportStyle);
+      window.removeEventListener('orientationchange', updateQuickReplyMenuViewportStyle);
+    };
+  }, [quickReplyMenuVisible]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (quickReplySlashMenuOpen) {
+      root.dataset.conversationQuickReplyMenu = 'open';
+      return () => {
+        if (root.dataset.conversationQuickReplyMenu === 'open') {
+          delete root.dataset.conversationQuickReplyMenu;
+        }
+      };
+    }
+
+    if (root.dataset.conversationQuickReplyMenu === 'open') {
+      delete root.dataset.conversationQuickReplyMenu;
+    }
+
+    return undefined;
+  }, [quickReplySlashMenuOpen]);
 
   useEffect(() => {
     if (quickReplySlashDismissedDraft !== null && quickReplySlashDismissedDraft !== draft) {
@@ -5704,6 +5829,7 @@ function ConversationComposer({
 
   return (
     <form
+      ref={composerContainerRef}
       className={`conversation-composer ${quickReplyMenuVisible ? 'has-quick-reply-menu' : ''} ${
         quickReplySlashMenuOpen ? 'has-slash-quick-reply-menu' : ''
       }`.trim()}
@@ -5903,6 +6029,7 @@ function ConversationComposer({
         <div
           className="conversation-quick-reply-menu conversation-quick-reply-menu-slash"
           ref={quickReplyMenuRef}
+          style={quickReplyMenuViewportStyle}
         >
           <div
             aria-activedescendant={activeQuickReplyId}

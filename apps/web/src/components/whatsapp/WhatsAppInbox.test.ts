@@ -9,6 +9,7 @@ import {
   allowedWhatsAppReactionEmojis,
   buildContactFinancialSummary,
   buildContactRecentActivity,
+  calculateQuickReplyMenuViewportPosition,
   calculateReactionPickerPosition,
   classifyContactPixState,
   classifyConversationIncomingFile,
@@ -1836,7 +1837,10 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-quick-reply-menu');
     expect(globalStylesSource).toContain('max-height: min(360px, calc(100dvh - 160px))');
     expect(globalStylesSource).toContain('@media');
-    expect(globalStylesSource).toContain('bottom: calc(72px + env(safe-area-inset-bottom))');
+    expect(globalStylesSource).toContain('top: var(--conversation-quick-reply-menu-top, auto)');
+    expect(globalStylesSource).toContain(
+      'max-height: var(--conversation-quick-reply-menu-max-height, min(38dvh, 280px))',
+    );
   });
 
   it('wires slash quick replies to keyboard navigation without changing reply or attachment state', () => {
@@ -1873,15 +1877,123 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(slashKeyDownSource).not.toContain('onCancelReply');
     expect(slashKeyDownSource).not.toContain('onRemoveMedia');
     expect(globalStylesSource).toContain('position: fixed;');
-    expect(globalStylesSource).toContain('max-height: min(38dvh, 280px)');
+    expect(globalStylesSource).toContain('--conversation-quick-reply-menu-max-height');
     expect(globalStylesSource).toContain('-webkit-overflow-scrolling: touch');
     expect(globalStylesSource).toContain('overscroll-behavior: contain');
     expect(globalStylesSource).toContain('min-height: 52px');
     expect(globalStylesSource).toContain('-webkit-line-clamp: 2');
-    expect(globalStylesSource).toContain('env(safe-area-inset-bottom)');
     expect(globalStylesSource).toContain('env(safe-area-inset-left)');
     expect(globalStylesSource).toContain('env(safe-area-inset-right)');
     expect(globalStylesSource).toContain(".conversation-quick-reply-option[aria-selected='true']");
+  });
+
+  it('positions mobile slash quick replies inside the visual viewport above the composer', () => {
+    expect(
+      calculateQuickReplyMenuViewportPosition({
+        composerRect: { top: 360 },
+        viewportHeight: 420,
+        viewportOffsetTop: 0,
+      }),
+    ).toEqual({
+      maxHeight: 280,
+      top: 72,
+    });
+
+    expect(
+      calculateQuickReplyMenuViewportPosition({
+        composerRect: { top: 260 },
+        viewportHeight: 300,
+        viewportOffsetTop: 24,
+      }),
+    ).toEqual({
+      maxHeight: 208,
+      top: 44,
+    });
+
+    expect(
+      calculateQuickReplyMenuViewportPosition({
+        composerRect: null,
+        viewportHeight: 300,
+      }),
+    ).toEqual({
+      maxHeight: 272,
+      top: 20,
+    });
+  });
+
+  it('keeps quick reply viewport math finite for small or invalid mobile viewports', () => {
+    expect(
+      calculateQuickReplyMenuViewportPosition({
+        composerRect: { top: 70 },
+        viewportHeight: 80,
+      }),
+    ).toEqual({
+      maxHeight: 52,
+      top: 10,
+    });
+
+    const invalidPosition = calculateQuickReplyMenuViewportPosition({
+      composerRect: { top: Number.NaN },
+      viewportHeight: Number.NaN,
+      viewportOffsetTop: Number.NaN,
+      viewportGap: Number.NaN,
+      composerGap: Number.NaN,
+      maxHeight: Number.NaN,
+      minHeight: Number.NaN,
+    });
+
+    expect(Number.isFinite(invalidPosition.top)).toBe(true);
+    expect(Number.isFinite(invalidPosition.maxHeight)).toBe(true);
+    expect(invalidPosition.top).toBeGreaterThanOrEqual(0);
+    expect(invalidPosition.maxHeight).toBeGreaterThan(0);
+  });
+
+  it('keeps mobile slash quick replies above message action rails and reaction overlays', () => {
+    expect(whatsAppInboxSource).toContain('window.visualViewport');
+    expect(whatsAppInboxSource).toContain('calculateQuickReplyMenuViewportPosition');
+    expect(whatsAppInboxSource).toContain('conversationQuickReplyMenu');
+    expect(whatsAppInboxSource).toContain(
+      "'--conversation-quick-reply-menu-top': `${position.top}px`",
+    );
+    expect(globalStylesSource).toContain(
+      ":root[data-conversation-quick-reply-menu='open'] .conversation-message-actions",
+    );
+    expect(globalStylesSource).toContain(
+      ":root[data-conversation-quick-reply-menu='open'] .conversation-reaction-picker",
+    );
+    expect(globalStylesSource).toContain('.conversation-composer.has-slash-quick-reply-menu');
+    expect(globalStylesSource).toContain('z-index: 1300;');
+  });
+
+  it('registers visual viewport and window listeners only while slash quick replies are visible', () => {
+    const quickReplyViewportEffectStart = whatsAppInboxSource.indexOf(
+      'useLayoutEffect(() => {',
+      whatsAppInboxSource.indexOf('quickReplyMenuViewportStyle'),
+    );
+    const quickReplyViewportEffectEnd = whatsAppInboxSource.indexOf(
+      'useEffect(() => {',
+      quickReplyViewportEffectStart,
+    );
+    const quickReplyViewportEffectSource = whatsAppInboxSource.slice(
+      quickReplyViewportEffectStart,
+      quickReplyViewportEffectEnd,
+    );
+
+    expect(quickReplyViewportEffectSource).toContain('if (!quickReplyMenuVisible)');
+    expect(quickReplyViewportEffectSource).toContain("visualViewport?.addEventListener('resize'");
+    expect(quickReplyViewportEffectSource).toContain("visualViewport?.addEventListener('scroll'");
+    expect(quickReplyViewportEffectSource).toContain("window.addEventListener('resize'");
+    expect(quickReplyViewportEffectSource).toContain("window.addEventListener('orientationchange'");
+    expect(quickReplyViewportEffectSource).toContain(
+      "visualViewport?.removeEventListener('resize'",
+    );
+    expect(quickReplyViewportEffectSource).toContain(
+      "visualViewport?.removeEventListener('scroll'",
+    );
+    expect(quickReplyViewportEffectSource).toContain("window.removeEventListener('resize'");
+    expect(quickReplyViewportEffectSource).toContain(
+      "window.removeEventListener('orientationchange'",
+    );
   });
 
   it('removes the sidebar unread badge immediately when read returns zero', () => {

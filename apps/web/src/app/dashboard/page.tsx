@@ -362,6 +362,14 @@ type View =
   | 'settings';
 
 type ClientDetailTab = 'overview' | 'references' | 'receivables' | 'messages' | 'timeline' | 'more';
+const clientDetailTabs: ClientDetailTab[] = [
+  'overview',
+  'references',
+  'receivables',
+  'messages',
+  'timeline',
+  'more',
+];
 
 type ClientDetailTabRequest = {
   tab: ClientDetailTab;
@@ -469,6 +477,19 @@ function clearWhatsAppRestoreQuery() {
     conversationId: null,
     view: null,
   });
+}
+
+function setClientDetailLocation(clientId: string, tab?: ClientDetailTab, receivableId?: string) {
+  replaceDashboardLocation({
+    view: 'clients',
+    clientId,
+    ...(tab ? { tab } : {}),
+    ...(tab === 'receivables' && receivableId ? { receivableId } : {}),
+  });
+}
+
+function setClientListLocation() {
+  replaceDashboardLocation({ view: 'clients' });
 }
 
 function dashboardUrlReturnContext(params: URLSearchParams): WhatsAppReturnContext | null {
@@ -645,10 +666,6 @@ export default function DashboardPage() {
       ) {
         setClientsPage(Math.max(1, nextClients.pagination.totalPages));
       }
-      setSelectedClient((current) => {
-        if (!current) return null;
-        return nextClients.items.some((client) => client.id === current.id) ? current : null;
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível carregar clientes e planos.');
     } finally {
@@ -705,46 +722,59 @@ export default function DashboardPage() {
       return undefined;
     }
 
-    if (requestedView !== 'clients' || params.get('tab') !== 'receivables') {
+    if (requestedView !== 'clients') {
       return undefined;
     }
 
     const clientId = params.get('clientId')?.trim();
+    if (!clientId) {
+      setSelectedClient(null);
+      setClientDetailTabRequest(null);
+      setView('clients');
+      return undefined;
+    }
+
+    const requestedTab = params.get('tab')?.trim();
+    const restoredTab = clientDetailTabs.includes(requestedTab as ClientDetailTab)
+      ? (requestedTab as ClientDetailTab)
+      : 'overview';
     const receivableId = params.get('receivableId')?.trim();
-    if (!clientId || !receivableId) return undefined;
 
     const restoredClientId = clientId;
-    const restoredReceivableId = receivableId;
+    const restoredReceivableId = restoredTab === 'receivables' ? receivableId : null;
     const returnContext = dashboardUrlReturnContext(params);
 
-    async function restoreClientReceivable() {
+    async function restoreClientDetail() {
       try {
         const [client, receivable] = await Promise.all([
           getClient(restoredClientId),
-          getReceivable(restoredReceivableId),
+          restoredReceivableId ? getReceivable(restoredReceivableId) : Promise.resolve(null),
         ]);
         if (!active) return;
 
         setSelectedClient(client);
         setClientDetailTabRequest({
-          receivable,
+          ...(receivable ? { receivable } : {}),
           ...(returnContext ? { returnContext } : {}),
           sequence: Date.now(),
-          tab: 'receivables',
+          tab: restoredTab,
         });
         setView('clients');
       } catch (err) {
         if (active) {
+          setSelectedClient(null);
+          setClientDetailTabRequest(null);
+          setView('clients');
           setError(
             err instanceof Error
               ? err.message
-              : 'Não foi possível restaurar a cobrança selecionada.',
+              : 'Não foi possível restaurar o cliente selecionado.',
           );
         }
       }
     }
 
-    void restoreClientReceivable();
+    void restoreClientDetail();
 
     return () => {
       active = false;
@@ -819,6 +849,13 @@ export default function DashboardPage() {
     setWhatsAppConversationQuery(context);
     setView('conversations');
   }
+
+  const handleClientDetailTabChange = useCallback(
+    (clientId: string, tab: ClientDetailTab, receivableId?: string) => {
+      setClientDetailLocation(clientId, tab, receivableId);
+    },
+    [],
+  );
 
   async function handleReferenceStatusChange(
     reference: ClientReference,
@@ -1074,6 +1111,7 @@ export default function DashboardPage() {
             onOpenClient={async (id) => {
               const client = await getClient(id);
               setSelectedClient(client);
+              setClientDetailLocation(id);
               setView('clients');
             }}
             onOpenFinance={(tab) => {
@@ -1100,6 +1138,7 @@ export default function DashboardPage() {
             onCreate={async (payload) => {
               const client = await createClient(payload);
               setSelectedClient(client);
+              setClientDetailLocation(client.id);
               await reloadAfterMutation();
             }}
             onEdit={(client) => {
@@ -1134,17 +1173,24 @@ export default function DashboardPage() {
             onSelect={async (client) => {
               const detailed = await getClient(client.id);
               setSelectedClient(detailed);
+              setClientDetailLocation(client.id);
             }}
-            onClearSelection={() => setSelectedClient(null)}
+            onClearSelection={() => {
+              setSelectedClient(null);
+              setClientDetailTabRequest(null);
+              setClientListLocation();
+            }}
             onRemoveClient={(client) => void handleRemoveClient(client)}
             onRemoveReference={(reference) => void handleRemoveReference(reference)}
             onReferenceStatusChange={(reference, nextStatus, reason) =>
               void handleReferenceStatusChange(reference, nextStatus, reason)
             }
             onClientsPageChange={setClientsPage}
+            onDetailTabChange={handleClientDetailTabChange}
             onFinancialMutation={async (clientId) => {
               const detailed = await getClient(clientId);
               setSelectedClient(detailed);
+              setClientDetailLocation(clientId, 'receivables');
               await loadData();
             }}
             onReturnToWhatsApp={restoreWhatsAppContext}
@@ -1188,6 +1234,7 @@ export default function DashboardPage() {
             onOpenClient={async (clientId, options) => {
               const client = await getClient(clientId);
               setSelectedClient(client);
+              setClientDetailLocation(clientId, options?.tab, options?.receivable?.id);
               if (options?.tab) {
                 const returnContext =
                   options.origin?.kind === 'whatsapp'
@@ -7586,6 +7633,7 @@ function ClientsView({
   onRemoveReference,
   onSelect,
   onClientsPageChange,
+  onDetailTabChange,
   onFinancialMutation,
   onWhatsAppSent,
   onUpdate,
@@ -7631,6 +7679,7 @@ function ClientsView({
   onRemoveReference: (reference: ClientReference) => void;
   onSelect: (client: Client) => void | Promise<void>;
   onClientsPageChange: (page: number) => void;
+  onDetailTabChange: (clientId: string, tab: ClientDetailTab, receivableId?: string) => void;
   onFinancialMutation: (clientId: string) => Promise<void>;
   onWhatsAppSent: (clientId: string) => Promise<void>;
   onUpdate: (payload: ClientUpdatePayload) => Promise<void>;
@@ -7755,6 +7804,11 @@ function ClientsView({
     (receivable) => receivable.status === 'PENDENTE',
   );
   const selectedClientId = selectedClient?.id;
+
+  function selectDetailTab(tab: ClientDetailTab) {
+    setDetailTab(tab);
+    if (selectedClientId) onDetailTabChange(selectedClientId, tab);
+  }
 
   const clientOverviewAmount = (key: keyof ReceivablesSummary) => {
     if (clientOverviewSummaryError) return 'Falha';
@@ -7949,6 +8003,7 @@ function ClientsView({
     if (!selectedClientId || !detailTabRequest) return;
 
     setDetailTab(detailTabRequest.tab);
+    onDetailTabChange(selectedClientId, detailTabRequest.tab, detailTabRequest.receivable?.id);
 
     if (detailTabRequest.receivable) {
       setClientFinanceReferenceId(detailTabRequest.receivable.clientReferenceId ?? '');
@@ -7957,7 +8012,7 @@ function ClientsView({
       setPixReceivableReturnContext(detailTabRequest.returnContext ?? null);
       setPixReceivable(detailTabRequest.receivable);
     }
-  }, [detailTabRequest, selectedClientId]);
+  }, [detailTabRequest, onDetailTabChange, selectedClientId]);
 
   useEffect(() => {
     if (!selectedClientId) return;
@@ -8386,42 +8441,42 @@ function ClientsView({
                 <button
                   className={detailTab === 'overview' ? 'active' : ''}
                   type="button"
-                  onClick={() => setDetailTab('overview')}
+                  onClick={() => selectDetailTab('overview')}
                 >
                   Visão Geral
                 </button>
                 <button
                   className={detailTab === 'references' ? 'active' : ''}
                   type="button"
-                  onClick={() => setDetailTab('references')}
+                  onClick={() => selectDetailTab('references')}
                 >
                   Referências
                 </button>
                 <button
                   className={detailTab === 'receivables' ? 'active' : ''}
                   type="button"
-                  onClick={() => setDetailTab('receivables')}
+                  onClick={() => selectDetailTab('receivables')}
                 >
                   Financeiro
                 </button>
                 <button
                   className={detailTab === 'messages' ? 'active' : ''}
                   type="button"
-                  onClick={() => setDetailTab('messages')}
+                  onClick={() => selectDetailTab('messages')}
                 >
                   Cobranças/PIX
                 </button>
                 <button
                   className={detailTab === 'timeline' ? 'active' : ''}
                   type="button"
-                  onClick={() => setDetailTab('timeline')}
+                  onClick={() => selectDetailTab('timeline')}
                 >
                   Histórico
                 </button>
                 <button
                   className={detailTab === 'more' ? 'active' : ''}
                   type="button"
-                  onClick={() => setDetailTab('more')}
+                  onClick={() => selectDetailTab('more')}
                 >
                   Mais
                 </button>
@@ -8558,7 +8613,7 @@ function ClientsView({
                           icon={History}
                           size="sm"
                           variant="ghost"
-                          onClick={() => setDetailTab('timeline')}
+                          onClick={() => selectDetailTab('timeline')}
                         >
                           Ver histórico completo
                         </Button>

@@ -268,14 +268,13 @@ describe('client reference presentation source', () => {
   it('keeps financial restore guarded by the clients receivables view', () => {
     const restoreEffectSource = dashboardSource.slice(
       dashboardSource.indexOf("if (requestedView === 'conversations')"),
-      dashboardSource.indexOf('void restoreClientReceivable();'),
+      dashboardSource.indexOf('void restoreClientDetail();'),
     );
 
     expect(restoreEffectSource).toContain("if (requestedView === 'conversations')");
     expect(restoreEffectSource).toContain("setView('conversations')");
-    expect(restoreEffectSource).toContain(
-      "if (requestedView !== 'clients' || params.get('tab') !== 'receivables')",
-    );
+    expect(restoreEffectSource).toContain("if (requestedView !== 'clients')");
+    expect(restoreEffectSource).toContain('const restoredTab = clientDetailTabs.includes');
     expect(restoreEffectSource).toContain("params.get('receivableId')?.trim()");
     expect(restoreEffectSource).toContain("params.get('clientId')?.trim()");
   });

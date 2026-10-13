@@ -127,6 +127,45 @@ describe('dashboard location helpers', () => {
     ).toBe('/dashboard?view=clients&clientId=client-a&tab=receivables&receivableId=receivable-a');
   });
 
+  it('builds canonical client detail URLs for WhatsApp and menu opens', () => {
+    expect(
+      buildDashboardLocationPath('/dashboard', {
+        clientId: 'client-a',
+        view: 'clients',
+      }),
+    ).toBe('/dashboard?view=clients&clientId=client-a');
+
+    expect(
+      buildDashboardLocationPath('/dashboard', {
+        clientId: 'client-a',
+        tab: 'receivables',
+        view: 'clients',
+      }),
+    ).toBe('/dashboard?view=clients&clientId=client-a&tab=receivables');
+  });
+
+  it('keeps client and conversation locations separate when switching contexts', () => {
+    const clientFinance = buildDashboardLocationPath('/dashboard', {
+      clientId: 'client-a',
+      tab: 'receivables',
+      view: 'clients',
+    });
+    expect(clientFinance).toBe('/dashboard?view=clients&clientId=client-a&tab=receivables');
+    expect(clientFinance).not.toContain('conversationId');
+    expect(clientFinance).not.toContain('contactPanel');
+
+    const conversation = buildDashboardLocationPath('/dashboard', {
+      contactPanelOpen: true,
+      conversationId: 'conversation-a',
+      view: 'conversations',
+    });
+    expect(conversation).toBe(
+      '/dashboard?view=conversations&conversationId=conversation-a&contactPanel=open',
+    );
+    expect(conversation).not.toContain('clientId');
+    expect(conversation).not.toContain('tab=');
+  });
+
   it('does not include a receivable without the clients receivables context', () => {
     expect(
       buildDashboardLocationPath('/dashboard', {

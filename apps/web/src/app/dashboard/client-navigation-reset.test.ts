@@ -66,12 +66,12 @@ describe('NAVIGATION2 client module reset', () => {
     expect(clientsViewSource).toContain('const [detailTab, setDetailTab] = useState<');
     expect(clientsViewSource).toContain("setDetailTab('overview');");
     expect(clientsViewSource).toContain('}, [selectedClientId]);');
-    expect(clientsViewSource).toContain("onClick={() => setDetailTab('overview')}");
-    expect(clientsViewSource).toContain("onClick={() => setDetailTab('references')}");
-    expect(clientsViewSource).toContain("onClick={() => setDetailTab('receivables')}");
-    expect(clientsViewSource).toContain("onClick={() => setDetailTab('messages')}");
-    expect(clientsViewSource).toContain("onClick={() => setDetailTab('timeline')}");
-    expect(clientsViewSource).toContain("onClick={() => setDetailTab('more')}");
+    expect(clientsViewSource).toContain("onClick={() => selectDetailTab('overview')}");
+    expect(clientsViewSource).toContain("onClick={() => selectDetailTab('references')}");
+    expect(clientsViewSource).toContain("onClick={() => selectDetailTab('receivables')}");
+    expect(clientsViewSource).toContain("onClick={() => selectDetailTab('messages')}");
+    expect(clientsViewSource).toContain("onClick={() => selectDetailTab('timeline')}");
+    expect(clientsViewSource).toContain("onClick={() => selectDetailTab('more')}");
     expect(clientsViewSource).not.toContain('handlePrimaryNavigation');
   });
 
@@ -79,6 +79,7 @@ describe('NAVIGATION2 client module reset', () => {
     expect(dashboardPageSource).toContain('onSelect={async (client) => {');
     expect(dashboardPageSource).toContain('const detailed = await getClient(client.id);');
     expect(dashboardPageSource).toContain('setSelectedClient(detailed);');
-    expect(dashboardPageSource).toContain('onClearSelection={() => setSelectedClient(null)}');
+    expect(dashboardPageSource).toContain('setClientDetailLocation(client.id);');
+    expect(dashboardPageSource).toContain('setClientListLocation();');
   });
 });

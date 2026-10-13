@@ -110,7 +110,7 @@ describe('client overview presentation source', () => {
   it('limits overview activity to five events and links to the full history tab', () => {
     expect(dashboardSource).toContain('(selectedClient.events ?? []).slice(0, 5)');
     expect(dashboardSource).toContain('Ver histórico completo');
-    expect(dashboardSource).toContain("onClick={() => setDetailTab('timeline')}");
+    expect(dashboardSource).toContain("onClick={() => selectDetailTab('timeline')}");
     expect(dashboardSource).toContain('Nenhuma atividade recente.');
   });
 

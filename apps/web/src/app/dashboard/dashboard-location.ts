@@ -49,3 +49,45 @@ export function parseDashboardView(params: URLSearchParams): DashboardLocationVi
   const view = params.get('view');
   return view === 'conversations' || view === 'clients' ? view : null;
 }
+
+export function parseDashboardLocation(params: URLSearchParams): DashboardLocation | null {
+  const view = parseDashboardView(params);
+
+  if (view === 'conversations') {
+    return {
+      contactPanelOpen: params.get('contactPanel') === 'open',
+      conversationId: params.get('conversationId')?.trim() || null,
+      view,
+    };
+  }
+
+  if (view === 'clients') {
+    return {
+      clientId: params.get('clientId')?.trim() || null,
+      receivableId: params.get('receivableId')?.trim() || null,
+      tab: params.get('tab')?.trim() || null,
+      view,
+    };
+  }
+
+  return null;
+}
+
+export function isDashboardClientLocation(
+  params: URLSearchParams,
+  clientId?: string,
+  tab?: string,
+) {
+  const location = parseDashboardLocation(params);
+  if (location?.view !== 'clients') return false;
+  if (clientId && location.clientId !== clientId) return false;
+  if (tab && location.tab !== tab) return false;
+  return true;
+}
+
+export function isDashboardConversationLocation(params: URLSearchParams, conversationId?: string) {
+  const location = parseDashboardLocation(params);
+  if (location?.view !== 'conversations') return false;
+  if (conversationId && location.conversationId !== conversationId) return false;
+  return true;
+}

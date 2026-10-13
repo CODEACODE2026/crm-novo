@@ -91,7 +91,11 @@ import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
 import { FinanceClientAutocomplete } from '../../components/clients/finance-client-autocomplete';
 import { WhatsAppInbox } from '../../components/whatsapp/WhatsAppInbox';
-import { buildDashboardLocationPath } from './dashboard-location';
+import {
+  buildDashboardLocationPath,
+  isDashboardClientLocation,
+  isDashboardConversationLocation,
+} from './dashboard-location';
 import {
   formatUnreadBadge,
   useWhatsAppRealtimeManager,
@@ -492,6 +496,21 @@ function setClientListLocation() {
   replaceDashboardLocation({ view: 'clients' });
 }
 
+function currentDashboardParams() {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search);
+}
+
+function currentLocationIsClient(clientId?: string, tab?: ClientDetailTab) {
+  const params = currentDashboardParams();
+  return params ? isDashboardClientLocation(params, clientId, tab) : false;
+}
+
+function currentLocationIsConversation(conversationId?: string) {
+  const params = currentDashboardParams();
+  return params ? isDashboardConversationLocation(params, conversationId) : false;
+}
+
 function dashboardUrlReturnContext(params: URLSearchParams): WhatsAppReturnContext | null {
   if (params.get('returnView') !== 'conversations') return null;
 
@@ -751,6 +770,7 @@ export default function DashboardPage() {
           restoredReceivableId ? getReceivable(restoredReceivableId) : Promise.resolve(null),
         ]);
         if (!active) return;
+        if (!currentLocationIsClient(restoredClientId)) return;
 
         setSelectedClient(client);
         setClientDetailTabRequest({
@@ -761,7 +781,7 @@ export default function DashboardPage() {
         });
         setView('clients');
       } catch (err) {
-        if (active) {
+        if (active && currentLocationIsClient(restoredClientId)) {
           setSelectedClient(null);
           setClientDetailTabRequest(null);
           setView('clients');
@@ -819,13 +839,34 @@ export default function DashboardPage() {
       setClientDetailTabRequest(null);
       setSelectedClient(null);
       setWhatsAppConversationQuery(context);
+      setView('conversations');
     },
     [],
   );
 
+  const navigateToClientDetail = useCallback(
+    (clientId: string, tab?: ClientDetailTab, receivableId?: string) => {
+      setClientDetailLocation(clientId, tab, receivableId);
+      setView('clients');
+    },
+    [],
+  );
+
+  const navigateToClientList = useCallback(() => {
+    setClientListLocation();
+    setView('clients');
+  }, []);
+
+  const navigateToWhatsAppConversation = useCallback((context: WhatsAppReturnContext) => {
+    setWhatsAppConversationQuery(context);
+    setView('conversations');
+  }, []);
+
   function handlePrimaryNavigation(nextView: View) {
     if (nextView === 'clients') {
       resetClientModuleState();
+      navigateToClientList();
+      return;
     } else if (view === 'clients') {
       resetClientDetailState();
     }
@@ -846,15 +887,14 @@ export default function DashboardPage() {
     });
     setClientDetailTabRequest(null);
     setSelectedClient(null);
-    setWhatsAppConversationQuery(context);
-    setView('conversations');
+    navigateToWhatsAppConversation(context);
   }
 
   const handleClientDetailTabChange = useCallback(
     (clientId: string, tab: ClientDetailTab, receivableId?: string) => {
-      setClientDetailLocation(clientId, tab, receivableId);
+      navigateToClientDetail(clientId, tab, receivableId);
     },
-    [],
+    [navigateToClientDetail],
   );
 
   async function handleReferenceStatusChange(
@@ -934,7 +974,7 @@ export default function DashboardPage() {
 
     if (!selectedReference) {
       setSelectedClient(client);
-      setView('clients');
+      navigateToClientDetail(client.id);
       setRenewalNotice('Selecione uma referência específica para renovar.');
       return;
     }
@@ -981,7 +1021,7 @@ export default function DashboardPage() {
     await loadData();
     const detailed = await getClient(reactivation.clientId);
     setSelectedClient(detailed);
-    setView('clients');
+    navigateToClientDetail(reactivation.clientId, 'receivables', reactivation.receivable.id);
     setReactivationTarget(null);
     setClientDetailTabRequest({
       receivable: reactivation.receivable,
@@ -997,7 +1037,7 @@ export default function DashboardPage() {
     await loadData();
     const detailed = await getClient(reactivation.clientId);
     setSelectedClient(detailed);
-    setView('clients');
+    navigateToClientDetail(reactivation.clientId, 'receivables', reactivation.receivable.id);
     setReactivationTarget(null);
     setClientDetailTabRequest({
       receivable: reactivation.receivable,
@@ -1106,13 +1146,12 @@ export default function DashboardPage() {
             onNewClient={() => {
               setEditingClient(null);
               setClientFormOpen(true);
-              setView('clients');
+              navigateToClientList();
             }}
             onOpenClient={async (id) => {
               const client = await getClient(id);
               setSelectedClient(client);
-              setClientDetailLocation(id);
-              setView('clients');
+              navigateToClientDetail(id);
             }}
             onOpenFinance={(tab) => {
               setFinanceInitialTab(tab);
@@ -1138,7 +1177,7 @@ export default function DashboardPage() {
             onCreate={async (payload) => {
               const client = await createClient(payload);
               setSelectedClient(client);
-              setClientDetailLocation(client.id);
+              navigateToClientDetail(client.id);
               await reloadAfterMutation();
             }}
             onEdit={(client) => {
@@ -1172,13 +1211,14 @@ export default function DashboardPage() {
             }}
             onSelect={async (client) => {
               const detailed = await getClient(client.id);
+              if (!currentLocationIsClient()) return;
               setSelectedClient(detailed);
-              setClientDetailLocation(client.id);
+              navigateToClientDetail(client.id);
             }}
             onClearSelection={() => {
               setSelectedClient(null);
               setClientDetailTabRequest(null);
-              setClientListLocation();
+              navigateToClientList();
             }}
             onRemoveClient={(client) => void handleRemoveClient(client)}
             onRemoveReference={(reference) => void handleRemoveReference(reference)}
@@ -1189,8 +1229,9 @@ export default function DashboardPage() {
             onDetailTabChange={handleClientDetailTabChange}
             onFinancialMutation={async (clientId) => {
               const detailed = await getClient(clientId);
+              if (!currentLocationIsClient(clientId)) return;
               setSelectedClient(detailed);
-              setClientDetailLocation(clientId, 'receivables');
+              navigateToClientDetail(clientId, 'receivables');
               await loadData();
             }}
             onReturnToWhatsApp={restoreWhatsAppContext}
@@ -1232,9 +1273,15 @@ export default function DashboardPage() {
             onSummaryRefreshRequest={whatsappRealtime.refreshSummary}
             onConversationLocationChange={handleWhatsAppConversationLocationChange}
             onOpenClient={async (clientId, options) => {
+              const originConversationId = currentLocationIsConversation()
+                ? new URLSearchParams(window.location.search).get('conversationId')?.trim()
+                : null;
               const client = await getClient(clientId);
+              if (originConversationId && !currentLocationIsConversation(originConversationId)) {
+                return;
+              }
               setSelectedClient(client);
-              setClientDetailLocation(clientId, options?.tab, options?.receivable?.id);
+              navigateToClientDetail(clientId, options?.tab, options?.receivable?.id);
               if (options?.tab) {
                 const returnContext =
                   options.origin?.kind === 'whatsapp'
@@ -1259,7 +1306,6 @@ export default function DashboardPage() {
                   });
                 }
               }
-              setView('clients');
             }}
           />
         ) : null}
@@ -1327,7 +1373,7 @@ export default function DashboardPage() {
             onClientCreated={async (client) => {
               await loadData();
               setSelectedClient(client);
-              setView('clients');
+              navigateToClientDetail(client.id);
             }}
           />
         ) : null}

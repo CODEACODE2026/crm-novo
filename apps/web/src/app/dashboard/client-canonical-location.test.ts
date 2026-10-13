@@ -28,7 +28,7 @@ describe('CHAT7 CONTACTINFO7 canonical client location', () => {
     expect(whatsAppOpenClientSource).toContain('const client = await getClient(clientId);');
     expect(whatsAppOpenClientSource).toContain('setSelectedClient(client);');
     expect(whatsAppOpenClientSource).toContain(
-      'setClientDetailLocation(clientId, options?.tab, options?.receivable?.id);',
+      'navigateToClientDetail(clientId, options?.tab, options?.receivable?.id);',
     );
     expect(
       buildDashboardLocationPath('/dashboard', {
@@ -97,14 +97,34 @@ describe('CHAT7 CONTACTINFO7 canonical client location', () => {
   it('keeps generate and recreate PIX refreshes on the same client receivables route', () => {
     expect(dashboardPageSource).toContain('onFinancialMutation={async (clientId) => {');
     expect(dashboardPageSource).toContain('const detailed = await getClient(clientId);');
-    expect(dashboardPageSource).toContain("setClientDetailLocation(clientId, 'receivables');");
+    expect(dashboardPageSource).toContain('if (!currentLocationIsClient(clientId)) return;');
+    expect(dashboardPageSource).toContain("navigateToClientDetail(clientId, 'receivables');");
     expect(clientsViewSource).toContain('await Promise.all([');
     expect(clientsViewSource).toContain('onFinancialMutation(selectedClient.id)');
   });
 
+  it('guards stale WhatsApp and financial callbacks against the current URL', () => {
+    expect(dashboardSource).toContain('function currentLocationIsClient');
+    expect(dashboardSource).toContain('function currentLocationIsConversation');
+    expect(whatsAppOpenClientSource).toContain('const originConversationId =');
+    expect(whatsAppOpenClientSource).toContain(
+      '!currentLocationIsConversation(originConversationId)',
+    );
+    expect(dashboardPageSource).toContain('if (!currentLocationIsClient(clientId)) return;');
+  });
+
+  it('syncs URL helpers and React view state through shared navigation wrappers', () => {
+    expect(dashboardPageSource).toContain('const navigateToClientDetail = useCallback');
+    expect(dashboardPageSource).toContain('setClientDetailLocation(clientId, tab, receivableId);');
+    expect(dashboardPageSource).toContain("setView('clients');");
+    expect(dashboardPageSource).toContain('const navigateToWhatsAppConversation = useCallback');
+    expect(dashboardPageSource).toContain('setWhatsAppConversationQuery(context);');
+    expect(dashboardPageSource).toContain("setView('conversations');");
+  });
+
   it('keeps normal menu client opens and list fallback canonical', () => {
     expect(dashboardPageSource).toContain('onSelect={async (client) => {');
-    expect(dashboardPageSource).toContain('setClientDetailLocation(client.id);');
+    expect(dashboardPageSource).toContain('navigateToClientDetail(client.id);');
     expect(dashboardPageSource).toContain('setClientListLocation();');
   });
 

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDashboardLocationPath,
   buildExactDashboardQueryPath,
+  isDashboardClientLocation,
+  isDashboardConversationLocation,
+  parseDashboardLocation,
   parseDashboardView,
 } from './dashboard-location';
 
@@ -175,5 +178,92 @@ describe('dashboard location helpers', () => {
         view: 'clients',
       }),
     ).toBe('/dashboard?view=clients&clientId=client-a&tab=overview');
+  });
+
+  it('parses dashboard locations for URL/state consistency guards', () => {
+    expect(
+      parseDashboardLocation(
+        new URLSearchParams('view=clients&clientId=client-a&tab=receivables&receivableId=r1'),
+      ),
+    ).toEqual({
+      clientId: 'client-a',
+      receivableId: 'r1',
+      tab: 'receivables',
+      view: 'clients',
+    });
+
+    expect(
+      parseDashboardLocation(
+        new URLSearchParams('view=conversations&conversationId=conversation-b&contactPanel=open'),
+      ),
+    ).toEqual({
+      contactPanelOpen: true,
+      conversationId: 'conversation-b',
+      view: 'conversations',
+    });
+  });
+
+  it('guards stale client and conversation callbacks against the current URL', () => {
+    const clientParams = new URLSearchParams(
+      'view=clients&clientId=client-a&tab=receivables&receivableId=r1',
+    );
+    expect(isDashboardClientLocation(clientParams, 'client-a')).toBe(true);
+    expect(isDashboardClientLocation(clientParams, 'client-a', 'receivables')).toBe(true);
+    expect(isDashboardClientLocation(clientParams, 'client-b')).toBe(false);
+    expect(isDashboardConversationLocation(clientParams)).toBe(false);
+
+    const conversationParams = new URLSearchParams(
+      'view=conversations&conversationId=conversation-b&contactPanel=open',
+    );
+    expect(isDashboardConversationLocation(conversationParams, 'conversation-b')).toBe(true);
+    expect(isDashboardConversationLocation(conversationParams, 'conversation-a')).toBe(false);
+    expect(isDashboardClientLocation(conversationParams, 'client-a')).toBe(false);
+  });
+
+  it('keeps a stale financial callback from reopening a client after conversation navigation', () => {
+    const financialActionStartedAt = new URLSearchParams(
+      'view=clients&clientId=client-a&tab=receivables&receivableId=r1',
+    );
+    const locationAfterUserNavigation = new URLSearchParams(
+      'view=conversations&conversationId=conversation-b&contactPanel=open',
+    );
+
+    expect(isDashboardClientLocation(financialActionStartedAt, 'client-a')).toBe(true);
+    expect(isDashboardClientLocation(locationAfterUserNavigation, 'client-a')).toBe(false);
+    expect(isDashboardConversationLocation(locationAfterUserNavigation, 'conversation-b')).toBe(
+      true,
+    );
+  });
+
+  it('allows the normal client financial callback while the URL still matches that client', () => {
+    const locationAfterFinancialAction = new URLSearchParams(
+      'view=clients&clientId=client-a&tab=receivables&receivableId=r1',
+    );
+
+    expect(isDashboardClientLocation(locationAfterFinancialAction, 'client-a')).toBe(true);
+    expect(isDashboardClientLocation(locationAfterFinancialAction, 'client-a', 'receivables')).toBe(
+      true,
+    );
+    expect(isDashboardConversationLocation(locationAfterFinancialAction)).toBe(false);
+  });
+
+  it('keeps URL and render target consistency mutually exclusive', () => {
+    function renderTargetFor(params: URLSearchParams) {
+      if (isDashboardConversationLocation(params)) return 'conversations';
+      if (isDashboardClientLocation(params)) return 'clients';
+      return null;
+    }
+
+    const conversationParams = new URLSearchParams(
+      'view=conversations&conversationId=conversation-b&clientId=client-a',
+    );
+    const clientParams = new URLSearchParams(
+      'view=clients&clientId=client-a&conversationId=conversation-b',
+    );
+
+    expect(renderTargetFor(conversationParams)).toBe('conversations');
+    expect(isDashboardClientLocation(conversationParams)).toBe(false);
+    expect(renderTargetFor(clientParams)).toBe('clients');
+    expect(isDashboardConversationLocation(clientParams)).toBe(false);
   });
 });

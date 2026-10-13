@@ -79,7 +79,7 @@ describe('NAVIGATION2 client module reset', () => {
     expect(dashboardPageSource).toContain('onSelect={async (client) => {');
     expect(dashboardPageSource).toContain('const detailed = await getClient(client.id);');
     expect(dashboardPageSource).toContain('setSelectedClient(detailed);');
-    expect(dashboardPageSource).toContain('setClientDetailLocation(client.id);');
+    expect(dashboardPageSource).toContain('navigateToClientDetail(client.id);');
     expect(dashboardPageSource).toContain('setClientListLocation();');
   });
 });

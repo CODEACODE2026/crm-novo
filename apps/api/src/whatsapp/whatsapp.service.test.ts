@@ -524,7 +524,9 @@ function serviceFactory({
       findFirst: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
-      create: vi.fn().mockResolvedValue(conversationMessage()),
+      create: vi.fn((args: { data?: Record<string, unknown> }) =>
+        Promise.resolve(conversationMessage(args.data ?? {})),
+      ),
       update: vi.fn((args: { data?: Record<string, unknown> }) =>
         Promise.resolve(conversationMessage(args.data ?? {})),
       ),
@@ -3180,7 +3182,7 @@ describe('WhatsAppService', () => {
   });
 
   it('sends the current WAITING_PAYMENT PIX through Kirago buttons without changing finance state', async () => {
-    const { service, provider, prisma } = serviceFactory({
+    const { service, provider, prisma, realtime } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
     });
 
@@ -3223,6 +3225,35 @@ describe('WhatsAppService', () => {
       destinationMasked: '5544*****9999',
       providerMessageId: 'provider-button-id',
     });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: conversation().id,
+          whatsAppConnectionId: connection().id,
+          direction: 'OUTBOUND',
+          isFromMe: true,
+          messageDispatchId: dispatch().id,
+          providerMessageId: 'provider-button-id',
+          requestId: 'request-id',
+          status: 'SENT',
+          text: expect.stringContaining('PIX'),
+          type: 'TEXT',
+        }),
+      }),
+    );
+    const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: { rawMetadata?: unknown; text?: string };
+    };
+    expect(JSON.stringify(messageCreate?.data?.rawMetadata)).not.toContain(
+      'PIX-COPY-PASTE-CURRENT',
+    );
+    expect(messageCreate?.data?.text).not.toContain('PIX-COPY-PASTE-CURRENT');
+    expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+      conversation().id,
+      conversationMessage().id,
+      'OUTBOUND',
+    );
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
     expect(prisma.paymentIntent.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'payment-intent-id' } }),
     );
@@ -3299,8 +3330,8 @@ describe('WhatsAppService', () => {
       clientId: client().id,
       receivableId: 'manual-receivable-id',
       phone: '5511988887777',
-      requestId: 'manual-charge-pix:manual-payment-intent-id',
-      idempotencyKey: 'manual-charge-pix:manual-payment-intent-id',
+      requestId: 'pix-whatsapp:manual-payment-intent-id',
+      idempotencyKey: 'pix-whatsapp:manual-payment-intent-id',
     });
     expect(dispatchCreate?.data?.clientReferenceId).toBeUndefined();
     expect(dispatchCreate?.data?.items).toBeUndefined();

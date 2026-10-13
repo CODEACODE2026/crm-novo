@@ -275,6 +275,17 @@ type PixWhatsAppDispatchItem = {
   statusSnapshot: ReceivableStatus;
 };
 
+type PixWhatsAppTemplateSnapshot = {
+  title: string;
+  body: string;
+  button: {
+    name: string;
+    buttonParamsJson: {
+      display_text?: string;
+    };
+  };
+};
+
 type PixWhatsAppContext =
   | {
       kind: 'INDIVIDUAL';
@@ -309,6 +320,13 @@ type PixWhatsAppContext =
       metadata: Record<string, unknown>;
       templateItems: Array<{ reference: string; amount: Prisma.Decimal }>;
     };
+
+type PixWhatsAppConversationMessageResult = {
+  id: string;
+  conversationId: string;
+  direction: 'INBOUND' | 'OUTBOUND';
+  created: boolean;
+};
 
 type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
   include: {
@@ -807,8 +825,7 @@ export class WhatsAppService {
         ? { itemCount: context.dispatchItems.length, items: context.templateItems }
         : {}),
     });
-    const requestId =
-      context.kind === 'MANUAL_CHARGE' ? `manual-charge-pix:${intent.id}` : randomUUID();
+    const requestId = `pix-whatsapp:${intent.id}`;
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
     const { dispatch, created } = await this.createPendingDispatch({
       clientId: context.client?.id ?? null,
@@ -817,7 +834,7 @@ export class WhatsAppService {
       body: template.body,
       requestId,
       origin: 'MANUAL',
-      ...(context.kind === 'MANUAL_CHARGE' ? { idempotencyKey: requestId } : {}),
+      idempotencyKey: requestId,
       dispatchItems: context.dispatchItems,
       ...(context.kind === 'INDIVIDUAL'
         ? {
@@ -835,6 +852,19 @@ export class WhatsAppService {
     });
 
     if ((!created && dispatch.status !== 'FAILED') || dispatch.status === 'SENT') {
+      if (dispatch.status === 'SENT') {
+        const message = await this.ensureSentPixWhatsAppConversationMessage({
+          connection,
+          context,
+          dispatch,
+          intent,
+          template,
+        });
+        if (message?.created) {
+          this.emitMessageCreated(message.conversationId, message.id, message.direction);
+          this.emitConversationUpdated(message.conversationId);
+        }
+      }
       return this.presentPixSendResult(dispatch, true, true);
     }
 
@@ -848,7 +878,7 @@ export class WhatsAppService {
         }),
       );
 
-      const updated = await this.prisma.$transaction(async (tx) => {
+      const { dispatch: updated, message } = await this.prisma.$transaction(async (tx) => {
         const sent = await tx.messageDispatch.update({
           where: { id: dispatch.id },
           data: {
@@ -898,8 +928,25 @@ export class WhatsAppService {
           });
         }
 
-        return sent;
+        const pixMessage = await this.upsertPixWhatsAppConversationMessage(tx, {
+          connection,
+          context,
+          dispatch: sent,
+          intent,
+          template,
+        });
+
+        return { dispatch: sent, message: pixMessage };
       });
+
+      if (message) {
+        if (message.created) {
+          this.emitMessageCreated(message.conversationId, message.id, message.direction);
+        } else {
+          this.emitMessageUpdated(message.conversationId, message.id);
+        }
+        this.emitConversationUpdated(message.conversationId);
+      }
 
       return this.presentPixSendResult(updated, true, false);
     } catch (error) {
@@ -5666,6 +5713,258 @@ export class WhatsAppService {
 
       throw error;
     }
+  }
+
+  private ensureSentPixWhatsAppConversationMessage(input: {
+    connection: WhatsAppConnection;
+    context: PixWhatsAppContext;
+    dispatch: MessageDispatch & {
+      client?: { id: string; name: string; reference: string } | null;
+      whatsAppConnection?: { id: string; name: string; provider: string } | null;
+    };
+    intent: PixPaymentIntentForWhatsApp;
+    template: PixWhatsAppTemplateSnapshot;
+  }) {
+    return this.prisma.$transaction((tx) => this.upsertPixWhatsAppConversationMessage(tx, input));
+  }
+
+  private async upsertPixWhatsAppConversationMessage(
+    tx: Prisma.TransactionClient,
+    input: {
+      connection: WhatsAppConnection;
+      context: PixWhatsAppContext;
+      dispatch: MessageDispatch & {
+        client?: { id: string; name: string; reference: string } | null;
+        whatsAppConnection?: { id: string; name: string; provider: string } | null;
+      };
+      intent: PixPaymentIntentForWhatsApp;
+      template: PixWhatsAppTemplateSnapshot;
+    },
+  ): Promise<PixWhatsAppConversationMessageResult | null> {
+    if (input.dispatch.status !== 'SENT') {
+      return null;
+    }
+
+    const existingByDispatch = await tx.whatsAppMessage.findFirst({
+      where: {
+        whatsAppConnectionId: input.connection.id,
+        messageDispatchId: input.dispatch.id,
+      },
+    });
+
+    if (existingByDispatch) {
+      return {
+        id: existingByDispatch.id,
+        conversationId: existingByDispatch.conversationId,
+        direction: existingByDispatch.direction,
+        created: false,
+      };
+    }
+
+    const existing = await this.findExistingConversationMessage(tx, input.connection.id, {
+      providerMessageId: input.dispatch.providerMessageId,
+      requestId: input.dispatch.requestId,
+    });
+
+    if (existing) {
+      const updated = await tx.whatsAppMessage.update({
+        where: { id: existing.id },
+        data: {
+          messageDispatchId: existing.messageDispatchId ?? input.dispatch.id,
+          providerMessageId: existing.providerMessageId ?? input.dispatch.providerMessageId,
+          status: 'SENT',
+          sentAt: existing.sentAt ?? input.dispatch.sentAt ?? new Date(),
+          failedAt: null,
+          ...(existing.text?.trim() ? {} : { text: this.pixWhatsAppConversationText(input) }),
+          ...this.pixWhatsAppRawMetadataUpdate(existing.rawMetadata, input),
+        },
+      });
+
+      await this.updatePixWhatsAppConversationPreview(tx, updated.conversationId, input, updated);
+
+      return {
+        id: updated.id,
+        conversationId: updated.conversationId,
+        direction: updated.direction,
+        created: false,
+      };
+    }
+
+    const conversation = await this.findOrCreatePixWhatsAppConversation(tx, input);
+    const sentAt = input.dispatch.sentAt ?? new Date();
+
+    try {
+      const message = await tx.whatsAppMessage.create({
+        data: buildWhatsAppMessageCreateDataForConversation(conversation, {
+          provider: 'KIRAGO',
+          providerMessageId: input.dispatch.providerMessageId,
+          requestId: input.dispatch.requestId,
+          messageDispatchId: input.dispatch.id,
+          replyToMessageId: null,
+          replyToProviderMessageId: null,
+          quotedText: null,
+          direction: 'OUTBOUND',
+          type: 'TEXT',
+          text: this.pixWhatsAppConversationText(input),
+          status: 'SENT',
+          sentAt,
+          failedAt: null,
+          isFromMe: true,
+          rawMetadata: this.buildPixWhatsAppRawMetadata(input),
+          mediaMimeType: null,
+          mediaFileName: null,
+          mediaSizeBytes: null,
+          mediaDurationSeconds: null,
+        }),
+      });
+
+      await this.updatePixWhatsAppConversationPreview(tx, conversation.id, input, message);
+
+      return {
+        id: message.id,
+        conversationId: message.conversationId,
+        direction: message.direction,
+        created: true,
+      };
+    } catch (error) {
+      if (!this.isDuplicateConversationMessage(error)) {
+        throw error;
+      }
+
+      const duplicate = await this.findExistingConversationMessage(tx, input.connection.id, {
+        providerMessageId: input.dispatch.providerMessageId,
+        requestId: input.dispatch.requestId,
+      });
+
+      if (!duplicate) {
+        throw error;
+      }
+
+      return {
+        id: duplicate.id,
+        conversationId: duplicate.conversationId,
+        direction: duplicate.direction,
+        created: false,
+      };
+    }
+  }
+
+  private async findOrCreatePixWhatsAppConversation(
+    tx: Prisma.TransactionClient,
+    input: {
+      connection: WhatsAppConnection;
+      context: PixWhatsAppContext;
+    },
+  ) {
+    const existing = await tx.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: input.connection.id,
+          phoneNormalized: input.context.phone,
+        },
+      },
+    });
+
+    if (existing) {
+      return existing;
+    }
+
+    return tx.whatsAppConversation.create({
+      data: {
+        whatsAppConnectionId: input.connection.id,
+        instanceName: input.connection.providerInstanceName ?? input.connection.name,
+        provider: 'KIRAGO',
+        externalInstanceId: input.connection.providerUserId,
+        clientId: input.context.client?.id ?? null,
+        contactName: this.pixWhatsAppContactName(input.context),
+        phone: input.context.phone,
+        phoneNormalized: input.context.phone,
+        status: 'OPEN',
+        unreadCount: 0,
+      },
+    });
+  }
+
+  private async updatePixWhatsAppConversationPreview(
+    tx: Prisma.TransactionClient,
+    conversationId: string,
+    input: {
+      dispatch: MessageDispatch;
+      template: PixWhatsAppTemplateSnapshot;
+    },
+    message: Pick<WhatsAppMessage, 'sentAt' | 'text'>,
+  ) {
+    await tx.whatsAppConversation.update({
+      where: { id: conversationId },
+      data: {
+        lastMessageAt: message.sentAt ?? input.dispatch.sentAt ?? new Date(),
+        lastMessagePreview: this.conversationLastMessagePreview('TEXT', {
+          text: message.text ?? input.template.body,
+        }),
+      },
+    });
+  }
+
+  private pixWhatsAppContactName(context: PixWhatsAppContext) {
+    if (context.kind === 'MANUAL_CHARGE') {
+      return context.receivable.payerName ?? context.client?.name ?? null;
+    }
+
+    return context.client.name;
+  }
+
+  private pixWhatsAppConversationText(input: {
+    context: PixWhatsAppContext;
+    template: PixWhatsAppTemplateSnapshot;
+  }) {
+    return ['PIX', input.template.body].join('\n').trim();
+  }
+
+  private pixWhatsAppRawMetadataUpdate(
+    current: Prisma.JsonValue | null,
+    input: {
+      context: PixWhatsAppContext;
+      dispatch: MessageDispatch;
+      intent: PixPaymentIntentForWhatsApp;
+      template: PixWhatsAppTemplateSnapshot;
+    },
+  ): Pick<Prisma.WhatsAppMessageUncheckedUpdateInput, 'rawMetadata'> {
+    const currentMetadata = this.rawMetadataObject(current);
+
+    return {
+      rawMetadata: {
+        ...currentMetadata,
+        ...this.buildPixWhatsAppRawMetadata(input),
+      },
+    };
+  }
+
+  private buildPixWhatsAppRawMetadata(input: {
+    context: PixWhatsAppContext;
+    dispatch: MessageDispatch;
+    intent: PixPaymentIntentForWhatsApp;
+    template: PixWhatsAppTemplateSnapshot;
+  }) {
+    return {
+      source: 'pix_whatsapp_send',
+      originalType: 'buttons',
+      isFromMe: true,
+      paymentIntentId: input.intent.id,
+      messageDispatchId: input.dispatch.id,
+      paymentProvider: input.intent.provider,
+      providerTransactionId: input.intent.providerTransactionId,
+      amount: input.intent.amount.toString(),
+      pixContext: input.context.kind,
+      template: {
+        title: input.template.title,
+        body: input.template.body,
+        button: {
+          name: input.template.button.name,
+          displayText: input.template.button.buttonParamsJson.display_text ?? null,
+        },
+      },
+      ...input.context.metadata,
+    } as Prisma.InputJsonObject;
   }
 
   private async buildPixWhatsAppContext(

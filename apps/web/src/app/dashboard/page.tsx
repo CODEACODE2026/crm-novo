@@ -91,6 +91,7 @@ import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
 import { FinanceClientAutocomplete } from '../../components/clients/finance-client-autocomplete';
 import { WhatsAppInbox } from '../../components/whatsapp/WhatsAppInbox';
+import { buildDashboardLocationPath } from './dashboard-location';
 import {
   formatUnreadBadge,
   useWhatsAppRealtimeManager,
@@ -420,25 +421,11 @@ function replaceDashboardQuery(params: Record<string, string | null | undefined>
   window.history.replaceState(null, '', `${url.pathname}${query ? `?${query}` : ''}`);
 }
 
-function buildExactDashboardQueryPath(
-  pathname: string,
-  params: Record<string, string | null | undefined>,
-) {
-  const nextParams = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === null || value === undefined || value === '') return;
-    nextParams.set(key, value);
-  });
-
-  const query = nextParams.toString();
-  return `${pathname}${query ? `?${query}` : ''}`;
-}
-
-function replaceDashboardQueryExactly(params: Record<string, string | null | undefined>) {
+function replaceDashboardLocation(location: Parameters<typeof buildDashboardLocationPath>[1]) {
   if (typeof window === 'undefined') return;
 
   const url = new URL(window.location.href);
-  window.history.replaceState(null, '', buildExactDashboardQueryPath(url.pathname, params));
+  window.history.replaceState(null, '', buildDashboardLocationPath(url.pathname, location));
 }
 
 function setWhatsAppReceivableQuery({
@@ -465,11 +452,14 @@ function setWhatsAppReceivableQuery({
   });
 }
 
-function setWhatsAppRestoreQuery(context: WhatsAppReturnContext) {
-  replaceDashboardQueryExactly({
+function setWhatsAppConversationQuery(context: {
+  contactPanelOpen?: boolean;
+  conversationId: string;
+}) {
+  replaceDashboardLocation({
     view: 'conversations',
     conversationId: context.conversationId,
-    contactPanel: context.contactPanelOpen ? 'open' : null,
+    ...(context.contactPanelOpen ? { contactPanelOpen: true } : {}),
   });
 }
 
@@ -794,6 +784,15 @@ export default function DashboardPage() {
     resetClientListState();
   }
 
+  const handleWhatsAppConversationLocationChange = useCallback(
+    (context: { contactPanelOpen?: boolean; conversationId: string }) => {
+      setClientDetailTabRequest(null);
+      setSelectedClient(null);
+      setWhatsAppConversationQuery(context);
+    },
+    [],
+  );
+
   function handlePrimaryNavigation(nextView: View) {
     if (nextView === 'clients') {
       resetClientModuleState();
@@ -817,7 +816,7 @@ export default function DashboardPage() {
     });
     setClientDetailTabRequest(null);
     setSelectedClient(null);
-    setWhatsAppRestoreQuery(context);
+    setWhatsAppConversationQuery(context);
     setView('conversations');
   }
 
@@ -1185,6 +1184,7 @@ export default function DashboardPage() {
             restoreRequest={whatsAppRestoreRequest}
             onSummaryChange={whatsappRealtime.setSummary}
             onSummaryRefreshRequest={whatsappRealtime.refreshSummary}
+            onConversationLocationChange={handleWhatsAppConversationLocationChange}
             onOpenClient={async (clientId, options) => {
               const client = await getClient(clientId);
               setSelectedClient(client);

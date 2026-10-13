@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { buildExactDashboardQueryPath } from './dashboard-location';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
@@ -21,18 +22,6 @@ const clientDetailMobileSource = stylesSource.slice(
 const clientDetailCompactSource = stylesSource.slice(
   stylesSource.lastIndexOf('@media (max-width: 480px)'),
 );
-const exactQueryPathBuilderSource = dashboardSource.slice(
-  dashboardSource.indexOf('function buildExactDashboardQueryPath'),
-  dashboardSource.indexOf('function replaceDashboardQueryExactly'),
-);
-const exactQueryPathBuilderJs = exactQueryPathBuilderSource.replace(
-  /function buildExactDashboardQueryPath\(\s*pathname: string,\s*params: Record<string, string \| null \| undefined>,\s*\)/,
-  'function buildExactDashboardQueryPath(pathname, params)',
-);
-// eslint-disable-next-line @typescript-eslint/no-implied-eval, @typescript-eslint/no-unsafe-call
-const buildExactDashboardQueryPath = Function(
-  `${exactQueryPathBuilderJs}; return buildExactDashboardQueryPath;`,
-)() as (pathname: string, params: Record<string, string | null | undefined>) => string;
 
 describe('client reference presentation source', () => {
   it('renders create and edit reference through the central modal only', () => {
@@ -211,7 +200,7 @@ describe('client reference presentation source', () => {
   it('preserves WhatsApp return context when opening a reference receivable', () => {
     expect(dashboardSource).toContain('type WhatsAppReturnContext');
     expect(dashboardSource).toContain('setWhatsAppReceivableQuery({');
-    expect(dashboardSource).toContain('function replaceDashboardQueryExactly');
+    expect(dashboardSource).toContain('function setWhatsAppConversationQuery');
     expect(dashboardSource).toContain("returnView: 'conversations'");
     expect(dashboardSource).toContain('returnConversationId: conversationId');
     expect(dashboardSource).toContain("returnContactPanel: contactPanelOpen ? 'open' : null");
@@ -228,20 +217,28 @@ describe('client reference presentation source', () => {
 
   it('cleans WhatsApp billing context atomically after returning to the inbox', () => {
     const restoreQuerySource = dashboardSource.slice(
-      dashboardSource.indexOf('function setWhatsAppRestoreQuery'),
+      dashboardSource.indexOf('function setWhatsAppConversationQuery'),
       dashboardSource.indexOf('function clearWhatsAppRestoreQuery'),
     );
 
-    expect(restoreQuerySource).toContain('replaceDashboardQueryExactly({');
+    expect(restoreQuerySource).toContain('replaceDashboardLocation({');
     expect(restoreQuerySource).toContain("view: 'conversations'");
     expect(restoreQuerySource).toContain('conversationId: context.conversationId');
-    expect(restoreQuerySource).toContain("contactPanel: context.contactPanelOpen ? 'open' : null");
+    expect(restoreQuerySource).toContain(
+      '...(context.contactPanelOpen ? { contactPanelOpen: true } : {})',
+    );
     expect(restoreQuerySource).not.toContain('clientId');
     expect(restoreQuerySource).not.toContain('receivableId');
     expect(restoreQuerySource).not.toContain('tab');
     expect(restoreQuerySource).not.toContain('returnView');
     expect(restoreQuerySource).not.toContain('returnConversationId');
     expect(restoreQuerySource).not.toContain('returnContactPanel');
+  });
+
+  it('syncs the canonical conversation URL when the active inbox conversation changes', () => {
+    expect(dashboardSource).toContain('onConversationLocationChange={');
+    expect(dashboardSource).toContain('handleWhatsAppConversationLocationChange');
+    expect(dashboardSource).toContain('setWhatsAppConversationQuery(context)');
   });
 
   it('builds the final WhatsApp return URL from only the allowed params', () => {

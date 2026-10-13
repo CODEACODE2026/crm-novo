@@ -153,6 +153,11 @@ type ConversationRestoreRequest = {
   view: 'conversations';
 };
 
+type ConversationLocationContext = {
+  contactPanelOpen?: boolean;
+  conversationId: string;
+};
+
 const conversationsPageSize = 20;
 const conversationMessagesPageSize = 30;
 const conversationMessageSearchPageSize = 50;
@@ -278,11 +283,13 @@ const avatarClientCacheTtlMs = 55 * 60 * 1000;
 const avatarClientConcurrency = 4;
 
 export function WhatsAppInbox({
+  onConversationLocationChange,
   onOpenClient,
   onSummaryChange,
   onSummaryRefreshRequest,
   restoreRequest,
 }: {
+  onConversationLocationChange: (context: ConversationLocationContext) => void;
   onOpenClient: (clientId: string, options?: ConversationOpenClientOptions) => Promise<void>;
   onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
   onSummaryRefreshRequest: () => Promise<WhatsAppConversationSummary | null>;
@@ -1523,6 +1530,15 @@ export function WhatsAppInbox({
     setGlobalActiveConversationId(selectedConversation?.id ?? null);
     return () => setGlobalActiveConversationId(null);
   }, [selectedConversation, setGlobalActiveConversationId]);
+
+  useEffect(() => {
+    if (!selectedConversation?.id) return;
+
+    onConversationLocationChange({
+      contactPanelOpen,
+      conversationId: selectedConversation.id,
+    });
+  }, [contactPanelOpen, onConversationLocationChange, selectedConversation?.id]);
 
   useEffect(() => {
     const scheduleVisibleActiveConversationRead = () => {

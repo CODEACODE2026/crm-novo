@@ -306,6 +306,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain("tab: 'receivables'");
     expect(whatsAppInboxSource).toContain('if (!request?.conversationId) return undefined');
     expect(whatsAppInboxSource).toContain('openContactPanel: restoreContactPanelOpen');
+    expect(whatsAppInboxSource).toContain('onConversationLocationChange({');
+    expect(whatsAppInboxSource).toContain('conversationId: selectedConversation.id');
     expect(whatsAppInboxSource).toContain('Abrir cliente');
     expect(globalStylesSource).toContain('.conversation-contact-drawer');
     expect(globalStylesSource).toContain('.conversation-reference-card');

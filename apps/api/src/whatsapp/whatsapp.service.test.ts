@@ -3271,6 +3271,397 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('reuses an existing PIX conversation when only the Brazil 9th digit variant differs', async () => {
+    const legacyConversation = conversation({
+      id: 'legacy-mobile-conversation-id',
+      phone: '554499999999',
+      phoneNormalized: '554499999999',
+    });
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([legacyConversation]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(prisma.whatsAppConversation.findUnique).toHaveBeenCalledWith({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: connection().id,
+          phoneNormalized: '5544999999999',
+        },
+      },
+    });
+    expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith({
+      where: {
+        whatsAppConnectionId: connection().id,
+        phoneNormalized: { in: ['554499999999'] },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    });
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'legacy-mobile-conversation-id',
+          whatsAppConnectionId: connection().id,
+        }),
+      }),
+    );
+  });
+
+  it('normalizes a legacy PIX phone and prioritizes an exact canonical conversation', async () => {
+    const canonicalConversation = conversation({
+      id: 'canonical-pix-conversation-id',
+      phone: '5544999999999',
+      phoneNormalized: '5544999999999',
+    });
+    const findMany = vi.fn().mockResolvedValue([]);
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'payment-intent-id',
+            receivableId: 'receivable-id',
+            paymentGroupId: null,
+            provider: 'FASTFLOW',
+            providerTransactionId: 'provider-transaction-id',
+            externalStatus: 'WAITING_PAYMENT',
+            externalDepixId: null,
+            blockchainTxId: null,
+            status: 'WAITING_PAYMENT',
+            amount: new Prisma.Decimal(30),
+            pixCopyPaste: 'PIX-COPY-PASTE-CURRENT',
+            qrCodeData: 'data:image/png;base64,abc',
+            expiresAt: new Date('2026-09-12T00:00:00.000Z'),
+            paidAt: null,
+            lastSyncAt: now,
+            failureCode: null,
+            failureMessage: null,
+            createdAt: now,
+            updatedAt: now,
+            receivable: {
+              id: 'receivable-id',
+              clientId: client().id,
+              clientReferenceId: clientReference().id,
+              purpose: 'INITIAL_ACTIVATION',
+              renewalId: null,
+              description: 'Cobranca inicial de ativacao - Mensal',
+              amount: new Prisma.Decimal(30),
+              dueDate: now,
+              status: 'PENDENTE',
+              paidAt: null,
+              canceledAt: null,
+              cancelReason: null,
+              createdAt: now,
+              updatedAt: now,
+              client: client({ phoneNormalized: '554499999999' }),
+              clientReference: clientReference(),
+            },
+          }),
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'payment-intent-id',
+            receivableId: 'receivable-id',
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(canonicalConversation),
+          findFirst: vi.fn(),
+          findMany,
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(canonicalConversation),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(prisma.whatsAppConversation.findUnique).toHaveBeenCalledWith({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: connection().id,
+          phoneNormalized: '5544999999999',
+        },
+      },
+    });
+    expect(findMany).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'canonical-pix-conversation-id',
+        }),
+      }),
+    );
+  });
+
+  it('reuses an exact existing PIX conversation without checking aliases or creating another chat', async () => {
+    const linkedConversation = conversation({
+      id: 'exact-pix-conversation-id',
+      clientId: client().id,
+    });
+    const findFirst = vi.fn();
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(linkedConversation),
+          findFirst,
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(linkedConversation),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(prisma.whatsAppConversation.findUnique).toHaveBeenCalledWith({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: connection().id,
+          phoneNormalized: '5544999999999',
+        },
+      },
+    });
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'exact-pix-conversation-id',
+        }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'exact-pix-conversation-id' },
+      }),
+    );
+  });
+
+  it('creates exactly one PIX conversation for a truly new contact on the active connection', async () => {
+    const newConversation = conversation({
+      id: 'new-pix-conversation-id',
+      phone: '5544999999999',
+      phoneNormalized: '5544999999999',
+    });
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(newConversation),
+          update: vi.fn().mockResolvedValue(newConversation),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(prisma.whatsAppConversation.create).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppConversation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          whatsAppConnectionId: connection().id,
+          phone: '5544999999999',
+          phoneNormalized: '5544999999999',
+          unreadCount: 0,
+        }),
+      }),
+    );
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'new-pix-conversation-id',
+          direction: 'OUTBOUND',
+        }),
+      }),
+    );
+  });
+
+  it('keeps PIX conversation lookup isolated to the active WhatsApp connection', async () => {
+    const activeConnection = connection({
+      id: 'connection-a',
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const sameConnectionConversation = conversation({
+      id: 'connection-a-conversation-id',
+      whatsAppConnectionId: activeConnection.id,
+      phone: '554499999999',
+      phoneNormalized: '554499999999',
+    });
+    const findMany = vi.fn(
+      (args: { where?: { whatsAppConnectionId?: string; phoneNormalized?: { in?: string[] } } }) =>
+        Promise.resolve(
+          args.where?.whatsAppConnectionId === activeConnection.id &&
+            args.where.phoneNormalized?.in?.includes('554499999999')
+            ? [sameConnectionConversation]
+            : [],
+        ),
+    );
+    const { service, prisma } = serviceFactory({
+      currentConnection: activeConnection,
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn(),
+          findMany,
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(sameConnectionConversation),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        whatsAppConnectionId: activeConnection.id,
+        phoneNormalized: { in: ['554499999999'] },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    });
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'connection-a-conversation-id',
+          whatsAppConnectionId: activeConnection.id,
+        }),
+      }),
+    );
+    expect(
+      JSON.stringify((prisma.whatsAppMessage.create as MockWithCalls).mock.calls),
+    ).not.toContain('connection-b-conversation-id');
+  });
+
+  it('chooses a deterministic linked PIX alias when multiple equivalent conversations already exist', async () => {
+    const unlinkedRecent = conversation({
+      id: 'alias-unlinked-recent',
+      phone: '554499999999',
+      phoneNormalized: '554499999999',
+      clientId: null,
+      updatedAt: new Date('2026-10-13T12:00:00.000Z'),
+    });
+    const linkedOlder = conversation({
+      id: 'alias-linked-older',
+      phone: '554499999999',
+      phoneNormalized: '554499999999',
+      clientId: client().id,
+      updatedAt: new Date('2026-10-12T12:00:00.000Z'),
+    });
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([unlinkedRecent, linkedOlder]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(linkedOlder),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: 'alias-linked-older',
+        }),
+      }),
+    );
+  });
+
+  it('does not duplicate PIX dispatch, message or conversation on payment intent retry', async () => {
+    const sentDispatch = dispatch({
+      status: 'SENT',
+      requestId: 'pix-whatsapp:payment-intent-id',
+      idempotencyKey: 'pix-whatsapp:payment-intent-id',
+      providerMessageId: 'provider-button-id',
+      sentAt: now,
+    });
+    const existingMessage = conversationMessage({
+      id: 'existing-pix-message-id',
+      conversationId: conversation().id,
+      whatsAppConnectionId: connection().id,
+      direction: 'OUTBOUND',
+      messageDispatchId: sentDispatch.id,
+      providerMessageId: sentDispatch.providerMessageId,
+      requestId: sentDispatch.requestId,
+      rawMetadata: { source: 'pix_whatsapp_send', paymentIntentId: 'payment-intent-id' },
+    });
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        messageDispatch: {
+          create: vi.fn().mockRejectedValue(duplicateError),
+          update: vi.fn(),
+          findMany: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(sentDispatch),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(existingMessage),
+          findFirst: vi.fn().mockResolvedValue(existingMessage),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(existingMessage),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(result).toMatchObject({ status: 'SENT', reused: true, idempotent: true });
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
   it('sends MANUAL_CHARGE for a registered client using payer snapshots instead of edited client data', async () => {
     const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),

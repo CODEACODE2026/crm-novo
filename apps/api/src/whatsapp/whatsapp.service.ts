@@ -4218,20 +4218,34 @@ export class WhatsAppService {
         continue;
       }
 
-      phones.add(phone);
-
-      const legacyVariant = brazilLegacyMobileVariant(phone);
-      if (legacyVariant) {
-        phones.add(legacyVariant);
-      }
-
-      const canonicalVariant = brazilCanonicalMobileToLegacyVariant(phone);
-      if (canonicalVariant) {
-        phones.add(canonicalVariant);
-      }
+      this.brazilPhoneMatchingCandidates(phone).forEach((value) => phones.add(value));
     }
 
     return [...phones];
+  }
+
+  private brazilPhoneMatchingCandidates(phoneNormalized: string) {
+    const normalized = this.tryNormalizePhone(phoneNormalized);
+    if (!normalized) {
+      return [];
+    }
+
+    const candidates = new Set<string>([normalized]);
+    const seedPhones = new Set([phoneNormalized, normalized]);
+
+    for (const seedPhone of seedPhones) {
+      const legacyVariant = brazilLegacyMobileVariant(seedPhone);
+      if (legacyVariant) {
+        candidates.add(legacyVariant);
+      }
+
+      const canonicalVariant = brazilCanonicalMobileToLegacyVariant(seedPhone);
+      if (canonicalVariant) {
+        candidates.add(canonicalVariant);
+      }
+    }
+
+    return [...candidates];
   }
 
   private async findConversationIdForChatPresenceLid(
@@ -5856,14 +5870,11 @@ export class WhatsAppService {
       context: PixWhatsAppContext;
     },
   ) {
-    const existing = await tx.whatsAppConversation.findUnique({
-      where: {
-        whatsAppConnectionId_phoneNormalized: {
-          whatsAppConnectionId: input.connection.id,
-          phoneNormalized: input.context.phone,
-        },
-      },
-    });
+    const existing = await this.findConversationByBrazilPhoneCandidates(
+      tx,
+      input.connection.id,
+      input.context.phone,
+    );
 
     if (existing) {
       return existing;
@@ -5883,6 +5894,61 @@ export class WhatsAppService {
         unreadCount: 0,
       },
     });
+  }
+
+  private async findConversationByBrazilPhoneCandidates(
+    tx: Prisma.TransactionClient,
+    whatsAppConnectionId: string,
+    phoneNormalized: string,
+  ) {
+    const exact = await tx.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId,
+          phoneNormalized,
+        },
+      },
+    });
+
+    if (exact) {
+      return exact;
+    }
+
+    const aliases = this.brazilPhoneMatchingCandidates(phoneNormalized).filter(
+      (candidate) => candidate !== phoneNormalized,
+    );
+
+    if (!aliases.length) {
+      return null;
+    }
+
+    const matches = await tx.whatsAppConversation.findMany({
+      where: {
+        whatsAppConnectionId,
+        phoneNormalized: { in: aliases },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    });
+
+    return this.pickBestEquivalentConversation(matches);
+  }
+
+  private pickBestEquivalentConversation(conversations: WhatsAppConversation[]) {
+    return (
+      [...conversations].sort((left, right) => {
+        const clientLinkPriority = Number(Boolean(right.clientId)) - Number(Boolean(left.clientId));
+        if (clientLinkPriority !== 0) {
+          return clientLinkPriority;
+        }
+
+        const updatedAtPriority = right.updatedAt.getTime() - left.updatedAt.getTime();
+        if (updatedAtPriority !== 0) {
+          return updatedAtPriority;
+        }
+
+        return left.id.localeCompare(right.id);
+      })[0] ?? null
+    );
   }
 
   private async updatePixWhatsAppConversationPreview(

@@ -8399,6 +8399,70 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(result.items[0])).not.toContain('https://mmg.whatsapp.net/image');
   });
 
+  it('exposes only safe PIX context for CRM PIX conversation messages', async () => {
+    const pixMessage = conversationMessage({
+      id: 'message-pix',
+      direction: 'OUTBOUND',
+      isFromMe: true,
+      type: 'TEXT',
+      text: 'PIX\nValor: R$ 30,00',
+      rawMetadata: {
+        source: 'pix_whatsapp_send',
+        paymentIntentId: 'payment-intent-id',
+        messageDispatchId: dispatch().id,
+        amount: '30.00',
+        providerTransactionId: 'provider-transaction-secret',
+        template: {
+          button: {
+            displayText: 'Copiar Chave PIX',
+            copy_code: 'PIX-COPY-PASTE-CURRENT',
+          },
+        },
+      },
+    });
+    const plainPixText = conversationMessage({
+      id: 'message-plain',
+      direction: 'OUTBOUND',
+      isFromMe: true,
+      type: 'TEXT',
+      text: 'PIX aqui e texto normal',
+      rawMetadata: null,
+    });
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: conversation().id }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([plainPixText, pixMessage]),
+          count: vi.fn().mockResolvedValue(2),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const result = await service.listConversationMessages(conversation().id, { page: 1, limit: 2 });
+
+    expect(result.items[0]).toMatchObject({
+      id: 'message-pix',
+      pixContext: {
+        paymentIntentId: 'payment-intent-id',
+        amount: '30.00',
+        buttonLabel: 'Copiar Chave PIX',
+      },
+    });
+    expect(result.items[1]).toMatchObject({ id: 'message-plain', pixContext: null });
+    expect(result.items[0]).not.toHaveProperty('rawMetadata');
+    expect(JSON.stringify(result.items[0])).not.toContain('PIX-COPY-PASTE-CURRENT');
+    expect(JSON.stringify(result.items[0])).not.toContain('provider-transaction-secret');
+  });
+
   it('loads older conversation messages with a stable createdAt and id cursor after new realtime inserts', async () => {
     const message100 = conversationMessage({
       id: 'message-100',

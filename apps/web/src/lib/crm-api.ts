@@ -309,6 +309,14 @@ export interface PixWhatsAppSendResult {
   idempotent?: boolean;
 }
 
+export interface PaymentIntentPixCopyResult {
+  available: boolean;
+  pixCopyPaste: string | null;
+  status: PaymentIntentStatus;
+  expiresAt: string | null;
+  isExpired: boolean;
+}
+
 export interface PixReconciliationPreview {
   adoptable: boolean;
   provider: PaymentProviderCode;
@@ -767,6 +775,11 @@ export interface WhatsAppConversationMessage {
   mediaAvailable: boolean;
   retryAction: 'RETRY' | 'SELECT_FILE_AGAIN' | 'RECORD_AGAIN' | null;
   messageDispatchId: string | null;
+  pixContext?: {
+    paymentIntentId: string;
+    amount: string | null;
+    buttonLabel: string;
+  } | null;
   createdAt: string;
 }
 
@@ -2355,6 +2368,10 @@ export function getPaymentIntentsSummary(filters: { clientId: string }) {
   params.set('clientId', filters.clientId);
 
   return apiFetch<PaymentIntentsSummary>(`/payment-intents/summary?${params.toString()}`);
+}
+
+export function getPaymentIntentPixCopy(id: string) {
+  return apiFetch<PaymentIntentPixCopyResult>(`/payment-intents/${id}/pix-copy`);
 }
 
 export function syncPaymentIntent(id: string) {

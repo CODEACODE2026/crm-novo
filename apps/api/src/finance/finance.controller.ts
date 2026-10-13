@@ -202,6 +202,11 @@ export class FinanceController {
     return this.financeService.paymentIntentsSummary(query);
   }
 
+  @Get('payment-intents/:id/pix-copy')
+  resolvePaymentIntentPixCopy(@Param('id') id: string) {
+    return this.financeService.resolvePaymentIntentPixCopy(id);
+  }
+
   @Post('payment-intents/:id/sync')
   syncPaymentIntent(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
     return this.financeService.syncPaymentIntent(id, request.user.id);

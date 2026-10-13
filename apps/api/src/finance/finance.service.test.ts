@@ -7489,6 +7489,147 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(0);
   });
 
+  it('resolves a payment intent PIX copy only when the current intent is usable', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents.at(0)!, {
+      expiresAt: new Date('2099-10-10T00:30:00.000Z'),
+      pixCopyPaste: 'MOCK-PIX-COPY',
+      status: 'WAITING_PAYMENT',
+    });
+
+    await expect(service.resolvePaymentIntentPixCopy(intent.id)).resolves.toEqual({
+      available: true,
+      pixCopyPaste: 'MOCK-PIX-COPY',
+      status: 'WAITING_PAYMENT',
+      expiresAt: '2099-10-10T00:30:00.000Z',
+      isExpired: false,
+    });
+    expect(fake.provider.getPixStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not expose a PIX copy for an intent without a CRM receivable or payment group scope', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    fake.paymentIntents.push({
+      id: 'orphan-intent',
+      receivableId: null,
+      paymentGroupId: null,
+      provider: 'MOCK',
+      providerTransactionId: 'mock-orphan',
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('50.00'),
+      pixCopyPaste: 'ORPHAN-PIX-COPY',
+      qrCodeData: null,
+      expiresAt: new Date('2099-10-10T00:30:00.000Z'),
+      paidAt: null,
+      lastSyncAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: new Date('2026-10-10T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-10T00:00:00.000Z'),
+    });
+
+    await expect(service.resolvePaymentIntentPixCopy('orphan-intent')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(JSON.stringify(fake.paymentIntents.at(-1))).toContain('ORPHAN-PIX-COPY');
+    expect(fake.provider.getPixStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not expose a PIX copy when the intent is expired or superseded', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents.at(0)!, {
+      expiresAt: new Date('2099-10-10T00:30:00.000Z'),
+      pixCopyPaste: 'MOCK-PIX-COPY',
+      status: 'SUPERSEDED',
+    });
+
+    await expect(service.resolvePaymentIntentPixCopy(intent.id)).resolves.toEqual({
+      available: false,
+      pixCopyPaste: null,
+      status: 'SUPERSEDED',
+      expiresAt: '2099-10-10T00:30:00.000Z',
+      isExpired: true,
+    });
+  });
+
+  it('does not expose a PIX copy when the intent is canceled, terminal, or missing copy data', async () => {
+    const scenarios = [
+      { status: 'CANCELED', pixCopyPaste: 'MOCK-PIX-COPY', isExpired: true },
+      { status: 'PAID', pixCopyPaste: 'MOCK-PIX-COPY', isExpired: false },
+      { status: 'WAITING_PAYMENT', pixCopyPaste: null, isExpired: false },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const fake = createFinancePrisma();
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        {} as never,
+        fake.config as never,
+      );
+      const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+      Object.assign(fake.paymentIntents.at(0)!, {
+        expiresAt: new Date('2099-10-10T00:30:00.000Z'),
+        pixCopyPaste: scenario.pixCopyPaste,
+        status: scenario.status,
+      });
+
+      await expect(service.resolvePaymentIntentPixCopy(intent.id)).resolves.toMatchObject({
+        available: false,
+        pixCopyPaste: null,
+        status: scenario.status,
+        isExpired: scenario.isExpired,
+      });
+    }
+  });
+
+  it('resolves PIX copy without mutating or syncing the payment intent', async () => {
+    const fake = createFinancePrisma();
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+    const update = vi.spyOn(fake.prisma.paymentIntent, 'update');
+    const updateMany = vi.spyOn(fake.prisma.paymentIntent, 'updateMany');
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents.at(0)!, {
+      expiresAt: new Date('2099-10-10T00:30:00.000Z'),
+      pixCopyPaste: 'MOCK-PIX-COPY',
+      status: 'WAITING_PAYMENT',
+    });
+    update.mockClear();
+    updateMany.mockClear();
+
+    await service.resolvePaymentIntentPixCopy(intent.id);
+
+    expect(update).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(fake.provider.getPixStatus).not.toHaveBeenCalled();
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves local state when reconciliation preview provider credentials are rejected', async () => {
     const fake = createFinancePrisma();
     fake.receivable.amount = new Prisma.Decimal('30.00');

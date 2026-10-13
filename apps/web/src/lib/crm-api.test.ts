@@ -18,6 +18,7 @@ import {
   formatDate,
   getBillingDispatchSummary,
   getFinancialSummary,
+  getPaymentIntentPixCopy,
   getPaymentIntentsSummary,
   getReferralSummary,
   getReceivable,
@@ -235,6 +236,31 @@ describe('CRM UI formatters', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/payment-intents/intent-1/send-whatsapp'),
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('gets a PIX copy payload by payment intent without mutating it', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          available: true,
+          pixCopyPaste: 'pix-copy',
+          status: 'WAITING_PAYMENT',
+          expiresAt: '2026-10-14T00:00:00.000Z',
+          isExpired: false,
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getPaymentIntentPixCopy('intent-1')).resolves.toMatchObject({
+      available: true,
+      pixCopyPaste: 'pix-copy',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/payment-intents/intent-1/pix-copy'),
+      expect.objectContaining({ credentials: 'include' }),
     );
   });
 

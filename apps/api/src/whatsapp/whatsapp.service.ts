@@ -6580,6 +6580,7 @@ export class WhatsAppService {
 
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {
     const deleted = Boolean(message.deletedAt || message.deletedForEveryone);
+    const pixContext = deleted ? null : this.presentPixConversationContext(message);
 
     return {
       id: message.id,
@@ -6625,7 +6626,46 @@ export class WhatsAppService {
       mediaAvailable: deleted ? false : this.hasAvailableMedia(message),
       retryAction: this.conversationMessageRetryAction(message),
       messageDispatchId: message.messageDispatchId,
+      pixContext,
       createdAt: message.createdAt,
+    };
+  }
+
+  private presentPixConversationContext(message: WhatsAppConversationMessageForPresenter) {
+    if (message.direction !== 'OUTBOUND' || !message.isFromMe || message.type !== 'TEXT') {
+      return null;
+    }
+
+    const metadata = this.rawMetadataObject(message.rawMetadata);
+
+    if (metadata.source !== 'pix_whatsapp_send') {
+      return null;
+    }
+
+    const paymentIntentId =
+      typeof metadata.paymentIntentId === 'string' && metadata.paymentIntentId.trim()
+        ? metadata.paymentIntentId.trim()
+        : null;
+
+    if (!paymentIntentId) {
+      return null;
+    }
+
+    const amount =
+      typeof metadata.amount === 'string' || typeof metadata.amount === 'number'
+        ? String(metadata.amount)
+        : null;
+    const template = this.asRecord(metadata.template);
+    const button = this.asRecord(template?.button);
+    const buttonLabel =
+      typeof button?.displayText === 'string' && button.displayText.trim()
+        ? button.displayText.trim()
+        : 'Copiar Chave PIX';
+
+    return {
+      paymentIntentId,
+      amount,
+      buttonLabel,
     };
   }
 

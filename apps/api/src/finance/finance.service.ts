@@ -1388,6 +1388,27 @@ export class FinanceService {
     return intents.map((intent) => this.presentPaymentIntent(intent));
   }
 
+  async resolvePaymentIntentPixCopy(id: string) {
+    const intent = await this.prisma.paymentIntent.findUnique({ where: { id } });
+
+    if (!intent || !this.hasCrmPaymentIntentScope(intent)) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada.');
+    }
+
+    const isExpired = this.isPaymentIntentPixExpired(intent);
+    const available = Boolean(
+      intent.status === 'WAITING_PAYMENT' && intent.pixCopyPaste && !isExpired,
+    );
+
+    return {
+      available,
+      pixCopyPaste: available ? intent.pixCopyPaste : null,
+      status: intent.status,
+      expiresAt: intent.expiresAt?.toISOString() ?? null,
+      isExpired,
+    };
+  }
+
   async previewReceivablePixReconciliation(
     receivableId: string,
     dto: ReconcileReceivablePixPreviewDto,
@@ -4421,6 +4442,22 @@ export class FinanceService {
       createdAt: intent.createdAt.toISOString(),
       updatedAt: intent.updatedAt.toISOString(),
     };
+  }
+
+  private isPaymentIntentPixExpired(intent: Prisma.PaymentIntentGetPayload<object>) {
+    if (
+      intent.status === 'EXPIRED' ||
+      intent.status === 'SUPERSEDED' ||
+      intent.status === 'CANCELED'
+    ) {
+      return true;
+    }
+
+    return Boolean(intent.expiresAt && intent.expiresAt.getTime() <= Date.now());
+  }
+
+  private hasCrmPaymentIntentScope(intent: Prisma.PaymentIntentGetPayload<object>) {
+    return Boolean(intent.receivableId || intent.paymentGroupId);
   }
 
   private presentTransaction(transaction: TransactionWithRelations) {

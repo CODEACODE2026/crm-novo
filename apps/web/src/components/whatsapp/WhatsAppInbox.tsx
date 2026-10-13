@@ -396,12 +396,14 @@ export function stopConversationPixCopyEvent(
 export function WhatsAppInbox({
   onConversationLocationChange,
   onOpenClient,
+  onRestoreRequestConsumed,
   onSummaryChange,
   onSummaryRefreshRequest,
   restoreRequest,
 }: {
   onConversationLocationChange: (context: ConversationLocationContext) => void;
   onOpenClient: (clientId: string, options?: ConversationOpenClientOptions) => Promise<void>;
+  onRestoreRequestConsumed?: (sequence: number) => void;
   onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
   onSummaryRefreshRequest: () => Promise<WhatsAppConversationSummary | null>;
   restoreRequest?: ConversationRestoreRequest | null;
@@ -1318,6 +1320,7 @@ export function WhatsAppInbox({
     let active = true;
     const restoreConversationId = request.conversationId;
     const restoreContactPanelOpen = Boolean(request.contactPanelOpen);
+    const restoreSequence = request.sequence;
 
     async function restoreConversation() {
       const existingConversation =
@@ -1332,6 +1335,7 @@ export function WhatsAppInbox({
         await selectConversation(conversation, {
           openContactPanel: restoreContactPanelOpen,
         });
+        if (active) onRestoreRequestConsumed?.(restoreSequence);
       } catch (err) {
         if (active) {
           setMessagesError(conversationErrorMessage(err, 'Falha ao restaurar conversa.'));
@@ -1344,7 +1348,7 @@ export function WhatsAppInbox({
     return () => {
       active = false;
     };
-  }, [restoreRequest?.sequence]);
+  }, [onRestoreRequestConsumed, restoreRequest?.sequence]);
 
   useEffect(() => {
     void loadStartConversationConnections();

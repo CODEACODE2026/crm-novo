@@ -105,6 +105,43 @@ describe('dashboard location helpers', () => {
     expect(refreshParams.get('contactPanel')).toBeNull();
   });
 
+  it('keeps the drawer closed when returning to conversations after leaving the inbox', () => {
+    const returnedFromClients = buildDashboardLocationPath('/dashboard', {
+      conversationId: 'conversation-a',
+      view: 'conversations',
+    });
+
+    expect(returnedFromClients).toBe('/dashboard?view=conversations&conversationId=conversation-a');
+    expect(new URLSearchParams(returnedFromClients.split('?')[1]).get('contactPanel')).toBeNull();
+  });
+
+  it('drops contact panel params from non-conversation module URLs', () => {
+    expect(
+      buildDashboardLocationPath('/dashboard', {
+        clientId: 'client-a',
+        view: 'clients',
+      }),
+    ).toBe('/dashboard?view=clients&clientId=client-a');
+
+    expect(
+      buildExactDashboardQueryPath('/dashboard', {
+        view: 'finance',
+        contactPanel: null,
+        conversationId: null,
+        returnContactPanel: null,
+      }),
+    ).toBe('/dashboard?view=finance');
+
+    expect(
+      buildExactDashboardQueryPath('/dashboard', {
+        view: null,
+        contactPanel: null,
+        conversationId: null,
+        returnContactPanel: null,
+      }),
+    ).toBe('/dashboard');
+  });
+
   it('keeps conversations authoritative when a mixed financial query is manually provided', () => {
     const mixedParams = new URLSearchParams(
       'view=conversations&conversationId=conversation-b&clientId=client-a&receivableId=receivable-a&tab=receivables',

@@ -62,6 +62,15 @@ describe('NAVIGATION2 client module reset', () => {
     expect(primaryNavigationSource).toContain('setView(nextView);');
   });
 
+  it('drops transient WhatsApp drawer restore state when leaving conversations', () => {
+    expect(primaryNavigationSource).toContain(
+      "if (view === 'conversations' && nextView !== 'conversations')",
+    );
+    expect(primaryNavigationSource).toContain('setWhatsAppRestoreRequest(null);');
+    expect(primaryNavigationSource).toContain("if (nextView === 'clients')");
+    expect(primaryNavigationSource).toContain('navigateToClientList();');
+  });
+
   it('resets newly opened clients to overview without hijacking same-client tab navigation', () => {
     expect(clientsViewSource).toContain('const [detailTab, setDetailTab] = useState<');
     expect(clientsViewSource).toContain("setDetailTab('overview');");

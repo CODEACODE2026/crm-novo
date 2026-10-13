@@ -862,7 +862,15 @@ export default function DashboardPage() {
     setView('conversations');
   }, []);
 
+  const handleWhatsAppRestoreRequestConsumed = useCallback((sequence: number) => {
+    setWhatsAppRestoreRequest((current) => (current?.sequence === sequence ? null : current));
+  }, []);
+
   function handlePrimaryNavigation(nextView: View) {
+    if (view === 'conversations' && nextView !== 'conversations') {
+      setWhatsAppRestoreRequest(null);
+    }
+
     if (nextView === 'clients') {
       resetClientModuleState();
       navigateToClientList();
@@ -1272,6 +1280,7 @@ export default function DashboardPage() {
             onSummaryChange={whatsappRealtime.setSummary}
             onSummaryRefreshRequest={whatsappRealtime.refreshSummary}
             onConversationLocationChange={handleWhatsAppConversationLocationChange}
+            onRestoreRequestConsumed={handleWhatsAppRestoreRequestConsumed}
             onOpenClient={async (clientId, options) => {
               const originConversationId = currentLocationIsConversation()
                 ? new URLSearchParams(window.location.search).get('conversationId')?.trim()

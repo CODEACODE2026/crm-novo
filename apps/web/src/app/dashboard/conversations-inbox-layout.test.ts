@@ -79,6 +79,23 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversation-contact-drawer-backdrop');
   });
 
+  it('consumes one-shot contact drawer restores after billing returns to the inbox', () => {
+    expect(conversationsSource).toContain('onRestoreRequestConsumed');
+    expect(conversationsSource).toContain('onRestoreRequestConsumed?: (sequence: number) => void;');
+    expect(conversationsSource).toContain('const restoreSequence = request.sequence;');
+    expect(conversationsSource).toContain('openContactPanel: restoreContactPanelOpen');
+    expect(conversationsSource).toContain(
+      'if (active) onRestoreRequestConsumed?.(restoreSequence);',
+    );
+    expect(dashboardSource).toContain('const handleWhatsAppRestoreRequestConsumed = useCallback');
+    expect(dashboardSource).toContain(
+      'setWhatsAppRestoreRequest((current) => (current?.sequence === sequence ? null : current));',
+    );
+    expect(dashboardSource).toContain(
+      'onRestoreRequestConsumed={handleWhatsAppRestoreRequestConsumed}',
+    );
+  });
+
   it('renders search, initial filters, unread summary, and empty/error states', () => {
     expect(whatsappSearchSource).toContain('function ConversationSearch');
     expect(whatsappSearchSource).toContain('Buscar nome ou telefone');

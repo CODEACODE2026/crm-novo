@@ -53,7 +53,7 @@ import {
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
 import {
-  WHATSAPP_QUICK_REPLIES,
+  WHATSAPP_DEFAULT_QUICK_REPLIES,
   applyWhatsAppSlashQuickReply,
   applyWhatsAppQuickReply,
   filterWhatsAppQuickReplies,
@@ -1696,8 +1696,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     revokeObjectURL.mockRestore();
   });
 
-  it('defines editable local quick replies without backend or financial automation hooks', () => {
-    expect(WHATSAPP_QUICK_REPLIES).toEqual([
+  it('defines local fallback quick replies without financial automation hooks', () => {
+    expect(WHATSAPP_DEFAULT_QUICK_REPLIES).toEqual([
       {
         id: 'greeting',
         label: 'Saudação',
@@ -1736,8 +1736,20 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppQuickRepliesSource).not.toContain('dangerouslySetInnerHTML');
   });
 
+  it('loads quick replies from the API with loading, empty, and fallback states', () => {
+    expect(whatsAppInboxSource).toContain('listWhatsAppQuickReplies');
+    expect(whatsAppInboxSource).toContain('setQuickReplies(replies)');
+    expect(whatsAppInboxSource).toContain('setQuickReplies(WHATSAPP_DEFAULT_QUICK_REPLIES)');
+    expect(whatsAppInboxSource).toContain('Carregando respostas...');
+    expect(whatsAppInboxSource).toContain('Nenhuma resposta rápida disponível.');
+    expect(whatsAppInboxSource).toContain('quickRepliesError');
+    expect(whatsAppInboxSource).not.toContain(
+      'filterWhatsAppQuickReplies(WHATSAPP_DEFAULT_QUICK_REPLIES',
+    );
+  });
+
   it('filters and previews quick replies by label or text', () => {
-    const replies = [...WHATSAPP_QUICK_REPLIES];
+    const replies = [...WHATSAPP_DEFAULT_QUICK_REPLIES];
 
     expect(filterWhatsAppQuickReplies(replies, '')).toBe(replies);
     expect(filterWhatsAppQuickReplies(replies, 'pix').map((reply) => reply.id)).toEqual([
@@ -1746,7 +1758,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(filterWhatsAppQuickReplies(replies, 'ATUALIZAÇÃO').map((reply) => reply.id)).toEqual([
       'follow-up',
     ]);
-    expect(replies).toEqual(WHATSAPP_QUICK_REPLIES);
+    expect(replies).toEqual(WHATSAPP_DEFAULT_QUICK_REPLIES);
     expect(whatsAppQuickReplyPreview('Mensagem curta')).toBe('Mensagem curta');
     expect(whatsAppQuickReplyPreview('A'.repeat(70), 12)).toBe('AAAAAAAAA...');
     expect(whatsAppQuickReplyPreview('Linha 1\nLinha 2', 20)).toBe('Linha 1 Linha 2');

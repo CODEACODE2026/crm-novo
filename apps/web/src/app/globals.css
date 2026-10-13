@@ -4103,6 +4103,11 @@ a {
   padding: 12px;
 }
 
+.conversation-quick-reply-warning {
+  border-bottom: 1px solid var(--border);
+  color: var(--warning);
+}
+
 .conversation-composer label {
   min-width: 0;
 }
@@ -9325,6 +9330,7 @@ tbody tr:hover,
 
 .settings-v2-toolbar {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
 }
 
@@ -9726,6 +9732,108 @@ tbody tr:hover,
 .settings-template-variable-list div > span {
   color: var(--muted);
   font-size: 13px;
+}
+
+.settings-whatsapp-quick-replies {
+  align-content: start;
+}
+
+.settings-quick-reply-form {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.settings-quick-reply-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 140px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.settings-quick-reply-order-field input {
+  text-align: right;
+}
+
+.settings-quick-reply-form textarea {
+  min-height: 116px;
+  resize: vertical;
+}
+
+.settings-quick-reply-form-actions,
+.settings-quick-reply-actions,
+.settings-quick-reply-title-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-quick-reply-form-actions {
+  justify-content: flex-end;
+}
+
+.settings-quick-reply-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-quick-reply-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-quick-reply-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, auto) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.settings-quick-reply-item p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.settings-quick-reply-title-row {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.settings-quick-reply-title-row strong {
+  min-width: 0;
+}
+
+.settings-quick-reply-item dl {
+  margin: 0;
+}
+
+.settings-quick-reply-item dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.settings-quick-reply-item dd {
+  margin: 2px 0 0;
+  font-weight: 800;
+}
+
+.settings-quick-reply-actions {
+  justify-content: flex-end;
 }
 
 .payment-provider-grid {
@@ -12094,6 +12202,18 @@ tbody tr:hover,
   .settings-billing-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .settings-quick-reply-form-grid,
+  .settings-quick-reply-item {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-quick-reply-form-actions,
+  .settings-quick-reply-actions {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .settings-billing-subnav {

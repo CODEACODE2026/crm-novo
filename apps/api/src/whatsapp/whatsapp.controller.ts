@@ -11,6 +11,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Patch,
   Put,
   Query,
   Req,
@@ -30,6 +31,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { validateKiragoWebhookToken } from '../config/security';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
+import { CreateWhatsAppQuickReplyDto } from './dto/create-whatsapp-quick-reply.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
@@ -42,7 +44,9 @@ import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { SetWhatsAppConversationPresenceDto } from './dto/set-whatsapp-conversation-presence.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { UpdateWhatsAppMessageReactionDto } from './dto/update-whatsapp-message-reaction.dto';
+import { UpdateWhatsAppQuickReplyDto } from './dto/update-whatsapp-quick-reply.dto';
 import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
+import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
 
@@ -71,6 +75,8 @@ export class WhatsAppMulterExceptionFilter implements ExceptionFilter {
 export class WhatsAppController {
   constructor(
     @Inject(WhatsAppService) private readonly whatsAppService: WhatsAppService,
+    @Inject(WhatsAppQuickRepliesService)
+    private readonly quickRepliesService: WhatsAppQuickRepliesService,
     @Inject(WhatsAppRealtimeService) private readonly realtime: WhatsAppRealtimeService,
   ) {}
 
@@ -82,6 +88,29 @@ export class WhatsAppController {
   @Get('connections')
   listConnections() {
     return this.whatsAppService.listUsableConnections();
+  }
+
+  @Get('quick-replies')
+  listQuickReplies() {
+    return this.quickRepliesService.listActiveForInbox();
+  }
+
+  @Get('quick-replies/admin')
+  listQuickRepliesAdmin() {
+    return this.quickRepliesService.listAdmin();
+  }
+
+  @Post('quick-replies')
+  createQuickReply(@Body() dto: CreateWhatsAppQuickReplyDto) {
+    return this.quickRepliesService.create(dto);
+  }
+
+  @Patch('quick-replies/:id')
+  updateQuickReply(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateWhatsAppQuickReplyDto,
+  ) {
+    return this.quickRepliesService.update(id, dto);
   }
 
   @Post('connection')

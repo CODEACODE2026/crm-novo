@@ -136,8 +136,20 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       markConversationAsRead: vi.fn().mockResolvedValue({ unreadCount: 0 }),
       resolveConversation: vi.fn().mockResolvedValue({ status: 'RESOLVED' }),
     };
+    const quickReplies = {
+      listActiveForInbox: vi
+        .fn()
+        .mockResolvedValue([{ id: 'reply-id', label: 'PIX', text: 'Pix' }]),
+      listAdmin: vi.fn().mockResolvedValue([{ id: 'reply-id', label: 'PIX', text: 'Pix' }]),
+      create: vi.fn().mockResolvedValue({ id: 'reply-id', label: 'Novo', text: 'Texto' }),
+      update: vi.fn().mockResolvedValue({ id: 'reply-id', label: 'Editado', text: 'Texto' }),
+    };
     const realtime = { subscribe: vi.fn() };
-    const subject = new WhatsAppController(service as never, realtime as never);
+    const subject = new WhatsAppController(
+      service as never,
+      quickReplies as never,
+      realtime as never,
+    );
     const response = { setHeader: vi.fn() };
     const request = { on: vi.fn() };
 
@@ -145,6 +157,18 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       items: [],
     });
     await expect(subject.listConnections()).resolves.toEqual([{ id: 'connection-id' }]);
+    await expect(subject.listQuickReplies()).resolves.toEqual([
+      { id: 'reply-id', label: 'PIX', text: 'Pix' },
+    ]);
+    await expect(subject.listQuickRepliesAdmin()).resolves.toEqual([
+      { id: 'reply-id', label: 'PIX', text: 'Pix' },
+    ]);
+    await expect(
+      subject.createQuickReply({ label: 'Novo', text: 'Texto', isActive: true, sortOrder: 10 }),
+    ).resolves.toEqual({ id: 'reply-id', label: 'Novo', text: 'Texto' });
+    await expect(
+      subject.updateQuickReply('99999999-9999-4999-8999-999999999999', { isActive: false }),
+    ).resolves.toEqual({ id: 'reply-id', label: 'Editado', text: 'Texto' });
     await expect(subject.getConversation('conversation-id')).resolves.toEqual({
       id: 'conversation-id',
     });
@@ -229,6 +253,17 @@ describe('WhatsAppController conversation inbox endpoints', () => {
 
     expect(service.listConversations).toHaveBeenCalledWith({ page: 1, limit: 20 });
     expect(service.listUsableConnections).toHaveBeenCalledWith();
+    expect(quickReplies.listActiveForInbox).toHaveBeenCalledWith();
+    expect(quickReplies.listAdmin).toHaveBeenCalledWith();
+    expect(quickReplies.create).toHaveBeenCalledWith({
+      label: 'Novo',
+      text: 'Texto',
+      isActive: true,
+      sortOrder: 10,
+    });
+    expect(quickReplies.update).toHaveBeenCalledWith('99999999-9999-4999-8999-999999999999', {
+      isActive: false,
+    });
     expect(service.getConversation).toHaveBeenCalledWith('conversation-id');
     expect(service.listConversationMessages).toHaveBeenCalledWith('conversation-id', {
       page: 1,

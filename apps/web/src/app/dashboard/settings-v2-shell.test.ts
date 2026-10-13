@@ -16,11 +16,11 @@ const settingsViewSource = dashboardSource.slice(
 );
 const settingsPaymentsSource = dashboardSource.slice(
   dashboardSource.indexOf('function SettingsPaymentsPanel'),
-  dashboardSource.indexOf('function SettingsPlaceholderPanel'),
+  dashboardSource.indexOf('function SettingsFinancePanel'),
 );
 const settingsBillingSource = dashboardSource.slice(
   dashboardSource.indexOf('function SettingsBillingAutomationPanel'),
-  dashboardSource.indexOf('function SettingsPlaceholderPanel'),
+  dashboardSource.indexOf('function SettingsSystemPanel'),
 );
 const automationsSource = dashboardSource.slice(
   dashboardSource.indexOf('function AutomationsView'),
@@ -114,12 +114,13 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsPaymentsSource).toContain('deactivatePaymentProviderCredential(provider)');
   });
 
-  it('keeps SET1 sections as navigation summaries without moving operational CRUDs', () => {
+  it('keeps connection operations out of Settings while allowing scoped WhatsApp settings', () => {
     expect(settingsViewSource).toContain("activeSection === 'finance'");
     expect(settingsViewSource).toContain("activeSection === 'whatsapp'");
-    expect(settingsViewSource).toContain('actionLabel="Abrir WhatsApp"');
+    expect(settingsViewSource).toContain('<SettingsWhatsAppQuickRepliesPanel');
     expect(settingsViewSource).toContain("activeSection === 'billing'");
     expect(settingsViewSource).not.toContain('connectWhatsApp(');
+    expect(settingsViewSource).not.toContain('createWhatsAppConnection(');
   });
 
   it('centralizes BillingAutomationSettings in Configurações > Cobrança e automações', () => {
@@ -414,6 +415,24 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsViewSource).toContain('await deleteFinancialCategory(id);');
     expect(settingsSource).toContain('Abrir Financeiro operacional');
     expect(settingsViewSource).not.toContain('As categorias financeiras serão centralizadas aqui');
+  });
+
+  it('adds WhatsApp quick reply administration in Settings > WhatsApp', () => {
+    expect(settingsViewSource).toContain('const [quickReplies, setQuickReplies]');
+    expect(settingsViewSource).toContain('setQuickReplies(await listWhatsAppQuickRepliesAdmin())');
+    expect(settingsViewSource).toContain(
+      'await createWhatsAppQuickReply(payload as WhatsAppQuickReplyPayload);',
+    );
+    expect(settingsViewSource).toContain('await updateWhatsAppQuickReply(id, payload);');
+    expect(settingsSource).toContain('function SettingsWhatsAppQuickRepliesPanel');
+    expect(settingsSource).toContain('Respostas ativas aparecem no slash menu do Inbox.');
+    expect(settingsSource).toContain('Título');
+    expect(settingsSource).toContain('Mensagem');
+    expect(settingsSource).toContain('Ordem');
+    expect(settingsSource).toContain('Ativo');
+    expect(settingsSource).toContain('Desativar');
+    expect(stylesSource).toContain('.settings-quick-reply-form');
+    expect(stylesSource).toContain('.settings-quick-reply-item');
   });
 
   it('renders Sistema as a read-only health panel without exposing secrets', () => {

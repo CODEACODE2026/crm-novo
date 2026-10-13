@@ -317,6 +317,26 @@ export interface PaymentIntentPixCopyResult {
   isExpired: boolean;
 }
 
+export interface WhatsAppQuickReply {
+  id: string;
+  label: string;
+  text: string;
+}
+
+export interface WhatsAppQuickReplyAdmin extends WhatsAppQuickReply {
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WhatsAppQuickReplyPayload {
+  label: string;
+  text: string;
+  isActive?: boolean;
+  sortOrder?: number;
+}
+
 export interface PixReconciliationPreview {
   adoptable: boolean;
   provider: PaymentProviderCode;
@@ -2372,6 +2392,28 @@ export function getPaymentIntentsSummary(filters: { clientId: string }) {
 
 export function getPaymentIntentPixCopy(id: string) {
   return apiFetch<PaymentIntentPixCopyResult>(`/payment-intents/${id}/pix-copy`);
+}
+
+export function listWhatsAppQuickReplies() {
+  return apiFetch<WhatsAppQuickReply[]>('/whatsapp/quick-replies');
+}
+
+export function listWhatsAppQuickRepliesAdmin() {
+  return apiFetch<WhatsAppQuickReplyAdmin[]>('/whatsapp/quick-replies/admin');
+}
+
+export function createWhatsAppQuickReply(payload: WhatsAppQuickReplyPayload) {
+  return apiFetch<WhatsAppQuickReplyAdmin>('/whatsapp/quick-replies', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWhatsAppQuickReply(id: string, payload: Partial<WhatsAppQuickReplyPayload>) {
+  return apiFetch<WhatsAppQuickReplyAdmin>(`/whatsapp/quick-replies/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function syncPaymentIntent(id: string) {

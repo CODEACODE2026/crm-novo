@@ -68,6 +68,7 @@ import {
   formatDate,
   getClient,
   getPaymentIntentPixCopy,
+  listWhatsAppQuickReplies,
   getWhatsAppConversation,
   getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
@@ -113,6 +114,7 @@ import {
   type WhatsAppMessageSearchResult,
   type WhatsAppConversationStatus,
   type WhatsAppConversationSummary,
+  type WhatsAppQuickReply,
   type WhatsAppRealtimeEvent,
 } from '../../lib/crm-api';
 import {
@@ -124,12 +126,11 @@ import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
 import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
 import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
 import {
-  WHATSAPP_QUICK_REPLIES,
+  WHATSAPP_DEFAULT_QUICK_REPLIES,
   applyWhatsAppSlashQuickReply,
   filterWhatsAppQuickReplies,
   whatsAppQuickReplySlashQuery,
   whatsAppQuickReplyPreview,
-  type WhatsAppQuickReply,
 } from './whatsapp-quick-replies';
 
 type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
@@ -428,6 +429,9 @@ export function WhatsAppInbox({
   );
   const [messages, setMessages] = useState<WhatsAppConversationMessage[]>([]);
   const [whatsAppConnections, setWhatsAppConnections] = useState<WhatsAppConnection[]>([]);
+  const [quickReplies, setQuickReplies] = useState<WhatsAppQuickReply[]>([]);
+  const [quickRepliesLoading, setQuickRepliesLoading] = useState(true);
+  const [quickRepliesError, setQuickRepliesError] = useState('');
   const [contactPanelOpen, setContactPanelOpen] = useState(false);
   const [contactInfo, setContactInfo] = useState<ConversationContactInfoState>({
     conversationId: null,
@@ -570,6 +574,39 @@ export function WhatsAppInbox({
   const presencePauseTimeoutsRef = useRef<Record<string, number>>({});
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function loadQuickReplies() {
+      setQuickRepliesLoading(true);
+      setQuickRepliesError('');
+
+      try {
+        const replies = await listWhatsAppQuickReplies();
+        if (canceled) return;
+        setQuickReplies(replies);
+      } catch (err) {
+        if (canceled) return;
+        setQuickReplies(WHATSAPP_DEFAULT_QUICK_REPLIES);
+        setQuickRepliesError(
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível carregar respostas rápidas. Usando respostas locais.',
+        );
+      } finally {
+        if (!canceled) {
+          setQuickRepliesLoading(false);
+        }
+      }
+    }
+
+    void loadQuickReplies();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   const fetchConversationAvatar = useCallback((conversationId: string) => {
     const cached = avatarCacheRef.current.get(conversationId);
@@ -3199,6 +3236,9 @@ export function WhatsAppInbox({
                 conversationId={selectedConversation.id}
                 draft={selectedDraft}
                 error={sendError}
+                quickReplies={quickReplies}
+                quickRepliesError={quickRepliesError}
+                quickRepliesLoading={quickRepliesLoading}
                 replyTarget={replyTarget}
                 selectedMedia={selectedMedia}
                 sending={sending}
@@ -5398,6 +5438,9 @@ function ConversationComposer({
   conversationId,
   draft,
   error,
+  quickReplies,
+  quickRepliesError,
+  quickRepliesLoading,
   replyTarget,
   selectedMedia,
   sending,
@@ -5414,6 +5457,9 @@ function ConversationComposer({
   conversationId: string;
   draft: string;
   error: string;
+  quickReplies: WhatsAppQuickReply[];
+  quickRepliesError: string;
+  quickRepliesLoading: boolean;
   replyTarget: WhatsAppConversationMessage | null;
   selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
@@ -5464,7 +5510,9 @@ function ConversationComposer({
     quickReplySlashQuery !== null && quickReplySlashDismissedDraft !== draft;
   const quickReplyMenuVisible = quickReplySlashMenuOpen;
   const quickReplyQuery = quickReplySlashQuery ?? '';
-  const visibleQuickReplies = filterWhatsAppQuickReplies(WHATSAPP_QUICK_REPLIES, quickReplyQuery);
+  const visibleQuickReplies = quickRepliesLoading
+    ? []
+    : filterWhatsAppQuickReplies(quickReplies, quickReplyQuery);
   const activeQuickReply =
     quickReplyActiveIndex >= 0 ? visibleQuickReplies[quickReplyActiveIndex] : undefined;
   const activeQuickReplyId = activeQuickReply
@@ -6037,7 +6085,35 @@ function ConversationComposer({
             id="conversation-quick-reply-list"
             role="listbox"
           >
-            {visibleQuickReplies.length ? (
+            {quickRepliesLoading ? (
+              <span className="conversation-quick-reply-empty">Carregando respostas...</span>
+            ) : quickRepliesError ? (
+              <>
+                <span className="conversation-quick-reply-empty conversation-quick-reply-warning">
+                  {quickRepliesError}
+                </span>
+                {visibleQuickReplies.length ? (
+                  visibleQuickReplies.map((reply, index) => (
+                    <button
+                      key={reply.id}
+                      id={`conversation-quick-reply-${reply.id}`}
+                      className="conversation-quick-reply-option"
+                      type="button"
+                      aria-selected={index === quickReplyActiveIndex}
+                      role="option"
+                      onClick={() => applyQuickReply(reply)}
+                    >
+                      <strong>{reply.label}</strong>
+                      <small>{whatsAppQuickReplyPreview(reply.text)}</small>
+                    </button>
+                  ))
+                ) : (
+                  <span className="conversation-quick-reply-empty">
+                    Nenhuma resposta rápida disponível.
+                  </span>
+                )}
+              </>
+            ) : visibleQuickReplies.length ? (
               visibleQuickReplies.map((reply, index) => (
                 <button
                   key={reply.id}
@@ -6053,7 +6129,11 @@ function ConversationComposer({
                 </button>
               ))
             ) : (
-              <span className="conversation-quick-reply-empty">Nenhuma resposta encontrada.</span>
+              <span className="conversation-quick-reply-empty">
+                {quickReplies.length
+                  ? 'Nenhuma resposta encontrada.'
+                  : 'Nenhuma resposta rápida disponível.'}
+              </span>
             )}
           </div>
         </div>

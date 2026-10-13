@@ -80,10 +80,10 @@ describe('payment integrations workspace polish', () => {
     expect(settingsSource).toContain('const actionRef = useRef(false);');
   });
 
-  it('keeps WhatsApp administration out of Settings and links to the WhatsApp area', () => {
+  it('keeps WhatsApp connection administration out of Settings while allowing quick replies', () => {
     expect(settingsViewSource).toContain("activeSection === 'whatsapp'");
-    expect(settingsViewSource).toContain('A integração e a conexão Kirago são gerenciadas');
-    expect(settingsViewSource).toContain('actionLabel="Abrir WhatsApp"');
+    expect(settingsViewSource).toContain('<SettingsWhatsAppQuickRepliesPanel');
+    expect(settingsViewSource).toContain('onOpenWhatsApp={onOpenWhatsApp}');
     expect(settingsViewSource).not.toContain('Token da instância');
     expect(settingsViewSource).not.toContain('Definida no ambiente da API');
     expect(settingsViewSource).not.toContain('Editar conexão');

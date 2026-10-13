@@ -151,6 +151,7 @@ import {
   createReceivablePix,
   createReceivablesPix,
   createPlan,
+  createWhatsAppQuickReply,
   deleteClient,
   deleteClientReference,
   deletePlan,
@@ -182,6 +183,7 @@ import {
   listReceivables,
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
+  listWhatsAppQuickRepliesAdmin,
   downloadReportCsv,
   logoutWhatsApp,
   payReceivable,
@@ -244,6 +246,7 @@ import {
   testPaymentProviderCredential,
   updateMessageTemplate,
   updateBillingAutomationSettings,
+  updateWhatsAppQuickReply,
   updateRecoveryAutomationSettings,
   syncPaymentIntent,
   deactivatePaymentProviderCredential,
@@ -317,6 +320,8 @@ import {
   type WhatsAppPendingContactStatus,
   type WhatsAppPendingContactsSummary,
   type WhatsAppProviderHealth,
+  type WhatsAppQuickReplyAdmin,
+  type WhatsAppQuickReplyPayload,
 } from '../../lib/crm-api';
 import { readLegacyImportJsonFile } from '../../lib/legacy-import-file';
 import {
@@ -5159,6 +5164,7 @@ function SettingsView({
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
+  const [quickReplies, setQuickReplies] = useState<WhatsAppQuickReplyAdmin[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
   const [billingEnabled, setBillingEnabled] = useState(false);
   const [billingSendTime, setBillingSendTime] = useState('09:00');
@@ -5178,6 +5184,7 @@ function SettingsView({
   const [loading, setLoading] = useState(false);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
+  const [quickRepliesLoading, setQuickRepliesLoading] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingSaving, setBillingSaving] = useState(false);
   const [recoveryLoading, setRecoveryLoading] = useState(false);
@@ -5185,12 +5192,14 @@ function SettingsView({
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [healthError, setHealthError] = useState('');
+  const [quickRepliesError, setQuickRepliesError] = useState('');
   const [billingError, setBillingError] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
   const loadingRef = useRef(false);
   const actionRef = useRef(false);
   const billingSaveRef = useRef(false);
   const recoverySaveRef = useRef(false);
+  const quickRepliesLoadedRef = useRef(false);
 
   useEffect(() => {
     setActiveSection(initialSection);
@@ -5233,6 +5242,52 @@ function SettingsView({
   useEffect(() => {
     void loadCategories();
   }, [loadCategories]);
+
+  const loadQuickReplies = useCallback(async () => {
+    setQuickRepliesLoading(true);
+    setQuickRepliesError('');
+
+    try {
+      setQuickReplies(await listWhatsAppQuickRepliesAdmin());
+      quickRepliesLoadedRef.current = true;
+    } catch (err) {
+      setQuickRepliesError(
+        err instanceof Error ? err.message : 'Não foi possível carregar respostas rápidas.',
+      );
+    } finally {
+      setQuickRepliesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === 'whatsapp' && !quickRepliesLoadedRef.current && !quickRepliesLoading) {
+      void loadQuickReplies();
+    }
+  }, [activeSection, loadQuickReplies, quickRepliesLoading]);
+
+  async function saveQuickReply(payload: Partial<WhatsAppQuickReplyPayload>, id?: string) {
+    setQuickRepliesError('');
+    setNotice('');
+
+    try {
+      if (id) {
+        await updateWhatsAppQuickReply(id, payload);
+        setNotice('Resposta rápida atualizada.');
+      } else {
+        await createWhatsAppQuickReply(payload as WhatsAppQuickReplyPayload);
+        setNotice('Resposta rápida criada.');
+      }
+      await loadQuickReplies();
+    } catch (err) {
+      setQuickRepliesError(
+        err instanceof Error ? err.message : 'Não foi possível salvar resposta rápida.',
+      );
+    }
+  }
+
+  async function toggleQuickReply(reply: WhatsAppQuickReplyAdmin) {
+    await saveQuickReply({ isActive: !reply.isActive }, reply.id);
+  }
 
   const applyBillingSettings = useCallback((settings: BillingAutomationSettings) => {
     setBillingSettings(settings);
@@ -5579,12 +5634,14 @@ function SettingsView({
           ) : null}
 
           {activeSection === 'whatsapp' ? (
-            <SettingsPlaceholderPanel
-              actionLabel="Abrir WhatsApp"
-              description="A integração e a conexão Kirago são gerenciadas na central WhatsApp."
-              icon={MessageCircle}
-              title="WhatsApp"
-              onAction={onOpenWhatsApp}
+            <SettingsWhatsAppQuickRepliesPanel
+              error={quickRepliesError}
+              loading={quickRepliesLoading}
+              replies={quickReplies}
+              onOpenWhatsApp={onOpenWhatsApp}
+              onRefresh={loadQuickReplies}
+              onSave={saveQuickReply}
+              onToggle={toggleQuickReply}
             />
           ) : null}
 
@@ -5828,6 +5885,211 @@ function SettingsPaymentsPanel({
               )
             }
           />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsWhatsAppQuickRepliesPanel({
+  error,
+  loading,
+  replies,
+  onOpenWhatsApp,
+  onRefresh,
+  onSave,
+  onToggle,
+}: {
+  error: string;
+  loading: boolean;
+  replies: WhatsAppQuickReplyAdmin[];
+  onOpenWhatsApp: () => void;
+  onRefresh: () => Promise<void>;
+  onSave: (payload: Partial<WhatsAppQuickReplyPayload>, id?: string) => Promise<void>;
+  onToggle: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [label, setLabel] = useState('');
+  const [text, setText] = useState('');
+  const [isActive, setIsActive] = useState(true);
+  const [sortOrder, setSortOrder] = useState('0');
+  const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const editingReply = replies.find((reply) => reply.id === editingId) ?? null;
+  const parsedSortOrder = Number(sortOrder);
+  const formValid =
+    Boolean(label.trim()) &&
+    Boolean(text.trim()) &&
+    Number.isInteger(parsedSortOrder) &&
+    parsedSortOrder >= 0;
+
+  function resetForm() {
+    setEditingId(null);
+    setLabel('');
+    setText('');
+    setIsActive(true);
+    setSortOrder('0');
+  }
+
+  function editReply(reply: WhatsAppQuickReplyAdmin) {
+    setEditingId(reply.id);
+    setLabel(reply.label);
+    setText(reply.text);
+    setIsActive(reply.isActive);
+    setSortOrder(String(reply.sortOrder));
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!formValid || saving) return;
+
+    setSaving(true);
+    try {
+      await onSave(
+        {
+          label: label.trim(),
+          text: text.trim(),
+          isActive,
+          sortOrder: parsedSortOrder,
+        },
+        editingId ?? undefined,
+      );
+      resetForm();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleReply(reply: WhatsAppQuickReplyAdmin) {
+    if (togglingId) return;
+
+    setTogglingId(reply.id);
+    try {
+      await onToggle(reply);
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  return (
+    <div className="settings-v2-panel settings-whatsapp-quick-replies">
+      <div className="settings-v2-toolbar">
+        <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenWhatsApp}>
+          Abrir WhatsApp
+        </Button>
+        <Button
+          icon={RefreshCcw}
+          loading={loading}
+          size="sm"
+          variant="secondary"
+          onClick={() => void onRefresh()}
+        >
+          Atualizar
+        </Button>
+      </div>
+
+      {error ? <div className="notice danger">{error}</div> : null}
+
+      <form className="settings-quick-reply-form" onSubmit={(event) => void submit(event)}>
+        <div className="panel-header">
+          <div>
+            <h3>{editingReply ? 'Editar resposta rápida' : 'Nova resposta rápida'}</h3>
+            <p>Respostas ativas aparecem no slash menu do Inbox.</p>
+          </div>
+        </div>
+        <div className="settings-quick-reply-form-grid">
+          <label className="field">
+            <span>Título</span>
+            <input
+              maxLength={80}
+              placeholder="PIX expirado"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+            />
+          </label>
+          <label className="field settings-quick-reply-order-field">
+            <span>Ordem</span>
+            <input
+              min={0}
+              step={1}
+              type="number"
+              value={sortOrder}
+              onChange={(event) => setSortOrder(event.target.value)}
+            />
+          </label>
+          <label className="settings-template-active-toggle">
+            <input
+              checked={isActive}
+              type="checkbox"
+              onChange={(event) => setIsActive(event.target.checked)}
+            />
+            <span>Ativo</span>
+          </label>
+        </div>
+        <label className="field">
+          <span>Mensagem</span>
+          <textarea
+            maxLength={2000}
+            placeholder="Esse PIX expirou. Posso gerar uma nova cobrança para você."
+            rows={4}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </label>
+        <div className="settings-quick-reply-form-actions">
+          {editingReply ? (
+            <Button type="button" variant="secondary" onClick={resetForm}>
+              Cancelar
+            </Button>
+          ) : null}
+          <Button disabled={!formValid} icon={Save} loading={saving} type="submit">
+            {editingReply ? 'Salvar resposta' : 'Criar resposta'}
+          </Button>
+        </div>
+      </form>
+
+      <div className="settings-quick-reply-list" aria-busy={loading}>
+        {loading && !replies.length ? (
+          <span className="settings-quick-reply-empty">Carregando respostas...</span>
+        ) : null}
+        {!loading && !replies.length ? (
+          <span className="settings-quick-reply-empty">Nenhuma resposta rápida cadastrada.</span>
+        ) : null}
+        {replies.map((reply) => (
+          <article className="settings-quick-reply-item" key={reply.id}>
+            <div>
+              <div className="settings-quick-reply-title-row">
+                <strong>{reply.label}</strong>
+                <span
+                  className={`finance-status-pill ${reply.isActive ? 'tone-success' : 'tone-muted'}`}
+                >
+                  {reply.isActive ? 'Ativo' : 'Inativo'}
+                </span>
+              </div>
+              <p>{reply.text}</p>
+            </div>
+            <dl>
+              <div>
+                <dt>Ordem</dt>
+                <dd>{reply.sortOrder}</dd>
+              </div>
+            </dl>
+            <div className="settings-quick-reply-actions">
+              <Button icon={Pencil} size="sm" variant="secondary" onClick={() => editReply(reply)}>
+                Editar
+              </Button>
+              <Button
+                icon={reply.isActive ? ToggleLeft : Power}
+                disabled={Boolean(togglingId)}
+                loading={togglingId === reply.id}
+                size="sm"
+                variant="secondary"
+                onClick={() => void toggleReply(reply)}
+              >
+                {reply.isActive ? 'Desativar' : 'Ativar'}
+              </Button>
+            </div>
+          </article>
         ))}
       </div>
     </div>
@@ -7140,35 +7402,6 @@ function SettingsBillingAutomationPanel({
         </section>
       ) : null}
     </div>
-  );
-}
-
-function SettingsPlaceholderPanel({
-  actionLabel,
-  description,
-  icon: Icon,
-  title,
-  onAction,
-}: {
-  actionLabel: string;
-  description: string;
-  icon: LucideIcon;
-  title: string;
-  onAction: () => void;
-}) {
-  return (
-    <section className="settings-v2-placeholder-panel">
-      <span className="settings-v2-card-icon" aria-hidden="true">
-        <Icon size={20} />
-      </span>
-      <div>
-        <h3>{title}</h3>
-        <p>{description}</p>
-      </div>
-      <Button icon={ArrowRight} variant="primary" onClick={onAction}>
-        {actionLabel}
-      </Button>
-    </section>
   );
 }
 

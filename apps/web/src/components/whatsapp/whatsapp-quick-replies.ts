@@ -11,7 +11,7 @@ export type WhatsAppQuickReplyApplyResult = {
 
 const whatsappQuickReplySlashPattern = /^\/\S*$/;
 
-export const WHATSAPP_QUICK_REPLIES: WhatsAppQuickReply[] = [
+export const WHATSAPP_DEFAULT_QUICK_REPLIES: WhatsAppQuickReply[] = [
   {
     id: 'greeting',
     label: 'Saudação',

@@ -6,6 +6,7 @@ import {
   advanceConversationListGeneration,
   allowedWhatsAppReactionEmojis,
   buildContactFinancialSummary,
+  buildContactRecentActivity,
   calculateReactionPickerPosition,
   classifyContactPixState,
   classifyConversationIncomingFile,
@@ -44,9 +45,11 @@ import {
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
 import type {
+  ClientEvent,
   ClientReference,
   PaymentIntent,
   Receivable,
+  Renewal,
   WhatsAppConversation,
   WhatsAppConversationMessage,
 } from '../../lib/crm-api';
@@ -191,6 +194,35 @@ function receivable(id: string, overrides: Partial<Receivable> = {}): Receivable
   };
 }
 
+function renewal(id: string, overrides: Partial<Renewal> = {}): Renewal {
+  return {
+    id,
+    amount: '100.00',
+    clientId: 'client-1',
+    clientReferenceId: 'reference-1',
+    createdAt: '2026-10-01T12:00:00.000Z',
+    durationMonths: 1,
+    newDueDate: '2026-11-10',
+    planId: 'plan-1',
+    planName: 'Mensal',
+    previousDueDate: '2026-10-10',
+    receivable: null,
+    status: 'ACTIVE',
+    ...overrides,
+  };
+}
+
+function clientEvent(id: string, overrides: Partial<ClientEvent> = {}): ClientEvent {
+  return {
+    id,
+    createdAt: '2026-10-01T12:00:00.000Z',
+    description: null,
+    title: `Evento ${id}`,
+    type: 'CLIENT_REFERENCE_REACTIVATION_REQUESTED',
+    ...overrides,
+  };
+}
+
 function paymentIntent(id: string, overrides: Partial<PaymentIntent> = {}): PaymentIntent {
   return {
     id,
@@ -269,6 +301,10 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('ConversationReferenceCard');
     expect(whatsAppInboxSource).toContain('buildContactFinancialSummary(client.references ?? []');
     expect(whatsAppInboxSource).toContain('financialSummary ? <ConversationFinancialSummary');
+    expect(whatsAppInboxSource).toContain('buildContactRecentActivity({');
+    expect(whatsAppInboxSource).toContain('ConversationRecentActivity');
+    expect(whatsAppInboxSource).toContain('Atividade recente');
+    expect(whatsAppInboxSource).toContain('Nenhuma atividade recente');
     expect(whatsAppInboxSource).toContain('Gerar PIX');
     expect(whatsAppInboxSource).toContain('createReceivablePix(receivable.id)');
     expect(whatsAppInboxSource).toContain('Recriar PIX');
@@ -312,8 +348,189 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-contact-drawer');
     expect(globalStylesSource).toContain('.conversation-reference-card');
     expect(globalStylesSource).toContain('.conversation-financial-summary');
+    expect(globalStylesSource).toContain('.conversation-recent-activity');
+    expect(globalStylesSource).toContain('.conversation-activity-item');
     expect(globalStylesSource).toContain('width: min(430px, calc(100vw - 24px))');
     expect(globalStylesSource).toContain('width: min(100vw, 440px)');
+  });
+
+  it('builds no contact recent activity when sources are empty or client is absent', () => {
+    expect(buildContactRecentActivity({ receivables: [], renewals: [], clientEvents: [] })).toEqual(
+      [],
+    );
+  });
+
+  it('uses paid receivable status plus real paidAt for contact payment activity', () => {
+    const activities = buildContactRecentActivity({
+      receivables: [
+        receivable('paid', {
+          amount: '49.90',
+          paidAt: '2026-10-10T14:32:00.000Z',
+          status: 'PAGO',
+          displayStatus: 'PAGO',
+        }),
+        receivable('paid-without-date', {
+          paidAt: null,
+          status: 'PAGO',
+          displayStatus: 'PAGO',
+        }),
+      ],
+    });
+
+    expect(activities).toHaveLength(1);
+    expect(activities[0]).toMatchObject({
+      amount: '49.90',
+      occurredAt: '2026-10-10T14:32:00.000Z',
+      title: 'Pagamento recebido',
+      type: 'PAYMENT',
+    });
+  });
+
+  it('uses createdAt for pending receivable creation activity', () => {
+    expect(
+      buildContactRecentActivity({
+        receivables: [
+          receivable('created', {
+            createdAt: '2026-10-09T10:00:00.000Z',
+            displayStatus: 'PENDENTE',
+            status: 'PENDENTE',
+          }),
+        ],
+      })[0],
+    ).toMatchObject({
+      occurredAt: '2026-10-09T10:00:00.000Z',
+      title: 'Cobrança gerada',
+      type: 'RECEIVABLE_CREATED',
+    });
+  });
+
+  it('uses dueDate for overdue activity only when the charge is still pending', () => {
+    const activities = buildContactRecentActivity({
+      now: Date.parse('2026-10-12T12:00:00.000Z'),
+      receivables: [
+        receivable('overdue', {
+          dueDate: '2026-10-01',
+          displayStatus: 'VENCIDO',
+          status: 'PENDENTE',
+        }),
+        receivable('paid-overdue-looking', {
+          dueDate: '2026-10-02',
+          displayStatus: 'VENCIDO',
+          paidAt: '2026-10-03T12:00:00.000Z',
+          status: 'PAGO',
+        }),
+      ],
+    });
+
+    expect(activities).toHaveLength(2);
+    expect(activities[0]).toMatchObject({ title: 'Pagamento recebido', type: 'PAYMENT' });
+    expect(activities[1]).toMatchObject({
+      occurredAt: '2026-10-01',
+      title: 'Cobrança venceu',
+      type: 'RECEIVABLE_OVERDUE',
+    });
+  });
+
+  it('adds renewal activity from real renewals', () => {
+    const activities = buildContactRecentActivity({
+      renewals: [
+        renewal('renewal-1', {
+          amount: '49.90',
+          createdAt: '2026-10-05T10:00:00.000Z',
+          planName: 'Plano Mensal',
+        }),
+      ],
+    });
+
+    expect(activities[0]).toMatchObject({
+      amount: '49.90',
+      occurredAt: '2026-10-05T10:00:00.000Z',
+      subtitle: 'Plano Mensal',
+      title: 'Renovação realizada',
+      type: 'RENEWAL',
+    });
+  });
+
+  it('adds reactivation activity only from official client events', () => {
+    const activities = buildContactRecentActivity({
+      clientEvents: [
+        clientEvent('reactivation-requested', {
+          createdAt: '2026-10-04T10:00:00.000Z',
+          description: 'Aguardando pagamento.',
+          type: 'CLIENT_REFERENCE_REACTIVATION_REQUESTED',
+        }),
+        clientEvent('reactivation-done', {
+          createdAt: '2026-10-06T10:00:00.000Z',
+          type: 'CLIENT_REFERENCE_REACTIVATED',
+        }),
+        clientEvent('technical', { type: 'PIX_PAYMENT_STATUS_UPDATED' }),
+      ],
+    });
+
+    expect(activities).toHaveLength(2);
+    expect(activities.map((item) => item.title)).toEqual([
+      'Reativação concluída',
+      'Reativação iniciada',
+    ]);
+  });
+
+  it('orders, dedupes and limits contact recent activity by reliable dates', () => {
+    const renewalReceivable = receivable('renewal-receivable', {
+      createdAt: '2026-10-08T10:00:00.000Z',
+      renewalId: 'renewal-1',
+    });
+    const activities = buildContactRecentActivity({
+      limit: 3,
+      receivables: [
+        renewalReceivable,
+        receivable('created-new', { createdAt: '2026-10-11T10:00:00.000Z' }),
+        receivable('created-old', { createdAt: '2026-10-01T10:00:00.000Z' }),
+      ],
+      renewals: [
+        renewal('renewal-1', {
+          createdAt: '2026-10-09T10:00:00.000Z',
+          receivable: renewalReceivable,
+        }),
+      ],
+      clientEvents: [
+        clientEvent('reactivation', {
+          createdAt: '2026-10-10T10:00:00.000Z',
+          type: 'CLIENT_REFERENCE_REACTIVATION_REQUESTED',
+        }),
+      ],
+    });
+
+    expect(activities).toHaveLength(3);
+    expect(activities.map((item) => item.title)).toEqual([
+      'Cobrança gerada',
+      'Reativação iniciada',
+      'Renovação realizada',
+    ]);
+    expect(activities.some((item) => item.id === 'receivable-created:renewal-receivable')).toBe(
+      false,
+    );
+  });
+
+  it('ignores invalid activity dates', () => {
+    expect(
+      buildContactRecentActivity({
+        receivables: [
+          receivable('invalid-paid', {
+            paidAt: 'not-a-date',
+            status: 'PAGO',
+            displayStatus: 'PAGO',
+          }),
+          receivable('invalid-created', { createdAt: 'not-a-date' }),
+          receivable('invalid-overdue', {
+            dueDate: '2026-99-99',
+            displayStatus: 'VENCIDO',
+            status: 'PENDENTE',
+          }),
+        ],
+        renewals: [renewal('invalid-renewal', { createdAt: 'not-a-date' })],
+        clientEvents: [clientEvent('invalid-event', { createdAt: 'not-a-date' })],
+      }),
+    ).toEqual([]);
   });
 
   it('builds an empty contact financial summary without inventing zero-value cards', () => {

@@ -4181,6 +4181,102 @@ a {
   color: var(--danger);
 }
 
+.conversation-recent-activity {
+  gap: 10px;
+}
+
+.conversation-activity-list {
+  display: grid;
+  gap: 8px;
+}
+
+.conversation-activity-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 9px;
+}
+
+.conversation-activity-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.conversation-activity-dot.activity-payment,
+.conversation-activity-dot.activity-renewal,
+.conversation-activity-dot.activity-reactivation {
+  background: var(--success);
+}
+
+.conversation-activity-dot.activity-receivable_overdue {
+  background: var(--danger);
+}
+
+.conversation-activity-dot.activity-receivable_created {
+  background: var(--warning);
+}
+
+.conversation-activity-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.conversation-activity-main > div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.conversation-activity-main strong,
+.conversation-activity-main p {
+  overflow-wrap: anywhere;
+}
+
+.conversation-activity-main strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.conversation-activity-main span,
+.conversation-activity-main p,
+.conversation-activity-empty {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.conversation-activity-main p {
+  margin: 0;
+}
+
+.conversation-activity-main .ui-button {
+  justify-self: start;
+  min-height: 26px;
+  padding-inline: 8px;
+}
+
+.conversation-activity-amount {
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.conversation-activity-empty {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 9px;
+}
+
 .conversation-contact-section-title > span {
   color: var(--text);
   font-size: 12px;

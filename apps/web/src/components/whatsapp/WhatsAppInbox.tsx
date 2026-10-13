@@ -90,12 +90,14 @@ import {
   startWhatsAppConversation,
   updateWhatsAppConversationMessageReaction,
   type Client,
+  type ClientEvent,
   type ClientReference,
   type ClientOption,
   type ClientPayload,
   type PaymentIntent,
   type Plan,
   type Receivable,
+  type Renewal,
   type WhatsAppConnection,
   type WhatsAppConversationAvatar,
   type WhatsAppConversation,
@@ -263,6 +265,18 @@ export type ContactPixReplacementPayload = {
   expectedCurrentIntentId: string;
   reason: string;
   idempotencyKey: string;
+};
+export type ContactRecentActivityType =
+  'PAYMENT' | 'RECEIVABLE_CREATED' | 'RECEIVABLE_OVERDUE' | 'RENEWAL' | 'REACTIVATION';
+export type ContactRecentActivityItem = {
+  id: string;
+  type: ContactRecentActivityType;
+  occurredAt: string;
+  title: string;
+  subtitle?: string;
+  amount?: string;
+  referenceId?: string | null;
+  receivableId?: string | null;
 };
 
 export function nextConversationPresenceState(
@@ -5719,6 +5733,13 @@ function ConversationClientPanelContent({
   const financialSummary = client
     ? buildContactFinancialSummary(client.references ?? [], contactInfo.receivables)
     : null;
+  const recentActivity = client
+    ? buildContactRecentActivity({
+        clientEvents: client.events ?? [],
+        receivables: contactInfo.receivables,
+        renewals: client.renewals ?? [],
+      })
+    : [];
 
   useEffect(() => {
     setLinkOpen(false);
@@ -5800,6 +5821,12 @@ function ConversationClientPanelContent({
           </dl>
         </section>
         {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
+        <ConversationRecentActivity
+          clientId={client.id}
+          items={recentActivity}
+          receivables={contactInfo.receivables}
+          onViewReceivable={onViewReceivable}
+        />
         <ConversationReferenceList
           client={client}
           lifecycleBusyReferenceId={lifecycleBusyReferenceId}
@@ -6031,6 +6058,72 @@ function ConversationFinancialSummary({ summary }: { summary: ContactFinancialSu
             </small>
           ) : null}
         </div>
+      )}
+    </section>
+  );
+}
+
+function ConversationRecentActivity({
+  clientId,
+  items,
+  receivables,
+  onViewReceivable,
+}: {
+  clientId: string;
+  items: ContactRecentActivityItem[];
+  receivables: Receivable[];
+  onViewReceivable: (clientId: string, receivable: Receivable) => void;
+}) {
+  return (
+    <section className="conversation-contact-section conversation-recent-activity">
+      <div className="conversation-contact-section-title">
+        <span>Atividade recente</span>
+        <small>{items.length}</small>
+      </div>
+      {items.length ? (
+        <div className="conversation-activity-list">
+          {items.map((item) => {
+            const receivable = item.receivableId
+              ? receivables.find((candidate) => candidate.id === item.receivableId)
+              : null;
+            const canViewReceivable = Boolean(
+              receivable && receivable.sourceKind !== 'LEGACY_IMPORT',
+            );
+
+            return (
+              <article className="conversation-activity-item" key={item.id}>
+                <span
+                  className={`conversation-activity-dot activity-${item.type.toLowerCase()}`}
+                  aria-hidden="true"
+                />
+                <div className="conversation-activity-main">
+                  <div>
+                    <strong>{item.title}</strong>
+                    <span>{formatDateTime(item.occurredAt)}</span>
+                  </div>
+                  {item.subtitle ? <p>{item.subtitle}</p> : null}
+                  {canViewReceivable && receivable ? (
+                    <Button
+                      icon={Eye}
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onViewReceivable(clientId, receivable)}
+                    >
+                      Ver cobrança
+                    </Button>
+                  ) : null}
+                </div>
+                {item.amount ? (
+                  <strong className="conversation-activity-amount">
+                    {formatCurrency(item.amount)}
+                  </strong>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="conversation-activity-empty">Nenhuma atividade recente</div>
       )}
     </section>
   );
@@ -6523,6 +6616,171 @@ export function buildContactFinancialSummary(
           ? 'PENDING'
           : 'CURRENT',
   };
+}
+
+export function buildContactRecentActivity({
+  clientEvents = [],
+  limit = 6,
+  now = Date.now(),
+  receivables = [],
+  renewals = [],
+}: {
+  clientEvents?: ClientEvent[];
+  limit?: number;
+  now?: number;
+  receivables?: Receivable[];
+  renewals?: Renewal[];
+}): ContactRecentActivityItem[] {
+  const renewalById = new Map(
+    renewals
+      .filter((renewal) => validContactActivityTimestamp(renewal.createdAt))
+      .map((renewal) => [renewal.id, renewal]),
+  );
+  const renewalReceivableIds = new Set(
+    renewals.map((renewal) => renewal.receivable?.id).filter((id): id is string => Boolean(id)),
+  );
+  const items: ContactRecentActivityItem[] = [];
+
+  for (const receivable of receivables) {
+    if (receivable.sourceKind === 'LEGACY_IMPORT') continue;
+
+    if (receivable.status === 'PAGO' && validContactActivityTimestamp(receivable.paidAt)) {
+      items.push({
+        amount: receivable.amount,
+        id: `receivable-payment:${receivable.id}`,
+        occurredAt: receivable.paidAt!,
+        receivableId: receivable.id,
+        referenceId: receivable.clientReferenceId ?? null,
+        subtitle: contactActivityReceivableSubtitle(receivable),
+        title: 'Pagamento recebido',
+        type: 'PAYMENT',
+      });
+      continue;
+    }
+
+    const renewal = receivable.renewalId ? renewalById.get(receivable.renewalId) : null;
+    if (renewal) continue;
+
+    if (
+      receivable.displayStatus === 'VENCIDO' &&
+      receivable.status === 'PENDENTE' &&
+      validContactActivityDate(receivable.dueDate) &&
+      contactDateKey(receivable.dueDate)! <= contactDateKey(new Date(now).toISOString())!
+    ) {
+      items.push({
+        amount: receivable.amount,
+        id: `receivable-overdue:${receivable.id}`,
+        occurredAt: receivable.dueDate,
+        receivableId: receivable.id,
+        referenceId: receivable.clientReferenceId ?? null,
+        subtitle: contactActivityReceivableSubtitle(receivable),
+        title: 'Cobrança venceu',
+        type: 'RECEIVABLE_OVERDUE',
+      });
+      continue;
+    }
+
+    if (receivable.displayStatus === 'VENCIDO') continue;
+
+    if (
+      receivable.status === 'PENDENTE' &&
+      validContactActivityTimestamp(receivable.createdAt) &&
+      !renewalReceivableIds.has(receivable.id)
+    ) {
+      items.push({
+        amount: receivable.amount,
+        id: `receivable-created:${receivable.id}`,
+        occurredAt: receivable.createdAt,
+        receivableId: receivable.id,
+        referenceId: receivable.clientReferenceId ?? null,
+        subtitle: contactActivityReceivableSubtitle(receivable),
+        title: 'Cobrança gerada',
+        type: 'RECEIVABLE_CREATED',
+      });
+    }
+  }
+
+  for (const renewal of renewals) {
+    if (!validContactActivityTimestamp(renewal.createdAt)) continue;
+    if (renewal.status === 'REVERTED') continue;
+
+    items.push({
+      amount: renewal.amount,
+      id: `renewal:${renewal.id}`,
+      occurredAt: renewal.createdAt,
+      receivableId: renewal.receivable?.id ?? null,
+      referenceId: renewal.clientReferenceId ?? null,
+      subtitle: renewal.planName,
+      title: 'Renovação realizada',
+      type: 'RENEWAL',
+    });
+  }
+
+  for (const event of clientEvents) {
+    const activity = contactActivityFromClientEvent(event);
+    if (activity) items.push(activity);
+  }
+
+  return dedupeContactRecentActivity(items)
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+    .slice(0, Math.max(0, limit));
+}
+
+function contactActivityFromClientEvent(event: ClientEvent): ContactRecentActivityItem | null {
+  if (!validContactActivityTimestamp(event.createdAt)) return null;
+
+  if (event.type === 'CLIENT_REFERENCE_REACTIVATION_REQUESTED') {
+    return {
+      id: `client-event:${event.id}`,
+      occurredAt: event.createdAt,
+      ...(event.description ? { subtitle: event.description } : {}),
+      title: 'Reativação iniciada',
+      type: 'REACTIVATION',
+    };
+  }
+
+  if (event.type === 'CLIENT_REFERENCE_REACTIVATED') {
+    return {
+      id: `client-event:${event.id}`,
+      occurredAt: event.createdAt,
+      ...(event.description ? { subtitle: event.description } : {}),
+      title: 'Reativação concluída',
+      type: 'REACTIVATION',
+    };
+  }
+
+  return null;
+}
+
+function dedupeContactRecentActivity(items: ContactRecentActivityItem[]) {
+  const seen = new Set<string>();
+  const deduped: ContactRecentActivityItem[] = [];
+
+  for (const item of items) {
+    const key = item.receivableId
+      ? `${item.type}:${item.receivableId}`
+      : `${item.type}:${item.id}:${item.occurredAt}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
+function contactActivityReceivableSubtitle(receivable: Receivable) {
+  return (
+    receivable.clientReference?.reference ??
+    (receivable.purpose === 'MANUAL_CHARGE' ? 'Cobrança avulsa' : receivable.description)
+  );
+}
+
+function validContactActivityTimestamp(value: string | null | undefined) {
+  return Boolean(value && Number.isFinite(Date.parse(value)));
+}
+
+function validContactActivityDate(value: string | null | undefined) {
+  return contactDateKey(value) !== null;
 }
 
 function contactReceivableAmount(receivables: Receivable[]) {

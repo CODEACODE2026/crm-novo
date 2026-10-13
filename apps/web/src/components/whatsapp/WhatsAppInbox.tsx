@@ -126,8 +126,10 @@ import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
 import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
 import {
   WHATSAPP_QUICK_REPLIES,
+  applyWhatsAppSlashQuickReply,
   applyWhatsAppQuickReply,
   filterWhatsAppQuickReplies,
+  whatsAppQuickReplySlashQuery,
   whatsAppQuickReplyPreview,
   type WhatsAppQuickReply,
 } from './whatsapp-quick-replies';
@@ -5362,6 +5364,10 @@ function ConversationComposer({
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [quickReplyMenuOpen, setQuickReplyMenuOpen] = useState(false);
   const [quickReplySearch, setQuickReplySearch] = useState('');
+  const [quickReplyActiveIndex, setQuickReplyActiveIndex] = useState(0);
+  const [quickReplySlashDismissedDraft, setQuickReplySlashDismissedDraft] = useState<string | null>(
+    null,
+  );
   const [recording, setRecording] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<ConversationVoiceDraft | null>(null);
   const [voiceError, setVoiceError] = useState('');
@@ -5388,7 +5394,17 @@ function ConversationComposer({
   const shouldShowSendAction = actionMode === 'SEND';
   const canSend = hasSendableContent && !sending;
   const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
-  const visibleQuickReplies = filterWhatsAppQuickReplies(WHATSAPP_QUICK_REPLIES, quickReplySearch);
+  const quickReplySlashQuery = whatsAppQuickReplySlashQuery(draft);
+  const quickReplySlashMenuOpen =
+    quickReplySlashQuery !== null && quickReplySlashDismissedDraft !== draft;
+  const quickReplyMenuVisible = quickReplyMenuOpen || quickReplySlashMenuOpen;
+  const quickReplyQuery = quickReplySlashMenuOpen ? (quickReplySlashQuery ?? '') : quickReplySearch;
+  const visibleQuickReplies = filterWhatsAppQuickReplies(WHATSAPP_QUICK_REPLIES, quickReplyQuery);
+  const activeQuickReply =
+    quickReplyActiveIndex >= 0 ? visibleQuickReplies[quickReplyActiveIndex] : undefined;
+  const activeQuickReplyId = activeQuickReply
+    ? `conversation-quick-reply-${activeQuickReply.id}`
+    : undefined;
 
   useEffect(() => {
     onVoiceRecordingChangeRef.current = onVoiceRecordingChange;
@@ -5402,7 +5418,7 @@ function ConversationComposer({
   }, [conversationId]);
 
   useEffect(() => {
-    if (!quickReplyMenuOpen) return undefined;
+    if (!quickReplyMenuVisible) return undefined;
 
     function closeOnPointerDown(event: PointerEvent) {
       const target = event.target as Node;
@@ -5411,6 +5427,9 @@ function ConversationComposer({
         !quickReplyButtonRef.current?.contains(target)
       ) {
         setQuickReplyMenuOpen(false);
+        if (quickReplySlashMenuOpen) {
+          setQuickReplySlashDismissedDraft(draft);
+        }
       }
     }
 
@@ -5418,7 +5437,12 @@ function ConversationComposer({
       if (event.key === 'Escape') {
         event.preventDefault();
         setQuickReplyMenuOpen(false);
-        quickReplyButtonRef.current?.focus();
+        if (quickReplySlashMenuOpen) {
+          setQuickReplySlashDismissedDraft(draft);
+          composerRef.current?.focus();
+        } else {
+          quickReplyButtonRef.current?.focus();
+        }
       }
     }
 
@@ -5429,7 +5453,26 @@ function ConversationComposer({
       document.removeEventListener('pointerdown', closeOnPointerDown, true);
       document.removeEventListener('keydown', closeOnKeyDown, true);
     };
-  }, [quickReplyMenuOpen]);
+  }, [composerRef, draft, quickReplyMenuVisible, quickReplySlashMenuOpen]);
+
+  useEffect(() => {
+    if (quickReplySlashDismissedDraft !== null && quickReplySlashDismissedDraft !== draft) {
+      setQuickReplySlashDismissedDraft(null);
+    }
+  }, [draft, quickReplySlashDismissedDraft]);
+
+  useEffect(() => {
+    if (!quickReplyMenuVisible) {
+      setQuickReplyActiveIndex(0);
+      return;
+    }
+
+    setQuickReplyActiveIndex((current) => {
+      if (!visibleQuickReplies.length) return -1;
+      if (current < 0) return 0;
+      return Math.min(current, visibleQuickReplies.length - 1);
+    });
+  }, [quickReplyMenuVisible, visibleQuickReplies.length]);
 
   function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
     if (!file) return;
@@ -5444,24 +5487,41 @@ function ConversationComposer({
 
   function applyQuickReply(reply: WhatsAppQuickReply) {
     const textarea = composerRef.current;
-    const result = applyWhatsAppQuickReply(
-      draft,
-      reply.text,
-      textarea
-        ? {
-            end: textarea.selectionEnd,
-            start: textarea.selectionStart,
-          }
-        : null,
-    );
+    const result = quickReplySlashMenuOpen
+      ? applyWhatsAppSlashQuickReply(reply.text)
+      : applyWhatsAppQuickReply(
+          draft,
+          reply.text,
+          textarea
+            ? {
+                end: textarea.selectionEnd,
+                start: textarea.selectionStart,
+              }
+            : null,
+        );
 
     onChange(result.text);
     setQuickReplyMenuOpen(false);
     setQuickReplySearch('');
+    setQuickReplySlashDismissedDraft(null);
 
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
       composerRef.current?.setSelectionRange(result.cursor, result.cursor);
+    });
+  }
+
+  function selectActiveQuickReply() {
+    if (!activeQuickReply) return;
+    applyQuickReply(activeQuickReply);
+  }
+
+  function moveActiveQuickReply(step: 1 | -1) {
+    if (!visibleQuickReplies.length) return;
+
+    setQuickReplyActiveIndex((current) => {
+      const safeCurrent = current < 0 ? 0 : current;
+      return (safeCurrent + step + visibleQuickReplies.length) % visibleQuickReplies.length;
     });
   }
 
@@ -5677,9 +5737,15 @@ function ConversationComposer({
 
   return (
     <form
-      className="conversation-composer"
+      className={`conversation-composer ${quickReplyMenuVisible ? 'has-quick-reply-menu' : ''} ${
+        quickReplySlashMenuOpen ? 'has-slash-quick-reply-menu' : ''
+      }`.trim()}
       onSubmit={(event) => {
         event.preventDefault();
+        if (quickReplySlashMenuOpen) {
+          selectActiveQuickReply();
+          return;
+        }
         if (shouldShowSendAction) {
           onSend();
         }
@@ -5869,37 +5935,52 @@ function ConversationComposer({
         <div className="conversation-quick-reply-control">
           <IconButton
             ref={quickReplyButtonRef}
+            aria-expanded={quickReplyMenuOpen}
+            aria-haspopup="listbox"
             icon={MessageSquareText}
             label="Respostas rápidas"
             disabled={recording || sending}
             onClick={toggleQuickReplies}
           />
-          {quickReplyMenuOpen ? (
-            <div className="conversation-quick-reply-menu" ref={quickReplyMenuRef}>
-              <label className="conversation-quick-reply-search">
-                <span className="sr-only">Buscar respostas rápidas</span>
-                <Search aria-hidden="true" size={14} />
-                <input
-                  autoFocus
-                  placeholder="Buscar..."
-                  type="search"
-                  value={quickReplySearch}
-                  onChange={(event) => setQuickReplySearch(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                    }
-                  }}
-                />
-              </label>
-              <div className="conversation-quick-reply-list" role="listbox">
+          {quickReplyMenuVisible ? (
+            <div
+              className={`conversation-quick-reply-menu ${
+                quickReplySlashMenuOpen ? 'conversation-quick-reply-menu-slash' : ''
+              }`.trim()}
+              ref={quickReplyMenuRef}
+            >
+              {!quickReplySlashMenuOpen ? (
+                <label className="conversation-quick-reply-search">
+                  <span className="sr-only">Buscar respostas rápidas</span>
+                  <Search aria-hidden="true" size={14} />
+                  <input
+                    autoFocus
+                    placeholder="Buscar..."
+                    type="search"
+                    value={quickReplySearch}
+                    onChange={(event) => setQuickReplySearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                      }
+                    }}
+                  />
+                </label>
+              ) : null}
+              <div
+                aria-activedescendant={activeQuickReplyId}
+                className="conversation-quick-reply-list"
+                id="conversation-quick-reply-list"
+                role="listbox"
+              >
                 {visibleQuickReplies.length ? (
-                  visibleQuickReplies.map((reply) => (
+                  visibleQuickReplies.map((reply, index) => (
                     <button
                       key={reply.id}
+                      id={`conversation-quick-reply-${reply.id}`}
                       className="conversation-quick-reply-option"
                       type="button"
-                      aria-selected="false"
+                      aria-selected={index === quickReplyActiveIndex}
                       role="option"
                       onClick={() => applyQuickReply(reply)}
                     >
@@ -5922,6 +6003,9 @@ function ConversationComposer({
         <textarea
           aria-label="Digite uma mensagem"
           aria-busy={sending}
+          aria-expanded={quickReplySlashMenuOpen}
+          aria-activedescendant={quickReplySlashMenuOpen ? activeQuickReplyId : undefined}
+          aria-controls={quickReplySlashMenuOpen ? 'conversation-quick-reply-list' : undefined}
           ref={composerRef}
           placeholder="Digite uma mensagem..."
           rows={2}
@@ -5929,6 +6013,29 @@ function ConversationComposer({
           onChange={(event) => onChange(event.target.value)}
           onBlur={onBlur}
           onKeyDown={(event) => {
+            if (quickReplySlashMenuOpen) {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setQuickReplySlashDismissedDraft(draft);
+                return;
+              }
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                moveActiveQuickReply(1);
+                return;
+              }
+              if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                moveActiveQuickReply(-1);
+                return;
+              }
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                selectActiveQuickReply();
+                return;
+              }
+            }
             if (event.key === 'Escape' && replyTarget) {
               event.preventDefault();
               onCancelReply();

@@ -9,6 +9,8 @@ export type WhatsAppQuickReplyApplyResult = {
   text: string;
 };
 
+const whatsappQuickReplySlashPattern = /^\/\S*$/;
+
 export const WHATSAPP_QUICK_REPLIES: WhatsAppQuickReply[] = [
   {
     id: 'greeting',
@@ -90,6 +92,16 @@ export function applyWhatsAppQuickReply(
   const text = `${prefix}${quickReplyText}${suffix}`;
 
   return { cursor: prefix.length + quickReplyText.length, text };
+}
+
+export function applyWhatsAppSlashQuickReply(
+  quickReplyText: string,
+): WhatsAppQuickReplyApplyResult {
+  return { cursor: quickReplyText.length, text: quickReplyText };
+}
+
+export function whatsAppQuickReplySlashQuery(draft: string) {
+  return whatsappQuickReplySlashPattern.test(draft) ? draft.slice(1) : null;
 }
 
 export function whatsAppQuickReplyPreview(text: string, maxLength = 64) {

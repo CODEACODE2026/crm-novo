@@ -53,8 +53,10 @@ import {
 } from './WhatsAppInbox';
 import {
   WHATSAPP_QUICK_REPLIES,
+  applyWhatsAppSlashQuickReply,
   applyWhatsAppQuickReply,
   filterWhatsAppQuickReplies,
+  whatsAppQuickReplySlashQuery,
   whatsAppQuickReplyPreview,
 } from './whatsapp-quick-replies';
 import type {
@@ -1778,6 +1780,20 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     });
   });
 
+  it('detects slash quick reply mode only when the composer contains slash query text', () => {
+    expect(whatsAppQuickReplySlashQuery('/')).toBe('');
+    expect(whatsAppQuickReplySlashQuery('/pix')).toBe('pix');
+    expect(whatsAppQuickReplySlashQuery('/PIX')).toBe('PIX');
+    expect(whatsAppQuickReplySlashQuery('bom dia / tudo bem')).toBeNull();
+    expect(whatsAppQuickReplySlashQuery('https://codeacode.com')).toBeNull();
+    expect(whatsAppQuickReplySlashQuery('10/10/2026')).toBeNull();
+    expect(whatsAppQuickReplySlashQuery('/pix agora')).toBeNull();
+    expect(applyWhatsAppSlashQuickReply('Esse PIX expirou.')).toEqual({
+      cursor: 'Esse PIX expirou.'.length,
+      text: 'Esse PIX expirou.',
+    });
+  });
+
   it('wires quick replies into the existing composer without sending automatically', () => {
     const applyQuickReplyStart = whatsAppInboxSource.indexOf('function applyQuickReply(');
     const clearVoicePreviewStart = whatsAppInboxSource.indexOf(
@@ -1791,7 +1807,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
     expect(whatsAppInboxSource).toContain('icon={MessageSquareText}');
     expect(whatsAppInboxSource).toContain('label="Respostas rápidas"');
-    expect(whatsAppInboxSource).toContain('className="conversation-quick-reply-menu"');
+    expect(whatsAppInboxSource).toContain('className={`conversation-quick-reply-menu');
     expect(whatsAppInboxSource).toContain('filterWhatsAppQuickReplies(');
     expect(whatsAppInboxSource).toContain('applyWhatsAppQuickReply(');
     expect(whatsAppInboxSource).toContain('onClick={() => applyQuickReply(reply)}');
@@ -1804,6 +1820,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('role="option"');
     expect(applyQuickReplySource).toContain('onChange(result.text)');
     expect(applyQuickReplySource).toContain('setQuickReplyMenuOpen(false)');
+    expect(applyQuickReplySource).toContain('applyWhatsAppSlashQuickReply(reply.text)');
     expect(applyQuickReplySource).not.toContain('onSend');
     expect(applyQuickReplySource).not.toContain('sendCurrentMessage');
     expect(applyQuickReplySource).not.toContain('sendWhatsAppConversationMessage');
@@ -1814,7 +1831,46 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-quick-reply-menu');
     expect(globalStylesSource).toContain('max-height: min(360px, calc(100dvh - 160px))');
     expect(globalStylesSource).toContain('@media');
-    expect(globalStylesSource).toContain('width: min(300px, calc(100vw - 20px))');
+    expect(globalStylesSource).toContain('bottom: calc(76px + env(safe-area-inset-bottom))');
+  });
+
+  it('wires slash quick replies to keyboard navigation without changing reply or attachment state', () => {
+    const textareaKeyDownStart = whatsAppInboxSource.indexOf(
+      'onKeyDown={(event) => {',
+      whatsAppInboxSource.indexOf('aria-label="Digite uma mensagem"'),
+    );
+    const keyDownStart = whatsAppInboxSource.indexOf(
+      'if (quickReplySlashMenuOpen) {',
+      textareaKeyDownStart,
+    );
+    const replyEscapeStart = whatsAppInboxSource.indexOf(
+      "if (event.key === 'Escape' && replyTarget)",
+      keyDownStart,
+    );
+    const slashKeyDownSource = whatsAppInboxSource.slice(keyDownStart, replyEscapeStart);
+
+    expect(whatsAppInboxSource).toContain('whatsAppQuickReplySlashQuery(draft)');
+    expect(whatsAppInboxSource).toContain('quickReplySlashMenuOpen');
+    expect(whatsAppInboxSource).toContain('quickReplySlashMenuOpen ? (quickReplySlashQuery ??');
+    expect(whatsAppInboxSource).toContain('conversation-quick-reply-menu-slash');
+    expect(whatsAppInboxSource).toContain('aria-activedescendant');
+    expect(whatsAppInboxSource).toContain('aria-expanded={quickReplySlashMenuOpen}');
+    expect(slashKeyDownSource).toContain("event.key === 'Enter'");
+    expect(slashKeyDownSource).toContain('selectActiveQuickReply()');
+    expect(slashKeyDownSource).toContain("event.key === 'ArrowDown'");
+    expect(slashKeyDownSource).toContain('moveActiveQuickReply(1)');
+    expect(slashKeyDownSource).toContain("event.key === 'ArrowUp'");
+    expect(slashKeyDownSource).toContain('moveActiveQuickReply(-1)');
+    expect(slashKeyDownSource).toContain("event.key === 'Escape'");
+    expect(slashKeyDownSource).toContain('setQuickReplySlashDismissedDraft(draft)');
+    expect(slashKeyDownSource).toContain('event.nativeEvent.isComposing');
+    expect(slashKeyDownSource).not.toContain('onSend');
+    expect(slashKeyDownSource).not.toContain('onCancelReply');
+    expect(slashKeyDownSource).not.toContain('onRemoveMedia');
+    expect(globalStylesSource).toContain('position: fixed;');
+    expect(globalStylesSource).toContain('max-height: min(45dvh, 320px)');
+    expect(globalStylesSource).toContain('env(safe-area-inset-bottom)');
+    expect(globalStylesSource).toContain(".conversation-quick-reply-option[aria-selected='true']");
   });
 
   it('removes the sidebar unread badge immediately when read returns zero', () => {

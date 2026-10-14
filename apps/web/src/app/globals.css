@@ -711,8 +711,11 @@ a {
   flex: 0 0 auto;
 }
 
-.sidebar-mobile-close,
-.topbar-menu-button {
+.icon-button.topbar-menu-button {
+  display: none;
+}
+
+.icon-button.sidebar-mobile-close {
   display: none;
 }
 
@@ -794,6 +797,7 @@ a {
 
 .topbar {
   display: flex;
+  width: 100%;
   min-height: 62px;
   align-items: flex-start;
   justify-content: space-between;
@@ -816,8 +820,12 @@ a {
 
 .topbar-context {
   display: grid;
+  flex: 1 1 auto;
+  width: 100%;
+  justify-items: start;
   gap: 3px;
   min-width: 0;
+  text-align: left;
 }
 
 .topbar-context > div {
@@ -10760,8 +10768,11 @@ tbody tr:hover,
     display: none;
   }
 
-  .sidebar-mobile-close,
-  .topbar-menu-button {
+  .icon-button.topbar-menu-button {
+    display: inline-flex;
+  }
+
+  .icon-button.sidebar-mobile-close {
     display: inline-flex;
   }
 

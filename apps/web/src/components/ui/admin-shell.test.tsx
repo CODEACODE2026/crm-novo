@@ -13,10 +13,11 @@ const stylesSource = readFileSync(resolve(currentDir, '../../app/globals.css'), 
 const mobileStylesSource = stylesSource.slice(stylesSource.indexOf('@media (max-width: 980px)'));
 
 function cssRule(selector: string, source = stylesSource) {
-  const ruleStart = source.indexOf(`${selector} {`);
-  if (ruleStart < 0) return '';
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ruleMatch = new RegExp(`(?:^|\\n)\\s*${escapedSelector}\\s*\\{`).exec(source);
+  if (!ruleMatch) return '';
 
-  const declarationsStart = source.indexOf('{', ruleStart) + 1;
+  const declarationsStart = source.indexOf('{', ruleMatch.index) + 1;
   return source.slice(declarationsStart, source.indexOf('}', declarationsStart));
 }
 
@@ -101,6 +102,36 @@ describe('AdminShell mobile navigation', () => {
     expect(cssRule('.app-shell.is-collapsed .sidebar-footer', mobileStylesSource)).toContain(
       'justify-content: flex-start;',
     );
+  });
+
+  it('separates desktop collapse controls from mobile drawer controls', () => {
+    expect(cssRule('.icon-button.sidebar-mobile-close')).toContain('display: none;');
+    expect(cssRule('.icon-button.topbar-menu-button')).toContain('display: none;');
+    expect(cssRule('.icon-button.sidebar-mobile-close', mobileStylesSource)).toContain(
+      'display: inline-flex;',
+    );
+    expect(cssRule('.icon-button.topbar-menu-button', mobileStylesSource)).toContain(
+      'display: inline-flex;',
+    );
+    expect(cssRule('.sidebar-collapse', mobileStylesSource)).toContain('display: none;');
+    expect(shellSource).toContain('className="icon-button sidebar-collapse"');
+    expect(shellSource).toContain('className="icon-button sidebar-mobile-close"');
+    expect(shellSource).toContain('className="icon-button topbar-menu-button"');
+  });
+
+  it('anchors the global page heading to the left edge of the main content', () => {
+    const topbarRule = cssRule('.topbar');
+    const contextRule = cssRule('.topbar-context');
+
+    expect(topbarRule).toContain('width: 100%;');
+    expect(topbarRule).toContain('justify-content: space-between;');
+    expect(topbarRule).not.toContain('justify-content: center;');
+    expect(contextRule).toContain('flex: 1 1 auto;');
+    expect(contextRule).toContain('width: 100%;');
+    expect(contextRule).toContain('justify-items: start;');
+    expect(contextRule).toContain('text-align: left;');
+    expect(contextRule).not.toContain('justify-items: center;');
+    expect(contextRule).not.toContain('text-align: center;');
   });
 
   it('renders repeated controlled collapse cycles without stale shell state', () => {

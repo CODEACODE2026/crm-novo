@@ -117,10 +117,11 @@ export function AdminShell<T extends string>({
             const badgeLabel = badge ? `${badge} mensagens não lidas em ${item.label}` : null;
             return (
               <button
+                aria-label={collapsed ? item.label : undefined}
                 aria-current={activeId === item.id ? 'page' : undefined}
                 className={`nav-item ${activeId === item.id ? 'active' : ''}`}
                 key={item.id}
-                title={badgeLabel ?? (collapsed ? item.label : undefined)}
+                title={collapsed ? item.label : (badgeLabel ?? undefined)}
                 type="button"
                 onClick={() => handleNavigate(item.id)}
               >

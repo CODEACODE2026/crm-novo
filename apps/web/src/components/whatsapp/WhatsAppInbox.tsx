@@ -73,7 +73,7 @@ import {
   getWhatsAppConversation,
   getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
-  getWhatsAppSavedStickerMediaUrl,
+  getWhatsAppSavedStickerMediaBlob,
   linkWhatsAppConversationClient,
   listClientOptions,
   listReceivables,
@@ -396,12 +396,20 @@ export function isConversationPixCopyEligible(message: WhatsAppConversationMessa
 }
 
 export function savedStickerPreviewKind(mimeType: string): SavedStickerPreviewKind {
-  const normalized = mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+  const normalized = savedStickerPreviewMimeType(mimeType);
 
   if (normalized === 'image/webp') return 'image';
   if (normalized === 'video/mp4') return 'video';
 
   return 'unsupported';
+}
+
+export function savedStickerPreviewMimeType(mimeType: string) {
+  const normalized = mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+
+  if (normalized === 'image/webp' || normalized === 'video/mp4') return normalized;
+
+  return null;
 }
 
 export function conversationPixCopyButtonLabel(
@@ -453,6 +461,7 @@ export function WhatsAppInbox({
   const [savedStickersLoaded, setSavedStickersLoaded] = useState(false);
   const [savedStickersLoading, setSavedStickersLoading] = useState(false);
   const [savedStickersError, setSavedStickersError] = useState('');
+  const [savedStickersNotice, setSavedStickersNotice] = useState('');
   const [savingStickerMessageIds, setSavingStickerMessageIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -643,6 +652,7 @@ export function WhatsAppInbox({
 
       setSavedStickersLoading(true);
       setSavedStickersError('');
+      setSavedStickersNotice('');
 
       try {
         const stickers = await listWhatsAppSavedStickers();
@@ -2246,6 +2256,7 @@ export function WhatsAppInbox({
 
     setSavingStickerMessageIds((current) => new Set(current).add(message.id));
     setSaveStickerFeedback((current) => ({ ...current, [message.id]: 'Salvando...' }));
+    setSavedStickersNotice('');
 
     try {
       const result = await saveWhatsAppStickerMessage(message.id);
@@ -2315,11 +2326,13 @@ export function WhatsAppInbox({
 
     setDeletingSavedStickerIds((current) => new Set(current).add(sticker.id));
     setSavedStickersError('');
+    setSavedStickersNotice('');
 
     try {
       await deleteWhatsAppSavedSticker(sticker.id);
       setSavedStickers((current) => current.filter((item) => item.id !== sticker.id));
       setDeleteSavedStickerConfirmId(null);
+      setSavedStickersNotice('Figurinha excluída.');
     } catch (err) {
       setSavedStickersError(
         err instanceof Error ? err.message : 'Não foi possível excluir a figurinha.',
@@ -3395,6 +3408,7 @@ export function WhatsAppInbox({
                 savedStickersError={savedStickersError}
                 savedStickersLoaded={savedStickersLoaded}
                 savedStickersLoading={savedStickersLoading}
+                savedStickersNotice={savedStickersNotice}
                 deleteSavedStickerConfirmId={deleteSavedStickerConfirmId}
                 deletingSavedStickerIds={deletingSavedStickerIds}
                 replyTarget={replyTarget}
@@ -3413,7 +3427,10 @@ export function WhatsAppInbox({
                 onSelectMedia={selectComposerMedia}
                 onSend={() => void sendCurrentMessage()}
                 onDeleteSavedSticker={(sticker) => void deleteSavedStickerFromLibrary(sticker)}
-                onDeleteSavedStickerConfirmChange={setDeleteSavedStickerConfirmId}
+                onDeleteSavedStickerConfirmChange={(stickerId) => {
+                  setDeleteSavedStickerConfirmId(stickerId);
+                  setSavedStickersError('');
+                }}
                 onLoadSavedStickers={() => void loadSavedStickers()}
                 onSendSavedSticker={(sticker) => void sendSavedStickerFromLibrary(sticker)}
                 onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
@@ -5704,6 +5721,7 @@ function ConversationComposer({
   savedStickersError,
   savedStickersLoaded,
   savedStickersLoading,
+  savedStickersNotice,
   deleteSavedStickerConfirmId,
   deletingSavedStickerIds,
   replyTarget,
@@ -5733,6 +5751,7 @@ function ConversationComposer({
   savedStickersError: string;
   savedStickersLoaded: boolean;
   savedStickersLoading: boolean;
+  savedStickersNotice: string;
   deleteSavedStickerConfirmId: string | null;
   deletingSavedStickerIds: Set<string>;
   replyTarget: WhatsAppConversationMessage | null;
@@ -5753,6 +5772,12 @@ function ConversationComposer({
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [savedStickerPickerOpen, setSavedStickerPickerOpen] = useState(false);
+  const [savedStickerPreviewUrls, setSavedStickerPreviewUrls] = useState<Record<string, string>>(
+    {},
+  );
+  const [loadingSavedStickerPreviewIds, setLoadingSavedStickerPreviewIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [failedSavedStickerPreviewIds, setFailedSavedStickerPreviewIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5770,6 +5795,13 @@ function ConversationComposer({
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const stickerInputRef = useRef<HTMLInputElement | null>(null);
   const composerContainerRef = useRef<HTMLFormElement | null>(null);
+  const savedStickerPickerRef = useRef<HTMLDivElement | null>(null);
+  const savedStickerPreviewUrlsRef = useRef(new Map<string, string>());
+  const loadingSavedStickerPreviewIdsRef = useRef(new Set<string>());
+  const savedStickerPreviewAbortRef = useRef(new Map<string, AbortController>());
+  const savedStickerPickerOpenRef = useRef(false);
+  const savedStickerIdsRef = useRef(new Set<string>());
+  const composerMountedRef = useRef(false);
   const quickReplyMenuRef = useRef<HTMLDivElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
@@ -5802,6 +5834,8 @@ function ConversationComposer({
   const activeQuickReplyId = activeQuickReply
     ? `conversation-quick-reply-${activeQuickReply.id}`
     : undefined;
+  const savedStickerDeleteCandidate =
+    savedStickers.find((sticker) => sticker.id === deleteSavedStickerConfirmId) ?? null;
 
   useEffect(() => {
     onVoiceRecordingChangeRef.current = onVoiceRecordingChange;
@@ -5917,11 +5951,102 @@ function ConversationComposer({
     });
   }, [quickReplyMenuVisible, visibleQuickReplies.length]);
 
+  useEffect(() => {
+    composerMountedRef.current = true;
+
+    return () => {
+      composerMountedRef.current = false;
+      clearSavedStickerPreviewCache(undefined, { updateState: false });
+    };
+  }, []);
+
+  useEffect(() => {
+    savedStickerPickerOpenRef.current = savedStickerPickerOpen;
+  }, [savedStickerPickerOpen]);
+
+  useEffect(() => {
+    closeSavedStickerPicker();
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!savedStickerPickerOpen) {
+      clearSavedStickerPreviewCache();
+      onDeleteSavedStickerConfirmChange(null);
+      return;
+    }
+
+    const availableStickerIds = new Set(savedStickers.map((sticker) => sticker.id));
+    savedStickerIdsRef.current = availableStickerIds;
+
+    savedStickerPreviewUrlsRef.current.forEach((objectUrl, stickerId) => {
+      if (!availableStickerIds.has(stickerId)) {
+        URL.revokeObjectURL(objectUrl);
+        savedStickerPreviewUrlsRef.current.delete(stickerId);
+        savedStickerPreviewAbortRef.current.get(stickerId)?.abort();
+        savedStickerPreviewAbortRef.current.delete(stickerId);
+        loadingSavedStickerPreviewIdsRef.current.delete(stickerId);
+      }
+    });
+
+    setSavedStickerPreviewUrls(Object.fromEntries(savedStickerPreviewUrlsRef.current));
+    setLoadingSavedStickerPreviewIds((current) => {
+      const next = new Set([...current].filter((stickerId) => availableStickerIds.has(stickerId)));
+      return next.size === current.size ? current : next;
+    });
+    setFailedSavedStickerPreviewIds((current) => {
+      const next = new Set([...current].filter((stickerId) => availableStickerIds.has(stickerId)));
+      return next.size === current.size ? current : next;
+    });
+
+    savedStickers.forEach((sticker) => {
+      if (savedStickerPreviewKind(sticker.mimeType) === 'unsupported') {
+        markSavedStickerPreviewFailed(sticker.id);
+        return;
+      }
+
+      void loadSavedStickerPreview(sticker);
+    });
+  }, [onDeleteSavedStickerConfirmChange, savedStickerPickerOpen, savedStickers]);
+
+  useEffect(() => {
+    if (!savedStickerPickerOpen && !deleteSavedStickerConfirmId) return undefined;
+
+    function closeOnPointerDown(event: PointerEvent) {
+      if (deleteSavedStickerConfirmId) return;
+
+      const target = event.target as Node;
+
+      if (savedStickerPickerRef.current?.contains(target)) return;
+      closeSavedStickerPicker();
+    }
+
+    function closeOnKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+
+      event.preventDefault();
+
+      if (deleteSavedStickerConfirmId) {
+        onDeleteSavedStickerConfirmChange(null);
+        return;
+      }
+
+      closeSavedStickerPicker();
+    }
+
+    document.addEventListener('pointerdown', closeOnPointerDown, true);
+    document.addEventListener('keydown', closeOnKeyDown, true);
+
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown, true);
+      document.removeEventListener('keydown', closeOnKeyDown, true);
+    };
+  }, [deleteSavedStickerConfirmId, savedStickerPickerOpen, onDeleteSavedStickerConfirmChange]);
+
   function selectFile(kind: ConversationComposerMedia['kind'], file: File | undefined) {
     if (!file) return;
     onSelectMedia(kind, file);
     setAttachmentMenuOpen(false);
-    setSavedStickerPickerOpen(false);
+    closeSavedStickerPicker();
   }
 
   function openSavedStickerPicker() {
@@ -5938,11 +6063,96 @@ function ConversationComposer({
   }
 
   function sendSavedSticker(sticker: WhatsAppSavedSticker) {
-    setSavedStickerPickerOpen(false);
+    closeSavedStickerPicker();
     onSendSavedSticker(sticker);
   }
 
+  function closeSavedStickerPicker() {
+    setSavedStickerPickerOpen(false);
+    onDeleteSavedStickerConfirmChange(null);
+  }
+
+  function clearSavedStickerPreviewCache(
+    stickerId?: string,
+    options: { updateState?: boolean } = {},
+  ) {
+    const updateState = options.updateState ?? true;
+    const stickerIds = stickerId ? [stickerId] : [...savedStickerPreviewUrlsRef.current.keys()];
+
+    stickerIds.forEach((currentStickerId) => {
+      const objectUrl = savedStickerPreviewUrlsRef.current.get(currentStickerId);
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        savedStickerPreviewUrlsRef.current.delete(currentStickerId);
+      }
+
+      savedStickerPreviewAbortRef.current.get(currentStickerId)?.abort();
+      savedStickerPreviewAbortRef.current.delete(currentStickerId);
+      loadingSavedStickerPreviewIdsRef.current.delete(currentStickerId);
+    });
+
+    if (!updateState || !composerMountedRef.current) return;
+
+    setSavedStickerPreviewUrls(Object.fromEntries(savedStickerPreviewUrlsRef.current));
+    setLoadingSavedStickerPreviewIds(new Set(loadingSavedStickerPreviewIdsRef.current));
+  }
+
+  async function loadSavedStickerPreview(sticker: WhatsAppSavedSticker) {
+    const stickerId = sticker.id;
+
+    if (
+      savedStickerPreviewUrlsRef.current.has(stickerId) ||
+      loadingSavedStickerPreviewIdsRef.current.has(stickerId) ||
+      failedSavedStickerPreviewIds.has(stickerId)
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    savedStickerPreviewAbortRef.current.set(stickerId, controller);
+    loadingSavedStickerPreviewIdsRef.current.add(stickerId);
+    setLoadingSavedStickerPreviewIds(new Set(loadingSavedStickerPreviewIdsRef.current));
+
+    try {
+      const blob = await getWhatsAppSavedStickerMediaBlob(stickerId, { signal: controller.signal });
+      if (
+        controller.signal.aborted ||
+        !composerMountedRef.current ||
+        !savedStickerPickerOpenRef.current ||
+        !savedStickerIdsRef.current.has(stickerId)
+      ) {
+        return;
+      }
+
+      const expectedMimeType = savedStickerPreviewMimeType(sticker.mimeType);
+      const blobMimeType = savedStickerPreviewMimeType(blob.type);
+
+      if (!blob.size || !expectedMimeType || blobMimeType !== expectedMimeType) {
+        throw new Error('Invalid saved sticker preview blob.');
+      }
+
+      const objectUrl = URL.createObjectURL(blob);
+      const previousObjectUrl = savedStickerPreviewUrlsRef.current.get(stickerId);
+      if (previousObjectUrl) {
+        URL.revokeObjectURL(previousObjectUrl);
+      }
+
+      savedStickerPreviewUrlsRef.current.set(stickerId, objectUrl);
+      setSavedStickerPreviewUrls(Object.fromEntries(savedStickerPreviewUrlsRef.current));
+    } catch {
+      if (controller.signal.aborted) return;
+      markSavedStickerPreviewFailed(stickerId);
+    } finally {
+      savedStickerPreviewAbortRef.current.delete(stickerId);
+      loadingSavedStickerPreviewIdsRef.current.delete(stickerId);
+      if (composerMountedRef.current && savedStickerPickerOpenRef.current) {
+        setLoadingSavedStickerPreviewIds(new Set(loadingSavedStickerPreviewIdsRef.current));
+      }
+    }
+  }
+
   function markSavedStickerPreviewFailed(stickerId: string) {
+    clearSavedStickerPreviewCache(stickerId);
     setFailedSavedStickerPreviewIds((current) => {
       if (current.has(stickerId)) return current;
 
@@ -6406,108 +6616,145 @@ function ConversationComposer({
         </div>
       </div>
       {savedStickerPickerOpen ? (
-        <div className="conversation-saved-sticker-picker">
+        <div ref={savedStickerPickerRef} className="conversation-saved-sticker-picker">
           {savedStickersLoading ? (
             <div className="conversation-saved-sticker-state">Carregando...</div>
           ) : savedStickersError ? (
             <div className="conversation-saved-sticker-state warning">{savedStickersError}</div>
           ) : savedStickers.length ? (
-            <div className="conversation-saved-sticker-grid">
-              {savedStickers.map((sticker) => {
-                const deleting = deletingSavedStickerIds.has(sticker.id);
-                const confirmingDelete = deleteSavedStickerConfirmId === sticker.id;
-                const previewKind = savedStickerPreviewKind(sticker.mimeType);
-                const previewUrl =
-                  sticker.previewUrl || getWhatsAppSavedStickerMediaUrl(sticker.id);
-                const previewFailed = failedSavedStickerPreviewIds.has(sticker.id);
+            <>
+              {savedStickersNotice ? (
+                <div className="conversation-saved-sticker-state success">
+                  {savedStickersNotice}
+                </div>
+              ) : null}
+              <div className="conversation-saved-sticker-grid">
+                {savedStickers.map((sticker) => {
+                  const deleting = deletingSavedStickerIds.has(sticker.id);
+                  const previewKind = savedStickerPreviewKind(sticker.mimeType);
+                  const previewUrl = savedStickerPreviewUrls[sticker.id];
+                  const previewLoading = loadingSavedStickerPreviewIds.has(sticker.id);
+                  const previewFailed = failedSavedStickerPreviewIds.has(sticker.id);
 
-                return (
-                  <div className="conversation-saved-sticker-item" key={sticker.id}>
-                    <button
-                      type="button"
-                      className="conversation-saved-sticker-thumb"
-                      disabled={sending || deleting}
-                      onClick={() => sendSavedSticker(sticker)}
-                      aria-label="Enviar figurinha salva"
-                    >
-                      {!previewFailed && previewKind === 'image' ? (
-                        <span className="conversation-saved-sticker-preview">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            alt=""
-                            decoding="async"
-                            loading="lazy"
+                  return (
+                    <div className="conversation-saved-sticker-item" key={sticker.id}>
+                      <button
+                        type="button"
+                        className="conversation-saved-sticker-thumb"
+                        disabled={sending || deleting || previewLoading}
+                        onClick={() => sendSavedSticker(sticker)}
+                        aria-label="Enviar figurinha salva"
+                      >
+                        {previewLoading ? (
+                          <span
+                            className="conversation-saved-sticker-placeholder loading"
+                            aria-label="Carregando prévia da figurinha"
+                          />
+                        ) : previewUrl && previewKind === 'image' && !previewFailed ? (
+                          <span className="conversation-saved-sticker-preview">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              alt=""
+                              decoding="async"
+                              loading="lazy"
+                              src={previewUrl}
+                              onError={() => markSavedStickerPreviewFailed(sticker.id)}
+                            />
+                          </span>
+                        ) : previewUrl && previewKind === 'video' && !previewFailed ? (
+                          <video
+                            aria-label="Prévia da figurinha salva"
+                            autoPlay
+                            className="conversation-saved-sticker-preview"
+                            loop
+                            muted
+                            playsInline
+                            preload="metadata"
                             src={previewUrl}
                             onError={() => markSavedStickerPreviewFailed(sticker.id)}
-                          />
-                        </span>
-                      ) : !previewFailed && previewKind === 'video' ? (
-                        <video
-                          aria-label="Prévia da figurinha salva"
-                          autoPlay
-                          className="conversation-saved-sticker-preview"
-                          loop
-                          muted
-                          playsInline
-                          preload="metadata"
-                          src={previewUrl}
-                          onError={() => markSavedStickerPreviewFailed(sticker.id)}
-                        >
-                          <track kind="captions" />
-                        </video>
-                      ) : (
-                        <span className="conversation-saved-sticker-placeholder">
-                          <ImageIcon aria-hidden="true" size={18} />
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="conversation-saved-sticker-delete"
-                      disabled={deleting}
-                      aria-label="Excluir figurinha salva"
-                      title="Excluir"
-                      onClick={() =>
-                        onDeleteSavedStickerConfirmChange(confirmingDelete ? null : sticker.id)
-                      }
-                    >
-                      {deleting ? (
-                        <Loader2 aria-hidden="true" size={13} />
-                      ) : (
-                        <Trash2 aria-hidden="true" size={13} />
-                      )}
-                    </button>
-                    {confirmingDelete ? (
-                      <div className="conversation-saved-sticker-confirm" role="dialog">
-                        <span>Excluir figurinha salva?</span>
-                        <div>
-                          <button
-                            type="button"
-                            disabled={deleting}
-                            onClick={() => onDeleteSavedStickerConfirmChange(null)}
                           >
-                            Cancelar
-                          </button>
-                          <button
-                            type="button"
-                            disabled={deleting}
-                            onClick={() => onDeleteSavedSticker(sticker)}
-                          >
-                            {deleting ? 'Excluindo...' : 'Excluir'}
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
+                            <track kind="captions" />
+                          </video>
+                        ) : (
+                          <span className="conversation-saved-sticker-placeholder">
+                            <ImageIcon aria-hidden="true" size={18} />
+                            <span>Indisponível</span>
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="conversation-saved-sticker-delete"
+                        disabled={deleting}
+                        aria-label="Excluir figurinha salva"
+                        title="Excluir"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteSavedStickerConfirmChange(sticker.id);
+                        }}
+                      >
+                        {deleting ? (
+                          <Loader2 aria-hidden="true" size={13} />
+                        ) : (
+                          <Trash2 aria-hidden="true" size={13} />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           ) : (
             <div className="conversation-saved-sticker-state">
               <strong>Nenhuma figurinha salva.</strong>
               <span>Salve uma figurinha recebida para encontrá-la aqui.</span>
             </div>
           )}
+        </div>
+      ) : null}
+      {savedStickerDeleteCandidate ? (
+        <div
+          className="conversation-saved-sticker-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              onDeleteSavedStickerConfirmChange(null);
+            }
+          }}
+        >
+          <div
+            aria-modal="true"
+            className="conversation-saved-sticker-modal"
+            role="dialog"
+            aria-labelledby="conversation-saved-sticker-delete-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <h2 id="conversation-saved-sticker-delete-title">Excluir figurinha salva?</h2>
+            <p>Esta ação removerá a figurinha da sua biblioteca.</p>
+            {savedStickersError ? (
+              <div className="conversation-saved-sticker-modal-error" role="alert">
+                {savedStickersError}
+              </div>
+            ) : null}
+            <div className="conversation-saved-sticker-modal-actions">
+              <button
+                type="button"
+                disabled={deletingSavedStickerIds.has(savedStickerDeleteCandidate.id)}
+                onClick={() => onDeleteSavedStickerConfirmChange(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={deletingSavedStickerIds.has(savedStickerDeleteCandidate.id)}
+                onClick={() => onDeleteSavedSticker(savedStickerDeleteCandidate)}
+              >
+                {deletingSavedStickerIds.has(savedStickerDeleteCandidate.id)
+                  ? 'Excluindo...'
+                  : 'Excluir'}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       {quickReplyMenuVisible ? (

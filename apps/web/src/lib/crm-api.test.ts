@@ -27,6 +27,7 @@ import {
   getReceivablesSummary,
   getWhatsAppConversation,
   getWhatsAppConversationMessagesAround,
+  getWhatsAppSavedStickerMediaBlob,
   getWhatsAppSavedStickerMediaUrl,
   importLegacyClients,
   importLegacyPayments,
@@ -1644,5 +1645,24 @@ describe('CRM UI formatters', () => {
     expect(eventSourceMock).toHaveBeenCalledWith(expect.stringContaining('/whatsapp/events'), {
       withCredentials: true,
     });
+  });
+
+  it('downloads saved sticker preview media through authenticated fetch', async () => {
+    const stickerBlob = new Blob(['webp'], { type: 'image/webp' });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(stickerBlob, {
+        status: 200,
+        headers: { 'Content-Type': 'image/webp' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getWhatsAppSavedStickerMediaBlob('saved-sticker-id');
+
+    expect(result.type).toBe('image/webp');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/whatsapp/saved-stickers/saved-sticker-id/media'),
+      expect.objectContaining({ credentials: 'include' }),
+    );
   });
 });

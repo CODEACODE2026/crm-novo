@@ -4125,7 +4125,21 @@ video.conversation-saved-sticker-preview {
   width: 100%;
   height: 100%;
   place-items: center;
+  gap: 4px;
   color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+}
+
+.conversation-saved-sticker-placeholder.loading::before {
+  width: 22px;
+  height: 22px;
+  border: 2px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  content: '';
+  animation: conversation-saved-sticker-spin 0.8s linear;
 }
 
 .conversation-saved-sticker-delete {
@@ -4144,48 +4158,9 @@ video.conversation-saved-sticker-preview {
   padding: 0;
 }
 
-.conversation-saved-sticker-confirm {
-  position: absolute;
-  top: 30px;
-  right: 0;
-  z-index: 2;
-  display: grid;
-  gap: 8px;
-  width: 180px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  padding: 10px;
-}
-
-.conversation-saved-sticker-confirm span,
 .conversation-saved-sticker-state span {
   color: var(--text-secondary);
   font-size: 12px;
-}
-
-.conversation-saved-sticker-confirm div {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.conversation-saved-sticker-confirm button {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--surface-soft);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  padding: 5px 8px;
-}
-
-.conversation-saved-sticker-confirm button:last-child {
-  border-color: transparent;
-  background: var(--danger);
-  color: white;
 }
 
 .conversation-saved-sticker-state {
@@ -4197,6 +4172,92 @@ video.conversation-saved-sticker-preview {
 
 .conversation-saved-sticker-state.warning {
   color: var(--danger);
+}
+
+.conversation-saved-sticker-state.success {
+  color: var(--success);
+  font-size: 12px;
+  padding: 2px 4px 10px;
+}
+
+.conversation-saved-sticker-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1700;
+  display: grid;
+  place-items: center;
+  background: rgb(15 23 42 / 38%);
+  padding: 16px;
+}
+
+.conversation-saved-sticker-modal {
+  display: grid;
+  width: min(360px, 100%);
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 18px;
+}
+
+.conversation-saved-sticker-modal h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.conversation-saved-sticker-modal p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.conversation-saved-sticker-modal-error {
+  border: 1px solid color-mix(in srgb, var(--danger) 36%, var(--border));
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 8px 10px;
+}
+
+.conversation-saved-sticker-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.conversation-saved-sticker-modal-actions button {
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-soft);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 12px;
+}
+
+.conversation-saved-sticker-modal-actions button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.conversation-saved-sticker-modal-actions button:last-child {
+  border-color: transparent;
+  background: var(--danger);
+  color: white;
+}
+
+@keyframes conversation-saved-sticker-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .conversation-quick-reply-menu {

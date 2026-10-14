@@ -2785,6 +2785,32 @@ export function getWhatsAppSavedStickerMediaUrl(id: string) {
   return buildApiUrl(`/whatsapp/saved-stickers/${id}/media`);
 }
 
+export async function getWhatsAppSavedStickerMediaBlob(
+  id: string,
+  init?: Pick<RequestInit, 'signal'>,
+) {
+  const response = await fetch(buildApiUrl(`/whatsapp/saved-stickers/${id}/media`), {
+    credentials: 'include',
+    ...init,
+  });
+
+  if (response.status === 401) {
+    redirectToLoginOnce();
+    throw new ApiError('Não autenticado.', response.status);
+  }
+
+  if (!response.ok) {
+    const body = await parseJsonResponse<{ message?: string } & Record<string, unknown>>(response);
+    throw new ApiError(
+      body?.message ?? 'Não foi possível carregar a prévia da figurinha.',
+      response.status,
+      body,
+    );
+  }
+
+  return response.blob();
+}
+
 export function saveWhatsAppStickerMessage(messageId: string) {
   return apiFetch<SaveWhatsAppStickerResult>(`/whatsapp/messages/${messageId}/save-sticker`, {
     method: 'POST',

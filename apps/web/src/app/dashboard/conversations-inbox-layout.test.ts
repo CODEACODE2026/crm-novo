@@ -1062,20 +1062,35 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('deleteWhatsAppSavedSticker(sticker.id)');
     expect(conversationsSource).toContain('Figurinhas salvas');
     expect(conversationsSource).toContain('conversation-saved-sticker-grid');
+    expect(conversationsSource).toContain('getWhatsAppSavedStickerMediaBlob(stickerId');
     expect(conversationsSource).toContain('savedStickerPreviewKind(sticker.mimeType)');
-    expect(conversationsSource).toContain('sticker.previewUrl || getWhatsAppSavedStickerMediaUrl');
+    expect(conversationsSource).toContain('URL.createObjectURL(blob)');
+    expect(conversationsSource).toContain('URL.revokeObjectURL(objectUrl)');
+    expect(conversationsSource).toContain('savedStickerPreviewUrlsRef.current');
+    expect(conversationsSource).toContain('loadingSavedStickerPreviewIdsRef.current');
+    expect(conversationsSource).toContain('savedStickerPreviewMimeType(blob.type)');
+    expect(conversationsSource).toContain("throw new Error('Invalid saved sticker preview blob.')");
+    expect(conversationsSource).toContain('savedStickerPickerOpenRef.current');
+    expect(conversationsSource).toContain('savedStickerIdsRef.current.has(stickerId)');
+    expect(conversationsSource).toContain('closeSavedStickerPicker();');
     expect(conversationsSource).toContain("previewKind === 'image'");
     expect(conversationsSource).toContain("previewKind === 'video'");
     expect(conversationsSource).toContain(
       'onError={() => markSavedStickerPreviewFailed(sticker.id)}',
     );
     expect(conversationsSource).toContain('conversation-saved-sticker-placeholder');
+    expect(conversationsSource).toContain('conversation-saved-sticker-modal-backdrop');
+    expect(conversationsSource).toContain('Esta ação removerá a figurinha da sua biblioteca.');
+    expect(conversationsSource).toContain("event.key !== 'Escape'");
+    expect(conversationsSource).toContain('event.stopPropagation()');
     expect(conversationsSource).toContain('Excluir figurinha salva?');
+    expect(conversationsSource).toContain('Figurinha excluída.');
     expect(conversationsSource).toContain('Figurinha já estava salva.');
     expect(stylesSource).toContain('.conversation-saved-sticker-picker');
     expect(stylesSource).toContain('grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));');
     expect(stylesSource).toContain('.conversation-saved-sticker-preview');
     expect(stylesSource).toContain('.conversation-saved-sticker-placeholder');
+    expect(stylesSource).toContain('.conversation-saved-sticker-modal');
     expect(mobileConversationMediaSource).toContain('.conversation-saved-sticker-picker');
     expect(mobileConversationMediaSource).toContain('max-height: min(42dvh, 320px);');
     expect(mobileConversationMediaSource).toContain(

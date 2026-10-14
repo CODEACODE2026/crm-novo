@@ -143,6 +143,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       listAdmin: vi.fn().mockResolvedValue([{ id: 'reply-id', label: 'PIX', text: 'Pix' }]),
       create: vi.fn().mockResolvedValue({ id: 'reply-id', label: 'Novo', text: 'Texto' }),
       update: vi.fn().mockResolvedValue({ id: 'reply-id', label: 'Editado', text: 'Texto' }),
+      remove: vi.fn().mockResolvedValue({ success: true }),
     };
     const realtime = { subscribe: vi.fn() };
     const subject = new WhatsAppController(
@@ -169,6 +170,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(
       subject.updateQuickReply('99999999-9999-4999-8999-999999999999', { isActive: false }),
     ).resolves.toEqual({ id: 'reply-id', label: 'Editado', text: 'Texto' });
+    await expect(subject.deleteQuickReply('99999999-9999-4999-8999-999999999999')).resolves.toEqual(
+      { success: true },
+    );
     await expect(subject.getConversation('conversation-id')).resolves.toEqual({
       id: 'conversation-id',
     });

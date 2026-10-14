@@ -113,6 +113,11 @@ export class WhatsAppController {
     return this.quickRepliesService.update(id, dto);
   }
 
+  @Delete('quick-replies/:id')
+  deleteQuickReply(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.quickRepliesService.remove(id);
+  }
+
   @Post('connection')
   createConnection(@Body() dto: CreateWhatsAppConnectionDto) {
     return this.whatsAppService.provisionConnection(dto);

@@ -53,7 +53,6 @@ import {
   updateConversationSummaryAfterRead,
 } from './WhatsAppInbox';
 import {
-  WHATSAPP_DEFAULT_QUICK_REPLIES,
   applyWhatsAppSlashQuickReply,
   applyWhatsAppQuickReply,
   filterWhatsAppQuickReplies,
@@ -81,6 +80,18 @@ const whatsAppQuickRepliesSource = readFileSync(
   join(currentDir, 'whatsapp-quick-replies.ts'),
   'utf8',
 );
+const quickReplyFilterFixture = [
+  {
+    id: 'expired-pix',
+    label: 'PIX expirado',
+    text: 'Esse PIX expirou. Posso gerar uma nova cobrança para você.',
+  },
+  {
+    id: 'follow-up',
+    label: 'Retorno',
+    text: 'Assim que eu tiver uma atualização, retorno por aqui.',
+  },
+];
 const referenceLifecycleModalsSource = readFileSync(
   join(currentDir, '../clients/reference-lifecycle-modals.tsx'),
   'utf8',
@@ -1696,39 +1707,10 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     revokeObjectURL.mockRestore();
   });
 
-  it('defines local fallback quick replies without financial automation hooks', () => {
-    expect(WHATSAPP_DEFAULT_QUICK_REPLIES).toEqual([
-      {
-        id: 'greeting',
-        label: 'Saudação',
-        text: 'Olá! Tudo bem? Como posso ajudar?',
-      },
-      {
-        id: 'waiting-payment',
-        label: 'Aguardando pagamento',
-        text: 'Olá! Ficamos no aguardo do pagamento. Assim que for identificado, damos continuidade.',
-      },
-      {
-        id: 'expired-pix',
-        label: 'PIX expirado',
-        text: 'Esse PIX expirou. Posso gerar uma nova cobrança para você.',
-      },
-      {
-        id: 'payment-confirmed',
-        label: 'Pagamento confirmado',
-        text: 'Pagamento confirmado. Obrigado!',
-      },
-      {
-        id: 'follow-up',
-        label: 'Retorno',
-        text: 'Assim que eu tiver uma atualização, retorno por aqui.',
-      },
-      {
-        id: 'closing',
-        label: 'Encerramento',
-        text: 'Qualquer dúvida, estou à disposição.',
-      },
-    ]);
+  it('keeps quick reply helpers pure and free from local fallback content', () => {
+    expect(whatsAppQuickRepliesSource).not.toContain('WHATSAPP_DEFAULT_QUICK_REPLIES');
+    expect(whatsAppQuickRepliesSource).not.toContain('Aguardando pagamento');
+    expect(whatsAppQuickRepliesSource).not.toContain('Pagamento confirmado');
     expect(whatsAppQuickRepliesSource).not.toContain('sendPaymentIntentWhatsApp');
     expect(whatsAppQuickRepliesSource).not.toContain('createReceivablePix');
     expect(whatsAppQuickRepliesSource).not.toContain('localStorage');
@@ -1736,20 +1718,22 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppQuickRepliesSource).not.toContain('dangerouslySetInnerHTML');
   });
 
-  it('loads quick replies from the API with loading, empty, and fallback states', () => {
+  it('loads quick replies from the API with loading, empty, and managed error states', () => {
     expect(whatsAppInboxSource).toContain('listWhatsAppQuickReplies');
     expect(whatsAppInboxSource).toContain('setQuickReplies(replies)');
-    expect(whatsAppInboxSource).toContain('setQuickReplies(WHATSAPP_DEFAULT_QUICK_REPLIES)');
+    expect(whatsAppInboxSource).toContain('setQuickReplies([])');
     expect(whatsAppInboxSource).toContain('Carregando respostas...');
     expect(whatsAppInboxSource).toContain('Nenhuma resposta rápida disponível.');
     expect(whatsAppInboxSource).toContain('quickRepliesError');
+    expect(whatsAppInboxSource).toContain('Não foi possível carregar respostas rápidas.');
+    expect(whatsAppInboxSource).not.toContain('Usando respostas locais.');
     expect(whatsAppInboxSource).not.toContain(
       'filterWhatsAppQuickReplies(WHATSAPP_DEFAULT_QUICK_REPLIES',
     );
   });
 
   it('filters and previews quick replies by label or text', () => {
-    const replies = [...WHATSAPP_DEFAULT_QUICK_REPLIES];
+    const replies = [...quickReplyFilterFixture];
 
     expect(filterWhatsAppQuickReplies(replies, '')).toBe(replies);
     expect(filterWhatsAppQuickReplies(replies, 'pix').map((reply) => reply.id)).toEqual([
@@ -1758,7 +1742,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(filterWhatsAppQuickReplies(replies, 'ATUALIZAÇÃO').map((reply) => reply.id)).toEqual([
       'follow-up',
     ]);
-    expect(replies).toEqual(WHATSAPP_DEFAULT_QUICK_REPLIES);
+    expect(replies).toEqual(quickReplyFilterFixture);
     expect(whatsAppQuickReplyPreview('Mensagem curta')).toBe('Mensagem curta');
     expect(whatsAppQuickReplyPreview('A'.repeat(70), 12)).toBe('AAAAAAAAA...');
     expect(whatsAppQuickReplyPreview('Linha 1\nLinha 2', 20)).toBe('Linha 1 Linha 2');

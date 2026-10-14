@@ -126,7 +126,6 @@ import { normalizeWhatsAppDisplayPhone } from '../../lib/whatsapp-actions';
 import { formatNormalizedBrazilPhone } from '../clients/client-referral-select';
 import { conversationPresenceLabel, useWhatsAppRealtime } from './WhatsAppRealtimeProvider';
 import {
-  WHATSAPP_DEFAULT_QUICK_REPLIES,
   applyWhatsAppSlashQuickReply,
   filterWhatsAppQuickReplies,
   whatsAppQuickReplySlashQuery,
@@ -588,11 +587,9 @@ export function WhatsAppInbox({
         setQuickReplies(replies);
       } catch (err) {
         if (canceled) return;
-        setQuickReplies(WHATSAPP_DEFAULT_QUICK_REPLIES);
+        setQuickReplies([]);
         setQuickRepliesError(
-          err instanceof Error
-            ? err.message
-            : 'Não foi possível carregar respostas rápidas. Usando respostas locais.',
+          err instanceof Error ? err.message : 'Não foi possível carregar respostas rápidas.',
         );
       } finally {
         if (!canceled) {

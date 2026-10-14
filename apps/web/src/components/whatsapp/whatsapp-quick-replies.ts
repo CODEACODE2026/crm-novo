@@ -11,39 +11,6 @@ export type WhatsAppQuickReplyApplyResult = {
 
 const whatsappQuickReplySlashPattern = /^\/\S*$/;
 
-export const WHATSAPP_DEFAULT_QUICK_REPLIES: WhatsAppQuickReply[] = [
-  {
-    id: 'greeting',
-    label: 'Saudação',
-    text: 'Olá! Tudo bem? Como posso ajudar?',
-  },
-  {
-    id: 'waiting-payment',
-    label: 'Aguardando pagamento',
-    text: 'Olá! Ficamos no aguardo do pagamento. Assim que for identificado, damos continuidade.',
-  },
-  {
-    id: 'expired-pix',
-    label: 'PIX expirado',
-    text: 'Esse PIX expirou. Posso gerar uma nova cobrança para você.',
-  },
-  {
-    id: 'payment-confirmed',
-    label: 'Pagamento confirmado',
-    text: 'Pagamento confirmado. Obrigado!',
-  },
-  {
-    id: 'follow-up',
-    label: 'Retorno',
-    text: 'Assim que eu tiver uma atualização, retorno por aqui.',
-  },
-  {
-    id: 'closing',
-    label: 'Encerramento',
-    text: 'Qualquer dúvida, estou à disposição.',
-  },
-];
-
 export function filterWhatsAppQuickReplies(
   replies: WhatsAppQuickReply[],
   search: string,

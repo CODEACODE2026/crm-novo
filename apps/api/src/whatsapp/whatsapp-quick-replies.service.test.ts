@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 
@@ -94,6 +95,49 @@ describe('WhatsAppQuickRepliesService', () => {
       where: { id: baseReply.id },
       data: { isActive: false, sortOrder: 0 },
     });
+  });
+
+  it('deletes existing replies without touching other quick replies', async () => {
+    const prisma = {
+      whatsAppQuickReply: {
+        findUnique: vi.fn().mockResolvedValue(baseReply),
+        delete: vi.fn().mockResolvedValue(baseReply),
+      },
+    };
+
+    await expect(service(prisma).remove(baseReply.id)).resolves.toEqual({ success: true });
+    expect(prisma.whatsAppQuickReply.findUnique).toHaveBeenCalledWith({
+      where: { id: baseReply.id },
+    });
+    expect(prisma.whatsAppQuickReply.delete).toHaveBeenCalledWith({ where: { id: baseReply.id } });
+  });
+
+  it('returns not found before deleting missing replies', async () => {
+    const prisma = {
+      whatsAppQuickReply: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        delete: vi.fn(),
+      },
+    };
+
+    await expect(service(prisma).remove(baseReply.id)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.whatsAppQuickReply.delete).not.toHaveBeenCalled();
+  });
+
+  it('maps concurrent delete misses to not found', async () => {
+    const prisma = {
+      whatsAppQuickReply: {
+        findUnique: vi.fn().mockResolvedValue(baseReply),
+        delete: vi.fn().mockRejectedValue(
+          new Prisma.PrismaClientKnownRequestError('Record to delete does not exist.', {
+            clientVersion: 'test',
+            code: 'P2025',
+          }),
+        ),
+      },
+    };
+
+    await expect(service(prisma).remove(baseReply.id)).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('rejects empty text and missing replies', async () => {

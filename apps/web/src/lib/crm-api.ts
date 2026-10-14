@@ -2416,6 +2416,10 @@ export function updateWhatsAppQuickReply(id: string, payload: Partial<WhatsAppQu
   });
 }
 
+export function deleteWhatsAppQuickReply(id: string) {
+  return apiFetch<{ success: boolean }>(`/whatsapp/quick-replies/${id}`, { method: 'DELETE' });
+}
+
 export function syncPaymentIntent(id: string) {
   return apiFetch<PaymentIntent>(`/payment-intents/${id}/sync`, { method: 'POST' });
 }

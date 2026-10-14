@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { WhatsAppQuickReply } from '@prisma/client';
+import { Prisma, type WhatsAppQuickReply } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateWhatsAppQuickReplyDto } from './dto/create-whatsapp-quick-reply.dto';
 import { UpdateWhatsAppQuickReplyDto } from './dto/update-whatsapp-quick-reply.dto';
@@ -65,6 +65,26 @@ export class WhatsAppQuickRepliesService {
     });
 
     return this.presentAdmin(updated);
+  }
+
+  async remove(id: string) {
+    const current = await this.prisma.whatsAppQuickReply.findUnique({ where: { id } });
+
+    if (!current) {
+      throw new NotFoundException('Resposta rapida nao encontrada.');
+    }
+
+    try {
+      await this.prisma.whatsAppQuickReply.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new NotFoundException('Resposta rapida nao encontrada.');
+      }
+
+      throw error;
+    }
+
+    return { success: true };
   }
 
   private assertText(value: string, message: string) {

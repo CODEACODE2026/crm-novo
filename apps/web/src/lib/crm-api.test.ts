@@ -13,6 +13,7 @@ import {
   createReceivablesPix,
   createWhatsAppRealtimeEventSource,
   deleteWhatsAppConversationMessage,
+  deleteWhatsAppQuickReply,
   deleteClient,
   formatCurrency,
   formatDate,
@@ -1466,6 +1467,7 @@ describe('CRM UI formatters', () => {
     await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', '❤️');
     await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', null);
     await deleteWhatsAppConversationMessage('conversation-id', 'message-id');
+    await deleteWhatsAppQuickReply('quick-reply-id');
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1581,6 +1583,11 @@ describe('CRM UI formatters', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       15,
       expect.stringContaining('/whatsapp/conversations/conversation-id/messages/message-id'),
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      16,
+      expect.stringContaining('/whatsapp/quick-replies/quick-reply-id'),
       expect.objectContaining({ method: 'DELETE' }),
     );
   });

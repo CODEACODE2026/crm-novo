@@ -154,6 +154,7 @@ import {
   createWhatsAppQuickReply,
   deleteClient,
   deleteClientReference,
+  deleteWhatsAppQuickReply,
   deletePlan,
   deleteFinancialCategory,
   deleteFinancialTransaction,
@@ -5289,6 +5290,22 @@ function SettingsView({
     await saveQuickReply({ isActive: !reply.isActive }, reply.id);
   }
 
+  async function deleteQuickReply(reply: WhatsAppQuickReplyAdmin) {
+    setQuickRepliesError('');
+    setNotice('');
+
+    try {
+      await deleteWhatsAppQuickReply(reply.id);
+      setQuickReplies((current) => current.filter((item) => item.id !== reply.id));
+      setNotice('Resposta rápida excluída.');
+    } catch (err) {
+      setQuickRepliesError(
+        err instanceof Error ? err.message : 'Não foi possível excluir resposta rápida.',
+      );
+      throw err;
+    }
+  }
+
   const applyBillingSettings = useCallback((settings: BillingAutomationSettings) => {
     setBillingSettings(settings);
     setBillingEnabled(settings.enabled);
@@ -5642,6 +5659,7 @@ function SettingsView({
               onRefresh={loadQuickReplies}
               onSave={saveQuickReply}
               onToggle={toggleQuickReply}
+              onDelete={deleteQuickReply}
             />
           ) : null}
 
@@ -5899,6 +5917,7 @@ function SettingsWhatsAppQuickRepliesPanel({
   onRefresh,
   onSave,
   onToggle,
+  onDelete,
 }: {
   error: string;
   loading: boolean;
@@ -5907,6 +5926,7 @@ function SettingsWhatsAppQuickRepliesPanel({
   onRefresh: () => Promise<void>;
   onSave: (payload: Partial<WhatsAppQuickReplyPayload>, id?: string) => Promise<void>;
   onToggle: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
+  onDelete: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [label, setLabel] = useState('');
@@ -5915,6 +5935,8 @@ function SettingsWhatsAppQuickRepliesPanel({
   const [sortOrder, setSortOrder] = useState('0');
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WhatsAppQuickReplyAdmin | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const editingReply = replies.find((reply) => reply.id === editingId) ?? null;
   const parsedSortOrder = Number(sortOrder);
   const formValid =
@@ -5968,6 +5990,23 @@ function SettingsWhatsAppQuickRepliesPanel({
       await onToggle(reply);
     } finally {
       setTogglingId(null);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget || deletingId) return;
+
+    setDeletingId(deleteTarget.id);
+    try {
+      await onDelete(deleteTarget);
+      if (editingId === deleteTarget.id) {
+        resetForm();
+      }
+      setDeleteTarget(null);
+    } catch {
+      // The parent sets the visible error. Keep the confirmation open so the item is not removed.
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -6088,10 +6127,67 @@ function SettingsWhatsAppQuickRepliesPanel({
               >
                 {reply.isActive ? 'Desativar' : 'Ativar'}
               </Button>
+              <Button
+                icon={Trash2}
+                disabled={Boolean(deletingId)}
+                size="sm"
+                variant="danger"
+                onClick={() => setDeleteTarget(reply)}
+              >
+                {deletingId === reply.id ? 'Excluindo...' : 'Excluir'}
+              </Button>
             </div>
           </article>
         ))}
       </div>
+      {deleteTarget ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal settings-quick-reply-delete-modal"
+            aria-labelledby="quick-reply-delete-title"
+          >
+            <header className="modal-header modal-header-with-icon">
+              <span className="modal-icon danger" aria-hidden="true">
+                <Trash2 size={16} />
+              </span>
+              <div>
+                <span className="metric-label">Exclusão definitiva</span>
+                <h2 id="quick-reply-delete-title">Excluir resposta rápida?</h2>
+                <p>Esta ação removerá definitivamente a resposta rápida "{deleteTarget.label}".</p>
+              </div>
+              <IconButton
+                disabled={Boolean(deletingId)}
+                icon={X}
+                label="Fechar confirmação de exclusão"
+                onClick={() => setDeleteTarget(null)}
+              />
+            </header>
+            <div className="notice danger">
+              A resposta não aparecerá mais no painel nem no slash menu quando o Inbox carregar a
+              lista do banco.
+            </div>
+            <div className="form-actions">
+              <div className="button-row">
+                <Button
+                  disabled={Boolean(deletingId)}
+                  variant="secondary"
+                  onClick={() => setDeleteTarget(null)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  icon={Trash2}
+                  disabled={deletingId === deleteTarget.id}
+                  variant="danger"
+                  onClick={() => void confirmDelete()}
+                >
+                  {deletingId === deleteTarget.id ? 'Excluindo...' : 'Excluir'}
+                </Button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

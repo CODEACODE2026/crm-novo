@@ -424,6 +424,7 @@ describe('Settings V2 SET1 shell contracts', () => {
       'await createWhatsAppQuickReply(payload as WhatsAppQuickReplyPayload);',
     );
     expect(settingsViewSource).toContain('await updateWhatsAppQuickReply(id, payload);');
+    expect(settingsViewSource).toContain('await deleteWhatsAppQuickReply(reply.id);');
     expect(settingsSource).toContain('function SettingsWhatsAppQuickRepliesPanel');
     expect(settingsSource).toContain('Respostas ativas aparecem no slash menu do Inbox.');
     expect(settingsSource).toContain('Título');
@@ -431,8 +432,11 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsSource).toContain('Ordem');
     expect(settingsSource).toContain('Ativo');
     expect(settingsSource).toContain('Desativar');
+    expect(settingsSource).toContain('Excluir resposta rápida?');
+    expect(settingsSource).toContain('Excluindo...');
     expect(stylesSource).toContain('.settings-quick-reply-form');
     expect(stylesSource).toContain('.settings-quick-reply-item');
+    expect(stylesSource).toContain('.settings-quick-reply-delete-modal');
   });
 
   it('renders Sistema as a read-only health panel without exposing secrets', () => {

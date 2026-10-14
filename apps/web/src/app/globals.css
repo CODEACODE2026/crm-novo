@@ -2241,11 +2241,10 @@ a {
 
 .conversations-view {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   max-height: 100%;
   min-height: 0;
-  gap: 14px;
 }
 
 .app-shell[data-active-view='conversations'] {
@@ -2310,7 +2309,7 @@ a {
 
 .conversations-shell {
   display: grid;
-  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr);
+  grid-template-columns: minmax(286px, 0.72fr) minmax(0, 1.78fr);
   height: 100%;
   max-height: 100%;
   min-height: 0;
@@ -2336,11 +2335,11 @@ a {
 
 .conversation-list-panel {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
-  gap: 11px;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+  gap: 8px;
   border-right: 1px solid var(--border);
   overflow: hidden;
-  padding: 14px;
+  padding: 10px;
 }
 
 .conversation-bubble mark {
@@ -2354,7 +2353,7 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .conversation-panel-header h3,
@@ -2394,6 +2393,10 @@ a {
   font-size: 12px;
 }
 
+.conversation-summary-slot {
+  min-height: 0;
+}
+
 .conversation-presence-label {
   display: block;
   margin-top: 2px;
@@ -2425,7 +2428,7 @@ a {
 }
 
 .conversation-search input {
-  min-height: 38px;
+  min-height: 34px;
 }
 
 .conversation-search .ui-icon-button {
@@ -2477,7 +2480,7 @@ a {
 
 .conversation-filter-row button {
   min-width: 0;
-  min-height: 30px;
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
@@ -2495,13 +2498,13 @@ a {
 
 .conversation-status-filter {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   color: var(--muted);
   font-size: 12px;
 }
 
 .conversation-status-filter select {
-  min-height: 34px;
+  min-height: 31px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
@@ -2533,15 +2536,15 @@ a {
 
 .conversation-list-item {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
   width: 100%;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 10px 9px;
+  padding: 8px 7px;
   text-align: left;
 }
 
@@ -2553,11 +2556,11 @@ a {
 
 .conversation-avatar {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   overflow: hidden;
   place-items: center;
-  flex: 0 0 38px;
+  flex: 0 0 34px;
   border: 0;
   border-radius: 999px;
   background: rgb(104 169 255 / 14%);
@@ -2660,7 +2663,7 @@ a {
 .conversation-preview-row {
   align-items: flex-start;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
 }
 
 .conversation-list-meta-row {
@@ -10791,7 +10794,7 @@ tbody tr:hover,
   }
 
   .conversations-shell {
-    grid-template-columns: minmax(292px, 0.94fr) minmax(0, 1.16fr);
+    grid-template-columns: minmax(272px, 0.68fr) minmax(0, 1.52fr);
   }
 
   .conversation-client-panel {
@@ -13670,8 +13673,6 @@ tbody tr:hover,
     height: 100%;
     max-height: 100%;
     min-height: 0;
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 8px;
   }
 
   .conversations-view .page-header {

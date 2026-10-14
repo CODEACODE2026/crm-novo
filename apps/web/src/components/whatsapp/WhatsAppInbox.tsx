@@ -50,7 +50,6 @@ import {
 } from 'lucide-react';
 import { ClientForm } from '../clients/client-form';
 import { FinanceClientAutocomplete } from '../clients/finance-client-autocomplete';
-import { PageHeader } from '../ui/admin-shell';
 import { Button, IconButton } from '../ui/primitives';
 import {
   ConversationMessageSearch,
@@ -3176,34 +3175,6 @@ export function WhatsAppInbox({
 
   return (
     <section className={`conversations-view mobile-mode-${mobileMode}`}>
-      <PageHeader
-        eyebrow="WhatsApp Inbox"
-        icon={MessagesSquare}
-        title="Conversas"
-        subtitle="Atendimento e histórico conversacional do WhatsApp"
-        actions={
-          <div className="conversation-page-actions">
-            {summary && hasUnreadConversationSummary(summary) ? (
-              <span className="conversation-summary-pill">
-                {formatConversationSummary(summary)}
-              </span>
-            ) : null}
-            <Button
-              icon={Plus}
-              size="sm"
-              variant="primary"
-              onClick={() => {
-                setStartConversationError('');
-                void loadStartConversationConnections();
-                setStartConversationOpen(true);
-              }}
-            >
-              Iniciar conversa
-            </Button>
-          </div>
-        }
-      />
-
       {startConversationOpen ? (
         <StartConversationModal
           connections={whatsAppConnections}
@@ -3281,6 +3252,7 @@ export function WhatsAppInbox({
           avatars={conversationAvatars}
           searchInput={searchInput}
           selectedId={selectedConversation?.id ?? null}
+          summary={summary}
           statusFilter={statusFilter}
           onAvatarError={handleAvatarImageError}
           onAvatarPreview={openAvatarPreview}
@@ -3288,6 +3260,11 @@ export function WhatsAppInbox({
           onLoadMore={() => void loadMoreConversations()}
           onSearchChange={setSearchInput}
           onSelect={(conversation) => void selectConversation(conversation)}
+          onStartConversation={() => {
+            setStartConversationError('');
+            void loadStartConversationConnections();
+            setStartConversationOpen(true);
+          }}
           onStatusFilterChange={setStatusFilter}
         />
 
@@ -3760,6 +3737,7 @@ function ConversationList({
   avatars,
   searchInput,
   selectedId,
+  summary,
   statusFilter,
   onAvatarError,
   onAvatarPreview,
@@ -3767,6 +3745,7 @@ function ConversationList({
   onLoadMore,
   onSearchChange,
   onSelect,
+  onStartConversation,
   onStatusFilterChange,
 }: {
   conversations: WhatsAppConversation[];
@@ -3779,6 +3758,7 @@ function ConversationList({
   avatars: Record<string, ConversationAvatarState>;
   searchInput: string;
   selectedId: string | null;
+  summary: WhatsAppConversationSummary | null;
   statusFilter: WhatsAppConversationStatus | '';
   onAvatarError: (conversationId: string, url: string) => void;
   onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
@@ -3786,6 +3766,7 @@ function ConversationList({
   onLoadMore: () => void;
   onSearchChange: (search: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
+  onStartConversation: () => void;
   onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
 }) {
   const emptyCopy = 'Nenhuma conversa encontrada.';
@@ -3797,6 +3778,13 @@ function ConversationList({
           <h3>Conversas</h3>
           <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
         </div>
+        <IconButton icon={Plus} label="Iniciar conversa" onClick={onStartConversation} />
+      </div>
+
+      <div className="conversation-summary-slot">
+        {summary && hasUnreadConversationSummary(summary) ? (
+          <span className="conversation-summary-pill">{formatConversationSummary(summary)}</span>
+        ) : null}
       </div>
 
       <ConversationSearch query={searchInput} onQueryChange={onSearchChange} />

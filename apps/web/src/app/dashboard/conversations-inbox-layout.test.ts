@@ -70,10 +70,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-rows: auto minmax(0, 1fr);');
     expect(stylesSource).toContain('height: 100%;');
     expect(stylesSource).toContain(
-      'grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.46fr);',
+      'grid-template-columns: minmax(286px, 0.72fr) minmax(0, 1.78fr);',
     );
     expect(stylesSource).toContain(
-      'grid-template-columns: minmax(292px, 0.94fr) minmax(0, 1.16fr);',
+      'grid-template-columns: minmax(272px, 0.68fr) minmax(0, 1.52fr);',
     );
     expect(stylesSource).toContain('.conversation-client-panel');
     expect(stylesSource).toContain('.conversation-contact-drawer-backdrop');
@@ -164,16 +164,17 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain("goToMessageSearchResult('previous')");
   });
 
-  it('keeps a single start conversation action outside the internal list header', () => {
-    expect(conversationsSource).toContain('conversation-page-actions');
+  it('keeps a compact start conversation action in the conversation list header', () => {
+    expect(conversationsSource).toContain('conversation-summary-slot');
     expect(conversationsSource).toContain('Iniciar conversa');
+    expect(conversationsSource).not.toContain('<PageHeader');
     expect(conversationsSource).not.toContain('Nova conversa');
     expect(conversationsSource).not.toContain('onNewConversation');
     expect(conversationsSource).toMatch(
-      /conversation-page-actions[\s\S]*<Button[\s\S]*icon=\{Plus\}[\s\S]*>\s*Iniciar conversa\s*<\/Button>/,
+      /<IconButton icon=\{Plus\} label="Iniciar conversa" onClick=\{onStartConversation\} \/>/,
     );
     expect(conversationsSource).toMatch(
-      /<div className="conversation-panel-header">[\s\S]*<h3>Conversas<\/h3>[\s\S]*`\$\{conversations\.length\} visíveis`[\s\S]*<\/div>\s*<\/div>/,
+      /<div className="conversation-panel-header">[\s\S]*<h3>Conversas<\/h3>[\s\S]*`\$\{conversations\.length\} visíveis`[\s\S]*<IconButton icon=\{Plus\} label="Iniciar conversa" onClick=\{onStartConversation\} \/>[\s\S]*<\/div>/,
     );
   });
 
@@ -944,7 +945,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-error-slot:empty');
     expect(stylesSource).toContain('.conversation-list-panel');
-    expect(stylesSource).toContain('grid-template-rows: auto auto auto auto minmax(0, 1fr);');
+    expect(stylesSource).toContain(
+      'grid-template-rows: auto auto auto auto auto minmax(0, 1fr);',
+    );
     expect(stylesSource).toContain('.conversation-list-items');
     expect(stylesSource).toContain('.conversation-messages-wrap');
     expect(stylesSource).toContain('.conversation-messages');

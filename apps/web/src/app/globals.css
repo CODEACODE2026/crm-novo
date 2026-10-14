@@ -3403,6 +3403,27 @@ a {
   background: #101214;
 }
 
+.conversation-sticker-media {
+  display: block;
+  width: min(200px, 100%);
+  max-width: 200px;
+  max-height: 200px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+}
+
+.conversation-sticker-media img,
+.conversation-sticker-media:is(video) {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 200px;
+  object-fit: contain;
+  background: transparent;
+}
+
 .conversation-document-media {
   display: grid;
   gap: 0;

@@ -86,6 +86,11 @@ describe('Kirago clients', () => {
       MimeType: 'video/mp4',
       Id: 'video-request-id',
     });
+    await client.sendSticker('instance-token', {
+      Phone: '5544999999999',
+      Sticker: 'data:image/webp;base64,abc',
+      ContextInfo: { StanzaId: 'quoted-provider-id' },
+    });
     await client.downloadImage('instance-token', {
       Url: 'https://mmg.whatsapp.net/image',
       MediaKey: 'media-key',
@@ -179,7 +184,17 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(7, '/chat/downloadimage', {
+    expect(request).toHaveBeenNthCalledWith(7, '/chat/send/sticker', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Sticker: 'data:image/webp;base64,abc',
+        ContextInfo: { StanzaId: 'quoted-provider-id' },
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(8, '/chat/downloadimage', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {
@@ -191,7 +206,7 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(8, '/chat/react', {
+    expect(request).toHaveBeenNthCalledWith(9, '/chat/react', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {
@@ -201,7 +216,7 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(9, '/chat/delete', {
+    expect(request).toHaveBeenNthCalledWith(10, '/chat/delete', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {
@@ -210,7 +225,7 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(10, '/chat/presence', {
+    expect(request).toHaveBeenNthCalledWith(11, '/chat/presence', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {
@@ -219,7 +234,7 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(11, '/chat/presence', {
+    expect(request).toHaveBeenNthCalledWith(12, '/chat/presence', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {
@@ -228,7 +243,7 @@ describe('Kirago clients', () => {
       },
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
-    expect(request).toHaveBeenNthCalledWith(12, '/chat/presence', {
+    expect(request).toHaveBeenNthCalledWith(13, '/chat/presence', {
       method: 'POST',
       headers: { token: 'instance-token' },
       body: {

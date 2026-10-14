@@ -259,11 +259,15 @@ export class WhatsAppController {
     file: { buffer: Buffer; mimetype: string; originalname: string; size: number } | undefined,
     @Body('caption') caption: string | undefined,
     @Body('requestId') requestId: string | undefined,
+    @Body('replyToMessageId') replyToMessageId: string | undefined,
+    @Body('mediaKind') mediaKind: string | undefined,
   ) {
     return this.whatsAppService.sendConversationMediaMessage(id, {
       ...(file ? { file } : {}),
       ...(caption !== undefined ? { caption } : {}),
       ...(requestId !== undefined ? { requestId } : {}),
+      ...(replyToMessageId !== undefined ? { replyToMessageId } : {}),
+      ...(mediaKind !== undefined ? { mediaKind } : {}),
     });
   }
 

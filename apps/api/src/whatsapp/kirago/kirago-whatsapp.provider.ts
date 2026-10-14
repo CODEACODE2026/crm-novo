@@ -20,6 +20,7 @@ import type {
   SendImageInput,
   SendAudioInput,
   SendReactionInput,
+  SendStickerInput,
   SendTextInput,
   SendVideoInput,
   WhatsAppProvider,
@@ -254,6 +255,29 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     };
   }
 
+  async sendSticker(instanceToken: string, input: SendStickerInput) {
+    const response = await this.instanceClient.sendSticker(instanceToken, {
+      Phone: input.phone,
+      Sticker: input.sticker,
+      ...(input.reply ? { ContextInfo: { StanzaId: input.reply.stanzaId } } : {}),
+    });
+
+    if (response.success !== true || response.code !== 200) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao enviar figurinha na Kirago.',
+        response.code,
+      );
+    }
+
+    this.logMediaSendDebug('STICKER', response);
+
+    return {
+      providerMessageId: response.data?.Id ?? null,
+      sentAt: this.parseKiragoTimestamp(response.data?.Timestamp),
+    };
+  }
+
   async sendButtons(instanceToken: string, input: SendButtonsInput) {
     const response = await this.instanceClient.sendButtons(instanceToken, {
       phone: input.phone,
@@ -280,11 +304,13 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     const response =
       input.type === 'IMAGE'
         ? await this.instanceClient.downloadImage(instanceToken, payload)
-        : input.type === 'DOCUMENT'
-          ? await this.instanceClient.downloadDocument(instanceToken, payload)
-          : input.type === 'AUDIO'
-            ? await this.instanceClient.downloadAudio(instanceToken, payload)
-            : await this.instanceClient.downloadVideo(instanceToken, payload);
+        : input.type === 'STICKER' && input.Mimetype.trim().toLowerCase() !== 'video/mp4'
+          ? await this.instanceClient.downloadImage(instanceToken, payload)
+          : input.type === 'DOCUMENT'
+            ? await this.instanceClient.downloadDocument(instanceToken, payload)
+            : input.type === 'AUDIO'
+              ? await this.instanceClient.downloadAudio(instanceToken, payload)
+              : await this.instanceClient.downloadVideo(instanceToken, payload);
 
     return {
       dataUrl: response.data?.Data ?? '',
@@ -429,7 +455,25 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     ].join('-');
   }
 
-  private logMediaSendDebug(kind: 'IMAGE' | 'DOCUMENT' | 'VIDEO', response: unknown) {
+  private parseKiragoTimestamp(value: unknown) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const date = new Date(value < 10_000_000_000 ? value * 1000 : value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const numeric = Number(value);
+      const date = Number.isFinite(numeric)
+        ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+        : new Date(value);
+
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    return null;
+  }
+
+  private logMediaSendDebug(kind: 'IMAGE' | 'DOCUMENT' | 'VIDEO' | 'STICKER', response: unknown) {
     if (this.config.get<string>('WHATSAPP_MEDIA_SEND_DEBUG') !== 'true') {
       return;
     }
@@ -439,7 +483,10 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     );
   }
 
-  private buildMediaSendDebugPayload(kind: 'IMAGE' | 'DOCUMENT' | 'VIDEO', response: unknown) {
+  private buildMediaSendDebugPayload(
+    kind: 'IMAGE' | 'DOCUMENT' | 'VIDEO' | 'STICKER',
+    response: unknown,
+  ) {
     const envelope = this.asRecord(response);
     const data = this.asRecord(envelope?.data);
     const details = data?.Details;

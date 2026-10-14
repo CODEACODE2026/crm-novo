@@ -430,7 +430,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain(
       'const videoConversationMediaMaxBytes = 50 * 1024 * 1024;',
     );
-    expect(conversationsSource).toContain('classifyConversationIncomingFile(file)');
+    expect(conversationsSource).toContain(
+      'classifyConversationIncomingFile(file, { expectedKind })',
+    );
     expect(conversationsSource).toContain('file.size > maxBytes');
     expect(conversationsSource).toContain('Arquivo excede o limite de 10 MB permitido.');
     expect(conversationsSource).toContain('sendWhatsAppConversationMedia(selectedConversation.id');
@@ -462,7 +464,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('function ConversationMediaContent');
     expect(conversationsSource).toContain('message.mediaAvailable');
     expect(conversationsSource).toContain(
-      "const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;",
+      "(message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable",
     );
     expect(conversationsSource).toContain(
       'const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);',
@@ -478,7 +480,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain("rootMargin: '240px 0px'");
     expect(conversationsSource).toContain('observer.disconnect();');
     expect(conversationsSource).toContain(
-      "const imageAutoVisible = message.type === 'IMAGE' && message.mediaAvailable && !mediaUrl;",
+      "(message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable && !mediaUrl",
     );
     expect(conversationsSource).toContain("if (type === 'AUDIO') return 'Mídia indisponível';");
     expect(conversationsSource).toContain(
@@ -686,9 +688,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
 
   it('keeps conversation media downloads lazy and interaction-gated', () => {
     expect(conversationsSource).toContain('useMediaVisibility(imageAutoVisible)');
-    expect(conversationsSource).toContain(
-      "if (message.type !== 'IMAGE' || !mediaVisible || mediaUrl) return;",
-    );
+    expect(conversationsSource).toContain("message.type !== 'IMAGE' && message.type !== 'STICKER'");
     expect(conversationsSource).toContain('void loadMedia();');
     expect(conversationsSource).toContain('async function openImageLightbox()');
     expect(conversationsSource).toContain('const objectUrl = mediaUrl ?? (await loadMedia());');

@@ -131,6 +131,7 @@ const documentMimeTypesByExtension: Record<string, Set<string>> = {
 const genericDocumentMimeTypes = new Set(['application/octet-stream']);
 const allowedAudioMimeTypes = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4']);
 const allowedVideoMimeTypes = new Set(['video/mp4']);
+const allowedStickerMimeTypes = new Set(['image/webp']);
 const allowedVideoExtensions = new Set(['mp4']);
 const allowedVoiceInputMimeTypes = new Set(['audio/webm', 'audio/webm;codecs=opus']);
 const defaultConversationMediaMaxBytes = 10 * 1024 * 1024;
@@ -157,7 +158,7 @@ type ConversationMediaUploadFile = {
 };
 
 type PreparedConversationMedia = {
-  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO' | 'STICKER';
   dataUrl: string;
   buffer: Buffer;
   mimeType: string;
@@ -1489,7 +1490,7 @@ export class WhatsAppService {
     });
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-    let result: { providerMessageId: string | null };
+    let result: { providerMessageId: string | null; sentAt?: Date | null };
 
     try {
       result = await this.mapConnectionProviderError(connection, () =>
@@ -1523,7 +1524,7 @@ export class WhatsAppService {
       rawMetadata: pending.rawMetadata,
     });
 
-    const sentAt = new Date();
+    const sentAt = result.sentAt ?? new Date();
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
@@ -1791,6 +1792,8 @@ export class WhatsAppService {
       file?: ConversationMediaUploadFile;
       caption?: string;
       requestId?: string;
+      replyToMessageId?: string;
+      mediaKind?: string;
     },
   ) {
     const requestId = input.requestId?.trim();
@@ -1799,7 +1802,10 @@ export class WhatsAppService {
       throw new BadRequestException('requestId obrigatorio.');
     }
 
-    const media = this.prepareConversationMedia(input.file);
+    const media = this.prepareConversationMedia(
+      input.file,
+      this.parseConversationMediaKind(input.mediaKind),
+    );
     const mediaType = media.kind;
     const caption = input.caption?.trim() || null;
     const conversation = await this.prisma.whatsAppConversation.findUnique({
@@ -1824,14 +1830,24 @@ export class WhatsAppService {
       return this.presentConversationMessage(existing);
     }
 
+    const replyTarget = await this.resolveConversationReplyTarget(
+      conversation,
+      input.replyToMessageId,
+    );
+
+    if (replyTarget && mediaType !== 'STICKER') {
+      throw new BadRequestException('Resposta com anexo ainda nao esta disponivel.');
+    }
+
     const pending = await this.createPendingConversationMediaMessage(conversation, {
       media,
       caption,
       requestId,
+      replyTarget: mediaType === 'STICKER' ? replyTarget : null,
     });
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
-    let result: { providerMessageId: string | null };
+    let result: { providerMessageId: string | null; sentAt?: Date | null };
 
     try {
       if (mediaType === 'IMAGE') {
@@ -1862,6 +1878,15 @@ export class WhatsAppService {
             caption,
             mimeType: media.mimeType,
             requestId,
+          }),
+        );
+      } else if (mediaType === 'STICKER') {
+        result = await this.mapConnectionProviderError(connection, () =>
+          this.provider.sendSticker(instanceToken, {
+            phone: conversation.phoneNormalized,
+            sticker: media.dataUrl,
+            requestId,
+            ...(replyTarget ? { reply: { stanzaId: replyTarget.message.providerMessageId! } } : {}),
           }),
         );
       } else {
@@ -1910,7 +1935,7 @@ export class WhatsAppService {
       ),
     });
 
-    const sentAt = new Date();
+    const sentAt = result.sentAt ?? new Date();
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
@@ -4055,7 +4080,8 @@ export class WhatsAppService {
       (existing.type === 'IMAGE' ||
         existing.type === 'DOCUMENT' ||
         existing.type === 'AUDIO' ||
-        existing.type === 'VIDEO') &&
+        existing.type === 'VIDEO' ||
+        existing.type === 'STICKER') &&
       this.isManualOutboundMediaMessage(existing)
     );
   }
@@ -5034,6 +5060,7 @@ export class WhatsAppService {
       media: PreparedConversationMedia;
       caption: string | null;
       requestId: string;
+      replyTarget?: ResolvedWhatsAppReplyTarget | null;
       source?: 'manual_outbound_media_send' | 'manual_outbound_voice_send';
     },
   ) {
@@ -5047,6 +5074,9 @@ export class WhatsAppService {
           providerMessageId: null,
           requestId: input.requestId,
           messageDispatchId: null,
+          replyToMessageId: input.replyTarget?.message.id ?? null,
+          replyToProviderMessageId: input.replyTarget?.message.providerMessageId ?? null,
+          quotedText: input.replyTarget?.quotedText ?? null,
           direction: 'OUTBOUND',
           type: mediaType,
           text: input.caption,
@@ -5330,6 +5360,17 @@ export class WhatsAppService {
       };
     }
 
+    if (downloadType === 'STICKER') {
+      return {
+        send: (instanceToken, requestId) =>
+          this.provider.sendSticker(instanceToken, {
+            phone: message.conversation.phoneNormalized,
+            sticker: dataUrl,
+            requestId,
+          }),
+      };
+    }
+
     throw new UnprocessableEntityException({
       code: 'WHATSAPP_RETRY_TYPE_UNSUPPORTED',
       message: 'Tipo de mensagem nao suportado para reenvio.',
@@ -5342,7 +5383,24 @@ export class WhatsAppService {
     return `data:${dataMimeType};base64,${buffer.toString('base64')}`;
   }
 
-  private prepareConversationMedia(file: ConversationMediaUploadFile | undefined) {
+  private parseConversationMediaKind(value: string | undefined) {
+    if (value === undefined || value.trim() === '') {
+      return null;
+    }
+
+    const normalized = value.trim().toUpperCase();
+
+    if (normalized === 'STICKER') {
+      return 'STICKER' as const;
+    }
+
+    throw new BadRequestException('Tipo de midia WhatsApp invalido.');
+  }
+
+  private prepareConversationMedia(
+    file: ConversationMediaUploadFile | undefined,
+    requestedKind: 'STICKER' | null = null,
+  ) {
     if (!file) {
       throw new BadRequestException('Arquivo obrigatorio.');
     }
@@ -5383,6 +5441,22 @@ export class WhatsAppService {
       !this.isAllowedOutboundDocument(safeMimeType, fileExtension)
     ) {
       throw new BadRequestException('MIME nao permitido para envio de midia WhatsApp.');
+    }
+
+    if (requestedKind === 'STICKER') {
+      if (!safeMimeType || !allowedStickerMimeTypes.has(safeMimeType) || fileExtension !== 'webp') {
+        throw new BadRequestException('Figurinha deve ser um arquivo WEBP valido.');
+      }
+
+      return {
+        kind: 'STICKER' as const,
+        dataUrl: `data:${mimeType};base64,${file.buffer.toString('base64')}`,
+        buffer: file.buffer,
+        mimeType,
+        fileName: safeFileName,
+        sizeBytes,
+        durationSeconds: null,
+      };
     }
 
     if (safeMimeType && allowedImageMimeTypes.has(safeMimeType)) {
@@ -7018,7 +7092,7 @@ export class WhatsAppService {
       video: 'VIDEO',
       audio: 'AUDIO',
       document: 'DOCUMENT',
-      sticker: 'UNKNOWN',
+      sticker: 'STICKER',
       location: 'LOCATION',
       live_location: 'LOCATION',
       contact: 'UNKNOWN',
@@ -7042,7 +7116,7 @@ export class WhatsAppService {
       return false;
     }
 
-    return ['image', 'video', 'audio', 'document', 'location', 'live_location'].includes(
+    return ['image', 'video', 'audio', 'document', 'sticker', 'location', 'live_location'].includes(
       normalized.messageType,
     );
   }
@@ -7069,6 +7143,7 @@ export class WhatsAppService {
     if (type === 'AUDIO') return '[Audio]';
     if (type === 'DOCUMENT') return input.mediaFileName || '[Documento]';
     if (type === 'VIDEO') return '[Video]';
+    if (type === 'STICKER') return '[Figurinha]';
     if (type === 'LOCATION') return '[Localizacao]';
     if (type === 'BUTTON') return '[Resposta interativa]';
     return '[Mensagem]';
@@ -7094,6 +7169,7 @@ export class WhatsAppService {
     if (message.type === 'AUDIO') return 'Áudio';
     if (message.type === 'DOCUMENT') return message.mediaFileName?.trim() || 'Documento';
     if (message.type === 'VIDEO') return 'Vídeo';
+    if (message.type === 'STICKER') return 'Figurinha';
     if (message.type === 'LOCATION') return 'Localização';
 
     return 'Mensagem';
@@ -7329,7 +7405,13 @@ export class WhatsAppService {
   }
 
   private supportedDownloadMediaType(type: WhatsAppConversationMessageType) {
-    if (type === 'IMAGE' || type === 'DOCUMENT' || type === 'AUDIO' || type === 'VIDEO') {
+    if (
+      type === 'IMAGE' ||
+      type === 'DOCUMENT' ||
+      type === 'AUDIO' ||
+      type === 'VIDEO' ||
+      type === 'STICKER'
+    ) {
       return type;
     }
 
@@ -7435,6 +7517,7 @@ export class WhatsAppService {
       'audio/mp4': 'm4a',
       'image/jpeg': 'jpg',
       'image/png': 'png',
+      'image/webp': 'webp',
       'video/mp4': 'mp4',
     };
 
@@ -7458,6 +7541,7 @@ export class WhatsAppService {
     const normalized = this.normalizeMediaMimeType(mimetype);
 
     if (type === 'IMAGE') return normalized === 'image/jpeg' || normalized === 'image/png';
+    if (type === 'STICKER') return normalized === 'image/webp' || normalized === 'video/mp4';
     if (type === 'DOCUMENT') return Boolean(normalized && allowedDocumentMimeTypes.has(normalized));
     if (type === 'AUDIO') {
       return (

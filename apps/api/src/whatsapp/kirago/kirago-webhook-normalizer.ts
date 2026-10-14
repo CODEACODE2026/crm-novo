@@ -609,6 +609,7 @@ export class KiragoWebhookNormalizer {
     if (quotedMessage.imageMessage) return 'Imagem';
     if (quotedMessage.audioMessage) return 'Áudio';
     if (quotedMessage.videoMessage) return 'Vídeo';
+    if (quotedMessage.stickerMessage) return 'Figurinha';
     if (quotedMessage.documentMessage) return 'Documento';
     if (quotedMessage.locationMessage || quotedMessage.liveLocationMessage) return 'Localização';
 
@@ -620,6 +621,7 @@ export class KiragoWebhookNormalizer {
     if (messageType === 'video') return 'videoMessage';
     if (messageType === 'audio') return 'audioMessage';
     if (messageType === 'document') return 'documentMessage';
+    if (messageType === 'sticker') return 'stickerMessage';
     return null;
   }
 }

@@ -629,6 +629,7 @@ function serviceFactory({
     sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'provider-document-id' }),
     sendAudio: vi.fn().mockResolvedValue({ providerMessageId: 'provider-audio-id' }),
     sendVideo: vi.fn().mockResolvedValue({ providerMessageId: 'provider-video-id' }),
+    sendSticker: vi.fn().mockResolvedValue({ providerMessageId: 'provider-sticker-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     sendReaction: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
@@ -748,6 +749,79 @@ describe('WhatsAppService', () => {
       where: { id: current.id },
       include: { whatsAppConnection: true },
     });
+  });
+
+  it('sends WEBP stickers through Kirago sticker endpoint and persists them as STICKER media', async () => {
+    const providerSentAt = new Date('2026-10-14T00:31:00.000Z');
+    const { service, prisma, provider } = serviceFactory({
+      providerOverrides: {
+        sendSticker: vi
+          .fn()
+          .mockResolvedValue({ providerMessageId: 'provider-sticker-id', sentAt: providerSentAt }),
+      },
+      prismaOverrides: {
+        whatsAppConnection: {
+          update: vi.fn().mockResolvedValue(connection()),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversation({
+              whatsAppConnection: connection({
+                status: 'CONNECTED',
+                connected: true,
+                loggedIn: true,
+              }),
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(conversation()),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(conversation().id, {
+      file: {
+        buffer: Buffer.from('webp-bytes'),
+        mimetype: 'image/webp',
+        originalname: 'figurinha.webp',
+        size: 10,
+      },
+      requestId: 'sticker-request-id',
+      mediaKind: 'STICKER',
+    });
+
+    expect(provider.sendSticker).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      sticker: `data:image/webp;base64,${Buffer.from('webp-bytes').toString('base64')}`,
+      requestId: 'sticker-request-id',
+    });
+    expect(provider.sendSticker).not.toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ reply: expect.anything() }),
+    );
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'STICKER',
+          text: null,
+          mediaMimeType: 'image/webp',
+          mediaFileName: 'figurinha.webp',
+        }),
+      }),
+    );
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          providerMessageId: 'provider-sticker-id',
+          sentAt: providerSentAt,
+          status: 'SENT',
+        }),
+      }),
+    );
   });
 
   it('returns unavailable for missing conversations and missing avatar URLs without a fatal provider error', async () => {
@@ -1284,6 +1358,7 @@ describe('WhatsAppService', () => {
         data: expect.objectContaining({
           status: 'SENT',
           providerMessageId: 'provider-image-id',
+          sentAt: expect.any(Date),
           failedAt: null,
           rawMetadata: expect.objectContaining({
             localMedia: {
@@ -7146,6 +7221,7 @@ describe('WhatsAppService', () => {
     ['image', 'IMAGE', { kind: 'image', mimetype: 'image/jpeg', size: 123 }],
     ['video', 'VIDEO', { kind: 'video', mimetype: 'video/mp4', seconds: 12 }],
     ['audio', 'AUDIO', { kind: 'audio', mimetype: 'audio/ogg', seconds: 8 }],
+    ['sticker', 'STICKER', { kind: 'sticker', mimetype: 'image/webp', size: 456 }],
     [
       'document',
       'DOCUMENT',

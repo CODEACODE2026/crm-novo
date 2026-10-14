@@ -1469,6 +1469,17 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       classifyConversationIncomingFile(new File(['video'], 'video.mp4', { type: 'video/mp4' })),
     ).toEqual({ ok: true, kind: 'VIDEO' });
     expect(
+      classifyConversationIncomingFile(
+        new File(['sticker'], 'figurinha.webp', { type: 'image/webp' }),
+      ),
+    ).toEqual({ ok: false, error: 'Tipo de arquivo não suportado para envio por WhatsApp.' });
+    expect(
+      classifyConversationIncomingFile(
+        new File(['sticker'], 'figurinha.webp', { type: 'image/webp' }),
+        { expectedKind: 'STICKER' },
+      ),
+    ).toEqual({ ok: true, kind: 'STICKER' });
+    expect(
       classifyConversationIncomingFile(new File(['video'], 'VIDEO.MP4', { type: 'video/mp4' })),
     ).toEqual({ ok: true, kind: 'VIDEO' });
     expect(conversationVideoAccept).toContain('video/mp4');

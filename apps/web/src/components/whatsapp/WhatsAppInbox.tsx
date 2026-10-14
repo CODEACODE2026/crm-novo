@@ -136,7 +136,7 @@ type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
 export type ConversationComposerMedia = {
   file: File;
-  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
+  kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO' | 'STICKER';
   previewUrl: string | null;
 };
 
@@ -189,6 +189,7 @@ const conversationMediaMaxBytes = defaultConversationMediaMaxBytes;
 const conversationVideoMaxBytes = videoConversationMediaMaxBytes;
 const conversationVoiceMaxSeconds = 60;
 const allowedConversationImageMimeTypes = new Set(['image/jpeg', 'image/png']);
+const allowedConversationStickerMimeTypes = new Set(['image/webp']);
 const allowedConversationDocumentMimeTypes = new Set([
   'application/pdf',
   'text/plain',
@@ -230,6 +231,7 @@ export const conversationDocumentAccept =
   'application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,image/vnd.adobe.photoshop,application/x-photoshop,application/vnd.android.package-archive,.zip,.rar,.psd,.apk';
 export const conversationAudioAccept = 'audio/ogg,audio/mpeg,audio/mp4';
 export const conversationVideoAccept = 'video/mp4';
+export const conversationStickerAccept = 'image/webp';
 const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
@@ -1878,7 +1880,7 @@ export function WhatsAppInbox({
       return false;
     }
 
-    const validation = classifyConversationIncomingFile(file);
+    const validation = classifyConversationIncomingFile(file, { expectedKind });
     if (!validation.ok) {
       setSendError(validation.error);
       return false;
@@ -1889,10 +1891,12 @@ export function WhatsAppInbox({
       return false;
     }
 
-    const replyNotice = replyTarget
-      ? 'Anexo selecionado como nova mensagem; respostas com mídia ainda não estão disponíveis.'
-      : '';
-    if (replyTarget) {
+    const keepsStickerReply = replyTarget && validation.kind === 'STICKER';
+    const replyNotice =
+      replyTarget && !keepsStickerReply
+        ? 'Anexo selecionado como nova mensagem; respostas com mídia ainda não estão disponíveis.'
+        : '';
+    if (replyTarget && !keepsStickerReply) {
       setReplyTarget(null);
     }
 
@@ -2198,7 +2202,7 @@ export function WhatsAppInbox({
     const mediaToSend = bodyOverride ? null : selectedMedia;
     const replyToSend = bodyOverride ? replyToOverride : replyTarget;
     if (!body && !mediaToSend) return;
-    if (replyToSend && mediaToSend) {
+    if (replyToSend && mediaToSend && mediaToSend.kind !== 'STICKER') {
       setSendError('Resposta com anexo ainda não está disponível. Envie uma resposta em texto.');
       return;
     }
@@ -2227,6 +2231,10 @@ export function WhatsAppInbox({
             file: mediaToSend.file,
             caption: body,
             requestId,
+            ...(replyToSend && mediaToSend.kind === 'STICKER'
+              ? { replyToMessageId: replyToSend.id }
+              : {}),
+            ...(mediaToSend.kind === 'STICKER' ? { mediaKind: 'STICKER' as const } : {}),
           })
         : await sendWhatsAppConversationMessage(selectedConversation.id, {
             body,
@@ -4147,6 +4155,7 @@ export function isRenderableConversationMessage(message: WhatsAppConversationMes
     message.type === 'VIDEO' ||
     message.type === 'AUDIO' ||
     message.type === 'DOCUMENT' ||
+    message.type === 'STICKER' ||
     message.type === 'LOCATION'
   );
 }
@@ -4155,13 +4164,18 @@ export function isDeleteEligibleConversationMessage(message: WhatsAppConversatio
   return message.direction === 'OUTBOUND' && Boolean(message.providerMessageId) && !message.deleted;
 }
 
-export function classifyConversationIncomingFile(file: File): ConversationIncomingFileResult {
+export function classifyConversationIncomingFile(
+  file: File,
+  { expectedKind = null }: { expectedKind?: ConversationComposerMedia['kind'] | null } = {},
+): ConversationIncomingFileResult {
   const mimeType = file.type.split(';')[0]?.trim().toLowerCase() || '';
   const extension = conversationFileExtension(file.name);
+  const isStickerPicker = expectedKind === 'STICKER';
   const isVideoFile =
     allowedConversationVideoMimeTypes.has(mimeType) ||
     allowedConversationVideoExtensions.has(extension);
-  const maxBytes = isVideoFile ? conversationVideoMaxBytes : conversationMediaMaxBytes;
+  const maxBytes =
+    isVideoFile && !isStickerPicker ? conversationVideoMaxBytes : conversationMediaMaxBytes;
 
   if (file.size > maxBytes) {
     return {
@@ -4170,6 +4184,12 @@ export function classifyConversationIncomingFile(file: File): ConversationIncomi
         ? 'Vídeo excede o limite de 50 MB permitido para envio por WhatsApp.'
         : 'Arquivo excede o limite de 10 MB permitido.',
     };
+  }
+
+  if (isStickerPicker) {
+    return allowedConversationStickerMimeTypes.has(mimeType) && extension === 'webp'
+      ? { ok: true, kind: 'STICKER' }
+      : { ok: false, error: 'Figurinha deve ser um arquivo WEBP.' };
   }
 
   if (allowedConversationDocumentExtensions.has(extension)) {
@@ -4215,7 +4235,9 @@ export function createConversationComposerMedia(
     file,
     kind,
     previewUrl:
-      kind === 'IMAGE' || kind === 'AUDIO' || kind === 'VIDEO' ? URL.createObjectURL(file) : null,
+      kind === 'IMAGE' || kind === 'AUDIO' || kind === 'VIDEO' || kind === 'STICKER'
+        ? URL.createObjectURL(file)
+        : null,
   };
 }
 
@@ -4309,7 +4331,8 @@ function ConversationBubble({
     return null;
   }
 
-  const hasAvailableImage = message.type === 'IMAGE' && message.mediaAvailable;
+  const hasAvailableImage =
+    (message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable;
   const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
@@ -4859,7 +4882,8 @@ function ConversationMediaContent({
   const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
   const isPdfDocument =
     message.type === 'DOCUMENT' && message.mediaMimeType?.toLowerCase() === 'application/pdf';
-  const imageAutoVisible = message.type === 'IMAGE' && message.mediaAvailable && !mediaUrl;
+  const imageAutoVisible =
+    (message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable && !mediaUrl;
   const { elementRef: visibilityRef, visible: mediaVisible } = useMediaVisibility(imageAutoVisible);
 
   useEffect(() => {
@@ -4938,7 +4962,9 @@ function ConversationMediaContent({
   }, []);
 
   useEffect(() => {
-    if (message.type !== 'IMAGE' || !mediaVisible || mediaUrl) return;
+    if ((message.type !== 'IMAGE' && message.type !== 'STICKER') || !mediaVisible || mediaUrl) {
+      return;
+    }
 
     void loadMedia();
   }, [loadMedia, mediaUrl, mediaVisible, message.type]);
@@ -5077,6 +5103,18 @@ function ConversationMediaContent({
     );
   }
 
+  if (message.type === 'STICKER' && !mediaUrl) {
+    return (
+      <div ref={visibilityRef} className="conversation-media-unavailable sticker-placeholder">
+        <span>{loading ? 'Carregando figurinha...' : 'Figurinha disponível'}</span>
+        {error ? <span>Falha ao carregar</span> : null}
+        <button type="button" onClick={() => void loadMedia()}>
+          {loading ? 'Carregando...' : error ? 'Tentar novamente' : 'Carregar figurinha'}
+        </button>
+      </div>
+    );
+  }
+
   if (message.type === 'IMAGE' && !mediaUrl) {
     return (
       <div ref={visibilityRef} className="conversation-media-unavailable image-placeholder">
@@ -5130,7 +5168,37 @@ function ConversationMediaContent({
     );
   }
 
+  if (message.type === 'STICKER') {
+    const stickerAlt = message.text || message.mediaFileName || 'Figurinha';
+
+    if (message.mediaMimeType?.split(';')[0]?.trim().toLowerCase() === 'video/mp4') {
+      return (
+        <video
+          aria-label={stickerAlt}
+          autoPlay
+          className="conversation-sticker-media"
+          loop
+          muted
+          playsInline
+          preload="metadata"
+          src={mediaUrl}
+        >
+          <track kind="captions" />
+        </video>
+      );
+    }
+
+    return (
+      <span className="conversation-sticker-media">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img alt={stickerAlt} src={mediaUrl} />
+      </span>
+    );
+  }
+
   if (message.type === 'IMAGE') {
+    const imageAlt = message.text || message.mediaFileName || 'Imagem';
+
     return (
       <>
         <button
@@ -5141,7 +5209,7 @@ function ConversationMediaContent({
           onClick={() => void openImageLightbox()}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img alt={message.text || message.mediaFileName || 'Imagem'} src={mediaUrl} />
+          <img alt={imageAlt} src={mediaUrl} />
         </button>
         {imageLightboxOpen ? (
           <div
@@ -5165,11 +5233,7 @@ function ConversationMediaContent({
             </button>
             <div className="conversation-image-lightbox-stage">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                alt={message.text || message.mediaFileName || 'Imagem'}
-                src={mediaUrl}
-                onClick={(event) => event.stopPropagation()}
-              />
+              <img alt={imageAlt} src={mediaUrl} onClick={(event) => event.stopPropagation()} />
             </div>
           </div>
         ) : null}
@@ -5482,6 +5546,7 @@ function ConversationComposer({
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const stickerInputRef = useRef<HTMLInputElement | null>(null);
   const composerContainerRef = useRef<HTMLFormElement | null>(null);
   const quickReplyMenuRef = useRef<HTMLDivElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -5960,7 +6025,8 @@ function ConversationComposer({
       ) : null}
       {selectedMedia ? (
         <div className="conversation-attachment-preview">
-          {selectedMedia.kind === 'IMAGE' && selectedMedia.previewUrl ? (
+          {(selectedMedia.kind === 'IMAGE' || selectedMedia.kind === 'STICKER') &&
+          selectedMedia.previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img alt="" src={selectedMedia.previewUrl} />
           ) : selectedMedia.kind === 'VIDEO' && selectedMedia.previewUrl ? (
@@ -6026,6 +6092,10 @@ function ConversationComposer({
                 <FileVideo aria-hidden="true" size={16} />
                 <span>Vídeo</span>
               </button>
+              <button type="button" onClick={() => stickerInputRef.current?.click()}>
+                <SmilePlus aria-hidden="true" size={16} />
+                <span>Figurinha</span>
+              </button>
             </div>
           ) : null}
           <input
@@ -6065,6 +6135,16 @@ function ConversationComposer({
             type="file"
             onChange={(event) => {
               selectFile('VIDEO', event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={stickerInputRef}
+            accept={conversationStickerAccept}
+            className="sr-only"
+            type="file"
+            onChange={(event) => {
+              selectFile('STICKER', event.target.files?.[0]);
               event.target.value = '';
             }}
           />
@@ -8228,6 +8308,7 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
     DOCUMENT: '',
     IMAGE: '[Imagem]',
     LOCATION: '[Localização]',
+    STICKER: '[Figurinha]',
     TEXT: '',
     UNKNOWN: '',
     VIDEO: '[Vídeo]',
@@ -8236,7 +8317,13 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
 }
 
 function isRenderableConversationMedia(type: WhatsAppConversationMessageType) {
-  return type === 'IMAGE' || type === 'DOCUMENT' || type === 'AUDIO' || type === 'VIDEO';
+  return (
+    type === 'IMAGE' ||
+    type === 'DOCUMENT' ||
+    type === 'AUDIO' ||
+    type === 'VIDEO' ||
+    type === 'STICKER'
+  );
 }
 
 function conversationMediaUnavailableText(type: WhatsAppConversationMessageType) {
@@ -8247,7 +8334,10 @@ function conversationMediaUnavailableText(type: WhatsAppConversationMessageType)
 
 export function isAvailableInlineConversationMedia(message: WhatsAppConversationMessage) {
   return (
-    (message.type === 'IMAGE' || message.type === 'AUDIO' || message.type === 'VIDEO') &&
+    (message.type === 'IMAGE' ||
+      message.type === 'AUDIO' ||
+      message.type === 'VIDEO' ||
+      message.type === 'STICKER') &&
     message.mediaAvailable
   );
 }
@@ -8277,6 +8367,7 @@ function conversationMessageQuotePreview(message: WhatsAppConversationMessage) {
   if (message.type === 'AUDIO') return 'Áudio';
   if (message.type === 'DOCUMENT') return message.mediaFileName || 'Documento';
   if (message.type === 'VIDEO') return 'Vídeo';
+  if (message.type === 'STICKER') return 'Figurinha';
   if (message.type === 'LOCATION') return 'Localização';
   return 'Mensagem';
 }

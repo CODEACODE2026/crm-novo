@@ -228,6 +228,8 @@ describe('WhatsAppController conversation inbox endpoints', () => {
         file,
         'Legenda',
         '2f419d6d-d81a-4ed8-9f38-c6ff02d37391',
+        undefined,
+        undefined,
       ),
     ).resolves.toEqual({ id: 'media-message-id' });
     const voiceFile = {

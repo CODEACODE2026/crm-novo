@@ -87,6 +87,20 @@ export type SendVideoResult = {
   providerMessageId: string | null;
 };
 
+export type SendStickerInput = {
+  phone: string;
+  sticker: string;
+  requestId: string;
+  reply?: {
+    stanzaId: string;
+  };
+};
+
+export type SendStickerResult = {
+  providerMessageId: string | null;
+  sentAt?: Date | null;
+};
+
 export type SendButtonsInput = {
   phone: string;
   title: string;
@@ -101,7 +115,7 @@ export type SendButtonsResult = {
   providerMessageId: string | null;
 };
 
-export type DownloadMediaType = 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO';
+export type DownloadMediaType = 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO' | 'STICKER';
 
 export type DownloadMediaInput = {
   type: DownloadMediaType;
@@ -178,6 +192,7 @@ export interface WhatsAppProvider {
   sendDocument(instanceToken: string, input: SendDocumentInput): Promise<SendDocumentResult>;
   sendAudio(instanceToken: string, input: SendAudioInput): Promise<SendAudioResult>;
   sendVideo(instanceToken: string, input: SendVideoInput): Promise<SendVideoResult>;
+  sendSticker(instanceToken: string, input: SendStickerInput): Promise<SendStickerResult>;
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput): Promise<void>;

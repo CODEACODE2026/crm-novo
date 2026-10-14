@@ -728,7 +728,7 @@ export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
 export type WhatsAppConversationMessageStatus =
   'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
 export type WhatsAppConversationMessageType =
-  'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'LOCATION' | 'BUTTON' | 'UNKNOWN';
+  'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'STICKER' | 'LOCATION' | 'BUTTON' | 'UNKNOWN';
 
 export interface WhatsAppConversation {
   id: string;
@@ -2766,11 +2766,23 @@ export function deleteWhatsAppConversationMessage(conversationId: string, messag
 
 export function sendWhatsAppConversationMedia(
   id: string,
-  payload: { file: File; caption?: string; requestId: string },
+  payload: {
+    file: File;
+    caption?: string;
+    requestId: string;
+    replyToMessageId?: string;
+    mediaKind?: 'STICKER';
+  },
 ) {
   const formData = new FormData();
   formData.set('file', payload.file);
   formData.set('requestId', payload.requestId);
+  if (payload.mediaKind) {
+    formData.set('mediaKind', payload.mediaKind);
+  }
+  if (payload.replyToMessageId) {
+    formData.set('replyToMessageId', payload.replyToMessageId);
+  }
   if (payload.caption?.trim()) {
     formData.set('caption', payload.caption.trim());
   }

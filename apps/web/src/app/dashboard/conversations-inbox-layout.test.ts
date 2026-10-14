@@ -1062,12 +1062,24 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('deleteWhatsAppSavedSticker(sticker.id)');
     expect(conversationsSource).toContain('Figurinhas salvas');
     expect(conversationsSource).toContain('conversation-saved-sticker-grid');
-    expect(conversationsSource).toContain('getWhatsAppSavedStickerMediaUrl(sticker.id)');
+    expect(conversationsSource).toContain('savedStickerPreviewKind(sticker.mimeType)');
+    expect(conversationsSource).toContain('sticker.previewUrl || getWhatsAppSavedStickerMediaUrl');
+    expect(conversationsSource).toContain("previewKind === 'image'");
+    expect(conversationsSource).toContain("previewKind === 'video'");
+    expect(conversationsSource).toContain(
+      'onError={() => markSavedStickerPreviewFailed(sticker.id)}',
+    );
+    expect(conversationsSource).toContain('conversation-saved-sticker-placeholder');
     expect(conversationsSource).toContain('Excluir figurinha salva?');
     expect(conversationsSource).toContain('Figurinha já estava salva.');
     expect(stylesSource).toContain('.conversation-saved-sticker-picker');
-    expect(stylesSource).toContain('grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));');
+    expect(stylesSource).toContain('grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));');
+    expect(stylesSource).toContain('.conversation-saved-sticker-preview');
+    expect(stylesSource).toContain('.conversation-saved-sticker-placeholder');
     expect(mobileConversationMediaSource).toContain('.conversation-saved-sticker-picker');
     expect(mobileConversationMediaSource).toContain('max-height: min(42dvh, 320px);');
+    expect(mobileConversationMediaSource).toContain(
+      'grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));',
+    );
   });
 });

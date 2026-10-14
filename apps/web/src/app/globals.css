@@ -4065,7 +4065,7 @@ a {
 
 .conversation-saved-sticker-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
   gap: 8px;
 }
 
@@ -4081,15 +4081,51 @@ a {
   place-items: center;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-soft);
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--border) 34%, transparent) 25%, transparent 25%),
+    linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--border) 34%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--border) 34%, transparent) 75%),
+    linear-gradient(
+      -45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--border) 34%, transparent) 75%
+    ),
+    var(--surface-soft);
+  background-position:
+    0 0,
+    0 5px,
+    5px -5px,
+    -5px 0;
+  background-size: 10px 10px;
   cursor: pointer;
-  padding: 6px;
+  overflow: hidden;
+  padding: 5px;
 }
 
-.conversation-saved-sticker-thumb img {
+.conversation-saved-sticker-preview {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+}
+
+.conversation-saved-sticker-preview img,
+video.conversation-saved-sticker-preview {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.conversation-saved-sticker-placeholder {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--text-muted);
 }
 
 .conversation-saved-sticker-delete {
@@ -13875,7 +13911,7 @@ tbody tr:hover,
   }
 
   .conversation-saved-sticker-grid {
-    grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
   }
 
   .conversation-quick-reply-menu {

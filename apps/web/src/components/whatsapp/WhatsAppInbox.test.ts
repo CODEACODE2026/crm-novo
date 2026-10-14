@@ -42,6 +42,7 @@ import {
   nextConversationPresenceState,
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
+  savedStickerPreviewKind,
   resolveConversationPixCopyAction,
   shouldAutoReadRealtimeMessage,
   shouldApplyConversationListResponse,
@@ -1483,6 +1484,11 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       classifyConversationIncomingFile(new File(['video'], 'VIDEO.MP4', { type: 'video/mp4' })),
     ).toEqual({ ok: true, kind: 'VIDEO' });
     expect(conversationVideoAccept).toContain('video/mp4');
+
+    expect(savedStickerPreviewKind('image/webp')).toBe('image');
+    expect(savedStickerPreviewKind('image/webp; charset=binary')).toBe('image');
+    expect(savedStickerPreviewKind('video/mp4')).toBe('video');
+    expect(savedStickerPreviewKind('application/octet-stream')).toBe('unsupported');
 
     expect(
       classifyConversationIncomingFile(

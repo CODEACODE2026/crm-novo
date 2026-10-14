@@ -238,6 +238,7 @@ export const conversationDocumentAccept =
 export const conversationAudioAccept = 'audio/ogg,audio/mpeg,audio/mp4';
 export const conversationVideoAccept = 'video/mp4';
 export const conversationStickerAccept = 'image/webp';
+export type SavedStickerPreviewKind = 'image' | 'video' | 'unsupported';
 const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
 const fallbackConversationVoiceMimeType = 'audio/webm';
@@ -392,6 +393,15 @@ export async function resolveConversationPixCopyAction({
 
 export function isConversationPixCopyEligible(message: WhatsAppConversationMessage) {
   return Boolean(message.pixContext?.paymentIntentId);
+}
+
+export function savedStickerPreviewKind(mimeType: string): SavedStickerPreviewKind {
+  const normalized = mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+
+  if (normalized === 'image/webp') return 'image';
+  if (normalized === 'video/mp4') return 'video';
+
+  return 'unsupported';
 }
 
 export function conversationPixCopyButtonLabel(
@@ -5743,6 +5753,9 @@ function ConversationComposer({
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [savedStickerPickerOpen, setSavedStickerPickerOpen] = useState(false);
+  const [failedSavedStickerPreviewIds, setFailedSavedStickerPreviewIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [quickReplyActiveIndex, setQuickReplyActiveIndex] = useState(0);
   const [quickReplySlashDismissedDraft, setQuickReplySlashDismissedDraft] = useState<string | null>(
     null,
@@ -5927,6 +5940,16 @@ function ConversationComposer({
   function sendSavedSticker(sticker: WhatsAppSavedSticker) {
     setSavedStickerPickerOpen(false);
     onSendSavedSticker(sticker);
+  }
+
+  function markSavedStickerPreviewFailed(stickerId: string) {
+    setFailedSavedStickerPreviewIds((current) => {
+      if (current.has(stickerId)) return current;
+
+      const next = new Set(current);
+      next.add(stickerId);
+      return next;
+    });
   }
 
   function applyQuickReply(reply: WhatsAppQuickReply) {
@@ -6393,6 +6416,10 @@ function ConversationComposer({
               {savedStickers.map((sticker) => {
                 const deleting = deletingSavedStickerIds.has(sticker.id);
                 const confirmingDelete = deleteSavedStickerConfirmId === sticker.id;
+                const previewKind = savedStickerPreviewKind(sticker.mimeType);
+                const previewUrl =
+                  sticker.previewUrl || getWhatsAppSavedStickerMediaUrl(sticker.id);
+                const previewFailed = failedSavedStickerPreviewIds.has(sticker.id);
 
                 return (
                   <div className="conversation-saved-sticker-item" key={sticker.id}>
@@ -6403,8 +6430,36 @@ function ConversationComposer({
                       onClick={() => sendSavedSticker(sticker)}
                       aria-label="Enviar figurinha salva"
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img alt="" src={getWhatsAppSavedStickerMediaUrl(sticker.id)} />
+                      {!previewFailed && previewKind === 'image' ? (
+                        <span className="conversation-saved-sticker-preview">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            alt=""
+                            decoding="async"
+                            loading="lazy"
+                            src={previewUrl}
+                            onError={() => markSavedStickerPreviewFailed(sticker.id)}
+                          />
+                        </span>
+                      ) : !previewFailed && previewKind === 'video' ? (
+                        <video
+                          aria-label="Prévia da figurinha salva"
+                          autoPlay
+                          className="conversation-saved-sticker-preview"
+                          loop
+                          muted
+                          playsInline
+                          preload="metadata"
+                          src={previewUrl}
+                          onError={() => markSavedStickerPreviewFailed(sticker.id)}
+                        >
+                          <track kind="captions" />
+                        </video>
+                      ) : (
+                        <span className="conversation-saved-sticker-placeholder">
+                          <ImageIcon aria-hidden="true" size={18} />
+                        </span>
+                      )}
                     </button>
                     <button
                       type="button"

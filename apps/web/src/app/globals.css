@@ -3104,6 +3104,7 @@ a {
 }
 
 .conversation-reply-action,
+.conversation-edit-action,
 .conversation-reaction-action {
   display: inline-grid;
   width: 28px;
@@ -3147,6 +3148,7 @@ a {
 }
 
 .conversation-reply-action:hover,
+.conversation-edit-action:hover,
 .conversation-reaction-action:hover,
 .conversation-delete-action:hover {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
@@ -3157,9 +3159,62 @@ a {
 }
 
 .conversation-reaction-action:disabled,
+.conversation-edit-action:disabled,
 .conversation-delete-action:disabled {
   cursor: wait;
   opacity: 0.76;
+}
+
+.conversation-message-editor {
+  display: grid;
+  gap: 8px;
+  min-width: min(360px, 62vw);
+}
+
+.conversation-message-editor textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  padding: 8px;
+}
+
+.conversation-message-editor > span {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.conversation-message-editor > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.conversation-message-editor button {
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 8px;
+}
+
+.conversation-message-editor button:last-child {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.conversation-message-editor button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .conversation-delete-confirm {

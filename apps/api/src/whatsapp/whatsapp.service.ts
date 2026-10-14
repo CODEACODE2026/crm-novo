@@ -67,6 +67,7 @@ import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.serv
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
+import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
@@ -427,6 +428,7 @@ export class WhatsAppService {
   private readonly chatPresenceRemoteLidLookupInFlight = new Map<string, Promise<string | null>>();
   private readonly avatarCache = new Map<string, WhatsAppAvatarCacheValue>();
   private readonly avatarInFlight = new Map<string, Promise<GetUserAvatarResult>>();
+  private readonly messageEditQueue = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -1982,6 +1984,132 @@ export class WhatsAppService {
 
     this.emitMessageUpdated(conversation.id, target.id);
     return this.presentConversationMessage(updated);
+  }
+
+  async editConversationMessage(
+    conversationId: string,
+    messageId: string,
+    dto: EditWhatsAppConversationMessageDto,
+  ) {
+    return this.withMessageEditLock(messageId, async () => {
+      const body = dto.body.trim();
+
+      if (!body) {
+        throw new BadRequestException('Mensagem obrigatoria.');
+      }
+
+      const target = await this.prisma.whatsAppMessage.findFirst({
+        where: { id: messageId, conversationId },
+        include: {
+          conversation: { include: { whatsAppConnection: true } },
+          ...whatsappMessageReplyInclude,
+        },
+      });
+
+      if (!target) {
+        throw new NotFoundException('Mensagem WhatsApp nao encontrada nesta conversa.');
+      }
+
+      const conversation = target.conversation;
+      const connection = conversation.whatsAppConnection;
+
+      if (
+        target.conversationId !== conversation.id ||
+        target.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
+        target.provider !== conversation.provider
+      ) {
+        throw new BadRequestException('Mensagem WhatsApp nao pertence a esta conversa.');
+      }
+
+      if (target.direction !== 'OUTBOUND') {
+        throw new ConflictException('Somente mensagens enviadas pelo CRM podem ser editadas.');
+      }
+
+      if (target.type !== 'TEXT') {
+        throw new ConflictException('Somente mensagens de texto podem ser editadas.');
+      }
+
+      if (target.deletedAt || target.deletedForEveryone) {
+        throw new ConflictException('Mensagem apagada nao pode ser editada.');
+      }
+
+      if (!target.providerMessageId) {
+        throw new BadRequestException('Mensagem WhatsApp ainda nao possui id do provider.');
+      }
+
+      if (body === target.text?.trim()) {
+        throw new ConflictException('O novo texto deve ser diferente do texto atual.');
+      }
+
+      if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+        throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
+      }
+
+      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+
+      await this.mapConnectionProviderError(connection, () =>
+        this.provider.editMessage(instanceToken, {
+          phone: conversation.phoneNormalized,
+          providerMessageId: target.providerMessageId!,
+          body,
+        }),
+      );
+
+      let editedLatestMessage = false;
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const latestMessage = await tx.whatsAppMessage.findFirst({
+          where: { conversationId: conversation.id },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: { id: true },
+        });
+        editedLatestMessage = latestMessage?.id === target.id;
+
+        const message = await tx.whatsAppMessage.update({
+          where: { id: target.id },
+          data: { text: body },
+          include: whatsappMessageReplyInclude,
+        });
+
+        if (editedLatestMessage) {
+          await tx.whatsAppConversation.update({
+            where: { id: conversation.id },
+            data: {
+              lastMessagePreview: this.conversationLastMessagePreview('TEXT', { text: body }),
+            },
+          });
+        }
+
+        return message;
+      });
+
+      this.emitMessageUpdated(conversation.id, target.id);
+      if (editedLatestMessage) {
+        this.emitConversationUpdated(conversation.id);
+      }
+
+      return this.presentConversationMessage(updated);
+    });
+  }
+
+  private async withMessageEditLock<T>(messageId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.messageEditQueue.get(messageId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => current);
+    this.messageEditQueue.set(messageId, queued);
+
+    await previous.catch(() => undefined);
+
+    try {
+      return await action();
+    } finally {
+      release();
+      if (this.messageEditQueue.get(messageId) === queued) {
+        this.messageEditQueue.delete(messageId);
+      }
+    }
   }
 
   async sendConversationMediaMessage(

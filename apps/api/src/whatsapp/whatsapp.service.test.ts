@@ -653,6 +653,7 @@ function serviceFactory({
     sendSticker: vi.fn().mockResolvedValue({ providerMessageId: 'provider-sticker-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
     sendReaction: vi.fn().mockResolvedValue(undefined),
+    editMessage: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
     setChatPresence: vi.fn().mockResolvedValue(undefined),
     resolveUserLid: vi.fn().mockResolvedValue({}),
@@ -9933,6 +9934,392 @@ describe('WhatsAppService', () => {
     });
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
     expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+  });
+
+  it('edits eligible outbound text provider-first, persists the same message and emits update events', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Texto original',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+      reactions: [{ id: 'reaction-id', emoji: '❤️', reactorKey: 'crm:self', isFromMe: true }],
+    });
+    const updated = conversationMessage({ ...target, text: 'Texto atualizado' });
+    const { service, provider, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(updated),
+        },
+      },
+    });
+
+    const result = await service.editConversationMessage(connectedConversation.id, target.id, {
+      body: '  Texto atualizado  ',
+    });
+
+    expect(provider.editMessage).toHaveBeenCalledWith('instance-token', {
+      phone: connectedConversation.phoneNormalized,
+      providerMessageId: 'provider-outbound',
+      body: 'Texto atualizado',
+    });
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
+      where: { id: target.id },
+      data: { text: 'Texto atualizado' },
+      include: expect.any(Object),
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      id: target.id,
+      text: 'Texto atualizado',
+      providerMessageId: 'provider-outbound',
+      reactions: expect.any(Array),
+    });
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith({
+      where: { id: connectedConversation.id },
+      data: { lastMessagePreview: 'Texto atualizado' },
+    });
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(connectedConversation.id);
+  });
+
+  it('does not change local text when the provider edit fails', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Texto original',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+    });
+    const { service, prisma, realtime } = serviceFactory({
+      providerOverrides: { editMessage: vi.fn().mockRejectedValue(new Error('provider failed')) },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          update: vi.fn().mockResolvedValue(target),
+        },
+      },
+    });
+
+    await expect(
+      service.editConversationMessage(connectedConversation.id, target.id, {
+        body: 'Texto atualizado',
+      }),
+    ).rejects.toThrow();
+
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+  });
+
+  it('does not change local text when the provider edit times out', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Texto original',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+    });
+    const { service, prisma, realtime } = serviceFactory({
+      providerOverrides: {
+        editMessage: vi
+          .fn()
+          .mockRejectedValue(new KiragoProviderError('KIRAGO_TIMEOUT', 'Kirago timeout.')),
+      },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          update: vi.fn().mockResolvedValue(target),
+        },
+      },
+    });
+
+    await expect(
+      service.editConversationMessage(connectedConversation.id, target.id, {
+        body: 'Texto atualizado',
+      }),
+    ).rejects.toThrow(ServiceUnavailableException);
+
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).not.toHaveBeenCalled();
+  });
+
+  it('does not update the conversation preview when editing an older message', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      id: '88888888-8888-4888-8888-888888888888',
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Texto antigo',
+      providerMessageId: 'provider-old',
+      conversation: connectedConversation,
+    });
+    const updated = conversationMessage({ ...target, text: 'Texto antigo editado' });
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce({ id: '99999999-9999-4999-8999-999999999999' });
+    const { service, prisma, realtime } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst,
+          update: vi.fn().mockResolvedValue(updated),
+        },
+      },
+    });
+
+    await service.editConversationMessage(connectedConversation.id, target.id, {
+      body: 'Texto antigo editado',
+    });
+
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
+  });
+
+  it('rejects message edits when the message is not in the requested conversation', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          update: vi.fn(),
+        },
+      },
+    });
+
+    await expect(
+      service.editConversationMessage(connectedConversation.id, conversationMessage().id, {
+        body: 'Texto atualizado',
+      }),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(provider.editMessage).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+  });
+
+  it('serializes consecutive edits of the same message and persists each provider-confirmed body', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Original',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+    });
+    let confirmFirstEdit!: () => void;
+    const firstProviderConfirmation = new Promise<void>((resolve) => {
+      confirmFirstEdit = resolve;
+    });
+    const editMessage = vi
+      .fn()
+      .mockImplementationOnce(() => firstProviderConfirmation)
+      .mockResolvedValueOnce(undefined);
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce({ id: target.id })
+      .mockResolvedValueOnce({ ...target, text: 'Primeira edicao' })
+      .mockResolvedValueOnce({ id: target.id });
+    const update = vi.fn((args: { data: { text: string } }) =>
+      Promise.resolve(conversationMessage({ ...target, text: args.data.text })),
+    );
+    const { service } = serviceFactory({
+      providerOverrides: { editMessage },
+      prismaOverrides: { whatsAppMessage: { findFirst, update } },
+    });
+
+    const first = service.editConversationMessage(connectedConversation.id, target.id, {
+      body: 'Primeira edicao',
+    });
+    const second = service.editConversationMessage(connectedConversation.id, target.id, {
+      body: 'Segunda edicao',
+    });
+
+    await vi.waitFor(() => expect(editMessage).toHaveBeenCalledTimes(1));
+    expect(update).not.toHaveBeenCalled();
+    confirmFirstEdit();
+    await Promise.all([first, second]);
+
+    expect(editMessage).toHaveBeenNthCalledWith(1, 'instance-token', {
+      phone: connectedConversation.phoneNormalized,
+      providerMessageId: 'provider-outbound',
+      body: 'Primeira edicao',
+    });
+    expect(editMessage).toHaveBeenNthCalledWith(2, 'instance-token', {
+      phone: connectedConversation.phoneNormalized,
+      providerMessageId: 'provider-outbound',
+      body: 'Segunda edicao',
+    });
+    expect(update.mock.calls.map(([args]) => args.data.text)).toEqual([
+      'Primeira edicao',
+      'Segunda edicao',
+    ]);
+  });
+
+  it('releases the same-message edit queue after a failure so the next edit can proceed', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Original',
+      providerMessageId: 'provider-outbound',
+      conversation: connectedConversation,
+    });
+    const editMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('provider failed'))
+      .mockResolvedValueOnce(undefined);
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce({ id: target.id });
+    const update = vi.fn((args: { data: { text: string } }) =>
+      Promise.resolve(conversationMessage({ ...target, text: args.data.text })),
+    );
+    const { service } = serviceFactory({
+      providerOverrides: { editMessage },
+      prismaOverrides: { whatsAppMessage: { findFirst, update } },
+    });
+
+    const first = service.editConversationMessage(connectedConversation.id, target.id, {
+      body: 'Primeira edicao',
+    });
+    const second = service.editConversationMessage(connectedConversation.id, target.id, {
+      body: 'Segunda edicao',
+    });
+
+    const results = await Promise.allSettled([first, second]);
+
+    expect(results.map(({ status }) => status)).toEqual(['rejected', 'fulfilled']);
+    expect(editMessage).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { text: 'Segunda edicao' } }),
+    );
+  });
+
+  it('does not block edits of different messages behind each other', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const firstTarget = conversationMessage({
+      id: '77777777-7777-4777-8777-777777777777',
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Original A',
+      providerMessageId: 'provider-a',
+      conversation: connectedConversation,
+    });
+    const secondTarget = conversationMessage({
+      id: '88888888-8888-4888-8888-888888888888',
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Original B',
+      providerMessageId: 'provider-b',
+      conversation: connectedConversation,
+    });
+    let releaseFirst!: () => void;
+    const firstProviderConfirmation = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const editMessage = vi.fn((_token: string, input: { providerMessageId: string }) =>
+      input.providerMessageId === 'provider-a'
+        ? firstProviderConfirmation
+        : Promise.resolve(undefined),
+    );
+    const findFirst = vi.fn((args: { where: { id?: string } }) => {
+      if (args.where.id === firstTarget.id) return Promise.resolve(firstTarget);
+      if (args.where.id === secondTarget.id) return Promise.resolve(secondTarget);
+      return Promise.resolve({ id: secondTarget.id });
+    });
+    const update = vi.fn((args: { where: { id: string }; data: { text: string } }) =>
+      Promise.resolve(
+        conversationMessage({
+          ...(args.where.id === firstTarget.id ? firstTarget : secondTarget),
+          text: args.data.text,
+        }),
+      ),
+    );
+    const { service } = serviceFactory({
+      providerOverrides: { editMessage },
+      prismaOverrides: { whatsAppMessage: { findFirst, update } },
+    });
+
+    const first = service.editConversationMessage(connectedConversation.id, firstTarget.id, {
+      body: 'Editado A',
+    });
+    const second = service.editConversationMessage(connectedConversation.id, secondTarget.id, {
+      body: 'Editado B',
+    });
+
+    await second;
+    expect(editMessage).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: secondTarget.id }, data: { text: 'Editado B' } }),
+    );
+
+    releaseFirst();
+    await first;
+  });
+
+  it('rejects ineligible message edits before calling the provider', async () => {
+    const connectedConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const candidates = [
+      conversationMessage({ direction: 'INBOUND', text: 'Original' }),
+      ...(['IMAGE', 'VIDEO', 'AUDIO', 'DOCUMENT', 'STICKER'] as const).map((type) =>
+        conversationMessage({ direction: 'OUTBOUND', type, text: 'Original' }),
+      ),
+      conversationMessage({ direction: 'OUTBOUND', text: 'Original', deletedAt: now }),
+      conversationMessage({ direction: 'OUTBOUND', text: 'Original', providerMessageId: null }),
+      conversationMessage({ direction: 'OUTBOUND', text: 'Mesmo texto' }),
+    ];
+
+    for (const candidate of candidates) {
+      const target = { ...candidate, conversation: connectedConversation };
+      const { service, provider } = serviceFactory({
+        prismaOverrides: { whatsAppMessage: { findFirst: vi.fn().mockResolvedValue(target) } },
+      });
+
+      await expect(
+        service.editConversationMessage(connectedConversation.id, target.id, {
+          body: candidate.text === 'Mesmo texto' ? 'Mesmo texto' : 'Novo texto',
+        }),
+      ).rejects.toThrow();
+      expect(provider.editMessage).not.toHaveBeenCalled();
+    }
+
+    const { service: emptyService, provider: emptyProvider } = serviceFactory();
+    await expect(
+      emptyService.editConversationMessage(connectedConversation.id, 'message-id', { body: '  ' }),
+    ).rejects.toThrow(BadRequestException);
+    expect(emptyProvider.editMessage).not.toHaveBeenCalled();
   });
 
   it('keeps outbound messages intact when provider delete fails', async () => {

@@ -34,6 +34,7 @@ import {
   conversationMediaUnavailableText,
   isConversationPixCopyEligible,
   isDeleteEligibleConversationMessage,
+  isEditEligibleConversationMessage,
   isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
   isTechnicalVideoPlaceholder,
@@ -2453,6 +2454,35 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('Apagar esta mensagem?');
     expect(whatsAppInboxSource).toContain('deleteWhatsAppConversationMessage');
     expect(globalStylesSource).toContain('.conversation-delete-confirm');
+  });
+
+  it('offers inline edit only for non-deleted outbound provider-backed text messages', () => {
+    expect(
+      isEditEligibleConversationMessage(
+        message({ direction: 'OUTBOUND', type: 'TEXT', providerMessageId: 'provider-id' }),
+      ),
+    ).toBe(true);
+
+    for (const candidate of [
+      message({ direction: 'INBOUND', type: 'TEXT', providerMessageId: 'provider-id' }),
+      message({ direction: 'OUTBOUND', type: 'TEXT', providerMessageId: null }),
+      message({ direction: 'OUTBOUND', type: 'TEXT', deleted: true }),
+      ...(['IMAGE', 'VIDEO', 'AUDIO', 'DOCUMENT', 'STICKER'] as const).map((type) =>
+        message({ direction: 'OUTBOUND', type, providerMessageId: 'provider-id' }),
+      ),
+    ]) {
+      expect(isEditEligibleConversationMessage(candidate)).toBe(false);
+    }
+
+    expect(whatsAppInboxSource).toContain('aria-label="Editar mensagem"');
+    expect(whatsAppInboxSource).toContain('aria-label="Editar texto da mensagem"');
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain("event.key === 'Enter'");
+    expect(whatsAppInboxSource).toContain('!event.shiftKey');
+    expect(whatsAppInboxSource).toContain('!event.nativeEvent.isComposing');
+    expect(whatsAppInboxSource).toContain("{savingEdit ? 'Salvando...' : 'Salvar'}");
+    expect(whatsAppInboxSource).toContain('editWhatsAppConversationMessage');
+    expect(globalStylesSource).toContain('.conversation-message-editor');
   });
 
   it('keeps message actions outside the bubble so short messages stay compact', () => {

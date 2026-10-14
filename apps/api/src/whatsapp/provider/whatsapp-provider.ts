@@ -151,6 +151,12 @@ export type DeleteMessageInput = {
   providerMessageId: string;
 };
 
+export type EditMessageInput = {
+  phone: string;
+  providerMessageId: string;
+  body: string;
+};
+
 export type ChatPresenceInput = {
   phone: string;
   state: 'composing' | 'paused';
@@ -197,6 +203,7 @@ export interface WhatsAppProvider {
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput): Promise<void>;
   sendReaction(instanceToken: string, input: SendReactionInput): Promise<void>;
+  editMessage(instanceToken: string, input: EditMessageInput): Promise<void>;
   deleteMessage(instanceToken: string, input: DeleteMessageInput): Promise<void>;
   setChatPresence(instanceToken: string, input: ChatPresenceInput): Promise<void>;
   resolveUserLid(instanceToken: string, phone: string): Promise<ResolveUserLidResult>;

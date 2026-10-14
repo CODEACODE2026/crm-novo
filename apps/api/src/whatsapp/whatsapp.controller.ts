@@ -33,6 +33,7 @@ import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { CreateWhatsAppQuickReplyDto } from './dto/create-whatsapp-quick-reply.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
+import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
@@ -240,6 +241,15 @@ export class WhatsAppController {
     @Param('messageId') messageId: string,
   ) {
     return this.whatsAppService.deleteConversationMessage(conversationId, messageId);
+  }
+
+  @Patch('conversations/:conversationId/messages/:messageId')
+  editConversationMessage(
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: EditWhatsAppConversationMessageDto,
+  ) {
+    return this.whatsAppService.editConversationMessage(conversationId, messageId, dto);
   }
 
   @Post('messages/:id/retry')

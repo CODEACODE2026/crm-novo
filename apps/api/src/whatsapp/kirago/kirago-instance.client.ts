@@ -108,6 +108,10 @@ export type KiragoDeleteMessageData = {
   Details?: unknown;
 };
 
+export type KiragoEditMessageData = {
+  Details?: unknown;
+};
+
 export type KiragoPresenceData = {
   Details?: unknown;
 };
@@ -381,6 +385,18 @@ export class KiragoInstanceClient {
 
   deleteMessage(instanceToken: string, payload: { Phone: string; Id: string }) {
     return this.http.request<KiragoEnvelope<KiragoDeleteMessageData>>('/chat/delete', {
+      method: 'POST',
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  editMessage(
+    instanceToken: string,
+    payload: { Phone: string; Id: string; Body: string; mentionAll: false },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoEditMessageData>>('/chat/send/edit', {
       method: 'POST',
       headers: { token: instanceToken },
       body: payload,

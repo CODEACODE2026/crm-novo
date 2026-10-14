@@ -32,6 +32,7 @@ import {
   MessagesSquare,
   Mic,
   Pause,
+  Pencil,
   Play,
   Plus,
   QrCode,
@@ -63,6 +64,7 @@ import {
   createReferenceReactivation,
   deleteWhatsAppSavedSticker,
   deleteWhatsAppConversationMessage,
+  editWhatsAppConversationMessage,
   downloadWhatsAppConversationMedia,
   formatCurrency,
   formatDate,
@@ -525,6 +527,10 @@ export function WhatsAppInbox({
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
   const [deletingMessageIds, setDeletingMessageIds] = useState<Set<string>>(new Set());
   const [deleteConfirmMessageId, setDeleteConfirmMessageId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editBody, setEditBody] = useState('');
+  const [editError, setEditError] = useState('');
+  const [savingEditMessageId, setSavingEditMessageId] = useState<string | null>(null);
   const [linkClientError, setLinkClientError] = useState('');
   const [guestClientCreateError, setGuestClientCreateError] = useState('');
   const [guestClientDuplicate, setGuestClientDuplicate] = useState<ClientOption | null>(null);
@@ -582,6 +588,7 @@ export function WhatsAppInbox({
   const retryingMessagesRef = useRef(new Set<string>());
   const reactingMessagesRef = useRef(new Set<string>());
   const deletingMessagesRef = useRef(new Set<string>());
+  const editingMessageRef = useRef<string | null>(null);
   const startingConversationRef = useRef(false);
   const contactPixWhatsAppIntentIdsRef = useRef(new Set<string>());
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
@@ -2094,6 +2101,10 @@ export function WhatsAppInbox({
     setTargetSearchTerm('');
     setSendError('');
     setReplyTarget(null);
+    editingMessageRef.current = null;
+    setEditingMessageId(null);
+    setEditBody('');
+    setEditError('');
     clearComposerMedia();
     setNewMessageNotice(false);
     setMobileMode('chat');
@@ -3094,6 +3105,61 @@ export function WhatsAppInbox({
     }
   }
 
+  function startEditingConversationMessage(message: WhatsAppConversationMessage) {
+    if (!isEditEligibleConversationMessage(message) || savingEditMessageId) return;
+    editingMessageRef.current = message.id;
+    setEditingMessageId(message.id);
+    setEditBody(message.text ?? '');
+    setEditError('');
+    setDeleteConfirmMessageId(null);
+    setReactionPickerMessageId(null);
+  }
+
+  function cancelEditingConversationMessage() {
+    if (savingEditMessageId) return;
+    editingMessageRef.current = null;
+    setEditingMessageId(null);
+    setEditBody('');
+    setEditError('');
+  }
+
+  async function saveEditedConversationMessage(message: WhatsAppConversationMessage) {
+    if (!selectedConversation || editingMessageRef.current !== message.id || savingEditMessageId) {
+      return;
+    }
+
+    const body = editBody.trim();
+    if (!body) {
+      setEditError('Digite o novo texto da mensagem.');
+      return;
+    }
+    if (body === message.text?.trim()) {
+      setEditError('Altere o texto antes de salvar.');
+      return;
+    }
+
+    const conversationId = selectedConversation.id;
+    setSavingEditMessageId(message.id);
+    setEditError('');
+
+    try {
+      const updated = await editWhatsAppConversationMessage(conversationId, message.id, body);
+      if (activeConversationIdRef.current === conversationId) {
+        setMessages((current) => mergeConversationMessages(current, [updated]));
+      }
+      if (editingMessageRef.current === message.id) {
+        editingMessageRef.current = null;
+        setEditingMessageId(null);
+        setEditBody('');
+      }
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setEditError(conversationErrorMessage(err, 'Não foi possível editar esta mensagem.'));
+    } finally {
+      setSavingEditMessageId(null);
+    }
+  }
+
   async function retryGuestClientLink(clientOption: ClientOption) {
     if (!guestClientCreateConversation || creatingGuestClient) return;
 
@@ -3348,6 +3414,10 @@ export function WhatsAppInbox({
                 deleteConfirmMessageId={deleteConfirmMessageId}
                 deleteErrors={deleteErrors}
                 deletingMessageIds={deletingMessageIds}
+                editingMessageId={editingMessageId}
+                editBody={editBody}
+                editError={editError}
+                savingEditMessageId={savingEditMessageId}
                 retryErrors={retryErrors}
                 retryingMessageIds={retryingMessageIds}
                 saveStickerFeedback={saveStickerFeedback}
@@ -3367,6 +3437,10 @@ export function WhatsAppInbox({
                 onReactionPickerChange={setReactionPickerMessageId}
                 onDelete={(message) => void deleteConversationMessage(message)}
                 onDeleteConfirmChange={setDeleteConfirmMessageId}
+                onEdit={startEditingConversationMessage}
+                onEditBodyChange={setEditBody}
+                onEditCancel={cancelEditingConversationMessage}
+                onEditSave={(message) => void saveEditedConversationMessage(message)}
                 onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
                 onSaveSticker={(message) => void saveStickerMessage(message)}
@@ -4077,6 +4151,10 @@ function ConversationMessages({
   deleteConfirmMessageId,
   deleteErrors,
   deletingMessageIds,
+  editingMessageId,
+  editBody,
+  editError,
+  savingEditMessageId,
   retryErrors,
   retryingMessageIds,
   saveStickerFeedback,
@@ -4089,6 +4167,10 @@ function ConversationMessages({
   onReactionPickerChange,
   onDelete,
   onDeleteConfirmChange,
+  onEdit,
+  onEditBodyChange,
+  onEditCancel,
+  onEditSave,
   onReply,
   onRetry,
   onSaveSticker,
@@ -4111,6 +4193,10 @@ function ConversationMessages({
   deleteConfirmMessageId: string | null;
   deleteErrors: Record<string, string>;
   deletingMessageIds: Set<string>;
+  editingMessageId: string | null;
+  editBody: string;
+  editError: string;
+  savingEditMessageId: string | null;
   retryErrors: Record<string, string>;
   retryingMessageIds: Set<string>;
   saveStickerFeedback: Record<string, string>;
@@ -4123,6 +4209,10 @@ function ConversationMessages({
   onReactionPickerChange: (messageId: string | null) => void;
   onDelete: (message: WhatsAppConversationMessage) => void;
   onDeleteConfirmChange: (messageId: string | null) => void;
+  onEdit: (message: WhatsAppConversationMessage) => void;
+  onEditBodyChange: (body: string) => void;
+  onEditCancel: () => void;
+  onEditSave: (message: WhatsAppConversationMessage) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   onSaveSticker: (message: WhatsAppConversationMessage) => void;
@@ -4251,6 +4341,10 @@ function ConversationMessages({
                     deleteConfirmOpen={deleteConfirmMessageId === message.id}
                     deleteError={deleteErrors[message.id] ?? ''}
                     deleting={deletingMessageIds.has(message.id)}
+                    editing={editingMessageId === message.id}
+                    editBody={editingMessageId === message.id ? editBody : ''}
+                    editError={editingMessageId === message.id ? editError : ''}
+                    savingEdit={savingEditMessageId === message.id}
                     reactionError={reactionErrors[message.id] ?? ''}
                     reactionPickerOpen={reactionPickerMessageId === message.id}
                     reacting={reactingMessageIds.has(message.id)}
@@ -4272,6 +4366,10 @@ function ConversationMessages({
                     onReactionPickerChange={onReactionPickerChange}
                     onDelete={onDelete}
                     onDeleteConfirmChange={onDeleteConfirmChange}
+                    onEdit={onEdit}
+                    onEditBodyChange={onEditBodyChange}
+                    onEditCancel={onEditCancel}
+                    onEditSave={onEditSave}
                     onReply={onReply}
                     onRetry={onRetry}
                     onSaveSticker={onSaveSticker}
@@ -4332,6 +4430,15 @@ export function isRenderableConversationMessage(message: WhatsAppConversationMes
 
 export function isDeleteEligibleConversationMessage(message: WhatsAppConversationMessage) {
   return message.direction === 'OUTBOUND' && Boolean(message.providerMessageId) && !message.deleted;
+}
+
+export function isEditEligibleConversationMessage(message: WhatsAppConversationMessage) {
+  return (
+    message.direction === 'OUTBOUND' &&
+    message.type === 'TEXT' &&
+    Boolean(message.providerMessageId) &&
+    !message.deleted
+  );
 }
 
 export function classifyConversationIncomingFile(
@@ -4453,6 +4560,10 @@ function ConversationBubble({
   deleteConfirmOpen,
   deleteError,
   deleting,
+  editing,
+  editBody,
+  editError,
+  savingEdit,
   highlighted,
   message,
   reactionError,
@@ -4470,6 +4581,10 @@ function ConversationBubble({
   onReactionPickerChange,
   onDelete,
   onDeleteConfirmChange,
+  onEdit,
+  onEditBodyChange,
+  onEditCancel,
+  onEditSave,
   onReply,
   onRetry,
   onSaveSticker,
@@ -4478,6 +4593,10 @@ function ConversationBubble({
   deleteConfirmOpen: boolean;
   deleteError: string;
   deleting: boolean;
+  editing: boolean;
+  editBody: string;
+  editError: string;
+  savingEdit: boolean;
   highlighted: boolean;
   message: WhatsAppConversationMessage;
   reactionError: string;
@@ -4495,6 +4614,10 @@ function ConversationBubble({
   onReactionPickerChange: (messageId: string | null) => void;
   onDelete: (message: WhatsAppConversationMessage) => void;
   onDeleteConfirmChange: (messageId: string | null) => void;
+  onEdit: (message: WhatsAppConversationMessage) => void;
+  onEditBodyChange: (body: string) => void;
+  onEditCancel: () => void;
+  onEditSave: (message: WhatsAppConversationMessage) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   onSaveSticker: (message: WhatsAppConversationMessage) => void;
@@ -4502,6 +4625,7 @@ function ConversationBubble({
   const outbound = message.direction === 'OUTBOUND';
   const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const deleteEligible = isDeleteEligibleConversationMessage(message);
+  const editEligible = isEditEligibleConversationMessage(message);
 
   if (!isRenderableConversationMessage(message)) {
     return null;
@@ -4544,6 +4668,23 @@ function ConversationBubble({
             <Loader2 aria-hidden="true" size={14} />
           ) : (
             <Download aria-hidden="true" size={14} />
+          )}
+        </button>
+      ) : null}
+      {editEligible ? (
+        <button
+          className="conversation-edit-action"
+          type="button"
+          title="Editar"
+          aria-label="Editar mensagem"
+          aria-expanded={editing}
+          disabled={savingEdit}
+          onClick={() => onEdit(message)}
+        >
+          {savingEdit ? (
+            <Loader2 aria-hidden="true" size={14} />
+          ) : (
+            <Pencil aria-hidden="true" size={14} />
           )}
         </button>
       ) : null}
@@ -4628,7 +4769,47 @@ function ConversationBubble({
         }`}
       >
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
-        {message.deleted ? (
+        {editing ? (
+          <div className="conversation-message-editor">
+            <textarea
+              aria-label="Editar texto da mensagem"
+              autoFocus
+              disabled={savingEdit}
+              maxLength={2000}
+              rows={3}
+              value={editBody}
+              onChange={(event) => onEditBodyChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  onEditCancel();
+                } else if (
+                  event.key === 'Enter' &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  onEditSave(message);
+                }
+              }}
+            />
+            {editError ? <span role="alert">{editError}</span> : null}
+            <div>
+              <button type="button" disabled={savingEdit} onClick={onEditCancel}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={
+                  savingEdit || !editBody.trim() || editBody.trim() === message.text?.trim()
+                }
+                onClick={() => onEditSave(message)}
+              >
+                {savingEdit ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+          </div>
+        ) : message.deleted ? (
           <p className="conversation-message-deleted">Mensagem apagada</p>
         ) : text ? (
           <p>{renderHighlightedSearchText(text, searchTerm)}</p>

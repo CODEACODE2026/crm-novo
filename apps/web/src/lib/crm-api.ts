@@ -2770,6 +2770,20 @@ export function updateWhatsAppConversationMessageReaction(
   );
 }
 
+export function editWhatsAppConversationMessage(
+  conversationId: string,
+  messageId: string,
+  body: string,
+) {
+  return apiFetch<WhatsAppConversationMessage>(
+    `/whatsapp/conversations/${conversationId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ body }),
+    },
+  );
+}
+
 export function deleteWhatsAppConversationMessage(conversationId: string, messageId: string) {
   return apiFetch<WhatsAppConversationMessage>(
     `/whatsapp/conversations/${conversationId}/messages/${messageId}`,

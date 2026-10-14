@@ -12,6 +12,7 @@ import type {
   MarkMessagesAsReadInput,
   ChatPresenceInput,
   DeleteMessageInput,
+  EditMessageInput,
   ProvisionConnectionInput,
   ResolveUserLidResult,
   RemoteConnectionLookupInput,
@@ -361,6 +362,27 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       throw new KiragoProviderError(
         'WHATSAPP_PROVIDER_ERROR',
         'Falha ao apagar mensagem na Kirago.',
+        response.code,
+      );
+    }
+  }
+
+  async editMessage(instanceToken: string, input: EditMessageInput) {
+    const response = await this.instanceClient.editMessage(instanceToken, {
+      Phone: input.phone,
+      Id: input.providerMessageId,
+      Body: input.body,
+      mentionAll: false,
+    });
+
+    if (
+      response.success !== true ||
+      response.code !== 200 ||
+      response.data?.Details !== 'Message updated'
+    ) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao editar mensagem na Kirago.',
         response.code,
       );
     }

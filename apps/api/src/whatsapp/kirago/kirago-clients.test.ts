@@ -281,6 +281,34 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('posts the official edit payload with the instance token', async () => {
+    const request = vi.fn().mockResolvedValue({
+      success: true,
+      code: 200,
+      data: { Details: 'Message updated' },
+    });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.editMessage('instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-message-id',
+      Body: 'Texto atualizado',
+      mentionAll: false,
+    });
+
+    expect(request).toHaveBeenCalledWith('/chat/send/edit', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '5544999999999',
+        Id: 'provider-message-id',
+        Body: 'Texto atualizado',
+        mentionAll: false,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('passes optional text reply context to Kirago without forwarding metadata', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'reply-id' } });
     const client = new KiragoInstanceClient({ request } as never);

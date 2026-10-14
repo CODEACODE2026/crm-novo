@@ -432,6 +432,44 @@ describe('Kirago dependency injection', () => {
     });
   });
 
+  it('maps message edits to the official Kirago contract and rejects unsuccessful envelopes', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const editMessage = vi.spyOn(instanceClient, 'editMessage').mockResolvedValue({
+      success: true,
+      code: 200,
+      data: { Details: 'Message updated' },
+    });
+
+    await provider.editMessage('instance-token', {
+      phone: '5544999999999',
+      providerMessageId: 'provider-message-id',
+      body: 'Texto atualizado',
+    });
+
+    expect(editMessage).toHaveBeenCalledWith('instance-token', {
+      Phone: '5544999999999',
+      Id: 'provider-message-id',
+      Body: 'Texto atualizado',
+      mentionAll: false,
+    });
+
+    editMessage.mockResolvedValueOnce({
+      success: false,
+      code: 200,
+      data: { Details: 'Failed' },
+    });
+    await expect(
+      provider.editMessage('instance-token', {
+        phone: '5544999999999',
+        providerMessageId: 'provider-message-id',
+        body: 'Outro texto',
+      }),
+    ).rejects.toThrow('Falha ao editar mensagem na Kirago.');
+  });
+
   it('maps text reply input to Kirago ContextInfo and QuotedText', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

@@ -1060,7 +1060,27 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('listWhatsAppSavedStickers()');
     expect(conversationsSource).toContain('sendWhatsAppSavedSticker(selectedConversation.id');
     expect(conversationsSource).toContain('deleteWhatsAppSavedSticker(sticker.id)');
-    expect(conversationsSource).toContain('Figurinhas salvas');
+    expect(conversationsSource).toContain('attachmentMenuRef.current?.contains(target)');
+    expect(conversationsSource).toContain('setAttachmentMenuOpen(false)');
+    expect(conversationsSource).toContain("event.key !== 'Escape'");
+    expect(conversationsSource).toContain(
+      "document.addEventListener('pointerdown', closeOnPointerDown, true)",
+    );
+    expect(conversationsSource).toContain(
+      "document.removeEventListener('pointerdown', closeOnPointerDown, true)",
+    );
+    expect(conversationsSource).toContain(
+      "document.addEventListener('keydown', closeOnKeyDown, true)",
+    );
+    expect(conversationsSource).toContain(
+      "document.removeEventListener('keydown', closeOnKeyDown, true)",
+    );
+    expect(conversationsSource).toContain('<span>Figurinhas</span>');
+    expect(conversationsSource).not.toContain('<span>Figurinhas salvas</span>');
+    expect(conversationsSource).not.toContain('<span>Figurinha</span>');
+    expect(conversationsSource).not.toContain('stickerInputRef');
+    expect(conversationsSource).not.toContain('conversationStickerAccept');
+    expect(conversationsSource).not.toContain("selectFile('STICKER'");
     expect(conversationsSource).toContain('conversation-saved-sticker-grid');
     expect(conversationsSource).toContain('getWhatsAppSavedStickerMediaBlob(stickerId');
     expect(conversationsSource).toContain('savedStickerPreviewKind(sticker.mimeType)');

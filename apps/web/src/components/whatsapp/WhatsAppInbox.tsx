@@ -237,7 +237,6 @@ export const conversationDocumentAccept =
   'application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,image/vnd.adobe.photoshop,application/x-photoshop,application/vnd.android.package-archive,.zip,.rar,.psd,.apk';
 export const conversationAudioAccept = 'audio/ogg,audio/mpeg,audio/mp4';
 export const conversationVideoAccept = 'video/mp4';
-export const conversationStickerAccept = 'image/webp';
 export type SavedStickerPreviewKind = 'image' | 'video' | 'unsupported';
 const genericConversationFileMimeTypes = new Set(['', 'application/octet-stream']);
 const preferredConversationVoiceMimeType = 'audio/webm;codecs=opus';
@@ -5793,7 +5792,7 @@ function ConversationComposer({
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
-  const stickerInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLFormElement | null>(null);
   const savedStickerPickerRef = useRef<HTMLDivElement | null>(null);
   const savedStickerPreviewUrlsRef = useRef(new Map<string, string>());
@@ -5950,6 +5949,33 @@ function ConversationComposer({
       return Math.min(current, visibleQuickReplies.length - 1);
     });
   }, [quickReplyMenuVisible, visibleQuickReplies.length]);
+
+  useEffect(() => {
+    if (!attachmentMenuOpen) return undefined;
+
+    function closeOnPointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      if (attachmentMenuRef.current?.contains(target)) return;
+
+      setAttachmentMenuOpen(false);
+    }
+
+    function closeOnKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setAttachmentMenuOpen(false);
+    }
+
+    document.addEventListener('pointerdown', closeOnPointerDown, true);
+    document.addEventListener('keydown', closeOnKeyDown, true);
+
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown, true);
+      document.removeEventListener('keydown', closeOnKeyDown, true);
+    };
+  }, [attachmentMenuOpen]);
 
   useEffect(() => {
     composerMountedRef.current = true;
@@ -6526,7 +6552,7 @@ function ConversationComposer({
         </div>
       ) : null}
       <div className="conversation-composer-tools">
-        <div className="conversation-attach-control">
+        <div ref={attachmentMenuRef} className="conversation-attach-control">
           <IconButton
             icon={Plus}
             label="Anexar arquivo"
@@ -6553,13 +6579,9 @@ function ConversationComposer({
                 <FileVideo aria-hidden="true" size={16} />
                 <span>Vídeo</span>
               </button>
-              <button type="button" onClick={() => stickerInputRef.current?.click()}>
-                <SmilePlus aria-hidden="true" size={16} />
-                <span>Figurinha</span>
-              </button>
               <button type="button" onClick={openSavedStickerPicker}>
                 <MessagesSquare aria-hidden="true" size={16} />
-                <span>Figurinhas salvas</span>
+                <span>Figurinhas</span>
               </button>
             </div>
           ) : null}
@@ -6600,16 +6622,6 @@ function ConversationComposer({
             type="file"
             onChange={(event) => {
               selectFile('VIDEO', event.target.files?.[0]);
-              event.target.value = '';
-            }}
-          />
-          <input
-            ref={stickerInputRef}
-            accept={conversationStickerAccept}
-            className="sr-only"
-            type="file"
-            onChange={(event) => {
-              selectFile('STICKER', event.target.files?.[0]);
               event.target.value = '';
             }}
           />

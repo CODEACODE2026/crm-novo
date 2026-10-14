@@ -1550,6 +1550,42 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toEqual({ ok: true, kind: 'DOCUMENT' });
   });
 
+  it('keeps the attachment menu focused on media uploads and the saved sticker library', () => {
+    expect(whatsAppInboxSource).toContain('const attachmentMenuRef = useRef');
+    expect(whatsAppInboxSource).toContain('if (!attachmentMenuOpen) return undefined;');
+    expect(whatsAppInboxSource).toContain('attachmentMenuRef.current?.contains(target)');
+    expect(whatsAppInboxSource).toContain(
+      "document.addEventListener('pointerdown', closeOnPointerDown, true)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "document.removeEventListener('pointerdown', closeOnPointerDown, true)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "document.addEventListener('keydown', closeOnKeyDown, true)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "document.removeEventListener('keydown', closeOnKeyDown, true)",
+    );
+    expect(whatsAppInboxSource).toContain("event.key !== 'Escape'");
+    expect(whatsAppInboxSource).toContain('event.preventDefault()');
+    expect(whatsAppInboxSource).toContain('event.stopPropagation()');
+    expect(whatsAppInboxSource).toContain('<span>Imagem</span>');
+    expect(whatsAppInboxSource).toContain('<span>Documento</span>');
+    expect(whatsAppInboxSource).toContain('<span>Áudio</span>');
+    expect(whatsAppInboxSource).toContain('<span>Vídeo</span>');
+    expect(whatsAppInboxSource).toContain('<span>Figurinhas</span>');
+    expect(whatsAppInboxSource).toContain('onClick={openSavedStickerPicker}');
+    expect(whatsAppInboxSource).toContain('setAttachmentMenuOpen(false)');
+    expect(whatsAppInboxSource).toContain('setSavedStickerPickerOpen((current) => {');
+    expect(whatsAppInboxSource).toContain('onSendSavedSticker(sticker)');
+    expect(whatsAppInboxSource).toContain("type === 'STICKER'");
+    expect(whatsAppInboxSource).not.toContain('<span>Figurinha</span>');
+    expect(whatsAppInboxSource).not.toContain('<span>Figurinhas salvas</span>');
+    expect(whatsAppInboxSource).not.toContain('stickerInputRef');
+    expect(whatsAppInboxSource).not.toContain('conversationStickerAccept');
+    expect(whatsAppInboxSource).not.toContain("selectFile('STICKER'");
+  });
+
   it('rejects unsupported, mismatched and oversized composer files before upload', () => {
     expect(
       classifyConversationIncomingFile(new File(['audio'], 'audio.wav', { type: 'audio/wav' })),

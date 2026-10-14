@@ -63,6 +63,45 @@ describe('WhatsAppMediaStorageService', () => {
     }
   });
 
+  it('stores saved stickers under a deterministic hash key without provider filenames', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'crm-novo-whatsapp-media-'));
+    const subject = storage(root);
+    const sha256 = 'a'.repeat(64);
+
+    try {
+      const result = await subject.storeSavedSticker({
+        buffer: Buffer.from('saved-sticker'),
+        mimeType: 'image/webp',
+        sha256,
+      });
+
+      expect(result).toEqual({
+        storageKey: `saved-stickers/aa/${sha256}.webp`,
+        mimeType: 'image/webp',
+        sizeBytes: 13,
+      });
+      expect(subject.isSafeStorageKey(result.storageKey)).toBe(true);
+      await expect(subject.read(result.storageKey)).resolves.toEqual(Buffer.from('saved-sticker'));
+
+      await expect(
+        subject.storeSavedSticker({
+          buffer: Buffer.from('saved-sticker'),
+          mimeType: 'image/png',
+          sha256,
+        }),
+      ).rejects.toThrow('Invalid WhatsApp saved sticker MIME.');
+      await expect(
+        subject.storeSavedSticker({
+          buffer: Buffer.from('saved-sticker'),
+          mimeType: 'image/webp',
+          sha256: '../not-a-hash',
+        }),
+      ).rejects.toThrow('Invalid WhatsApp saved sticker hash.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects relative storage roots to avoid writing under the process cwd', async () => {
     const subject = storage('relative-whatsapp-media');
 

@@ -1053,4 +1053,21 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('min-height: 0;');
     expect(stylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
   });
+
+  it('supports saved sticker library actions without reuploading through the browser', () => {
+    expect(conversationsSource).toContain('saveWhatsAppStickerMessage(message.id)');
+    expect(conversationsSource).toContain("message.mediaMimeType?.toLowerCase() === 'image/webp'");
+    expect(conversationsSource).toContain('listWhatsAppSavedStickers()');
+    expect(conversationsSource).toContain('sendWhatsAppSavedSticker(selectedConversation.id');
+    expect(conversationsSource).toContain('deleteWhatsAppSavedSticker(sticker.id)');
+    expect(conversationsSource).toContain('Figurinhas salvas');
+    expect(conversationsSource).toContain('conversation-saved-sticker-grid');
+    expect(conversationsSource).toContain('getWhatsAppSavedStickerMediaUrl(sticker.id)');
+    expect(conversationsSource).toContain('Excluir figurinha salva?');
+    expect(conversationsSource).toContain('Figurinha já estava salva.');
+    expect(stylesSource).toContain('.conversation-saved-sticker-picker');
+    expect(stylesSource).toContain('grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));');
+    expect(mobileConversationMediaSource).toContain('.conversation-saved-sticker-picker');
+    expect(mobileConversationMediaSource).toContain('max-height: min(42dvh, 320px);');
+  });
 });

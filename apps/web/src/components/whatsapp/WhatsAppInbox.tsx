@@ -62,6 +62,7 @@ import {
   createClient,
   confirmReferenceRenewal,
   createReferenceReactivation,
+  deleteWhatsAppSavedSticker,
   deleteWhatsAppConversationMessage,
   downloadWhatsAppConversationMedia,
   formatCurrency,
@@ -72,6 +73,7 @@ import {
   getWhatsAppConversation,
   getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
+  getWhatsAppSavedStickerMediaUrl,
   linkWhatsAppConversationClient,
   listClientOptions,
   listReceivables,
@@ -80,13 +82,16 @@ import {
   listWhatsAppConversationMessages,
   listWhatsAppConversations,
   markWhatsAppConversationRead,
+  listWhatsAppSavedStickers,
   createReceivablePix,
   previewReceivablePixReplacement,
   replaceReceivablePix,
   resolveWhatsAppConversation,
   retryWhatsAppConversationMessage,
   searchWhatsAppConversationMessages,
+  saveWhatsAppStickerMessage,
   sendPaymentIntentWhatsApp,
+  sendWhatsAppSavedSticker,
   sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
@@ -108,6 +113,7 @@ import {
   type WhatsAppConversationAvatar,
   type WhatsAppConversation,
   type WhatsAppConversationMessage,
+  type WhatsAppSavedSticker,
   type WhatsAppConversationMessageStatus,
   type WhatsAppConversationMessageType,
   type WhatsAppConversationMessagesCursor,
@@ -433,6 +439,20 @@ export function WhatsAppInbox({
   const [quickReplies, setQuickReplies] = useState<WhatsAppQuickReply[]>([]);
   const [quickRepliesLoading, setQuickRepliesLoading] = useState(true);
   const [quickRepliesError, setQuickRepliesError] = useState('');
+  const [savedStickers, setSavedStickers] = useState<WhatsAppSavedSticker[]>([]);
+  const [savedStickersLoaded, setSavedStickersLoaded] = useState(false);
+  const [savedStickersLoading, setSavedStickersLoading] = useState(false);
+  const [savedStickersError, setSavedStickersError] = useState('');
+  const [savingStickerMessageIds, setSavingStickerMessageIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [saveStickerFeedback, setSaveStickerFeedback] = useState<Record<string, string>>({});
+  const [deletingSavedStickerIds, setDeletingSavedStickerIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [deleteSavedStickerConfirmId, setDeleteSavedStickerConfirmId] = useState<string | null>(
+    null,
+  );
   const [contactPanelOpen, setContactPanelOpen] = useState(false);
   const [contactInfo, setContactInfo] = useState<ConversationContactInfoState>({
     conversationId: null,
@@ -606,6 +626,28 @@ export function WhatsAppInbox({
       canceled = true;
     };
   }, []);
+
+  const loadSavedStickers = useCallback(
+    async ({ force = false }: { force?: boolean } = {}) => {
+      if (savedStickersLoading || (savedStickersLoaded && !force)) return;
+
+      setSavedStickersLoading(true);
+      setSavedStickersError('');
+
+      try {
+        const stickers = await listWhatsAppSavedStickers();
+        setSavedStickers(stickers);
+        setSavedStickersLoaded(true);
+      } catch (err) {
+        setSavedStickersError(
+          err instanceof Error ? err.message : 'Não foi possível carregar figurinhas salvas.',
+        );
+      } finally {
+        setSavedStickersLoading(false);
+      }
+    },
+    [savedStickersLoaded, savedStickersLoading],
+  );
 
   const fetchConversationAvatar = useCallback((conversationId: string) => {
     const cached = avatarCacheRef.current.get(conversationId);
@@ -2189,6 +2231,98 @@ export function WhatsAppInbox({
     });
   }
 
+  async function saveStickerMessage(message: WhatsAppConversationMessage) {
+    if (message.type !== 'STICKER' || savingStickerMessageIds.has(message.id)) return;
+
+    setSavingStickerMessageIds((current) => new Set(current).add(message.id));
+    setSaveStickerFeedback((current) => ({ ...current, [message.id]: 'Salvando...' }));
+
+    try {
+      const result = await saveWhatsAppStickerMessage(message.id);
+      setSavedStickers((current) => {
+        const withoutDuplicate = current.filter((sticker) => sticker.id !== result.sticker.id);
+        return [result.sticker, ...withoutDuplicate];
+      });
+      setSavedStickersLoaded(true);
+      setSaveStickerFeedback((current) => ({
+        ...current,
+        [message.id]: result.alreadyExisted ? 'Figurinha já estava salva.' : 'Figurinha salva.',
+      }));
+    } catch (err) {
+      setSaveStickerFeedback((current) => ({
+        ...current,
+        [message.id]: conversationErrorMessage(err, 'Falha ao salvar figurinha.'),
+      }));
+    } finally {
+      setSavingStickerMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+    }
+  }
+
+  async function sendSavedStickerFromLibrary(sticker: WhatsAppSavedSticker) {
+    if (!selectedConversation || sending || sendingRef.current) return;
+
+    sendingRef.current = true;
+    setSending(true);
+    setSendError('');
+    pauseConversationPresence(selectedConversation.id);
+
+    try {
+      const message = await sendWhatsAppSavedSticker(selectedConversation.id, sticker.id, {
+        requestId: createConversationRequestId(),
+        ...(replyTarget ? { replyToMessageId: replyTarget.id } : {}),
+      });
+      pendingSendScrollConversationRef.current = selectedConversation.id;
+      setMessages((current) => mergeConversationMessages(current, [message]));
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? {
+                ...conversation,
+                lastMessageAt: message.sentAt ?? message.createdAt,
+                lastMessagePreview: conversationLastMessagePreview(message),
+              }
+            : conversation,
+        ),
+      );
+      setReplyTarget(null);
+      await loadConversations({ preserveLoaded: true, silent: true });
+    } catch (err) {
+      setSendError(conversationErrorMessage(err, 'Falha ao enviar figurinha salva.'));
+    } finally {
+      pendingComposerFocusRef.current = true;
+      setComposerFocusRequest((current) => current + 1);
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
+  async function deleteSavedStickerFromLibrary(sticker: WhatsAppSavedSticker) {
+    if (deletingSavedStickerIds.has(sticker.id)) return;
+
+    setDeletingSavedStickerIds((current) => new Set(current).add(sticker.id));
+    setSavedStickersError('');
+
+    try {
+      await deleteWhatsAppSavedSticker(sticker.id);
+      setSavedStickers((current) => current.filter((item) => item.id !== sticker.id));
+      setDeleteSavedStickerConfirmId(null);
+    } catch (err) {
+      setSavedStickersError(
+        err instanceof Error ? err.message : 'Não foi possível excluir a figurinha.',
+      );
+    } finally {
+      setDeletingSavedStickerIds((current) => {
+        const next = new Set(current);
+        next.delete(sticker.id);
+        return next;
+      });
+    }
+  }
+
   async function sendCurrentMessage(
     bodyOverride?: string,
     {
@@ -3217,6 +3351,8 @@ export function WhatsAppInbox({
                 deletingMessageIds={deletingMessageIds}
                 retryErrors={retryErrors}
                 retryingMessageIds={retryingMessageIds}
+                saveStickerFeedback={saveStickerFeedback}
+                savingStickerMessageIds={savingStickerMessageIds}
                 scrollRef={messagesScrollRef}
                 showNewMessageNotice={newMessageNotice}
                 targetMessageId={targetMessageId}
@@ -3234,6 +3370,7 @@ export function WhatsAppInbox({
                 onDeleteConfirmChange={setDeleteConfirmMessageId}
                 onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
+                onSaveSticker={(message) => void saveStickerMessage(message)}
               />
 
               <ConversationComposer
@@ -3244,6 +3381,12 @@ export function WhatsAppInbox({
                 quickReplies={quickReplies}
                 quickRepliesError={quickRepliesError}
                 quickRepliesLoading={quickRepliesLoading}
+                savedStickers={savedStickers}
+                savedStickersError={savedStickersError}
+                savedStickersLoaded={savedStickersLoaded}
+                savedStickersLoading={savedStickersLoading}
+                deleteSavedStickerConfirmId={deleteSavedStickerConfirmId}
+                deletingSavedStickerIds={deletingSavedStickerIds}
                 replyTarget={replyTarget}
                 selectedMedia={selectedMedia}
                 sending={sending}
@@ -3259,6 +3402,10 @@ export function WhatsAppInbox({
                 onCancelReply={() => setReplyTarget(null)}
                 onSelectMedia={selectComposerMedia}
                 onSend={() => void sendCurrentMessage()}
+                onDeleteSavedSticker={(sticker) => void deleteSavedStickerFromLibrary(sticker)}
+                onDeleteSavedStickerConfirmChange={setDeleteSavedStickerConfirmId}
+                onLoadSavedStickers={() => void loadSavedStickers()}
+                onSendSavedSticker={(sticker) => void sendSavedStickerFromLibrary(sticker)}
                 onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
                 onVoiceRecordingChange={(recording) =>
                   noteAudioRecordingPresence(selectedConversation.id, recording)
@@ -3918,6 +4065,8 @@ function ConversationMessages({
   deletingMessageIds,
   retryErrors,
   retryingMessageIds,
+  saveStickerFeedback,
+  savingStickerMessageIds,
   onJumpToBottom,
   onLoadLatest,
   onLoadOlder,
@@ -3928,6 +4077,7 @@ function ConversationMessages({
   onDeleteConfirmChange,
   onReply,
   onRetry,
+  onSaveSticker,
   reactionErrors,
   reactionPickerMessageId,
   reactingMessageIds,
@@ -3949,6 +4099,8 @@ function ConversationMessages({
   deletingMessageIds: Set<string>;
   retryErrors: Record<string, string>;
   retryingMessageIds: Set<string>;
+  saveStickerFeedback: Record<string, string>;
+  savingStickerMessageIds: Set<string>;
   onJumpToBottom: () => void;
   onLoadLatest: () => void;
   onLoadOlder: () => void;
@@ -3959,6 +4111,7 @@ function ConversationMessages({
   onDeleteConfirmChange: (messageId: string | null) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
+  onSaveSticker: (message: WhatsAppConversationMessage) => void;
   reactionErrors: Record<string, string>;
   reactionPickerMessageId: string | null;
   reactingMessageIds: Set<string>;
@@ -4089,6 +4242,8 @@ function ConversationMessages({
                     reacting={reactingMessageIds.has(message.id)}
                     retryError={retryErrors[message.id] ?? ''}
                     retrying={retryingMessageIds.has(message.id)}
+                    saveStickerFeedback={saveStickerFeedback[message.id] ?? ''}
+                    savingSticker={savingStickerMessageIds.has(message.id)}
                     pixCopyState={
                       message.pixContext?.paymentIntentId
                         ? pixCopyStates[message.pixContext.paymentIntentId]
@@ -4105,6 +4260,7 @@ function ConversationMessages({
                     onDeleteConfirmChange={onDeleteConfirmChange}
                     onReply={onReply}
                     onRetry={onRetry}
+                    onSaveSticker={onSaveSticker}
                   />
                 </Fragment>
               );
@@ -4290,6 +4446,8 @@ function ConversationBubble({
   reacting,
   retryError,
   retrying,
+  saveStickerFeedback,
+  savingSticker,
   pixCopyState,
   searchTerm,
   onCopyPix,
@@ -4300,6 +4458,7 @@ function ConversationBubble({
   onDeleteConfirmChange,
   onReply,
   onRetry,
+  onSaveSticker,
 }: {
   conversationId: string;
   deleteConfirmOpen: boolean;
@@ -4312,6 +4471,8 @@ function ConversationBubble({
   reacting: boolean;
   retryError: string;
   retrying: boolean;
+  saveStickerFeedback: string;
+  savingSticker: boolean;
   pixCopyState?: ConversationPixCopyState | undefined;
   searchTerm: string;
   onCopyPix: (message: WhatsAppConversationMessage) => void;
@@ -4322,6 +4483,7 @@ function ConversationBubble({
   onDeleteConfirmChange: (messageId: string | null) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
+  onSaveSticker: (message: WhatsAppConversationMessage) => void;
 }) {
   const outbound = message.direction === 'OUTBOUND';
   const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -4334,6 +4496,11 @@ function ConversationBubble({
   const hasAvailableImage =
     (message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable;
   const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);
+  const canSaveSticker =
+    message.type === 'STICKER' &&
+    message.mediaAvailable &&
+    !message.deleted &&
+    message.mediaMimeType?.toLowerCase() === 'image/webp';
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
   const actionRail = (
@@ -4350,6 +4517,22 @@ function ConversationBubble({
       >
         <Reply aria-hidden="true" size={14} />
       </button>
+      {canSaveSticker ? (
+        <button
+          className="conversation-save-sticker-action"
+          type="button"
+          title="Salvar figurinha"
+          aria-label="Salvar figurinha"
+          disabled={savingSticker}
+          onClick={() => onSaveSticker(message)}
+        >
+          {savingSticker ? (
+            <Loader2 aria-hidden="true" size={14} />
+          ) : (
+            <Download aria-hidden="true" size={14} />
+          )}
+        </button>
+      ) : null}
       {deleteEligible ? (
         <div className="conversation-delete-action-wrap">
           <button
@@ -4452,6 +4635,11 @@ function ConversationBubble({
         {deleteError ? (
           <div className="conversation-reaction-error" role="alert">
             {deleteError}
+          </div>
+        ) : null}
+        {saveStickerFeedback ? (
+          <div className="conversation-reaction-error" role="status">
+            {saveStickerFeedback}
           </div>
         ) : null}
         <footer>
@@ -5502,6 +5690,12 @@ function ConversationComposer({
   quickReplies,
   quickRepliesError,
   quickRepliesLoading,
+  savedStickers,
+  savedStickersError,
+  savedStickersLoaded,
+  savedStickersLoading,
+  deleteSavedStickerConfirmId,
+  deletingSavedStickerIds,
   replyTarget,
   selectedMedia,
   sending,
@@ -5510,7 +5704,11 @@ function ConversationComposer({
   onCancelReply,
   onRemoveMedia,
   onSelectMedia,
+  onDeleteSavedSticker,
+  onDeleteSavedStickerConfirmChange,
+  onLoadSavedStickers,
   onSend,
+  onSendSavedSticker,
   onSendVoice,
   onVoiceRecordingChange,
 }: {
@@ -5521,6 +5719,12 @@ function ConversationComposer({
   quickReplies: WhatsAppQuickReply[];
   quickRepliesError: string;
   quickRepliesLoading: boolean;
+  savedStickers: WhatsAppSavedSticker[];
+  savedStickersError: string;
+  savedStickersLoaded: boolean;
+  savedStickersLoading: boolean;
+  deleteSavedStickerConfirmId: string | null;
+  deletingSavedStickerIds: Set<string>;
   replyTarget: WhatsAppConversationMessage | null;
   selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
@@ -5529,11 +5733,16 @@ function ConversationComposer({
   onCancelReply: () => void;
   onRemoveMedia: () => void;
   onSelectMedia: (kind: ConversationComposerMedia['kind'], file: File) => void;
+  onDeleteSavedSticker: (sticker: WhatsAppSavedSticker) => void;
+  onDeleteSavedStickerConfirmChange: (stickerId: string | null) => void;
+  onLoadSavedStickers: () => void;
   onSend: () => void;
+  onSendSavedSticker: (sticker: WhatsAppSavedSticker) => void;
   onSendVoice: (voice: ConversationVoiceDraft) => Promise<void>;
   onVoiceRecordingChange: (recording: boolean) => void;
 }) {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [savedStickerPickerOpen, setSavedStickerPickerOpen] = useState(false);
   const [quickReplyActiveIndex, setQuickReplyActiveIndex] = useState(0);
   const [quickReplySlashDismissedDraft, setQuickReplySlashDismissedDraft] = useState<string | null>(
     null,
@@ -5699,6 +5908,25 @@ function ConversationComposer({
     if (!file) return;
     onSelectMedia(kind, file);
     setAttachmentMenuOpen(false);
+    setSavedStickerPickerOpen(false);
+  }
+
+  function openSavedStickerPicker() {
+    setAttachmentMenuOpen(false);
+    setSavedStickerPickerOpen((current) => {
+      const next = !current;
+
+      if (next && !savedStickersLoaded) {
+        onLoadSavedStickers();
+      }
+
+      return next;
+    });
+  }
+
+  function sendSavedSticker(sticker: WhatsAppSavedSticker) {
+    setSavedStickerPickerOpen(false);
+    onSendSavedSticker(sticker);
   }
 
   function applyQuickReply(reply: WhatsAppQuickReply) {
@@ -6096,6 +6324,10 @@ function ConversationComposer({
                 <SmilePlus aria-hidden="true" size={16} />
                 <span>Figurinha</span>
               </button>
+              <button type="button" onClick={openSavedStickerPicker}>
+                <MessagesSquare aria-hidden="true" size={16} />
+                <span>Figurinhas salvas</span>
+              </button>
             </div>
           ) : null}
           <input
@@ -6150,6 +6382,79 @@ function ConversationComposer({
           />
         </div>
       </div>
+      {savedStickerPickerOpen ? (
+        <div className="conversation-saved-sticker-picker">
+          {savedStickersLoading ? (
+            <div className="conversation-saved-sticker-state">Carregando...</div>
+          ) : savedStickersError ? (
+            <div className="conversation-saved-sticker-state warning">{savedStickersError}</div>
+          ) : savedStickers.length ? (
+            <div className="conversation-saved-sticker-grid">
+              {savedStickers.map((sticker) => {
+                const deleting = deletingSavedStickerIds.has(sticker.id);
+                const confirmingDelete = deleteSavedStickerConfirmId === sticker.id;
+
+                return (
+                  <div className="conversation-saved-sticker-item" key={sticker.id}>
+                    <button
+                      type="button"
+                      className="conversation-saved-sticker-thumb"
+                      disabled={sending || deleting}
+                      onClick={() => sendSavedSticker(sticker)}
+                      aria-label="Enviar figurinha salva"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img alt="" src={getWhatsAppSavedStickerMediaUrl(sticker.id)} />
+                    </button>
+                    <button
+                      type="button"
+                      className="conversation-saved-sticker-delete"
+                      disabled={deleting}
+                      aria-label="Excluir figurinha salva"
+                      title="Excluir"
+                      onClick={() =>
+                        onDeleteSavedStickerConfirmChange(confirmingDelete ? null : sticker.id)
+                      }
+                    >
+                      {deleting ? (
+                        <Loader2 aria-hidden="true" size={13} />
+                      ) : (
+                        <Trash2 aria-hidden="true" size={13} />
+                      )}
+                    </button>
+                    {confirmingDelete ? (
+                      <div className="conversation-saved-sticker-confirm" role="dialog">
+                        <span>Excluir figurinha salva?</span>
+                        <div>
+                          <button
+                            type="button"
+                            disabled={deleting}
+                            onClick={() => onDeleteSavedStickerConfirmChange(null)}
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deleting}
+                            onClick={() => onDeleteSavedSticker(sticker)}
+                          >
+                            {deleting ? 'Excluindo...' : 'Excluir'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="conversation-saved-sticker-state">
+              <strong>Nenhuma figurinha salva.</strong>
+              <span>Salve uma figurinha recebida para encontrá-la aqui.</span>
+            </div>
+          )}
+        </div>
+      ) : null}
       {quickReplyMenuVisible ? (
         <div
           className="conversation-quick-reply-menu conversation-quick-reply-menu-slash"

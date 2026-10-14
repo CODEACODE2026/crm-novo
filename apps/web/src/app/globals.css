@@ -4046,6 +4046,123 @@ a {
   background: var(--surface-soft);
 }
 
+.conversation-saved-sticker-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 56px;
+  z-index: 1200;
+  width: min(340px, calc(100% - 96px));
+  max-height: min(360px, calc(100dvh - 160px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+
+.conversation-saved-sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 8px;
+}
+
+.conversation-saved-sticker-item {
+  position: relative;
+  min-width: 0;
+}
+
+.conversation-saved-sticker-thumb {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  cursor: pointer;
+  padding: 6px;
+}
+
+.conversation-saved-sticker-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.conversation-saved-sticker-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0;
+}
+
+.conversation-saved-sticker-confirm {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 2;
+  display: grid;
+  gap: 8px;
+  width: 180px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+
+.conversation-saved-sticker-confirm span,
+.conversation-saved-sticker-state span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.conversation-saved-sticker-confirm div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.conversation-saved-sticker-confirm button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-soft);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.conversation-saved-sticker-confirm button:last-child {
+  border-color: transparent;
+  background: var(--danger);
+  color: white;
+}
+
+.conversation-saved-sticker-state {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  text-align: center;
+}
+
+.conversation-saved-sticker-state.warning {
+  color: var(--danger);
+}
+
 .conversation-quick-reply-menu {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -13746,6 +13863,19 @@ tbody tr:hover,
 
   .conversation-attach-menu {
     min-width: 136px;
+  }
+
+  .conversation-saved-sticker-picker {
+    position: fixed;
+    right: max(10px, env(safe-area-inset-right));
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    left: max(10px, env(safe-area-inset-left));
+    width: auto;
+    max-height: min(42dvh, 320px);
+  }
+
+  .conversation-saved-sticker-grid {
+    grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
   }
 
   .conversation-quick-reply-menu {

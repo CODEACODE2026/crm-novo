@@ -12,6 +12,7 @@ import {
   createReceivablePix,
   createReceivablesPix,
   createWhatsAppRealtimeEventSource,
+  deleteWhatsAppSavedSticker,
   deleteWhatsAppConversationMessage,
   deleteWhatsAppQuickReply,
   deleteClient,
@@ -26,11 +27,13 @@ import {
   getReceivablesSummary,
   getWhatsAppConversation,
   getWhatsAppConversationMessagesAround,
+  getWhatsAppSavedStickerMediaUrl,
   importLegacyClients,
   importLegacyPayments,
   listWhatsAppConversationMessages,
   listWhatsAppConversations,
   listWhatsAppConnections,
+  listWhatsAppSavedStickers,
   listBillingDispatches,
   listClientOptions,
   listClients,
@@ -52,12 +55,14 @@ import {
   replaceReceivablesPix,
   resolveWhatsAppConversation,
   resetUnauthorizedRedirectForTests,
+  saveWhatsAppStickerMessage,
   savePaymentProviderCredential,
   searchWhatsAppConversationMessages,
   sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
   sendPaymentIntentWhatsApp,
+  sendWhatsAppSavedSticker,
   startWhatsAppConversation,
   testPaymentProviderCredential,
   markWhatsAppConversationRead,
@@ -1468,6 +1473,13 @@ describe('CRM UI formatters', () => {
     await updateWhatsAppConversationMessageReaction('conversation-id', 'message-id', null);
     await deleteWhatsAppConversationMessage('conversation-id', 'message-id');
     await deleteWhatsAppQuickReply('quick-reply-id');
+    await listWhatsAppSavedStickers();
+    await saveWhatsAppStickerMessage('message-id');
+    await sendWhatsAppSavedSticker('conversation-id', 'saved-sticker-id', {
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37394',
+      replyToMessageId: 'reply-message-id',
+    });
+    await deleteWhatsAppSavedSticker('saved-sticker-id');
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1589,6 +1601,37 @@ describe('CRM UI formatters', () => {
       16,
       expect.stringContaining('/whatsapp/quick-replies/quick-reply-id'),
       expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      17,
+      expect.stringContaining('/whatsapp/saved-stickers'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      18,
+      expect.stringContaining('/whatsapp/messages/message-id/save-sticker'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      19,
+      expect.stringContaining(
+        '/whatsapp/conversations/conversation-id/saved-stickers/saved-sticker-id/send',
+      ),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37394',
+          replyToMessageId: 'reply-message-id',
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      20,
+      expect.stringContaining('/whatsapp/saved-stickers/saved-sticker-id'),
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(getWhatsAppSavedStickerMediaUrl('saved-sticker-id')).toContain(
+      '/whatsapp/saved-stickers/saved-sticker-id/media',
     );
   });
 

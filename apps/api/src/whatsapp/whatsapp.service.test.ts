@@ -533,6 +533,27 @@ function serviceFactory({
       findUniqueOrThrow: vi.fn().mockResolvedValue(conversationMessage()),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
+    whatsAppSavedSticker: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn((args: { data?: Record<string, unknown> }) =>
+        Promise.resolve({
+          id: '77777777-7777-4777-8777-777777777777',
+          mimeType: 'image/webp',
+          storageKey:
+            'saved-stickers/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp',
+          sizeBytes: 16,
+          sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          sourceMessageId: conversationMessage().id,
+          createdAt: now,
+          updatedAt: now,
+          ...(args.data ?? {}),
+        }),
+      ),
+      delete: vi.fn().mockResolvedValue({
+        id: '77777777-7777-4777-8777-777777777777',
+      }),
+    },
     whatsAppMessageReaction: {
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       upsert: vi.fn().mockResolvedValue({
@@ -675,6 +696,12 @@ function serviceFactory({
       mimeType: 'image/jpeg',
       sizeBytes: 10,
     }),
+    storeSavedSticker: vi.fn().mockResolvedValue({
+      storageKey:
+        'saved-stickers/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp',
+      mimeType: 'image/webp',
+      sizeBytes: 16,
+    }),
     read: vi.fn().mockResolvedValue(null),
     delete: vi.fn().mockResolvedValue(undefined),
     isSafeStorageKey: vi.fn().mockReturnValue(true),
@@ -724,6 +751,8 @@ function serviceFactory({
 }
 
 describe('WhatsAppService', () => {
+  const webpBytes = Buffer.from('RIFF0000WEBPvp8-data');
+
   it('returns a normalized conversation avatar using the conversation phone and instance token', async () => {
     const current = conversation();
     const { service, provider, encryption, prisma } = serviceFactory({
@@ -749,6 +778,212 @@ describe('WhatsAppService', () => {
       where: { id: current.id },
       include: { whatsAppConnection: true },
     });
+  });
+
+  it('saves only WEBP sticker messages using byte SHA-256 and persistent storage', async () => {
+    const stickerMessage = conversationMessage({
+      type: 'STICKER',
+      mediaMimeType: 'image/webp',
+      rawMetadata: {
+        localMedia: {
+          storageKey: `${connection().id}/${conversationMessage().id}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: 'image/webp',
+          sizeBytes: webpBytes.length,
+        },
+      },
+    });
+    const sha256 = createHash('sha256').update(webpBytes).digest('hex');
+    const { service, prisma, mediaStorage } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(webpBytes),
+        storeSavedSticker: vi.fn().mockResolvedValue({
+          storageKey: `saved-stickers/${sha256.slice(0, 2)}/${sha256}.webp`,
+          mimeType: 'image/webp',
+          sizeBytes: webpBytes.length,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(stickerMessage),
+        },
+      },
+    });
+
+    const result = await service.saveConversationStickerMessage(stickerMessage.id);
+
+    expect(result.alreadyExisted).toBe(false);
+    expect(result.sticker).toMatchObject({
+      id: '77777777-7777-4777-8777-777777777777',
+      mimeType: 'image/webp',
+      previewUrl: '/whatsapp/saved-stickers/77777777-7777-4777-8777-777777777777/media',
+    });
+    expect(mediaStorage.storeSavedSticker).toHaveBeenCalledWith({
+      buffer: webpBytes,
+      mimeType: 'image/webp',
+      sha256,
+    });
+    expect(prisma.whatsAppSavedSticker.create).toHaveBeenCalledWith({
+      data: {
+        mimeType: 'image/webp',
+        storageKey: `saved-stickers/${sha256.slice(0, 2)}/${sha256}.webp`,
+        sizeBytes: webpBytes.length,
+        sha256,
+        sourceMessageId: stickerMessage.id,
+      },
+    });
+  });
+
+  it('returns existing saved sticker on concurrent unique races without deleting shared media', async () => {
+    const stickerMessage = conversationMessage({
+      type: 'STICKER',
+      mediaMimeType: 'image/webp',
+      rawMetadata: {
+        localMedia: {
+          storageKey: `${connection().id}/${conversationMessage().id}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+          mimeType: 'image/webp',
+          sizeBytes: webpBytes.length,
+        },
+      },
+    });
+    const sha256 = createHash('sha256').update(webpBytes).digest('hex');
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['sha256'] },
+    });
+    const { service, mediaStorage } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(webpBytes),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(stickerMessage),
+        },
+        whatsAppSavedSticker: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({
+              id: 'existing-sticker-id',
+              mimeType: 'image/webp',
+              storageKey: `saved-stickers/${sha256.slice(0, 2)}/${sha256}.webp`,
+              sizeBytes: webpBytes.length,
+              sha256,
+              sourceMessageId: stickerMessage.id,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          create: vi.fn().mockRejectedValue(duplicateError),
+        },
+      },
+    });
+
+    const result = await service.saveConversationStickerMessage(stickerMessage.id);
+
+    expect(result).toMatchObject({
+      alreadyExisted: true,
+      sticker: { id: 'existing-sticker-id' },
+    });
+    expect(mediaStorage.delete).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-sticker messages and spoofed WEBP content when saving stickers', async () => {
+    const { service: imageService } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(conversationMessage({ type: 'IMAGE' })),
+        },
+      },
+    });
+
+    await expect(
+      imageService.saveConversationStickerMessage(conversationMessage().id),
+    ).rejects.toThrow('Somente mensagens de figurinha podem ser salvas.');
+
+    const { service: spoofedService } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(Buffer.from('not-webp')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(conversation({ whatsAppConnection: connection() })),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              type: 'STICKER',
+              mediaMimeType: 'image/webp',
+              rawMetadata: {
+                localMedia: {
+                  storageKey: `${connection().id}/${conversationMessage().id}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+                  mimeType: 'image/webp',
+                  sizeBytes: 8,
+                },
+              },
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      spoofedService.saveConversationStickerMessage(conversationMessage().id),
+    ).rejects.toThrow('Figurinha WEBP invalida.');
+  });
+
+  it('returns controlled errors for saved sticker rows with missing or invalid files', async () => {
+    const { service: missingFileService } = serviceFactory({
+      prismaOverrides: {
+        whatsAppSavedSticker: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'saved-sticker-id',
+            mimeType: 'image/webp',
+            storageKey:
+              'saved-stickers/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp',
+            sizeBytes: webpBytes.length,
+            sha256: 'a'.repeat(64),
+            sourceMessageId: null,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        },
+      },
+    });
+
+    await expect(missingFileService.downloadSavedStickerMedia('saved-sticker-id')).rejects.toThrow(
+      'Arquivo da figurinha salva nao encontrado.',
+    );
+
+    const { service: invalidFileService } = serviceFactory({
+      mediaStorageOverrides: {
+        read: vi.fn().mockResolvedValue(Buffer.from('not-webp')),
+      },
+      prismaOverrides: {
+        whatsAppSavedSticker: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'saved-sticker-id',
+            mimeType: 'image/webp',
+            storageKey:
+              'saved-stickers/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp',
+            sizeBytes: 8,
+            sha256: 'a'.repeat(64),
+            sourceMessageId: null,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        },
+      },
+    });
+
+    await expect(invalidFileService.downloadSavedStickerMedia('saved-sticker-id')).rejects.toThrow(
+      'Arquivo da figurinha salva e invalido.',
+    );
   });
 
   it('sends WEBP stickers through Kirago sticker endpoint and persists them as STICKER media', async () => {

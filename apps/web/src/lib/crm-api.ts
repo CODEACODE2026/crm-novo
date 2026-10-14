@@ -754,6 +754,19 @@ export interface WhatsAppConversationSummary {
   totalUnreadMessages: number;
 }
 
+export interface WhatsAppSavedSticker {
+  id: string;
+  mimeType: string;
+  previewUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveWhatsAppStickerResult {
+  sticker: WhatsAppSavedSticker;
+  alreadyExisted: boolean;
+}
+
 export interface WhatsAppConversationAvatar {
   available: boolean;
   url: string | null;
@@ -2761,6 +2774,40 @@ export function deleteWhatsAppConversationMessage(conversationId: string, messag
   return apiFetch<WhatsAppConversationMessage>(
     `/whatsapp/conversations/${conversationId}/messages/${messageId}`,
     { method: 'DELETE' },
+  );
+}
+
+export function listWhatsAppSavedStickers() {
+  return apiFetch<WhatsAppSavedSticker[]>('/whatsapp/saved-stickers');
+}
+
+export function getWhatsAppSavedStickerMediaUrl(id: string) {
+  return buildApiUrl(`/whatsapp/saved-stickers/${id}/media`);
+}
+
+export function saveWhatsAppStickerMessage(messageId: string) {
+  return apiFetch<SaveWhatsAppStickerResult>(`/whatsapp/messages/${messageId}/save-sticker`, {
+    method: 'POST',
+  });
+}
+
+export function deleteWhatsAppSavedSticker(id: string) {
+  return apiFetch<{ success: boolean }>(`/whatsapp/saved-stickers/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export function sendWhatsAppSavedSticker(
+  conversationId: string,
+  stickerId: string,
+  payload: { requestId: string; replyToMessageId?: string },
+) {
+  return apiFetch<WhatsAppConversationMessage>(
+    `/whatsapp/conversations/${conversationId}/saved-stickers/${stickerId}/send`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
   );
 }
 

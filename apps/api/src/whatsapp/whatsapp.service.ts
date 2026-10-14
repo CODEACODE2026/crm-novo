@@ -25,7 +25,7 @@ import {
   WhatsAppMessage,
   WhatsAppMessageReaction,
 } from '@prisma/client';
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FinanceService } from '../finance/finance.service';
 import { PlansService } from '../plans/plans.service';
@@ -192,6 +192,14 @@ type DownloadedConversationMedia = {
   disposition: 'inline' | 'attachment';
   fileName: string;
   mimetype: string;
+};
+
+type SavedStickerResult = {
+  id: string;
+  mimeType: string;
+  previewUrl: string;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 type MediaDebugFieldSummary = {
@@ -1319,6 +1327,196 @@ export class WhatsAppService {
     throw new BadRequestException({
       code: 'MEDIA_NOT_AVAILABLE',
       message: 'Midia indisponivel para mensagens antigas ou sem metadados completos.',
+    });
+  }
+
+  async saveConversationStickerMessage(messageId: string) {
+    const message = await this.prisma.whatsAppMessage.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        conversationId: true,
+        type: true,
+        deletedAt: true,
+        deletedForEveryone: true,
+      },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
+    }
+
+    if (message.type !== 'STICKER') {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_INVALID_MESSAGE_TYPE',
+        message: 'Somente mensagens de figurinha podem ser salvas.',
+      });
+    }
+
+    if (message.deletedAt || message.deletedForEveryone) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_MESSAGE_DELETED',
+        message: 'Nao e possivel salvar figurinha de mensagem apagada.',
+      });
+    }
+
+    const media = await this.downloadConversationMessageMedia(message.conversationId, message.id);
+    const mimeType = this.normalizeMediaMimeType(media.mimetype);
+
+    if (mimeType !== 'image/webp') {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_MIME_UNSUPPORTED',
+        message: 'Nesta versao, a biblioteca salva apenas figurinhas WEBP.',
+      });
+    }
+
+    if (!this.isWebpBuffer(media.buffer)) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_CONTENT_INVALID',
+        message: 'Figurinha WEBP invalida.',
+      });
+    }
+
+    if (media.buffer.length > WhatsAppService.conversationMediaMaxBytes) {
+      throw new PayloadTooLargeException({
+        code: 'WHATSAPP_SAVED_STICKER_TOO_LARGE',
+        message: 'Figurinha excede o limite de 10 MB permitido.',
+      });
+    }
+
+    const sha256 = createHash('sha256').update(media.buffer).digest('hex');
+    const existing = await this.prisma.whatsAppSavedSticker.findUnique({ where: { sha256 } });
+
+    if (existing) {
+      return { sticker: this.presentSavedSticker(existing), alreadyExisted: true };
+    }
+
+    const stored = await this.mediaStorage.storeSavedSticker({
+      buffer: media.buffer,
+      mimeType,
+      sha256,
+    });
+
+    try {
+      const sticker = await this.prisma.whatsAppSavedSticker.create({
+        data: {
+          mimeType,
+          storageKey: stored.storageKey,
+          sizeBytes: stored.sizeBytes,
+          sha256,
+          sourceMessageId: message.id,
+        },
+      });
+
+      return { sticker: this.presentSavedSticker(sticker), alreadyExisted: false };
+    } catch (error) {
+      if (this.isPrismaUniqueConstraint(error)) {
+        const duplicate = await this.prisma.whatsAppSavedSticker.findUnique({ where: { sha256 } });
+
+        if (duplicate) {
+          return { sticker: this.presentSavedSticker(duplicate), alreadyExisted: true };
+        }
+      }
+
+      await this.deleteLocalMediaQuietly(stored.storageKey);
+      throw error;
+    }
+  }
+
+  async listSavedStickers() {
+    const stickers = await this.prisma.whatsAppSavedSticker.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return stickers.map((sticker) => this.presentSavedSticker(sticker));
+  }
+
+  async downloadSavedStickerMedia(id: string): Promise<DownloadedConversationMedia> {
+    const sticker = await this.prisma.whatsAppSavedSticker.findUnique({ where: { id } });
+
+    if (!sticker) {
+      throw new NotFoundException('Figurinha salva nao encontrada.');
+    }
+
+    if (!this.mediaStorage.isSafeStorageKey(sticker.storageKey)) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_STORAGE_INVALID',
+        message: 'Referencia de midia invalida.',
+      });
+    }
+
+    if (this.normalizeMediaMimeType(sticker.mimeType) !== 'image/webp') {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_MIME_UNSUPPORTED',
+        message: 'Figurinha salva possui MIME nao suportado.',
+      });
+    }
+
+    const buffer = await this.mediaStorage.read(sticker.storageKey);
+
+    if (!buffer) {
+      throw new NotFoundException('Arquivo da figurinha salva nao encontrado.');
+    }
+
+    if (buffer.length > WhatsAppService.conversationMediaMaxBytes) {
+      throw new PayloadTooLargeException({
+        code: 'WHATSAPP_SAVED_STICKER_TOO_LARGE',
+        message: 'Figurinha excede o limite interno do CRM.',
+      });
+    }
+
+    if (!this.isWebpBuffer(buffer)) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_SAVED_STICKER_CONTENT_INVALID',
+        message: 'Arquivo da figurinha salva e invalido.',
+      });
+    }
+
+    return {
+      buffer,
+      contentLength: buffer.length,
+      disposition: 'inline',
+      fileName: `saved-sticker-${sticker.id}.webp`,
+      mimetype: sticker.mimeType,
+    };
+  }
+
+  async deleteSavedSticker(id: string) {
+    const sticker = await this.prisma.whatsAppSavedSticker.findUnique({ where: { id } });
+
+    if (!sticker) {
+      throw new NotFoundException('Figurinha salva nao encontrada.');
+    }
+
+    await this.prisma.whatsAppSavedSticker.delete({ where: { id } });
+    await this.deleteLocalMediaQuietly(sticker.storageKey);
+
+    return { success: true };
+  }
+
+  async sendSavedSticker(
+    conversationId: string,
+    stickerId: string,
+    input: { requestId?: string; replyToMessageId?: string },
+  ) {
+    const requestId = input.requestId?.trim();
+
+    if (!requestId) {
+      throw new BadRequestException('requestId obrigatorio.');
+    }
+
+    const media = await this.downloadSavedStickerMedia(stickerId);
+
+    return this.sendConversationMediaMessage(conversationId, {
+      file: {
+        buffer: media.buffer,
+        mimetype: media.mimetype,
+        originalname: media.fileName,
+        size: media.buffer.length,
+      },
+      requestId,
+      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+      mediaKind: 'STICKER',
     });
   }
 
@@ -5383,6 +5581,14 @@ export class WhatsAppService {
     return `data:${dataMimeType};base64,${buffer.toString('base64')}`;
   }
 
+  private isWebpBuffer(buffer: Buffer) {
+    return (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+    );
+  }
+
   private parseConversationMediaKind(value: string | undefined) {
     if (value === undefined || value.trim() === '') {
       return null;
@@ -6718,6 +6924,21 @@ export class WhatsAppService {
     return (allowedWhatsAppReactionEmojis as readonly string[]).includes(value);
   }
 
+  private presentSavedSticker(sticker: {
+    id: string;
+    mimeType: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }): SavedStickerResult {
+    return {
+      id: sticker.id,
+      mimeType: sticker.mimeType,
+      previewUrl: `/whatsapp/saved-stickers/${sticker.id}/media`,
+      createdAt: sticker.createdAt,
+      updatedAt: sticker.updatedAt,
+    };
+  }
+
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {
     const deleted = Boolean(message.deletedAt || message.deletedForEveryone);
     const pixContext = deleted ? null : this.presentPixConversationContext(message);
@@ -7624,6 +7845,10 @@ export class WhatsAppService {
 
     const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
     return target.includes('providerMessageId') || target.includes('requestId');
+  }
+
+  private isPrismaUniqueConstraint(error: unknown) {
+    return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
   }
 
   private handleClientCreationError(error: unknown): never {

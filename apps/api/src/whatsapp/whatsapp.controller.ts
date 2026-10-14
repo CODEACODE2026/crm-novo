@@ -41,6 +41,7 @@ import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-cont
 import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { SendWhatsAppSavedStickerDto } from './dto/send-whatsapp-saved-sticker.dto';
 import { SetWhatsAppConversationPresenceDto } from './dto/set-whatsapp-conversation-presence.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { UpdateWhatsAppMessageReactionDto } from './dto/update-whatsapp-message-reaction.dto';
@@ -244,6 +245,47 @@ export class WhatsAppController {
   @Post('messages/:id/retry')
   retryConversationMessage(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.whatsAppService.retryConversationMessage(id);
+  }
+
+  @Post('messages/:id/save-sticker')
+  saveConversationStickerMessage(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.whatsAppService.saveConversationStickerMessage(id);
+  }
+
+  @Get('saved-stickers')
+  listSavedStickers() {
+    return this.whatsAppService.listSavedStickers();
+  }
+
+  @Get('saved-stickers/:id/media')
+  async downloadSavedStickerMedia(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const media = await this.whatsAppService.downloadSavedStickerMedia(id);
+    response.setHeader('Content-Type', media.mimetype);
+    response.setHeader('Content-Length', String(media.contentLength));
+    response.setHeader(
+      'Content-Disposition',
+      `${media.disposition}; filename="${media.fileName.replace(/["\\]/g, '_')}"`,
+    );
+    response.setHeader('Cache-Control', 'private, no-store');
+
+    return new StreamableFile(media.buffer);
+  }
+
+  @Delete('saved-stickers/:id')
+  deleteSavedSticker(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.whatsAppService.deleteSavedSticker(id);
+  }
+
+  @Post('conversations/:conversationId/saved-stickers/:stickerId/send')
+  sendSavedSticker(
+    @Param('conversationId') conversationId: string,
+    @Param('stickerId', new ParseUUIDPipe()) stickerId: string,
+    @Body() dto: SendWhatsAppSavedStickerDto,
+  ) {
+    return this.whatsAppService.sendSavedSticker(conversationId, stickerId, dto);
   }
 
   @Post('conversations/:id/media')

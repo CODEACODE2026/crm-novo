@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { constants } from 'fs';
-import { access, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { access, mkdir, readFile, rename, rm, writeFile } from 'fs/promises';
 import path from 'path';
 
 export type StoredWhatsAppMedia = {
@@ -17,6 +17,12 @@ export type StoreWhatsAppMediaInput = {
   buffer: Buffer;
   mimeType: string;
   sizeBytes: number;
+};
+
+export type StoreSavedWhatsAppStickerInput = {
+  buffer: Buffer;
+  mimeType: string;
+  sha256: string;
 };
 
 const defaultStorageRoot = '/var/lib/crm-novo/whatsapp-media';
@@ -37,6 +43,28 @@ export class WhatsAppMediaStorageService {
       storageKey,
       mimeType: input.mimeType,
       sizeBytes: input.sizeBytes,
+    };
+  }
+
+  async storeSavedSticker(input: StoreSavedWhatsAppStickerInput): Promise<StoredWhatsAppMedia> {
+    const storageKey = this.buildSavedStickerStorageKey(input.sha256, input.mimeType);
+    const filePath = this.resolveStoragePath(storageKey);
+    const tempPath = `${filePath}.${randomUUID()}.tmp`;
+
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o750 });
+
+    try {
+      await writeFile(tempPath, input.buffer, { mode: 0o600 });
+      await rename(tempPath, filePath);
+    } catch (error) {
+      await rm(tempPath, { force: true });
+      throw error;
+    }
+
+    return {
+      storageKey,
+      mimeType: input.mimeType,
+      sizeBytes: input.buffer.length,
     };
   }
 
@@ -68,6 +96,22 @@ export class WhatsAppMediaStorageService {
 
   private buildStorageKey(whatsAppConnectionId: string, messageId: string) {
     return [whatsAppConnectionId, messageId, randomUUID()].join('/');
+  }
+
+  private buildSavedStickerStorageKey(sha256: string, mimeType: string) {
+    const safeHash = sha256.trim().toLowerCase();
+
+    if (!/^[a-f0-9]{64}$/.test(safeHash)) {
+      throw new Error('Invalid WhatsApp saved sticker hash.');
+    }
+
+    const extension = mimeType.trim().toLowerCase() === 'image/webp' ? 'webp' : null;
+
+    if (!extension) {
+      throw new Error('Invalid WhatsApp saved sticker MIME.');
+    }
+
+    return ['saved-stickers', safeHash.slice(0, 2), `${safeHash}.${extension}`].join('/');
   }
 
   private resolveStoragePath(storageKey: string) {

@@ -689,6 +689,37 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('width: min(100vw, 440px)');
   });
 
+  it('keeps the contact drawer compact, readable and responsive without changing its actions', () => {
+    const financialPosition = whatsAppInboxSource.indexOf(
+      'financialSummary ? <ConversationFinancialSummary',
+    );
+    const notesPosition = whatsAppInboxSource.indexOf(
+      'conversation-contact-section conversation-internal-notes',
+    );
+
+    expect(whatsAppInboxSource).toContain('if (!open) return null;');
+    expect(whatsAppInboxSource).toContain('label="Fechar informações do contato"');
+    expect(whatsAppInboxSource).toContain('conversation-contact-profile-copy');
+    expect(whatsAppInboxSource).toContain('conversation-client-summary-grid');
+    expect(whatsAppInboxSource).toContain("linkedClient ? 'Cliente vinculado'");
+    expect(whatsAppInboxSource).toContain('onOpenClient={() => onOpenClient(client.id)}');
+    expect(whatsAppInboxSource).toContain('Abrir cliente');
+    expect(financialPosition).toBeGreaterThan(-1);
+    expect(notesPosition).toBeGreaterThan(financialPosition);
+
+    expect(globalStylesSource).toContain('overflow-x: hidden');
+    expect(globalStylesSource).toContain('grid-template-columns: 46px minmax(0, 1fr) auto');
+    expect(globalStylesSource).toContain('width: 46px');
+    expect(globalStylesSource).toContain('.conversation-client-summary-grid');
+    expect(globalStylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
+    expect(globalStylesSource).toContain('.conversation-activity-item:last-child');
+    expect(globalStylesSource).toContain('border-bottom: 0');
+    expect(globalStylesSource).toContain('.conversation-reference-card .detail-list.compact');
+    expect(globalStylesSource).toContain('grid-template-columns: 42px minmax(0, 1fr)');
+    expect(globalStylesSource).toContain('.conversation-activity-amount');
+    expect(globalStylesSource).toContain('grid-column: 2');
+  });
+
   it('keeps contact internal notes on the client update path only', () => {
     expect(whatsAppInboxSource).toContain('Notas internas');
     expect(whatsAppInboxSource).toContain('Nenhuma nota interna');

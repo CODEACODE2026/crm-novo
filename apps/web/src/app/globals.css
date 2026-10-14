@@ -4433,7 +4433,8 @@ video.conversation-saved-sticker-preview {
   box-sizing: border-box;
   height: 100%;
   border-left: 1px solid var(--border);
-  padding: 13px;
+  padding: 0 16px 20px;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -4470,12 +4471,21 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-contact-drawer-header {
-  margin-bottom: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 52px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .conversation-contact-drawer-header h2 {
-  margin: 2px 0 0;
-  font-size: 20px;
+  margin: 0;
+  font-size: 16px;
+}
+
+.conversation-contact-drawer-header .metric-label {
+  display: none;
 }
 
 .conversation-contact-info,
@@ -4483,28 +4493,33 @@ video.conversation-saved-sticker-preview {
 .conversation-reference-list,
 .conversation-reference-card {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .conversation-contact-profile {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-columns: 46px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 14px;
+  gap: 10px;
+  padding: 16px 0;
 }
 
 .conversation-contact-profile-avatar {
   display: grid;
   place-items: center;
-  width: 54px;
-  height: 54px;
+  width: 46px;
+  height: 46px;
   overflow: hidden;
   border-radius: 50%;
   background: var(--surface-soft);
   color: var(--accent);
   font-weight: 800;
+}
+
+.conversation-contact-profile-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
 }
 
 .conversation-contact-profile-avatar img {
@@ -4526,9 +4541,53 @@ video.conversation-saved-sticker-preview {
   font-size: 12px;
 }
 
+.conversation-contact-profile h3 {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.conversation-contact-profile .conversation-kind {
+  justify-self: start;
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.conversation-contact-profile > .ui-button {
+  min-height: 30px;
+  padding-inline: 9px;
+}
+
 .conversation-contact-section {
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 16px;
+}
+
+.conversation-contact-info .conversation-client-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.conversation-contact-info .conversation-client-summary-grid > div {
+  min-width: 0;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.conversation-contact-info .conversation-client-summary-grid dt {
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.conversation-contact-info .conversation-client-summary-grid dd {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .conversation-financial-summary {
@@ -4545,10 +4604,11 @@ video.conversation-saved-sticker-preview {
 .conversation-financial-empty {
   display: grid;
   gap: 3px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
-  padding: 9px;
+  min-height: 74px;
+  padding: 10px;
 }
 
 .conversation-financial-grid span,
@@ -4604,7 +4664,7 @@ video.conversation-saved-sticker-preview {
 
 .conversation-activity-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 
 .conversation-activity-item {
@@ -4612,10 +4672,17 @@ video.conversation-saved-sticker-preview {
   grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: start;
   gap: 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-soft);
-  padding: 9px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.conversation-activity-item:first-child {
+  padding-top: 2px;
+}
+
+.conversation-activity-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .conversation-activity-dot {
@@ -4688,10 +4755,9 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-activity-empty {
-  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
-  padding: 9px;
+  padding: 10px;
 }
 
 .conversation-contact-section-title > span {
@@ -4708,18 +4774,18 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-internal-notes {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-soft);
-  padding: 12px;
+  background: transparent;
 }
 
 .conversation-internal-notes p {
   margin: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+  padding: 10px;
   white-space: pre-wrap;
 }
 
@@ -4741,10 +4807,22 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-reference-card {
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-sm);
-  background: var(--surface-soft);
-  padding: 12px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
+  padding: 11px;
+}
+
+.conversation-reference-card .detail-list.compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.conversation-reference-card .detail-list.compact > div {
+  min-width: 0;
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .conversation-reference-card-header strong,
@@ -14059,6 +14137,30 @@ tbody tr:hover,
 
   .conversation-contact-drawer {
     width: min(100vw, 440px);
+  }
+
+  .conversation-contact-profile {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .conversation-contact-profile-avatar {
+    width: 42px;
+    height: 42px;
+  }
+
+  .conversation-contact-profile > .ui-button {
+    grid-column: 2;
+    justify-self: start;
+    min-height: 36px;
+  }
+
+  .conversation-activity-item {
+    grid-template-columns: 10px minmax(0, 1fr);
+  }
+
+  .conversation-activity-amount {
+    grid-column: 2;
+    justify-self: end;
   }
 
   .client-detail-view {

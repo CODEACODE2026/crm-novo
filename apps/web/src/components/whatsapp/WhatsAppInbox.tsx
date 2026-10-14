@@ -7153,6 +7153,7 @@ function ConversationClientPanelContent({
           avatar={avatar}
           conversation={conversation}
           linkedClient={client}
+          onOpenClient={() => onOpenClient(client.id)}
         />
         {contactInfo.loading ? (
           <div className="conversation-loading-row">
@@ -7168,19 +7169,11 @@ function ConversationClientPanelContent({
         {contactInfo.notice ? (
           <div className="notice success conversation-notice">{contactInfo.notice}</div>
         ) : null}
-        <section className="conversation-contact-section">
+        <section className="conversation-contact-section conversation-client-summary">
           <div className="conversation-contact-section-title">
             <span>Cliente</span>
-            <Button
-              icon={ArrowRight}
-              size="sm"
-              variant="secondary"
-              onClick={() => onOpenClient(client.id)}
-            >
-              Abrir cliente
-            </Button>
           </div>
-          <dl className="detail-list">
+          <dl className="detail-list conversation-client-summary-grid">
             <div>
               <dt>Nome</dt>
               <dd>{client.name}</dd>
@@ -7201,6 +7194,7 @@ function ConversationClientPanelContent({
             </div>
           </dl>
         </section>
+        {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
         <section className="conversation-contact-section conversation-internal-notes">
           <div className="conversation-contact-section-title">
             <span>Notas internas</span>
@@ -7256,7 +7250,6 @@ function ConversationClientPanelContent({
             </p>
           )}
         </section>
-        {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
         <ConversationRecentActivity
           clientId={client.id}
           items={recentActivity}
@@ -7405,10 +7398,12 @@ function ConversationContactHeader({
   avatar,
   conversation,
   linkedClient,
+  onOpenClient,
 }: {
   avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
   linkedClient: Client | null;
+  onOpenClient?: () => void;
 }) {
   const phoneLabel =
     normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
@@ -7419,13 +7414,18 @@ function ConversationContactHeader({
       <span className={`conversation-contact-profile-avatar${imageUrl ? ' has-image' : ''}`}>
         {imageUrl ? <img alt="" src={imageUrl} /> : conversationInitials(conversation)}
       </span>
-      <div>
+      <div className="conversation-contact-profile-copy">
         <h3>{conversation.displayName}</h3>
         <p>{phoneLabel}</p>
         <span className={`conversation-kind ${linkedClient ? 'client' : 'guest'}`}>
-          {linkedClient ? `Cliente vinculado: ${linkedClient.name}` : 'Contato não vinculado'}
+          {linkedClient ? 'Cliente vinculado' : 'Contato não vinculado'}
         </span>
       </div>
+      {linkedClient && onOpenClient ? (
+        <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenClient}>
+          Abrir cliente
+        </Button>
+      ) : null}
     </section>
   );
 }

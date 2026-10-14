@@ -93,6 +93,41 @@ describe('Kirago dependency injection', () => {
     ]);
   });
 
+  it.each(['image/webp', 'video/mp4'])(
+    'downloads %s stickers through the dedicated Kirago endpoint',
+    async (mimetype) => {
+      app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+      const instanceClient = app.get(KiragoInstanceClient);
+      const provider = app.get(KiragoWhatsAppProvider);
+      const downloadSticker = vi.spyOn(instanceClient, 'downloadSticker').mockResolvedValue({
+        success: true,
+        data: { Data: `data:${mimetype};base64,UklGRg==`, Mimetype: mimetype },
+      });
+
+      const result = await provider.downloadMedia('instance-token', {
+        type: 'STICKER',
+        Url: 'https://mmg.whatsapp.net/sticker',
+        MediaKey: 'sticker-media-key',
+        Mimetype: mimetype,
+        FileSHA256: 'sticker-file-sha',
+        FileLength: 123,
+      });
+
+      expect(downloadSticker).toHaveBeenCalledWith('instance-token', {
+        Url: 'https://mmg.whatsapp.net/sticker',
+        MediaKey: 'sticker-media-key',
+        Mimetype: mimetype,
+        FileSHA256: 'sticker-file-sha',
+        FileLength: 123,
+      });
+      expect(result).toEqual({
+        dataUrl: `data:${mimetype};base64,UklGRg==`,
+        mimetype,
+      });
+    },
+  );
+
   it('returns only jid and lid when resolving a user LID', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

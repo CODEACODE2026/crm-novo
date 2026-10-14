@@ -30,11 +30,14 @@ import {
   createConversationComposerMedia,
   disposeConversationComposerMedia,
   conversationMessageCaption,
+  conversationMessageDisplayText,
+  conversationMediaUnavailableText,
   isConversationPixCopyEligible,
   isDeleteEligibleConversationMessage,
   isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
   isTechnicalVideoPlaceholder,
+  isTechnicalStickerPlaceholder,
   mergeConversationById,
   mergeConversationLists,
   mergeConversationMessages,
@@ -1579,6 +1582,42 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
         new File(['rar'], 'pacote.Rar', { type: 'application/octet-stream' }),
       ),
     ).toEqual({ ok: true, kind: 'DOCUMENT' });
+  });
+
+  it('renders IMAGE and STICKER as media instead of technical text fallbacks', () => {
+    const inboundImage = message({
+      direction: 'INBOUND',
+      mediaAvailable: true,
+      mediaMimeType: 'image/jpeg',
+      text: null,
+      type: 'IMAGE',
+    });
+    const outboundSticker = message({
+      direction: 'OUTBOUND',
+      mediaAvailable: true,
+      mediaMimeType: 'image/webp',
+      text: ':sticker:',
+      type: 'STICKER',
+    });
+
+    expect(isAvailableInlineConversationMedia(inboundImage)).toBe(true);
+    expect(isAvailableInlineConversationMedia(outboundSticker)).toBe(true);
+    expect(conversationMessageDisplayText(inboundImage)).toBe('');
+    expect(conversationMessageDisplayText(outboundSticker)).toBe('');
+    expect(conversationMessageCaption(outboundSticker)).toBe('');
+    expect(isTechnicalStickerPlaceholder(':sticker:')).toBe(true);
+    expect(isTechnicalStickerPlaceholder('[Figurinha]')).toBe(true);
+  });
+
+  it('uses explicit unavailable states only when media is actually unavailable', () => {
+    expect(conversationMediaUnavailableText('IMAGE')).toBe('Imagem indisponível');
+    expect(conversationMediaUnavailableText('STICKER')).toBe('Figurinha indisponível');
+    expect(conversationMediaUnavailableText('VIDEO')).toBe('[Vídeo]');
+    expect(whatsAppInboxSource).toContain('if (!message.mediaAvailable)');
+    expect(whatsAppInboxSource).toContain('role="status"');
+    expect(whatsAppInboxSource).toContain(
+      "if (message.type === 'IMAGE' || message.type === 'STICKER') return '';",
+    );
   });
 
   it('keeps the attachment menu focused on media uploads and the saved sticker library', () => {

@@ -5225,7 +5225,11 @@ function ConversationMediaContent({
       </span>
     ) : message.type === 'DOCUMENT' ? (
       <span className="conversation-media-meta">Mídia indisponível</span>
-    ) : null;
+    ) : (
+      <div className="conversation-media-unavailable" role="status">
+        <span>{conversationMediaUnavailableText(message.type)}</span>
+      </div>
+    );
   }
 
   if (message.type === 'DOCUMENT') {
@@ -8933,9 +8937,11 @@ function isRenderableConversationMedia(type: WhatsAppConversationMessageType) {
   );
 }
 
-function conversationMediaUnavailableText(type: WhatsAppConversationMessageType) {
+export function conversationMediaUnavailableText(type: WhatsAppConversationMessageType) {
   if (type === 'AUDIO') return 'Mídia indisponível';
   if (type === 'DOCUMENT') return 'Mídia indisponível';
+  if (type === 'IMAGE') return 'Imagem indisponível';
+  if (type === 'STICKER') return 'Figurinha indisponível';
   return conversationMessagePlaceholder(type);
 }
 
@@ -8953,9 +8959,10 @@ export function isTechnicalVideoPlaceholder(text: string | null | undefined) {
   return text?.trim().toLowerCase() === ':video:';
 }
 
-function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
+export function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
   if (message.deleted) return 'Mensagem apagada';
   if (message.type === 'TEXT') return message.text || '';
+  if (message.type === 'IMAGE' || message.type === 'STICKER') return '';
   return conversationMessagePlaceholder(message.type);
 }
 
@@ -8963,7 +8970,13 @@ export function conversationMessageCaption(message: WhatsAppConversationMessage)
   if (message.deleted) return '';
   if (message.type === 'TEXT') return '';
   if (message.type === 'VIDEO' && isTechnicalVideoPlaceholder(message.text)) return '';
+  if (message.type === 'STICKER' && isTechnicalStickerPlaceholder(message.text)) return '';
   return message.text?.trim() || '';
+}
+
+export function isTechnicalStickerPlaceholder(text: string | null | undefined) {
+  const normalized = text?.trim().toLowerCase();
+  return normalized === ':sticker:' || normalized === '[figurinha]';
 }
 
 function conversationMessageQuotePreview(message: WhatsAppConversationMessage) {

@@ -94,8 +94,6 @@ export type NormalizedKiragoWebhook =
 type RecordValue = Record<string, unknown>;
 
 const messageTypeMap: Record<string, NormalizedMessageType> = {
-  conversation: 'text',
-  extendedTextMessage: 'text',
   imageMessage: 'image',
   videoMessage: 'video',
   audioMessage: 'audio',
@@ -110,6 +108,8 @@ const messageTypeMap: Record<string, NormalizedMessageType> = {
   templateButtonReplyMessage: 'button_response',
   listResponseMessage: 'list_response',
   interactiveResponseMessage: 'interactive_response',
+  extendedTextMessage: 'text',
+  conversation: 'text',
 };
 
 export class KiragoWebhookNormalizer {
@@ -150,7 +150,7 @@ export class KiragoWebhookNormalizer {
       messageId: stringOrNull(info?.ID),
       direction,
       messageType,
-      text: this.extractText(message),
+      text: this.extractText(message, messageType),
       messageTimestamp: this.parseTimestamp(info?.Timestamp),
       receivedAt,
       isGroup,
@@ -388,22 +388,29 @@ export class KiragoWebhookNormalizer {
     );
   }
 
-  private extractText(message: RecordValue | null) {
-    const candidates = [
-      message?.conversation,
-      asRecord(message?.extendedTextMessage)?.text,
-      asRecord(message?.imageMessage)?.caption,
-      asRecord(message?.videoMessage)?.caption,
-      asRecord(message?.documentMessage)?.caption,
-      asRecord(message?.buttonsResponseMessage)?.selectedDisplayText,
-      asRecord(message?.buttonsResponseMessage)?.selectedButtonId,
-      asRecord(message?.templateButtonReplyMessage)?.selectedDisplayText,
-      asRecord(message?.templateButtonReplyMessage)?.selectedId,
-      asRecord(message?.listResponseMessage)?.title,
-      asRecord(message?.listResponseMessage)?.description,
-      asRecord(asRecord(message?.listResponseMessage)?.singleSelectReply)?.selectedRowId,
-      asRecord(asRecord(message?.interactiveResponseMessage)?.body)?.text,
-    ];
+  private extractText(message: RecordValue | null, messageType: NormalizedMessageType) {
+    const candidates =
+      messageType === 'image'
+        ? [asRecord(message?.imageMessage)?.caption]
+        : messageType === 'video'
+          ? [asRecord(message?.videoMessage)?.caption]
+          : messageType === 'document'
+            ? [asRecord(message?.documentMessage)?.caption]
+            : messageType === 'audio' || messageType === 'sticker'
+              ? []
+              : [
+                  message?.conversation,
+                  asRecord(message?.extendedTextMessage)?.text,
+                  asRecord(message?.buttonsResponseMessage)?.selectedDisplayText,
+                  asRecord(message?.buttonsResponseMessage)?.selectedButtonId,
+                  asRecord(message?.templateButtonReplyMessage)?.selectedDisplayText,
+                  asRecord(message?.templateButtonReplyMessage)?.selectedId,
+                  asRecord(message?.listResponseMessage)?.title,
+                  asRecord(message?.listResponseMessage)?.description,
+                  asRecord(asRecord(message?.listResponseMessage)?.singleSelectReply)
+                    ?.selectedRowId,
+                  asRecord(asRecord(message?.interactiveResponseMessage)?.body)?.text,
+                ];
 
     for (const candidate of candidates) {
       const text = stringOrNull(candidate);

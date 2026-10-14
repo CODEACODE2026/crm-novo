@@ -309,6 +309,10 @@ export class KiragoInstanceClient {
     return this.downloadMedia(instanceToken, '/chat/downloadimage', payload);
   }
 
+  downloadSticker(instanceToken: string, payload: KiragoDownloadMediaPayload) {
+    return this.downloadMedia(instanceToken, '/chat/downloadsticker', payload);
+  }
+
   downloadDocument(instanceToken: string, payload: KiragoDownloadMediaPayload) {
     return this.downloadMedia(instanceToken, '/chat/downloaddocument', payload);
   }

@@ -304,8 +304,8 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     const response =
       input.type === 'IMAGE'
         ? await this.instanceClient.downloadImage(instanceToken, payload)
-        : input.type === 'STICKER' && input.Mimetype.trim().toLowerCase() !== 'video/mp4'
-          ? await this.instanceClient.downloadImage(instanceToken, payload)
+        : input.type === 'STICKER'
+          ? await this.instanceClient.downloadSticker(instanceToken, payload)
           : input.type === 'DOCUMENT'
             ? await this.instanceClient.downloadDocument(instanceToken, payload)
             : input.type === 'AUDIO'

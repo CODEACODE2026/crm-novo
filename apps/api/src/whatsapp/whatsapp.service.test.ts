@@ -7879,6 +7879,54 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(messageCreate.data?.rawMetadata)).not.toContain('base64');
   });
 
+  it('persists captionless inbound IMAGE and emits realtime without requiring text', async () => {
+    const { service, prisma, normalizer, realtime } = serviceFactory();
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        messageId: 'captionless-image',
+        messageType: 'image',
+        text: null,
+        mediaMetadata: {
+          kind: 'image',
+          mimetype: 'image/jpeg',
+          size: 321,
+        },
+        mediaDownloadMetadata: {
+          Url: 'https://mmg.whatsapp.net/captionless-image',
+          MediaKey: 'captionless-image-media-key',
+          Mimetype: 'image/jpeg',
+          FileSHA256: 'captionless-image-file-sha',
+          FileLength: 321,
+        },
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      processed: true,
+      conversation: { action: 'conversation_message_persisted', direction: 'INBOUND' },
+    });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          providerMessageId: 'captionless-image',
+          direction: 'INBOUND',
+          type: 'IMAGE',
+          text: null,
+          mediaMimeType: 'image/jpeg',
+          mediaSizeBytes: 321,
+        }),
+      }),
+    );
+    expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+      conversation().id,
+      expect.any(String),
+      'INBOUND',
+    );
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
+  });
+
   it('stores document and video media metadata without downloading media', async () => {
     const { service, prisma, normalizer } = serviceFactory();
     normalizer.normalize.mockReturnValue(
@@ -8055,6 +8103,80 @@ describe('WhatsAppService', () => {
       }),
     );
   });
+
+  it.each([':sticker:', '[Figurinha]'])(
+    'does not downgrade manual outbound STICKER when the outgoing echo contains %s',
+    async (technicalText) => {
+      const existing = conversationMessage({
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37395',
+        providerMessageId: null,
+        direction: 'OUTBOUND',
+        type: 'STICKER',
+        status: 'SENT',
+        sentAt: now,
+        isFromMe: true,
+        text: null,
+        mediaMimeType: 'image/webp',
+        mediaFileName: 'figurinha.webp',
+        mediaSizeBytes: 12,
+        rawMetadata: {
+          source: 'manual_outbound_media_send',
+          storage: 'transient_request_only',
+          retryPolicy: 'select_file_again_after_reload',
+          localMedia: {
+            storageKey: `${connection().id}/message-sticker/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+            mimeType: 'image/webp',
+            sizeBytes: 12,
+          },
+        },
+      });
+      const { service, prisma, normalizer, realtime } = serviceFactory({
+        prismaOverrides: {
+          whatsAppMessage: {
+            findFirst: vi.fn().mockResolvedValue(existing),
+            findMany: vi.fn().mockResolvedValue([]),
+            count: vi.fn().mockResolvedValue(0),
+            create: vi.fn(),
+            update: vi.fn((args: { data: Record<string, unknown> }) =>
+              Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+            ),
+          },
+        },
+      });
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound(technicalText, {
+          direction: 'OUTGOING',
+          messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37395',
+          messageType: 'text',
+          mediaMetadata: null,
+        }),
+      );
+
+      await service.receiveWebhook({ type: 'Message' });
+
+      expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+      expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: existing.id },
+          data: expect.not.objectContaining({
+            type: 'TEXT',
+            text: technicalText,
+            mediaMimeType: null,
+            rawMetadata: expect.not.objectContaining({ localMedia: expect.anything() }),
+          }),
+        }),
+      );
+      expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ lastMessagePreview: '[Figurinha]' }),
+        }),
+      );
+      expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(
+        existing.conversationId,
+        existing.id,
+      );
+    },
+  );
 
   it('does not downgrade manual outbound DOCUMENT to TEXT when the outgoing webhook echo lacks media metadata', async () => {
     const existing = conversationMessage({

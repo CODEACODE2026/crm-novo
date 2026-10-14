@@ -35,6 +35,32 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('uses the dedicated sticker download endpoint', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.downloadSticker('instance-token', {
+      Url: 'https://mmg.whatsapp.net/sticker',
+      MediaKey: 'sticker-media-key',
+      Mimetype: 'image/webp',
+      FileSHA256: 'sticker-file-sha',
+      FileLength: 123,
+    });
+
+    expect(request).toHaveBeenCalledWith('/chat/downloadsticker', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Url: 'https://mmg.whatsapp.net/sticker',
+        MediaKey: 'sticker-media-key',
+        Mimetype: 'image/webp',
+        FileSHA256: 'sticker-file-sha',
+        FileLength: 123,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('uses Authorization when looking up an admin user by provider id', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { id: 'kirago-user' } });
     const client = new KiragoAdminClient(

@@ -238,6 +238,128 @@ describe('KiragoWebhookNormalizer', () => {
 
   it.each([
     [
+      'image',
+      '[Imagem]',
+      {
+        imageMessage: {
+          URL: 'https://mmg.whatsapp.net/image-without-caption',
+          mediaKey: 'image-media-key',
+          mimetype: 'image/jpeg',
+          fileSHA256: 'image-file-sha',
+          fileLength: 321,
+        },
+      },
+      'image/jpeg',
+    ],
+    [
+      'sticker',
+      ':sticker:',
+      {
+        stickerMessage: {
+          URL: 'https://mmg.whatsapp.net/sticker',
+          mediaKey: 'sticker-media-key',
+          mimetype: 'image/webp',
+          fileSHA256: 'sticker-file-sha',
+          fileLength: 123,
+        },
+      },
+      'image/webp',
+    ],
+    [
+      'video',
+      ':video:',
+      {
+        videoMessage: {
+          URL: 'https://mmg.whatsapp.net/video',
+          mediaKey: 'video-media-key',
+          mimetype: 'video/mp4',
+          fileSHA256: 'video-file-sha',
+          fileLength: 654,
+        },
+      },
+      'video/mp4',
+    ],
+    [
+      'audio',
+      ':audio:',
+      {
+        audioMessage: {
+          URL: 'https://mmg.whatsapp.net/audio',
+          mediaKey: 'audio-media-key',
+          mimetype: 'audio/ogg',
+          fileSHA256: 'audio-file-sha',
+          fileLength: 456,
+        },
+      },
+      'audio/ogg',
+    ],
+    [
+      'document',
+      '[Documento]',
+      {
+        documentMessage: {
+          URL: 'https://mmg.whatsapp.net/document',
+          mediaKey: 'document-media-key',
+          mimetype: 'application/pdf',
+          fileSHA256: 'document-file-sha',
+          fileLength: 789,
+        },
+      },
+      'application/pdf',
+    ],
+  ])(
+    'prioritizes %s media over provider auxiliary text',
+    (messageType, auxiliaryText, mediaMessage, mimetype) => {
+      const result = normalizer.normalize(
+        payload({
+          event: {
+            Info: { ...payload().event.Info, Type: messageType },
+            Message: { conversation: auxiliaryText, ...mediaMessage },
+          },
+        }),
+        receivedAt,
+      );
+
+      expect(result).toMatchObject({
+        messageType,
+        text: null,
+        mediaMetadata: { kind: messageType, mimetype },
+        mediaDownloadMetadata: { Mimetype: mimetype },
+      });
+    },
+  );
+
+  it('prioritizes captionless IMAGE over extended text and conversation auxiliaries', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, Type: 'image' },
+          Message: {
+            conversation: '[Imagem]',
+            extendedTextMessage: { text: 'image' },
+            imageMessage: {
+              URL: 'https://mmg.whatsapp.net/captionless-image',
+              mediaKey: 'captionless-image-media-key',
+              mimetype: 'image/jpeg',
+              fileSHA256: 'captionless-image-file-sha',
+              fileLength: 321,
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'image',
+      text: null,
+      mediaMetadata: { kind: 'image', mimetype: 'image/jpeg' },
+      mediaDownloadMetadata: { Mimetype: 'image/jpeg', FileLength: 321 },
+    });
+  });
+
+  it.each([
+    [
       'image lowercase',
       {
         imageMessage: {
@@ -315,6 +437,19 @@ describe('KiragoWebhookNormalizer', () => {
         },
       },
       'video',
+    ],
+    [
+      'sticker',
+      {
+        stickerMessage: {
+          Url: 'https://mmg.whatsapp.net/sticker',
+          MediaKey: 'sticker-media-key',
+          Mimetype: 'image/webp',
+          FileSHA256: 'sticker-file',
+          FileLength: 512,
+        },
+      },
+      'sticker',
     ],
   ])(
     'preserves download metadata for %s without storing base64 bodies',

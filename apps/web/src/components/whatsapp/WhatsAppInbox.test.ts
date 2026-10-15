@@ -3178,6 +3178,9 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('function ConversationLabelChips');
     expect(whatsAppInboxSource).toContain('labels.slice(0, limit)');
     expect(whatsAppInboxSource).toContain('labels.length - limit');
+    expect(whatsAppInboxSource).toContain(
+      '<span className="conversation-label-name">{label.name}</span>',
+    );
     expect(whatsAppInboxSource).toContain('Aplicar etiquetas');
     expect(whatsAppInboxSource).toContain('type="checkbox"');
     expect(whatsAppInboxSource).toContain('setWhatsAppConversationLabels');
@@ -3217,5 +3220,35 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-label-options {');
     expect(globalStylesSource).toContain('overscroll-behavior: contain;');
     expect(globalStylesSource).toContain('.conversation-label-manager .conversation-modal-actions');
+  });
+
+  it('keeps conversation labels compact and subordinate in the list and chat header', () => {
+    expect(whatsAppInboxSource).toContain(
+      '<ConversationLabelChips labels={conversation.labels} limit={2} />\n        </span>',
+    );
+    expect(whatsAppInboxSource).toContain(
+      '<ConversationLabelChips labels={conversation.labels} limit={3} />',
+    );
+    expect(whatsAppInboxSource).toContain('labels.slice(0, limit)');
+    expect(whatsAppInboxSource).toContain('labels.length - limit');
+    expect(globalStylesSource).toContain('.conversation-list-meta-row .conversation-label-chips');
+    expect(globalStylesSource).toContain('flex: 0 1 112px;');
+    expect(globalStylesSource).toContain('margin-left: auto;');
+    expect(globalStylesSource).toContain(
+      '.conversation-header-main > div > .conversation-label-chips',
+    );
+    expect(globalStylesSource).toContain('min-height: 15px;');
+    expect(globalStylesSource).toContain('font-size: 9px;');
+    expect(globalStylesSource).toContain('background: rgb(255 255 255 / 2%);');
+    expect(globalStylesSource).toContain('.conversation-label-name {');
+    expect(globalStylesSource).toContain('text-overflow: ellipsis;');
+    expect(globalStylesSource).toContain('white-space: nowrap;');
+    expect(globalStylesSource).toContain(
+      '.conversation-label-chip.color-blue .conversation-label-dot',
+    );
+    expect(globalStylesSource).toContain('flex-wrap: wrap;');
+    expect(globalStylesSource).toContain('max-height: 38px;');
+    expect(globalStylesSource).toContain('.conversation-list-meta-row .conversation-kind');
+    expect(globalStylesSource).toContain('.conversation-header-badges .conversation-status-badge');
   });
 });

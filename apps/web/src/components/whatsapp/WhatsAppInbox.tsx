@@ -4358,7 +4358,7 @@ function ConversationLabelChips({
           key={label.id}
         >
           <span aria-hidden="true" className="conversation-label-dot" />
-          {label.name}
+          <span className="conversation-label-name">{label.name}</span>
         </span>
       ))}
       {labels.length > limit ? (
@@ -4808,8 +4808,8 @@ function ConversationListItem({
           {conversation.needsManualFollowUp ? (
             <span className="conversation-followup-badge">Retorno pendente</span>
           ) : null}
+          <ConversationLabelChips labels={conversation.labels} limit={2} />
         </span>
-        <ConversationLabelChips labels={conversation.labels} limit={2} />
       </button>
     </div>
   );

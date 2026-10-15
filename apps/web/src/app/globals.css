@@ -15212,6 +15212,23 @@ tbody tr:hover,
     min-height: 44px;
   }
 
+  .conversation-list-meta-row .conversation-label-chips {
+    max-width: 120px;
+    flex-basis: 120px;
+  }
+
+  .conversation-list-meta-row .conversation-label-chip,
+  .conversation-header-main > div > .conversation-label-chips .conversation-label-chip {
+    min-height: 18px;
+    font-size: 9.5px;
+  }
+
+  .conversation-header-main > div > .conversation-label-chips {
+    max-height: 38px;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
   .conversation-label-manager {
     width: 100%;
     max-height: calc(100dvh - 24px);
@@ -17089,34 +17106,91 @@ tbody tr:hover,
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   overflow: hidden;
+  line-height: 1;
 }
 
 .conversation-label-chip,
 .conversation-label-more {
   display: inline-flex;
-  max-width: 112px;
+  min-height: 16px;
+  max-width: 96px;
   align-items: center;
-  gap: 4px;
-  border: 1px solid rgb(255 255 255 / 8%);
+  gap: 3px;
+  border: 1px solid rgb(255 255 255 / 5%);
   border-radius: 999px;
-  padding: 1px 6px;
-  background: rgb(255 255 255 / 4%);
+  padding: 0 4px;
+  background: rgb(255 255 255 / 2%);
   color: var(--text-secondary);
-  font-size: 0.66rem;
-  line-height: 1.35;
+  font-size: 9.5px;
+  line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.conversation-label-chip {
+  flex: 0 1 auto;
+}
+
+.conversation-label-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-label-more {
+  max-width: none;
+  flex: 0 0 auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  padding-inline: 2px;
+}
+
 .conversation-label-dot {
-  width: 7px;
-  height: 7px;
+  width: 5px;
+  height: 5px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: currentColor;
+}
+
+.conversation-list-meta-row .conversation-label-chips {
+  max-width: 112px;
+  flex: 0 1 112px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.conversation-list-meta-row .conversation-label-chip {
+  max-width: 48px;
+  min-height: 15px;
+  padding-inline: 2px;
+  font-size: 9px;
+}
+
+.conversation-list-meta-row .conversation-label-dot {
+  width: 4px;
+  height: 4px;
+}
+
+.conversation-header-main > div {
+  min-width: 0;
+}
+
+.conversation-header-main > div > .conversation-label-chips {
+  max-width: 100%;
+  margin-top: 2px;
+}
+
+.conversation-header-main > div > .conversation-label-chips .conversation-label-chip {
+  min-height: 15px;
+  max-width: 88px;
+  padding-inline: 3px;
+  font-size: 9px;
 }
 
 .conversation-label-manager {
@@ -17234,47 +17308,47 @@ tbody tr:hover,
   box-shadow: 0 0 0 2px currentColor;
 }
 
-.conversation-label-chip.color-blue,
+.conversation-label-chip.color-blue .conversation-label-dot,
 .conversation-label-dot.color-blue,
 .conversation-label-palette .color-blue {
   color: #60a5fa;
 }
-.conversation-label-chip.color-green,
+.conversation-label-chip.color-green .conversation-label-dot,
 .conversation-label-dot.color-green,
 .conversation-label-palette .color-green {
   color: #4ade80;
 }
-.conversation-label-chip.color-yellow,
+.conversation-label-chip.color-yellow .conversation-label-dot,
 .conversation-label-dot.color-yellow,
 .conversation-label-palette .color-yellow {
   color: #facc15;
 }
-.conversation-label-chip.color-orange,
+.conversation-label-chip.color-orange .conversation-label-dot,
 .conversation-label-dot.color-orange,
 .conversation-label-palette .color-orange {
   color: #fb923c;
 }
-.conversation-label-chip.color-red,
+.conversation-label-chip.color-red .conversation-label-dot,
 .conversation-label-dot.color-red,
 .conversation-label-palette .color-red {
   color: #f87171;
 }
-.conversation-label-chip.color-purple,
+.conversation-label-chip.color-purple .conversation-label-dot,
 .conversation-label-dot.color-purple,
 .conversation-label-palette .color-purple {
   color: #c084fc;
 }
-.conversation-label-chip.color-pink,
+.conversation-label-chip.color-pink .conversation-label-dot,
 .conversation-label-dot.color-pink,
 .conversation-label-palette .color-pink {
   color: #f472b6;
 }
-.conversation-label-chip.color-teal,
+.conversation-label-chip.color-teal .conversation-label-dot,
 .conversation-label-dot.color-teal,
 .conversation-label-palette .color-teal {
   color: #2dd4bf;
 }
-.conversation-label-chip.color-gray,
+.conversation-label-chip.color-gray .conversation-label-dot,
 .conversation-label-dot.color-gray,
 .conversation-label-palette .color-gray {
   color: #94a3b8;

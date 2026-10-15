@@ -3232,8 +3232,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('labels.slice(0, limit)');
     expect(whatsAppInboxSource).toContain('labels.length - limit');
     expect(globalStylesSource).toContain('.conversation-list-meta-row .conversation-label-chips');
-    expect(globalStylesSource).toContain('flex: 0 1 112px;');
-    expect(globalStylesSource).toContain('margin-left: auto;');
+    expect(globalStylesSource).toContain('flex: 0 1 auto;');
+    expect(globalStylesSource).toContain('justify-content: flex-start;');
     expect(globalStylesSource).toContain('.conversation-header-badges > .conversation-label-chips');
     expect(globalStylesSource).toContain('min-height: 15px;');
     expect(globalStylesSource).toContain('font-size: 9px;');
@@ -3264,5 +3264,37 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('flex-wrap: wrap;');
     expect(globalStylesSource).toContain('max-height: 38px;');
     expect(whatsAppInboxSource).toContain('className="conversation-header-actions"');
+  });
+
+  it('keeps phone, contact kind, follow-up and labels grouped in the list metadata row', () => {
+    const listLabelStyles = (
+      globalStylesSource.match(
+        /\.conversation-list-meta-row \.conversation-label-chips \{[\s\S]*?\n\s*\}/g,
+      ) ?? []
+    ).join('\n');
+
+    expect(whatsAppInboxSource).toContain(
+      "{conversation.client ? 'Cliente' : 'Avulso'}\n          </span>",
+    );
+    expect(whatsAppInboxSource).toContain(
+      '<span className="conversation-followup-badge">Retorno pendente</span>',
+    );
+    expect(whatsAppInboxSource).toContain(
+      '<ConversationLabelChips labels={conversation.labels} limit={2} />\n        </span>',
+    );
+    expect(globalStylesSource).toContain('.conversation-list-meta-row {');
+    expect(globalStylesSource).toContain('justify-content: flex-start;');
+    expect(globalStylesSource).toContain('.conversation-list-meta-row > span:first-child {');
+    expect(globalStylesSource).toContain('text-overflow: ellipsis;');
+    expect(listLabelStyles).toContain('flex-basis: auto;');
+    expect(listLabelStyles).toContain('flex: 0 1 auto;');
+    expect(listLabelStyles).toContain('justify-content: flex-start;');
+    expect(listLabelStyles).not.toContain('flex-basis: 120px;');
+    expect(listLabelStyles).not.toContain('flex: 0 1 112px;');
+    expect(listLabelStyles).not.toContain('margin-left: auto;');
+    expect(whatsAppInboxSource).toContain('className="conversation-list-title-row"');
+    expect(whatsAppInboxSource).toContain(
+      '<ConversationLabelChips labels={conversation.labels} limit={3} />',
+    );
   });
 });

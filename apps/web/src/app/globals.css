@@ -2766,12 +2766,14 @@ a {
 }
 
 .conversation-list-meta-row > span:first-child {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .conversation-list-meta-row .conversation-kind {
+  flex: 0 0 auto;
   min-height: 17px;
   font-size: 9px;
   line-height: 1;
@@ -15214,7 +15216,7 @@ tbody tr:hover,
 
   .conversation-list-meta-row .conversation-label-chips {
     max-width: 120px;
-    flex-basis: 120px;
+    flex-basis: auto;
   }
 
   .conversation-list-meta-row .conversation-label-chip,
@@ -17160,9 +17162,8 @@ tbody tr:hover,
 
 .conversation-list-meta-row .conversation-label-chips {
   max-width: 112px;
-  flex: 0 1 112px;
-  justify-content: flex-end;
-  margin-left: auto;
+  flex: 0 1 auto;
+  justify-content: flex-start;
 }
 
 .conversation-list-meta-row .conversation-label-chip {

@@ -34,6 +34,7 @@ import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dt
 import { UpdateWhatsAppAutoReplyDto } from './dto/update-whatsapp-auto-reply.dto';
 import { CreateWhatsAppQuickReplyDto } from './dto/create-whatsapp-quick-reply.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
+import { CreateWhatsAppConversationLabelDto } from './dto/create-whatsapp-conversation-label.dto';
 import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
 import { ForwardWhatsAppConversationMessageDto } from './dto/forward-whatsapp-conversation-message.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
@@ -45,10 +46,12 @@ import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
 import { SendWhatsAppSavedStickerDto } from './dto/send-whatsapp-saved-sticker.dto';
+import { SetWhatsAppConversationLabelsDto } from './dto/set-whatsapp-conversation-labels.dto';
 import { SetWhatsAppConversationPresenceDto } from './dto/set-whatsapp-conversation-presence.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
 import { UpdateWhatsAppMessageReactionDto } from './dto/update-whatsapp-message-reaction.dto';
 import { UpdateWhatsAppQuickReplyDto } from './dto/update-whatsapp-quick-reply.dto';
+import { UpdateWhatsAppConversationLabelDto } from './dto/update-whatsapp-conversation-label.dto';
 import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
@@ -113,6 +116,36 @@ export class WhatsAppController {
     @Body() dto: UpdateWhatsAppAutoReplyDto,
   ) {
     return this.autoReplyService.updateConfig(connectionId, dto);
+  }
+
+  @Get('connections/:connectionId/labels')
+  listConversationLabels(@Param('connectionId', new ParseUUIDPipe()) connectionId: string) {
+    return this.whatsAppService.listConversationLabels(connectionId);
+  }
+
+  @Post('connections/:connectionId/labels')
+  createConversationLabel(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Body() dto: CreateWhatsAppConversationLabelDto,
+  ) {
+    return this.whatsAppService.createConversationLabel(connectionId, dto);
+  }
+
+  @Patch('connections/:connectionId/labels/:labelId')
+  updateConversationLabel(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Param('labelId', new ParseUUIDPipe()) labelId: string,
+    @Body() dto: UpdateWhatsAppConversationLabelDto,
+  ) {
+    return this.whatsAppService.updateConversationLabel(connectionId, labelId, dto);
+  }
+
+  @Delete('connections/:connectionId/labels/:labelId')
+  deleteConversationLabel(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Param('labelId', new ParseUUIDPipe()) labelId: string,
+  ) {
+    return this.whatsAppService.deleteConversationLabel(connectionId, labelId);
   }
 
   @Get('quick-replies')
@@ -222,6 +255,14 @@ export class WhatsAppController {
     @Query() query: ListWhatsAppConversationMessagesDto,
   ) {
     return this.whatsAppService.listConversationMessages(id, query);
+  }
+
+  @Put('conversations/:conversationId/labels')
+  setConversationLabels(
+    @Param('conversationId', new ParseUUIDPipe()) conversationId: string,
+    @Body() dto: SetWhatsAppConversationLabelsDto,
+  ) {
+    return this.whatsAppService.setConversationLabels(conversationId, dto);
   }
 
   @Get('conversations/:conversationId/messages/around/:messageId')

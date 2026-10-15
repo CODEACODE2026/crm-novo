@@ -43,6 +43,7 @@ import {
   Send,
   SmilePlus,
   Square,
+  Tags,
   Trash2,
   Upload,
   User,
@@ -61,6 +62,7 @@ import {
 import {
   ApiError,
   createClient,
+  createWhatsAppConversationLabel,
   confirmReferenceRenewal,
   createReferenceReactivation,
   deleteWhatsAppSavedSticker,
@@ -84,6 +86,7 @@ import {
   listPlans,
   listWhatsAppConnections,
   listWhatsAppConversationMessages,
+  listWhatsAppConversationLabels,
   listWhatsAppConversations,
   markWhatsAppConversationRead,
   listWhatsAppSavedStickers,
@@ -100,6 +103,7 @@ import {
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
   setWhatsAppConversationPresence,
+  setWhatsAppConversationLabels,
   startWhatsAppConversation,
   updateClient,
   updateWhatsAppConversationMessageReaction,
@@ -118,6 +122,9 @@ import {
   type WhatsAppAutoReplyConfig,
   type WhatsAppConversationAvatar,
   type WhatsAppConversation,
+  type WhatsAppConversationLabel,
+  type WhatsAppConversationLabelAdmin,
+  type WhatsAppConversationLabelColor,
   type WhatsAppConversationMessage,
   type WhatsAppSavedSticker,
   type WhatsAppConversationMessageStatus,
@@ -511,6 +518,13 @@ export function WhatsAppInbox({
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ConversationFilter>('all');
   const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
+  const [labelFilter, setLabelFilter] = useState('');
+  const [conversationLabels, setConversationLabels] = useState<WhatsAppConversationLabelAdmin[]>(
+    [],
+  );
+  const [labelManagerOpen, setLabelManagerOpen] = useState(false);
+  const [labelManagerSaving, setLabelManagerSaving] = useState(false);
+  const [labelManagerError, setLabelManagerError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
@@ -965,7 +979,7 @@ export function WhatsAppInbox({
       preserveLoaded = false,
       silent = false,
     }: { append?: boolean; page?: number; preserveLoaded?: boolean; silent?: boolean } = {}) => {
-      const requestQueryKey = JSON.stringify({ filter, search, statusFilter });
+      const requestQueryKey = JSON.stringify({ filter, labelFilter, search, statusFilter });
       conversationListQueryKeyRef.current = requestQueryKey;
       const requestGeneration = nextConversationListRequestGeneration(
         conversationListRequestGenerationRef.current,
@@ -1002,6 +1016,7 @@ export function WhatsAppInbox({
         if (filter === 'followup') filters.needsManualFollowUp = true;
         if (filter === 'clients') filters.hasClient = true;
         if (filter === 'guests') filters.hasClient = false;
+        if (labelFilter) filters.labelId = labelFilter;
 
         const payload = await listWhatsAppConversations({
           ...filters,
@@ -1032,6 +1047,11 @@ export function WhatsAppInbox({
           return payload.items.find((item) => item.id === current.id) ?? current;
         });
       } catch (err) {
+        if (labelFilter && err instanceof ApiError && err.status === 404) {
+          setLabelFilter('');
+          setListError('');
+          return;
+        }
         const message = conversationErrorMessage(err, 'Falha ao carregar conversas.');
         if (append) {
           setListLoadMoreError(message);
@@ -1046,7 +1066,7 @@ export function WhatsAppInbox({
         }
       }
     },
-    [filter, onSummaryChange, search, statusFilter],
+    [filter, labelFilter, onSummaryChange, search, statusFilter],
   );
 
   const loadMessages = useCallback(
@@ -1356,6 +1376,54 @@ export function WhatsAppInbox({
   useEffect(() => {
     void loadAutoReplyConfigs();
   }, [loadAutoReplyConfigs]);
+
+  const loadConversationLabels = useCallback(async () => {
+    try {
+      const groups = await Promise.all(
+        autoReplyConfigs.map((config) =>
+          listWhatsAppConversationLabels(config.whatsAppConnectionId),
+        ),
+      );
+      setConversationLabels(groups.flat());
+    } catch {
+      setConversationLabels([]);
+    }
+  }, [autoReplyConfigs]);
+
+  useEffect(() => {
+    void loadConversationLabels();
+  }, [loadConversationLabels]);
+
+  async function saveSelectedConversationLabels(labelIds: string[]) {
+    if (!selectedConversation || labelManagerSaving) return;
+    setLabelManagerSaving(true);
+    setLabelManagerError('');
+    try {
+      const updated = await setWhatsAppConversationLabels(selectedConversation.id, labelIds);
+      setSelectedConversation(updated);
+      setConversations((current) => mergeConversationById(current, updated));
+      setLabelManagerOpen(false);
+    } catch (error) {
+      setLabelManagerError(conversationErrorMessage(error, 'Não foi possível salvar etiquetas.'));
+    } finally {
+      setLabelManagerSaving(false);
+    }
+  }
+
+  async function createLabelFromConversation(input: {
+    name: string;
+    color: WhatsAppConversationLabelColor;
+  }) {
+    if (!selectedConversation) return null;
+    const created = await createWhatsAppConversationLabel(
+      selectedConversation.whatsAppConnectionId,
+      input,
+    );
+    setConversationLabels((current) =>
+      [...current, created].sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    return created;
+  }
 
   async function disableAutoReply(config: WhatsAppAutoReplyConfig) {
     if (autoReplyDisabling) return;
@@ -2225,6 +2293,7 @@ export function WhatsAppInbox({
             unreadCount: 0,
             needsManualFollowUp: false,
             lastAutoReplyAt: null,
+            labels: [],
             createdAt: result.message.createdAt,
             updatedAt: result.message.createdAt,
             client: result.conversation.client
@@ -3428,6 +3497,22 @@ export function WhatsAppInbox({
         />
       ) : null}
 
+      {labelManagerOpen && selectedConversation ? (
+        <ConversationLabelManager
+          conversation={selectedConversation}
+          error={labelManagerError}
+          labels={conversationLabels.filter(
+            (label) => label.whatsAppConnectionId === selectedConversation.whatsAppConnectionId,
+          )}
+          saving={labelManagerSaving}
+          onClose={() => {
+            if (!labelManagerSaving) setLabelManagerOpen(false);
+          }}
+          onCreate={createLabelFromConversation}
+          onSave={saveSelectedConversationLabels}
+        />
+      ) : null}
+
       {autoReplyConfigs
         .filter(
           (config) =>
@@ -3473,6 +3558,8 @@ export function WhatsAppInbox({
           selectedId={selectedConversation?.id ?? null}
           summary={summary}
           statusFilter={statusFilter}
+          labels={conversationLabels}
+          labelFilter={labelFilter}
           onAvatarError={handleAvatarImageError}
           onAvatarPreview={openAvatarPreview}
           onFilterChange={setFilter}
@@ -3485,6 +3572,7 @@ export function WhatsAppInbox({
             setStartConversationOpen(true);
           }}
           onStatusFilterChange={setStatusFilter}
+          onLabelFilterChange={setLabelFilter}
         />
 
         <section
@@ -3524,6 +3612,10 @@ export function WhatsAppInbox({
                   }
                   setMessageSearchOpen(true);
                   setMessageSearchError('');
+                }}
+                onManageLabels={() => {
+                  setLabelManagerError('');
+                  setLabelManagerOpen(true);
                 }}
               />
 
@@ -4237,6 +4329,211 @@ function WhatsAppAvatarPreview({
   );
 }
 
+const conversationLabelColors: WhatsAppConversationLabelColor[] = [
+  'BLUE',
+  'GREEN',
+  'YELLOW',
+  'ORANGE',
+  'RED',
+  'PURPLE',
+  'PINK',
+  'TEAL',
+  'GRAY',
+];
+
+function ConversationLabelChips({
+  labels,
+  limit,
+}: {
+  labels: WhatsAppConversationLabel[];
+  limit: number;
+}) {
+  if (!labels.length) return null;
+  const visible = labels.slice(0, limit);
+  return (
+    <span className="conversation-label-chips" aria-label="Etiquetas da conversa">
+      {visible.map((label) => (
+        <span
+          className={`conversation-label-chip color-${label.color.toLowerCase()}`}
+          key={label.id}
+        >
+          <span aria-hidden="true" className="conversation-label-dot" />
+          {label.name}
+        </span>
+      ))}
+      {labels.length > limit ? (
+        <span className="conversation-label-more">+{labels.length - limit}</span>
+      ) : null}
+    </span>
+  );
+}
+
+function ConversationLabelManager({
+  conversation,
+  error,
+  labels,
+  saving,
+  onClose,
+  onCreate,
+  onSave,
+}: {
+  conversation: WhatsAppConversation;
+  error: string;
+  labels: WhatsAppConversationLabel[];
+  saving: boolean;
+  onClose: () => void;
+  onCreate: (input: {
+    name: string;
+    color: WhatsAppConversationLabelColor;
+  }) => Promise<WhatsAppConversationLabelAdmin | null>;
+  onSave: (labelIds: string[]) => Promise<void>;
+}) {
+  const [selectedIds, setSelectedIds] = useState(() =>
+    conversation.labels.map((label) => label.id),
+  );
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<WhatsAppConversationLabelColor>('BLUE');
+  const [createError, setCreateError] = useState('');
+  const nameRef = useRef<HTMLInputElement>(null);
+  const modalRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose);
+  const savingRef = useRef(saving);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+    savingRef.current = saving;
+  }, [onClose, saving]);
+
+  useEffect(() => {
+    const returnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    nameRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !savingRef.current) closeRef.current();
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(
+        modalRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled])',
+        ) ?? [],
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      returnFocus?.focus();
+    };
+  }, []);
+
+  async function createLabel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim() || creating) return;
+    setCreating(true);
+    setCreateError('');
+    try {
+      const created = await onCreate({ name: name.trim(), color });
+      if (created) setSelectedIds((current) => [...new Set([...current, created.id])]);
+      setName('');
+    } catch (createLabelError) {
+      setCreateError(
+        conversationErrorMessage(createLabelError, 'Não foi possível criar a etiqueta.'),
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return createPortal(
+    <div className="conversation-modal-backdrop" onMouseDown={onClose}>
+      <section
+        aria-labelledby="conversation-label-manager-title"
+        aria-modal="true"
+        className="conversation-modal-card conversation-label-manager"
+        ref={modalRef}
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="conversation-modal-header">
+          <div>
+            <h3 id="conversation-label-manager-title">Aplicar etiquetas</h3>
+            <p>{conversation.displayName}</p>
+          </div>
+          <IconButton icon={X} label="Fechar" onClick={onClose} />
+        </div>
+        <div className="conversation-label-options">
+          {labels.length ? (
+            labels.map((label) => (
+              <label key={label.id} className="conversation-label-option">
+                <input
+                  checked={selectedIds.includes(label.id)}
+                  type="checkbox"
+                  onChange={(event) =>
+                    setSelectedIds((current) =>
+                      event.target.checked
+                        ? [...new Set([...current, label.id])]
+                        : current.filter((id) => id !== label.id),
+                    )
+                  }
+                />
+                <span className={`conversation-label-dot color-${label.color.toLowerCase()}`} />
+                <span>{label.name}</span>
+              </label>
+            ))
+          ) : (
+            <p className="conversation-label-empty">Nenhuma etiqueta nesta conexão.</p>
+          )}
+        </div>
+        <form className="conversation-label-create" onSubmit={(event) => void createLabel(event)}>
+          <label>
+            <span>Nova etiqueta</span>
+            <input
+              ref={nameRef}
+              maxLength={40}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <div className="conversation-label-palette" aria-label="Cor da etiqueta">
+            {conversationLabelColors.map((item) => (
+              <button
+                aria-label={`Cor ${item.toLowerCase()}`}
+                aria-pressed={color === item}
+                className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
+                key={item}
+                type="button"
+                onClick={() => setColor(item)}
+              />
+            ))}
+          </div>
+          <Button disabled={!name.trim()} loading={creating} size="sm" type="submit">
+            Criar
+          </Button>
+        </form>
+        {createError || error ? <div className="notice danger">{createError || error}</div> : null}
+        <div className="conversation-modal-actions">
+          <Button disabled={saving} variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button loading={saving} onClick={() => void onSave(selectedIds)}>
+            Salvar
+          </Button>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function ConversationList({
   conversations,
   filter,
@@ -4250,6 +4547,8 @@ function ConversationList({
   selectedId,
   summary,
   statusFilter,
+  labels,
+  labelFilter,
   onAvatarError,
   onAvatarPreview,
   onFilterChange,
@@ -4258,6 +4557,7 @@ function ConversationList({
   onSelect,
   onStartConversation,
   onStatusFilterChange,
+  onLabelFilterChange,
 }: {
   conversations: WhatsAppConversation[];
   filter: ConversationFilter;
@@ -4271,6 +4571,8 @@ function ConversationList({
   selectedId: string | null;
   summary: WhatsAppConversationSummary | null;
   statusFilter: WhatsAppConversationStatus | '';
+  labels: WhatsAppConversationLabel[];
+  labelFilter: string;
   onAvatarError: (conversationId: string, url: string) => void;
   onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onFilterChange: (filter: ConversationFilter) => void;
@@ -4279,6 +4581,7 @@ function ConversationList({
   onSelect: (conversation: WhatsAppConversation) => void;
   onStartConversation: () => void;
   onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
+  onLabelFilterChange: (labelId: string) => void;
 }) {
   const emptyCopy = 'Nenhuma conversa encontrada.';
 
@@ -4326,6 +4629,18 @@ function ConversationList({
           <option value="">Todos</option>
           <option value="OPEN">Abertas</option>
           <option value="RESOLVED">Resolvidas</option>
+        </select>
+      </label>
+
+      <label className="conversation-label-filter">
+        <span>Etiquetas</span>
+        <select value={labelFilter} onChange={(event) => onLabelFilterChange(event.target.value)}>
+          <option value="">Todas</option>
+          {labels.map((label) => (
+            <option key={label.id} value={label.id}>
+              {label.name}
+            </option>
+          ))}
         </select>
       </label>
 
@@ -4488,6 +4803,7 @@ function ConversationListItem({
             <span className="conversation-followup-badge">Retorno pendente</span>
           ) : null}
         </span>
+        <ConversationLabelChips labels={conversation.labels} limit={2} />
       </button>
     </div>
   );
@@ -4505,6 +4821,7 @@ function ConversationHeader({
   onOpenClientPanel,
   onResolve,
   onToggleSearch,
+  onManageLabels,
 }: {
   avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
@@ -4517,6 +4834,7 @@ function ConversationHeader({
   onOpenClientPanel: () => void;
   onResolve: () => void;
   onToggleSearch: () => void;
+  onManageLabels: () => void;
 }) {
   const instanceLabel = conversationInstanceLabel(conversation.instanceName);
   const phoneLabel =
@@ -4557,9 +4875,11 @@ function ConversationHeader({
             </span>
             {opening ? <span className="conversation-sync-badge">Carregando</span> : null}
           </div>
+          <ConversationLabelChips labels={conversation.labels} limit={3} />
         </div>
       </div>
       <div className="conversation-header-actions">
+        <IconButton icon={Tags} label="Gerenciar etiquetas" onClick={onManageLabels} />
         <IconButton icon={Search} label="Buscar nesta conversa" onClick={onToggleSearch} />
         <IconButton
           icon={Info}

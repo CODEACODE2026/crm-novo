@@ -12,8 +12,10 @@ import {
   createReceivablePix,
   createReceivablesPix,
   createWhatsAppRealtimeEventSource,
+  createWhatsAppConversationLabel,
   deleteWhatsAppSavedSticker,
   deleteWhatsAppConversationMessage,
+  deleteWhatsAppConversationLabel,
   deleteWhatsAppQuickReply,
   deleteClient,
   formatCurrency,
@@ -34,6 +36,7 @@ import {
   importLegacyClients,
   importLegacyPayments,
   listWhatsAppConversationMessages,
+  listWhatsAppConversationLabels,
   listWhatsAppAutoReplies,
   listWhatsAppConversations,
   listWhatsAppConnections,
@@ -71,6 +74,8 @@ import {
   testPaymentProviderCredential,
   markWhatsAppConversationRead,
   updateWhatsAppConversationMessageReaction,
+  updateWhatsAppConversationLabel,
+  setWhatsAppConversationLabels,
   updateWhatsAppAutoReply,
   updateClient,
   updateMessageTemplate,
@@ -1745,5 +1750,47 @@ describe('WhatsApp forward API', () => {
         }),
       }),
     );
+  });
+});
+
+describe('WhatsApp conversation labels API', () => {
+  afterEach(() => {
+    resetUnauthorizedRedirectForTests();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('uses scoped CRUD, assignment and server-side filter contracts', async () => {
+    const requestedUrls: string[] = [];
+    const requestInits: Array<RequestInit | undefined> = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrls.push(
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
+      );
+      requestInits.push(init);
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const connectionId = '11111111-1111-4111-8111-111111111111';
+    const labelId = '22222222-2222-4222-8222-222222222222';
+
+    await listWhatsAppConversationLabels(connectionId);
+    await createWhatsAppConversationLabel(connectionId, { name: 'VIP', color: 'BLUE' });
+    await updateWhatsAppConversationLabel(connectionId, labelId, { color: 'RED' });
+    await deleteWhatsAppConversationLabel(connectionId, labelId);
+    await setWhatsAppConversationLabels('conversation-id', [labelId]);
+    await listWhatsAppConversations({ labelId, unreadOnly: true, needsManualFollowUp: true });
+
+    expect(requestedUrls[0]).toContain(`/whatsapp/connections/${connectionId}/labels`);
+    expect(requestInits[1]).toMatchObject({ method: 'POST' });
+    expect(requestInits[2]).toMatchObject({ method: 'PATCH' });
+    expect(requestInits[3]).toMatchObject({ method: 'DELETE' });
+    expect(requestInits[4]).toMatchObject({
+      method: 'PUT',
+      body: JSON.stringify({ labelIds: [labelId] }),
+    });
+    expect(requestedUrls[5]).toContain(`labelId=${labelId}`);
+    expect(requestedUrls[5]).toContain('unreadOnly=true');
+    expect(requestedUrls[5]).toContain('needsManualFollowUp=true');
   });
 });

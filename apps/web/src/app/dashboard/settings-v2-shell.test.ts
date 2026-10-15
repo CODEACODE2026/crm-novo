@@ -452,6 +452,18 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsSource).not.toContain('providerTokenEncrypted');
   });
 
+  it('adds per-connection label CRUD with an allowlisted accessible color palette', () => {
+    expect(settingsSource).toContain('function SettingsWhatsAppLabelsPanel');
+    expect(settingsSource).toContain('listWhatsAppConversationLabels');
+    expect(settingsSource).toContain('createWhatsAppConversationLabel');
+    expect(settingsSource).toContain('updateWhatsAppConversationLabel');
+    expect(settingsSource).toContain('deleteWhatsAppConversationLabel');
+    expect(settingsSource).toContain('As conversas não serão excluídas.');
+    expect(settingsSource).toContain('aria-label="Cor da etiqueta"');
+    expect(stylesSource).toContain('.settings-whatsapp-labels');
+    expect(stylesSource).toContain('.whatsapp-label-settings-row');
+  });
+
   it('renders Sistema as a read-only health panel without exposing secrets', () => {
     expect(settingsViewSource).toContain("activeSection === 'system'");
     expect(settingsSource).toContain('function SettingsSystemPanel');

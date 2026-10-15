@@ -7245,6 +7245,110 @@ video.conversation-saved-sticker-preview {
   }
 }
 
+.settings-whatsapp-labels {
+  display: grid;
+  gap: 14px;
+}
+
+.whatsapp-label-settings-form {
+  display: grid;
+  gap: 12px;
+  border-block: 1px solid var(--border-subtle);
+  padding-block: 14px;
+}
+
+.whatsapp-label-settings-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.whatsapp-label-settings-palette button {
+  width: 30px;
+  height: 30px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.whatsapp-label-settings-palette button.active {
+  border-color: white;
+  box-shadow: 0 0 0 2px currentColor;
+}
+
+.whatsapp-label-settings-list {
+  display: grid;
+  gap: 6px;
+}
+
+.whatsapp-label-settings-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 8px;
+  background: rgb(255 255 255 / 3%);
+}
+
+.whatsapp-label-settings-row small {
+  color: var(--text-muted);
+}
+
+.whatsapp-label-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.whatsapp-label-dot.color-blue,
+.whatsapp-label-settings-palette .color-blue {
+  color: #60a5fa;
+}
+.whatsapp-label-dot.color-green,
+.whatsapp-label-settings-palette .color-green {
+  color: #4ade80;
+}
+.whatsapp-label-dot.color-yellow,
+.whatsapp-label-settings-palette .color-yellow {
+  color: #facc15;
+}
+.whatsapp-label-dot.color-orange,
+.whatsapp-label-settings-palette .color-orange {
+  color: #fb923c;
+}
+.whatsapp-label-dot.color-red,
+.whatsapp-label-settings-palette .color-red {
+  color: #f87171;
+}
+.whatsapp-label-dot.color-purple,
+.whatsapp-label-settings-palette .color-purple {
+  color: #c084fc;
+}
+.whatsapp-label-dot.color-pink,
+.whatsapp-label-settings-palette .color-pink {
+  color: #f472b6;
+}
+.whatsapp-label-dot.color-teal,
+.whatsapp-label-settings-palette .color-teal {
+  color: #2dd4bf;
+}
+.whatsapp-label-dot.color-gray,
+.whatsapp-label-settings-palette .color-gray {
+  color: #94a3b8;
+}
+
+@media (max-width: 620px) {
+  .whatsapp-label-settings-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .whatsapp-label-settings-row small {
+    grid-column: 2 / -1;
+  }
+}
+
 .form-actions {
   display: flex;
   align-items: center;
@@ -15102,6 +15206,16 @@ tbody tr:hover,
     padding-inline: 10px;
     white-space: nowrap;
   }
+
+  .conversation-label-filter select,
+  .conversation-label-option {
+    min-height: 44px;
+  }
+
+  .conversation-label-manager {
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+  }
 }
 
 @media (max-width: 480px) {
@@ -16933,4 +17047,152 @@ tbody tr:hover,
   .waitlist-table .finance-actions-column {
     grid-area: actions;
   }
+}
+.conversation-label-filter {
+  display: grid;
+  gap: 4px;
+  padding: 0 10px 8px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.conversation-label-filter select {
+  min-width: 0;
+  height: 32px;
+}
+
+.conversation-label-chips {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.conversation-label-chip,
+.conversation-label-more {
+  display: inline-flex;
+  max-width: 112px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-label-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.conversation-label-manager {
+  width: min(440px, calc(100vw - 24px));
+}
+
+.conversation-label-options {
+  display: grid;
+  max-height: 280px;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.conversation-label-option {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.conversation-label-option:hover {
+  background: rgb(255 255 255 / 4%);
+}
+
+.conversation-label-create {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+
+.conversation-label-create label {
+  display: grid;
+  gap: 5px;
+}
+
+.conversation-label-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conversation-label-palette button {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.conversation-label-palette button.active {
+  border-color: white;
+  box-shadow: 0 0 0 2px currentColor;
+}
+
+.conversation-label-chip.color-blue,
+.conversation-label-dot.color-blue,
+.conversation-label-palette .color-blue {
+  color: #60a5fa;
+}
+.conversation-label-chip.color-green,
+.conversation-label-dot.color-green,
+.conversation-label-palette .color-green {
+  color: #4ade80;
+}
+.conversation-label-chip.color-yellow,
+.conversation-label-dot.color-yellow,
+.conversation-label-palette .color-yellow {
+  color: #facc15;
+}
+.conversation-label-chip.color-orange,
+.conversation-label-dot.color-orange,
+.conversation-label-palette .color-orange {
+  color: #fb923c;
+}
+.conversation-label-chip.color-red,
+.conversation-label-dot.color-red,
+.conversation-label-palette .color-red {
+  color: #f87171;
+}
+.conversation-label-chip.color-purple,
+.conversation-label-dot.color-purple,
+.conversation-label-palette .color-purple {
+  color: #c084fc;
+}
+.conversation-label-chip.color-pink,
+.conversation-label-dot.color-pink,
+.conversation-label-palette .color-pink {
+  color: #f472b6;
+}
+.conversation-label-chip.color-teal,
+.conversation-label-dot.color-teal,
+.conversation-label-palette .color-teal {
+  color: #2dd4bf;
+}
+.conversation-label-chip.color-gray,
+.conversation-label-dot.color-gray,
+.conversation-label-palette .color-gray {
+  color: #94a3b8;
 }

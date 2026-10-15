@@ -152,9 +152,11 @@ import {
   createReceivablesPix,
   createPlan,
   createWhatsAppQuickReply,
+  createWhatsAppConversationLabel,
   deleteClient,
   deleteClientReference,
   deleteWhatsAppQuickReply,
+  deleteWhatsAppConversationLabel,
   deletePlan,
   deleteFinancialCategory,
   deleteFinancialTransaction,
@@ -185,6 +187,7 @@ import {
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
   listWhatsAppAutoReplies,
+  listWhatsAppConversationLabels,
   listWhatsAppQuickRepliesAdmin,
   downloadReportCsv,
   logoutWhatsApp,
@@ -249,6 +252,7 @@ import {
   updateMessageTemplate,
   updateBillingAutomationSettings,
   updateWhatsAppQuickReply,
+  updateWhatsAppConversationLabel,
   updateWhatsAppAutoReply,
   updateRecoveryAutomationSettings,
   syncPaymentIntent,
@@ -321,6 +325,8 @@ import {
   type WhatsAppAutoReplyConfig,
   type WhatsAppAutoReplyMode,
   type WhatsAppAutoReplyAudience,
+  type WhatsAppConversationLabelAdmin,
+  type WhatsAppConversationLabelColor,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
   type WhatsAppPendingContactStatus,
@@ -6044,6 +6050,204 @@ function saoPauloDateTimeToIso(value: string) {
   return new Date(wallTimeUtc - offset).toISOString();
 }
 
+const whatsappLabelColors: WhatsAppConversationLabelColor[] = [
+  'BLUE',
+  'GREEN',
+  'YELLOW',
+  'ORANGE',
+  'RED',
+  'PURPLE',
+  'PINK',
+  'TEAL',
+  'GRAY',
+];
+
+function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAutoReplyConfig[] }) {
+  const [connectionId, setConnectionId] = useState('');
+  const selectedConnectionId = connectionId || connections[0]?.whatsAppConnectionId || '';
+  const [labels, setLabels] = useState<WhatsAppConversationLabelAdmin[]>([]);
+  const [editing, setEditing] = useState<WhatsAppConversationLabelAdmin | null>(null);
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<WhatsAppConversationLabelColor>('BLUE');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const load = useCallback(async () => {
+    if (!selectedConnectionId) {
+      setLabels([]);
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      setLabels(await listWhatsAppConversationLabels(selectedConnectionId));
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error ? loadError.message : 'Não foi possível carregar etiquetas.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedConnectionId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function reset() {
+    setEditing(null);
+    setName('');
+    setColor('BLUE');
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedConnectionId || !name.trim() || saving) return;
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      if (editing) {
+        await updateWhatsAppConversationLabel(selectedConnectionId, editing.id, {
+          name: name.trim(),
+          color,
+        });
+        setNotice('Etiqueta atualizada.');
+      } else {
+        await createWhatsAppConversationLabel(selectedConnectionId, { name: name.trim(), color });
+        setNotice('Etiqueta criada.');
+      }
+      reset();
+      await load();
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error ? saveError.message : 'Não foi possível salvar etiqueta.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(label: WhatsAppConversationLabelAdmin) {
+    if (!selectedConnectionId || saving) return;
+    if (!window.confirm(`Excluir a etiqueta “${label.name}”? As conversas não serão excluídas.`))
+      return;
+    setSaving(true);
+    setError('');
+    try {
+      await deleteWhatsAppConversationLabel(selectedConnectionId, label.id);
+      if (editing?.id === label.id) reset();
+      setNotice('Etiqueta excluída.');
+      await load();
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error ? deleteError.message : 'Não foi possível excluir etiqueta.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section
+      className="settings-auto-reply-card settings-whatsapp-labels"
+      aria-labelledby="settings-whatsapp-labels-title"
+    >
+      <div className="panel-header">
+        <div>
+          <span className="metric-label">WhatsApp</span>
+          <h3 id="settings-whatsapp-labels-title">Etiquetas</h3>
+          <p>Organize conversas com nomes e cores próprios para cada conexão.</p>
+        </div>
+      </div>
+      <label className="field">
+        <span>Conexão</span>
+        <select
+          value={selectedConnectionId}
+          onChange={(event) => {
+            setConnectionId(event.target.value);
+            setLabels([]);
+            setError('');
+            setNotice('');
+            reset();
+          }}
+        >
+          {!connections.length ? <option value="">Nenhuma conexão</option> : null}
+          {connections.map((connection) => (
+            <option key={connection.whatsAppConnectionId} value={connection.whatsAppConnectionId}>
+              {connection.connectionName}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error ? <div className="notice danger">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
+      <form className="whatsapp-label-settings-form" onSubmit={(event) => void submit(event)}>
+        <label className="field">
+          <span>{editing ? 'Editar nome' : 'Nova etiqueta'}</span>
+          <input
+            maxLength={40}
+            placeholder="Urgente"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <div className="whatsapp-label-settings-palette" aria-label="Cor da etiqueta">
+          {whatsappLabelColors.map((item) => (
+            <button
+              aria-label={`Cor ${item.toLowerCase()}`}
+              aria-pressed={color === item}
+              className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
+              key={item}
+              type="button"
+              onClick={() => setColor(item)}
+            />
+          ))}
+        </div>
+        <div className="settings-quick-reply-form-actions">
+          {editing ? (
+            <Button variant="ghost" type="button" onClick={reset}>
+              Cancelar
+            </Button>
+          ) : null}
+          <Button disabled={!selectedConnectionId || !name.trim()} loading={saving} type="submit">
+            {editing ? 'Salvar' : 'Criar'}
+          </Button>
+        </div>
+      </form>
+      <div className="whatsapp-label-settings-list" aria-busy={loading}>
+        {labels.map((label) => (
+          <div key={label.id} className="whatsapp-label-settings-row">
+            <span
+              className={`whatsapp-label-dot color-${label.color.toLowerCase()}`}
+              aria-hidden="true"
+            />
+            <strong>{label.name}</strong>
+            <small>{label._count?.assignments ?? 0} conversas</small>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setEditing(label);
+                setName(label.name);
+                setColor(label.color);
+              }}
+            >
+              Editar
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => void remove(label)}>
+              Excluir
+            </Button>
+          </div>
+        ))}
+        {!labels.length && !loading ? <p>Nenhuma etiqueta criada.</p> : null}
+      </div>
+    </section>
+  );
+}
+
 function SettingsWhatsAppQuickRepliesPanel({
   autoReplyConfigs,
   autoReplyError,
@@ -6383,6 +6587,8 @@ function SettingsWhatsAppQuickRepliesPanel({
           </Button>
         </div>
       </section>
+
+      <SettingsWhatsAppLabelsPanel connections={autoReplyConfigs} />
 
       <div className="settings-v2-toolbar">
         <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenWhatsApp}>

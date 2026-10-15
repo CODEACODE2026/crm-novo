@@ -126,6 +126,7 @@ function conversation(
     unreadCount: 0,
     needsManualFollowUp: false,
     lastAutoReplyAt: null,
+    labels: [],
     createdAt: '2026-10-08T11:00:00.000Z',
     updatedAt: '2026-10-08T12:00:00.000Z',
     ...overrides,
@@ -3171,5 +3172,23 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('min-height: 44px;');
     expect(whatsAppInboxSource).toContain("event.key !== 'Tab'");
     expect(whatsAppInboxSource).toContain('modalRef.current?.querySelectorAll<HTMLElement>');
+  });
+
+  it('renders compact conversation label chips, manager and a combinable server-side filter', () => {
+    expect(whatsAppInboxSource).toContain('function ConversationLabelChips');
+    expect(whatsAppInboxSource).toContain('labels.slice(0, limit)');
+    expect(whatsAppInboxSource).toContain('labels.length - limit');
+    expect(whatsAppInboxSource).toContain('Aplicar etiquetas');
+    expect(whatsAppInboxSource).toContain('type="checkbox"');
+    expect(whatsAppInboxSource).toContain('setWhatsAppConversationLabels');
+    expect(whatsAppInboxSource).toContain('if (labelFilter) filters.labelId = labelFilter');
+    expect(whatsAppInboxSource).toContain(
+      'labelFilter && err instanceof ApiError && err.status === 404',
+    );
+    expect(whatsAppInboxSource).toContain("setLabelFilter('');");
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(globalStylesSource).toContain('.conversation-label-chip');
+    expect(globalStylesSource).toContain('.conversation-label-manager');
+    expect(globalStylesSource).toContain('min-height: 44px;');
   });
 });

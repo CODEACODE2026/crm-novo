@@ -113,6 +113,11 @@ describe('WhatsAppController conversation inbox endpoints', () => {
   it('routes conversation inbox operations to the service', async () => {
     const service = {
       listConversations: vi.fn().mockResolvedValue({ items: [] }),
+      listConversationLabels: vi.fn().mockResolvedValue([]),
+      createConversationLabel: vi.fn().mockResolvedValue({ id: 'label-id' }),
+      updateConversationLabel: vi.fn().mockResolvedValue({ id: 'label-id', name: 'VIP' }),
+      deleteConversationLabel: vi.fn().mockResolvedValue({ deleted: true, id: 'label-id' }),
+      setConversationLabels: vi.fn().mockResolvedValue({ id: 'conversation-id', labels: [] }),
       listUsableConnections: vi.fn().mockResolvedValue([{ id: 'connection-id' }]),
       getConversation: vi.fn().mockResolvedValue({ id: 'conversation-id' }),
       listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
@@ -165,6 +170,23 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       items: [],
     });
     await expect(subject.listConnections()).resolves.toEqual([{ id: 'connection-id' }]);
+    await expect(subject.listConversationLabels('connection-id')).resolves.toEqual([]);
+    await expect(
+      subject.createConversationLabel('connection-id', { name: 'VIP', color: 'BLUE' }),
+    ).resolves.toEqual({ id: 'label-id' });
+    await expect(
+      subject.updateConversationLabel('connection-id', 'label-id', { color: 'RED' }),
+    ).resolves.toEqual({ id: 'label-id', name: 'VIP' });
+    await expect(subject.deleteConversationLabel('connection-id', 'label-id')).resolves.toEqual({
+      deleted: true,
+      id: 'label-id',
+    });
+    await expect(
+      subject.setConversationLabels('conversation-id', { labelIds: [] }),
+    ).resolves.toEqual({
+      id: 'conversation-id',
+      labels: [],
+    });
     await expect(subject.listAutoReplies()).resolves.toEqual([]);
     await expect(subject.getAutoReply('11111111-1111-4111-8111-111111111111')).resolves.toEqual({
       enabled: false,
@@ -285,6 +307,10 @@ describe('WhatsAppController conversation inbox endpoints', () => {
 
     expect(service.listConversations).toHaveBeenCalledWith({ page: 1, limit: 20 });
     expect(service.listUsableConnections).toHaveBeenCalledWith();
+    expect(service.createConversationLabel).toHaveBeenCalledWith('connection-id', {
+      name: 'VIP',
+      color: 'BLUE',
+    });
     expect(quickReplies.listActiveForInbox).toHaveBeenCalledWith();
     expect(quickReplies.listAdmin).toHaveBeenCalledWith();
     expect(quickReplies.create).toHaveBeenCalledWith({

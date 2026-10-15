@@ -233,6 +233,18 @@ enum WhatsAppConversationStatus {
   RESOLVED
 }
 
+enum WhatsAppConversationLabelColor {
+  BLUE
+  GREEN
+  YELLOW
+  ORANGE
+  RED
+  PURPLE
+  PINK
+  TEAL
+  GRAY
+}
+
 enum WhatsAppConversationMessageDirection {
   INBOUND
   OUTBOUND
@@ -434,6 +446,7 @@ model WhatsAppConnection {
   messageReactions       WhatsAppMessageReaction[]
   autoReplyConfig        WhatsAppAutoReplyConfig?
   autoReplyExecutions    WhatsAppAutoReplyExecution[]
+  conversationLabels     WhatsAppConversationLabel[]
 
   @@index([provider])
   @@index([providerInstanceName])
@@ -702,27 +715,28 @@ model WhatsAppInboundMessage {
 }
 
 model WhatsAppConversation {
-  id                   String                       @id @default(uuid()) @db.Uuid
-  whatsAppConnectionId String                       @db.Uuid
+  id                   String                                @id @default(uuid()) @db.Uuid
+  whatsAppConnectionId String                                @db.Uuid
   instanceName         String?
-  provider             WhatsAppProvider             @default(KIRAGO)
+  provider             WhatsAppProvider                      @default(KIRAGO)
   externalInstanceId   String?
-  clientId             String?                      @db.Uuid
+  clientId             String?                               @db.Uuid
   contactName          String?
   phone                String
   phoneNormalized      String
-  status               WhatsAppConversationStatus   @default(OPEN)
+  status               WhatsAppConversationStatus            @default(OPEN)
   lastMessageAt        DateTime?
   lastMessagePreview   String?
-  unreadCount          Int                          @default(0)
-  needsManualFollowUp  Boolean                      @default(false)
+  unreadCount          Int                                   @default(0)
+  needsManualFollowUp  Boolean                               @default(false)
   lastAutoReplyAt      DateTime?
-  createdAt            DateTime                     @default(now())
-  updatedAt            DateTime                     @updatedAt
-  whatsAppConnection   WhatsAppConnection           @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
-  client               Client?                      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                              @default(now())
+  updatedAt            DateTime                              @updatedAt
+  whatsAppConnection   WhatsAppConnection                    @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict)
+  client               Client?                               @relation(fields: [clientId], references: [id], onDelete: SetNull)
   messages             WhatsAppMessage[]
   autoReplyExecutions  WhatsAppAutoReplyExecution[]
+  labelAssignments     WhatsAppConversationLabelAssignment[]
 
   @@unique([whatsAppConnectionId, phoneNormalized])
   @@index([lastMessageAt])
@@ -731,6 +745,34 @@ model WhatsAppConversation {
   @@index([whatsAppConnectionId, status, lastMessageAt])
   @@index([whatsAppConnectionId, needsManualFollowUp, lastMessageAt])
   @@map("whatsapp_conversations")
+}
+
+model WhatsAppConversationLabel {
+  id                   String                                @id @default(uuid()) @db.Uuid
+  whatsAppConnectionId String                                @db.Uuid
+  name                 String
+  normalizedName       String
+  color                WhatsAppConversationLabelColor
+  createdAt            DateTime                              @default(now())
+  updatedAt            DateTime                              @updatedAt
+  whatsAppConnection   WhatsAppConnection                    @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Cascade)
+  assignments          WhatsAppConversationLabelAssignment[]
+
+  @@unique([whatsAppConnectionId, normalizedName])
+  @@index([whatsAppConnectionId, name])
+  @@map("whatsapp_conversation_labels")
+}
+
+model WhatsAppConversationLabelAssignment {
+  conversationId String                    @db.Uuid
+  labelId        String                    @db.Uuid
+  createdAt      DateTime                  @default(now())
+  conversation   WhatsAppConversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  label          WhatsAppConversationLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, labelId])
+  @@index([labelId])
+  @@map("whatsapp_conversation_label_assignments")
 }
 
 model WhatsAppAutoReplyConfig {

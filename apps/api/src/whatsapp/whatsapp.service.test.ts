@@ -527,6 +527,20 @@ function serviceFactory({
       create: vi.fn().mockResolvedValue(conversation()),
       update: vi.fn().mockResolvedValue(conversation()),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findUniqueOrThrow: vi.fn().mockResolvedValue(conversation({ labelAssignments: [] })),
+    },
+    whatsAppConversationLabel: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+    whatsAppConversationLabelAssignment: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      findMany: vi.fn().mockResolvedValue([]),
     },
     whatsAppMessage: {
       findUnique: vi.fn().mockResolvedValue(conversationMessage()),
@@ -636,6 +650,8 @@ function serviceFactory({
           upsert: prisma.whatsAppPendingContact.upsert,
         },
         whatsAppConversation: prisma.whatsAppConversation,
+        whatsAppConversationLabel: prisma.whatsAppConversationLabel,
+        whatsAppConversationLabelAssignment: prisma.whatsAppConversationLabelAssignment,
         whatsAppMessage: prisma.whatsAppMessage,
         whatsAppMessageReaction: prisma.whatsAppMessageReaction,
       });
@@ -8960,6 +8976,10 @@ describe('WhatsAppService', () => {
       whatsAppConnection: {
         select: { name: true, providerInstanceName: true, providerUserId: true },
       },
+      labelAssignments: {
+        select: { label: { select: { id: true, name: true, color: true } } },
+        orderBy: { label: { name: 'asc' } },
+      },
     });
     expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
       expect.arrayContaining([
@@ -14405,5 +14425,144 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
     expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(target.id, expect.any(String));
+  });
+});
+
+describe('WhatsApp conversation labels', () => {
+  const label = {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    whatsAppConnectionId: connection().id,
+    name: 'Urgente',
+    normalizedName: 'urgente',
+    color: 'RED',
+    createdAt: now,
+    updatedAt: now,
+    _count: { assignments: 0 },
+  };
+
+  it('preserves labels in open, read and resolve conversation presenters', async () => {
+    const labelAssignments = [{ label: { id: label.id, name: label.name, color: label.color } }];
+    const labeledConversation = conversation({ unreadCount: 0, labelAssignments });
+    const resolvedConversation = conversation({
+      status: 'RESOLVED',
+      unreadCount: 0,
+      labelAssignments,
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(labeledConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(1),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(labeledConversation),
+          update: vi.fn().mockResolvedValue(resolvedConversation),
+        },
+      },
+    });
+
+    await expect(service.getConversation(labeledConversation.id)).resolves.toMatchObject({
+      labels: [{ id: label.id, name: label.name, color: label.color }],
+    });
+    await expect(service.markConversationAsRead(labeledConversation.id)).resolves.toMatchObject({
+      labels: [{ id: label.id, name: label.name, color: label.color }],
+    });
+    await expect(service.resolveConversation(labeledConversation.id)).resolves.toMatchObject({
+      labels: [{ id: label.id, name: label.name, color: label.color }],
+    });
+
+    for (const [args] of (prisma.whatsAppConversation.findUnique as MockWithCalls).mock.calls) {
+      expect(args).toEqual(
+        expect.objectContaining({
+          include: expect.objectContaining({ labelAssignments: expect.any(Object) }),
+        }),
+      );
+    }
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({ labelAssignments: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it('creates trimmed labels with case-insensitive uniqueness data and lists by connection', async () => {
+    const { service, prisma } = serviceFactory();
+    prisma.whatsAppConversationLabel.create.mockImplementation(({ data }: { data: object }) =>
+      Promise.resolve({ ...label, ...data }),
+    );
+    prisma.whatsAppConversationLabel.findMany.mockResolvedValue([label]);
+
+    await expect(
+      service.createConversationLabel(connection().id, { name: '  Urgente  ', color: 'RED' }),
+    ).resolves.toMatchObject({ name: 'Urgente', color: 'RED' });
+    expect(prisma.whatsAppConversationLabel.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ name: 'Urgente', normalizedName: 'urgente' }),
+      }),
+    );
+    await expect(service.listConversationLabels(connection().id)).resolves.toEqual([label]);
+  });
+
+  it('atomically replaces, deduplicates and emits assignments for the conversation connection', async () => {
+    const assignedConversation = conversation({
+      labelAssignments: [{ label: { id: label.id, name: label.name, color: label.color } }],
+    });
+    const { service, prisma, realtime } = serviceFactory();
+    prisma.whatsAppConversation.findUnique.mockResolvedValue(conversation());
+    prisma.whatsAppConversation.findUniqueOrThrow.mockResolvedValue(assignedConversation);
+    prisma.whatsAppConversationLabel.findMany.mockResolvedValue([label]);
+
+    await expect(
+      service.setConversationLabels(conversation().id, { labelIds: [label.id, label.id] }),
+    ).resolves.toMatchObject({ labels: [{ id: label.id, name: 'Urgente', color: 'RED' }] });
+    expect(prisma.whatsAppConversationLabelAssignment.createMany).toHaveBeenCalledWith({
+      data: [{ conversationId: conversation().id, labelId: label.id }],
+      skipDuplicates: true,
+    });
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
+  });
+
+  it('rejects cross-connection assignments and scopes label filters before pagination', async () => {
+    const foreignLabel = { ...label, whatsAppConnectionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+    const { service, prisma } = serviceFactory();
+    prisma.whatsAppConversation.findUnique.mockResolvedValue(conversation());
+    prisma.whatsAppConversationLabel.findMany.mockResolvedValue([foreignLabel]);
+
+    await expect(
+      service.setConversationLabels(conversation().id, { labelIds: [foreignLabel.id] }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    prisma.whatsAppConversationLabel.findUnique.mockResolvedValue(label);
+    await expect(
+      service.listConversations({
+        labelId: label.id,
+        whatsAppConnectionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await service.listConversations({
+      labelId: label.id,
+      page: 2,
+      limit: 20,
+      unreadOnly: true,
+      needsManualFollowUp: true,
+      hasClient: false,
+      status: 'OPEN',
+      search: 'Ana',
+    });
+    expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          whatsAppConnectionId: connection().id,
+          labelAssignments: { some: { labelId: label.id } },
+          unreadCount: { gt: 0 },
+          needsManualFollowUp: true,
+          clientId: null,
+          status: 'OPEN',
+          OR: expect.any(Array),
+        }),
+        skip: 20,
+        take: 20,
+      }),
+    );
   });
 });

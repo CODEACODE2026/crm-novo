@@ -28,6 +28,10 @@ export class ListWhatsAppConversationsDto {
   whatsAppConnectionId?: string;
 
   @IsOptional()
+  @IsUUID()
+  labelId?: string;
+
+  @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   unreadOnly?: boolean;

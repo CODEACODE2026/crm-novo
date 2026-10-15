@@ -724,6 +724,19 @@ export interface MessageDispatch {
 }
 
 export type WhatsAppConversationStatus = 'OPEN' | 'RESOLVED';
+export type WhatsAppConversationLabelColor =
+  'BLUE' | 'GREEN' | 'YELLOW' | 'ORANGE' | 'RED' | 'PURPLE' | 'PINK' | 'TEAL' | 'GRAY';
+export interface WhatsAppConversationLabel {
+  id: string;
+  name: string;
+  color: WhatsAppConversationLabelColor;
+}
+export interface WhatsAppConversationLabelAdmin extends WhatsAppConversationLabel {
+  whatsAppConnectionId: string;
+  createdAt?: string;
+  updatedAt?: string;
+  _count?: { assignments: number };
+}
 export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
 export type WhatsAppConversationMessageStatus =
   'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
@@ -747,6 +760,7 @@ export interface WhatsAppConversation {
   unreadCount: number;
   needsManualFollowUp: boolean;
   lastAutoReplyAt: string | null;
+  labels: WhatsAppConversationLabel[];
   createdAt: string;
   updatedAt: string;
 }
@@ -2681,6 +2695,7 @@ export function listWhatsAppConversations(
     needsManualFollowUp?: boolean;
     whatsAppConnectionId?: string;
     hasClient?: boolean;
+    labelId?: string;
   } = {},
 ) {
   const params = new URLSearchParams();
@@ -2696,6 +2711,7 @@ export function listWhatsAppConversations(
   if (filters.whatsAppConnectionId) {
     params.set('whatsAppConnectionId', filters.whatsAppConnectionId);
   }
+  if (filters.labelId) params.set('labelId', filters.labelId);
 
   const query = params.toString();
   return apiFetch<PaginatedWhatsAppConversations>(
@@ -2723,6 +2739,45 @@ export function updateWhatsAppAutoReply(
 
 export function getWhatsAppConversation(id: string) {
   return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}`);
+}
+
+export function listWhatsAppConversationLabels(connectionId: string) {
+  return apiFetch<WhatsAppConversationLabelAdmin[]>(`/whatsapp/connections/${connectionId}/labels`);
+}
+
+export function createWhatsAppConversationLabel(
+  connectionId: string,
+  payload: { name: string; color: WhatsAppConversationLabelColor },
+) {
+  return apiFetch<WhatsAppConversationLabelAdmin>(`/whatsapp/connections/${connectionId}/labels`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWhatsAppConversationLabel(
+  connectionId: string,
+  labelId: string,
+  payload: { name?: string; color?: WhatsAppConversationLabelColor },
+) {
+  return apiFetch<WhatsAppConversationLabelAdmin>(
+    `/whatsapp/connections/${connectionId}/labels/${labelId}`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+  );
+}
+
+export function deleteWhatsAppConversationLabel(connectionId: string, labelId: string) {
+  return apiFetch<{ deleted: boolean; id: string }>(
+    `/whatsapp/connections/${connectionId}/labels/${labelId}`,
+    { method: 'DELETE' },
+  );
+}
+
+export function setWhatsAppConversationLabels(conversationId: string, labelIds: string[]) {
+  return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${conversationId}/labels`, {
+    method: 'PUT',
+    body: JSON.stringify({ labelIds }),
+  });
 }
 
 export function getWhatsAppConversationAvatar(id: string) {

@@ -18,6 +18,7 @@ import {
   Prisma,
   ReceivableStatus,
   WhatsAppConversation,
+  WhatsAppConversationLabelColor,
   WhatsAppConversationMessageType,
   WhatsAppInboundMessageType,
   WhatsAppConnection,
@@ -66,6 +67,7 @@ import {
 import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.service';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
+import { CreateWhatsAppConversationLabelDto } from './dto/create-whatsapp-conversation-label.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
 import { ForwardWhatsAppConversationMessageDto } from './dto/forward-whatsapp-conversation-message.dto';
@@ -77,8 +79,10 @@ import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-cont
 import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
 import { SendWhatsAppMessageDto } from './dto/send-whatsapp-message.dto';
+import { SetWhatsAppConversationLabelsDto } from './dto/set-whatsapp-conversation-labels.dto';
 import { SetWhatsAppConversationPresenceDto } from './dto/set-whatsapp-conversation-presence.dto';
 import { StartWhatsAppConversationDto } from './dto/start-whatsapp-conversation.dto';
+import { UpdateWhatsAppConversationLabelDto } from './dto/update-whatsapp-conversation-label.dto';
 import {
   allowedWhatsAppReactionEmojis,
   type AllowedWhatsAppReactionEmoji,
@@ -364,7 +368,11 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
       };
     };
   };
-}>;
+}> & {
+  labelAssignments?: Array<{
+    label: { id: string; name: string; color: WhatsAppConversationLabelColor };
+  }>;
+};
 
 type WhatsAppConversationMessageQuote = Pick<
   WhatsAppMessage,
@@ -1000,6 +1008,19 @@ export class WhatsAppService {
     const limit = Math.min(query.limit ?? 20, pageSizeLimit);
     const where = this.buildConversationWhere(query);
 
+    if (query.labelId) {
+      const label = await this.prisma.whatsAppConversationLabel.findUnique({
+        where: { id: query.labelId },
+        select: { whatsAppConnectionId: true },
+      });
+      if (!label) throw new NotFoundException('Etiqueta WhatsApp nao encontrada.');
+      if (query.whatsAppConnectionId && query.whatsAppConnectionId !== label.whatsAppConnectionId) {
+        throw new BadRequestException('A etiqueta nao pertence a conexao informada.');
+      }
+      where.whatsAppConnectionId = label.whatsAppConnectionId;
+      where.labelAssignments = { some: { labelId: query.labelId } };
+    }
+
     const [items, total, totalUnreadConversations, unreadMessages] = await this.prisma.$transaction(
       [
         this.prisma.whatsAppConversation.findMany({
@@ -1008,6 +1029,10 @@ export class WhatsAppService {
             client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
             whatsAppConnection: {
               select: { name: true, providerInstanceName: true, providerUserId: true },
+            },
+            labelAssignments: {
+              select: { label: { select: { id: true, name: true, color: true } } },
+              orderBy: { label: { name: 'asc' } },
             },
           },
           orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
@@ -1043,6 +1068,151 @@ export class WhatsAppService {
     }
 
     return this.presentConversation(conversation);
+  }
+
+  async listConversationLabels(connectionId: string) {
+    await this.requireWhatsAppConnection(connectionId);
+    return this.prisma.whatsAppConversationLabel.findMany({
+      where: { whatsAppConnectionId: connectionId },
+      select: {
+        id: true,
+        whatsAppConnectionId: true,
+        name: true,
+        color: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: { select: { assignments: true } },
+      },
+      orderBy: [{ normalizedName: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  async createConversationLabel(connectionId: string, dto: CreateWhatsAppConversationLabelDto) {
+    await this.requireWhatsAppConnection(connectionId);
+    const name = this.normalizeConversationLabelDisplayName(dto.name);
+    try {
+      return await this.prisma.whatsAppConversationLabel.create({
+        data: {
+          whatsAppConnectionId: connectionId,
+          name,
+          normalizedName: this.normalizeConversationLabelName(name),
+          color: dto.color,
+        },
+        select: {
+          id: true,
+          whatsAppConnectionId: true,
+          name: true,
+          color: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: { select: { assignments: true } },
+        },
+      });
+    } catch (error) {
+      this.throwConversationLabelWriteError(error);
+    }
+  }
+
+  async updateConversationLabel(
+    connectionId: string,
+    labelId: string,
+    dto: UpdateWhatsAppConversationLabelDto,
+  ) {
+    const current = await this.requireConversationLabel(connectionId, labelId);
+    if (dto.name === undefined && dto.color === undefined) {
+      throw new BadRequestException('Informe nome ou cor para atualizar a etiqueta.');
+    }
+    const name =
+      dto.name === undefined ? current.name : this.normalizeConversationLabelDisplayName(dto.name);
+    try {
+      const updated = await this.prisma.whatsAppConversationLabel.update({
+        where: { id: labelId },
+        data: {
+          ...(dto.name === undefined
+            ? {}
+            : { name, normalizedName: this.normalizeConversationLabelName(name) }),
+          ...(dto.color === undefined ? {} : { color: dto.color }),
+        },
+        select: {
+          id: true,
+          whatsAppConnectionId: true,
+          name: true,
+          color: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: { select: { assignments: true } },
+        },
+      });
+      await this.emitLabelConversationUpdates(labelId);
+      return updated;
+    } catch (error) {
+      this.throwConversationLabelWriteError(error);
+    }
+  }
+
+  async deleteConversationLabel(connectionId: string, labelId: string) {
+    const label = await this.requireConversationLabel(connectionId, labelId);
+    const affected = await this.prisma.whatsAppConversationLabelAssignment.findMany({
+      where: { labelId },
+      select: { conversationId: true },
+    });
+    await this.prisma.whatsAppConversationLabel.delete({ where: { id: labelId } });
+    for (const assignment of affected) this.emitConversationUpdated(assignment.conversationId);
+    return { deleted: true, id: label.id };
+  }
+
+  async setConversationLabels(conversationId: string, dto: SetWhatsAppConversationLabelsDto) {
+    const labelIds = [...new Set(dto.labelIds)];
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const conversation = await tx.whatsAppConversation.findUnique({
+        where: { id: conversationId },
+        select: { id: true, whatsAppConnectionId: true },
+      });
+      if (!conversation) throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+
+      const labels = labelIds.length
+        ? await tx.whatsAppConversationLabel.findMany({
+            where: { id: { in: labelIds } },
+            select: { id: true, whatsAppConnectionId: true },
+          })
+        : [];
+      if (labels.length !== labelIds.length) {
+        throw new BadRequestException('Uma ou mais etiquetas nao existem.');
+      }
+      if (
+        labels.some((label) => label.whatsAppConnectionId !== conversation.whatsAppConnectionId)
+      ) {
+        throw new BadRequestException('Todas as etiquetas devem pertencer a conexao da conversa.');
+      }
+
+      await tx.whatsAppConversationLabelAssignment.deleteMany({
+        where: {
+          conversationId,
+          ...(labelIds.length ? { labelId: { notIn: labelIds } } : {}),
+        },
+      });
+      if (labelIds.length) {
+        await tx.whatsAppConversationLabelAssignment.createMany({
+          data: labelIds.map((labelId) => ({ conversationId, labelId })),
+          skipDuplicates: true,
+        });
+      }
+      return tx.whatsAppConversation.findUniqueOrThrow({
+        where: { id: conversationId },
+        include: {
+          client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          whatsAppConnection: {
+            select: { name: true, providerInstanceName: true, providerUserId: true },
+          },
+          labelAssignments: {
+            select: { label: { select: { id: true, name: true, color: true } } },
+            orderBy: { label: { name: 'asc' } },
+          },
+        },
+      });
+    });
+    this.emitConversationUpdated(conversationId);
+    return this.presentConversation(updated);
   }
 
   async getConversationAvatar(id: string): Promise<WhatsAppConversationAvatarResponse> {
@@ -2843,6 +3013,10 @@ export class WhatsAppService {
             whatsAppConnection: {
               select: { name: true, providerInstanceName: true, providerUserId: true },
             },
+            labelAssignments: {
+              select: { label: { select: { id: true, name: true, color: true } } },
+              orderBy: { label: { name: 'asc' } },
+            },
           },
         });
         return this.presentConversation(current!);
@@ -2871,6 +3045,10 @@ export class WhatsAppService {
           whatsAppConnection: {
             select: { name: true, providerInstanceName: true, providerUserId: true },
           },
+          labelAssignments: {
+            select: { label: { select: { id: true, name: true, color: true } } },
+            orderBy: { label: { name: 'asc' } },
+          },
         },
       });
 
@@ -2898,6 +3076,10 @@ export class WhatsAppService {
       include: {
         client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
         whatsAppConnection: true,
+        labelAssignments: {
+          select: { label: { select: { id: true, name: true, color: true } } },
+          orderBy: { label: { name: 'asc' } },
+        },
       },
     });
 
@@ -2975,6 +3157,10 @@ export class WhatsAppService {
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
+        labelAssignments: {
+          select: { label: { select: { id: true, name: true, color: true } } },
+          orderBy: { label: { name: 'asc' } },
+        },
       },
     });
 
@@ -2991,6 +3177,10 @@ export class WhatsAppService {
         client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+        labelAssignments: {
+          select: { label: { select: { id: true, name: true, color: true } } },
+          orderBy: { label: { name: 'asc' } },
         },
       },
     });
@@ -5222,6 +5412,49 @@ export class WhatsAppService {
     return where;
   }
 
+  private async requireWhatsAppConnection(connectionId: string) {
+    const connection = await this.prisma.whatsAppConnection.findUnique({
+      where: { id: connectionId },
+      select: { id: true },
+    });
+    if (!connection) throw new NotFoundException('Conexao WhatsApp nao encontrada.');
+    return connection;
+  }
+
+  private async requireConversationLabel(connectionId: string, labelId: string) {
+    const label = await this.prisma.whatsAppConversationLabel.findFirst({
+      where: { id: labelId, whatsAppConnectionId: connectionId },
+      select: { id: true, name: true },
+    });
+    if (!label) throw new NotFoundException('Etiqueta WhatsApp nao encontrada.');
+    return label;
+  }
+
+  private normalizeConversationLabelDisplayName(value: string) {
+    const name = value.trim().replace(/\s+/g, ' ');
+    if (!name) throw new BadRequestException('O nome da etiqueta e obrigatorio.');
+    return name;
+  }
+
+  private normalizeConversationLabelName(value: string) {
+    return value.normalize('NFKC').toLocaleLowerCase('pt-BR');
+  }
+
+  private throwConversationLabelWriteError(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new ConflictException('Ja existe uma etiqueta com este nome nesta conexao.');
+    }
+    throw error;
+  }
+
+  private async emitLabelConversationUpdates(labelId: string) {
+    const assignments = await this.prisma.whatsAppConversationLabelAssignment.findMany({
+      where: { labelId },
+      select: { conversationId: true },
+    });
+    for (const assignment of assignments) this.emitConversationUpdated(assignment.conversationId);
+  }
+
   private async findConversationForRead(id: string) {
     return this.prisma.whatsAppConversation.findUnique({
       where: { id },
@@ -5229,6 +5462,10 @@ export class WhatsAppService {
         client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+        labelAssignments: {
+          select: { label: { select: { id: true, name: true, color: true } } },
+          orderBy: { label: { name: 'asc' } },
         },
       },
     });
@@ -5297,6 +5534,10 @@ export class WhatsAppService {
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
+        labelAssignments: {
+          select: { label: { select: { id: true, name: true, color: true } } },
+          orderBy: { label: { name: 'asc' } },
+        },
       },
     });
   }
@@ -5325,6 +5566,10 @@ export class WhatsAppService {
           client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
           whatsAppConnection: {
             select: { name: true, providerInstanceName: true, providerUserId: true },
+          },
+          labelAssignments: {
+            select: { label: { select: { id: true, name: true, color: true } } },
+            orderBy: { label: { name: 'asc' } },
           },
         },
       });
@@ -5386,6 +5631,10 @@ export class WhatsAppService {
             whatsAppConnection: {
               select: { name: true, providerInstanceName: true, providerUserId: true },
             },
+            labelAssignments: {
+              select: { label: { select: { id: true, name: true, color: true } } },
+              orderBy: { label: { name: 'asc' } },
+            },
           },
         });
 
@@ -5433,6 +5682,10 @@ export class WhatsAppService {
         client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
+        },
+        labelAssignments: {
+          select: { label: { select: { id: true, name: true, color: true } } },
+          orderBy: { label: { name: 'asc' } },
         },
       },
     });
@@ -7288,6 +7541,7 @@ export class WhatsAppService {
       unreadCount: conversation.unreadCount,
       needsManualFollowUp: conversation.needsManualFollowUp,
       lastAutoReplyAt: conversation.lastAutoReplyAt,
+      labels: (conversation.labelAssignments ?? []).map(({ label }) => label),
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };

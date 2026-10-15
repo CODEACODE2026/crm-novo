@@ -376,11 +376,7 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
         mentionAll: false,
       });
 
-      if (
-        response.success !== true ||
-        response.code !== 200 ||
-        response.data?.Details !== 'Message updated'
-      ) {
+      if (response.success !== true || response.code !== 200) {
         const providerMessage = this.editDiagnosticText(response.message ?? response.error, input);
         const providerDetails = this.editDiagnosticText(
           response.data?.Details ?? response.Details ?? response.details,

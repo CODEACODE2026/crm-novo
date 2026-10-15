@@ -432,7 +432,7 @@ describe('Kirago dependency injection', () => {
     });
   });
 
-  it('maps message edits to the official Kirago contract and rejects unsuccessful envelopes', async () => {
+  it('accepts successful edit envelopes independently of Details and rejects false success', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 
     const instanceClient = app.get(KiragoInstanceClient);
@@ -457,6 +457,28 @@ describe('Kirago dependency injection', () => {
       Body: 'Texto atualizado',
       mentionAll: false,
     });
+
+    editMessage.mockResolvedValueOnce({
+      success: true,
+      code: 200,
+      data: { Details: 'Sent' },
+    });
+    await expect(
+      provider.editMessage('instance-token', {
+        phone: '5544999999999',
+        providerMessageId: 'provider-message-id',
+        body: 'Texto atualizado com resposta real',
+      }),
+    ).resolves.toBeUndefined();
+
+    editMessage.mockResolvedValueOnce({ success: true, code: 200 });
+    await expect(
+      provider.editMessage('instance-token', {
+        phone: '5544999999999',
+        providerMessageId: 'provider-message-id',
+        body: 'Texto atualizado sem Details',
+      }),
+    ).resolves.toBeUndefined();
     expect(warn).not.toHaveBeenCalled();
 
     editMessage.mockResolvedValueOnce({
@@ -477,6 +499,19 @@ describe('Kirago dependency injection', () => {
         'WhatsApp edit provider failed httpStatus=200 providerCode=200 providerMessage="Provider refused edit" providerDetails="Failed" phoneSuffix=9999 idFormat=other',
       ),
     );
+
+    editMessage.mockResolvedValueOnce({
+      success: true,
+      code: 400,
+      data: { Details: 'Sent' },
+    });
+    await expect(
+      provider.editMessage('instance-token', {
+        phone: '5544999999999',
+        providerMessageId: 'provider-message-id',
+        body: 'Texto com provider code invalido',
+      }),
+    ).rejects.toThrow('Falha ao editar mensagem na Kirago.');
   });
 
   it('logs an invalid edit response without exposing token, phone, body or full message id', async () => {

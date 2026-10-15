@@ -2483,6 +2483,9 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain("{savingEdit ? 'Salvando...' : 'Salvar'}");
     expect(whatsAppInboxSource).toContain('editWhatsAppConversationMessage');
     expect(globalStylesSource).toContain('.conversation-message-editor');
+    expect(whatsAppInboxSource).toContain(
+      "setEditError(conversationErrorMessage(err, 'Não foi possível editar esta mensagem.'))",
+    );
   });
 
   it('keeps message actions outside the bubble so short messages stay compact', () => {

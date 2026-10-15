@@ -5,6 +5,10 @@ type KiragoEnvelope<T> = {
   code?: number;
   data?: T;
   success?: boolean;
+  message?: unknown;
+  error?: unknown;
+  Details?: unknown;
+  details?: unknown;
 };
 
 export type KiragoStatusData = {

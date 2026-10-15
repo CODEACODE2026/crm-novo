@@ -437,6 +437,8 @@ describe('Kirago dependency injection', () => {
 
     const instanceClient = app.get(KiragoInstanceClient);
     const provider = app.get(KiragoWhatsAppProvider);
+    const warn = vi.fn();
+    (provider as unknown as { logger: { warn: typeof warn } }).logger.warn = warn;
     const editMessage = vi.spyOn(instanceClient, 'editMessage').mockResolvedValue({
       success: true,
       code: 200,
@@ -455,11 +457,13 @@ describe('Kirago dependency injection', () => {
       Body: 'Texto atualizado',
       mentionAll: false,
     });
+    expect(warn).not.toHaveBeenCalled();
 
     editMessage.mockResolvedValueOnce({
       success: false,
       code: 200,
       data: { Details: 'Failed' },
+      message: 'Provider refused edit',
     });
     await expect(
       provider.editMessage('instance-token', {
@@ -468,6 +472,81 @@ describe('Kirago dependency injection', () => {
         body: 'Outro texto',
       }),
     ).rejects.toThrow('Falha ao editar mensagem na Kirago.');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'WhatsApp edit provider failed httpStatus=200 providerCode=200 providerMessage="Provider refused edit" providerDetails="Failed" phoneSuffix=9999 idFormat=other',
+      ),
+    );
+  });
+
+  it('logs an invalid edit response without exposing token, phone, body or full message id', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const warn = vi.fn();
+    (provider as unknown as { logger: { warn: typeof warn } }).logger.warn = warn;
+    const token = 'instance-token-sensitive';
+    const phone = '5544999988776';
+    const body = 'conteudo muito reservado';
+    const providerMessageId = '2f419d6d-d81a-4ed8-9f38-c6ff02d37390';
+    vi.spyOn(instanceClient, 'editMessage').mockRejectedValue(
+      new KiragoProviderError('WHATSAPP_PROVIDER_ERROR', 'Falha sanitizada.', 400, {
+        method: 'POST',
+        path: '/chat/send/edit',
+        status: 400,
+        providerCode: '400',
+        providerMessage: `token=${token}\n\u0000 Phone ${phone}`,
+        providerDetails: `Body ${body} Id ${providerMessageId}`,
+      }),
+    );
+
+    await expect(
+      provider.editMessage(token, { phone, providerMessageId, body }),
+    ).rejects.toBeInstanceOf(KiragoProviderError);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const log = String(warn.mock.calls[0]?.[0]);
+    expect(log).toContain('WhatsApp edit provider failed');
+    expect(log).toContain('httpStatus=400');
+    expect(log).toContain('providerCode=400');
+    expect(log).toContain('phoneSuffix=8776');
+    expect(log).toContain('idFormat=uuid');
+    expect(log).toContain('idLength=36');
+    expect(log).not.toContain(token);
+    expect(log).not.toContain(phone);
+    expect(log).not.toContain(body);
+    expect(log).not.toContain(providerMessageId);
+    expect(
+      Array.from(log).some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 31 || (code >= 127 && code <= 159);
+      }),
+    ).toBe(false);
+  });
+
+  it('logs invalid edit envelopes as unknown diagnostics and keeps the provider error generic', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const warn = vi.fn();
+    (provider as unknown as { logger: { warn: typeof warn } }).logger.warn = warn;
+    vi.spyOn(instanceClient, 'editMessage').mockResolvedValue({});
+
+    await expect(
+      provider.editMessage('instance-token', {
+        phone: '5544999999999',
+        providerMessageId: 'provider-message-id',
+        body: 'Texto atualizado',
+      }),
+    ).rejects.toThrow('Falha ao editar mensagem na Kirago.');
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'httpStatus=502 providerCode=unknown providerMessage="unknown" providerDetails="unknown"',
+      ),
+    );
   });
 
   it('maps text reply input to Kirago ContextInfo and QuotedText', async () => {

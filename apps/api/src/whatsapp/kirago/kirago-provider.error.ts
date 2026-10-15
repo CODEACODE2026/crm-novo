@@ -13,7 +13,9 @@ export type KiragoErrorDetails = {
   method: string;
   path: string;
   status?: number;
-  responseBody?: string;
+  providerCode?: string;
+  providerMessage?: string;
+  providerDetails?: string;
 };
 
 export class KiragoProviderError extends Error {

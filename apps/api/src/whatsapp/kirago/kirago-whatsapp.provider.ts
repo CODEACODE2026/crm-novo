@@ -368,23 +368,45 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
   }
 
   async editMessage(instanceToken: string, input: EditMessageInput) {
-    const response = await this.instanceClient.editMessage(instanceToken, {
-      Phone: input.phone,
-      Id: input.providerMessageId,
-      Body: input.body,
-      mentionAll: false,
-    });
+    try {
+      const response = await this.instanceClient.editMessage(instanceToken, {
+        Phone: input.phone,
+        Id: input.providerMessageId,
+        Body: input.body,
+        mentionAll: false,
+      });
 
-    if (
-      response.success !== true ||
-      response.code !== 200 ||
-      response.data?.Details !== 'Message updated'
-    ) {
-      throw new KiragoProviderError(
-        'WHATSAPP_PROVIDER_ERROR',
-        'Falha ao editar mensagem na Kirago.',
-        response.code,
-      );
+      if (
+        response.success !== true ||
+        response.code !== 200 ||
+        response.data?.Details !== 'Message updated'
+      ) {
+        const providerMessage = this.editDiagnosticText(response.message ?? response.error, input);
+        const providerDetails = this.editDiagnosticText(
+          response.data?.Details ?? response.Details ?? response.details,
+          input,
+        );
+
+        throw new KiragoProviderError(
+          'WHATSAPP_PROVIDER_ERROR',
+          'Falha ao editar mensagem na Kirago.',
+          response.code,
+          {
+            method: 'POST',
+            path: '/chat/send/edit',
+            ...(response.code !== undefined ? { status: response.code } : {}),
+            ...(response.code !== undefined ? { providerCode: String(response.code) } : {}),
+            ...(providerMessage ? { providerMessage } : {}),
+            ...(providerDetails ? { providerDetails } : {}),
+          },
+        );
+      }
+    } catch (error) {
+      if (error instanceof KiragoProviderError) {
+        this.logEditProviderFailure(error, input, instanceToken);
+      }
+
+      throw error;
     }
   }
 
@@ -458,6 +480,76 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     }
 
     return `me:${providerMessageId}`;
+  }
+
+  private logEditProviderFailure(
+    error: KiragoProviderError,
+    input: EditMessageInput,
+    instanceToken: string,
+  ) {
+    const providerMessage = this.editDiagnosticText(
+      error.details?.providerMessage,
+      input,
+      instanceToken,
+    );
+    const providerDetails = this.editDiagnosticText(
+      error.details?.providerDetails,
+      input,
+      instanceToken,
+    );
+    const providerCode = this.editDiagnosticText(error.details?.providerCode, input, instanceToken);
+    const phoneDigits = input.phone.replace(/\D/g, '');
+
+    this.logger.warn(
+      [
+        'WhatsApp edit provider failed',
+        `httpStatus=${error.httpStatus}`,
+        `providerCode=${providerCode ?? 'unknown'}`,
+        `providerMessage=${JSON.stringify(providerMessage ?? 'unknown')}`,
+        `providerDetails=${JSON.stringify(providerDetails ?? 'unknown')}`,
+        `phoneSuffix=${phoneDigits.slice(-4) || 'unknown'}`,
+        `idFormat=${this.editMessageIdFormat(input.providerMessageId)}`,
+        `idLength=${input.providerMessageId.length}`,
+      ].join(' '),
+    );
+  }
+
+  private editDiagnosticText(value: unknown, input: EditMessageInput, instanceToken?: string) {
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      return null;
+    }
+
+    let sanitized = String(value);
+    for (const secret of [input.phone, input.providerMessageId, input.body, instanceToken]) {
+      if (secret && secret.length >= 3) {
+        sanitized = sanitized.replace(new RegExp(this.escapeRegExp(secret), 'gi'), '[redacted]');
+      }
+    }
+
+    sanitized = sanitized
+      .replace(/authorization\s*[:=]\s*bearer\s+[^\s"',;}]+/gi, 'Authorization: [redacted]')
+      .replace(/(token|secret|api[_-]?key)\s*[:=]\s*["']?[^"',;}\s]+/gi, '$1=[redacted]')
+      .replace(/\b\d{7,15}\b/g, '[redacted-phone]');
+    sanitized = this.stripControlCharacters(sanitized).replace(/\s+/g, ' ').trim().slice(0, 160);
+
+    return sanitized || null;
+  }
+
+  private editMessageIdFormat(value: string) {
+    if (uuidPattern.test(value)) return 'uuid';
+    if (/^[0-9a-f]+$/i.test(value)) return 'hex';
+    return 'other';
+  }
+
+  private escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private stripControlCharacters(value: string) {
+    return Array.from(value, (character) => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || (code >= 127 && code <= 159) ? ' ' : character;
+    }).join('');
   }
 
   private kiragoMessageId(requestId: string) {

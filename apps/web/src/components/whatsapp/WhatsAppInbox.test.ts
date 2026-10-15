@@ -3020,4 +3020,77 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('onFilterChange(item.id)');
     expect(whatsAppInboxSource).toContain('onStatusFilterChange(');
   });
+
+  it('keeps text bubbles dense, content-sized and aligned without horizontal overflow', () => {
+    const messageViewportStyles =
+      globalStylesSource.match(
+        /\.conversation-chat-panel \.conversation-messages \{[\s\S]*?\n\}/,
+      )?.[0] ?? '';
+    const desktopBubbleStyles =
+      globalStylesSource.match(
+        /\.conversation-chat-panel \.conversation-bubble \{[\s\S]*?\n {2}\}/,
+      )?.[0] ?? '';
+    const bubbleTextStyles =
+      globalStylesSource.match(/\.conversation-bubble p \{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(globalStylesSource).toContain('@media (min-width: 981px)');
+    expect(desktopBubbleStyles).toContain('width: fit-content;');
+    expect(desktopBubbleStyles).toContain('max-width: min(62%, 620px);');
+    expect(desktopBubbleStyles).toContain('line-height: 1.38;');
+    expect(globalStylesSource).toContain('.conversation-bubble-row.outbound');
+    expect(globalStylesSource).toContain('justify-content: flex-end;');
+    expect(globalStylesSource).toContain('.conversation-bubble-row.inbound');
+    expect(globalStylesSource).toContain('justify-content: flex-start;');
+    expect(bubbleTextStyles).toContain('overflow-wrap: anywhere;');
+    expect(bubbleTextStyles).toContain('white-space: pre-wrap;');
+    expect(messageViewportStyles).toContain('overflow-x: hidden;');
+    expect(globalStylesSource).toContain('overflow-y: auto;');
+  });
+
+  it('contains every media type, replies, reactions and footer inside the compact bubble', () => {
+    const desktopMediaBubbleStyles =
+      globalStylesSource.match(
+        /\.conversation-chat-panel \.conversation-bubble\.has-image-media \{[\s\S]*?\n {2}\}/,
+      )?.[0] ?? '';
+    const imageStyles =
+      globalStylesSource.match(/\.conversation-image-media img \{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(desktopMediaBubbleStyles).toContain('width: fit-content;');
+    expect(desktopMediaBubbleStyles).toContain('max-width: min(62%, 380px);');
+    expect(globalStylesSource).toContain('width: min(340px, 100%);');
+    expect(globalStylesSource).toContain('max-height: 320px;');
+    expect(imageStyles).toContain('height: auto;');
+    expect(imageStyles).toContain('object-fit: contain;');
+    expect(globalStylesSource).toContain('.conversation-document-media');
+    expect(globalStylesSource).toContain('.conversation-video-media');
+    expect(globalStylesSource).toContain('.conversation-audio-player');
+    expect(globalStylesSource).toContain('.conversation-sticker-media');
+    expect(globalStylesSource).toContain('.conversation-quote');
+    expect(globalStylesSource).toContain('.conversation-reaction-summary');
+    expect(globalStylesSource).toContain('.conversation-bubble footer');
+    expect(whatsAppInboxSource).toContain("message.isAutoReply ? 'Automática · ' : ''");
+    expect(whatsAppInboxSource).toContain('conversationMessageFooterLabel(message)');
+  });
+
+  it('compacts the desktop composer and scrollbar while preserving tablet and mobile comfort', () => {
+    const messageViewportStyles =
+      globalStylesSource.match(
+        /\.conversation-chat-panel \.conversation-messages \{[\s\S]*?\n\}/,
+      )?.[0] ?? '';
+
+    expect(messageViewportStyles).toContain('scrollbar-width: thin;');
+    expect(messageViewportStyles).not.toContain('scrollbar-width: none;');
+    expect(messageViewportStyles).not.toContain('display: none;');
+    expect(globalStylesSource).toContain(
+      '.conversation-chat-panel .conversation-messages::-webkit-scrollbar',
+    );
+    expect(globalStylesSource).toContain('.conversation-messages:hover::-webkit-scrollbar-thumb');
+    expect(globalStylesSource).toContain('min-height: 68px;');
+    expect(globalStylesSource).toContain('min-height: 38px;');
+    expect(globalStylesSource).toContain('@media (min-width: 621px) and (max-width: 980px)');
+    expect(globalStylesSource).toContain('max-width: min(72%, 560px);');
+    expect(globalStylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
+    expect(globalStylesSource).toContain('width: min(82vw, 100%);');
+    expect(globalStylesSource).toContain('min-height: 42px;');
+  });
 });

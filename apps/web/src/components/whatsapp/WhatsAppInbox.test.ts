@@ -3234,9 +3234,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-list-meta-row .conversation-label-chips');
     expect(globalStylesSource).toContain('flex: 0 1 112px;');
     expect(globalStylesSource).toContain('margin-left: auto;');
-    expect(globalStylesSource).toContain(
-      '.conversation-header-main > div > .conversation-label-chips',
-    );
+    expect(globalStylesSource).toContain('.conversation-header-badges > .conversation-label-chips');
     expect(globalStylesSource).toContain('min-height: 15px;');
     expect(globalStylesSource).toContain('font-size: 9px;');
     expect(globalStylesSource).toContain('background: rgb(255 255 255 / 2%);');
@@ -3250,5 +3248,21 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('max-height: 38px;');
     expect(globalStylesSource).toContain('.conversation-list-meta-row .conversation-kind');
     expect(globalStylesSource).toContain('.conversation-header-badges .conversation-status-badge');
+  });
+
+  it('keeps contact kind, status and labels in the same ordered header badge row', () => {
+    expect(whatsAppInboxSource).toContain("{conversation.client ? 'Cliente' : 'Avulso'}");
+    expect(whatsAppInboxSource).toContain('{conversation.status}');
+    expect(whatsAppInboxSource).toContain(
+      '{opening ? <span className="conversation-sync-badge">Carregando</span> : null}\n            <ConversationLabelChips labels={conversation.labels} limit={3} />\n          </div>',
+    );
+    expect(whatsAppInboxSource).toContain('if (!labels.length) return null;');
+    expect(globalStylesSource).toContain(
+      '.conversation-header-badges > .conversation-label-chips {',
+    );
+    expect(globalStylesSource).toContain('flex: 0 1 auto;');
+    expect(globalStylesSource).toContain('flex-wrap: wrap;');
+    expect(globalStylesSource).toContain('max-height: 38px;');
+    expect(whatsAppInboxSource).toContain('className="conversation-header-actions"');
   });
 });

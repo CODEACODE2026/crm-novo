@@ -4880,8 +4880,8 @@ function ConversationHeader({
               {conversation.status}
             </span>
             {opening ? <span className="conversation-sync-badge">Carregando</span> : null}
+            <ConversationLabelChips labels={conversation.labels} limit={3} />
           </div>
-          <ConversationLabelChips labels={conversation.labels} limit={3} />
         </div>
       </div>
       <div className="conversation-header-actions">

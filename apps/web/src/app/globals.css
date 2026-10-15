@@ -15218,12 +15218,12 @@ tbody tr:hover,
   }
 
   .conversation-list-meta-row .conversation-label-chip,
-  .conversation-header-main > div > .conversation-label-chips .conversation-label-chip {
+  .conversation-header-badges > .conversation-label-chips .conversation-label-chip {
     min-height: 18px;
     font-size: 9.5px;
   }
 
-  .conversation-header-main > div > .conversation-label-chips {
+  .conversation-header-badges {
     max-height: 38px;
     flex-wrap: wrap;
     row-gap: 2px;
@@ -17181,12 +17181,14 @@ tbody tr:hover,
   min-width: 0;
 }
 
-.conversation-header-main > div > .conversation-label-chips {
+.conversation-header-badges > .conversation-label-chips {
   max-width: 100%;
-  margin-top: 2px;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 
-.conversation-header-main > div > .conversation-label-chips .conversation-label-chip {
+.conversation-header-badges > .conversation-label-chips .conversation-label-chip {
   min-height: 15px;
   max-width: 88px;
   padding-inline: 3px;

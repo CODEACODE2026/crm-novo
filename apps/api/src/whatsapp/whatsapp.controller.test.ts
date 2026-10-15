@@ -120,6 +120,7 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       getConversationMessagesAround: vi.fn().mockResolvedValue({ items: [] }),
       startConversation: vi.fn().mockResolvedValue({ conversation: { id: 'conversation-id' } }),
       sendConversationTextMessage: vi.fn().mockResolvedValue({ id: 'message-id' }),
+      forwardConversationMessage: vi.fn().mockResolvedValue({ id: 'forwarded-message-id' }),
       setConversationPresence: vi.fn().mockResolvedValue({ success: true }),
       updateConversationMessageReaction: vi.fn().mockResolvedValue({ id: 'message-id' }),
       deleteConversationMessage: vi.fn().mockResolvedValue({ id: 'deleted-message-id' }),
@@ -224,6 +225,12 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       }),
     ).resolves.toEqual({ id: 'message-id' });
     await expect(
+      subject.forwardConversationMessage('conversation-id', 'message-id', {
+        targetConversationId: '77777777-7777-4777-8777-777777777777',
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37395',
+      }),
+    ).resolves.toEqual({ id: 'forwarded-message-id' });
+    await expect(
       subject.setConversationPresence('conversation-id', { state: 'composing', media: 'audio' }),
     ).resolves.toEqual({ success: true });
     await expect(
@@ -317,6 +324,14 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       body: 'Ola',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
     });
+    expect(service.forwardConversationMessage).toHaveBeenCalledWith(
+      'conversation-id',
+      'message-id',
+      {
+        targetConversationId: '77777777-7777-4777-8777-777777777777',
+        requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37395',
+      },
+    );
     expect(service.updateConversationMessageReaction).toHaveBeenCalledWith(
       'conversation-id',
       'message-id',

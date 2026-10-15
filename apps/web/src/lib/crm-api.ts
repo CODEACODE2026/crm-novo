@@ -790,6 +790,7 @@ export interface WhatsAppConversationMessage {
   deletedForEveryone: boolean;
   isFromMe: boolean;
   isAutoReply: boolean;
+  isForwarded?: boolean;
   providerMessageId: string | null;
   replyToMessageId: string | null;
   replyToProviderMessageId: string | null;
@@ -2842,6 +2843,20 @@ export function deleteWhatsAppConversationMessage(conversationId: string, messag
   return apiFetch<WhatsAppConversationMessage>(
     `/whatsapp/conversations/${conversationId}/messages/${messageId}`,
     { method: 'DELETE' },
+  );
+}
+
+export function forwardWhatsAppConversationMessage(
+  sourceConversationId: string,
+  messageId: string,
+  payload: { targetConversationId: string; requestId: string },
+) {
+  return apiFetch<WhatsAppConversationMessage>(
+    `/whatsapp/conversations/${sourceConversationId}/messages/${messageId}/forward`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
   );
 }
 

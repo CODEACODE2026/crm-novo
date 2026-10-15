@@ -26,6 +26,7 @@ import {
   FileAudio,
   FileText,
   FileVideo,
+  Forward as ForwardIcon,
   Image as ImageIcon,
   Info,
   Loader2,
@@ -65,6 +66,7 @@ import {
   deleteWhatsAppSavedSticker,
   deleteWhatsAppConversationMessage,
   editWhatsAppConversationMessage,
+  forwardWhatsAppConversationMessage,
   downloadWhatsAppConversationMedia,
   formatCurrency,
   formatDate,
@@ -540,6 +542,9 @@ export function WhatsAppInbox({
   const [editBody, setEditBody] = useState('');
   const [editError, setEditError] = useState('');
   const [savingEditMessageId, setSavingEditMessageId] = useState<string | null>(null);
+  const [forwardMessage, setForwardMessage] = useState<WhatsAppConversationMessage | null>(null);
+  const [forwarding, setForwarding] = useState(false);
+  const [forwardError, setForwardError] = useState('');
   const [linkClientError, setLinkClientError] = useState('');
   const [guestClientCreateError, setGuestClientCreateError] = useState('');
   const [guestClientDuplicate, setGuestClientDuplicate] = useState<ClientOption | null>(null);
@@ -598,6 +603,7 @@ export function WhatsAppInbox({
   const reactingMessagesRef = useRef(new Set<string>());
   const deletingMessagesRef = useRef(new Set<string>());
   const editingMessageRef = useRef<string | null>(null);
+  const forwardingRef = useRef(false);
   const startingConversationRef = useRef(false);
   const contactPixWhatsAppIntentIdsRef = useRef(new Set<string>());
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
@@ -3214,6 +3220,55 @@ export function WhatsAppInbox({
     }
   }
 
+  function openForwardMessage(message: WhatsAppConversationMessage) {
+    if (!selectedConversation || !isForwardEligibleConversationMessage(message) || forwarding) {
+      return;
+    }
+
+    setForwardMessage(message);
+    setForwardError('');
+    setDeleteConfirmMessageId(null);
+    setReactionPickerMessageId(null);
+  }
+
+  function closeForwardMessage() {
+    if (forwarding) return;
+    setForwardMessage(null);
+    setForwardError('');
+  }
+
+  async function submitForwardMessage(targetConversationId: string, requestId: string) {
+    if (!selectedConversation || !forwardMessage || forwardingRef.current) return;
+
+    forwardingRef.current = true;
+    setForwarding(true);
+    setForwardError('');
+
+    try {
+      const forwarded = await forwardWhatsAppConversationMessage(
+        selectedConversation.id,
+        forwardMessage.id,
+        {
+          targetConversationId,
+          requestId,
+        },
+      );
+
+      if (forwarded.status === 'FAILED') {
+        setForwardError('Não foi possível encaminhar esta mensagem.');
+        return;
+      }
+
+      setForwardMessage(null);
+      await loadConversations({ silent: true });
+    } catch (err) {
+      setForwardError(conversationErrorMessage(err, 'Não foi possível encaminhar esta mensagem.'));
+    } finally {
+      forwardingRef.current = false;
+      setForwarding(false);
+    }
+  }
+
   async function retryGuestClientLink(clientOption: ClientOption) {
     if (!guestClientCreateConversation || creatingGuestClient) return;
 
@@ -3304,6 +3359,19 @@ export function WhatsAppInbox({
             if (!startingConversation) setStartConversationOpen(false);
           }}
           onSubmit={(input) => void startNewConversation(input)}
+        />
+      ) : null}
+
+      {forwardMessage && selectedConversation ? (
+        <ForwardConversationMessageModal
+          error={forwardError}
+          loading={forwarding}
+          message={forwardMessage}
+          sourceConversation={selectedConversation}
+          onClose={closeForwardMessage}
+          onSubmit={(targetConversationId, requestId) =>
+            void submitForwardMessage(targetConversationId, requestId)
+          }
         />
       ) : null}
 
@@ -3526,6 +3594,7 @@ export function WhatsAppInbox({
                 onEditBodyChange={setEditBody}
                 onEditCancel={cancelEditingConversationMessage}
                 onEditSave={(message) => void saveEditedConversationMessage(message)}
+                onForward={openForwardMessage}
                 onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
                 onSaveSticker={(message) => void saveStickerMessage(message)}
@@ -3615,6 +3684,289 @@ export function WhatsAppInbox({
         />
       </div>
     </section>
+  );
+}
+
+function ForwardConversationMessageModal({
+  error,
+  loading,
+  message,
+  sourceConversation,
+  onClose,
+  onSubmit,
+}: {
+  error: string;
+  loading: boolean;
+  message: WhatsAppConversationMessage;
+  sourceConversation: WhatsAppConversation;
+  onClose: () => void;
+  onSubmit: (targetConversationId: string, requestId: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [destinations, setDestinations] = useState<WhatsAppConversation[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchLoading, setSearchLoading] = useState(true);
+  const [searchError, setSearchError] = useState('');
+  const requestGenerationRef = useRef(0);
+  const submissionRef = useRef<{ requestId: string; targetConversationId: string } | null>(null);
+  const modalRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !loading) {
+        onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(
+        modalRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+
+      if (!first || !last) return;
+
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || !modalRef.current?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [loading, onClose]);
+
+  useEffect(() => {
+    const generation = ++requestGenerationRef.current;
+    const timer = window.setTimeout(
+      () => {
+        void (async () => {
+          setSearchLoading(true);
+          setSearchError('');
+
+          try {
+            const search = query.trim();
+            const result = await listWhatsAppConversations({
+              page: 1,
+              pageSize: 20,
+              ...(search ? { search } : {}),
+              whatsAppConnectionId: sourceConversation.whatsAppConnectionId,
+            });
+            if (generation !== requestGenerationRef.current) return;
+            setDestinations(result.items.filter((item) => item.id !== sourceConversation.id));
+          } catch (err) {
+            if (generation !== requestGenerationRef.current) return;
+            setDestinations([]);
+            setSearchError(
+              conversationErrorMessage(err, 'Não foi possível carregar as conversas disponíveis.'),
+            );
+          } finally {
+            if (generation === requestGenerationRef.current) setSearchLoading(false);
+          }
+        })();
+      },
+      query ? 250 : 0,
+    );
+
+    return () => {
+      window.clearTimeout(timer);
+      requestGenerationRef.current += 1;
+    };
+  }, [query, sourceConversation.id, sourceConversation.whatsAppConnectionId]);
+
+  return (
+    <div
+      className="modal-backdrop conversation-forward-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !loading) onClose();
+      }}
+    >
+      <section
+        ref={modalRef}
+        aria-labelledby="conversation-forward-title"
+        aria-modal="true"
+        className="modal conversation-forward-modal"
+        role="dialog"
+      >
+        <div className="conversation-forward-header">
+          <div>
+            <span className="eyebrow">WhatsApp</span>
+            <h2 id="conversation-forward-title">Encaminhar mensagem</h2>
+          </div>
+          <IconButton icon={X} label="Fechar" disabled={loading} onClick={onClose} />
+        </div>
+
+        <ConversationForwardPreview conversationId={sourceConversation.id} message={message} />
+
+        <label className="conversation-forward-search">
+          <span>Buscar conversa por nome ou telefone</span>
+          <div>
+            <Search aria-hidden="true" size={16} />
+            <input
+              autoFocus
+              disabled={loading}
+              placeholder="Nome ou telefone"
+              type="search"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSelectedId(null);
+                submissionRef.current = null;
+              }}
+            />
+          </div>
+        </label>
+
+        <div className="conversation-forward-destinations" aria-live="polite">
+          {searchLoading ? <span className="conversation-forward-state">Carregando...</span> : null}
+          {!searchLoading && searchError ? (
+            <span className="conversation-forward-state danger" role="alert">
+              {searchError}
+            </span>
+          ) : null}
+          {!searchLoading && !searchError && !destinations.length ? (
+            <span className="conversation-forward-state">
+              Nenhuma conversa elegível encontrada.
+            </span>
+          ) : null}
+          {!searchLoading && !searchError
+            ? destinations.map((conversation) => (
+                <button
+                  aria-pressed={selectedId === conversation.id}
+                  className={`conversation-forward-destination ${
+                    selectedId === conversation.id ? 'selected' : ''
+                  }`}
+                  disabled={loading}
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(conversation.id);
+                    if (submissionRef.current?.targetConversationId !== conversation.id) {
+                      submissionRef.current = null;
+                    }
+                  }}
+                >
+                  <span className="conversation-forward-avatar" aria-hidden="true">
+                    {conversationInitials(conversation)}
+                  </span>
+                  <span>
+                    <strong>{conversation.displayName}</strong>
+                    <small>{conversation.phone}</small>
+                  </span>
+                  <span className="conversation-kind">
+                    {conversation.client ? 'Cliente' : 'Avulso'}
+                  </span>
+                </button>
+              ))
+            : null}
+        </div>
+
+        {error ? (
+          <div className="notice danger conversation-forward-error" role="alert">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="conversation-forward-actions">
+          <Button disabled={loading} variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            icon={ForwardIcon}
+            loading={loading}
+            disabled={!selectedId}
+            onClick={() => {
+              if (!selectedId) return;
+              const submission =
+                submissionRef.current?.targetConversationId === selectedId
+                  ? submissionRef.current
+                  : {
+                      targetConversationId: selectedId,
+                      requestId: crypto.randomUUID(),
+                    };
+              submissionRef.current = submission;
+              onSubmit(submission.targetConversationId, submission.requestId);
+            }}
+          >
+            {loading ? 'Encaminhando...' : 'Encaminhar'}
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ConversationForwardPreview({
+  conversationId,
+  message,
+}: {
+  conversationId: string;
+  message: WhatsAppConversationMessage;
+}) {
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const canLoadThumbnail =
+    (message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable;
+
+  useEffect(() => {
+    if (!canLoadThumbnail) return undefined;
+    let active = true;
+    let objectUrl: string | null = null;
+
+    void downloadWhatsAppConversationMedia(conversationId, message.id)
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setThumbnailUrl(objectUrl);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [canLoadThumbnail, conversationId, message.id]);
+
+  const text = message.text?.trim();
+  const label =
+    message.type === 'VIDEO'
+      ? 'Vídeo'
+      : message.type === 'AUDIO'
+        ? 'Áudio'
+        : message.type === 'DOCUMENT'
+          ? message.mediaFileName || 'Documento'
+          : message.type === 'STICKER'
+            ? 'Figurinha'
+            : message.type === 'IMAGE'
+              ? 'Imagem'
+              : text || 'Mensagem';
+
+  return (
+    <div className="conversation-forward-preview">
+      {thumbnailUrl ? <img alt="Prévia da mensagem" src={thumbnailUrl} /> : null}
+      <span>
+        <strong>{label}</strong>
+        {text && message.type !== 'TEXT' ? <small>{text}</small> : null}
+      </span>
+    </div>
   );
 }
 
@@ -4259,6 +4611,7 @@ function ConversationMessages({
   onEditBodyChange,
   onEditCancel,
   onEditSave,
+  onForward,
   onReply,
   onRetry,
   onSaveSticker,
@@ -4301,6 +4654,7 @@ function ConversationMessages({
   onEditBodyChange: (body: string) => void;
   onEditCancel: () => void;
   onEditSave: (message: WhatsAppConversationMessage) => void;
+  onForward: (message: WhatsAppConversationMessage) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   onSaveSticker: (message: WhatsAppConversationMessage) => void;
@@ -4458,6 +4812,7 @@ function ConversationMessages({
                     onEditBodyChange={onEditBodyChange}
                     onEditCancel={onEditCancel}
                     onEditSave={onEditSave}
+                    onForward={onForward}
                     onReply={onReply}
                     onRetry={onRetry}
                     onSaveSticker={onSaveSticker}
@@ -4527,6 +4882,23 @@ export function isEditEligibleConversationMessage(message: WhatsAppConversationM
     Boolean(message.providerMessageId) &&
     !message.deleted
   );
+}
+
+export function isForwardEligibleConversationMessage(message: WhatsAppConversationMessage) {
+  if (message.deleted || message.deletedAt || message.deletedForEveryone) return false;
+  if (message.type === 'TEXT') return Boolean(message.text?.trim());
+  if (
+    message.type !== 'IMAGE' &&
+    message.type !== 'VIDEO' &&
+    message.type !== 'AUDIO' &&
+    message.type !== 'DOCUMENT' &&
+    message.type !== 'STICKER'
+  ) {
+    return false;
+  }
+  if (!message.mediaAvailable) return false;
+
+  return message.type !== 'STICKER' || message.mediaMimeType?.toLowerCase() === 'image/webp';
 }
 
 export function classifyConversationIncomingFile(
@@ -4673,6 +5045,7 @@ function ConversationBubble({
   onEditBodyChange,
   onEditCancel,
   onEditSave,
+  onForward,
   onReply,
   onRetry,
   onSaveSticker,
@@ -4706,6 +5079,7 @@ function ConversationBubble({
   onEditBodyChange: (body: string) => void;
   onEditCancel: () => void;
   onEditSave: (message: WhatsAppConversationMessage) => void;
+  onForward: (message: WhatsAppConversationMessage) => void;
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   onSaveSticker: (message: WhatsAppConversationMessage) => void;
@@ -4714,6 +5088,7 @@ function ConversationBubble({
   const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const deleteEligible = isDeleteEligibleConversationMessage(message);
   const editEligible = isEditEligibleConversationMessage(message);
+  const forwardEligible = isForwardEligibleConversationMessage(message);
 
   if (!isRenderableConversationMessage(message)) {
     return null;
@@ -4757,6 +5132,17 @@ function ConversationBubble({
           ) : (
             <Download aria-hidden="true" size={14} />
           )}
+        </button>
+      ) : null}
+      {forwardEligible ? (
+        <button
+          className="conversation-forward-action"
+          type="button"
+          title="Encaminhar"
+          aria-label="Encaminhar mensagem"
+          onClick={() => onForward(message)}
+        >
+          <ForwardIcon aria-hidden="true" size={14} />
         </button>
       ) : null}
       {editEligible ? (
@@ -4857,6 +5243,9 @@ function ConversationBubble({
         }`}
       >
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
+        {message.isForwarded ? (
+          <span className="conversation-forwarded-label">Encaminhada</span>
+        ) : null}
         {editing ? (
           <div className="conversation-message-editor">
             <textarea

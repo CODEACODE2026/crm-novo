@@ -68,6 +68,7 @@ import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
 import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
+import { ForwardWhatsAppConversationMessageDto } from './dto/forward-whatsapp-conversation-message.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
@@ -167,6 +168,12 @@ type PreparedConversationMedia = {
   fileName: string;
   sizeBytes: number;
   durationSeconds: number | null;
+};
+
+type ForwardMessageMetadata = {
+  forwardedFromConversationId: string;
+  forwardedFromMessageId: string;
+  forwardPtt?: boolean;
 };
 
 type NormalizedInboundReaction = {
@@ -1653,7 +1660,11 @@ export class WhatsAppService {
     };
   }
 
-  async sendConversationTextMessage(id: string, dto: SendWhatsAppConversationMessageDto) {
+  async sendConversationTextMessage(
+    id: string,
+    dto: SendWhatsAppConversationMessageDto,
+    forwardMetadata?: ForwardMessageMetadata,
+  ) {
     const body = dto.body.trim();
 
     if (!body) {
@@ -1691,6 +1702,7 @@ export class WhatsAppService {
       body,
       requestId,
       replyTarget,
+      ...(forwardMetadata ? { forwardMetadata } : {}),
     });
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
@@ -1711,10 +1723,16 @@ export class WhatsAppService {
         data: {
           status: 'FAILED',
           failedAt: new Date(),
-          rawMetadata: {
-            source: 'manual_outbound_send',
-            errorMessage: this.sanitizeError(error),
-          },
+          rawMetadata: forwardMetadata
+            ? this.rawMetadataWithError(
+                pending.rawMetadata,
+                this.sanitizeError(error),
+                'manual_outbound_send',
+              )
+            : {
+                source: 'manual_outbound_send',
+                errorMessage: this.sanitizeError(error),
+              },
         },
       });
 
@@ -1764,6 +1782,172 @@ export class WhatsAppService {
         messageId: pending.id,
       });
     }
+  }
+
+  async forwardConversationMessage(
+    sourceConversationId: string,
+    messageId: string,
+    dto: ForwardWhatsAppConversationMessageDto,
+  ) {
+    if (sourceConversationId === dto.targetConversationId) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_FORWARD_SAME_CONVERSATION',
+        message: 'Escolha outra conversa para encaminhar.',
+      });
+    }
+
+    const [sourceConversation, targetConversation, sourceMessage] = await Promise.all([
+      this.prisma.whatsAppConversation.findUnique({ where: { id: sourceConversationId } }),
+      this.prisma.whatsAppConversation.findUnique({
+        where: { id: dto.targetConversationId },
+        include: { whatsAppConnection: true },
+      }),
+      this.prisma.whatsAppMessage.findUnique({ where: { id: messageId } }),
+    ]);
+
+    if (!sourceConversation) {
+      throw new NotFoundException('Conversa WhatsApp de origem nao encontrada.');
+    }
+
+    if (!sourceMessage) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
+    }
+
+    if (sourceMessage.conversationId !== sourceConversation.id) {
+      throw new BadRequestException({
+        code: 'MESSAGE_CONVERSATION_MISMATCH',
+        message: 'Mensagem nao pertence a conversa de origem.',
+      });
+    }
+
+    if (sourceMessage.whatsAppConnectionId !== sourceConversation.whatsAppConnectionId) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_FORWARD_SOURCE_CONNECTION_MISMATCH',
+        message: 'Mensagem nao pertence a conexao WhatsApp da conversa de origem.',
+      });
+    }
+
+    if (!targetConversation) {
+      throw new NotFoundException('Conversa WhatsApp de destino nao encontrada.');
+    }
+
+    if (sourceConversation.whatsAppConnectionId !== targetConversation.whatsAppConnectionId) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_FORWARD_CONNECTION_MISMATCH',
+        message: 'Encaminhamento entre conexoes WhatsApp diferentes nao e permitido.',
+      });
+    }
+
+    if (
+      targetConversation.whatsAppConnection.status !== 'CONNECTED' ||
+      !targetConversation.whatsAppConnection.connected ||
+      !targetConversation.whatsAppConnection.loggedIn
+    ) {
+      throw new ConflictException('Conexao WhatsApp da conversa de destino nao esta operacional.');
+    }
+
+    const existing = await this.findConversationMessageByRequestId(
+      targetConversation.whatsAppConnectionId,
+      dto.requestId.trim(),
+    );
+
+    if (existing) {
+      this.assertMessageBelongsToConversation(existing, targetConversation.id);
+      const existingMetadata = this.rawMetadataObject(existing.rawMetadata);
+
+      if (
+        existingMetadata.source !== 'forward' ||
+        existingMetadata.forwardedFromConversationId !== sourceConversation.id ||
+        existingMetadata.forwardedFromMessageId !== sourceMessage.id
+      ) {
+        throw new ConflictException(
+          'requestId ja foi usado por outro envio para esta conversa de destino.',
+        );
+      }
+
+      return this.presentConversationMessage(existing);
+    }
+
+    if (sourceMessage.deletedAt || sourceMessage.deletedForEveryone) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_FORWARD_MESSAGE_DELETED',
+        message: 'Nao e possivel encaminhar uma mensagem apagada.',
+      });
+    }
+
+    const supportedTypes = new Set<WhatsAppConversationMessageType>([
+      'TEXT',
+      'IMAGE',
+      'VIDEO',
+      'AUDIO',
+      'DOCUMENT',
+      'STICKER',
+    ]);
+
+    if (!supportedTypes.has(sourceMessage.type)) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_FORWARD_TYPE_UNSUPPORTED',
+        message: 'Este tipo de mensagem nao pode ser encaminhado.',
+      });
+    }
+
+    if (
+      sourceMessage.type === 'STICKER' &&
+      this.normalizeMediaMimeType(sourceMessage.mediaMimeType ?? '') !== 'image/webp'
+    ) {
+      throw new BadRequestException({
+        code: 'WHATSAPP_FORWARD_STICKER_UNSUPPORTED',
+        message: 'Nesta versao, somente figurinhas WEBP podem ser encaminhadas.',
+      });
+    }
+
+    const requestId = dto.requestId.trim();
+    const metadata: ForwardMessageMetadata = {
+      forwardedFromConversationId: sourceConversation.id,
+      forwardedFromMessageId: sourceMessage.id,
+      ...(this.isManualOutboundVoiceMessage(sourceMessage) ? { forwardPtt: true } : {}),
+    };
+
+    if (sourceMessage.type === 'TEXT') {
+      const body = sourceMessage.text?.trim();
+
+      if (!body) {
+        throw new BadRequestException({
+          code: 'WHATSAPP_FORWARD_TEXT_EMPTY',
+          message: 'A mensagem nao possui texto para encaminhar.',
+        });
+      }
+
+      return this.sendConversationTextMessage(targetConversation.id, { body, requestId }, metadata);
+    }
+
+    let media: DownloadedConversationMedia;
+
+    try {
+      media = await this.downloadConversationMessageMedia(sourceConversation.id, sourceMessage.id);
+    } catch {
+      throw new UnprocessableEntityException({
+        code: 'WHATSAPP_FORWARD_MEDIA_UNAVAILABLE',
+        message: 'Nao foi possivel encaminhar esta midia.',
+      });
+    }
+
+    return this.sendConversationMediaMessage(targetConversation.id, {
+      file: {
+        buffer: media.buffer,
+        mimetype: media.mimetype,
+        originalname: media.fileName,
+        size: media.buffer.length,
+      },
+      ...((sourceMessage.type === 'IMAGE' || sourceMessage.type === 'VIDEO') && sourceMessage.text
+        ? { caption: sourceMessage.text }
+        : {}),
+      requestId,
+      ...(sourceMessage.type === 'STICKER' ? { mediaKind: 'STICKER' } : {}),
+      forwardMetadata: metadata,
+      audioPtt: metadata.forwardPtt ?? false,
+      mediaDurationSeconds: sourceMessage.mediaDurationSeconds,
+    });
   }
 
   async setConversationPresence(id: string, dto: SetWhatsAppConversationPresenceDto) {
@@ -2126,6 +2310,9 @@ export class WhatsAppService {
       requestId?: string;
       replyToMessageId?: string;
       mediaKind?: string;
+      forwardMetadata?: ForwardMessageMetadata;
+      audioPtt?: boolean;
+      mediaDurationSeconds?: number | null;
     },
   ) {
     const requestId = input.requestId?.trim();
@@ -2134,10 +2321,17 @@ export class WhatsAppService {
       throw new BadRequestException('requestId obrigatorio.');
     }
 
-    const media = this.prepareConversationMedia(
+    const preparedMedia = this.prepareConversationMedia(
       input.file,
       this.parseConversationMediaKind(input.mediaKind),
     );
+    const media = {
+      ...preparedMedia,
+      durationSeconds:
+        typeof input.mediaDurationSeconds === 'number' && input.mediaDurationSeconds >= 0
+          ? input.mediaDurationSeconds
+          : preparedMedia.durationSeconds,
+    };
     const mediaType = media.kind;
     const caption = input.caption?.trim() || null;
     const conversation = await this.prisma.whatsAppConversation.findUnique({
@@ -2176,6 +2370,7 @@ export class WhatsAppService {
       caption,
       requestId,
       replyTarget: mediaType === 'STICKER' ? replyTarget : null,
+      ...(input.forwardMetadata ? { forwardMetadata: input.forwardMetadata } : {}),
     });
 
     const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
@@ -2198,7 +2393,7 @@ export class WhatsAppService {
             audioDataUrl: media.dataUrl,
             mimeType: media.mimeType,
             seconds: media.durationSeconds,
-            ptt: false,
+            ptt: input.audioPtt ?? false,
             requestId,
           }),
         );
@@ -2237,13 +2432,24 @@ export class WhatsAppService {
         data: {
           status: 'FAILED',
           failedAt: new Date(),
-          rawMetadata: {
-            source: 'manual_outbound_media_send',
-            errorMessage: this.sanitizeError(error),
-            mimeType: media.mimeType,
-            fileName: media.fileName,
-            sizeBytes: media.sizeBytes,
-          },
+          rawMetadata: input.forwardMetadata
+            ? {
+                ...this.rawMetadataWithError(
+                  pending.rawMetadata,
+                  this.sanitizeError(error),
+                  'manual_outbound_media_send',
+                ),
+                mimeType: media.mimeType,
+                fileName: media.fileName,
+                sizeBytes: media.sizeBytes,
+              }
+            : {
+                source: 'manual_outbound_media_send',
+                errorMessage: this.sanitizeError(error),
+                mimeType: media.mimeType,
+                fileName: media.fileName,
+                sizeBytes: media.sizeBytes,
+              },
         },
       });
 
@@ -4460,7 +4666,8 @@ export class WhatsAppService {
     return (
       message.direction === 'OUTBOUND' &&
       (metadata.source === 'manual_outbound_media_send' ||
-        metadata.source === 'manual_outbound_voice_send') &&
+        metadata.source === 'manual_outbound_voice_send' ||
+        metadata.source === 'forward') &&
       Boolean(message.mediaMimeType || this.asRecord(metadata.localMedia))
     );
   }
@@ -4470,7 +4677,11 @@ export class WhatsAppService {
   ) {
     const metadata = this.rawMetadataObject(message.rawMetadata);
 
-    return message.direction === 'OUTBOUND' && metadata.source === 'manual_outbound_voice_send';
+    return (
+      message.direction === 'OUTBOUND' &&
+      (metadata.source === 'manual_outbound_voice_send' ||
+        (metadata.source === 'forward' && metadata.forwardPtt === true))
+    );
   }
 
   private async upsertWebhookConversation(
@@ -5381,6 +5592,7 @@ export class WhatsAppService {
       body: string;
       requestId: string;
       replyTarget?: ResolvedWhatsAppReplyTarget | null;
+      forwardMetadata?: ForwardMessageMetadata;
     },
   ) {
     try {
@@ -5400,7 +5612,9 @@ export class WhatsAppService {
           sentAt: null,
           failedAt: null,
           isFromMe: true,
-          rawMetadata: Prisma.JsonNull,
+          rawMetadata: input.forwardMetadata
+            ? this.forwardRawMetadata(input.forwardMetadata)
+            : Prisma.JsonNull,
           mediaMimeType: null,
           mediaFileName: null,
           mediaSizeBytes: null,
@@ -5434,6 +5648,7 @@ export class WhatsAppService {
       requestId: string;
       replyTarget?: ResolvedWhatsAppReplyTarget | null;
       source?: 'manual_outbound_media_send' | 'manual_outbound_voice_send';
+      forwardMetadata?: ForwardMessageMetadata;
     },
   ) {
     const mediaType = input.media.kind;
@@ -5457,7 +5672,9 @@ export class WhatsAppService {
           failedAt: null,
           isFromMe: true,
           rawMetadata: {
-            source,
+            ...(input.forwardMetadata
+              ? this.forwardRawMetadata(input.forwardMetadata)
+              : { source }),
             storage: 'transient_request_only',
             retryPolicy: 'select_file_again_after_reload',
           },
@@ -5594,6 +5811,29 @@ export class WhatsAppService {
     }
 
     return metadata as Prisma.InputJsonValue;
+  }
+
+  private forwardRawMetadata(input: ForwardMessageMetadata): Prisma.InputJsonObject {
+    return {
+      source: 'forward',
+      forwardedFromMessageId: input.forwardedFromMessageId,
+      forwardedFromConversationId: input.forwardedFromConversationId,
+      ...(input.forwardPtt ? { forwardPtt: true } : {}),
+    };
+  }
+
+  private rawMetadataWithError(
+    current: Prisma.JsonValue | null,
+    errorMessage: string,
+    fallbackSource: string,
+  ): Prisma.InputJsonObject {
+    const metadata = this.rawMetadataObject(current);
+
+    return {
+      source: typeof metadata.source === 'string' ? metadata.source : fallbackSource,
+      ...metadata,
+      errorMessage,
+    };
   }
 
   private retryRawMetadata(
@@ -7118,6 +7358,7 @@ export class WhatsAppService {
   private presentConversationMessage(message: WhatsAppConversationMessageForPresenter) {
     const deleted = Boolean(message.deletedAt || message.deletedForEveryone);
     const pixContext = deleted ? null : this.presentPixConversationContext(message);
+    const metadata = this.rawMetadataObject(message.rawMetadata);
 
     return {
       id: message.id,
@@ -7134,7 +7375,8 @@ export class WhatsAppService {
       deletedAt: message.deletedAt,
       deletedForEveryone: message.deletedForEveryone,
       isFromMe: message.isFromMe,
-      isAutoReply: this.rawMetadataObject(message.rawMetadata).source === 'auto_reply',
+      isAutoReply: metadata.source === 'auto_reply',
+      isForwarded: metadata.source === 'forward',
       providerMessageId: message.providerMessageId,
       replyToMessageId: message.replyToMessageId,
       replyToProviderMessageId: message.replyToProviderMessageId,

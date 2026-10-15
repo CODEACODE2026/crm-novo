@@ -18,6 +18,7 @@ import {
   deleteClient,
   formatCurrency,
   formatDate,
+  forwardWhatsAppConversationMessage,
   getBillingDispatchSummary,
   getFinancialSummary,
   getPaymentIntentPixCopy,
@@ -1704,5 +1705,45 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/whatsapp/conversations?needsManualFollowUp=true'),
     ]);
     expect(requestInits[2]).toMatchObject({ method: 'PUT' });
+  });
+});
+
+describe('WhatsApp forward API', () => {
+  afterEach(() => {
+    resetUnauthorizedRedirectForTests();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('sends only targetConversationId and requestId to the authenticated forward endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'forwarded-message-id',
+          conversationId: 'target-conversation-id',
+          isForwarded: true,
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await forwardWhatsAppConversationMessage('source-conversation-id', 'source-message-id', {
+      targetConversationId: 'target-conversation-id',
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37395',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/whatsapp/conversations/source-conversation-id/messages/source-message-id/forward',
+      ),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          targetConversationId: 'target-conversation-id',
+          requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37395',
+        }),
+      }),
+    );
   });
 });

@@ -35,6 +35,7 @@ import { UpdateWhatsAppAutoReplyDto } from './dto/update-whatsapp-auto-reply.dto
 import { CreateWhatsAppQuickReplyDto } from './dto/create-whatsapp-quick-reply.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
+import { ForwardWhatsAppConversationMessageDto } from './dto/forward-whatsapp-conversation-message.dto';
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
@@ -272,6 +273,15 @@ export class WhatsAppController {
     @Body() dto: EditWhatsAppConversationMessageDto,
   ) {
     return this.whatsAppService.editConversationMessage(conversationId, messageId, dto);
+  }
+
+  @Post('conversations/:sourceConversationId/messages/:messageId/forward')
+  forwardConversationMessage(
+    @Param('sourceConversationId', new ParseUUIDPipe()) sourceConversationId: string,
+    @Param('messageId', new ParseUUIDPipe()) messageId: string,
+    @Body() dto: ForwardWhatsAppConversationMessageDto,
+  ) {
+    return this.whatsAppService.forwardConversationMessage(sourceConversationId, messageId, dto);
   }
 
   @Post('messages/:id/retry')

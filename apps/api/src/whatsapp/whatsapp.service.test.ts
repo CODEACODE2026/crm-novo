@@ -13831,4 +13831,579 @@ describe('WhatsAppService', () => {
     ).rejects.toThrow('client create failed');
     expect(pendingUpdate).not.toHaveBeenCalled();
   });
+
+  it('forwards the current TEXT content to a same-connection target without mutating the source', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      phone: '5511999999999',
+      phoneNormalized: '5511999999999',
+      needsManualFollowUp: true,
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const original = conversationMessage({
+      id: '12121212-1212-4121-8121-121212121212',
+      text: 'Texto atual editado',
+      editedAt: now,
+    });
+    const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const { service, prisma, provider, realtime } = serviceFactory();
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
+    prisma.whatsAppMessage.update.mockImplementation((args: { data?: Record<string, unknown> }) =>
+      Promise.resolve(
+        conversationMessage({
+          conversationId: target.id,
+          direction: 'OUTBOUND',
+          rawMetadata: {
+            source: 'forward',
+            forwardedFromConversationId: source.id,
+            forwardedFromMessageId: original.id,
+          },
+          ...(args.data ?? {}),
+        }),
+      ),
+    );
+
+    const result = await service.forwardConversationMessage(source.id, original.id, {
+      targetConversationId: target.id,
+      requestId,
+    });
+
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: target.phoneNormalized,
+      body: 'Texto atual editado',
+      requestId,
+    });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          conversationId: target.id,
+          direction: 'OUTBOUND',
+          type: 'TEXT',
+          text: 'Texto atual editado',
+          requestId,
+          rawMetadata: {
+            source: 'forward',
+            forwardedFromConversationId: source.id,
+            forwardedFromMessageId: original.id,
+          },
+        }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: target.id },
+        data: expect.objectContaining({ needsManualFollowUp: false }),
+      }),
+    );
+    expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+      target.id,
+      expect.any(String),
+      'OUTBOUND',
+    );
+    expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(target.id);
+    expect(realtime.emitConversationUpdated).not.toHaveBeenCalledWith(source.id);
+    expect(result).toMatchObject({ direction: 'OUTBOUND', isForwarded: true });
+    expect(JSON.stringify(result)).not.toContain(source.id);
+    expect(JSON.stringify(result)).not.toContain(original.id);
+    expect(original).toMatchObject({ conversationId: source.id, text: 'Texto atual editado' });
+  });
+
+  it.each([
+    ['IMAGE', 'image/jpeg', 'foto.jpg', 'sendImage'],
+    ['VIDEO', 'video/mp4', 'video.mp4', 'sendVideo'],
+    ['AUDIO', 'audio/ogg', 'audio.ogg', 'sendAudio'],
+    ['DOCUMENT', 'application/pdf', 'contrato.pdf', 'sendDocument'],
+    ['STICKER', 'image/webp', 'figurinha.webp', 'sendSticker'],
+  ] as const)(
+    'forwards %s bytes through the existing provider pipeline and preserves internal forward metadata',
+    async (type, mimeType, fileName, providerMethod) => {
+      const source = conversation();
+      const target = conversation({
+        id: '77777777-7777-4777-8777-777777777777',
+        phoneNormalized: '5511999999999',
+        whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      });
+      const bytes = type === 'STICKER' ? webpBytes : Buffer.from(`${type.toLowerCase()}-bytes`);
+      const original = conversationMessage({
+        type,
+        text: type === 'STICKER' ? null : 'Legenda atual',
+        mediaMimeType: mimeType,
+        mediaFileName: fileName,
+        mediaSizeBytes: bytes.length,
+        rawMetadata: {
+          localMedia: {
+            storageKey: `${connection().id}/${conversationMessage().id}/media-source`,
+            mimeType,
+            sizeBytes: bytes.length,
+          },
+        },
+      });
+      const requestId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const { service, prisma, provider, mediaStorage } = serviceFactory({
+        mediaStorageOverrides: { read: vi.fn().mockResolvedValue(bytes) },
+      });
+
+      prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+        Promise.resolve(args.where.id === source.id ? source : target),
+      );
+      prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+      prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
+      prisma.whatsAppMessage.update.mockImplementation((args: { data?: Record<string, unknown> }) =>
+        Promise.resolve(
+          conversationMessage({
+            conversationId: target.id,
+            direction: 'OUTBOUND',
+            type,
+            rawMetadata: {
+              source: 'forward',
+              forwardedFromConversationId: source.id,
+              forwardedFromMessageId: original.id,
+            },
+            ...(args.data ?? {}),
+          }),
+        ),
+      );
+
+      const result = await service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId,
+      });
+
+      expect(mediaStorage.read).toHaveBeenCalledOnce();
+      expect(provider[providerMethod]).toHaveBeenCalledOnce();
+      if (type === 'IMAGE') {
+        expect(provider.sendImage).toHaveBeenCalledWith(
+          'instance-token',
+          expect.objectContaining({
+            caption: 'Legenda atual',
+            imageDataUrl: expect.stringContaining('data:image/jpeg;base64,'),
+            phone: target.phoneNormalized,
+            requestId,
+          }),
+        );
+      } else if (type === 'VIDEO') {
+        expect(provider.sendVideo).toHaveBeenCalledWith(
+          'instance-token',
+          expect.objectContaining({ caption: 'Legenda atual', mimeType, requestId }),
+        );
+      } else if (type === 'AUDIO') {
+        expect(provider.sendAudio).toHaveBeenCalledWith(
+          'instance-token',
+          expect.objectContaining({ mimeType, ptt: false, requestId }),
+        );
+      } else if (type === 'DOCUMENT') {
+        expect(provider.sendDocument).toHaveBeenCalledWith(
+          'instance-token',
+          expect.objectContaining({ fileName, requestId }),
+        );
+      } else {
+        expect(provider.sendSticker).toHaveBeenCalledWith(
+          'instance-token',
+          expect.objectContaining({
+            requestId,
+            sticker: expect.stringContaining('data:image/webp'),
+          }),
+        );
+      }
+      expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            conversationId: target.id,
+            type,
+            text: type === 'IMAGE' || type === 'VIDEO' ? 'Legenda atual' : null,
+            requestId,
+            rawMetadata: expect.objectContaining({
+              source: 'forward',
+              forwardedFromConversationId: source.id,
+              forwardedFromMessageId: original.id,
+            }),
+          }),
+        }),
+      );
+      expect(result).toMatchObject({ direction: 'OUTBOUND', type, isForwarded: true });
+    },
+  );
+
+  it('preserves PTT semantics when forwarding an existing manual voice note', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const bytes = Buffer.from('ogg-voice-bytes');
+    const original = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'AUDIO',
+      mediaMimeType: 'audio/ogg',
+      mediaFileName: 'gravacao.ogg',
+      mediaSizeBytes: bytes.length,
+      mediaDurationSeconds: 4,
+      rawMetadata: {
+        source: 'manual_outbound_voice_send',
+        localMedia: {
+          storageKey: `${connection().id}/${conversationMessage().id}/voice-source`,
+          mimeType: 'audio/ogg',
+          sizeBytes: bytes.length,
+        },
+      },
+    });
+    const { service, prisma, provider } = serviceFactory({
+      mediaStorageOverrides: { read: vi.fn().mockResolvedValue(bytes) },
+    });
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
+
+    await service.forwardConversationMessage(source.id, original.id, {
+      targetConversationId: target.id,
+      requestId: 'abababab-abab-4aba-8aba-abababababab',
+    });
+
+    expect(provider.sendAudio).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ ptt: true, seconds: 4 }),
+    );
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          mediaDurationSeconds: 4,
+          rawMetadata: expect.objectContaining({ source: 'forward', forwardPtt: true }),
+        }),
+      }),
+    );
+  });
+
+  it('returns an idempotent target message for a repeated forward requestId', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const original = conversationMessage();
+    const existing = conversationMessage({
+      id: '88888888-8888-4888-8888-888888888888',
+      conversationId: target.id,
+      direction: 'OUTBOUND',
+      requestId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      rawMetadata: {
+        source: 'forward',
+        forwardedFromConversationId: source.id,
+        forwardedFromMessageId: original.id,
+      },
+    });
+    const { service, prisma, provider } = serviceFactory();
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(existing);
+
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      }),
+    ).resolves.toMatchObject({ id: existing.id, direction: 'OUTBOUND', isForwarded: true });
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a repeated requestId that belongs to another forward or another target', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const original = conversationMessage();
+    const existing = conversationMessage({
+      conversationId: target.id,
+      direction: 'OUTBOUND',
+      requestId: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+      rawMetadata: {
+        source: 'forward',
+        forwardedFromConversationId: source.id,
+        forwardedFromMessageId: '12121212-1212-4121-8121-121212121212',
+      },
+    });
+    const { service, prisma, provider } = serviceFactory();
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(existing);
+
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: existing.requestId!,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    existing.conversationId = '88888888-8888-4888-8888-888888888888';
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: existing.requestId!,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing source, missing target and an offline destination without creating messages', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const original = conversationMessage();
+    const { service, prisma, provider } = serviceFactory();
+
+    prisma.whatsAppConversation.findUnique.mockResolvedValue(null);
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: 'dededede-dede-4ede-8ede-dededededede',
+      }),
+    ).rejects.toThrow('Conversa WhatsApp de origem nao encontrada.');
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(null);
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: 'dddddddd-eeee-4eee-8eee-eeeeeeeeeeee',
+      }),
+    ).rejects.toThrow('Mensagem WhatsApp nao encontrada.');
+
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(original);
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : null),
+    );
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: 'dfdfdfdf-dfdf-4fdf-8fdf-dfdfdfdfdfdf',
+      }),
+    ).rejects.toThrow('Conversa WhatsApp de destino nao encontrada.');
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    target.whatsAppConnection = connection();
+    await expect(
+      service.forwardConversationMessage(source.id, original.id, {
+        targetConversationId: target.id,
+        requestId: 'efefefef-efef-4fef-8fef-efefefefefef',
+      }),
+    ).rejects.toThrow('Conexao WhatsApp da conversa de destino nao esta operacional.');
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('keeps forward metadata through provider echo reconciliation and refresh presentation', () => {
+    const forwarded = conversationMessage({
+      direction: 'OUTBOUND',
+      type: 'IMAGE',
+      mediaMimeType: 'image/jpeg',
+      rawMetadata: {
+        source: 'forward',
+        forwardedFromConversationId: conversation().id,
+        forwardedFromMessageId: '12121212-1212-4121-8121-121212121212',
+        localMedia: {
+          storageKey: `${connection().id}/forwarded/image.jpg`,
+          mimeType: 'image/jpeg',
+          sizeBytes: 10,
+        },
+      },
+    });
+    const { service } = serviceFactory();
+    const privateService = service as unknown as {
+      reconciledRawMetadataUpdate: (
+        current: Prisma.JsonValue | null,
+        normalized: ReturnType<typeof normalizedInbound>,
+      ) => { rawMetadata?: Prisma.InputJsonValue };
+      presentConversationMessage: (message: ReturnType<typeof conversationMessage>) => {
+        isForwarded: boolean;
+      };
+    };
+    const normalized = normalizedInbound('Eco encaminhado', {
+      direction: 'OUTGOING',
+      messageType: 'image',
+      mediaDownloadMetadata: {
+        Url: 'https://media.example.test/image',
+        MediaKey: 'safe-key',
+        Mimetype: 'image/jpeg',
+        FileSHA256: 'safe-sha',
+        FileLength: 10,
+      },
+    });
+
+    const reconciliation = privateService.reconciledRawMetadataUpdate(
+      forwarded.rawMetadata,
+      normalized,
+    );
+    expect(reconciliation.rawMetadata).toMatchObject({
+      source: 'forward',
+      forwardedFromConversationId: conversation().id,
+      forwardedFromMessageId: '12121212-1212-4121-8121-121212121212',
+      mediaDownload: expect.objectContaining({ Mimetype: 'image/jpeg' }),
+    });
+
+    const refreshed = conversationMessage({
+      ...forwarded,
+      rawMetadata: reconciliation.rawMetadata ?? forwarded.rawMetadata,
+    });
+    expect(privateService.presentConversationMessage(refreshed).isForwarded).toBe(true);
+  });
+
+  it('rejects same-conversation, cross-connection, deleted and unsupported forwards server-side', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, prisma, provider } = serviceFactory();
+
+    await expect(
+      service.forwardConversationMessage(source.id, conversationMessage().id, {
+        targetConversationId: source.id,
+        requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_FORWARD_SAME_CONVERSATION' }),
+    });
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(
+        args.where.id === source.id
+          ? source
+          : { ...target, whatsAppConnectionId: 'other-connection-id' },
+      ),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(conversationMessage());
+    await expect(
+      service.forwardConversationMessage(source.id, conversationMessage().id, {
+        targetConversationId: target.id,
+        requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_FORWARD_CONNECTION_MISMATCH' }),
+    });
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(
+      conversationMessage({ conversationId: '88888888-8888-4888-8888-888888888888' }),
+    );
+    await expect(
+      service.forwardConversationMessage(source.id, conversationMessage().id, {
+        targetConversationId: target.id,
+        requestId: 'dcdcdcdc-dcdc-4dcd-8dcd-dcdcdcdcdcdc',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MESSAGE_CONVERSATION_MISMATCH' }),
+    });
+
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(
+      conversationMessage({ deletedAt: now, deletedForEveryone: true }),
+    );
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
+    await expect(
+      service.forwardConversationMessage(source.id, conversationMessage().id, {
+        targetConversationId: target.id,
+        requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_FORWARD_MESSAGE_DELETED' }),
+    });
+
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(conversationMessage({ type: 'LOCATION' }));
+    await expect(
+      service.forwardConversationMessage(source.id, conversationMessage().id, {
+        targetConversationId: target.id,
+        requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_FORWARD_TYPE_UNSUPPORTED' }),
+    });
+
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(
+      conversationMessage({ type: 'STICKER', mediaMimeType: 'video/mp4' }),
+    );
+    await expect(
+      service.forwardConversationMessage(source.id, conversationMessage().id, {
+        targetConversationId: target.id,
+        requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_FORWARD_STICKER_UNSUPPORTED' }),
+    });
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('fails safely when source media is unavailable or the provider rejects the forward', async () => {
+    const source = conversation();
+    const target = conversation({
+      id: '77777777-7777-4777-8777-777777777777',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const unavailable = conversationMessage({ type: 'IMAGE', mediaMimeType: 'image/jpeg' });
+    const { service, prisma, provider, realtime } = serviceFactory({
+      providerOverrides: { sendText: vi.fn().mockRejectedValue(new Error('provider secret')) },
+    });
+
+    prisma.whatsAppConversation.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve(args.where.id === source.id ? source : target),
+    );
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(unavailable);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.forwardConversationMessage(source.id, unavailable.id, {
+        targetConversationId: target.id,
+        requestId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_FORWARD_MEDIA_UNAVAILABLE' }),
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+
+    prisma.whatsAppMessage.findUnique.mockResolvedValue(
+      conversationMessage({ text: 'Falha real' }),
+    );
+    const failed = await service.forwardConversationMessage(source.id, conversationMessage().id, {
+      targetConversationId: target.id,
+      requestId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    });
+
+    expect(failed).toMatchObject({ status: 'FAILED', isForwarded: true });
+    expect(provider.sendText).toHaveBeenCalledOnce();
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          rawMetadata: expect.objectContaining({ source: 'forward' }),
+        }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
+    expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(target.id, expect.any(String));
+  });
 });

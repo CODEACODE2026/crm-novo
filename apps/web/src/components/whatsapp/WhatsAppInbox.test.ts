@@ -36,6 +36,7 @@ import {
   isConversationPixCopyEligible,
   isDeleteEligibleConversationMessage,
   isEditEligibleConversationMessage,
+  isForwardEligibleConversationMessage,
   isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
   isTechnicalVideoPlaceholder,
@@ -3092,5 +3093,83 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
     expect(globalStylesSource).toContain('width: min(82vw, 100%);');
     expect(globalStylesSource).toContain('min-height: 42px;');
+  });
+
+  it('offers forwarding only for supported non-deleted message content', () => {
+    for (const type of ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'DOCUMENT', 'STICKER'] as const) {
+      expect(
+        isForwardEligibleConversationMessage(
+          message({
+            type,
+            text: type === 'TEXT' ? 'Conteúdo atual' : null,
+            mediaAvailable: type !== 'TEXT',
+            mediaMimeType: type === 'STICKER' ? 'image/webp' : null,
+          }),
+        ),
+      ).toBe(true);
+    }
+
+    expect(isForwardEligibleConversationMessage(message({ deleted: true }))).toBe(false);
+    expect(
+      isForwardEligibleConversationMessage(message({ deletedAt: '2026-10-15T10:00:00Z' })),
+    ).toBe(false);
+    expect(isForwardEligibleConversationMessage(message({ type: 'TEXT', text: '   ' }))).toBe(
+      false,
+    );
+    expect(isForwardEligibleConversationMessage(message({ type: 'LOCATION' }))).toBe(false);
+    expect(
+      isForwardEligibleConversationMessage(
+        message({ type: 'STICKER', mediaAvailable: true, mediaMimeType: 'video/mp4' }),
+      ),
+    ).toBe(false);
+    expect(
+      isForwardEligibleConversationMessage(message({ type: 'IMAGE', mediaAvailable: false })),
+    ).toBe(false);
+  });
+
+  it('keeps forwarding scoped, searchable, accessible and single-target in the Inbox', () => {
+    expect(whatsAppInboxSource).toContain('aria-label="Encaminhar mensagem"');
+    expect(whatsAppInboxSource).toContain('role="dialog"');
+    expect(whatsAppInboxSource).toContain('aria-modal="true"');
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain('Buscar conversa por nome ou telefone');
+    expect(whatsAppInboxSource).toContain(
+      'whatsAppConnectionId: sourceConversation.whatsAppConnectionId',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'result.items.filter((item) => item.id !== sourceConversation.id)',
+    );
+    expect(whatsAppInboxSource).toContain('aria-pressed={selectedId === conversation.id}');
+    expect(whatsAppInboxSource).toContain("loading ? 'Encaminhando...' : 'Encaminhar'");
+    expect(whatsAppInboxSource).toContain('forwardingRef.current');
+    expect(whatsAppInboxSource).toContain('submissionRef.current?.targetConversationId');
+    expect(whatsAppInboxSource).toContain(
+      'onSubmit(submission.targetConversationId, submission.requestId)',
+    );
+  });
+
+  it('renders compact previews and a persistent forwarded marker without exposing source contact data', () => {
+    expect(whatsAppInboxSource).toContain('function ConversationForwardPreview');
+    expect(whatsAppInboxSource).toContain("message.type === 'VIDEO'");
+    expect(whatsAppInboxSource).toContain("message.type === 'AUDIO'");
+    expect(whatsAppInboxSource).toContain("message.type === 'DOCUMENT'");
+    expect(whatsAppInboxSource).toContain("message.type === 'STICKER'");
+    expect(whatsAppInboxSource).toContain('message.isForwarded');
+    expect(whatsAppInboxSource).toContain('>Encaminhada</span>');
+    expect(whatsAppInboxSource).not.toContain('forwardedFromConversationId}</');
+    expect(whatsAppInboxSource).not.toContain('forwardedFromMessageId}</');
+  });
+
+  it('keeps the forwarding modal responsive, focus-visible and vertically scrollable', () => {
+    expect(globalStylesSource).toContain('.conversation-forward-modal');
+    expect(globalStylesSource).toContain('.conversation-forward-destinations');
+    expect(globalStylesSource).toContain('overflow-y: auto;');
+    expect(globalStylesSource).toContain('.conversation-forward-destination:focus-visible');
+    expect(globalStylesSource).toContain('.conversation-forward-destination.selected');
+    expect(globalStylesSource).toContain('@media (max-width: 620px)');
+    expect(globalStylesSource).toContain('max-height: min(84dvh, 680px);');
+    expect(globalStylesSource).toContain('min-height: 44px;');
+    expect(whatsAppInboxSource).toContain("event.key !== 'Tab'");
+    expect(whatsAppInboxSource).toContain('modalRef.current?.querySelectorAll<HTMLElement>');
   });
 });

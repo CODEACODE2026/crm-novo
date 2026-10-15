@@ -79,6 +79,7 @@ import type { ConversationPixCopyCache, ConversationPixCopyInFlight } from './Wh
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const whatsAppInboxSource = readFileSync(join(currentDir, 'WhatsAppInbox.tsx'), 'utf8');
+const dashboardSource = readFileSync(join(currentDir, '../../app/dashboard/page.tsx'), 'utf8');
 const whatsAppRealtimeProviderSource = readFileSync(
   join(currentDir, 'WhatsAppRealtimeProvider.tsx'),
   'utf8',
@@ -3311,6 +3312,48 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('grid-template-columns: 40px minmax(0, 1fr);');
     expect(globalStylesSource).toContain('flex: 1 1 auto;');
     expect(globalStylesSource).toContain('overflow-y: auto;');
+  });
+
+  it('adds a mobile-only accessible return to the dashboard through existing navigation', () => {
+    expect(whatsAppInboxSource).toContain('aria-label="Voltar ao Dashboard"');
+    expect(whatsAppInboxSource).toContain('className="conversation-dashboard-back"');
+    expect(whatsAppInboxSource).toContain('onClick={onBackToDashboard}');
+    expect(dashboardSource).toContain(
+      "onBackToDashboard={() => handlePrimaryNavigation('dashboard')}",
+    );
+    expect(globalStylesSource).toContain('.conversation-dashboard-back,');
+    expect(globalStylesSource).toContain('.conversation-dashboard-back {');
+    expect(globalStylesSource).toContain('flex: 0 0 44px;');
+  });
+
+  it('locks only the mobile Inbox page to the visual viewport and restores the document contract', () => {
+    expect(whatsAppInboxSource).toContain(
+      "const mobileInboxQuery = window.matchMedia('(max-width: 620px)')",
+    );
+    expect(whatsAppInboxSource).toContain('if (mobileInboxQuery.matches)');
+    expect(whatsAppInboxSource).toContain(
+      "root.setAttribute('data-mobile-conversation-inbox', 'open')",
+    );
+    expect(whatsAppInboxSource).toContain("root.removeAttribute('data-mobile-conversation-inbox')");
+    expect(whatsAppInboxSource).toContain(
+      "root.setAttribute('data-mobile-conversation-inbox', previousMobileInboxState)",
+    );
+    expect(globalStylesSource).toContain("html[data-mobile-conversation-inbox='open'] body");
+    expect(globalStylesSource).toContain('height: var(--chat-viewport-height, 100svh);');
+    expect(globalStylesSource).toContain('overscroll-behavior: none;');
+    expect(whatsAppInboxSource).toContain('const viewportHeight = visualViewport?.height');
+    expect(whatsAppInboxSource).toContain(
+      "visualViewport?.addEventListener('resize', updateChatViewportHeight)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "visualViewport?.removeEventListener('resize', updateChatViewportHeight)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "mobileInboxQuery.addEventListener('change', updateMobileInboxDocumentState)",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "mobileInboxQuery.removeEventListener('change', updateMobileInboxDocumentState)",
+    );
   });
 
   it('uses one compact accessible mobile chat header row with an overflow action menu', () => {

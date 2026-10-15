@@ -446,6 +446,7 @@ export function stopConversationPixCopyEvent(
 }
 
 export function WhatsAppInbox({
+  onBackToDashboard,
   onConversationLocationChange,
   onOpenAutoReplySettings,
   onOpenClient,
@@ -454,6 +455,7 @@ export function WhatsAppInbox({
   onSummaryRefreshRequest,
   restoreRequest,
 }: {
+  onBackToDashboard: () => void;
   onConversationLocationChange: (context: ConversationLocationContext) => void;
   onOpenAutoReplySettings: () => void;
   onOpenClient: (clientId: string, options?: ConversationOpenClientOptions) => Promise<void>;
@@ -1957,6 +1959,18 @@ export function WhatsAppInbox({
   useEffect(() => {
     const root = document.documentElement;
     const visualViewport = window.visualViewport;
+    const mobileInboxQuery = window.matchMedia('(max-width: 620px)');
+    const previousMobileInboxState = root.getAttribute('data-mobile-conversation-inbox');
+
+    const updateMobileInboxDocumentState = () => {
+      if (mobileInboxQuery.matches) {
+        root.setAttribute('data-mobile-conversation-inbox', 'open');
+      } else if (previousMobileInboxState === null) {
+        root.removeAttribute('data-mobile-conversation-inbox');
+      } else {
+        root.setAttribute('data-mobile-conversation-inbox', previousMobileInboxState);
+      }
+    };
 
     const updateChatViewportHeight = () => {
       const shouldKeepBottom = isConversationScrollNearBottom(messagesScrollRef.current);
@@ -1969,14 +1983,22 @@ export function WhatsAppInbox({
       }
     };
 
+    updateMobileInboxDocumentState();
     updateChatViewportHeight();
+    mobileInboxQuery.addEventListener('change', updateMobileInboxDocumentState);
     visualViewport?.addEventListener('resize', updateChatViewportHeight);
     window.addEventListener('resize', updateChatViewportHeight);
 
     return () => {
+      mobileInboxQuery.removeEventListener('change', updateMobileInboxDocumentState);
       visualViewport?.removeEventListener('resize', updateChatViewportHeight);
       window.removeEventListener('resize', updateChatViewportHeight);
       root.style.removeProperty('--chat-viewport-height');
+      if (previousMobileInboxState === null) {
+        root.removeAttribute('data-mobile-conversation-inbox');
+      } else {
+        root.setAttribute('data-mobile-conversation-inbox', previousMobileInboxState);
+      }
     };
   }, []);
 
@@ -3560,6 +3582,7 @@ export function WhatsAppInbox({
           statusFilter={statusFilter}
           labels={conversationLabels}
           labelFilter={labelFilter}
+          onBackToDashboard={onBackToDashboard}
           onAvatarError={handleAvatarImageError}
           onAvatarPreview={openAvatarPreview}
           onFilterChange={setFilter}
@@ -4552,6 +4575,7 @@ function ConversationList({
   statusFilter,
   labels,
   labelFilter,
+  onBackToDashboard,
   onAvatarError,
   onAvatarPreview,
   onFilterChange,
@@ -4576,6 +4600,7 @@ function ConversationList({
   statusFilter: WhatsAppConversationStatus | '';
   labels: WhatsAppConversationLabel[];
   labelFilter: string;
+  onBackToDashboard: () => void;
   onAvatarError: (conversationId: string, url: string) => void;
   onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onFilterChange: (filter: ConversationFilter) => void;
@@ -4594,9 +4619,19 @@ function ConversationList({
       aria-label="Lista de conversas"
     >
       <div className="conversation-panel-header">
-        <div>
-          <h3>Conversas</h3>
-          <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
+        <div className="conversation-list-heading">
+          <button
+            aria-label="Voltar ao Dashboard"
+            className="conversation-dashboard-back"
+            type="button"
+            onClick={onBackToDashboard}
+          >
+            <ArrowLeft aria-hidden="true" size={18} />
+          </button>
+          <div>
+            <h3>Conversas</h3>
+            <span>{loading ? 'Atualizando...' : `${conversations.length} visíveis`}</span>
+          </div>
         </div>
         <IconButton icon={Plus} label="Iniciar conversa" onClick={onStartConversation} />
       </div>

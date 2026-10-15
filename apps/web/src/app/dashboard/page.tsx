@@ -1294,6 +1294,7 @@ export default function DashboardPage() {
         {view === 'conversations' ? (
           <WhatsAppInbox
             restoreRequest={whatsAppRestoreRequest}
+            onBackToDashboard={() => handlePrimaryNavigation('dashboard')}
             onOpenAutoReplySettings={() => {
               setSettingsInitialSection('whatsapp');
               setView('settings');

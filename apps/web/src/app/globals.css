@@ -2545,9 +2545,17 @@ a {
 }
 
 .conversation-filter-label-mobile,
+.conversation-dashboard-back,
 .conversation-header-actions-mobile,
 .conversation-message-mobile-actions {
   display: none;
+}
+
+.conversation-list-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
 }
 
 .conversation-secondary-filters {
@@ -14426,6 +14434,14 @@ tbody tr:hover,
 }
 
 @media (max-width: 620px) {
+  html[data-mobile-conversation-inbox='open'],
+  html[data-mobile-conversation-inbox='open'] body {
+    height: var(--chat-viewport-height, 100svh);
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   .app-shell[data-active-view='conversations'] {
     height: var(--chat-viewport-height, 100svh);
     max-height: var(--chat-viewport-height, 100svh);
@@ -14449,9 +14465,12 @@ tbody tr:hover,
   }
 
   .conversations-view {
+    display: flex;
+    flex-direction: column;
     height: 100%;
     max-height: 100%;
     min-height: 0;
+    overflow: hidden;
   }
 
   .conversations-view .page-header {
@@ -14479,7 +14498,8 @@ tbody tr:hover,
   }
 
   .conversations-shell {
-    height: 100%;
+    flex: 1 1 0;
+    height: auto;
     max-height: 100%;
     min-height: 0;
     border: 0;
@@ -14492,6 +14512,22 @@ tbody tr:hover,
     height: 100%;
     max-height: 100%;
     min-height: 0;
+  }
+
+  .conversation-chat-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .conversation-chat-panel > :not(.conversation-messages-wrap) {
+    flex: 0 0 auto;
+  }
+
+  .conversation-chat-panel .conversation-messages-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .conversations-view.mobile-mode-list .conversation-chat-panel {
@@ -14522,6 +14558,21 @@ tbody tr:hover,
     width: 40px;
     height: 40px;
     min-height: 40px;
+  }
+
+  .conversation-dashboard-back {
+    display: inline-grid;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+    place-items: center;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0;
   }
 
   .conversation-search {

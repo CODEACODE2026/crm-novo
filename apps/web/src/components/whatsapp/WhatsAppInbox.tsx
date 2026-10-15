@@ -2443,6 +2443,7 @@ export function WhatsAppInbox({
         deletedForEveryone: false,
         direction: 'OUTBOUND',
         deliveredAt: null,
+        editedAt: null,
         failedAt,
         isFromMe: true,
         mediaDurationSeconds: null,
@@ -4838,7 +4839,7 @@ function ConversationBubble({
           </div>
         ) : null}
         <footer>
-          <span>{conversationMessageTime(message)}</span>
+          <span>{conversationMessageFooterLabel(message)}</span>
           {outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}
         </footer>
         {!message.deleted && message.status === 'FAILED' && outbound ? (
@@ -8960,6 +8961,15 @@ function conversationDateLabel(value: string | null) {
 function conversationMessageTime(message: WhatsAppConversationMessage) {
   const value = message.sentAt ?? message.createdAt;
   return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+export function conversationMessageFooterLabel(message: WhatsAppConversationMessage) {
+  if (!message.editedAt) return conversationMessageTime(message);
+  const editedTime = new Date(message.editedAt).toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `Editada ${editedTime}`;
 }
 
 function conversationMessageDateKey(message: WhatsAppConversationMessage) {

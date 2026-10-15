@@ -779,6 +779,7 @@ export interface WhatsAppConversationMessage {
   text: string | null;
   status: WhatsAppConversationMessageStatus;
   sentAt: string | null;
+  editedAt: string | null;
   deliveredAt: string | null;
   readAt: string | null;
   failedAt: string | null;

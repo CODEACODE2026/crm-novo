@@ -274,6 +274,7 @@ function conversationMessage(overrides: Record<string, unknown> = {}) {
     mediaDurationSeconds: null,
     status: 'SENT',
     sentAt: now,
+    editedAt: null,
     deliveredAt: null,
     readAt: null,
     failedAt: null,
@@ -6773,10 +6774,12 @@ describe('WhatsAppService', () => {
 
   it('updates outbound messages to DELIVERED from Kirago ReadReceipt', async () => {
     const receiptAt = new Date('2026-10-08T21:21:18.000Z');
+    const editedAt = new Date('2026-10-08T20:00:00.000Z');
     const existing = conversationMessage({
       direction: 'OUTBOUND',
       providerMessageId: 'provider-message-id',
       status: 'SENT',
+      editedAt,
     });
     const { service, normalizer, prisma, realtime } = serviceFactory();
     normalizer.normalize.mockReturnValue(normalizedReceipt({ timestamp: receiptAt }));
@@ -6801,6 +6804,7 @@ describe('WhatsAppService', () => {
       where: { id: existing.id },
       data: { status: 'DELIVERED', deliveredAt: receiptAt },
     });
+    expect(existing.editedAt).toBe(editedAt);
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(existing.conversationId, existing.id);
   });
 
@@ -9147,6 +9151,7 @@ describe('WhatsAppService', () => {
         },
       },
       createdAt: new Date('2026-10-03T10:00:00.000Z'),
+      editedAt: new Date('2026-10-03T10:15:00.000Z'),
     });
     const newer = conversationMessage({
       id: 'message-newer',
@@ -9209,12 +9214,14 @@ describe('WhatsAppService', () => {
       direction: 'INBOUND',
       type: 'IMAGE',
       text: 'Legenda',
+      editedAt: new Date('2026-10-03T10:15:00.000Z'),
       mediaMimeType: 'image/jpeg',
       mediaAvailable: true,
     });
     expect(result.items[1]).toMatchObject({
       direction: 'OUTBOUND',
       type: 'DOCUMENT',
+      editedAt: null,
       mediaFileName: 'contrato.pdf',
       mediaSizeBytes: 2048,
       messageDispatchId: dispatch().id,
@@ -9572,10 +9579,12 @@ describe('WhatsAppService', () => {
         loggedIn: true,
       }),
     });
+    const editedAt = new Date('2026-10-08T20:00:00.000Z');
     const target = conversationMessage({
       direction: 'INBOUND',
       providerMessageId: 'provider-inbound',
       conversation: connectedConversation,
+      editedAt,
     });
     const updated = conversationMessage({
       ...target,
@@ -9641,6 +9650,7 @@ describe('WhatsAppService', () => {
     expect(result.reactions).toEqual([
       expect.objectContaining({ emoji: '❤️', isFromMe: true, reactorKey: 'crm:self' }),
     ]);
+    expect(result.editedAt).toBe(editedAt);
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
   });
 
@@ -9882,11 +9892,13 @@ describe('WhatsAppService', () => {
         loggedIn: true,
       }),
     });
+    const editedAt = new Date('2026-10-08T20:00:00.000Z');
     const target = conversationMessage({
       direction: 'OUTBOUND',
       providerMessageId: 'provider-outbound',
       conversation: connectedConversation,
       text: 'Conteudo sensivel',
+      editedAt,
       reactions: [{ id: 'reaction-id', emoji: '❤️', reactorKey: 'crm:self', isFromMe: true }],
     });
     const updated = conversationMessage({
@@ -9931,6 +9943,7 @@ describe('WhatsAppService', () => {
       mediaAvailable: false,
       retryAction: null,
       reactions: [],
+      editedAt,
     });
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(connectedConversation.id, target.id);
     expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
@@ -9952,7 +9965,12 @@ describe('WhatsAppService', () => {
       conversation: connectedConversation,
       reactions: [{ id: 'reaction-id', emoji: '❤️', reactorKey: 'crm:self', isFromMe: true }],
     });
-    const updated = conversationMessage({ ...target, text: 'Texto atualizado' });
+    const persistedEditedAt = new Date('2026-10-15T00:22:00.000Z');
+    const updated = conversationMessage({
+      ...target,
+      text: 'Texto atualizado',
+      editedAt: persistedEditedAt,
+    });
     const { service, provider, prisma, realtime } = serviceFactory({
       prismaOverrides: {
         whatsAppMessage: {
@@ -9974,13 +9992,14 @@ describe('WhatsAppService', () => {
     });
     expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith({
       where: { id: target.id },
-      data: { text: 'Texto atualizado' },
+      data: { text: 'Texto atualizado', editedAt: expect.any(Date) },
       include: expect.any(Object),
     });
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       id: target.id,
       text: 'Texto atualizado',
+      editedAt: persistedEditedAt,
       providerMessageId: 'provider-outbound',
       reactions: expect.any(Array),
     });
@@ -10142,8 +10161,14 @@ describe('WhatsAppService', () => {
       .mockResolvedValueOnce({ id: target.id })
       .mockResolvedValueOnce({ ...target, text: 'Primeira edicao' })
       .mockResolvedValueOnce({ id: target.id });
-    const update = vi.fn((args: { data: { text: string } }) =>
-      Promise.resolve(conversationMessage({ ...target, text: args.data.text })),
+    const update = vi.fn((args: { data: { text: string; editedAt: Date } }) =>
+      Promise.resolve(
+        conversationMessage({
+          ...target,
+          text: args.data.text,
+          editedAt: args.data.editedAt,
+        }),
+      ),
     );
     const { service } = serviceFactory({
       providerOverrides: { editMessage },
@@ -10176,6 +10201,9 @@ describe('WhatsAppService', () => {
       'Primeira edicao',
       'Segunda edicao',
     ]);
+    const editTimestamps = update.mock.calls.map(([args]) => args.data.editedAt);
+    expect(editTimestamps).toEqual([expect.any(Date), expect.any(Date)]);
+    expect(editTimestamps[1]).not.toBe(editTimestamps[0]);
   });
 
   it('releases the same-message edit queue after a failure so the next edit can proceed', async () => {
@@ -10219,7 +10247,9 @@ describe('WhatsAppService', () => {
     expect(editMessage).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { text: 'Segunda edicao' } }),
+      expect.objectContaining({
+        data: expect.objectContaining({ text: 'Segunda edicao', editedAt: expect.any(Date) }),
+      }),
     );
   });
 
@@ -10280,7 +10310,10 @@ describe('WhatsAppService', () => {
     await second;
     expect(editMessage).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: secondTarget.id }, data: { text: 'Editado B' } }),
+      expect.objectContaining({
+        where: { id: secondTarget.id },
+        data: expect.objectContaining({ text: 'Editado B', editedAt: expect.any(Date) }),
+      }),
     );
 
     releaseFirst();

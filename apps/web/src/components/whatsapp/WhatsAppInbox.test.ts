@@ -25,6 +25,7 @@ import {
   contactReceivablesForReference,
   conversationComposerActionMode,
   conversationInitials,
+  conversationMessageFooterLabel,
   conversationPixCopyButtonLabel,
   conversationVideoAccept,
   createConversationComposerMedia,
@@ -138,6 +139,7 @@ function message(
     text: 'Ola',
     status: 'SENT',
     sentAt: '2026-10-08T12:00:00.000Z',
+    editedAt: null,
     deliveredAt: null,
     readAt: null,
     failedAt: null,
@@ -2488,6 +2490,36 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     );
   });
 
+  it('shows only the time for original messages and Editada with the edit time when persisted', () => {
+    const original = message({
+      sentAt: '2026-10-08T12:00:00.000Z',
+      editedAt: null,
+    });
+    const edited = message({
+      sentAt: '2026-10-08T12:00:00.000Z',
+      editedAt: '2026-10-08T12:22:00.000Z',
+    });
+
+    expect(conversationMessageFooterLabel(original)).toBe(
+      new Date(original.sentAt!).toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    );
+    expect(conversationMessageFooterLabel(edited)).toBe(
+      `Editada ${new Date(edited.editedAt!).toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`,
+    );
+    expect(whatsAppInboxSource).toContain('<span>{conversationMessageFooterLabel(message)}</span>');
+    expect(whatsAppInboxSource).toContain(
+      '{outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}',
+    );
+    expect(globalStylesSource).toContain('.conversation-bubble footer');
+    expect(globalStylesSource).toContain('line-height: 1;');
+  });
+
   it('keeps message actions outside the bubble so short messages stay compact', () => {
     expect(whatsAppInboxSource).toContain('className={`conversation-message-actions');
     expect(whatsAppInboxSource).toContain('{outbound ? actionRail : null}');
@@ -2865,6 +2897,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     });
     const updated = message({
       id: 'message-reaction',
+      editedAt: '2026-10-08T12:22:00.000Z',
       reactions: [reaction({ id: 'reaction-updated', emoji: '😂', isFromMe: true })],
     });
     const merged = mergeConversationMessages([stale], [updated]);
@@ -2873,6 +2906,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(merged[0]?.reactions).toEqual([
       expect.objectContaining({ emoji: '😂', isFromMe: true }),
     ]);
+    expect(merged[0]?.editedAt).toBe('2026-10-08T12:22:00.000Z');
     expect(JSON.stringify(merged)).not.toContain('❤️');
     expect(
       summarizeConversationReactions([

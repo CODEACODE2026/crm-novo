@@ -2055,6 +2055,7 @@ export class WhatsAppService {
         }),
       );
 
+      const editedAt = new Date();
       let editedLatestMessage = false;
       const updated = await this.prisma.$transaction(async (tx) => {
         const latestMessage = await tx.whatsAppMessage.findFirst({
@@ -2066,7 +2067,7 @@ export class WhatsAppService {
 
         const message = await tx.whatsAppMessage.update({
           where: { id: target.id },
-          data: { text: body },
+          data: { text: body, editedAt },
           include: whatsappMessageReplyInclude,
         });
 
@@ -7078,6 +7079,7 @@ export class WhatsAppService {
       text: deleted ? null : message.text,
       status: message.status,
       sentAt: message.sentAt,
+      editedAt: message.editedAt,
       deliveredAt: message.deliveredAt,
       readAt: message.readAt,
       failedAt: message.failedAt,

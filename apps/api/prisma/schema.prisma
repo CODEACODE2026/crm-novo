@@ -729,6 +729,7 @@ model WhatsAppMessage {
   mediaDurationSeconds     Int?
   status                   WhatsAppConversationMessageStatus
   sentAt                   DateTime?
+  editedAt                 DateTime?
   deliveredAt              DateTime?
   readAt                   DateTime?
   failedAt                 DateTime?

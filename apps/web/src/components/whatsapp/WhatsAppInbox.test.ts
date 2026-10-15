@@ -2535,7 +2535,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('pointer-events: none;');
     expect(globalStylesSource).toContain('.conversation-bubble-row.outbound .conversation-bubble');
     expect(globalStylesSource).toContain('.conversation-bubble-row.inbound .conversation-bubble');
-    expect(globalStylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
+    expect(globalStylesSource).toContain('max-width: min(90%, calc(100% - 52px));');
   });
 
   it('auto-read only accepts active visible focused inbound message.created events', () => {
@@ -3010,7 +3010,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     );
     expect(globalStylesSource).toContain('grid-template-columns: 34px minmax(0, 1fr);');
     expect(globalStylesSource).toContain('min-height: 36px;');
-    expect(globalStylesSource).toContain('padding: 8px 7px;');
+    expect(globalStylesSource).toContain('padding: 7px;');
   });
 
   it('preserves every conversation list filter while changing only presentation', () => {
@@ -3091,7 +3091,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('min-height: 38px;');
     expect(globalStylesSource).toContain('@media (min-width: 621px) and (max-width: 980px)');
     expect(globalStylesSource).toContain('max-width: min(72%, 560px);');
-    expect(globalStylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
+    expect(globalStylesSource).toContain('max-width: min(90%, calc(100% - 52px));');
     expect(globalStylesSource).toContain('width: min(82vw, 100%);');
     expect(globalStylesSource).toContain('min-height: 42px;');
   });
@@ -3296,5 +3296,68 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain(
       '<ConversationLabelChips labels={conversation.labels} limit={3} />',
     );
+  });
+
+  it('compacts the mobile list controls before the independently scrolling conversations', () => {
+    expect(whatsAppInboxSource).toContain('conversation-filter-label-mobile');
+    expect(whatsAppInboxSource).toContain("item.id === 'followup' ? 'Aguardando' : item.label");
+    expect(whatsAppInboxSource).toContain('className="conversation-secondary-filters"');
+    expect(whatsAppInboxSource).toContain('aria-label="Filtrar por status"');
+    expect(whatsAppInboxSource).toContain('aria-label="Filtrar por etiqueta"');
+    expect(globalStylesSource).toContain('overscroll-behavior-inline: contain;');
+    expect(globalStylesSource).toContain('scrollbar-width: none;');
+    expect(globalStylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(globalStylesSource).toContain('min-height: 42px;');
+    expect(globalStylesSource).toContain('grid-template-columns: 40px minmax(0, 1fr);');
+    expect(globalStylesSource).toContain('flex: 1 1 auto;');
+    expect(globalStylesSource).toContain('overflow-y: auto;');
+  });
+
+  it('uses one compact accessible mobile chat header row with an overflow action menu', () => {
+    expect(whatsAppInboxSource).toContain('className="conversation-mobile-back"');
+    expect(whatsAppInboxSource).toContain('aria-label="Voltar para conversas"');
+    expect(whatsAppInboxSource).toContain('className="conversation-header-actions-mobile"');
+    expect(whatsAppInboxSource).toContain('label="Mais ações da conversa"');
+    expect(whatsAppInboxSource).toContain("label: 'Etiquetas'");
+    expect(whatsAppInboxSource).toContain("label: 'Buscar na conversa'");
+    expect(whatsAppInboxSource).toContain("label: 'Informações do contato'");
+    expect(globalStylesSource).toContain("grid-template-areas: 'back contact actions';");
+    expect(globalStylesSource).toContain('grid-template-columns: 40px minmax(0, 1fr) 40px;');
+    expect(globalStylesSource).toContain('.conversation-mobile-back span {');
+    expect(globalStylesSource).toContain('.conversation-header-actions-mobile .ui-icon-button');
+    expect(globalStylesSource).toContain('max-height: 34px;');
+    expect(globalStylesSource).toContain('flex-wrap: wrap;');
+    expect(whatsAppInboxSource).toContain("conversation.status === 'RESOLVED'");
+    expect(whatsAppInboxSource).toContain("label: 'Resolver conversa'");
+    expect(whatsAppInboxSource).toContain('className="conversation-header-actions"');
+  });
+
+  it('collapses mobile message actions and keeps the composer touch-safe and compact', () => {
+    expect(whatsAppInboxSource).toContain('const mobileActionItems: ActionMenuItem[]');
+    expect(whatsAppInboxSource).toContain('label="Ações da mensagem"');
+    expect(whatsAppInboxSource).toContain("label: 'Responder'");
+    expect(whatsAppInboxSource).toContain("label: 'Encaminhar'");
+    expect(whatsAppInboxSource).toContain('label: `Reagir com ${emoji}`');
+    expect(whatsAppInboxSource).toContain("label: savingEdit ? 'Salvando edição...' : 'Editar'");
+    expect(whatsAppInboxSource).toContain("label: deleting ? 'Apagando...' : 'Apagar'");
+    expect(globalStylesSource).toContain(
+      '.conversation-message-actions > :not(.conversation-message-mobile-actions)',
+    );
+    expect(globalStylesSource).toContain('.conversation-message-mobile-actions .ui-icon-button');
+    expect(globalStylesSource).toContain('max-width: min(90%, calc(100% - 52px));');
+    expect(globalStylesSource).toContain('min-height: 56px;');
+    expect(globalStylesSource).toContain('padding: 6px 8px max(6px, env(safe-area-inset-bottom));');
+    expect(globalStylesSource).toContain('min-height: 44px;');
+    expect(globalStylesSource).toContain('max-height: 96px;');
+    expect(globalStylesSource).toContain('var(--chat-viewport-height, 100svh)');
+  });
+
+  it('keeps mobile PIX cards touch-safe and inside compact bubbles', () => {
+    expect(whatsAppInboxSource).toContain('aria-label="Copiar chave PIX"');
+    expect(globalStylesSource).toContain('.conversation-pix-copy-action {');
+    expect(globalStylesSource).toContain('.conversation-pix-copy-action span {');
+    expect(globalStylesSource).toContain('text-overflow: ellipsis;');
+    expect(globalStylesSource).toContain('min-height: 44px;');
+    expect(globalStylesSource).toContain('max-width: min(92%, calc(100% - 52px));');
   });
 });

@@ -843,7 +843,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       '.conversation-messages {\n    padding: 0;\n    scroll-padding-bottom: 12px;',
     );
     expect(mobileConversationMediaSource).toContain(
-      '.conversation-message-stack {\n    padding: 12px;',
+      '.conversation-message-stack {\n    gap: 6px;\n    padding: 8px;',
     );
     expect(stylesSource).not.toContain(
       '.conversation-messages {\n  box-sizing: border-box;\n  display: flex;\n  flex: 1 1 auto;',
@@ -917,25 +917,28 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('keeps the mobile conversation header compact without affecting desktop header rules', () => {
-    expect(mobileConversationMediaSource).toContain('grid-template-columns: minmax(0, 1fr) 34px;');
-    expect(mobileConversationMediaSource).toContain('gap: 2px 8px;');
-    expect(mobileConversationMediaSource).toContain('padding: 5px 8px 6px;');
-    expect(mobileConversationMediaSource).toContain('min-height: 24px;');
+    expect(mobileConversationMediaSource).toContain(
+      'grid-template-columns: 40px minmax(0, 1fr) 40px;',
+    );
+    expect(mobileConversationMediaSource).toContain('gap: 6px;');
+    expect(mobileConversationMediaSource).toContain(
+      'padding: max(5px, env(safe-area-inset-top)) 6px 6px;',
+    );
+    expect(mobileConversationMediaSource).toContain('min-height: 44px;');
     expect(mobileConversationMediaSource).toContain('font-size: 11px;');
-    expect(mobileConversationMediaSource).toContain('grid-template-columns: 30px minmax(0, 1fr);');
-    expect(mobileConversationMediaSource).toContain('width: 30px;');
-    expect(mobileConversationMediaSource).toContain('height: 30px;');
+    expect(mobileConversationMediaSource).toContain('grid-template-columns: 36px minmax(0, 1fr);');
+    expect(mobileConversationMediaSource).toContain('width: 36px;');
+    expect(mobileConversationMediaSource).toContain('height: 36px;');
     expect(mobileConversationMediaSource).toContain('font-size: 14px;');
     expect(mobileConversationMediaSource).toContain('font-size: 10.5px;');
-    expect(mobileConversationMediaSource).toContain('flex-wrap: nowrap;');
+    expect(mobileConversationMediaSource).toContain('flex-wrap: wrap;');
+    expect(mobileConversationMediaSource).toContain('max-height: 34px;');
     expect(mobileConversationMediaSource).toContain('min-height: 16px;');
     expect(mobileConversationMediaSource).toContain('font-size: 9px;');
-    expect(mobileConversationMediaSource).toContain(
-      '.conversation-header-actions .conversation-resolved-label',
-    );
-    expect(mobileConversationMediaSource).toContain('width: 34px;');
-    expect(mobileConversationMediaSource).toContain('height: 34px;');
-    expect(mobileConversationMediaSource).toContain('min-height: 34px;');
+    expect(mobileConversationMediaSource).toContain('.conversation-header-actions {');
+    expect(mobileConversationMediaSource).toContain('.conversation-header-actions-mobile {');
+    expect(mobileConversationMediaSource).toContain('width: 40px;');
+    expect(mobileConversationMediaSource).toContain('height: 44px;');
     expect(stylesSource).toContain('min-width: 112px;');
     expect(stylesSource).toContain('width: 44px;');
     expect(stylesSource).toContain('height: 44px;');
@@ -979,7 +982,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       ".app-shell[data-active-view='conversations'] {\n    height: var(--chat-viewport-height, 100svh);",
     );
     expect(stylesSource).toContain('@supports not (height: 100svh)');
-    expect(stylesSource).toContain('padding: 10px 10px max(10px, env(safe-area-inset-bottom));');
+    expect(stylesSource).toContain('padding: 6px 8px max(6px, env(safe-area-inset-bottom));');
     expect(mobileConversationComposerBlock).not.toContain('position: fixed;');
     expect(mobileConversationComposerBlock).not.toContain('position: sticky;');
   });
@@ -1054,7 +1057,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('.conversations-view.mobile-mode-chat .conversation-list-panel');
     expect(stylesSource).toContain('height: 100dvh;');
     expect(stylesSource).toContain('min-height: 0;');
-    expect(stylesSource).toContain('max-width: min(88%, calc(100% - 100px));');
+    expect(stylesSource).toContain('max-width: min(90%, calc(100% - 52px));');
   });
 
   it('supports saved sticker library actions without reuploading through the browser', () => {

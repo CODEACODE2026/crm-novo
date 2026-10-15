@@ -53,7 +53,7 @@ import {
 } from 'lucide-react';
 import { ClientForm } from '../clients/client-form';
 import { FinanceClientAutocomplete } from '../clients/finance-client-autocomplete';
-import { Button, IconButton } from '../ui/primitives';
+import { ActionMenu, Button, IconButton, type ActionMenuItem } from '../ui/primitives';
 import {
   ConversationMessageSearch,
   ConversationSearch,
@@ -4619,36 +4619,46 @@ function ConversationList({
             type="button"
             onClick={() => onFilterChange(item.id)}
           >
-            {item.label}
+            <span className="conversation-filter-label-desktop">{item.label}</span>
+            <span className="conversation-filter-label-mobile">
+              {item.id === 'followup' ? 'Aguardando' : item.label}
+            </span>
           </button>
         ))}
       </div>
 
-      <label className="conversation-status-filter">
-        <span>Status</span>
-        <select
-          value={statusFilter}
-          onChange={(event) =>
-            onStatusFilterChange(event.target.value as WhatsAppConversationStatus | '')
-          }
-        >
-          <option value="">Todos</option>
-          <option value="OPEN">Abertas</option>
-          <option value="RESOLVED">Resolvidas</option>
-        </select>
-      </label>
+      <div className="conversation-secondary-filters">
+        <label className="conversation-status-filter">
+          <span>Status</span>
+          <select
+            aria-label="Filtrar por status"
+            value={statusFilter}
+            onChange={(event) =>
+              onStatusFilterChange(event.target.value as WhatsAppConversationStatus | '')
+            }
+          >
+            <option value="">Todos</option>
+            <option value="OPEN">Abertas</option>
+            <option value="RESOLVED">Resolvidas</option>
+          </select>
+        </label>
 
-      <label className="conversation-label-filter">
-        <span>Etiquetas</span>
-        <select value={labelFilter} onChange={(event) => onLabelFilterChange(event.target.value)}>
-          <option value="">Todas</option>
-          {labels.map((label) => (
-            <option key={label.id} value={label.id}>
-              {label.name}
-            </option>
-          ))}
-        </select>
-      </label>
+        <label className="conversation-label-filter">
+          <span>Etiquetas</span>
+          <select
+            aria-label="Filtrar por etiqueta"
+            value={labelFilter}
+            onChange={(event) => onLabelFilterChange(event.target.value)}
+          >
+            <option value="">Todas</option>
+            {labels.map((label) => (
+              <option key={label.id} value={label.id}>
+                {label.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       {listError ? (
         <div className="notice danger conversation-notice" role="alert">
@@ -4848,7 +4858,12 @@ function ConversationHeader({
 
   return (
     <header className="conversation-header">
-      <button className="conversation-mobile-back" type="button" onClick={onBack}>
+      <button
+        aria-label="Voltar para conversas"
+        className="conversation-mobile-back"
+        type="button"
+        onClick={onBack}
+      >
         <ArrowLeft aria-hidden="true" size={16} />
         <span>Voltar</span>
       </button>
@@ -4900,6 +4915,26 @@ function ConversationHeader({
             Resolver
           </Button>
         )}
+      </div>
+      <div className="conversation-header-actions-mobile">
+        <ActionMenu
+          label="Mais ações da conversa"
+          items={[
+            { label: 'Etiquetas', icon: Tags, onSelect: onManageLabels },
+            { label: 'Buscar na conversa', icon: Search, onSelect: onToggleSearch },
+            { label: 'Informações do contato', icon: Info, onSelect: onOpenClientPanel },
+            ...(conversation.status === 'RESOLVED'
+              ? []
+              : [
+                  {
+                    label: 'Resolver conversa',
+                    icon: CircleCheck,
+                    disabled: resolving,
+                    onSelect: onResolve,
+                  },
+                ]),
+          ]}
+        />
       </div>
     </header>
   );
@@ -5430,11 +5465,73 @@ function ConversationBubble({
     message.mediaMimeType?.toLowerCase() === 'image/webp';
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
+  const mobileActionItems: ActionMenuItem[] = [
+    { label: 'Responder', icon: Reply, onSelect: () => onReply(message) },
+    ...(canSaveSticker
+      ? [
+          {
+            label: savingSticker ? 'Salvando figurinha...' : 'Salvar figurinha',
+            icon: Download,
+            disabled: savingSticker,
+            onSelect: () => onSaveSticker(message),
+          },
+        ]
+      : []),
+    ...(forwardEligible
+      ? [{ label: 'Encaminhar', icon: ForwardIcon, onSelect: () => onForward(message) }]
+      : []),
+    ...(editEligible
+      ? [
+          {
+            label: savingEdit ? 'Salvando edição...' : 'Editar',
+            icon: Pencil,
+            disabled: savingEdit,
+            onSelect: () => onEdit(message),
+          },
+        ]
+      : []),
+    ...(!message.deleted
+      ? allowedWhatsAppReactionEmojis.map((emoji) => ({
+          label: `Reagir com ${emoji}`,
+          disabled: reacting,
+          onSelect: () => onReaction(message, emoji),
+          section: 'Reagir',
+        }))
+      : []),
+    ...(deleteEligible
+      ? [
+          {
+            label: deleting ? 'Apagando...' : 'Apagar',
+            icon: Trash2,
+            danger: true,
+            disabled: deleting,
+            onSelect: () => onDeleteConfirmChange(message.id),
+            section: 'Mensagem',
+          },
+        ]
+      : []),
+  ];
   const actionRail = (
     <div
       className={`conversation-message-actions ${outbound ? 'outbound' : 'inbound'}`}
       aria-label="Acoes da mensagem"
     >
+      <div className="conversation-message-mobile-actions">
+        <ActionMenu items={mobileActionItems} label="Ações da mensagem" />
+        {deleteConfirmOpen ? (
+          <div className="conversation-delete-confirm" role="dialog" aria-label="Apagar mensagem">
+            <span>Apagar esta mensagem?</span>
+            <div>
+              <button type="button" disabled={deleting} onClick={() => onDeleteConfirmChange(null)}>
+                Cancelar
+              </button>
+              <button type="button" disabled={deleting} onClick={() => onDelete(message)}>
+                {deleting ? 'Apagando...' : 'Apagar'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
       <button
         className="conversation-reply-action"
         type="button"

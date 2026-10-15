@@ -26,12 +26,14 @@ import {
   getReceivable,
   getReceivablesSummary,
   getWhatsAppConversation,
+  getWhatsAppAutoReply,
   getWhatsAppConversationMessagesAround,
   getWhatsAppSavedStickerMediaBlob,
   getWhatsAppSavedStickerMediaUrl,
   importLegacyClients,
   importLegacyPayments,
   listWhatsAppConversationMessages,
+  listWhatsAppAutoReplies,
   listWhatsAppConversations,
   listWhatsAppConnections,
   listWhatsAppSavedStickers,
@@ -68,6 +70,7 @@ import {
   testPaymentProviderCredential,
   markWhatsAppConversationRead,
   updateWhatsAppConversationMessageReaction,
+  updateWhatsAppAutoReply,
   updateClient,
   updateMessageTemplate,
 } from './crm-api';
@@ -1664,5 +1667,42 @@ describe('CRM UI formatters', () => {
       expect.stringContaining('/whatsapp/saved-stickers/saved-sticker-id/media'),
       expect.objectContaining({ credentials: 'include' }),
     );
+  });
+  it('uses typed per-connection auto-reply endpoints and follow-up filter', async () => {
+    const requestedUrls: string[] = [];
+    const requestInits: Array<RequestInit | undefined> = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrls.push(
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
+      );
+      requestInits.push(init);
+      return Promise.resolve(new Response(JSON.stringify({ enabled: false }), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listWhatsAppAutoReplies();
+    await getWhatsAppAutoReply('11111111-1111-4111-8111-111111111111');
+    await updateWhatsAppAutoReply('11111111-1111-4111-8111-111111111111', {
+      enabled: true,
+      mode: 'AWAY',
+      message: 'Retornaremos em breve.',
+      cooldownMinutes: 720,
+      audience: 'ALL',
+      startsAt: null,
+      endsAt: null,
+    });
+    await listWhatsAppConversations({ needsManualFollowUp: true });
+
+    expect(requestedUrls).toEqual([
+      expect.stringContaining('/whatsapp/auto-replies'),
+      expect.stringContaining(
+        '/whatsapp/connections/11111111-1111-4111-8111-111111111111/auto-reply',
+      ),
+      expect.stringContaining(
+        '/whatsapp/connections/11111111-1111-4111-8111-111111111111/auto-reply',
+      ),
+      expect.stringContaining('/whatsapp/conversations?needsManualFollowUp=true'),
+    ]);
+    expect(requestInits[2]).toMatchObject({ method: 'PUT' });
   });
 });

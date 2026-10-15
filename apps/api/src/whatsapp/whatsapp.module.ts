@@ -21,6 +21,7 @@ import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.service';
 import { WhatsAppService } from './whatsapp.service';
+import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
 
 @Module({
   imports: [AuthModule, PrismaModule, PlansModule, FinanceModule, ReferralsModule],
@@ -36,6 +37,7 @@ import { WhatsAppService } from './whatsapp.service';
     WhatsAppQuickRepliesService,
     WhatsAppRealtimeService,
     WhatsAppVoiceConversionService,
+    WhatsAppAutoReplyService,
     WhatsAppService,
     {
       provide: WHATSAPP_PROVIDER,

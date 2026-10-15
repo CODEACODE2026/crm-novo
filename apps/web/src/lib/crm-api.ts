@@ -745,6 +745,8 @@ export interface WhatsAppConversation {
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   unreadCount: number;
+  needsManualFollowUp: boolean;
+  lastAutoReplyAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -787,6 +789,7 @@ export interface WhatsAppConversationMessage {
   deletedAt: string | null;
   deletedForEveryone: boolean;
   isFromMe: boolean;
+  isAutoReply: boolean;
   providerMessageId: string | null;
   replyToMessageId: string | null;
   replyToProviderMessageId: string | null;
@@ -815,6 +818,36 @@ export interface WhatsAppConversationMessage {
     buttonLabel: string;
   } | null;
   createdAt: string;
+}
+
+export type WhatsAppAutoReplyMode = 'AWAY' | 'SERVICE_UNAVAILABLE' | 'CUSTOM';
+export type WhatsAppAutoReplyAudience = 'ALL' | 'LINKED_CLIENTS' | 'UNLINKED_CONTACTS';
+
+export interface WhatsAppAutoReplyConfig {
+  id: string | null;
+  whatsAppConnectionId: string;
+  connectionName: string;
+  connectionStatus: WhatsAppConnectionStatus;
+  enabled: boolean;
+  mode: WhatsAppAutoReplyMode;
+  message: string;
+  cooldownMinutes: number;
+  audience: WhatsAppAutoReplyAudience;
+  startsAt: string | null;
+  endsAt: string | null;
+  timezone: 'America/Sao_Paulo';
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface UpdateWhatsAppAutoReplyPayload {
+  enabled: boolean;
+  mode: WhatsAppAutoReplyMode;
+  message: string;
+  cooldownMinutes: number;
+  audience: WhatsAppAutoReplyAudience;
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 export interface WhatsAppMessageReaction {
@@ -2644,6 +2677,7 @@ export function listWhatsAppConversations(
     search?: string;
     status?: WhatsAppConversationStatus | '';
     unreadOnly?: boolean;
+    needsManualFollowUp?: boolean;
     whatsAppConnectionId?: string;
     hasClient?: boolean;
   } = {},
@@ -2655,6 +2689,7 @@ export function listWhatsAppConversations(
   if (filters.search) params.set('search', filters.search);
   if (filters.status) params.set('status', filters.status);
   if (filters.unreadOnly) params.set('unreadOnly', 'true');
+  if (filters.needsManualFollowUp) params.set('needsManualFollowUp', 'true');
   if (filters.hasClient !== undefined) params.set('hasClient', String(filters.hasClient));
   if (filters.clientId) params.set('clientId', filters.clientId);
   if (filters.whatsAppConnectionId) {
@@ -2665,6 +2700,24 @@ export function listWhatsAppConversations(
   return apiFetch<PaginatedWhatsAppConversations>(
     `/whatsapp/conversations${query ? `?${query}` : ''}`,
   );
+}
+
+export function listWhatsAppAutoReplies() {
+  return apiFetch<WhatsAppAutoReplyConfig[]>('/whatsapp/auto-replies');
+}
+
+export function getWhatsAppAutoReply(connectionId: string) {
+  return apiFetch<WhatsAppAutoReplyConfig>(`/whatsapp/connections/${connectionId}/auto-reply`);
+}
+
+export function updateWhatsAppAutoReply(
+  connectionId: string,
+  payload: UpdateWhatsAppAutoReplyPayload,
+) {
+  return apiFetch<WhatsAppAutoReplyConfig>(`/whatsapp/connections/${connectionId}/auto-reply`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getWhatsAppConversation(id: string) {

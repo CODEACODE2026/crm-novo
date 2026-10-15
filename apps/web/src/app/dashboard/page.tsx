@@ -184,6 +184,7 @@ import {
   listReceivables,
   listWhatsAppPendingContacts,
   listWhatsAppMessages,
+  listWhatsAppAutoReplies,
   listWhatsAppQuickRepliesAdmin,
   downloadReportCsv,
   logoutWhatsApp,
@@ -248,6 +249,7 @@ import {
   updateMessageTemplate,
   updateBillingAutomationSettings,
   updateWhatsAppQuickReply,
+  updateWhatsAppAutoReply,
   updateRecoveryAutomationSettings,
   syncPaymentIntent,
   deactivatePaymentProviderCredential,
@@ -316,6 +318,9 @@ import {
   type ReferralStatus,
   type ReferralSummary,
   type WhatsAppConnection,
+  type WhatsAppAutoReplyConfig,
+  type WhatsAppAutoReplyMode,
+  type WhatsAppAutoReplyAudience,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
   type WhatsAppPendingContactStatus,
@@ -1283,6 +1288,10 @@ export default function DashboardPage() {
         {view === 'conversations' ? (
           <WhatsAppInbox
             restoreRequest={whatsAppRestoreRequest}
+            onOpenAutoReplySettings={() => {
+              setSettingsInitialSection('whatsapp');
+              setView('settings');
+            }}
             onSummaryChange={whatsappRealtime.setSummary}
             onSummaryRefreshRequest={whatsappRealtime.refreshSummary}
             onConversationLocationChange={handleWhatsAppConversationLocationChange}
@@ -5166,6 +5175,7 @@ function SettingsView({
   const [credentials, setCredentials] = useState<PaymentProviderCredentialStatus[]>([]);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [quickReplies, setQuickReplies] = useState<WhatsAppQuickReplyAdmin[]>([]);
+  const [autoReplyConfigs, setAutoReplyConfigs] = useState<WhatsAppAutoReplyConfig[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingAutomationSettings | null>(null);
   const [billingEnabled, setBillingEnabled] = useState(false);
   const [billingSendTime, setBillingSendTime] = useState('09:00');
@@ -5186,6 +5196,10 @@ function SettingsView({
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
   const [quickRepliesLoading, setQuickRepliesLoading] = useState(false);
+  const [autoRepliesLoading, setAutoRepliesLoading] = useState(false);
+  const [autoReplySavingConnectionId, setAutoReplySavingConnectionId] = useState<string | null>(
+    null,
+  );
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingSaving, setBillingSaving] = useState(false);
   const [recoveryLoading, setRecoveryLoading] = useState(false);
@@ -5194,6 +5208,7 @@ function SettingsView({
   const [error, setError] = useState('');
   const [healthError, setHealthError] = useState('');
   const [quickRepliesError, setQuickRepliesError] = useState('');
+  const [autoRepliesError, setAutoRepliesError] = useState('');
   const [billingError, setBillingError] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
   const loadingRef = useRef(false);
@@ -5201,6 +5216,7 @@ function SettingsView({
   const billingSaveRef = useRef(false);
   const recoverySaveRef = useRef(false);
   const quickRepliesLoadedRef = useRef(false);
+  const autoRepliesLoadedRef = useRef(false);
 
   useEffect(() => {
     setActiveSection(initialSection);
@@ -5265,6 +5281,60 @@ function SettingsView({
       void loadQuickReplies();
     }
   }, [activeSection, loadQuickReplies, quickRepliesLoading]);
+
+  const loadAutoReplies = useCallback(async () => {
+    setAutoRepliesLoading(true);
+    setAutoRepliesError('');
+    try {
+      setAutoReplyConfigs(await listWhatsAppAutoReplies());
+      autoRepliesLoadedRef.current = true;
+    } catch (err) {
+      setAutoRepliesError(
+        err instanceof Error ? err.message : 'Não foi possível carregar respostas automáticas.',
+      );
+    } finally {
+      setAutoRepliesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === 'whatsapp' && !autoRepliesLoadedRef.current && !autoRepliesLoading) {
+      void loadAutoReplies();
+    }
+  }, [activeSection, autoRepliesLoading, loadAutoReplies]);
+
+  async function saveAutoReplyConfig(
+    config: WhatsAppAutoReplyConfig,
+    payload: {
+      enabled: boolean;
+      mode: WhatsAppAutoReplyMode;
+      message: string;
+      cooldownMinutes: number;
+      audience: WhatsAppAutoReplyAudience;
+      startsAt: string | null;
+      endsAt: string | null;
+    },
+  ) {
+    if (autoReplySavingConnectionId) return;
+    setAutoReplySavingConnectionId(config.whatsAppConnectionId);
+    setAutoRepliesError('');
+    setNotice('');
+    try {
+      const updated = await updateWhatsAppAutoReply(config.whatsAppConnectionId, payload);
+      setAutoReplyConfigs((current) =>
+        current.map((item) =>
+          item.whatsAppConnectionId === updated.whatsAppConnectionId ? updated : item,
+        ),
+      );
+      setNotice(updated.enabled ? 'Resposta automática ativada.' : 'Resposta automática salva.');
+    } catch (err) {
+      setAutoRepliesError(
+        err instanceof Error ? err.message : 'Não foi possível salvar resposta automática.',
+      );
+    } finally {
+      setAutoReplySavingConnectionId(null);
+    }
+  }
 
   async function saveQuickReply(payload: Partial<WhatsAppQuickReplyPayload>, id?: string) {
     setQuickRepliesError('');
@@ -5652,11 +5722,17 @@ function SettingsView({
 
           {activeSection === 'whatsapp' ? (
             <SettingsWhatsAppQuickRepliesPanel
+              autoReplyConfigs={autoReplyConfigs}
+              autoReplyError={autoRepliesError}
+              autoReplyLoading={autoRepliesLoading}
+              autoReplySavingConnectionId={autoReplySavingConnectionId}
               error={quickRepliesError}
               loading={quickRepliesLoading}
               replies={quickReplies}
               onOpenWhatsApp={onOpenWhatsApp}
               onRefresh={loadQuickReplies}
+              onRefreshAutoReplies={loadAutoReplies}
+              onSaveAutoReply={saveAutoReplyConfig}
               onSave={saveQuickReply}
               onToggle={toggleQuickReply}
               onDelete={deleteQuickReply}
@@ -5909,25 +5985,177 @@ function SettingsPaymentsPanel({
   );
 }
 
+function autoReplyPreset(mode: WhatsAppAutoReplyMode) {
+  if (mode === 'AWAY') {
+    return 'Olá! No momento estou ausente. Assim que retornar, respondo você por aqui.';
+  }
+  if (mode === 'SERVICE_UNAVAILABLE') {
+    return 'Olá! Estamos com uma instabilidade no serviço no momento. Assim que normalizar, retorno por aqui.';
+  }
+  return '';
+}
+
+function toDateTimeLocalValue(value: string | null) {
+  if (!value) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
+}
+
+function saoPauloDateTimeToIso(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  const wallTimeUtc = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+  );
+  const zonedParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(wallTimeUtc));
+  const zonedPart = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(zonedParts.find((item) => item.type === type)?.value ?? 0);
+  const offset =
+    Date.UTC(
+      zonedPart('year'),
+      zonedPart('month') - 1,
+      zonedPart('day'),
+      zonedPart('hour'),
+      zonedPart('minute'),
+    ) - wallTimeUtc;
+  return new Date(wallTimeUtc - offset).toISOString();
+}
+
 function SettingsWhatsAppQuickRepliesPanel({
+  autoReplyConfigs,
+  autoReplyError,
+  autoReplyLoading,
+  autoReplySavingConnectionId,
   error,
   loading,
   replies,
   onOpenWhatsApp,
   onRefresh,
+  onRefreshAutoReplies,
+  onSaveAutoReply,
   onSave,
   onToggle,
   onDelete,
 }: {
+  autoReplyConfigs: WhatsAppAutoReplyConfig[];
+  autoReplyError: string;
+  autoReplyLoading: boolean;
+  autoReplySavingConnectionId: string | null;
   error: string;
   loading: boolean;
   replies: WhatsAppQuickReplyAdmin[];
   onOpenWhatsApp: () => void;
   onRefresh: () => Promise<void>;
+  onRefreshAutoReplies: () => Promise<void>;
+  onSaveAutoReply: (
+    config: WhatsAppAutoReplyConfig,
+    payload: {
+      enabled: boolean;
+      mode: WhatsAppAutoReplyMode;
+      message: string;
+      cooldownMinutes: number;
+      audience: WhatsAppAutoReplyAudience;
+      startsAt: string | null;
+      endsAt: string | null;
+    },
+  ) => Promise<void>;
   onSave: (payload: Partial<WhatsAppQuickReplyPayload>, id?: string) => Promise<void>;
   onToggle: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
   onDelete: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
 }) {
+  const [selectedAutoReplyConnectionId, setSelectedAutoReplyConnectionId] = useState('');
+  const selectedAutoReply =
+    autoReplyConfigs.find((item) => item.whatsAppConnectionId === selectedAutoReplyConnectionId) ??
+    autoReplyConfigs[0] ??
+    null;
+  const [autoReplyMode, setAutoReplyMode] = useState<WhatsAppAutoReplyMode>('AWAY');
+  const [autoReplyMessage, setAutoReplyMessage] = useState('');
+  const [autoReplyCooldown, setAutoReplyCooldown] = useState('720');
+  const [autoReplyAudience, setAutoReplyAudience] = useState<WhatsAppAutoReplyAudience>('ALL');
+  const [autoReplyScheduled, setAutoReplyScheduled] = useState(false);
+  const [autoReplyStartsAt, setAutoReplyStartsAt] = useState('');
+  const [autoReplyEndsAt, setAutoReplyEndsAt] = useState('');
+
+  useEffect(() => {
+    if (!selectedAutoReply) return;
+    setSelectedAutoReplyConnectionId(selectedAutoReply.whatsAppConnectionId);
+    setAutoReplyMode(selectedAutoReply.mode);
+    setAutoReplyMessage(selectedAutoReply.message);
+    setAutoReplyCooldown(String(selectedAutoReply.cooldownMinutes));
+    setAutoReplyAudience(selectedAutoReply.audience);
+    setAutoReplyScheduled(Boolean(selectedAutoReply.startsAt || selectedAutoReply.endsAt));
+    setAutoReplyStartsAt(toDateTimeLocalValue(selectedAutoReply.startsAt));
+    setAutoReplyEndsAt(toDateTimeLocalValue(selectedAutoReply.endsAt));
+  }, [selectedAutoReply]);
+
+  const parsedAutoReplyCooldown = Number(autoReplyCooldown);
+  const autoReplyValid = Boolean(
+    selectedAutoReply &&
+    autoReplyMessage.trim() &&
+    Number.isInteger(parsedAutoReplyCooldown) &&
+    parsedAutoReplyCooldown >= 1 &&
+    (!autoReplyScheduled ||
+      !autoReplyStartsAt ||
+      !autoReplyEndsAt ||
+      autoReplyStartsAt < autoReplyEndsAt),
+  );
+
+  function changeAutoReplyMode(mode: WhatsAppAutoReplyMode) {
+    setAutoReplyMode(mode);
+    if (!autoReplyMessage.trim() || autoReplyMessage === autoReplyPreset(autoReplyMode)) {
+      setAutoReplyMessage(autoReplyPreset(mode));
+    }
+  }
+
+  async function submitAutoReply() {
+    if (!selectedAutoReply || !autoReplyValid) return;
+    await onSaveAutoReply(selectedAutoReply, {
+      enabled: true,
+      mode: autoReplyMode,
+      message: autoReplyMessage.trim(),
+      cooldownMinutes: parsedAutoReplyCooldown,
+      audience: autoReplyAudience,
+      startsAt:
+        autoReplyScheduled && autoReplyStartsAt ? saoPauloDateTimeToIso(autoReplyStartsAt) : null,
+      endsAt: autoReplyScheduled && autoReplyEndsAt ? saoPauloDateTimeToIso(autoReplyEndsAt) : null,
+    });
+  }
+
+  async function disableAutoReply() {
+    if (!selectedAutoReply) return;
+    await onSaveAutoReply(selectedAutoReply, {
+      enabled: false,
+      mode: selectedAutoReply.mode,
+      message: selectedAutoReply.message,
+      cooldownMinutes: selectedAutoReply.cooldownMinutes,
+      audience: selectedAutoReply.audience,
+      startsAt: selectedAutoReply.startsAt,
+      endsAt: selectedAutoReply.endsAt,
+    });
+  }
   const [editingId, setEditingId] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [text, setText] = useState('');
@@ -6012,6 +6240,150 @@ function SettingsWhatsAppQuickRepliesPanel({
 
   return (
     <div className="settings-v2-panel settings-whatsapp-quick-replies">
+      <section className="settings-auto-reply-card" aria-labelledby="settings-auto-reply-title">
+        <div className="panel-header">
+          <div>
+            <span className="metric-label">WhatsApp</span>
+            <h3 id="settings-auto-reply-title">Resposta automática</h3>
+            <p>Responda uma vez por período e mantenha a conversa aguardando retorno manual.</p>
+          </div>
+          <span
+            className={`finance-status-pill ${selectedAutoReply?.enabled ? 'tone-success' : 'tone-muted'}`}
+          >
+            {selectedAutoReply?.enabled ? 'ATIVA' : 'INATIVA'}
+          </span>
+        </div>
+
+        {autoReplyError ? <div className="notice danger">{autoReplyError}</div> : null}
+        <div className="settings-auto-reply-grid">
+          <label className="field">
+            <span>Conexão</span>
+            <select
+              disabled={autoReplyLoading || !autoReplyConfigs.length}
+              value={selectedAutoReply?.whatsAppConnectionId ?? ''}
+              onChange={(event) => setSelectedAutoReplyConnectionId(event.target.value)}
+            >
+              {!autoReplyConfigs.length ? <option value="">Nenhuma conexão</option> : null}
+              {autoReplyConfigs.map((config) => (
+                <option key={config.whatsAppConnectionId} value={config.whatsAppConnectionId}>
+                  {config.connectionName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Tipo</span>
+            <select
+              disabled={!selectedAutoReply}
+              value={autoReplyMode}
+              onChange={(event) => changeAutoReplyMode(event.target.value as WhatsAppAutoReplyMode)}
+            >
+              <option value="AWAY">Ausente</option>
+              <option value="SERVICE_UNAVAILABLE">Serviço indisponível</option>
+              <option value="CUSTOM">Personalizada</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Responder novamente após</span>
+            <select
+              disabled={!selectedAutoReply}
+              value={autoReplyCooldown}
+              onChange={(event) => setAutoReplyCooldown(event.target.value)}
+            >
+              <option value="60">1 hora</option>
+              <option value="180">3 horas</option>
+              <option value="360">6 horas</option>
+              <option value="720">12 horas</option>
+              <option value="1440">24 horas</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Público</span>
+            <select
+              disabled={!selectedAutoReply}
+              value={autoReplyAudience}
+              onChange={(event) =>
+                setAutoReplyAudience(event.target.value as WhatsAppAutoReplyAudience)
+              }
+            >
+              <option value="ALL">Todos</option>
+              <option value="LINKED_CLIENTS">Somente clientes vinculados</option>
+              <option value="UNLINKED_CONTACTS">Somente contatos não vinculados</option>
+            </select>
+          </label>
+        </div>
+        <label className="field">
+          <span>Mensagem</span>
+          <textarea
+            disabled={!selectedAutoReply}
+            maxLength={2000}
+            rows={4}
+            value={autoReplyMessage}
+            onChange={(event) => setAutoReplyMessage(event.target.value)}
+          />
+        </label>
+        <label className="settings-template-active-toggle">
+          <input
+            checked={autoReplyScheduled}
+            disabled={!selectedAutoReply}
+            type="checkbox"
+            onChange={(event) => setAutoReplyScheduled(event.target.checked)}
+          />
+          <span>Programar período opcional</span>
+        </label>
+        {autoReplyScheduled ? (
+          <div className="settings-auto-reply-grid">
+            <label className="field">
+              <span>Início</span>
+              <input
+                type="datetime-local"
+                value={autoReplyStartsAt}
+                onChange={(event) => setAutoReplyStartsAt(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Fim</span>
+              <input
+                type="datetime-local"
+                value={autoReplyEndsAt}
+                onChange={(event) => setAutoReplyEndsAt(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+        <small>Fuso operacional: America/Sao_Paulo. Persistência em UTC.</small>
+        <div className="settings-quick-reply-form-actions">
+          <Button
+            icon={RefreshCcw}
+            loading={autoReplyLoading}
+            type="button"
+            variant="secondary"
+            onClick={() => void onRefreshAutoReplies()}
+          >
+            Atualizar
+          </Button>
+          {selectedAutoReply?.enabled ? (
+            <Button
+              loading={autoReplySavingConnectionId === selectedAutoReply.whatsAppConnectionId}
+              type="button"
+              variant="danger"
+              onClick={() => void disableAutoReply()}
+            >
+              Desativar resposta automática
+            </Button>
+          ) : null}
+          <Button
+            disabled={!autoReplyValid}
+            icon={Save}
+            loading={autoReplySavingConnectionId === selectedAutoReply?.whatsAppConnectionId}
+            type="button"
+            onClick={() => void submitAutoReply()}
+          >
+            {selectedAutoReply?.enabled ? 'Salvar' : 'Ativar'}
+          </Button>
+        </div>
+      </section>
+
       <div className="settings-v2-toolbar">
         <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenWhatsApp}>
           Abrir WhatsApp

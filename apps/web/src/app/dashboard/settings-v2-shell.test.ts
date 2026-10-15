@@ -439,6 +439,19 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(stylesSource).toContain('.settings-quick-reply-delete-modal');
   });
 
+  it('adds per-connection automatic reply controls without exposing provider secrets', () => {
+    expect(settingsViewSource).toContain('setAutoReplyConfigs(await listWhatsAppAutoReplies())');
+    expect(settingsViewSource).toContain('await updateWhatsAppAutoReply');
+    expect(settingsSource).toContain('Resposta automática');
+    expect(settingsSource).toContain('Serviço indisponível');
+    expect(settingsSource).toContain('Somente clientes vinculados');
+    expect(settingsSource).toContain('Somente contatos não vinculados');
+    expect(settingsSource).toContain('Desativar resposta automática');
+    expect(settingsSource).toContain('Programar período opcional');
+    expect(settingsSource).toContain('America/Sao_Paulo');
+    expect(settingsSource).not.toContain('providerTokenEncrypted');
+  });
+
   it('renders Sistema as a read-only health panel without exposing secrets', () => {
     expect(settingsViewSource).toContain("activeSection === 'system'");
     expect(settingsSource).toContain('function SettingsSystemPanel');

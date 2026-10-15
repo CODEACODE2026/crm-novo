@@ -71,6 +71,7 @@ import {
   getClient,
   getPaymentIntentPixCopy,
   listWhatsAppQuickReplies,
+  listWhatsAppAutoReplies,
   getWhatsAppConversation,
   getWhatsAppConversationAvatar,
   getWhatsAppConversationMessagesAround,
@@ -100,6 +101,7 @@ import {
   startWhatsAppConversation,
   updateClient,
   updateWhatsAppConversationMessageReaction,
+  updateWhatsAppAutoReply,
   type Client,
   type ClientEvent,
   type ClientReference,
@@ -111,6 +113,7 @@ import {
   type Receivable,
   type Renewal,
   type WhatsAppConnection,
+  type WhatsAppAutoReplyConfig,
   type WhatsAppConversationAvatar,
   type WhatsAppConversation,
   type WhatsAppConversationMessage,
@@ -139,7 +142,7 @@ import {
   whatsAppQuickReplyPreview,
 } from './whatsapp-quick-replies';
 
-type ConversationFilter = 'all' | 'unread' | 'clients' | 'guests';
+type ConversationFilter = 'all' | 'unread' | 'followup' | 'clients' | 'guests';
 type StartConversationRecipientType = 'client' | 'guest';
 export type ConversationComposerMedia = {
   file: File;
@@ -316,6 +319,7 @@ export function nextConversationPresenceState(
 const conversationFilters = [
   { id: 'all', label: 'Todas' },
   { id: 'unread', label: 'Não lidas' },
+  { id: 'followup', label: 'Aguardando retorno' },
   { id: 'clients', label: 'Clientes' },
   { id: 'guests', label: 'Avulsos' },
 ] satisfies Array<{ id: ConversationFilter; label: string }>;
@@ -434,6 +438,7 @@ export function stopConversationPixCopyEvent(
 
 export function WhatsAppInbox({
   onConversationLocationChange,
+  onOpenAutoReplySettings,
   onOpenClient,
   onRestoreRequestConsumed,
   onSummaryChange,
@@ -441,6 +446,7 @@ export function WhatsAppInbox({
   restoreRequest,
 }: {
   onConversationLocationChange: (context: ConversationLocationContext) => void;
+  onOpenAutoReplySettings: () => void;
   onOpenClient: (clientId: string, options?: ConversationOpenClientOptions) => Promise<void>;
   onRestoreRequestConsumed?: (sequence: number) => void;
   onSummaryChange: (summary: WhatsAppConversationSummary | null) => void;
@@ -454,6 +460,9 @@ export function WhatsAppInbox({
   );
   const [messages, setMessages] = useState<WhatsAppConversationMessage[]>([]);
   const [whatsAppConnections, setWhatsAppConnections] = useState<WhatsAppConnection[]>([]);
+  const [autoReplyConfigs, setAutoReplyConfigs] = useState<WhatsAppAutoReplyConfig[]>([]);
+  const [autoReplyError, setAutoReplyError] = useState('');
+  const [autoReplyDisabling, setAutoReplyDisabling] = useState(false);
   const [quickReplies, setQuickReplies] = useState<WhatsAppQuickReply[]>([]);
   const [quickRepliesLoading, setQuickRepliesLoading] = useState(true);
   const [quickRepliesError, setQuickRepliesError] = useState('');
@@ -984,6 +993,7 @@ export function WhatsAppInbox({
         if (search) filters.search = search;
         if (statusFilter) filters.status = statusFilter;
         if (filter === 'unread') filters.unreadOnly = true;
+        if (filter === 'followup') filters.needsManualFollowUp = true;
         if (filter === 'clients') filters.hasClient = true;
         if (filter === 'guests') filters.hasClient = false;
 
@@ -1327,6 +1337,46 @@ export function WhatsAppInbox({
       setWhatsAppConnections([]);
     }
   }, []);
+
+  const loadAutoReplyConfigs = useCallback(async () => {
+    try {
+      setAutoReplyConfigs(await listWhatsAppAutoReplies());
+      setAutoReplyError('');
+    } catch {
+      setAutoReplyError('Não foi possível atualizar o status da resposta automática.');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAutoReplyConfigs();
+  }, [loadAutoReplyConfigs]);
+
+  async function disableAutoReply(config: WhatsAppAutoReplyConfig) {
+    if (autoReplyDisabling) return;
+    setAutoReplyDisabling(true);
+    setAutoReplyError('');
+
+    try {
+      const updated = await updateWhatsAppAutoReply(config.whatsAppConnectionId, {
+        enabled: false,
+        mode: config.mode,
+        message: config.message,
+        cooldownMinutes: config.cooldownMinutes,
+        audience: config.audience,
+        startsAt: config.startsAt,
+        endsAt: config.endsAt,
+      });
+      setAutoReplyConfigs((current) =>
+        current.map((item) =>
+          item.whatsAppConnectionId === updated.whatsAppConnectionId ? updated : item,
+        ),
+      );
+    } catch {
+      setAutoReplyError('Não foi possível desativar a resposta automática.');
+    } finally {
+      setAutoReplyDisabling(false);
+    }
+  }
 
   const loadGuestClientCreatePlans = useCallback(async () => {
     setGuestClientCreatePlansLoading(true);
@@ -2167,6 +2217,8 @@ export function WhatsAppInbox({
             lastMessageAt: result.message.sentAt ?? result.message.createdAt,
             lastMessagePreview: result.snippet,
             unreadCount: 0,
+            needsManualFollowUp: false,
+            lastAutoReplyAt: null,
             createdAt: result.message.createdAt,
             updatedAt: result.message.createdAt,
             client: result.conversation.client
@@ -2446,6 +2498,7 @@ export function WhatsAppInbox({
         editedAt: null,
         failedAt,
         isFromMe: true,
+        isAutoReply: false,
         mediaDurationSeconds: null,
         mediaAvailable: false,
         mediaFileName: mediaToSend?.file.name ?? null,
@@ -3307,6 +3360,37 @@ export function WhatsAppInbox({
         />
       ) : null}
 
+      {autoReplyConfigs
+        .filter(
+          (config) =>
+            config.enabled &&
+            config.whatsAppConnectionId === selectedConversation?.whatsAppConnectionId,
+        )
+        .map((config) => (
+          <div className="conversation-auto-reply-banner" key={config.whatsAppConnectionId}>
+            <div>
+              <strong>🟠 Resposta automática ativa · {config.connectionName}</strong>
+              <span>{config.message}</span>
+            </div>
+            <div>
+              <Button size="sm" variant="ghost" onClick={onOpenAutoReplySettings}>
+                Configurar
+              </Button>
+              <Button
+                loading={autoReplyDisabling}
+                size="sm"
+                variant="secondary"
+                onClick={() => void disableAutoReply(config)}
+              >
+                Desativar
+              </Button>
+            </div>
+          </div>
+        ))}
+      {autoReplyError ? (
+        <div className="notice danger conversation-notice">{autoReplyError}</div>
+      ) : null}
+
       <div className="conversations-shell">
         <ConversationList
           conversations={conversations}
@@ -4048,6 +4132,9 @@ function ConversationListItem({
           <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
             {conversation.client ? 'Cliente' : 'Avulso'}
           </span>
+          {conversation.needsManualFollowUp ? (
+            <span className="conversation-followup-badge">Retorno pendente</span>
+          ) : null}
         </span>
       </button>
     </div>
@@ -4839,7 +4926,10 @@ function ConversationBubble({
           </div>
         ) : null}
         <footer>
-          <span>{conversationMessageFooterLabel(message)}</span>
+          <span>
+            {message.isAutoReply ? 'Automática · ' : ''}
+            {conversationMessageFooterLabel(message)}
+          </span>
           {outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}
         </footer>
         {!message.deleted && message.status === 'FAILED' && outbound ? (

@@ -146,10 +146,16 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       remove: vi.fn().mockResolvedValue({ success: true }),
     };
     const realtime = { subscribe: vi.fn() };
+    const autoReply = {
+      listConfigs: vi.fn().mockResolvedValue([]),
+      getConfig: vi.fn().mockResolvedValue({ enabled: false }),
+      updateConfig: vi.fn().mockResolvedValue({ enabled: true }),
+    };
     const subject = new WhatsAppController(
       service as never,
       quickReplies as never,
       realtime as never,
+      autoReply as never,
     );
     const response = { setHeader: vi.fn() };
     const request = { on: vi.fn() };
@@ -158,6 +164,19 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       items: [],
     });
     await expect(subject.listConnections()).resolves.toEqual([{ id: 'connection-id' }]);
+    await expect(subject.listAutoReplies()).resolves.toEqual([]);
+    await expect(subject.getAutoReply('11111111-1111-4111-8111-111111111111')).resolves.toEqual({
+      enabled: false,
+    });
+    await expect(
+      subject.updateAutoReply('11111111-1111-4111-8111-111111111111', {
+        enabled: true,
+        mode: 'AWAY',
+        message: 'Ausente',
+        cooldownMinutes: 60,
+        audience: 'ALL',
+      }),
+    ).resolves.toEqual({ enabled: true });
     await expect(subject.listQuickReplies()).resolves.toEqual([
       { id: 'reply-id', label: 'PIX', text: 'Pix' },
     ]);

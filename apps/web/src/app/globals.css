@@ -2724,6 +2724,75 @@ a {
   padding: 0 6px;
 }
 
+.conversation-auto-reply-banner {
+  align-items: center;
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  border-radius: 12px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 0 10px;
+  padding: 9px 12px;
+}
+
+.conversation-auto-reply-banner > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.conversation-auto-reply-banner > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.conversation-auto-reply-banner span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  max-width: 720px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-followup-badge {
+  color: var(--warning-strong, #9a6700);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.settings-auto-reply-card {
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+}
+
+.settings-auto-reply-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 720px) {
+  .conversation-auto-reply-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .conversation-auto-reply-banner > div:last-child {
+    justify-content: flex-end;
+  }
+
+  .settings-auto-reply-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .conversation-empty-list,
 .conversation-empty-chat,
 .conversation-empty-panel,

@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import { KiragoWebhookNormalizer } from './kirago/kirago-webhook-normalizer';
@@ -16,6 +18,10 @@ import { WhatsAppService } from './whatsapp.service';
 
 const now = new Date('2026-09-11T00:00:00.000Z');
 const defaultKiragoReadReceiptPhone = '554499999999';
+const whatsAppServiceSource = readFileSync(
+  join(process.cwd(), 'src/whatsapp/whatsapp.service.ts'),
+  'utf8',
+);
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -353,6 +359,7 @@ function serviceFactory({
   mediaStorageOverrides = {},
   voiceConversionOverrides = {},
   realtimeOverrides = {},
+  autoReplyOverrides = {},
   prismaOverrides = {},
 }: {
   currentConnection?: ReturnType<typeof connection> | null;
@@ -362,6 +369,7 @@ function serviceFactory({
   mediaStorageOverrides?: Record<string, unknown>;
   voiceConversionOverrides?: Record<string, unknown>;
   realtimeOverrides?: Record<string, unknown>;
+  autoReplyOverrides?: Record<string, unknown>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
   const txClientReferenceUpdate = vi.fn();
@@ -725,6 +733,10 @@ function serviceFactory({
     emitMessageUpdated: vi.fn(),
     ...realtimeOverrides,
   };
+  const autoReply = {
+    tryReplyToInbound: vi.fn().mockResolvedValue({ sent: false, reason: 'disabled' }),
+    ...autoReplyOverrides,
+  };
 
   return {
     service: new WhatsAppService(
@@ -738,6 +750,8 @@ function serviceFactory({
       mediaStorage as never,
       voiceConversion as never,
       realtime as never,
+      undefined,
+      autoReply as never,
     ),
     prisma,
     provider,
@@ -747,6 +761,7 @@ function serviceFactory({
     mediaStorage,
     voiceConversion,
     realtime,
+    autoReply,
     txClientReferenceUpdate,
     txReceivableUpdate,
   };
@@ -7257,7 +7272,7 @@ describe('WhatsAppService', () => {
   });
 
   it('creates a conversation and inbound message on the first eligible inbound webhook', async () => {
-    const { service, prisma, normalizer, realtime } = serviceFactory();
+    const { service, prisma, normalizer, realtime, autoReply } = serviceFactory();
     normalizer.normalize.mockReturnValue(
       normalizedInbound('Ola conversa', { messageId: 'conversation-msg-1' }),
     );
@@ -7309,6 +7324,11 @@ describe('WhatsAppService', () => {
       'INBOUND',
     );
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
+    expect(autoReply.tryReplyToInbound).toHaveBeenCalledWith({
+      whatsAppConnectionId: connection().id,
+      conversationId: conversation().id,
+      triggerMessageId: expect.any(String),
+    });
   });
 
   it('correlates inbound replies by provider stanza id and preserves quoted snapshots', async () => {
@@ -7965,7 +7985,7 @@ describe('WhatsAppService', () => {
   });
 
   it('does not duplicate conversation message or unread count on provider replay', async () => {
-    const { service, prisma, normalizer } = serviceFactory({
+    const { service, prisma, normalizer, autoReply } = serviceFactory({
       prismaOverrides: {
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(conversationMessage({ id: 'existing-message' })),
@@ -7982,6 +8002,7 @@ describe('WhatsAppService', () => {
     });
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
+    expect(autoReply.tryReplyToInbound).not.toHaveBeenCalled();
   });
 
   it('reconciles outgoing webhook echo with an existing CRM message by requestId without duplicating', async () => {
@@ -7994,7 +8015,7 @@ describe('WhatsAppService', () => {
       text: 'Eco CRM',
       rawMetadata: null,
     });
-    const { service, prisma, normalizer, realtime } = serviceFactory({
+    const { service, prisma, normalizer, realtime, autoReply } = serviceFactory({
       prismaOverrides: {
         whatsAppMessage: {
           findFirst: vi.fn().mockResolvedValue(existing),
@@ -8039,6 +8060,49 @@ describe('WhatsAppService', () => {
     );
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(existing.conversationId, existing.id);
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(existing.conversationId);
+    expect(autoReply.tryReplyToInbound).not.toHaveBeenCalled();
+  });
+
+  it('preserves auto_reply origin when the provider echo reconciles the outbound message', async () => {
+    const existing = conversationMessage({
+      requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+      providerMessageId: null,
+      direction: 'OUTBOUND',
+      status: 'PENDING',
+      sentAt: null,
+      text: 'Resposta automática',
+      rawMetadata: {
+        source: 'auto_reply',
+        autoReplyConfigId: '33333333-3333-4333-8333-333333333333',
+      },
+    });
+    const update = vi.fn((args: { data: Record<string, unknown> }) =>
+      Promise.resolve(conversationMessage({ ...existing, ...args.data })),
+    );
+    const { service, prisma, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(existing),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn(),
+          update,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Resposta automática', {
+        direction: 'OUTGOING',
+        messageId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37392',
+      }),
+    );
+
+    await service.receiveWebhook({ type: 'Message' });
+
+    const updateData = update.mock.calls[0]?.[0].data;
+    expect(updateData).not.toHaveProperty('rawMetadata');
+    expect(existing.rawMetadata).toMatchObject({ source: 'auto_reply' });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
   });
 
   it('does not downgrade manual outbound IMAGE to TEXT when the outgoing webhook echo lacks media metadata', async () => {
@@ -12403,6 +12467,33 @@ describe('WhatsAppService', () => {
     expect(prisma.clientEvent.create).not.toHaveBeenCalled();
   });
 
+  it('clears auto-reply follow-up only in successful manual send paths', () => {
+    const segment = (start: string, end: string) =>
+      whatsAppServiceSource.slice(
+        whatsAppServiceSource.indexOf(start),
+        whatsAppServiceSource.indexOf(end),
+      );
+
+    expect(segment('async sendConversationTextMessage', 'async setConversationPresence')).toContain(
+      'needsManualFollowUp: false',
+    );
+    expect(
+      segment('async sendConversationMediaMessage', 'async sendConversationVoiceMessage'),
+    ).toContain('needsManualFollowUp: false');
+    expect(
+      segment('async sendConversationVoiceMessage', 'async retryConversationMessage'),
+    ).toContain('needsManualFollowUp: false');
+    expect(segment('async retryConversationMessage', 'async linkConversationClient')).toContain(
+      'needsManualFollowUp: false',
+    );
+    expect(
+      segment('async editConversationMessage', 'private async withMessageEditLock'),
+    ).not.toContain('needsManualFollowUp');
+    expect(
+      segment('private async processMessageReceiptWebhook', 'private buildReceiptStatusUpdate'),
+    ).not.toContain('needsManualFollowUp');
+  });
+
   it('sends a manual TEXT message through the conversation connection and persists SENT history', async () => {
     const activeConnection = connection({
       status: 'CONNECTED',
@@ -12493,6 +12584,7 @@ describe('WhatsAppService', () => {
         where: { id: conversationRecord.id },
         data: expect.objectContaining({
           lastMessagePreview: 'Ola pelo CRM',
+          needsManualFollowUp: false,
         }),
       }),
     );
@@ -12886,6 +12978,11 @@ describe('WhatsAppService', () => {
     expect(result).toMatchObject({ id: failed.id, status: 'SENT', retryAction: null });
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(conversation().id, failed.id);
     expect(realtime.emitConversationUpdated).toHaveBeenCalledWith(conversation().id);
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ needsManualFollowUp: false }),
+      }),
+    );
   });
 
   it('preserves reply context when retrying a FAILED outbound TEXT reply', async () => {

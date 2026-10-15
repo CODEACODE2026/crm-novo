@@ -33,6 +33,11 @@ export class ListWhatsAppConversationsDto {
   unreadOnly?: boolean;
 
   @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  needsManualFollowUp?: boolean;
+
+  @IsOptional()
   @IsUUID()
   clientId?: string;
 

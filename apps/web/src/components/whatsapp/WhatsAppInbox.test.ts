@@ -123,6 +123,8 @@ function conversation(
     lastMessageAt: '2026-10-08T12:00:00.000Z',
     lastMessagePreview: 'Mensagem',
     unreadCount: 0,
+    needsManualFollowUp: false,
+    lastAutoReplyAt: null,
     createdAt: '2026-10-08T11:00:00.000Z',
     updatedAt: '2026-10-08T12:00:00.000Z',
     ...overrides,
@@ -147,6 +149,7 @@ function message(
     deletedAt: null,
     deletedForEveryone: false,
     isFromMe: false,
+    isAutoReply: false,
     providerMessageId: 'provider-message-1',
     replyTo: null,
     replyToMessageId: null,
@@ -2512,7 +2515,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
         minute: '2-digit',
       })}`,
     );
-    expect(whatsAppInboxSource).toContain('<span>{conversationMessageFooterLabel(message)}</span>');
+    expect(whatsAppInboxSource).toContain('{conversationMessageFooterLabel(message)}');
+    expect(whatsAppInboxSource).toContain("message.isAutoReply ? 'Automática · ' : ''");
     expect(whatsAppInboxSource).toContain(
       '{outbound ? <ConversationMessageStatusIcon status={message.status} /> : null}',
     );
@@ -2954,5 +2958,26 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(JSON.stringify(merged)).not.toContain('contrato secreto');
     expect(JSON.stringify(merged)).not.toContain('Contrato sigiloso.pdf');
     expect(JSON.stringify(merged)).not.toContain('❤️');
+  });
+
+  it('renders automatic replies and pending follow-up without changing manual bubbles', () => {
+    const automatic = message({ isAutoReply: true });
+    const manual = message({ id: 'manual-message', isAutoReply: false });
+    const merged = mergeConversationMessages([manual], [automatic]);
+
+    expect(automatic.isAutoReply).toBe(true);
+    expect(manual.isAutoReply).toBe(false);
+    expect(merged.some((item) => item.isAutoReply)).toBe(true);
+    expect(whatsAppInboxSource).toContain("message.isAutoReply ? 'Automática · ' : ''");
+    expect(whatsAppInboxSource).toContain("id: 'followup', label: 'Aguardando retorno'");
+    expect(whatsAppInboxSource).toContain('filters.needsManualFollowUp = true');
+    expect(whatsAppInboxSource).toContain('Retorno pendente');
+    expect(whatsAppInboxSource).toContain('Resposta automática ativa');
+    expect(whatsAppInboxSource).toContain('updateWhatsAppAutoReply');
+    expect(whatsAppInboxSource).toContain(
+      'config.whatsAppConnectionId === selectedConversation?.whatsAppConnectionId',
+    );
+    expect(globalStylesSource).toContain('.conversation-auto-reply-banner');
+    expect(globalStylesSource).toContain('@media (max-width: 720px)');
   });
 });

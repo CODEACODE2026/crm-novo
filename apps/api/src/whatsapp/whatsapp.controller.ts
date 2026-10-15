@@ -31,6 +31,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { validateKiragoWebhookToken } from '../config/security';
 import { ApproveWhatsAppPendingContactDto } from './dto/approve-whatsapp-pending-contact.dto';
 import { ConfigureWhatsAppWebhookDto } from './dto/configure-whatsapp-webhook.dto';
+import { UpdateWhatsAppAutoReplyDto } from './dto/update-whatsapp-auto-reply.dto';
 import { CreateWhatsAppQuickReplyDto } from './dto/create-whatsapp-quick-reply.dto';
 import { CreateWhatsAppConnectionDto } from './dto/create-whatsapp-connection.dto';
 import { EditWhatsAppConversationMessageDto } from './dto/edit-whatsapp-conversation-message.dto';
@@ -51,6 +52,7 @@ import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
+import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
@@ -80,6 +82,8 @@ export class WhatsAppController {
     @Inject(WhatsAppQuickRepliesService)
     private readonly quickRepliesService: WhatsAppQuickRepliesService,
     @Inject(WhatsAppRealtimeService) private readonly realtime: WhatsAppRealtimeService,
+    @Inject(WhatsAppAutoReplyService)
+    private readonly autoReplyService: WhatsAppAutoReplyService,
   ) {}
 
   @Get('connection')
@@ -90,6 +94,24 @@ export class WhatsAppController {
   @Get('connections')
   listConnections() {
     return this.whatsAppService.listUsableConnections();
+  }
+
+  @Get('auto-replies')
+  listAutoReplies() {
+    return this.autoReplyService.listConfigs();
+  }
+
+  @Get('connections/:connectionId/auto-reply')
+  getAutoReply(@Param('connectionId', new ParseUUIDPipe()) connectionId: string) {
+    return this.autoReplyService.getConfig(connectionId);
+  }
+
+  @Put('connections/:connectionId/auto-reply')
+  updateAutoReply(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Body() dto: UpdateWhatsAppAutoReplyDto,
+  ) {
+    return this.autoReplyService.updateConfig(connectionId, dto);
   }
 
   @Get('quick-replies')

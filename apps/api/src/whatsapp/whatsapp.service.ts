@@ -87,6 +87,7 @@ import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
+import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
 import { requiredWhatsAppProviderEvents } from './provider/whatsapp-provider';
 
 const providerEvents = requiredWhatsAppProviderEvents;
@@ -453,6 +454,9 @@ export class WhatsAppService {
     @Optional()
     @Inject(ReferralsService)
     private readonly referralsService?: ReferralsService,
+    @Optional()
+    @Inject(WhatsAppAutoReplyService)
+    private readonly autoReplyService?: WhatsAppAutoReplyService,
   ) {}
 
   private emitConversationUpdated(conversationId: string) {
@@ -1743,6 +1747,7 @@ export class WhatsAppService {
           data: {
             lastMessageAt: sentAt,
             lastMessagePreview: this.conversationLastMessagePreview('TEXT', { text: body }),
+            needsManualFollowUp: false,
           },
         });
 
@@ -2289,6 +2294,7 @@ export class WhatsAppService {
               text: caption,
               mediaFileName: media.fileName,
             }),
+            needsManualFollowUp: false,
           },
         });
 
@@ -2434,6 +2440,7 @@ export class WhatsAppService {
               text: null,
               mediaFileName: media.fileName,
             }),
+            needsManualFollowUp: false,
           },
         });
 
@@ -2575,6 +2582,7 @@ export class WhatsAppService {
               text: message.text,
               mediaFileName: message.mediaFileName,
             }),
+            needsManualFollowUp: false,
           },
         });
 
@@ -3287,7 +3295,40 @@ export class WhatsAppService {
       incoming,
       clients,
     );
+    await this.triggerAutoReplySafely(connection.id, conversationResult);
     return { received: true, ...legacyResult, conversation: conversationResult };
+  }
+
+  private async triggerAutoReplySafely(
+    whatsAppConnectionId: string,
+    result: {
+      action?: string;
+      conversationId?: string;
+      messageId?: string;
+      processed?: boolean;
+    },
+  ) {
+    if (
+      !this.autoReplyService ||
+      !result.processed ||
+      result.action !== 'conversation_message_persisted' ||
+      !result.conversationId ||
+      !result.messageId
+    ) {
+      return;
+    }
+
+    try {
+      await this.autoReplyService.tryReplyToInbound({
+        whatsAppConnectionId,
+        conversationId: result.conversationId,
+        triggerMessageId: result.messageId,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `WhatsApp auto-reply evaluation failed connection=${whatsAppConnectionId} conversation=${result.conversationId} message=${this.sanitizeError(error)}`,
+      );
+    }
   }
 
   private logMediaDebugPayload(payload: unknown) {
@@ -4942,6 +4983,10 @@ export class WhatsAppService {
 
     if (query.unreadOnly) {
       where.unreadCount = { gt: 0 };
+    }
+
+    if (query.needsManualFollowUp) {
+      where.needsManualFollowUp = true;
     }
 
     if (query.search) {
@@ -7001,6 +7046,8 @@ export class WhatsAppService {
       lastMessageAt: conversation.lastMessageAt,
       lastMessagePreview: conversation.lastMessagePreview,
       unreadCount: conversation.unreadCount,
+      needsManualFollowUp: conversation.needsManualFollowUp,
+      lastAutoReplyAt: conversation.lastAutoReplyAt,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };
@@ -7087,6 +7134,7 @@ export class WhatsAppService {
       deletedAt: message.deletedAt,
       deletedForEveryone: message.deletedForEveryone,
       isFromMe: message.isFromMe,
+      isAutoReply: this.rawMetadataObject(message.rawMetadata).source === 'auto_reply',
       providerMessageId: message.providerMessageId,
       replyToMessageId: message.replyToMessageId,
       replyToProviderMessageId: message.replyToProviderMessageId,

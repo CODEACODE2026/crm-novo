@@ -15213,8 +15213,9 @@ tbody tr:hover,
   }
 
   .conversation-label-manager {
+    width: 100%;
     max-height: calc(100dvh - 24px);
-    overflow-y: auto;
+    overflow: hidden;
   }
 }
 
@@ -17050,15 +17051,38 @@ tbody tr:hover,
 }
 .conversation-label-filter {
   display: grid;
-  gap: 4px;
-  padding: 0 10px 8px;
-  color: var(--text-muted);
-  font-size: 0.72rem;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.1;
 }
 
 .conversation-label-filter select {
+  width: 100%;
   min-width: 0;
-  height: 32px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.conversation-list-panel-with-labels {
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-list-panel-with-labels > :not(.conversation-list-items) {
+  flex: 0 0 auto;
+}
+
+.conversation-list-panel-with-labels .conversation-list-items {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .conversation-label-chips {
@@ -17096,14 +17120,72 @@ tbody tr:hover,
 }
 
 .conversation-label-manager {
-  width: min(440px, calc(100vw - 24px));
+  display: flex;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(80dvh, 680px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.conversation-label-manager-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1700;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: rgb(15 23 42 / 62%);
+  padding: 12px;
+}
+
+.conversation-label-manager .conversation-modal-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 14px 16px;
+}
+
+.conversation-label-manager .conversation-modal-header h3,
+.conversation-label-manager .conversation-modal-header p {
+  margin: 0;
+}
+
+.conversation-label-manager .conversation-modal-header p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation-label-manager .notice {
+  flex: 0 0 auto;
+  margin: 0 16px 10px;
+}
+
+.conversation-label-manager .conversation-modal-actions {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 12px 16px;
 }
 
 .conversation-label-options {
   display: grid;
-  max-height: 280px;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 4px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 16px;
 }
 
 .conversation-label-option {
@@ -17122,9 +17204,10 @@ tbody tr:hover,
 
 .conversation-label-create {
   display: grid;
+  flex: 0 0 auto;
   gap: 10px;
   border-top: 1px solid var(--border-subtle);
-  padding-top: 12px;
+  padding: 12px 16px;
 }
 
 .conversation-label-create label {

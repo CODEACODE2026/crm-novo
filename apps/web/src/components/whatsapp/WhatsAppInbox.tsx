@@ -4408,6 +4408,8 @@ function ConversationLabelManager({
   useEffect(() => {
     const returnFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     nameRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !savingRef.current) closeRef.current();
@@ -4430,6 +4432,7 @@ function ConversationLabelManager({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
+      document.body.style.overflow = previousBodyOverflow;
       document.removeEventListener('keydown', onKeyDown);
       returnFocus?.focus();
     };
@@ -4454,7 +4457,7 @@ function ConversationLabelManager({
   }
 
   return createPortal(
-    <div className="conversation-modal-backdrop" onMouseDown={onClose}>
+    <div className="conversation-label-manager-backdrop" role="presentation" onMouseDown={onClose}>
       <section
         aria-labelledby="conversation-label-manager-title"
         aria-modal="true"
@@ -4586,7 +4589,10 @@ function ConversationList({
   const emptyCopy = 'Nenhuma conversa encontrada.';
 
   return (
-    <aside className="conversation-list-panel" aria-label="Lista de conversas">
+    <aside
+      className="conversation-list-panel conversation-list-panel-with-labels"
+      aria-label="Lista de conversas"
+    >
       <div className="conversation-panel-header">
         <div>
           <h3>Conversas</h3>

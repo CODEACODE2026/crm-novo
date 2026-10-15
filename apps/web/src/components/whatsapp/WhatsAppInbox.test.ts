@@ -3191,4 +3191,31 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-label-manager');
     expect(globalStylesSource).toContain('min-height: 44px;');
   });
+
+  it('keeps label filters in the list flow and renders the manager as a fixed portal overlay', () => {
+    expect(whatsAppInboxSource).toContain(
+      'className="conversation-list-panel conversation-list-panel-with-labels"',
+    );
+    expect(globalStylesSource).toContain('.conversation-list-panel-with-labels {');
+    expect(globalStylesSource).toContain('flex-direction: column;');
+    expect(globalStylesSource).toContain(
+      '.conversation-list-panel-with-labels > :not(.conversation-list-items)',
+    );
+    expect(globalStylesSource).toContain(
+      '.conversation-list-panel-with-labels .conversation-list-items',
+    );
+    expect(globalStylesSource).toContain('flex: 1 1 auto;');
+    expect(whatsAppInboxSource).toContain('className="conversation-label-manager-backdrop"');
+    expect(whatsAppInboxSource).toContain('document.body,');
+    expect(whatsAppInboxSource).toContain("document.body.style.overflow = 'hidden';");
+    expect(whatsAppInboxSource).toContain('document.body.style.overflow = previousBodyOverflow;');
+    expect(globalStylesSource).toContain('.conversation-label-manager-backdrop {');
+    expect(globalStylesSource).toContain('position: fixed;');
+    expect(globalStylesSource).toContain('inset: 0;');
+    expect(globalStylesSource).toContain('z-index: 1700;');
+    expect(globalStylesSource).toContain('max-height: min(80dvh, 680px);');
+    expect(globalStylesSource).toContain('.conversation-label-options {');
+    expect(globalStylesSource).toContain('overscroll-behavior: contain;');
+    expect(globalStylesSource).toContain('.conversation-label-manager .conversation-modal-actions');
+  });
 });

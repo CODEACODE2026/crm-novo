@@ -2980,4 +2980,44 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-auto-reply-banner');
     expect(globalStylesSource).toContain('@media (max-width: 720px)');
   });
+
+  it('keeps the desktop conversation list compact with a subtle usable scrollbar', () => {
+    const scrollAreaStyles =
+      globalStylesSource.match(/\.conversation-list-items \{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(globalStylesSource).toContain('grid-template-columns: 16px minmax(0, 1fr) auto;');
+    expect(globalStylesSource).toContain('grid-template-columns: 30px minmax(0, 1fr);');
+    expect(globalStylesSource).toContain('min-height: 24px;');
+    expect(globalStylesSource).toContain('padding: 6px 5px;');
+    expect(scrollAreaStyles).toContain('overflow-x: hidden;');
+    expect(scrollAreaStyles).toContain('overflow-y: auto;');
+    expect(scrollAreaStyles).toContain('scrollbar-width: thin;');
+    expect(scrollAreaStyles).not.toContain('scrollbar-width: none;');
+    expect(globalStylesSource).toContain('.conversation-list-items::-webkit-scrollbar');
+    expect(globalStylesSource).toContain('.conversation-list-items::-webkit-scrollbar-track');
+    expect(globalStylesSource).toContain('.conversation-list-items::-webkit-scrollbar-thumb');
+    expect(globalStylesSource).toContain('width: 4px;');
+    expect(globalStylesSource).toContain('.conversation-list-items:hover::-webkit-scrollbar-thumb');
+    expect(scrollAreaStyles).toContain('overscroll-behavior: contain;');
+    expect(globalStylesSource).toContain('.conversation-list-meta-row .conversation-kind');
+  });
+
+  it('restores touch-friendly controls and conversation rows on mobile', () => {
+    expect(globalStylesSource).toContain(
+      '.conversation-list-panel .conversation-panel-header .ui-icon-button,',
+    );
+    expect(globalStylesSource).toContain('grid-template-columns: 34px minmax(0, 1fr);');
+    expect(globalStylesSource).toContain('min-height: 36px;');
+    expect(globalStylesSource).toContain('padding: 8px 7px;');
+  });
+
+  it('preserves every conversation list filter while changing only presentation', () => {
+    expect(whatsAppInboxSource).toContain("{ id: 'all', label: 'Todas' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'unread', label: 'Não lidas' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'followup', label: 'Aguardando retorno' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'clients', label: 'Clientes' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'guests', label: 'Avulsos' }");
+    expect(whatsAppInboxSource).toContain('onFilterChange(item.id)');
+    expect(whatsAppInboxSource).toContain('onStatusFilterChange(');
+  });
 });

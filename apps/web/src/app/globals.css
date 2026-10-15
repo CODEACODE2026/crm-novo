@@ -2362,10 +2362,10 @@ a {
 .conversation-list-panel {
   display: grid;
   grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
-  gap: 8px;
+  gap: 6px;
   border-right: 1px solid var(--border);
   overflow: hidden;
-  padding: 10px;
+  padding: 8px;
 }
 
 .conversation-bubble mark {
@@ -2379,7 +2379,24 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+}
+
+.conversation-list-panel .conversation-panel-header h3 {
+  font-size: 14px;
+  line-height: 1.1;
+}
+
+.conversation-list-panel .conversation-panel-header span {
+  margin-top: 1px;
+  font-size: 10.5px;
+  line-height: 1.1;
+}
+
+.conversation-list-panel .conversation-panel-header .ui-icon-button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
 }
 
 .conversation-panel-header h3,
@@ -2433,14 +2450,14 @@ a {
 
 .conversation-search {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
   color: var(--muted);
-  padding: 0 10px;
+  padding: 0 8px;
 }
 
 .conversation-search input,
@@ -2454,7 +2471,8 @@ a {
 }
 
 .conversation-search input {
-  min-height: 34px;
+  min-height: 30px;
+  font-size: 12px;
 }
 
 .conversation-search .ui-icon-button {
@@ -2499,21 +2517,25 @@ a {
 }
 
 .conversation-filter-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
 }
 
 .conversation-filter-row button {
+  flex: 1 1 auto;
   min-width: 0;
-  min-height: 28px;
+  min-height: 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 700;
+  line-height: 1;
+  padding: 0 6px;
+  white-space: nowrap;
 }
 
 .conversation-filter-row button.active {
@@ -2524,26 +2546,57 @@ a {
 
 .conversation-status-filter {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10.5px;
+  line-height: 1.1;
 }
 
 .conversation-status-filter select {
-  min-height: 31px;
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
-  padding: 0 10px;
+  font-size: 12px;
+  padding: 0 8px;
 }
 
 .conversation-list-items {
   display: grid;
   align-content: start;
-  gap: 5px;
+  gap: 2px;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 2px;
+  overscroll-behavior: contain;
+  padding-right: 1px;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+
+.conversation-list-items:hover {
+  scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
+}
+
+.conversation-list-items::-webkit-scrollbar {
+  width: 4px;
+}
+
+.conversation-list-items::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.conversation-list-items::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.conversation-list-items:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
+}
+
+.conversation-list-items::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 52%, transparent);
 }
 
 .conversation-list-more,
@@ -2562,15 +2615,15 @@ a {
 
 .conversation-list-item {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 7px;
   width: 100%;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 8px 7px;
+  padding: 6px 5px;
   text-align: left;
 }
 
@@ -2654,7 +2707,7 @@ a {
 
 .conversation-list-main {
   display: grid;
-  gap: 5px;
+  gap: 2px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -2670,7 +2723,14 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 5px;
+}
+
+.conversation-list-item .conversation-avatar {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+  font-size: 12px;
 }
 
 .conversation-list-title-row strong,
@@ -2680,20 +2740,48 @@ a {
   white-space: nowrap;
 }
 
+.conversation-list-title-row strong {
+  font-size: 12.5px;
+  line-height: 1.15;
+}
+
 .conversation-list-title-row small,
 .conversation-list-meta-row {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10.5px;
+  line-height: 1.1;
 }
 
 .conversation-preview-row {
-  align-items: flex-start;
+  align-items: center;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: 11.5px;
+  line-height: 1.2;
 }
 
 .conversation-list-meta-row {
   justify-content: flex-start;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.conversation-list-meta-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-list-meta-row .conversation-kind {
+  min-height: 17px;
+  font-size: 9px;
+  line-height: 1;
+  padding: 0 5px;
+}
+
+.conversation-list-meta-row .conversation-followup-badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  white-space: nowrap;
 }
 
 .conversation-kind.client {
@@ -13975,6 +14063,44 @@ tbody tr:hover,
   .conversation-list-panel {
     border-right: 0;
     padding: 12px;
+  }
+
+  .conversation-list-panel .conversation-panel-header .ui-icon-button,
+  .conversation-search .ui-icon-button {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .conversation-search input,
+  .conversation-status-filter select {
+    min-height: 36px;
+  }
+
+  .conversation-filter-row {
+    gap: 5px;
+  }
+
+  .conversation-filter-row button {
+    min-height: 36px;
+    font-size: 11px;
+    padding: 0 9px;
+  }
+
+  .conversation-list-items {
+    gap: 4px;
+  }
+
+  .conversation-list-item {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 7px;
+  }
+
+  .conversation-list-item .conversation-avatar {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
   }
 
   .conversation-mobile-back {

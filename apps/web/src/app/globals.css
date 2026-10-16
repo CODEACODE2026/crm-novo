@@ -58,13 +58,36 @@
   color: #22683a;
 }
 
+.resolve-attendance-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1900;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: rgb(3 8 15 / 82%);
+  backdrop-filter: blur(4px);
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
 .resolve-attendance-modal {
-  max-width: 520px;
+  isolation: isolate;
+  display: flex;
   width: min(520px, calc(100vw - 2rem));
+  max-width: 520px;
+  max-height: min(760px, calc(100dvh - 32px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, white 14%);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 58%);
+  color: var(--text);
 }
 
 .resolve-attendance-modal > header,
-.resolve-attendance-modal > footer,
 .conversation-attendance-item > header {
   align-items: center;
   display: flex;
@@ -72,12 +95,60 @@
   gap: 0.75rem;
 }
 
+.resolve-attendance-modal > header {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 18px 20px;
+}
+
+.resolve-attendance-modal > header h3,
+.resolve-attendance-modal > header .metric-label {
+  margin: 0;
+}
+
+.resolve-attendance-modal > header h3 {
+  margin-top: 3px;
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+
+.resolve-attendance-content {
+  display: grid;
+  min-height: 0;
+  gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 20px;
+}
+
+.resolve-attendance-content .field {
+  min-width: 0;
+}
+
+.resolve-attendance-content select,
+.resolve-attendance-content textarea {
+  width: 100%;
+  max-width: 100%;
+}
+
+.resolve-attendance-content textarea {
+  resize: vertical;
+}
+
 .resolve-attendance-modal > footer {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 14px 20px;
 }
 
 .attendance-resolution-summary {
-  background: var(--surface-muted);
+  background: var(--surface-strong);
   border: 1px solid var(--border);
   border-radius: 10px;
   display: grid;
@@ -118,10 +189,22 @@
 }
 
 @media (max-width: 720px) {
+  .resolve-attendance-backdrop {
+    align-items: end;
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
   .resolve-attendance-modal {
-    max-height: calc(100dvh - 1rem);
-    overflow-y: auto;
+    max-height: calc(100dvh - max(16px, env(safe-area-inset-top)));
     width: calc(100vw - 1rem);
+    border-radius: 14px;
+  }
+
+  .resolve-attendance-modal > header,
+  .resolve-attendance-content,
+  .resolve-attendance-modal > footer {
+    padding-inline: 16px;
   }
 }
 

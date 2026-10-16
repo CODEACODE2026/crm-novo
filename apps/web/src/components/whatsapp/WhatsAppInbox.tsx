@@ -545,6 +545,8 @@ export function WhatsAppInbox({
     [],
   );
   const [attendanceCategoriesLoading, setAttendanceCategoriesLoading] = useState(false);
+  const [attendanceCategoriesError, setAttendanceCategoriesError] = useState('');
+  const [resolveAttendanceError, setResolveAttendanceError] = useState('');
   const [attendanceHistory, setAttendanceHistory] = useState<WhatsAppAttendance[]>([]);
   const [attendanceHistoryLoading, setAttendanceHistoryLoading] = useState(false);
   const [attendanceHistoryError, setAttendanceHistoryError] = useState('');
@@ -2834,6 +2836,7 @@ export function WhatsAppInbox({
 
     setResolving(true);
     setMessagesError('');
+    setResolveAttendanceError('');
 
     try {
       const resolved = await resolveWhatsAppConversation(selectedConversation.id, payload);
@@ -2842,6 +2845,7 @@ export function WhatsAppInbox({
         current.map((item) => (item.id === resolved.id ? { ...item, ...resolved } : item)),
       );
       setResolveAttendanceOpen(false);
+      setResolveAttendanceError('');
       if (contactPanelOpen) {
         const history = resolved.client?.id
           ? await listWhatsAppClientAttendances(resolved.client.id, { limit: 5 })
@@ -2851,7 +2855,9 @@ export function WhatsAppInbox({
         setAttendanceHistoryHasMore(history.pagination.hasMore);
       }
     } catch (err) {
-      setMessagesError(conversationErrorMessage(err, 'Falha ao resolver conversa.'));
+      const error = conversationErrorMessage(err, 'Falha ao resolver conversa.');
+      setResolveAttendanceError(error);
+      setMessagesError(error);
     } finally {
       setResolving(false);
     }
@@ -2865,6 +2871,9 @@ export function WhatsAppInbox({
 
     setResolveAttendanceOpen(true);
     setAttendanceCategoriesLoading(true);
+    setAttendanceCategories([]);
+    setAttendanceCategoriesError('');
+    setResolveAttendanceError('');
     setMessagesError('');
     try {
       const categories = await listWhatsAppAttendanceCategories(
@@ -2873,7 +2882,9 @@ export function WhatsAppInbox({
       );
       setAttendanceCategories(categories);
     } catch (err) {
-      setMessagesError(conversationErrorMessage(err, 'Falha ao carregar categorias.'));
+      const error = conversationErrorMessage(err, 'Falha ao carregar categorias.');
+      setAttendanceCategoriesError(error);
+      setMessagesError(error);
     } finally {
       setAttendanceCategoriesLoading(false);
     }
@@ -3651,7 +3662,10 @@ export function WhatsAppInbox({
         <ResolveAttendanceModal
           attendance={selectedConversation.activeAttendance}
           categories={attendanceCategories}
-          loading={resolving || attendanceCategoriesLoading}
+          categoriesError={attendanceCategoriesError}
+          categoriesLoading={attendanceCategoriesLoading}
+          resolveError={resolveAttendanceError}
+          submitting={resolving}
           onClose={() => {
             if (!resolving) setResolveAttendanceOpen(false);
           }}
@@ -3950,47 +3964,72 @@ export function WhatsAppInbox({
 function ResolveAttendanceModal({
   attendance,
   categories,
-  loading,
+  categoriesError,
+  categoriesLoading,
+  resolveError,
+  submitting,
   onClose,
   onResolve,
 }: {
   attendance: NonNullable<WhatsAppConversation['activeAttendance']>;
   categories: WhatsAppAttendanceCategory[];
-  loading: boolean;
+  categoriesError: string;
+  categoriesLoading: boolean;
+  resolveError: string;
+  submitting: boolean;
   onClose: () => void;
   onResolve: (payload: { categoryId: string; resolutionNote?: string }) => Promise<void>;
 }) {
   const [categoryId, setCategoryId] = useState('');
   const [note, setNote] = useState('');
-  const [error, setError] = useState('');
   const selectRef = useRef<HTMLSelectElement>(null);
+  const closeRef = useRef(onClose);
+  const submittingRef = useRef(submitting);
+  const activeCategories = categories.filter((category) => category.isActive);
 
   useEffect(() => {
-    selectRef.current?.focus();
+    closeRef.current = onClose;
+    submittingRef.current = submitting;
+  }, [onClose, submitting]);
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !loading) onClose();
+      if (event.key === 'Escape' && !submittingRef.current) closeRef.current();
     };
     document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [loading, onClose]);
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!categoriesLoading) selectRef.current?.focus();
+  }, [categoriesLoading]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!categoryId || loading) return;
-    setError('');
-    try {
-      await onResolve({ categoryId, ...(note.trim() ? { resolutionNote: note.trim() } : {}) });
-    } catch (submitError) {
-      setError(conversationErrorMessage(submitError, 'Falha ao resolver atendimento.'));
-    }
+    if (!categoryId || submitting || categoriesLoading) return;
+    await onResolve({ categoryId, ...(note.trim() ? { resolutionNote: note.trim() } : {}) });
   }
 
   return createPortal(
-    <div className="conversation-label-manager-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="resolve-attendance-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !submitting) onClose();
+      }}
+    >
       <form
         aria-labelledby="resolve-attendance-title"
         aria-modal="true"
-        className="conversation-modal-card resolve-attendance-modal"
+        className="resolve-attendance-modal"
         role="dialog"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => void submit(event)}
@@ -4000,60 +4039,80 @@ function ResolveAttendanceModal({
             <span className="metric-label">Atendimento</span>
             <h3 id="resolve-attendance-title">Resolver atendimento</h3>
           </div>
-          <IconButton disabled={loading} icon={X} label="Fechar" onClick={onClose} />
+          <IconButton disabled={submitting} icon={X} label="Fechar" onClick={onClose} />
         </header>
-        <div className="attendance-resolution-summary">
-          <span>Aberto há: {attendanceElapsedLabel(attendance.openedAt)}</span>
-          <span>
-            Primeira resposta:{' '}
-            {attendance.firstAgentReplyAt
-              ? attendanceDurationLabel(attendance.openedAt, attendance.firstAgentReplyAt)
-              : 'Ainda não respondido'}
-          </span>
-          <span>
-            Mensagens: {attendance.inboundMessagesCount} recebidas ·{' '}
-            {attendance.outboundMessagesCount} manuais
-          </span>
-        </div>
-        <label className="field">
-          <span>Categoria *</span>
-          <select
-            ref={selectRef}
-            required
-            disabled={loading}
-            value={categoryId}
-            onChange={(event) => setCategoryId(event.target.value)}
-          >
-            <option value="">Selecione</option>
-            {categories
-              .filter((category) => category.isActive)
-              .map((category) => (
+        <div className="resolve-attendance-content">
+          <div className="attendance-resolution-summary">
+            <span>Aberto há: {attendanceElapsedLabel(attendance.openedAt)}</span>
+            <span>
+              Primeira resposta:{' '}
+              {attendance.firstAgentReplyAt
+                ? attendanceDurationLabel(attendance.openedAt, attendance.firstAgentReplyAt)
+                : 'Ainda não respondido'}
+            </span>
+            <span>
+              Mensagens: {attendance.inboundMessagesCount} recebidas ·{' '}
+              {attendance.outboundMessagesCount} manuais
+            </span>
+          </div>
+          {categoriesLoading ? (
+            <div className="notice" role="status">
+              Carregando categorias...
+            </div>
+          ) : null}
+          {categoriesError ? (
+            <div className="notice danger" role="alert">
+              {categoriesError}
+            </div>
+          ) : null}
+          {!categoriesLoading && !categoriesError && !activeCategories.length ? (
+            <div className="notice warning" role="status">
+              Nenhuma categoria ativa. Cadastre ou ative uma categoria em Configurações &gt;
+              WhatsApp.
+            </div>
+          ) : null}
+          <label className="field">
+            <span>Categoria *</span>
+            <select
+              ref={selectRef}
+              required
+              disabled={submitting || categoriesLoading || !activeCategories.length}
+              value={categoryId}
+              onChange={(event) => setCategoryId(event.target.value)}
+            >
+              <option value="">Selecione</option>
+              {activeCategories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
                 </option>
               ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Observação</span>
-          <textarea
-            disabled={loading}
-            maxLength={4000}
-            rows={5}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
-        </label>
-        {error ? (
-          <div className="notice danger" role="alert">
-            {error}
-          </div>
-        ) : null}
+            </select>
+          </label>
+          <label className="field">
+            <span>Observação</span>
+            <textarea
+              disabled={submitting}
+              maxLength={4000}
+              rows={5}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </label>
+          {resolveError ? (
+            <div className="notice danger" role="alert">
+              {resolveError}
+            </div>
+          ) : null}
+        </div>
         <footer>
-          <Button disabled={loading} type="button" variant="secondary" onClick={onClose}>
+          <Button disabled={submitting} type="button" variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button disabled={!categoryId} loading={loading} type="submit">
+          <Button
+            disabled={!categoryId || submitting || categoriesLoading || Boolean(categoriesError)}
+            loading={submitting}
+            type="submit"
+          >
             Resolver atendimento
           </Button>
         </footer>

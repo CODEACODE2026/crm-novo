@@ -196,14 +196,19 @@ export class WhatsAppAttendanceService {
     input: { conversationId: string; messageId: string; occurredAt: Date },
   ) {
     await this.lockConversation(tx, input.conversationId);
-    const linked = await tx.whatsAppMessage.findUnique({
+    const message = await tx.whatsAppMessage.findUnique({
       where: { id: input.messageId },
-      select: { attendanceId: true },
+      select: { attendanceId: true, createdAt: true },
     });
-    if (linked?.attendanceId) return linked.attendanceId;
+    if (!message) return null;
+    if (message.attendanceId) return message.attendanceId;
 
     const active = await tx.whatsAppAttendance.findFirst({
-      where: { conversationId: input.conversationId, status: { in: activeAttendanceStatuses } },
+      where: {
+        conversationId: input.conversationId,
+        status: { in: activeAttendanceStatuses },
+        openedAt: { lte: message.createdAt },
+      },
       orderBy: { openedAt: 'desc' },
     });
     if (!active) return null;

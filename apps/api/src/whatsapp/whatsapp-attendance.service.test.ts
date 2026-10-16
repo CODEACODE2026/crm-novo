@@ -16,7 +16,10 @@ function transaction(overrides: Record<string, unknown> = {}) {
   const tx = {
     $executeRaw: vi.fn().mockResolvedValue(1),
     whatsAppMessage: {
-      findUnique: vi.fn().mockResolvedValue({ attendanceId: null }),
+      findUnique: vi.fn().mockResolvedValue({
+        attendanceId: null,
+        createdAt: new Date('2026-10-16T10:05:00.000Z'),
+      }),
       update: vi.fn().mockResolvedValue({}),
     },
     whatsAppAttendance: {
@@ -232,6 +235,36 @@ describe('WhatsAppAttendanceService', () => {
       where: { id: attendanceId },
       data: { outboundMessagesCount: { increment: 1 } },
     });
+  });
+
+  it('never associates an outbound message created before the attendance opened', async () => {
+    const tx = transaction();
+    const messageCreatedAt = new Date('2026-10-16T09:06:00.000Z');
+    tx.whatsAppMessage.findUnique.mockResolvedValue({
+      attendanceId: null,
+      createdAt: messageCreatedAt,
+    });
+    tx.whatsAppAttendance.findFirst.mockResolvedValue(null);
+    const context = service(tx);
+
+    await expect(
+      context.subject.recordManualOutboundMessage(tx as never, {
+        conversationId,
+        messageId,
+        occurredAt: new Date('2026-10-16T09:08:00.000Z'),
+      }),
+    ).resolves.toBeNull();
+
+    expect(tx.whatsAppAttendance.findFirst).toHaveBeenCalledWith({
+      where: {
+        conversationId,
+        status: { in: ['PENDING', 'IN_PROGRESS'] },
+        openedAt: { lte: messageCreatedAt },
+      },
+      orderBy: { openedAt: 'desc' },
+    });
+    expect(tx.whatsAppAttendance.update).not.toHaveBeenCalled();
+    expect(tx.whatsAppMessage.update).not.toHaveBeenCalled();
   });
 
   it('requires an active same-connection category to resolve an attendance', async () => {

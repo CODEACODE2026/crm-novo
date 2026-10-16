@@ -45,6 +45,23 @@ describe('ATENDIMENTO1 integration contracts', () => {
       serviceSource.indexOf('async saveConversationStickerMessage('),
     );
     expect(retrySource).not.toContain('recordManualOutboundMessage');
+    const presenceSource = serviceSource.slice(
+      serviceSource.indexOf('async setConversationPresence('),
+      serviceSource.indexOf('async updateConversationMessageReaction('),
+    );
+    expect(presenceSource).not.toContain('recordManualOutboundMessage');
+    expect(attendanceSource).toContain('openedAt: { lte: message.createdAt }');
+  });
+
+  it('keeps financial PIX and automatic metadata outside the human-reply classifier', () => {
+    const classifier = serviceSource.slice(
+      serviceSource.indexOf('private isManualAttendanceOutbound('),
+      serviceSource.indexOf('private supportedDownloadMediaType('),
+    );
+    expect(classifier).toContain("source === 'manual_outbound_send'");
+    expect(classifier).toContain("source === 'forward'");
+    expect(classifier).not.toMatch(/pix_whatsapp_send|auto_reply|billing|recovery|scheduler|retry/);
+    expect(serviceSource).toContain("source: 'pix_whatsapp_send'");
   });
 
   it('serializes inbound updates and has database-level active/idempotency protection', () => {

@@ -6320,9 +6320,111 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-reference-card {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
+  gap: 0;
+  padding: 0;
+}
+
+.conversation-reference-toggle {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 82px;
+  min-width: 0;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 9px 34px 9px 10px;
+  text-align: left;
+}
+
+.conversation-reference-toggle:hover {
+  background: color-mix(in srgb, var(--surface-strong) 52%, transparent);
+}
+
+.conversation-reference-toggle:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.conversation-reference-primary-row,
+.conversation-reference-secondary-row,
+.conversation-reference-compact-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.conversation-reference-primary-row,
+.conversation-reference-secondary-row {
+  justify-content: space-between;
+}
+
+.conversation-reference-primary-row > strong,
+.conversation-reference-secondary-row > span:first-child,
+.conversation-reference-financial-text,
+.conversation-reference-compact-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-reference-primary-row > strong {
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.conversation-reference-primary-row .conversation-reference-status,
+.conversation-reference-secondary-row .conversation-reference-status {
+  flex: 0 0 auto;
+}
+
+.conversation-reference-secondary-row,
+.conversation-reference-compact-meta,
+.conversation-reference-financial-text {
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.25;
+}
+
+.conversation-reference-compact-meta {
+  justify-content: flex-start;
+}
+
+.conversation-reference-compact-meta > span + span::before {
+  margin-right: 7px;
+  color: var(--border);
+  content: '·';
+}
+
+.conversation-reference-chevron {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  color: var(--muted);
+  transform: translateY(-50%);
+  transition: transform 140ms ease;
+}
+
+.conversation-reference-card.is-expanded .conversation-reference-chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.conversation-reference-details {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-soft) 88%, var(--surface));
   padding: 11px;
 }
 
@@ -16250,6 +16352,49 @@ tbody tr:hover,
   .conversation-activity-amount {
     grid-column: 2;
     justify-self: end;
+  }
+
+  .conversation-reference-toggle {
+    min-height: 78px;
+    gap: 3px;
+    padding: 8px 32px 8px 9px;
+  }
+
+  .conversation-reference-primary-row,
+  .conversation-reference-secondary-row,
+  .conversation-reference-compact-meta {
+    gap: 5px;
+  }
+
+  .conversation-reference-primary-row > strong {
+    font-size: 0.78rem;
+  }
+
+  .conversation-reference-secondary-row,
+  .conversation-reference-compact-meta,
+  .conversation-reference-financial-text {
+    font-size: 0.67rem;
+  }
+
+  .conversation-reference-compact-meta > span + span::before {
+    margin-right: 5px;
+  }
+
+  .conversation-reference-details {
+    padding: 9px;
+  }
+
+  .conversation-reference-details .conversation-reference-actions,
+  .conversation-reference-details .conversation-reference-pix {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .conversation-reference-details .ui-button {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
   }
 
   .client-detail-view {

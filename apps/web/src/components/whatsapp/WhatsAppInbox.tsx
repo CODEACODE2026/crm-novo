@@ -9682,6 +9682,14 @@ function ConversationReferenceList({
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
   const references = sortContactReferences(client.references ?? []);
+  const referenceIdentity = references.map((reference) => reference.id).join('|');
+  const [expandedReferenceId, setExpandedReferenceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setExpandedReferenceId((current) =>
+      current && referenceIdentity.split('|').includes(current) ? current : null,
+    );
+  }, [client.id, referenceIdentity]);
 
   return (
     <section className="conversation-contact-section">
@@ -9691,27 +9699,36 @@ function ConversationReferenceList({
       </div>
       {references.length ? (
         <div className="conversation-reference-list">
-          {references.map((reference) => (
-            <ConversationReferenceCard
-              key={reference.id}
-              clientId={client.id}
-              lifecycleBusyReferenceId={lifecycleBusyReferenceId}
-              lifecyclePlansLoading={lifecyclePlansLoading}
-              pixBusyReceivableId={pixBusyReceivableId}
-              pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
-              pixIntent={pixIntent}
-              receivables={contactReceivablesForReference(receivables, reference.id)}
-              reference={reference}
-              onCopyPix={onCopyPix}
-              onGeneratePix={onGeneratePix}
-              onRecreatePix={onRecreatePix}
-              onReactivateReference={onReactivateReference}
-              onSendPixWhatsApp={onSendPixWhatsApp}
-              onRenewReference={onRenewReference}
-              onOpenClient={onOpenClient}
-              onViewReceivable={onViewReceivable}
-            />
-          ))}
+          {references.map((reference) => {
+            const expanded = expandedReferenceId === reference.id;
+            return (
+              <ConversationReferenceCard
+                key={reference.id}
+                clientId={client.id}
+                expanded={expanded}
+                lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+                lifecyclePlansLoading={lifecyclePlansLoading}
+                pixBusyReceivableId={pixBusyReceivableId}
+                pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
+                pixIntent={pixIntent}
+                receivables={contactReceivablesForReference(receivables, reference.id)}
+                reference={reference}
+                onCopyPix={onCopyPix}
+                onGeneratePix={onGeneratePix}
+                onRecreatePix={onRecreatePix}
+                onReactivateReference={onReactivateReference}
+                onSendPixWhatsApp={onSendPixWhatsApp}
+                onRenewReference={onRenewReference}
+                onOpenClient={onOpenClient}
+                onToggle={() =>
+                  setExpandedReferenceId((current) =>
+                    current === reference.id ? null : reference.id,
+                  )
+                }
+                onViewReceivable={onViewReceivable}
+              />
+            );
+          })}
         </div>
       ) : (
         <div className="conversation-empty-panel">
@@ -9725,6 +9742,7 @@ function ConversationReferenceList({
 
 function ConversationReferenceCard({
   clientId,
+  expanded,
   lifecycleBusyReferenceId,
   lifecyclePlansLoading,
   pixBusyReceivableId,
@@ -9739,9 +9757,11 @@ function ConversationReferenceCard({
   onSendPixWhatsApp,
   onRenewReference,
   onOpenClient,
+  onToggle,
   onViewReceivable,
 }: {
   clientId: string;
+  expanded: boolean;
   lifecycleBusyReferenceId: string | null;
   lifecyclePlansLoading: boolean;
   pixBusyReceivableId: string | null;
@@ -9756,6 +9776,7 @@ function ConversationReferenceCard({
   onSendPixWhatsApp: (receivable: Receivable, intent: PaymentIntent) => void;
   onRenewReference: (reference: ClientReference) => void;
   onOpenClient: (clientId: string) => void;
+  onToggle: () => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
   const openReceivable = contactOpenReceivable(receivables);
@@ -9776,137 +9797,185 @@ function ConversationReferenceCard({
     visiblePix,
   );
   const lifecycleBusy = lifecycleBusyReferenceId === reference.id || lifecyclePlansLoading;
+  const detailsId = `conversation-reference-details-${reference.id}`;
+  const financialStatus = openReceivable
+    ? receivableStatusText(openReceivable.displayStatus)
+    : 'Sem cobrança em aberto';
+  const pixSummary = visiblePix
+    ? pixState === 'EXPIRED_PIX'
+      ? 'PIX expirado'
+      : `PIX ${paymentIntentStatusText(visiblePix.status).toLowerCase()}`
+    : null;
 
   return (
-    <article className="conversation-reference-card">
-      <div className="conversation-reference-card-header">
-        <div>
-          <strong>{reference.reference}</strong>
-          <span>{reference.plan?.name ?? 'Plano não informado'}</span>
-        </div>
-        <ConversationStatusBadge status={reference.status} />
-      </div>
-      <dl className="detail-list compact">
-        <div>
-          <dt>Valor</dt>
-          <dd>{formatCurrency(reference.recurringValue)}</dd>
-        </div>
-        <div>
-          <dt>Vencimento</dt>
-          <dd>{formatDate(reference.dueDate)}</dd>
-        </div>
-        <div>
-          <dt>Dia base</dt>
-          <dd>{reference.billingAnchorDay}</dd>
-        </div>
-        <div>
-          <dt>Situação financeira</dt>
-          <dd>
-            {openReceivable ? (
-              <ConversationReceivableStatusBadge status={openReceivable.displayStatus} />
-            ) : (
-              'Sem cobrança em aberto'
-            )}
-          </dd>
-        </div>
-      </dl>
-      {reference.notes ? <p className="conversation-reference-note">{reference.notes}</p> : null}
-      {visiblePix ? (
-        <div className="conversation-reference-pix">
-          <div>
-            <span>
-              PIX {paymentIntentStatusText(visiblePix.status)}
-              {visiblePix.provider ? ` · ${visiblePix.provider}` : ''}
-            </span>
-            {visiblePix.expiresAt ? (
-              <small>
-                {pixState === 'EXPIRED_PIX' ? 'PIX expirado em ' : 'PIX válido até '}
-                {formatDateTime(visiblePix.expiresAt)}
-              </small>
-            ) : null}
+    <article className={`conversation-reference-card${expanded ? ' is-expanded' : ''}`}>
+      <button
+        type="button"
+        className="conversation-reference-toggle"
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        onClick={onToggle}
+      >
+        <span className="conversation-reference-primary-row">
+          <strong title={reference.reference}>{reference.reference}</strong>
+          <ConversationStatusBadge status={reference.status} />
+        </span>
+        <span className="conversation-reference-secondary-row">
+          <span title={reference.plan?.name ?? undefined}>
+            {reference.plan?.name ?? 'Plano não informado'}
+          </span>
+          {openReceivable ? (
+            <ConversationReceivableStatusBadge status={openReceivable.displayStatus} />
+          ) : (
+            <span className="conversation-reference-financial-text">{financialStatus}</span>
+          )}
+        </span>
+        <span className="conversation-reference-compact-meta">
+          <span>{formatCurrency(reference.recurringValue)}</span>
+          <span>Vence {formatDate(reference.dueDate)}</span>
+          {pixSummary ? <span>{pixSummary}</span> : null}
+        </span>
+        <ChevronDown aria-hidden="true" className="conversation-reference-chevron" size={17} />
+      </button>
+      {expanded ? (
+        <div id={detailsId} className="conversation-reference-details">
+          <div className="conversation-reference-card-header">
+            <div>
+              <strong>{reference.reference}</strong>
+              <span>{reference.plan?.name ?? 'Plano não informado'}</span>
+            </div>
+            <ConversationStatusBadge status={reference.status} />
           </div>
-          {pixState === 'ACTIVE_PIX' && visiblePix.pixCopyPaste ? (
-            <Button
-              icon={QrCode}
-              size="sm"
-              variant={actions.primary === 'COPY_PIX' ? 'primary' : 'secondary'}
-              onClick={() => onCopyPix(visiblePix)}
-            >
-              Copiar PIX
-            </Button>
+          <dl className="detail-list compact">
+            <div>
+              <dt>Valor</dt>
+              <dd>{formatCurrency(reference.recurringValue)}</dd>
+            </div>
+            <div>
+              <dt>Vencimento</dt>
+              <dd>{formatDate(reference.dueDate)}</dd>
+            </div>
+            <div>
+              <dt>Dia base</dt>
+              <dd>{reference.billingAnchorDay}</dd>
+            </div>
+            <div>
+              <dt>Situação financeira</dt>
+              <dd>
+                {openReceivable ? (
+                  <ConversationReceivableStatusBadge status={openReceivable.displayStatus} />
+                ) : (
+                  financialStatus
+                )}
+              </dd>
+            </div>
+          </dl>
+          {reference.notes ? (
+            <p className="conversation-reference-note">{reference.notes}</p>
           ) : null}
-          {canSendPixWhatsApp && openReceivable && visiblePix ? (
-            <Button
-              disabled={pixWhatsAppSending}
-              icon={Send}
-              size="sm"
-              variant={actions.primary === 'SEND_PIX_WHATSAPP' ? 'primary' : 'secondary'}
-              onClick={() => onSendPixWhatsApp(openReceivable, visiblePix)}
-            >
-              {contactPixWhatsAppButtonLabel(pixWhatsAppSending)}
-            </Button>
+          {visiblePix ? (
+            <div className="conversation-reference-pix">
+              <div>
+                <span>
+                  PIX {paymentIntentStatusText(visiblePix.status)}
+                  {visiblePix.provider ? ` · ${visiblePix.provider}` : ''}
+                </span>
+                {visiblePix.expiresAt ? (
+                  <small>
+                    {pixState === 'EXPIRED_PIX' ? 'PIX expirado em ' : 'PIX válido até '}
+                    {formatDateTime(visiblePix.expiresAt)}
+                  </small>
+                ) : null}
+              </div>
+              {pixState === 'ACTIVE_PIX' && visiblePix.pixCopyPaste ? (
+                <Button
+                  icon={QrCode}
+                  size="sm"
+                  variant={actions.primary === 'COPY_PIX' ? 'primary' : 'secondary'}
+                  onClick={() => onCopyPix(visiblePix)}
+                >
+                  Copiar PIX
+                </Button>
+              ) : null}
+              {canSendPixWhatsApp && openReceivable && visiblePix ? (
+                <Button
+                  disabled={pixWhatsAppSending}
+                  icon={Send}
+                  size="sm"
+                  variant={actions.primary === 'SEND_PIX_WHATSAPP' ? 'primary' : 'secondary'}
+                  onClick={() => onSendPixWhatsApp(openReceivable, visiblePix)}
+                >
+                  {contactPixWhatsAppButtonLabel(pixWhatsAppSending)}
+                </Button>
+              ) : null}
+              {canActOnPix && openReceivable && pixState === 'EXPIRED_PIX' ? (
+                <Button
+                  icon={RefreshCw}
+                  loading={pixBusyReceivableId === openReceivable.id}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => onRecreatePix(openReceivable, visiblePix)}
+                >
+                  Recriar PIX
+                </Button>
+              ) : null}
+            </div>
           ) : null}
-          {canActOnPix && openReceivable && pixState === 'EXPIRED_PIX' ? (
+          <div className="conversation-reference-actions">
+            {canActOnPix && openReceivable && pixState === 'NO_PIX' ? (
+              <Button
+                icon={QrCode}
+                loading={pixBusyReceivableId === openReceivable.id}
+                size="sm"
+                variant="primary"
+                onClick={() => onGeneratePix(openReceivable)}
+              >
+                Gerar PIX
+              </Button>
+            ) : null}
+            {actions.viewReceivable && relevantReceivable ? (
+              <Button
+                icon={Eye}
+                size="sm"
+                variant="secondary"
+                onClick={() => onViewReceivable(clientId, relevantReceivable)}
+              >
+                Ver cobrança
+              </Button>
+            ) : null}
+            {actions.renew ? (
+              <Button
+                icon={RefreshCw}
+                loading={lifecycleBusy}
+                size="sm"
+                variant="secondary"
+                onClick={() => onRenewReference(reference)}
+              >
+                Renovar
+              </Button>
+            ) : null}
+            {actions.reactivate ? (
+              <Button
+                icon={RefreshCw}
+                loading={lifecycleBusy}
+                size="sm"
+                variant="primary"
+                onClick={() => onReactivateReference(reference)}
+              >
+                Reativar
+              </Button>
+            ) : null}
             <Button
-              icon={RefreshCw}
-              loading={pixBusyReceivableId === openReceivable.id}
+              icon={ArrowRight}
               size="sm"
-              variant="primary"
-              onClick={() => onRecreatePix(openReceivable, visiblePix)}
+              variant="ghost"
+              onClick={() => onOpenClient(clientId)}
             >
-              Recriar PIX
+              Abrir cliente
             </Button>
-          ) : null}
+          </div>
         </div>
       ) : null}
-      <div className="conversation-reference-actions">
-        {canActOnPix && openReceivable && pixState === 'NO_PIX' ? (
-          <Button
-            icon={QrCode}
-            loading={pixBusyReceivableId === openReceivable.id}
-            size="sm"
-            variant="primary"
-            onClick={() => onGeneratePix(openReceivable)}
-          >
-            Gerar PIX
-          </Button>
-        ) : null}
-        {actions.viewReceivable && relevantReceivable ? (
-          <Button
-            icon={Eye}
-            size="sm"
-            variant="secondary"
-            onClick={() => onViewReceivable(clientId, relevantReceivable)}
-          >
-            Ver cobrança
-          </Button>
-        ) : null}
-        {actions.renew ? (
-          <Button
-            icon={RefreshCw}
-            loading={lifecycleBusy}
-            size="sm"
-            variant="secondary"
-            onClick={() => onRenewReference(reference)}
-          >
-            Renovar
-          </Button>
-        ) : null}
-        {actions.reactivate ? (
-          <Button
-            icon={RefreshCw}
-            loading={lifecycleBusy}
-            size="sm"
-            variant="primary"
-            onClick={() => onReactivateReference(reference)}
-          >
-            Reativar
-          </Button>
-        ) : null}
-        <Button icon={ArrowRight} size="sm" variant="ghost" onClick={() => onOpenClient(clientId)}>
-          Abrir cliente
-        </Button>
-      </div>
     </article>
   );
 }

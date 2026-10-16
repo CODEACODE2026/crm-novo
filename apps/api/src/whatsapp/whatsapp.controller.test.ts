@@ -157,11 +157,22 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       getConfig: vi.fn().mockResolvedValue({ enabled: false }),
       updateConfig: vi.fn().mockResolvedValue({ enabled: true }),
     };
+    const attendance = {
+      listCategories: vi.fn().mockResolvedValue([]),
+      createCategory: vi.fn().mockResolvedValue({ id: 'attendance-category-id' }),
+      updateCategory: vi.fn().mockResolvedValue({ id: 'attendance-category-id' }),
+      removeCategory: vi.fn().mockResolvedValue({ deactivated: true }),
+      getActiveAttendance: vi.fn().mockResolvedValue(null),
+      listConversationAttendances: vi.fn().mockResolvedValue({ items: [] }),
+      getAttendance: vi.fn().mockResolvedValue({ id: 'attendance-id' }),
+      listClientAttendances: vi.fn().mockResolvedValue({ items: [] }),
+    };
     const subject = new WhatsAppController(
       service as never,
       quickReplies as never,
       realtime as never,
       autoReply as never,
+      attendance as never,
     );
     const response = { setHeader: vi.fn() };
     const request = { on: vi.fn() };
@@ -300,9 +311,23 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(subject.markConversationAsRead('conversation-id')).resolves.toEqual({
       unreadCount: 0,
     });
-    await expect(subject.resolveConversation('conversation-id')).resolves.toEqual({
-      status: 'RESOLVED',
+    await expect(
+      subject.resolveConversation('conversation-id', {}, { user: { id: 'user-id' } } as never),
+    ).resolves.toEqual({ status: 'RESOLVED' });
+    await expect(subject.listAttendanceCategories('connection-id', 'true')).resolves.toEqual([]);
+    await expect(
+      subject.createAttendanceCategory('connection-id', { name: 'Suporte', color: 'BLUE' }),
+    ).resolves.toEqual({ id: 'attendance-category-id' });
+    await expect(subject.getActiveAttendance('conversation-id')).resolves.toBeNull();
+    await expect(
+      subject.listConversationAttendances('conversation-id', { page: 1, limit: 5 }),
+    ).resolves.toEqual({ items: [] });
+    await expect(subject.getAttendance('attendance-id')).resolves.toEqual({
+      id: 'attendance-id',
     });
+    await expect(
+      subject.listClientAttendances('client-id', { page: 1, limit: 5 }),
+    ).resolves.toEqual({ items: [] });
     subject.events(request as never, response as never);
 
     expect(service.listConversations).toHaveBeenCalledWith({ page: 1, limit: 20 });
@@ -384,7 +409,20 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     expect(response.setHeader).toHaveBeenCalledWith('Content-Type', 'image/jpeg');
     expect(response.setHeader).toHaveBeenCalledWith('Content-Length', '5');
     expect(service.markConversationAsRead).toHaveBeenCalledWith('conversation-id');
-    expect(service.resolveConversation).toHaveBeenCalledWith('conversation-id');
+    expect(service.resolveConversation).toHaveBeenCalledWith('conversation-id', {}, 'user-id');
+    expect(attendance.listCategories).toHaveBeenCalledWith('connection-id', false);
+    expect(attendance.createCategory).toHaveBeenCalledWith('connection-id', {
+      name: 'Suporte',
+      color: 'BLUE',
+    });
+    expect(attendance.listConversationAttendances).toHaveBeenCalledWith('conversation-id', {
+      page: 1,
+      limit: 5,
+    });
+    expect(attendance.listClientAttendances).toHaveBeenCalledWith('client-id', {
+      page: 1,
+      limit: 5,
+    });
     expect(realtime.subscribe).toHaveBeenCalledWith(request, response);
   });
 });

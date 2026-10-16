@@ -154,10 +154,12 @@ import {
   createPlan,
   createWhatsAppQuickReply,
   createWhatsAppConversationLabel,
+  createWhatsAppAttendanceCategory,
   deleteClient,
   deleteClientReference,
   deleteWhatsAppQuickReply,
   deleteWhatsAppConversationLabel,
+  deleteWhatsAppAttendanceCategory,
   deletePlan,
   deleteFinancialCategory,
   deleteFinancialTransaction,
@@ -189,6 +191,7 @@ import {
   listWhatsAppMessages,
   listWhatsAppAutoReplies,
   listWhatsAppConversationLabels,
+  listWhatsAppAttendanceCategories,
   listWhatsAppQuickRepliesAdmin,
   downloadReportCsv,
   logoutWhatsApp,
@@ -254,6 +257,7 @@ import {
   updateBillingAutomationSettings,
   updateWhatsAppQuickReply,
   updateWhatsAppConversationLabel,
+  updateWhatsAppAttendanceCategory,
   updateWhatsAppAutoReply,
   updateRecoveryAutomationSettings,
   syncPaymentIntent,
@@ -328,6 +332,7 @@ import {
   type WhatsAppAutoReplyAudience,
   type WhatsAppConversationLabelAdmin,
   type WhatsAppConversationLabelColor,
+  type WhatsAppAttendanceCategory,
   type WhatsAppInboundMessageType,
   type WhatsAppPendingContact,
   type WhatsAppPendingContactStatus,
@@ -6418,6 +6423,206 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
   );
 }
 
+function SettingsWhatsAppAttendanceCategoriesPanel({
+  connections,
+}: {
+  connections: WhatsAppAutoReplyConfig[];
+}) {
+  const [connectionId, setConnectionId] = useState('');
+  const selectedConnectionId = connectionId || connections[0]?.whatsAppConnectionId || '';
+  const [categories, setCategories] = useState<WhatsAppAttendanceCategory[]>([]);
+  const [editing, setEditing] = useState<WhatsAppAttendanceCategory | null>(null);
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<WhatsAppConversationLabelColor>('BLUE');
+  const [sortOrder, setSortOrder] = useState('0');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const load = useCallback(async () => {
+    if (!selectedConnectionId) return setCategories([]);
+    setLoading(true);
+    setError('');
+    try {
+      setCategories(await listWhatsAppAttendanceCategories(selectedConnectionId));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Falha ao carregar categorias.');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedConnectionId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function reset() {
+    setEditing(null);
+    setName('');
+    setColor('BLUE');
+    setSortOrder('0');
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const order = Number(sortOrder);
+    if (!selectedConnectionId || !name.trim() || !Number.isInteger(order) || order < 0 || saving)
+      return;
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      if (editing) {
+        await updateWhatsAppAttendanceCategory(selectedConnectionId, editing.id, {
+          name: name.trim(),
+          color,
+          sortOrder: order,
+        });
+        setNotice('Categoria atualizada.');
+      } else {
+        await createWhatsAppAttendanceCategory(selectedConnectionId, {
+          name: name.trim(),
+          color,
+          sortOrder: order,
+        });
+        setNotice('Categoria criada.');
+      }
+      reset();
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Falha ao salvar categoria.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggle(category: WhatsAppAttendanceCategory) {
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await updateWhatsAppAttendanceCategory(selectedConnectionId, category.id, {
+        isActive: !category.isActive,
+      });
+      await load();
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : 'Falha ao alterar categoria.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(category: WhatsAppAttendanceCategory) {
+    if (saving || !window.confirm(`Remover a categoria “${category.name}”?`)) return;
+    setSaving(true);
+    setError('');
+    try {
+      const result = await deleteWhatsAppAttendanceCategory(selectedConnectionId, category.id);
+      setNotice(result.deactivated ? 'Categoria em uso desativada.' : 'Categoria removida.');
+      await load();
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : 'Falha ao remover categoria.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="settings-auto-reply-card settings-attendance-categories">
+      <div className="panel-header">
+        <div>
+          <span className="metric-label">Atendimentos</span>
+          <h3>Categorias de resolução</h3>
+          <p>Categorias obrigatórias para encerrar episódios de atendimento.</p>
+        </div>
+      </div>
+      <label className="field">
+        <span>Conexão</span>
+        <select
+          value={selectedConnectionId}
+          onChange={(event) => setConnectionId(event.target.value)}
+        >
+          {!connections.length ? <option value="">Nenhuma conexão</option> : null}
+          {connections.map((connection) => (
+            <option key={connection.whatsAppConnectionId} value={connection.whatsAppConnectionId}>
+              {connection.connectionName}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error ? <div className="notice danger">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
+      <form className="whatsapp-label-settings-form" onSubmit={(event) => void submit(event)}>
+        <label className="field">
+          <span>{editing ? 'Editar categoria' : 'Nova categoria'}</span>
+          <input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Ordem</span>
+          <input
+            min={0}
+            type="number"
+            value={sortOrder}
+            onChange={(event) => setSortOrder(event.target.value)}
+          />
+        </label>
+        <div className="whatsapp-label-settings-palette" aria-label="Cor da categoria">
+          {whatsappLabelColors.map((item) => (
+            <button
+              aria-label={`Cor ${item.toLowerCase()}`}
+              aria-pressed={color === item}
+              className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
+              key={item}
+              type="button"
+              onClick={() => setColor(item)}
+            />
+          ))}
+        </div>
+        <div className="settings-quick-reply-form-actions">
+          {editing ? (
+            <Button type="button" variant="ghost" onClick={reset}>
+              Cancelar
+            </Button>
+          ) : null}
+          <Button disabled={!selectedConnectionId || !name.trim()} loading={saving} type="submit">
+            {editing ? 'Salvar' : 'Criar'}
+          </Button>
+        </div>
+      </form>
+      <div className="whatsapp-label-settings-list" aria-busy={loading}>
+        {categories.map((category) => (
+          <div key={category.id} className="whatsapp-label-settings-row">
+            <span className={`whatsapp-label-dot color-${category.color.toLowerCase()}`} />
+            <strong>{category.name}</strong>
+            <small>
+              {category.isActive ? 'Ativa' : 'Inativa'} · {category._count?.attendances ?? 0}
+            </small>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setEditing(category);
+                setName(category.name);
+                setColor(category.color);
+                setSortOrder(String(category.sortOrder));
+              }}
+            >
+              Editar
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => void toggle(category)}>
+              {category.isActive ? 'Desativar' : 'Ativar'}
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => void remove(category)}>
+              Remover
+            </Button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SettingsWhatsAppQuickRepliesPanel({
   autoReplyConfigs,
   autoReplyError,
@@ -6759,6 +6964,7 @@ function SettingsWhatsAppQuickRepliesPanel({
       </section>
 
       <SettingsWhatsAppLabelsPanel connections={autoReplyConfigs} />
+      <SettingsWhatsAppAttendanceCategoriesPanel connections={autoReplyConfigs} />
 
       <div className="settings-v2-toolbar">
         <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenWhatsApp}>

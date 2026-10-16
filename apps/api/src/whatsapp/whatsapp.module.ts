@@ -22,6 +22,7 @@ import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppVoiceConversionService } from './whatsapp-voice-conversion.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
+import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
 
 @Module({
   imports: [AuthModule, PrismaModule, PlansModule, FinanceModule, ReferralsModule],
@@ -38,6 +39,7 @@ import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
     WhatsAppRealtimeService,
     WhatsAppVoiceConversionService,
     WhatsAppAutoReplyService,
+    WhatsAppAttendanceService,
     WhatsAppService,
     {
       provide: WHATSAPP_PROVIDER,

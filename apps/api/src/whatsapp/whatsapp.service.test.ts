@@ -8980,6 +8980,19 @@ describe('WhatsAppService', () => {
         select: { label: { select: { id: true, name: true, color: true } } },
         orderBy: { label: { name: 'asc' } },
       },
+      attendances: {
+        where: { status: { in: ['PENDING', 'IN_PROGRESS'] } },
+        select: {
+          id: true,
+          status: true,
+          openedAt: true,
+          firstAgentReplyAt: true,
+          inboundMessagesCount: true,
+          outboundMessagesCount: true,
+        },
+        orderBy: { openedAt: 'desc' },
+        take: 1,
+      },
     });
     expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
       expect.arrayContaining([

@@ -233,6 +233,12 @@ enum WhatsAppConversationStatus {
   RESOLVED
 }
 
+enum WhatsAppAttendanceStatus {
+  PENDING
+  IN_PROGRESS
+  RESOLVED
+}
+
 enum WhatsAppConversationLabelColor {
   BLUE
   GREEN
@@ -314,6 +320,7 @@ model User {
   createdReferrals        Referral[]                    @relation("ReferralCreatedBy")
   createdPaymentGroups    PaymentGroup[]                @relation("PaymentGroupCreatedBy")
   receivableAuditEvents   ReceivableAuditEvent[]        @relation("ReceivableAuditEventActor")
+  resolvedAttendances     WhatsAppAttendance[]          @relation("WhatsAppAttendanceResolvedBy")
 
   @@map("users")
 }
@@ -367,6 +374,7 @@ model Client {
   whatsappPendingContacts WhatsAppPendingContact[]
   whatsappInboundMessages WhatsAppInboundMessage[]
   whatsappConversations   WhatsAppConversation[]
+  whatsappAttendances     WhatsAppAttendance[]
   referralReceived        Referral?                     @relation("ReferralReferredClient")
   referralsMade           Referral[]                    @relation("ReferralReferrerClient")
 
@@ -447,6 +455,8 @@ model WhatsAppConnection {
   autoReplyConfig        WhatsAppAutoReplyConfig?
   autoReplyExecutions    WhatsAppAutoReplyExecution[]
   conversationLabels     WhatsAppConversationLabel[]
+  attendanceCategories   WhatsAppAttendanceCategory[]
+  attendances            WhatsAppAttendance[]
 
   @@index([provider])
   @@index([providerInstanceName])
@@ -737,6 +747,7 @@ model WhatsAppConversation {
   messages             WhatsAppMessage[]
   autoReplyExecutions  WhatsAppAutoReplyExecution[]
   labelAssignments     WhatsAppConversationLabelAssignment[]
+  attendances          WhatsAppAttendance[]
 
   @@unique([whatsAppConnectionId, phoneNormalized])
   @@index([lastMessageAt])
@@ -745,6 +756,56 @@ model WhatsAppConversation {
   @@index([whatsAppConnectionId, status, lastMessageAt])
   @@index([whatsAppConnectionId, needsManualFollowUp, lastMessageAt])
   @@map("whatsapp_conversations")
+}
+
+model WhatsAppAttendanceCategory {
+  id                   String                         @id @default(uuid()) @db.Uuid
+  whatsAppConnectionId String                         @db.Uuid
+  name                 String
+  normalizedName       String
+  color                WhatsAppConversationLabelColor
+  isActive             Boolean                        @default(true)
+  sortOrder            Int                            @default(0)
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+  whatsAppConnection   WhatsAppConnection             @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Cascade, map: "whatsapp_attendance_categories_connection_fkey")
+  attendances          WhatsAppAttendance[]
+
+  @@unique([whatsAppConnectionId, normalizedName], map: "whatsapp_attendance_categories_connection_normalized_key")
+  @@index([whatsAppConnectionId, isActive, sortOrder], map: "whatsapp_attendance_categories_connection_active_order_idx")
+  @@map("whatsapp_attendance_categories")
+}
+
+model WhatsAppAttendance {
+  id                    String                      @id @default(uuid()) @db.Uuid
+  conversationId        String                      @db.Uuid
+  whatsAppConnectionId  String                      @db.Uuid
+  clientId              String?                     @db.Uuid
+  status                WhatsAppAttendanceStatus    @default(PENDING)
+  openedAt              DateTime
+  firstAgentReplyAt     DateTime?
+  resolvedAt            DateTime?
+  categoryId            String?                     @db.Uuid
+  resolutionNote        String?
+  openedByMessageId     String                      @unique @db.Uuid
+  resolvedByUserId      String?                     @db.Uuid
+  inboundMessagesCount  Int                         @default(1)
+  outboundMessagesCount Int                         @default(0)
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+  conversation          WhatsAppConversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade, map: "whatsapp_attendances_conversation_fkey")
+  whatsAppConnection    WhatsAppConnection          @relation(fields: [whatsAppConnectionId], references: [id], onDelete: Restrict, map: "whatsapp_attendances_connection_fkey")
+  client                Client?                     @relation(fields: [clientId], references: [id], onDelete: SetNull, map: "whatsapp_attendances_client_fkey")
+  category              WhatsAppAttendanceCategory? @relation(fields: [categoryId], references: [id], onDelete: Restrict, map: "whatsapp_attendances_category_fkey")
+  openedByMessage       WhatsAppMessage             @relation("WhatsAppAttendanceOpeningMessage", fields: [openedByMessageId], references: [id], onDelete: Restrict, map: "whatsapp_attendances_opened_message_fkey")
+  resolvedBy            User?                       @relation("WhatsAppAttendanceResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: SetNull, map: "whatsapp_attendances_resolved_by_fkey")
+  messages              WhatsAppMessage[]           @relation("WhatsAppAttendanceMessages")
+
+  @@index([conversationId, openedAt], map: "whatsapp_attendances_conversation_openedAt_idx")
+  @@index([whatsAppConnectionId, status, openedAt], map: "whatsapp_attendances_connection_status_openedAt_idx")
+  @@index([clientId, openedAt], map: "whatsapp_attendances_client_openedAt_idx")
+  @@index([categoryId, resolvedAt], map: "whatsapp_attendances_category_resolvedAt_idx")
+  @@map("whatsapp_attendances")
 }
 
 model WhatsAppConversationLabel {
@@ -829,6 +890,7 @@ model WhatsAppMessage {
   providerMessageId          String?
   requestId                  String?
   messageDispatchId          String?                              @db.Uuid
+  attendanceId               String?                              @db.Uuid
   replyToMessageId           String?                              @db.Uuid
   replyToProviderMessageId   String?
   quotedText                 String?
@@ -858,11 +920,14 @@ model WhatsAppMessage {
   reactions                  WhatsAppMessageReaction[]
   autoReplyTriggerExecutions WhatsAppAutoReplyExecution[]         @relation("WhatsAppAutoReplyTrigger")
   autoReplyExecution         WhatsAppAutoReplyExecution?          @relation("WhatsAppAutoReplyOutbound")
+  attendance                 WhatsAppAttendance?                  @relation("WhatsAppAttendanceMessages", fields: [attendanceId], references: [id], onDelete: SetNull, map: "whatsapp_messages_attendance_fkey")
+  openedAttendance           WhatsAppAttendance?                  @relation("WhatsAppAttendanceOpeningMessage")
 
   @@unique([provider, whatsAppConnectionId, providerMessageId])
   @@unique([whatsAppConnectionId, requestId])
   @@index([conversationId, createdAt])
   @@index([messageDispatchId])
+  @@index([attendanceId, createdAt])
   @@index([replyToMessageId])
   @@index([provider, whatsAppConnectionId, replyToProviderMessageId], map: "whatsapp_messages_reply_provider_msg_idx")
   @@map("whatsapp_messages")

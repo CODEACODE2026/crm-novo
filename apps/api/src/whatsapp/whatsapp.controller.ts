@@ -53,6 +53,11 @@ import { UpdateWhatsAppMessageReactionDto } from './dto/update-whatsapp-message-
 import { UpdateWhatsAppQuickReplyDto } from './dto/update-whatsapp-quick-reply.dto';
 import { UpdateWhatsAppConversationLabelDto } from './dto/update-whatsapp-conversation-label.dto';
 import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
+import { CreateWhatsAppAttendanceCategoryDto } from './dto/create-whatsapp-attendance-category.dto';
+import { ListWhatsAppAttendancesDto } from './dto/list-whatsapp-attendances.dto';
+import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
+import { UpdateWhatsAppAttendanceCategoryDto } from './dto/update-whatsapp-attendance-category.dto';
+import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
 import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
@@ -88,6 +93,8 @@ export class WhatsAppController {
     @Inject(WhatsAppRealtimeService) private readonly realtime: WhatsAppRealtimeService,
     @Inject(WhatsAppAutoReplyService)
     private readonly autoReplyService: WhatsAppAutoReplyService,
+    @Inject(WhatsAppAttendanceService)
+    private readonly attendanceService: WhatsAppAttendanceService,
   ) {}
 
   @Get('connection')
@@ -146,6 +153,39 @@ export class WhatsAppController {
     @Param('labelId', new ParseUUIDPipe()) labelId: string,
   ) {
     return this.whatsAppService.deleteConversationLabel(connectionId, labelId);
+  }
+
+  @Get('connections/:connectionId/attendance-categories')
+  listAttendanceCategories(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Query('activeOnly') activeOnly?: string,
+  ) {
+    return this.attendanceService.listCategories(connectionId, activeOnly !== 'true');
+  }
+
+  @Post('connections/:connectionId/attendance-categories')
+  createAttendanceCategory(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Body() dto: CreateWhatsAppAttendanceCategoryDto,
+  ) {
+    return this.attendanceService.createCategory(connectionId, dto);
+  }
+
+  @Patch('connections/:connectionId/attendance-categories/:categoryId')
+  updateAttendanceCategory(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Param('categoryId', new ParseUUIDPipe()) categoryId: string,
+    @Body() dto: UpdateWhatsAppAttendanceCategoryDto,
+  ) {
+    return this.attendanceService.updateCategory(connectionId, categoryId, dto);
+  }
+
+  @Delete('connections/:connectionId/attendance-categories/:categoryId')
+  removeAttendanceCategory(
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+    @Param('categoryId', new ParseUUIDPipe()) categoryId: string,
+  ) {
+    return this.attendanceService.removeCategory(connectionId, categoryId);
   }
 
   @Get('quick-replies')
@@ -462,8 +502,38 @@ export class WhatsAppController {
   }
 
   @Post('conversations/:id/resolve')
-  resolveConversation(@Param('id') id: string) {
-    return this.whatsAppService.resolveConversation(id);
+  resolveConversation(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ResolveWhatsAppAttendanceDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.whatsAppService.resolveConversation(id, dto, request.user.id);
+  }
+
+  @Get('conversations/:id/attendance')
+  getActiveAttendance(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.attendanceService.getActiveAttendance(id);
+  }
+
+  @Get('conversations/:id/attendances')
+  listConversationAttendances(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() query: ListWhatsAppAttendancesDto,
+  ) {
+    return this.attendanceService.listConversationAttendances(id, query);
+  }
+
+  @Get('attendances/:id')
+  getAttendance(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.attendanceService.getAttendance(id);
+  }
+
+  @Get('clients/:clientId/attendances')
+  listClientAttendances(
+    @Param('clientId', new ParseUUIDPipe()) clientId: string,
+    @Query() query: ListWhatsAppAttendancesDto,
+  ) {
+    return this.attendanceService.listClientAttendances(clientId, query);
   }
 
   @Get('pending-contacts')

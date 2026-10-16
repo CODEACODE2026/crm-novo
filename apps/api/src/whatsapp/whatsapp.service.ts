@@ -93,6 +93,8 @@ import { buildPixWhatsAppTemplate } from './pix-whatsapp-template';
 import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conversation-domain';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
+import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
+import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
 import { requiredWhatsAppProviderEvents } from './provider/whatsapp-provider';
 
 const providerEvents = requiredWhatsAppProviderEvents;
@@ -372,6 +374,14 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
   labelAssignments?: Array<{
     label: { id: string; name: string; color: WhatsAppConversationLabelColor };
   }>;
+  attendances?: Array<{
+    id: string;
+    status: 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+    openedAt: Date;
+    firstAgentReplyAt: Date | null;
+    inboundMessagesCount: number;
+    outboundMessagesCount: number;
+  }>;
 };
 
 type WhatsAppConversationMessageQuote = Pick<
@@ -472,6 +482,9 @@ export class WhatsAppService {
     @Optional()
     @Inject(WhatsAppAutoReplyService)
     private readonly autoReplyService?: WhatsAppAutoReplyService,
+    @Optional()
+    @Inject(WhatsAppAttendanceService)
+    private readonly attendanceService?: WhatsAppAttendanceService,
   ) {}
 
   private emitConversationUpdated(conversationId: string) {
@@ -1033,6 +1046,19 @@ export class WhatsAppService {
             labelAssignments: {
               select: { label: { select: { id: true, name: true, color: true } } },
               orderBy: { label: { name: 'asc' } },
+            },
+            attendances: {
+              where: { status: { in: ['PENDING', 'IN_PROGRESS'] } },
+              select: {
+                id: true,
+                status: true,
+                openedAt: true,
+                firstAgentReplyAt: true,
+                inboundMessagesCount: true,
+                outboundMessagesCount: true,
+              },
+              orderBy: { openedAt: 'desc' },
+              take: 1,
             },
           },
           orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
@@ -1939,6 +1965,12 @@ export class WhatsAppService {
           },
         });
 
+        await this.attendanceService?.recordManualOutboundMessage(tx, {
+          conversationId: conversation.id,
+          messageId: message.id,
+          occurredAt: sentAt,
+        });
+
         return message;
       });
 
@@ -2674,6 +2706,12 @@ export class WhatsAppService {
           },
         });
 
+        await this.attendanceService?.recordManualOutboundMessage(tx, {
+          conversationId: conversation.id,
+          messageId: message.id,
+          occurredAt: sentAt,
+        });
+
         return message;
       });
 
@@ -2818,6 +2856,12 @@ export class WhatsAppService {
             }),
             needsManualFollowUp: false,
           },
+        });
+
+        await this.attendanceService?.recordManualOutboundMessage(tx, {
+          conversationId: conversation.id,
+          messageId: message.id,
+          occurredAt: sentAt,
         });
 
         return message;
@@ -3080,6 +3124,19 @@ export class WhatsAppService {
           select: { label: { select: { id: true, name: true, color: true } } },
           orderBy: { label: { name: 'asc' } },
         },
+        attendances: {
+          where: { status: { in: ['PENDING', 'IN_PROGRESS'] } },
+          select: {
+            id: true,
+            status: true,
+            openedAt: true,
+            firstAgentReplyAt: true,
+            inboundMessagesCount: true,
+            outboundMessagesCount: true,
+          },
+          orderBy: { openedAt: 'desc' },
+          take: 1,
+        },
       },
     });
 
@@ -3168,7 +3225,18 @@ export class WhatsAppService {
     return this.presentConversation(updated);
   }
 
-  async resolveConversation(id: string) {
+  async resolveConversation(
+    id: string,
+    dto: ResolveWhatsAppAttendanceDto = {},
+    actorUserId?: string,
+  ) {
+    if (this.attendanceService && actorUserId) {
+      await this.attendanceService.resolveActiveAttendance(id, actorUserId, dto);
+      const conversation = await this.findConversationForRead(id);
+      if (!conversation) throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+      return this.presentConversation(conversation);
+    }
+
     await this.ensureConversationExists(id);
     const conversation = await this.prisma.whatsAppConversation.update({
       where: { id },
@@ -4551,6 +4619,14 @@ export class WhatsAppService {
               normalized,
             );
 
+            if (this.isManualAttendanceOutbound(reconciled.rawMetadata)) {
+              await this.attendanceService?.recordManualOutboundMessage(tx, {
+                conversationId: reconciled.conversationId,
+                messageId: reconciled.id,
+                occurredAt: reconciled.sentAt ?? normalized.messageTimestamp ?? new Date(),
+              });
+            }
+
             return {
               processed: true,
               action: 'outgoing_conversation_message_reconciled',
@@ -4597,6 +4673,16 @@ export class WhatsAppService {
             conversationId: message.conversationId,
             messageId: message.id,
           };
+        }
+
+        if (direction === 'INBOUND') {
+          await this.attendanceService?.recordInboundMessage(tx, {
+            conversationId: conversation.id,
+            connectionId: connection.id,
+            clientId: conversation.clientId,
+            messageId: message.id,
+            occurredAt: sentAt,
+          });
         }
 
         await tx.whatsAppConversation.update({
@@ -5467,6 +5553,19 @@ export class WhatsAppService {
           select: { label: { select: { id: true, name: true, color: true } } },
           orderBy: { label: { name: 'asc' } },
         },
+        attendances: {
+          where: { status: { in: ['PENDING', 'IN_PROGRESS'] } },
+          select: {
+            id: true,
+            status: true,
+            openedAt: true,
+            firstAgentReplyAt: true,
+            inboundMessagesCount: true,
+            outboundMessagesCount: true,
+          },
+          orderBy: { openedAt: 'desc' },
+          take: 1,
+        },
       },
     });
   }
@@ -5867,7 +5966,7 @@ export class WhatsAppService {
           isFromMe: true,
           rawMetadata: input.forwardMetadata
             ? this.forwardRawMetadata(input.forwardMetadata)
-            : Prisma.JsonNull,
+            : { source: 'manual_outbound_send' },
           mediaMimeType: null,
           mediaFileName: null,
           mediaSizeBytes: null,
@@ -7542,6 +7641,7 @@ export class WhatsAppService {
       needsManualFollowUp: conversation.needsManualFollowUp,
       lastAutoReplyAt: conversation.lastAutoReplyAt,
       labels: (conversation.labelAssignments ?? []).map(({ label }) => label),
+      activeAttendance: conversation.attendances?.[0] ?? null,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };
@@ -8297,6 +8397,16 @@ export class WhatsAppService {
     return rawMetadata && typeof rawMetadata === 'object' && !Array.isArray(rawMetadata)
       ? (rawMetadata as Record<string, Prisma.JsonValue>)
       : {};
+  }
+
+  private isManualAttendanceOutbound(rawMetadata: Prisma.JsonValue | null) {
+    const source = this.rawMetadataObject(rawMetadata).source;
+    return (
+      source === 'manual_outbound_send' ||
+      source === 'manual_outbound_media_send' ||
+      source === 'manual_outbound_voice_send' ||
+      source === 'forward'
+    );
   }
 
   private supportedDownloadMediaType(type: WhatsAppConversationMessageType) {

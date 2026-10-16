@@ -200,7 +200,10 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       'activeConversationIdRef.current === readConversation.id',
     );
     expect(conversationsSource).toContain('updateConversationSummaryAfterRead');
-    expect(conversationsSource).toContain('resolveWhatsAppConversation(selectedConversation.id)');
+    expect(conversationsSource).toContain(
+      'resolveWhatsAppConversation(selectedConversation.id, payload)',
+    );
+    expect(conversationsSource).toContain('setResolveAttendanceOpen(true)');
     expect(conversationsSource).toContain('document.hidden');
     expect(conversationsSource).toContain('mergeConversationMessages');
     expect(conversationsSource).toContain('activeConversationIdRef.current !== conversationId');
@@ -964,9 +967,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-rows: auto auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-error-slot:empty');
     expect(stylesSource).toContain('.conversation-list-panel');
-    expect(stylesSource).toContain(
-      'grid-template-rows: auto auto auto auto auto minmax(0, 1fr);',
-    );
+    expect(stylesSource).toContain('grid-template-rows: auto auto auto auto auto minmax(0, 1fr);');
     expect(stylesSource).toContain('.conversation-list-items');
     expect(stylesSource).toContain('.conversation-messages-wrap');
     expect(stylesSource).toContain('.conversation-messages');

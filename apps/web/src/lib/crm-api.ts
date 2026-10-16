@@ -737,6 +737,37 @@ export interface WhatsAppConversationLabelAdmin extends WhatsAppConversationLabe
   updatedAt?: string;
   _count?: { assignments: number };
 }
+export type WhatsAppAttendanceStatus = 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+export interface WhatsAppAttendanceSummary {
+  id: string;
+  status: WhatsAppAttendanceStatus;
+  openedAt: string;
+  firstAgentReplyAt: string | null;
+  inboundMessagesCount: number;
+  outboundMessagesCount: number;
+}
+export interface WhatsAppAttendance extends WhatsAppAttendanceSummary {
+  conversationId: string;
+  whatsAppConnectionId: string;
+  clientId: string | null;
+  resolvedAt: string | null;
+  category: { id: string; name: string; color: WhatsAppConversationLabelColor } | null;
+  resolutionNote: string | null;
+  resolvedBy: { id: string; name: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface WhatsAppAttendanceCategory {
+  id: string;
+  whatsAppConnectionId: string;
+  name: string;
+  color: WhatsAppConversationLabelColor;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt?: string;
+  updatedAt?: string;
+  _count?: { attendances: number };
+}
 export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
 export type WhatsAppConversationMessageStatus =
   'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
@@ -761,6 +792,7 @@ export interface WhatsAppConversation {
   needsManualFollowUp: boolean;
   lastAutoReplyAt: string | null;
   labels: WhatsAppConversationLabel[];
+  activeAttendance?: WhatsAppAttendanceSummary | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2773,6 +2805,40 @@ export function deleteWhatsAppConversationLabel(connectionId: string, labelId: s
   );
 }
 
+export function listWhatsAppAttendanceCategories(connectionId: string, activeOnly = false) {
+  return apiFetch<WhatsAppAttendanceCategory[]>(
+    `/whatsapp/connections/${connectionId}/attendance-categories${activeOnly ? '?activeOnly=true' : ''}`,
+  );
+}
+
+export function createWhatsAppAttendanceCategory(
+  connectionId: string,
+  payload: { name: string; color: WhatsAppConversationLabelColor; sortOrder?: number },
+) {
+  return apiFetch<WhatsAppAttendanceCategory>(
+    `/whatsapp/connections/${connectionId}/attendance-categories`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
+}
+
+export function updateWhatsAppAttendanceCategory(
+  connectionId: string,
+  categoryId: string,
+  payload: Partial<Pick<WhatsAppAttendanceCategory, 'name' | 'color' | 'isActive' | 'sortOrder'>>,
+) {
+  return apiFetch<WhatsAppAttendanceCategory>(
+    `/whatsapp/connections/${connectionId}/attendance-categories/${categoryId}`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+  );
+}
+
+export function deleteWhatsAppAttendanceCategory(connectionId: string, categoryId: string) {
+  return apiFetch<{ deleted: boolean; deactivated: boolean }>(
+    `/whatsapp/connections/${connectionId}/attendance-categories/${categoryId}`,
+    { method: 'DELETE' },
+  );
+}
+
 export function setWhatsAppConversationLabels(conversationId: string, labelIds: string[]) {
   return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${conversationId}/labels`, {
     method: 'PUT',
@@ -3070,10 +3136,60 @@ export function markWhatsAppConversationRead(id: string) {
   });
 }
 
-export function resolveWhatsAppConversation(id: string) {
+export function resolveWhatsAppConversation(
+  id: string,
+  payload: { categoryId?: string; resolutionNote?: string } = {},
+) {
   return apiFetch<WhatsAppConversation>(`/whatsapp/conversations/${id}/resolve`, {
     method: 'POST',
+    body: JSON.stringify(payload),
   });
+}
+
+export function getWhatsAppActiveAttendance(conversationId: string) {
+  return apiFetch<WhatsAppAttendance | null>(
+    `/whatsapp/conversations/${conversationId}/attendance`,
+  );
+}
+
+export function listWhatsAppConversationAttendances(
+  conversationId: string,
+  filters: { page?: number; limit?: number } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.limit) params.set('limit', String(filters.limit));
+  const query = params.toString();
+  return apiFetch<{
+    items: WhatsAppAttendance[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasMore: boolean;
+    };
+  }>(`/whatsapp/conversations/${conversationId}/attendances${query ? `?${query}` : ''}`);
+}
+
+export function listWhatsAppClientAttendances(
+  clientId: string,
+  filters: { page?: number; limit?: number } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.limit) params.set('limit', String(filters.limit));
+  const query = params.toString();
+  return apiFetch<{
+    items: WhatsAppAttendance[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      hasMore: boolean;
+    };
+  }>(`/whatsapp/clients/${clientId}/attendances${query ? `?${query}` : ''}`);
 }
 
 export function getBillingSummary() {

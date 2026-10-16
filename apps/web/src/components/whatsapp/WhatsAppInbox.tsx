@@ -87,6 +87,9 @@ import {
   listWhatsAppConnections,
   listWhatsAppConversationMessages,
   listWhatsAppConversationLabels,
+  listWhatsAppAttendanceCategories,
+  listWhatsAppConversationAttendances,
+  listWhatsAppClientAttendances,
   listWhatsAppConversations,
   markWhatsAppConversationRead,
   listWhatsAppSavedStickers,
@@ -133,6 +136,8 @@ import {
   type WhatsAppMessageSearchResult,
   type WhatsAppConversationStatus,
   type WhatsAppConversationSummary,
+  type WhatsAppAttendance,
+  type WhatsAppAttendanceCategory,
   type WhatsAppQuickReply,
   type WhatsAppRealtimeEvent,
 } from '../../lib/crm-api';
@@ -535,6 +540,16 @@ export function WhatsAppInbox({
   const [replyTarget, setReplyTarget] = useState<WhatsAppConversationMessage | null>(null);
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [resolveAttendanceOpen, setResolveAttendanceOpen] = useState(false);
+  const [attendanceCategories, setAttendanceCategories] = useState<WhatsAppAttendanceCategory[]>(
+    [],
+  );
+  const [attendanceCategoriesLoading, setAttendanceCategoriesLoading] = useState(false);
+  const [attendanceHistory, setAttendanceHistory] = useState<WhatsAppAttendance[]>([]);
+  const [attendanceHistoryLoading, setAttendanceHistoryLoading] = useState(false);
+  const [attendanceHistoryError, setAttendanceHistoryError] = useState('');
+  const [attendanceHistoryPage, setAttendanceHistoryPage] = useState(1);
+  const [attendanceHistoryHasMore, setAttendanceHistoryHasMore] = useState(false);
   const [linkingClient, setLinkingClient] = useState(false);
   const [creatingGuestClient, setCreatingGuestClient] = useState(false);
   const [opening, setOpening] = useState(false);
@@ -1834,6 +1849,68 @@ export function WhatsAppInbox({
   }, [contactPanelOpen, loadContactInfo, selectedConversation?.id]);
 
   useEffect(() => {
+    if (!contactPanelOpen || !selectedConversation) {
+      setAttendanceHistory([]);
+      setAttendanceHistoryError('');
+      return;
+    }
+
+    let active = true;
+    setAttendanceHistoryLoading(true);
+    setAttendanceHistoryError('');
+    const request = selectedConversation.client?.id
+      ? listWhatsAppClientAttendances(selectedConversation.client.id, { limit: 5 })
+      : listWhatsAppConversationAttendances(selectedConversation.id, { limit: 5 });
+    void request
+      .then((response) => {
+        if (active) {
+          setAttendanceHistory(response.items);
+          setAttendanceHistoryPage(1);
+          setAttendanceHistoryHasMore(response.pagination.hasMore);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setAttendanceHistoryError(
+            conversationErrorMessage(error, 'Falha ao carregar atendimentos.'),
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setAttendanceHistoryLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [contactPanelOpen, selectedConversation?.client?.id, selectedConversation?.id]);
+
+  async function loadMoreAttendanceHistory() {
+    if (!selectedConversation || attendanceHistoryLoading || !attendanceHistoryHasMore) return;
+    const nextPage = attendanceHistoryPage + 1;
+    setAttendanceHistoryLoading(true);
+    setAttendanceHistoryError('');
+    try {
+      const response = selectedConversation.client?.id
+        ? await listWhatsAppClientAttendances(selectedConversation.client.id, {
+            page: nextPage,
+            limit: 5,
+          })
+        : await listWhatsAppConversationAttendances(selectedConversation.id, {
+            page: nextPage,
+            limit: 5,
+          });
+      setAttendanceHistory((current) => [...current, ...response.items]);
+      setAttendanceHistoryPage(nextPage);
+      setAttendanceHistoryHasMore(response.pagination.hasMore);
+    } catch (error) {
+      setAttendanceHistoryError(conversationErrorMessage(error, 'Falha ao carregar atendimentos.'));
+    } finally {
+      setAttendanceHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
     if (!contactPanelOpen) return undefined;
 
     function closeOnEscape(event: KeyboardEvent) {
@@ -2747,22 +2824,58 @@ export function WhatsAppInbox({
     }
   }
 
-  async function resolveSelectedConversation() {
+  async function resolveSelectedConversation(
+    payload: {
+      categoryId?: string;
+      resolutionNote?: string;
+    } = {},
+  ) {
     if (!selectedConversation || resolving || selectedConversation.status === 'RESOLVED') return;
 
     setResolving(true);
     setMessagesError('');
 
     try {
-      const resolved = await resolveWhatsAppConversation(selectedConversation.id);
+      const resolved = await resolveWhatsAppConversation(selectedConversation.id, payload);
       setSelectedConversation(resolved);
       setConversations((current) =>
         current.map((item) => (item.id === resolved.id ? { ...item, ...resolved } : item)),
       );
+      setResolveAttendanceOpen(false);
+      if (contactPanelOpen) {
+        const history = resolved.client?.id
+          ? await listWhatsAppClientAttendances(resolved.client.id, { limit: 5 })
+          : await listWhatsAppConversationAttendances(resolved.id, { limit: 5 });
+        setAttendanceHistory(history.items);
+        setAttendanceHistoryPage(1);
+        setAttendanceHistoryHasMore(history.pagination.hasMore);
+      }
     } catch (err) {
       setMessagesError(conversationErrorMessage(err, 'Falha ao resolver conversa.'));
     } finally {
       setResolving(false);
+    }
+  }
+
+  async function requestResolveSelectedConversation() {
+    if (!selectedConversation?.activeAttendance) {
+      await resolveSelectedConversation();
+      return;
+    }
+
+    setResolveAttendanceOpen(true);
+    setAttendanceCategoriesLoading(true);
+    setMessagesError('');
+    try {
+      const categories = await listWhatsAppAttendanceCategories(
+        selectedConversation.whatsAppConnectionId,
+        true,
+      );
+      setAttendanceCategories(categories);
+    } catch (err) {
+      setMessagesError(conversationErrorMessage(err, 'Falha ao carregar categorias.'));
+    } finally {
+      setAttendanceCategoriesLoading(false);
     }
   }
 
@@ -3534,6 +3647,18 @@ export function WhatsAppInbox({
         />
       ) : null}
 
+      {resolveAttendanceOpen && selectedConversation?.activeAttendance ? (
+        <ResolveAttendanceModal
+          attendance={selectedConversation.activeAttendance}
+          categories={attendanceCategories}
+          loading={resolving || attendanceCategoriesLoading}
+          onClose={() => {
+            if (!resolving) setResolveAttendanceOpen(false);
+          }}
+          onResolve={(payload) => resolveSelectedConversation(payload)}
+        />
+      ) : null}
+
       {labelManagerOpen && selectedConversation ? (
         <ConversationLabelManager
           conversation={selectedConversation}
@@ -3642,7 +3767,7 @@ export function WhatsAppInbox({
                 onAvatarPreview={openAvatarPreview}
                 onBack={onBackToConversationList}
                 onOpenClientPanel={() => setContactPanelOpen(true)}
-                onResolve={() => void resolveSelectedConversation()}
+                onResolve={() => void requestResolveSelectedConversation()}
                 onToggleSearch={() => {
                   if (messageSearchOpen) {
                     resetMessageSearch();
@@ -3783,6 +3908,10 @@ export function WhatsAppInbox({
         </section>
 
         <ConversationClientPanel
+          attendances={attendanceHistory}
+          attendancesError={attendanceHistoryError}
+          attendancesHasMore={attendanceHistoryHasMore}
+          attendancesLoading={attendanceHistoryLoading}
           avatar={selectedConversation ? conversationAvatars[selectedConversation.id] : undefined}
           contactInfo={contactInfo}
           pixBusyReceivableId={contactPixReceivableId}
@@ -3792,6 +3921,7 @@ export function WhatsAppInbox({
           linkingClient={linkingClient}
           open={contactPanelOpen}
           onClose={() => setContactPanelOpen(false)}
+          onLoadMoreAttendances={() => void loadMoreAttendanceHistory()}
           onCreateClient={(conversation) => void openGuestClientCreate(conversation)}
           onGeneratePix={(receivable) => void generateContactReceivablePix(receivable)}
           onRecreatePix={(receivable, intent) =>
@@ -3814,6 +3944,122 @@ export function WhatsAppInbox({
         />
       </div>
     </section>
+  );
+}
+
+function ResolveAttendanceModal({
+  attendance,
+  categories,
+  loading,
+  onClose,
+  onResolve,
+}: {
+  attendance: NonNullable<WhatsAppConversation['activeAttendance']>;
+  categories: WhatsAppAttendanceCategory[];
+  loading: boolean;
+  onClose: () => void;
+  onResolve: (payload: { categoryId: string; resolutionNote?: string }) => Promise<void>;
+}) {
+  const [categoryId, setCategoryId] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const selectRef = useRef<HTMLSelectElement>(null);
+
+  useEffect(() => {
+    selectRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading) onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [loading, onClose]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!categoryId || loading) return;
+    setError('');
+    try {
+      await onResolve({ categoryId, ...(note.trim() ? { resolutionNote: note.trim() } : {}) });
+    } catch (submitError) {
+      setError(conversationErrorMessage(submitError, 'Falha ao resolver atendimento.'));
+    }
+  }
+
+  return createPortal(
+    <div className="conversation-label-manager-backdrop" role="presentation" onMouseDown={onClose}>
+      <form
+        aria-labelledby="resolve-attendance-title"
+        aria-modal="true"
+        className="conversation-modal-card resolve-attendance-modal"
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => void submit(event)}
+      >
+        <header>
+          <div>
+            <span className="metric-label">Atendimento</span>
+            <h3 id="resolve-attendance-title">Resolver atendimento</h3>
+          </div>
+          <IconButton disabled={loading} icon={X} label="Fechar" onClick={onClose} />
+        </header>
+        <div className="attendance-resolution-summary">
+          <span>Aberto há: {attendanceElapsedLabel(attendance.openedAt)}</span>
+          <span>
+            Primeira resposta:{' '}
+            {attendance.firstAgentReplyAt
+              ? attendanceDurationLabel(attendance.openedAt, attendance.firstAgentReplyAt)
+              : 'Ainda não respondido'}
+          </span>
+          <span>
+            Mensagens: {attendance.inboundMessagesCount} recebidas ·{' '}
+            {attendance.outboundMessagesCount} manuais
+          </span>
+        </div>
+        <label className="field">
+          <span>Categoria *</span>
+          <select
+            ref={selectRef}
+            required
+            disabled={loading}
+            value={categoryId}
+            onChange={(event) => setCategoryId(event.target.value)}
+          >
+            <option value="">Selecione</option>
+            {categories
+              .filter((category) => category.isActive)
+              .map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Observação</span>
+          <textarea
+            disabled={loading}
+            maxLength={4000}
+            rows={5}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+        </label>
+        {error ? (
+          <div className="notice danger" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <footer>
+          <Button disabled={loading} type="button" variant="secondary" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button disabled={!categoryId} loading={loading} type="submit">
+            Resolver atendimento
+          </Button>
+        </footer>
+      </form>
+    </div>,
+    document.body,
   );
 }
 
@@ -4944,6 +5190,13 @@ function ConversationHeader({
             >
               {conversation.status}
             </span>
+            {conversation.activeAttendance ? (
+              <span
+                className={`attendance-status ${conversation.activeAttendance.status.toLowerCase()}`}
+              >
+                {attendanceStatusLabel(conversation.activeAttendance.status)}
+              </span>
+            ) : null}
             {opening ? <span className="conversation-sync-badge">Carregando</span> : null}
             <ConversationLabelChips labels={conversation.labels} limit={3} />
           </div>
@@ -8056,7 +8309,109 @@ function ConversationComposer({
   );
 }
 
+function attendanceDurationLabel(start: string, end: string) {
+  const milliseconds = Math.max(0, new Date(end).getTime() - new Date(start).getTime());
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`;
+}
+
+function attendanceElapsedLabel(openedAt: string) {
+  return attendanceDurationLabel(openedAt, new Date().toISOString());
+}
+
+function attendanceStatusLabel(status: WhatsAppAttendance['status']) {
+  if (status === 'PENDING') return 'Pendente';
+  if (status === 'IN_PROGRESS') return 'Em atendimento';
+  return 'Resolvido';
+}
+
+function ConversationAttendanceHistory({
+  attendances,
+  error,
+  hasMore,
+  loading,
+  onLoadMore,
+}: {
+  attendances: WhatsAppAttendance[];
+  error: string;
+  hasMore: boolean;
+  loading: boolean;
+  onLoadMore: () => void;
+}) {
+  return (
+    <section className="conversation-contact-section conversation-attendance-history">
+      <div className="conversation-contact-section-title">
+        <span>Atendimentos</span>
+      </div>
+      {loading ? (
+        <div className="conversation-loading-row">
+          <Loader2 aria-hidden="true" size={15} /> Carregando atendimentos...
+        </div>
+      ) : null}
+      {error ? <div className="notice danger">{error}</div> : null}
+      {!loading && !error && !attendances.length ? (
+        <p className="muted-value">Nenhum atendimento registrado.</p>
+      ) : null}
+      <div className="conversation-attendance-list">
+        {attendances.map((attendance) => (
+          <article key={attendance.id} className="conversation-attendance-item">
+            <header>
+              <strong>
+                {attendance.category?.name ?? attendanceStatusLabel(attendance.status)}
+              </strong>
+              <span className={`attendance-status ${attendance.status.toLowerCase()}`}>
+                {attendanceStatusLabel(attendance.status)}
+              </span>
+            </header>
+            <small>
+              {new Intl.DateTimeFormat('pt-BR', {
+                dateStyle: 'short',
+                timeStyle: 'short',
+                timeZone: 'America/Sao_Paulo',
+              }).format(new Date(attendance.openedAt))}
+            </small>
+            <dl>
+              <div>
+                <dt>Primeira resposta</dt>
+                <dd>
+                  {attendance.firstAgentReplyAt
+                    ? attendanceDurationLabel(attendance.openedAt, attendance.firstAgentReplyAt)
+                    : '-'}
+                </dd>
+              </div>
+              <div>
+                <dt>Tempo total</dt>
+                <dd>
+                  {attendance.resolvedAt
+                    ? attendanceDurationLabel(attendance.openedAt, attendance.resolvedAt)
+                    : '-'}
+                </dd>
+              </div>
+            </dl>
+            {attendance.resolutionNote ? <p>{attendance.resolutionNote}</p> : null}
+            {attendance.resolvedBy ? (
+              <small>Resolvido por {attendance.resolvedBy.name}</small>
+            ) : null}
+          </article>
+        ))}
+      </div>
+      {hasMore ? (
+        <Button disabled={loading} size="sm" variant="secondary" onClick={onLoadMore}>
+          Ver mais
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
 function ConversationClientPanel({
+  attendances,
+  attendancesError,
+  attendancesHasMore,
+  attendancesLoading,
   avatar,
   contactInfo,
   conversation,
@@ -8077,9 +8432,14 @@ function ConversationClientPanel({
   onRenewReference,
   onSaveInternalNotes,
   onLinkClient,
+  onLoadMoreAttendances,
   onOpenClient,
   onViewReceivable,
 }: {
+  attendances: WhatsAppAttendance[];
+  attendancesError: string;
+  attendancesHasMore: boolean;
+  attendancesLoading: boolean;
   avatar?: ConversationAvatarState | undefined;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
@@ -8100,6 +8460,7 @@ function ConversationClientPanel({
   onRenewReference: (reference: ClientReference) => void;
   onSaveInternalNotes: (clientId: string, notes: string) => Promise<void>;
   onLinkClient: (client: ClientOption) => void;
+  onLoadMoreAttendances: () => void;
   onOpenClient: (clientId: string) => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
@@ -8122,6 +8483,10 @@ function ConversationClientPanel({
           <IconButton icon={X} label="Fechar informações do contato" onClick={onClose} />
         </header>
         <ConversationClientPanelContent
+          attendances={attendances}
+          attendancesError={attendancesError}
+          attendancesHasMore={attendancesHasMore}
+          attendancesLoading={attendancesLoading}
           avatar={avatar}
           contactInfo={contactInfo}
           conversation={conversation}
@@ -8140,6 +8505,7 @@ function ConversationClientPanel({
           onRenewReference={onRenewReference}
           onSaveInternalNotes={onSaveInternalNotes}
           onLinkClient={onLinkClient}
+          onLoadMoreAttendances={onLoadMoreAttendances}
           onOpenClient={onOpenClient}
           onViewReceivable={onViewReceivable}
         />
@@ -8149,6 +8515,10 @@ function ConversationClientPanel({
 }
 
 function ConversationClientPanelContent({
+  attendances,
+  attendancesError,
+  attendancesHasMore,
+  attendancesLoading,
   avatar,
   contactInfo,
   conversation,
@@ -8167,9 +8537,14 @@ function ConversationClientPanelContent({
   onRenewReference,
   onSaveInternalNotes,
   onLinkClient,
+  onLoadMoreAttendances,
   onOpenClient,
   onViewReceivable,
 }: {
+  attendances: WhatsAppAttendance[];
+  attendancesError: string;
+  attendancesHasMore: boolean;
+  attendancesLoading: boolean;
   avatar?: ConversationAvatarState | undefined;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
@@ -8188,6 +8563,7 @@ function ConversationClientPanelContent({
   onRenewReference: (reference: ClientReference) => void;
   onSaveInternalNotes: (clientId: string, notes: string) => Promise<void>;
   onLinkClient: (client: ClientOption) => void;
+  onLoadMoreAttendances: () => void;
   onOpenClient: (clientId: string) => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
@@ -8292,6 +8668,13 @@ function ConversationClientPanelContent({
           conversation={conversation}
           linkedClient={client}
           onOpenClient={() => onOpenClient(client.id)}
+        />
+        <ConversationAttendanceHistory
+          attendances={attendances}
+          error={attendancesError}
+          hasMore={attendancesHasMore}
+          loading={attendancesLoading}
+          onLoadMore={onLoadMoreAttendances}
         />
         {contactInfo.loading ? (
           <div className="conversation-loading-row">
@@ -8426,6 +8809,13 @@ function ConversationClientPanelContent({
   return (
     <div className="conversation-context-card conversation-contact-info">
       <ConversationContactHeader avatar={avatar} conversation={conversation} linkedClient={null} />
+      <ConversationAttendanceHistory
+        attendances={attendances}
+        error={attendancesError}
+        hasMore={attendancesHasMore}
+        loading={attendancesLoading}
+        onLoadMore={onLoadMoreAttendances}
+      />
       <section className="conversation-contact-section">
         <div className="conversation-contact-section-title">
           <span>Contato não vinculado</span>

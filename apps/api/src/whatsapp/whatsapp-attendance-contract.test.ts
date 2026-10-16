@@ -1,6 +1,12 @@
+import 'reflect-metadata';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { validate } from 'class-validator';
 import { describe, expect, it } from 'vitest';
+import {
+  ListWhatsAppConversationsDto,
+  WhatsAppConversationAttendanceFilter,
+} from './dto/list-whatsapp-conversations.dto';
 
 const apiRoot = process.cwd();
 const serviceSource = readFileSync(join(apiRoot, 'src/whatsapp/whatsapp.service.ts'), 'utf8');
@@ -18,6 +24,17 @@ const migrationSource = readFileSync(
 );
 
 describe('ATENDIMENTO1 integration contracts', () => {
+  it('defaults the Inbox API to active attendances and rejects unknown attendance filters', async () => {
+    const defaults = new ListWhatsAppConversationsDto();
+    expect(defaults.attendanceStatus).toBe(WhatsAppConversationAttendanceFilter.ACTIVE);
+    await expect(validate(defaults)).resolves.toEqual([]);
+
+    const invalid = Object.assign(new ListWhatsAppConversationsDto(), {
+      attendanceStatus: 'RESOLVED',
+    });
+    expect((await validate(invalid)).map((error) => error.property)).toContain('attendanceStatus');
+  });
+
   it('opens attendances only from newly persisted inbound conversation messages', () => {
     const webhook = serviceSource.slice(
       serviceSource.indexOf('private async processConversationWebhook('),

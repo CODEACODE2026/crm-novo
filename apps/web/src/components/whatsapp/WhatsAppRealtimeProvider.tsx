@@ -84,7 +84,11 @@ export function useWhatsAppRealtimeManager(enabled = true): WhatsAppRealtimeCont
       applySummary: setSummary,
       isEnabled: () => enabledRef.current,
       loadSummary: async () => {
-        const payload = await listWhatsAppConversations({ page: 1, pageSize: 1 });
+        const payload = await listWhatsAppConversations({
+          attendanceStatus: 'ALL',
+          page: 1,
+          pageSize: 1,
+        });
         return payload.summary;
       },
     });

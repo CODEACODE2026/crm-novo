@@ -158,6 +158,7 @@ import {
 } from './whatsapp-quick-replies';
 
 type ConversationFilter = 'all' | 'unread' | 'followup' | 'clients' | 'guests';
+type AttendanceFilter = 'ACTIVE' | 'PENDING' | 'IN_PROGRESS' | 'ALL';
 type StartConversationRecipientType = 'client' | 'guest';
 export type ConversationComposerMedia = {
   file: File;
@@ -338,6 +339,12 @@ const conversationFilters = [
   { id: 'clients', label: 'Clientes' },
   { id: 'guests', label: 'Avulsos' },
 ] satisfies Array<{ id: ConversationFilter; label: string }>;
+const attendanceFilters = [
+  { id: 'ACTIVE', label: 'Atendimentos' },
+  { id: 'PENDING', label: 'Pendentes' },
+  { id: 'IN_PROGRESS', label: 'Em andamento' },
+  { id: 'ALL', label: 'Todas' },
+] satisfies Array<{ id: AttendanceFilter; label: string }>;
 const avatarClientCacheTtlMs = 55 * 60 * 1000;
 const avatarClientConcurrency = 4;
 
@@ -526,6 +533,7 @@ export function WhatsAppInbox({
   >(null);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [attendanceFilter, setAttendanceFilter] = useState<AttendanceFilter>('ACTIVE');
   const [filter, setFilter] = useState<ConversationFilter>('all');
   const [statusFilter, setStatusFilter] = useState<WhatsAppConversationStatus | ''>('');
   const [labelFilter, setLabelFilter] = useState('');
@@ -643,6 +651,7 @@ export function WhatsAppInbox({
   const startingConversationRef = useRef(false);
   const contactPixWhatsAppIntentIdsRef = useRef(new Set<string>());
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
+  const realtimeListReplaceRef = useRef(false);
   const pendingReadTimeoutsRef = useRef(new Map<string, number>());
   const readInFlightConversationIdsRef = useRef(new Set<string>());
   const readRetryConversationIdsRef = useRef(new Set<string>());
@@ -1001,7 +1010,13 @@ export function WhatsAppInbox({
       preserveLoaded = false,
       silent = false,
     }: { append?: boolean; page?: number; preserveLoaded?: boolean; silent?: boolean } = {}) => {
-      const requestQueryKey = JSON.stringify({ filter, labelFilter, search, statusFilter });
+      const requestQueryKey = JSON.stringify({
+        attendanceFilter,
+        filter,
+        labelFilter,
+        search,
+        statusFilter,
+      });
       conversationListQueryKeyRef.current = requestQueryKey;
       const requestGeneration = nextConversationListRequestGeneration(
         conversationListRequestGenerationRef.current,
@@ -1029,6 +1044,7 @@ export function WhatsAppInbox({
 
       try {
         const filters: Parameters<typeof listWhatsAppConversations>[0] = {
+          attendanceStatus: attendanceFilter,
           page,
           pageSize: conversationsPageSize,
         };
@@ -1088,7 +1104,7 @@ export function WhatsAppInbox({
         }
       }
     },
-    [filter, labelFilter, onSummaryChange, search, statusFilter],
+    [attendanceFilter, filter, labelFilter, onSummaryChange, search, statusFilter],
   );
 
   const loadMessages = useCallback(
@@ -1924,16 +1940,22 @@ export function WhatsAppInbox({
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [contactPanelOpen]);
 
-  const scheduleRealtimeListRefresh = useCallback(() => {
-    if (realtimeListRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(realtimeListRefreshTimeoutRef.current);
-    }
+  const scheduleRealtimeListRefresh = useCallback(
+    (replace = false) => {
+      realtimeListReplaceRef.current = realtimeListReplaceRef.current || replace;
+      if (realtimeListRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(realtimeListRefreshTimeoutRef.current);
+      }
 
-    realtimeListRefreshTimeoutRef.current = window.setTimeout(() => {
-      realtimeListRefreshTimeoutRef.current = null;
-      void loadConversations({ preserveLoaded: true, silent: true });
-    }, 150);
-  }, [loadConversations]);
+      realtimeListRefreshTimeoutRef.current = window.setTimeout(() => {
+        realtimeListRefreshTimeoutRef.current = null;
+        const shouldReplace = realtimeListReplaceRef.current;
+        realtimeListReplaceRef.current = false;
+        void loadConversations({ preserveLoaded: !shouldReplace, silent: true });
+      }, 150);
+    },
+    [loadConversations],
+  );
 
   const handleRealtimeEvent = useCallback(
     (event: WhatsAppRealtimeEvent) => {
@@ -1970,7 +1992,7 @@ export function WhatsAppInbox({
       }
 
       if (event.type === 'conversation.updated') {
-        scheduleRealtimeListRefresh();
+        scheduleRealtimeListRefresh(true);
       }
     },
     [loadMessages, scheduleActiveConversationRead, scheduleRealtimeListRefresh],
@@ -3723,6 +3745,7 @@ export function WhatsAppInbox({
 
       <div className="conversations-shell">
         <ConversationList
+          attendanceFilter={attendanceFilter}
           conversations={conversations}
           hasMore={hasMoreConversations}
           filter={filter}
@@ -3740,6 +3763,7 @@ export function WhatsAppInbox({
           onBackToDashboard={onBackToDashboard}
           onAvatarError={handleAvatarImageError}
           onAvatarPreview={openAvatarPreview}
+          onAttendanceFilterChange={setAttendanceFilter}
           onFilterChange={setFilter}
           onLoadMore={() => void loadMoreConversations()}
           onSearchChange={setSearchInput}
@@ -4202,6 +4226,7 @@ function ForwardConversationMessageModal({
           try {
             const search = query.trim();
             const result = await listWhatsAppConversations({
+              attendanceStatus: 'ALL',
               page: 1,
               pageSize: 20,
               ...(search ? { search } : {}),
@@ -4882,6 +4907,7 @@ function ConversationLabelManager({
 }
 
 function ConversationList({
+  attendanceFilter,
   conversations,
   filter,
   hasMore,
@@ -4899,6 +4925,7 @@ function ConversationList({
   onBackToDashboard,
   onAvatarError,
   onAvatarPreview,
+  onAttendanceFilterChange,
   onFilterChange,
   onLoadMore,
   onSearchChange,
@@ -4907,6 +4934,7 @@ function ConversationList({
   onStatusFilterChange,
   onLabelFilterChange,
 }: {
+  attendanceFilter: AttendanceFilter;
   conversations: WhatsAppConversation[];
   filter: ConversationFilter;
   hasMore: boolean;
@@ -4924,6 +4952,7 @@ function ConversationList({
   onBackToDashboard: () => void;
   onAvatarError: (conversationId: string, url: string) => void;
   onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
+  onAttendanceFilterChange: (filter: AttendanceFilter) => void;
   onFilterChange: (filter: ConversationFilter) => void;
   onLoadMore: () => void;
   onSearchChange: (search: string) => void;
@@ -4932,7 +4961,14 @@ function ConversationList({
   onStatusFilterChange: (status: WhatsAppConversationStatus | '') => void;
   onLabelFilterChange: (labelId: string) => void;
 }) {
-  const emptyCopy = 'Nenhuma conversa encontrada.';
+  const emptyCopy =
+    attendanceFilter === 'ACTIVE'
+      ? 'Nenhum atendimento aguardando no momento.'
+      : attendanceFilter === 'PENDING'
+        ? 'Nenhum atendimento pendente.'
+        : attendanceFilter === 'IN_PROGRESS'
+          ? 'Nenhum atendimento em andamento.'
+          : 'Nenhuma conversa encontrada.';
 
   return (
     <aside
@@ -4965,25 +5001,41 @@ function ConversationList({
 
       <ConversationSearch query={searchInput} onQueryChange={onSearchChange} />
 
-      <div className="conversation-filter-row" role="tablist" aria-label="Filtros de conversas">
-        {conversationFilters.map((item) => (
+      <div
+        className="conversation-filter-row conversation-attendance-filter-row"
+        role="tablist"
+        aria-label="Filtros de atendimento"
+      >
+        {attendanceFilters.map((item) => (
           <button
-            aria-selected={filter === item.id}
-            className={filter === item.id ? 'active' : ''}
+            aria-selected={attendanceFilter === item.id}
+            className={attendanceFilter === item.id ? 'active' : ''}
             key={item.id}
             role="tab"
             type="button"
-            onClick={() => onFilterChange(item.id)}
+            onClick={() => onAttendanceFilterChange(item.id)}
           >
-            <span className="conversation-filter-label-desktop">{item.label}</span>
-            <span className="conversation-filter-label-mobile">
-              {item.id === 'followup' ? 'Aguardando' : item.label}
-            </span>
+            {item.label}
           </button>
         ))}
       </div>
 
       <div className="conversation-secondary-filters">
+        <label className="conversation-kind-filter">
+          <span>Conversas</span>
+          <select
+            aria-label="Filtro secundário de conversas"
+            value={filter}
+            onChange={(event) => onFilterChange(event.target.value as ConversationFilter)}
+          >
+            {conversationFilters.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id === 'followup' ? 'Aguardando' : item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <label className="conversation-status-filter">
           <span>Status</span>
           <select

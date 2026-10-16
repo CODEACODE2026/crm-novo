@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import { KiragoWebhookNormalizer } from './kirago/kirago-webhook-normalizer';
+import { WhatsAppConversationAttendanceFilter } from './dto/list-whatsapp-conversations.dto';
 import { WhatsAppService } from './whatsapp.service';
 
 const now = new Date('2026-09-11T00:00:00.000Z');
@@ -8988,6 +8989,7 @@ describe('WhatsAppService', () => {
     });
     expect(findManyArgs).toMatchObject({
       where: {
+        attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
         status: 'OPEN',
         whatsAppConnectionId: connection().id,
         clientId: client().id,
@@ -9051,6 +9053,46 @@ describe('WhatsAppService', () => {
       .calls[0]?.[0] as { where?: Record<string, unknown> };
 
     expect(findManyArgs.where).toMatchObject({ status: 'RESOLVED' });
+  });
+
+  it('filters attendance queues before pagination and keeps legacy conversations available in ALL', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listConversations({});
+    await service.listConversations({
+      attendanceStatus: WhatsAppConversationAttendanceFilter.ACTIVE,
+    });
+    await service.listConversations({
+      attendanceStatus: WhatsAppConversationAttendanceFilter.PENDING,
+    });
+    await service.listConversations({
+      attendanceStatus: WhatsAppConversationAttendanceFilter.IN_PROGRESS,
+    });
+    await service.listConversations({
+      attendanceStatus: WhatsAppConversationAttendanceFilter.ALL,
+    });
+
+    const findMany = prisma.whatsAppConversation.findMany as MockWithCalls;
+    const count = prisma.whatsAppConversation.count as MockWithCalls;
+    expect(findMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } } },
+      skip: 0,
+      take: 20,
+    });
+    expect(findMany.mock.calls[1]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } } },
+    });
+    expect(findMany.mock.calls[2]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: 'PENDING' } } },
+    });
+    expect(findMany.mock.calls[3]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: 'IN_PROGRESS' } } },
+    });
+    expect(findMany.mock.calls[4]?.[0]).toMatchObject({ where: {} });
+    expect(count.mock.calls[0]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } } },
+    });
+    expect(count.mock.calls[8]?.[0]).toMatchObject({ where: {} });
   });
 
   it('filters client and guest conversations on the backend before pagination', async () => {

@@ -234,9 +234,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
   });
 
   it('centralizes global unread, sound settings, and single SSE ownership in the provider', () => {
-    expect(whatsappRealtimeProviderSource).toContain(
-      'listWhatsAppConversations({ page: 1, pageSize: 1 })',
-    );
+    expect(whatsappRealtimeProviderSource).toContain("attendanceStatus: 'ALL'");
+    expect(whatsappRealtimeProviderSource).toContain('pageSize: 1');
     expect(whatsappRealtimeProviderSource).toContain("direction === 'INBOUND'");
     expect(whatsappRealtimeProviderSource).toContain('soundEnabledStorageKey');
     expect(whatsappRealtimeProviderSource).toContain('createLimitedMessageIdCache');

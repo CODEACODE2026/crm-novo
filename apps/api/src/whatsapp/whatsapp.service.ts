@@ -74,7 +74,10 @@ import { ForwardWhatsAppConversationMessageDto } from './dto/forward-whatsapp-co
 import { IgnoreWhatsAppPendingContactDto } from './dto/ignore-whatsapp-pending-contact.dto';
 import { LinkWhatsAppConversationClientDto } from './dto/link-whatsapp-conversation-client.dto';
 import { ListWhatsAppConversationMessagesDto } from './dto/list-whatsapp-conversation-messages.dto';
-import { ListWhatsAppConversationsDto } from './dto/list-whatsapp-conversations.dto';
+import {
+  ListWhatsAppConversationsDto,
+  WhatsAppConversationAttendanceFilter,
+} from './dto/list-whatsapp-conversations.dto';
 import { ListWhatsAppPendingContactsDto } from './dto/list-whatsapp-pending-contacts.dto';
 import { SearchWhatsAppMessagesDto } from './dto/search-whatsapp-messages.dto';
 import { SendWhatsAppConversationMessageDto } from './dto/send-whatsapp-conversation-message.dto';
@@ -5468,6 +5471,16 @@ export class WhatsAppService {
     query: ListWhatsAppConversationsDto,
   ): Prisma.WhatsAppConversationWhereInput {
     const where: Prisma.WhatsAppConversationWhereInput = {};
+
+    const attendanceStatus = query.attendanceStatus ?? WhatsAppConversationAttendanceFilter.ACTIVE;
+    if (attendanceStatus === WhatsAppConversationAttendanceFilter.ACTIVE) {
+      where.attendances = { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } };
+    } else if (
+      attendanceStatus === WhatsAppConversationAttendanceFilter.PENDING ||
+      attendanceStatus === WhatsAppConversationAttendanceFilter.IN_PROGRESS
+    ) {
+      where.attendances = { some: { status: attendanceStatus } };
+    }
 
     if (query.status) {
       where.status = query.status;

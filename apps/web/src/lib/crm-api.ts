@@ -2790,6 +2790,7 @@ export function listWhatsAppMessages() {
 
 export function listWhatsAppConversations(
   filters: {
+    attendanceStatus?: 'ACTIVE' | 'ALL' | 'IN_PROGRESS' | 'PENDING';
     clientId?: string;
     page?: number;
     pageSize?: number;
@@ -2807,6 +2808,7 @@ export function listWhatsAppConversations(
   if (filters.page) params.set('page', String(filters.page));
   if (filters.pageSize) params.set('limit', String(filters.pageSize));
   if (filters.search) params.set('search', filters.search);
+  if (filters.attendanceStatus) params.set('attendanceStatus', filters.attendanceStatus);
   if (filters.status) params.set('status', filters.status);
   if (filters.unreadOnly) params.set('unreadOnly', 'true');
   if (filters.needsManualFollowUp) params.set('needsManualFollowUp', 'true');

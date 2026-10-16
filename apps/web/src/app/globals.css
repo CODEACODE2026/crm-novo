@@ -3255,6 +3255,7 @@ a {
 }
 
 .conversation-search input,
+.conversation-kind-filter select,
 .conversation-status-filter select,
 .conversation-composer textarea {
   width: 100%;
@@ -3354,9 +3355,11 @@ a {
 
 .conversation-secondary-filters {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
+.conversation-kind-filter,
 .conversation-status-filter {
   display: grid;
   gap: 2px;
@@ -3365,6 +3368,7 @@ a {
   line-height: 1.1;
 }
 
+.conversation-kind-filter select,
 .conversation-status-filter select {
   min-height: 28px;
   border: 1px solid var(--border);
@@ -15446,7 +15450,7 @@ tbody tr:hover,
 
   .conversation-secondary-filters {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -15468,6 +15472,7 @@ tbody tr:hover,
     text-transform: uppercase;
   }
 
+  .conversation-kind-filter select,
   .conversation-status-filter select,
   .conversation-label-filter select {
     width: 100%;

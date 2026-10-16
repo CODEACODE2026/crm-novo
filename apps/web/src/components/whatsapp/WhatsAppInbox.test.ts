@@ -3015,13 +3015,31 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
   });
 
   it('preserves every conversation list filter while changing only presentation', () => {
+    expect(whatsAppInboxSource).toContain("useState<AttendanceFilter>('ACTIVE')");
+    expect(whatsAppInboxSource).toContain("{ id: 'ACTIVE', label: 'Atendimentos' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'PENDING', label: 'Pendentes' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'IN_PROGRESS', label: 'Em andamento' }");
+    expect(whatsAppInboxSource).toContain("{ id: 'ALL', label: 'Todas' }");
+    expect(whatsAppInboxSource).toContain('attendanceStatus: attendanceFilter');
     expect(whatsAppInboxSource).toContain("{ id: 'all', label: 'Todas' }");
     expect(whatsAppInboxSource).toContain("{ id: 'unread', label: 'Não lidas' }");
     expect(whatsAppInboxSource).toContain("{ id: 'followup', label: 'Aguardando retorno' }");
     expect(whatsAppInboxSource).toContain("{ id: 'clients', label: 'Clientes' }");
     expect(whatsAppInboxSource).toContain("{ id: 'guests', label: 'Avulsos' }");
-    expect(whatsAppInboxSource).toContain('onFilterChange(item.id)');
+    expect(whatsAppInboxSource).toContain('Filtro secundário de conversas');
+    expect(whatsAppInboxSource).toContain(
+      'onFilterChange(event.target.value as ConversationFilter)',
+    );
     expect(whatsAppInboxSource).toContain('onStatusFilterChange(');
+    expect(whatsAppInboxSource).toContain('Nenhum atendimento aguardando no momento.');
+    expect(whatsAppInboxSource).toContain('Nenhum atendimento pendente.');
+    expect(whatsAppInboxSource).toContain('Nenhum atendimento em andamento.');
+    expect(whatsAppInboxSource).toContain('scheduleRealtimeListRefresh(true)');
+    const forwardModalSource = whatsAppInboxSource.slice(
+      whatsAppInboxSource.indexOf('function ForwardConversationMessageModal('),
+      whatsAppInboxSource.indexOf('function ConversationLabelManager('),
+    );
+    expect(forwardModalSource).toContain("attendanceStatus: 'ALL'");
   });
 
   it('keeps text bubbles dense, content-sized and aligned without horizontal overflow', () => {
@@ -3300,14 +3318,15 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
   });
 
   it('compacts the mobile list controls before the independently scrolling conversations', () => {
-    expect(whatsAppInboxSource).toContain('conversation-filter-label-mobile');
+    expect(whatsAppInboxSource).toContain('conversation-attendance-filter-row');
     expect(whatsAppInboxSource).toContain("item.id === 'followup' ? 'Aguardando' : item.label");
     expect(whatsAppInboxSource).toContain('className="conversation-secondary-filters"');
+    expect(whatsAppInboxSource).toContain('aria-label="Filtro secundário de conversas"');
     expect(whatsAppInboxSource).toContain('aria-label="Filtrar por status"');
     expect(whatsAppInboxSource).toContain('aria-label="Filtrar por etiqueta"');
     expect(globalStylesSource).toContain('overscroll-behavior-inline: contain;');
     expect(globalStylesSource).toContain('scrollbar-width: none;');
-    expect(globalStylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(globalStylesSource).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));');
     expect(globalStylesSource).toContain('min-height: 42px;');
     expect(globalStylesSource).toContain('grid-template-columns: 40px minmax(0, 1fr);');
     expect(globalStylesSource).toContain('flex: 1 1 auto;');

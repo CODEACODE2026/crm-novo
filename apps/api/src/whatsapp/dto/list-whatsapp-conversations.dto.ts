@@ -2,6 +2,13 @@ import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { WhatsAppConversationStatus } from '@prisma/client';
 
+export enum WhatsAppConversationAttendanceFilter {
+  ACTIVE = 'ACTIVE',
+  PENDING = 'PENDING',
+  IN_PROGRESS = 'IN_PROGRESS',
+  ALL = 'ALL',
+}
+
 export class ListWhatsAppConversationsDto {
   @IsOptional()
   @Type(() => Number)
@@ -22,6 +29,11 @@ export class ListWhatsAppConversationsDto {
   @IsOptional()
   @IsEnum(WhatsAppConversationStatus)
   status?: WhatsAppConversationStatus;
+
+  @IsOptional()
+  @IsEnum(WhatsAppConversationAttendanceFilter)
+  attendanceStatus?: WhatsAppConversationAttendanceFilter =
+    WhatsAppConversationAttendanceFilter.ACTIVE;
 
   @IsOptional()
   @IsUUID()

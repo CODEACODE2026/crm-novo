@@ -1440,6 +1440,7 @@ describe('CRM UI formatters', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await listWhatsAppConversations({
+      attendanceStatus: 'ACTIVE',
       page: 2,
       pageSize: 20,
       search: 'maria',
@@ -1494,7 +1495,7 @@ describe('CRM UI formatters', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       expect.stringContaining(
-        '/whatsapp/conversations?page=2&limit=20&search=maria&status=OPEN&unreadOnly=true&clientId=550e8400-e29b-41d4-a716-446655440000&whatsAppConnectionId=550e8400-e29b-41d4-a716-446655440001',
+        '/whatsapp/conversations?page=2&limit=20&search=maria&attendanceStatus=ACTIVE&status=OPEN&unreadOnly=true&clientId=550e8400-e29b-41d4-a716-446655440000&whatsAppConnectionId=550e8400-e29b-41d4-a716-446655440001',
       ),
       expect.any(Object),
     );

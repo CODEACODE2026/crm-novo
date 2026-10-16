@@ -14,6 +14,13 @@ import {
 import { PageHeader } from '../ui/admin-shell';
 import { Button, Card } from '../ui/primitives';
 import {
+  formatWaitingDuration,
+  getHumanWaitingSeconds,
+  getWaitingPriority,
+  useWaitingClock,
+  waitingPriorityLabels,
+} from '../../lib/attendance-waiting';
+import {
   getWhatsAppAttendanceAnalytics,
   listWhatsAppAttendanceCategories,
   listWhatsAppConnections,
@@ -89,6 +96,7 @@ export function WhatsAppAttendanceAnalyticsView({
 }: {
   onOpenClient: (clientId: string) => void;
 }) {
+  const waitingClockNow = useWaitingClock();
   const today = useMemo(() => saoPauloToday(), []);
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
   const [customFrom, setCustomFrom] = useState(monthStart(today));
@@ -415,6 +423,8 @@ export function WhatsAppAttendanceAnalyticsView({
                   <OpenAttendanceList
                     data={data.waitingFirstResponse}
                     emptyLabel="Nenhum atendimento aguardando resposta."
+                    showWaitingPriority
+                    waitingClockNow={waitingClockNow}
                   />
                 </Card>
                 <Card>
@@ -426,6 +436,7 @@ export function WhatsAppAttendanceAnalyticsView({
                     data={data.oldestOpenAttendances}
                     emptyLabel="Nenhum atendimento aberto."
                     showStatus
+                    waitingClockNow={waitingClockNow}
                   />
                 </Card>
               </section>
@@ -651,40 +662,67 @@ function OpenAttendanceList({
   data,
   emptyLabel,
   showStatus = false,
+  showWaitingPriority = false,
+  waitingClockNow,
 }: {
   data: WhatsAppAttendanceAnalytics['oldestOpenAttendances'];
   emptyLabel: string;
   showStatus?: boolean;
+  showWaitingPriority?: boolean;
+  waitingClockNow: number;
 }) {
   if (!data.length) return <div className="empty-state">{emptyLabel}</div>;
   return (
     <div className="attendance-open-list">
-      {data.map((item) => (
-        <article key={item.attendanceId}>
-          <div>
-            <strong>{item.clientName || item.phone}</strong>
-            <small>{item.phone}</small>
-          </div>
-          {showStatus ? (
-            <span className={`attendance-status-pill ${item.status.toLowerCase()}`}>
-              {statusLabels[item.status]}
-            </span>
-          ) : null}
-          {item.hasAutoReply ? (
-            <span className="attendance-auto-reply-badge" title="Resposta automática enviada">
-              <Bot aria-hidden="true" size={13} /> Automática
-            </span>
-          ) : null}
-          <div>
-            <strong>{formatAttendanceAnalyticsDuration(item.ageSeconds)}</strong>
-            <small>em aberto</small>
-          </div>
-          <div>
-            <strong>{item.inboundMessagesCount}</strong>
-            <small>recebidas</small>
-          </div>
-        </article>
-      ))}
+      {data.map((item) => {
+        const waitingSeconds = getHumanWaitingSeconds(item.openedAt, waitingClockNow);
+        const waitingPriority =
+          showWaitingPriority && item.status === 'PENDING'
+            ? getWaitingPriority(waitingSeconds)
+            : null;
+
+        return (
+          <article
+            className={waitingPriority ? `waiting-${waitingPriority.toLowerCase()}` : undefined}
+            key={item.attendanceId}
+          >
+            <div>
+              <strong>{item.clientName || item.phone}</strong>
+              <small>{item.phone}</small>
+            </div>
+            {showStatus ? (
+              <span className={`attendance-status-pill ${item.status.toLowerCase()}`}>
+                {statusLabels[item.status]}
+              </span>
+            ) : null}
+            {item.hasAutoReply ? (
+              <span className="attendance-auto-reply-badge" title="Resposta automática enviada">
+                <Bot aria-hidden="true" size={13} /> Automática
+              </span>
+            ) : null}
+            <div
+              className={
+                waitingPriority
+                  ? `attendance-waiting-metric priority-${waitingPriority.toLowerCase()}`
+                  : undefined
+              }
+            >
+              <strong>
+                {waitingPriority
+                  ? formatWaitingDuration(waitingSeconds)
+                  : formatAttendanceAnalyticsDuration(item.ageSeconds)}
+              </strong>
+              <small>
+                {waitingPriority ? waitingPriorityLabels[waitingPriority] : 'em aberto'}
+              </small>
+            </div>
+            <div>
+              <strong>{item.inboundMessagesCount}</strong>
+              <small>recebidas</small>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }

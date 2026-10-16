@@ -491,6 +491,19 @@
   padding: 10px;
 }
 
+.attendance-open-list article.waiting-high {
+  box-shadow: inset 3px 0 0 var(--warning-strong, #d97706);
+}
+
+.attendance-open-list article.waiting-critical {
+  box-shadow: inset 3px 0 0 var(--danger, #ef4444);
+}
+
+.attendance-waiting-metric strong,
+.attendance-waiting-metric small {
+  color: inherit;
+}
+
 .attendance-auto-reply-badge {
   display: inline-flex;
   align-items: center;
@@ -3450,6 +3463,14 @@ a {
   background: rgb(38 198 163 / 7%);
 }
 
+.conversation-list-item.waiting-high {
+  box-shadow: inset 2px 0 0 var(--warning-strong, #d97706);
+}
+
+.conversation-list-item.waiting-critical {
+  box-shadow: inset 2px 0 0 var(--danger, #ef4444);
+}
+
 .conversation-avatar {
   display: grid;
   width: 34px;
@@ -3607,6 +3628,53 @@ a {
   flex: 0 0 auto;
   padding: 2px 5px;
   font-size: 9px;
+}
+
+.attendance-waiting-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  border-radius: 999px;
+  padding: 2px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.priority-normal {
+  color: var(--text-muted);
+}
+
+.priority-attention {
+  color: var(--warning, #eab308);
+}
+
+.priority-high {
+  color: var(--warning-strong, #d97706);
+}
+
+.priority-critical {
+  color: var(--danger, #ef4444);
+}
+
+.attendance-waiting-badge.priority-normal {
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.attendance-waiting-badge.priority-attention,
+.attendance-waiting-badge.priority-high,
+.attendance-waiting-badge.priority-critical {
+  border: 1px solid color-mix(in srgb, currentColor 38%, var(--border));
+  background: color-mix(in srgb, currentColor 8%, var(--surface));
+}
+
+@media (max-width: 620px) {
+  .conversation-list-meta-row .attendance-waiting-level {
+    display: none;
+  }
 }
 
 .conversation-kind.client {
@@ -3816,6 +3884,12 @@ a {
   color: var(--warning-strong, #b7791f);
   font-size: 11px;
   font-weight: 700;
+}
+
+.attendance-human-waiting > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .attendance-human-waiting small,

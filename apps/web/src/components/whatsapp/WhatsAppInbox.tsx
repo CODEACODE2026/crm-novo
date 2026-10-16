@@ -21,6 +21,7 @@ import {
   ArrowRight,
   Bot,
   CircleCheck,
+  Clock3,
   Copy,
   Download,
   Eye,
@@ -55,6 +56,13 @@ import {
 import { ClientForm } from '../clients/client-form';
 import { FinanceClientAutocomplete } from '../clients/finance-client-autocomplete';
 import { ActionMenu, Button, IconButton, type ActionMenuItem } from '../ui/primitives';
+import {
+  formatWaitingDuration,
+  getHumanWaitingSeconds,
+  getWaitingPriority,
+  useWaitingClock,
+  waitingPriorityLabels,
+} from '../../lib/attendance-waiting';
 import {
   ConversationMessageSearch,
   ConversationSearch,
@@ -479,6 +487,7 @@ export function WhatsAppInbox({
   onSummaryRefreshRequest: () => Promise<WhatsAppConversationSummary | null>;
   restoreRequest?: ConversationRestoreRequest | null;
 }) {
+  const waitingClockNow = useWaitingClock();
   const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
   const [summary, setSummary] = useState<WhatsAppConversationSummary | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<WhatsAppConversation | null>(
@@ -3757,6 +3766,7 @@ export function WhatsAppInbox({
           searchInput={searchInput}
           selectedId={selectedConversation?.id ?? null}
           summary={summary}
+          waitingClockNow={waitingClockNow}
           statusFilter={statusFilter}
           labels={conversationLabels}
           labelFilter={labelFilter}
@@ -3802,6 +3812,7 @@ export function WhatsAppInbox({
                 opening={opening}
                 presence={conversationPresenceLabel(conversationPresence[selectedConversation.id])}
                 resolving={resolving}
+                waitingClockNow={waitingClockNow}
                 onAvatarError={handleAvatarImageError}
                 onAvatarPreview={openAvatarPreview}
                 onBack={onBackToConversationList}
@@ -4919,6 +4930,7 @@ function ConversationList({
   searchInput,
   selectedId,
   summary,
+  waitingClockNow,
   statusFilter,
   labels,
   labelFilter,
@@ -4946,6 +4958,7 @@ function ConversationList({
   searchInput: string;
   selectedId: string | null;
   summary: WhatsAppConversationSummary | null;
+  waitingClockNow: number;
   statusFilter: WhatsAppConversationStatus | '';
   labels: WhatsAppConversationLabel[];
   labelFilter: string;
@@ -5081,6 +5094,7 @@ function ConversationList({
             conversation={conversation}
             key={conversation.id}
             selected={selectedId === conversation.id}
+            waitingClockNow={waitingClockNow}
             onAvatarError={onAvatarError}
             onAvatarPreview={onAvatarPreview}
             onSelect={onSelect}
@@ -5177,6 +5191,7 @@ function ConversationListItem({
   avatar,
   conversation,
   selected,
+  waitingClockNow,
   onAvatarError,
   onAvatarPreview,
   onSelect,
@@ -5184,14 +5199,24 @@ function ConversationListItem({
   avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
   selected: boolean;
+  waitingClockNow: number;
   onAvatarError: (conversationId: string, url: string) => void;
   onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onSelect: (conversation: WhatsAppConversation) => void;
 }) {
+  const pendingAttendance =
+    conversation.activeAttendance?.status === 'PENDING' ? conversation.activeAttendance : null;
+  const waitingSeconds = pendingAttendance
+    ? getHumanWaitingSeconds(pendingAttendance.openedAt, waitingClockNow)
+    : 0;
+  const waitingPriority = pendingAttendance ? getWaitingPriority(waitingSeconds) : null;
+
   return (
     <div
       aria-current={selected ? 'true' : undefined}
-      className={`conversation-list-item ${selected ? 'active' : ''}`}
+      className={`conversation-list-item ${selected ? 'active' : ''}${
+        waitingPriority ? ` waiting-${waitingPriority.toLowerCase()}` : ''
+      }`}
     >
       <ConversationAvatar
         avatar={avatar}
@@ -5226,6 +5251,19 @@ function ConversationListItem({
           {conversation.needsManualFollowUp ? (
             <span className="conversation-followup-badge">Retorno pendente</span>
           ) : null}
+          {pendingAttendance && waitingPriority ? (
+            <span
+              aria-label={`${waitingPriorityLabels[waitingPriority]}: aguardando resposta humana há ${formatWaitingDuration(waitingSeconds)}`}
+              className={`attendance-waiting-badge priority-${waitingPriority.toLowerCase()}`}
+              title="Tempo desde a abertura do atendimento, sem considerar respostas automáticas"
+            >
+              <Clock3 aria-hidden="true" size={11} />
+              <span className="attendance-waiting-level">
+                {waitingPriorityLabels[waitingPriority]} ·{' '}
+              </span>
+              {formatWaitingDuration(waitingSeconds)}
+            </span>
+          ) : null}
           {conversation.activeAttendance?.status === 'PENDING' &&
           conversation.activeAttendance.autoReply.sent ? (
             <span className="attendance-auto-reply-badge" title="Resposta automática enviada">
@@ -5245,6 +5283,7 @@ function ConversationHeader({
   opening,
   presence,
   resolving,
+  waitingClockNow,
   onAvatarError,
   onAvatarPreview,
   onBack,
@@ -5258,6 +5297,7 @@ function ConversationHeader({
   opening: boolean;
   presence: string | null;
   resolving: boolean;
+  waitingClockNow: number;
   onAvatarError: (conversationId: string, url: string) => void;
   onAvatarPreview: (conversation: WhatsAppConversation, url: string) => void;
   onBack: () => void;
@@ -5269,6 +5309,12 @@ function ConversationHeader({
   const instanceLabel = conversationInstanceLabel(conversation.instanceName);
   const phoneLabel =
     normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const pendingWaitingSeconds =
+    conversation.activeAttendance?.status === 'PENDING'
+      ? getHumanWaitingSeconds(conversation.activeAttendance.openedAt, waitingClockNow)
+      : null;
+  const pendingWaitingPriority =
+    pendingWaitingSeconds === null ? null : getWaitingPriority(pendingWaitingSeconds);
 
   return (
     <header className="conversation-header">
@@ -5319,10 +5365,15 @@ function ConversationHeader({
             <ConversationLabelChips labels={conversation.labels} limit={3} />
           </div>
           {conversation.activeAttendance?.status === 'PENDING' ? (
-            <div className="attendance-human-waiting">
+            <div
+              className={`attendance-human-waiting priority-${pendingWaitingPriority?.toLowerCase() ?? 'normal'}`}
+            >
               <span>
-                Aguardando resposta humana há{' '}
-                {attendanceElapsedLabel(conversation.activeAttendance.openedAt)}
+                <Clock3 aria-hidden="true" size={12} />{' '}
+                {pendingWaitingPriority
+                  ? waitingPriorityLabels[pendingWaitingPriority]
+                  : 'Aguardando'}{' '}
+                · Aguardando resposta humana há {formatWaitingDuration(pendingWaitingSeconds ?? 0)}
               </span>
               {conversation.activeAttendance.autoReply.sent ? (
                 <small>

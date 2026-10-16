@@ -53,6 +53,8 @@ describe('ATENDIMENTO2 analytics UI', () => {
       'Resolvidos hoje',
       'Mensagens recebidas',
       'Respostas manuais',
+      'Com resposta automática',
+      'Automáticas enviadas',
     ]) {
       expect(componentSource).toContain(label);
     }
@@ -60,6 +62,16 @@ describe('ATENDIMENTO2 analytics UI', () => {
       'Indicadores de status consideram atendimentos abertos no período selecionado.',
     );
     expect(componentSource).toContain('Estado atual · sem limite do período');
+  });
+
+  it('shows auto-reply coverage without replacing the human first-response metric', () => {
+    expect(componentSource).toContain('summary?.attendancesWithAutoReply');
+    expect(componentSource).toContain('summary?.autoReplyCoverageRate');
+    expect(componentSource).toContain('summary?.autoRepliesSentInPeriod');
+    expect(componentSource).toContain('summary?.pendingWithAutoReply');
+    expect(componentSource).toContain('item.hasAutoReply');
+    expect(componentSource).toContain('Automática');
+    expect(componentSource).toContain('summary?.firstResponseAvgSeconds');
   });
 
   it('provides period, connection, category and status filters', () => {

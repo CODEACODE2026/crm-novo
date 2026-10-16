@@ -17,6 +17,9 @@ type AnalyticsSummaryRow = {
   resolutionAvgSeconds: number;
   receivedMessages: number;
   sentManualMessages: number;
+  pendingWithAutoReply: number;
+  attendancesWithAutoReply: number;
+  autoRepliesSentInPeriod: number;
 };
 
 type ResolvedTodayRow = { count: number };
@@ -47,6 +50,9 @@ type OpenAttendanceRow = {
   ageSeconds: number;
   inboundMessagesCount: number;
   outboundMessagesCount: number;
+  hasAutoReply: boolean;
+  lastAutoReplyAt: Date | null;
+  autoReplyMode: 'AWAY' | 'SERVICE_UNAVAILABLE' | 'CUSTOM' | null;
 };
 
 @Injectable()
@@ -93,6 +99,22 @@ export class WhatsAppAttendanceAnalyticsService {
     ] = await this.prisma.$transaction(async (tx) =>
       Promise.all([
         tx.$queryRaw<AnalyticsSummaryRow[]>`
+          WITH attendance_base AS (
+            SELECT
+              a.*,
+              (
+                SELECT COUNT(*)::int
+                FROM "whatsapp_auto_reply_executions" ar
+                WHERE ar."conversationId" = a."conversationId"
+                  AND ar."whatsAppConnectionId" = a."whatsAppConnectionId"
+                  AND ar."status" = 'SENT'
+                  AND ar."sentAt" IS NOT NULL
+                  AND ar."sentAt" >= a."openedAt"
+                  AND (a."resolvedAt" IS NULL OR ar."sentAt" <= a."resolvedAt")
+              ) AS "autoReplyCount"
+            FROM "whatsapp_attendances" a
+            ${openedWhere}
+          )
           SELECT
             COUNT(*)::int AS "total",
             COUNT(*) FILTER (WHERE a."status" = 'PENDING')::int AS "pending",
@@ -105,9 +127,13 @@ export class WhatsAppAttendanceAnalyticsService {
               FILTER (WHERE a."status" = 'RESOLVED' AND a."resolvedAt" IS NOT NULL), 0)::double precision
               AS "resolutionAvgSeconds",
             COALESCE(SUM(a."inboundMessagesCount"), 0)::int AS "receivedMessages",
-            COALESCE(SUM(a."outboundMessagesCount"), 0)::int AS "sentManualMessages"
-          FROM "whatsapp_attendances" a
-          ${openedWhere}
+            COALESCE(SUM(a."outboundMessagesCount"), 0)::int AS "sentManualMessages",
+            COUNT(*) FILTER (
+              WHERE a."status" = 'PENDING' AND a."autoReplyCount" > 0
+            )::int AS "pendingWithAutoReply",
+            COUNT(*) FILTER (WHERE a."autoReplyCount" > 0)::int AS "attendancesWithAutoReply",
+            COALESCE(SUM(a."autoReplyCount"), 0)::int AS "autoRepliesSentInPeriod"
+          FROM attendance_base a
         `,
         tx.$queryRaw<ResolvedTodayRow[]>`
           SELECT COUNT(*)::int AS "count"
@@ -197,10 +223,26 @@ export class WhatsAppAttendanceAnalyticsService {
                 a."openedAt",
                 GREATEST(EXTRACT(EPOCH FROM ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - a."openedAt")), 0)::double precision AS "ageSeconds",
                 a."inboundMessagesCount",
-                a."outboundMessagesCount"
+                a."outboundMessagesCount",
+                (ar."id" IS NOT NULL) AS "hasAutoReply",
+                ar."sentAt" AS "lastAutoReplyAt",
+                ar."mode"::text AS "autoReplyMode"
               FROM "whatsapp_attendances" a
               INNER JOIN "whatsapp_conversations" conv ON conv."id" = a."conversationId"
               LEFT JOIN "clients" c ON c."id" = a."clientId"
+              LEFT JOIN LATERAL (
+                SELECT execution."id", execution."sentAt", config."mode"
+                FROM "whatsapp_auto_reply_executions" execution
+                INNER JOIN "whatsapp_auto_reply_configs" config
+                  ON config."id" = execution."configId"
+                WHERE execution."conversationId" = a."conversationId"
+                  AND execution."whatsAppConnectionId" = a."whatsAppConnectionId"
+                  AND execution."status" = 'SENT'
+                  AND execution."sentAt" IS NOT NULL
+                  AND execution."sentAt" >= a."openedAt"
+                ORDER BY execution."sentAt" DESC
+                LIMIT 1
+              ) ar ON TRUE
               ${operationalWhere}
                 AND a."status" = 'PENDING'
               ORDER BY a."openedAt" ASC
@@ -219,10 +261,26 @@ export class WhatsAppAttendanceAnalyticsService {
                 a."openedAt",
                 GREATEST(EXTRACT(EPOCH FROM ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - a."openedAt")), 0)::double precision AS "ageSeconds",
                 a."inboundMessagesCount",
-                a."outboundMessagesCount"
+                a."outboundMessagesCount",
+                (ar."id" IS NOT NULL) AS "hasAutoReply",
+                ar."sentAt" AS "lastAutoReplyAt",
+                ar."mode"::text AS "autoReplyMode"
               FROM "whatsapp_attendances" a
               INNER JOIN "whatsapp_conversations" conv ON conv."id" = a."conversationId"
               LEFT JOIN "clients" c ON c."id" = a."clientId"
+              LEFT JOIN LATERAL (
+                SELECT execution."id", execution."sentAt", config."mode"
+                FROM "whatsapp_auto_reply_executions" execution
+                INNER JOIN "whatsapp_auto_reply_configs" config
+                  ON config."id" = execution."configId"
+                WHERE execution."conversationId" = a."conversationId"
+                  AND execution."whatsAppConnectionId" = a."whatsAppConnectionId"
+                  AND execution."status" = 'SENT'
+                  AND execution."sentAt" IS NOT NULL
+                  AND execution."sentAt" >= a."openedAt"
+                ORDER BY execution."sentAt" DESC
+                LIMIT 1
+              ) ar ON TRUE
               ${operationalWhere}
                 AND a."status" IN ('PENDING', 'IN_PROGRESS')
                 ${query.status ? Prisma.sql`AND a."status" = ${query.status}::"WhatsAppAttendanceStatus"` : Prisma.empty}
@@ -255,6 +313,10 @@ export class WhatsAppAttendanceAnalyticsService {
         resolutionAvgSeconds: this.roundSeconds(summary.resolutionAvgSeconds),
         receivedMessages: summary.receivedMessages,
         sentManualMessages: summary.sentManualMessages,
+        pendingWithAutoReply: summary.pendingWithAutoReply,
+        attendancesWithAutoReply: summary.attendancesWithAutoReply,
+        autoRepliesSentInPeriod: summary.autoRepliesSentInPeriod,
+        autoReplyCoverageRate: percentage(summary.attendancesWithAutoReply),
       },
       statusDistribution: [
         { status: 'PENDING', count: summary.pending, percentage: percentage(summary.pending) },
@@ -433,6 +495,9 @@ export class WhatsAppAttendanceAnalyticsService {
       resolutionAvgSeconds: 0,
       receivedMessages: 0,
       sentManualMessages: 0,
+      pendingWithAutoReply: 0,
+      attendancesWithAutoReply: 0,
+      autoRepliesSentInPeriod: 0,
     };
   }
 }

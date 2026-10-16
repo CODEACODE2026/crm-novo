@@ -92,4 +92,17 @@ describe('ATENDIMENTO1 Inbox UI contracts', () => {
     expect(dashboardSource).toContain('isActive: !category.isActive');
     expect(dashboardSource).toContain('sortOrder');
   });
+
+  it('keeps automatic replies visibly separate from the pending human response', () => {
+    expect(inboxSource).toContain('Aguardando resposta humana há');
+    expect(inboxSource).toContain('Resposta automática enviada');
+    expect(inboxSource).toContain("mode === 'AWAY'");
+    expect(inboxSource).toContain("mode === 'SERVICE_UNAVAILABLE'");
+    expect(inboxSource).toContain("mode === 'CUSTOM'");
+    expect(inboxSource).toContain("conversation.activeAttendance?.status === 'PENDING'");
+    expect(inboxSource).toContain('attendance.autoReply.sent');
+    expect(inboxSource).toContain("timeZone: 'America/Sao_Paulo'");
+    expect(stylesSource).toContain('.attendance-auto-reply-badge');
+    expect(stylesSource).toContain('.attendance-human-waiting');
+  });
 });

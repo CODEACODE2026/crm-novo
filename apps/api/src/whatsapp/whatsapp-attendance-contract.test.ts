@@ -104,4 +104,19 @@ describe('ATENDIMENTO1 integration contracts', () => {
     expect(analyticsSource).toContain('Prisma.join(conditions');
     expect(analyticsSource).not.toMatch(/\$queryRawUnsafe|resolutionNote|rawMetadata/);
   });
+
+  it('derives auto-reply context from successful executions without contaminating human reply state', () => {
+    expect(attendanceSource).toContain("status: 'SENT'");
+    expect(attendanceSource).toContain('execution.sentAt >= attendance.openedAt');
+    expect(attendanceSource).toContain(
+      '!attendance.resolvedAt || execution.sentAt <= attendance.resolvedAt',
+    );
+    expect(attendanceSource).toContain('autoReply: {');
+    expect(analyticsSource).toContain('"whatsapp_auto_reply_executions"');
+    expect(analyticsSource).toContain('"pendingWithAutoReply"');
+    expect(analyticsSource).toContain('"autoRepliesSentInPeriod"');
+    expect(analyticsSource).not.toMatch(
+      /firstAgentReplyAt"\s*-\s*ar\.|autoReply.*firstAgentReplyAt/,
+    );
+  });
 });

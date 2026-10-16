@@ -738,6 +738,13 @@ export interface WhatsAppConversationLabelAdmin extends WhatsAppConversationLabe
   _count?: { assignments: number };
 }
 export type WhatsAppAttendanceStatus = 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+export interface WhatsAppAttendanceAutoReplyContext {
+  sent: boolean;
+  count?: number;
+  lastSentAt: string | null;
+  mode: WhatsAppAutoReplyMode | null;
+  executionId?: string | null;
+}
 export interface WhatsAppAttendanceSummary {
   id: string;
   status: WhatsAppAttendanceStatus;
@@ -745,6 +752,7 @@ export interface WhatsAppAttendanceSummary {
   firstAgentReplyAt: string | null;
   inboundMessagesCount: number;
   outboundMessagesCount: number;
+  autoReply: WhatsAppAttendanceAutoReplyContext;
 }
 export interface WhatsAppAttendance extends WhatsAppAttendanceSummary {
   conversationId: string;
@@ -786,6 +794,10 @@ export interface WhatsAppAttendanceAnalytics {
     resolutionAvgSeconds: number;
     receivedMessages: number;
     sentManualMessages: number;
+    pendingWithAutoReply: number;
+    attendancesWithAutoReply: number;
+    autoRepliesSentInPeriod: number;
+    autoReplyCoverageRate: number;
   };
   statusDistribution: Array<{
     status: WhatsAppAttendanceStatus;
@@ -824,6 +836,9 @@ export interface WhatsAppAttendanceAnalyticsOpenItem {
   ageSeconds: number;
   inboundMessagesCount: number;
   outboundMessagesCount: number;
+  hasAutoReply: boolean;
+  lastAutoReplyAt: string | null;
+  autoReplyMode: WhatsAppAutoReplyMode | null;
 }
 export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
 export type WhatsAppConversationMessageStatus =

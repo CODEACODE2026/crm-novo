@@ -6,7 +6,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { Prisma, type WhatsAppAttendanceStatus } from '@prisma/client';
+import { Prisma, type WhatsAppAttendanceStatus, type WhatsAppAutoReplyMode } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateWhatsAppAttendanceCategoryDto } from './dto/create-whatsapp-attendance-category.dto';
 import { ListWhatsAppAttendancesDto } from './dto/list-whatsapp-attendances.dto';
@@ -33,6 +33,13 @@ const defaultCategories = [
 ] as const;
 
 type AttendanceTransaction = Prisma.TransactionClient;
+type AutoReplyExecutionContext = {
+  id: string;
+  conversationId: string;
+  whatsAppConnectionId: string;
+  sentAt: Date | null;
+  config: { mode: WhatsAppAutoReplyMode };
+};
 
 @Injectable()
 export class WhatsAppAttendanceService {
@@ -239,7 +246,7 @@ export class WhatsAppAttendanceService {
       include: this.detailInclude(),
       orderBy: { openedAt: 'desc' },
     });
-    return attendance ? this.present(attendance) : null;
+    return attendance ? this.presentWithAutoReply(attendance) : null;
   }
 
   async listConversationAttendances(conversationId: string, query: ListWhatsAppAttendancesDto) {
@@ -262,7 +269,7 @@ export class WhatsAppAttendanceService {
       include: this.detailInclude(),
     });
     if (!attendance) throw new NotFoundException('Atendimento WhatsApp nao encontrado.');
-    return this.present(attendance);
+    return this.presentWithAutoReply(attendance);
   }
 
   async resolveActiveAttendance(
@@ -355,8 +362,9 @@ export class WhatsAppAttendanceService {
       this.prisma.whatsAppAttendance.count({ where }),
     ]);
     const totalPages = Math.ceil(total / limit);
+    const autoReplies = await this.autoRepliesForAttendances(items);
     return {
-      items: items.map((item) => this.present(item)),
+      items: items.map((item) => this.present(item, this.contextForAttendance(item, autoReplies))),
       pagination: {
         page,
         limit,
@@ -376,10 +384,23 @@ export class WhatsAppAttendanceService {
     } satisfies Prisma.WhatsAppAttendanceInclude;
   }
 
+  private async presentWithAutoReply(
+    attendance: Prisma.WhatsAppAttendanceGetPayload<{
+      include: ReturnType<WhatsAppAttendanceService['detailInclude']>;
+    }>,
+  ) {
+    const executions = await this.autoRepliesForAttendances([attendance]);
+    return this.present(attendance, this.contextForAttendance(attendance, executions));
+  }
+
   private present(
     attendance: Prisma.WhatsAppAttendanceGetPayload<{
       include: ReturnType<WhatsAppAttendanceService['detailInclude']>;
     }>,
+    autoReply: {
+      count: number;
+      latest: AutoReplyExecutionContext | null;
+    } = { count: 0, latest: null },
   ) {
     return {
       id: attendance.id,
@@ -395,9 +416,67 @@ export class WhatsAppAttendanceService {
       resolvedBy: attendance.resolvedBy,
       inboundMessagesCount: attendance.inboundMessagesCount,
       outboundMessagesCount: attendance.outboundMessagesCount,
+      autoReply: {
+        sent: autoReply.count > 0,
+        count: autoReply.count,
+        lastSentAt: autoReply.latest?.sentAt ?? null,
+        mode: autoReply.latest?.config.mode ?? null,
+        executionId: autoReply.latest?.id ?? null,
+      },
       createdAt: attendance.createdAt,
       updatedAt: attendance.updatedAt,
     };
+  }
+
+  private async autoRepliesForAttendances(
+    attendances: Array<{
+      conversationId: string;
+      whatsAppConnectionId: string;
+      openedAt: Date;
+    }>,
+  ) {
+    if (!attendances.length) return [];
+    const conversationIds = [...new Set(attendances.map((item) => item.conversationId))];
+    const connectionIds = [...new Set(attendances.map((item) => item.whatsAppConnectionId))];
+    const earliestOpenedAt = new Date(
+      Math.min(...attendances.map((item) => item.openedAt.getTime())),
+    );
+    return this.prisma.whatsAppAutoReplyExecution.findMany({
+      where: {
+        conversationId: { in: conversationIds },
+        whatsAppConnectionId: { in: connectionIds },
+        status: 'SENT',
+        sentAt: { not: null, gte: earliestOpenedAt },
+      },
+      select: {
+        id: true,
+        conversationId: true,
+        whatsAppConnectionId: true,
+        sentAt: true,
+        config: { select: { mode: true } },
+      },
+      orderBy: { sentAt: 'desc' },
+    });
+  }
+
+  private contextForAttendance(
+    attendance: {
+      conversationId: string;
+      whatsAppConnectionId: string;
+      openedAt: Date;
+      resolvedAt: Date | null;
+    },
+    executions: AutoReplyExecutionContext[],
+  ) {
+    const matching = executions.filter(
+      (execution) =>
+        execution.conversationId === attendance.conversationId &&
+        execution.whatsAppConnectionId === attendance.whatsAppConnectionId &&
+        execution.sentAt !== null &&
+        execution.sentAt >= attendance.openedAt &&
+        (!attendance.resolvedAt || execution.sentAt <= attendance.resolvedAt),
+    );
+    return { count: matching.length, latest: matching[0] ?? null };
   }
 
   private async lockConversation(tx: AttendanceTransaction, conversationId: string) {

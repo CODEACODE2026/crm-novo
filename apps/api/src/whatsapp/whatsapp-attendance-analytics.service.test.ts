@@ -36,6 +36,9 @@ function completeResults() {
         resolutionAvgSeconds: 3720.6,
         receivedMessages: 28,
         sentManualMessages: 14,
+        pendingWithAutoReply: 1,
+        attendancesWithAutoReply: 4,
+        autoRepliesSentInPeriod: 6,
       },
     ],
     [{ count: 2 }],
@@ -65,6 +68,9 @@ function completeResults() {
         ageSeconds: 125.8,
         inboundMessagesCount: 2,
         outboundMessagesCount: 0,
+        hasAutoReply: true,
+        lastAutoReplyAt: new Date('2026-10-16T12:01:00.000Z'),
+        autoReplyMode: 'SERVICE_UNAVAILABLE',
       },
     ],
     [],
@@ -102,6 +108,10 @@ describe('WhatsAppAttendanceAnalyticsService', () => {
       resolutionAvgSeconds: 3721,
       receivedMessages: 28,
       sentManualMessages: 14,
+      pendingWithAutoReply: 1,
+      attendancesWithAutoReply: 4,
+      autoRepliesSentInPeriod: 6,
+      autoReplyCoverageRate: 40,
     });
     expect(result.statusDistribution).toEqual([
       { status: 'PENDING', count: 2, percentage: 20 },
@@ -115,7 +125,11 @@ describe('WhatsAppAttendanceAnalyticsService', () => {
     expect(result.hourlyDistribution[9]).toEqual({ hour: 9, count: 3 });
     expect(result.weekdayDistribution).toHaveLength(7);
     expect(result.weekdayDistribution[5]).toEqual({ weekday: 5, count: 3 });
-    expect(result.waitingFirstResponse[0]).toMatchObject({ ageSeconds: 126 });
+    expect(result.waitingFirstResponse[0]).toMatchObject({
+      ageSeconds: 126,
+      hasAutoReply: true,
+      autoReplyMode: 'SERVICE_UNAVAILABLE',
+    });
     expect(tx.$queryRaw).toHaveBeenCalledTimes(9);
   });
 
@@ -221,6 +235,10 @@ describe('WhatsAppAttendanceAnalyticsService', () => {
       resolutionAvgSeconds: 0,
       receivedMessages: 0,
       sentManualMessages: 0,
+      pendingWithAutoReply: 0,
+      attendancesWithAutoReply: 0,
+      autoRepliesSentInPeriod: 0,
+      autoReplyCoverageRate: 0,
     });
     expect(result.statusDistribution.every((item) => item.percentage === 0)).toBe(true);
     expect(result.hourlyDistribution).toHaveLength(24);

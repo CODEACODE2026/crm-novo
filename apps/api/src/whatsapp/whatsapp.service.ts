@@ -382,6 +382,11 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
     inboundMessagesCount: number;
     outboundMessagesCount: number;
   }>;
+  autoReplyExecutions?: Array<{
+    id: string;
+    sentAt: Date | null;
+    config: { mode: 'AWAY' | 'SERVICE_UNAVAILABLE' | 'CUSTOM' };
+  }>;
 };
 
 type WhatsAppConversationMessageQuote = Pick<
@@ -1058,6 +1063,12 @@ export class WhatsAppService {
                 outboundMessagesCount: true,
               },
               orderBy: { openedAt: 'desc' },
+              take: 1,
+            },
+            autoReplyExecutions: {
+              where: { status: 'SENT', sentAt: { not: null } },
+              select: { id: true, sentAt: true, config: { select: { mode: true } } },
+              orderBy: { sentAt: 'desc' },
               take: 1,
             },
           },
@@ -3135,6 +3146,12 @@ export class WhatsAppService {
             outboundMessagesCount: true,
           },
           orderBy: { openedAt: 'desc' },
+          take: 1,
+        },
+        autoReplyExecutions: {
+          where: { status: 'SENT', sentAt: { not: null } },
+          select: { id: true, sentAt: true, config: { select: { mode: true } } },
+          orderBy: { sentAt: 'desc' },
           take: 1,
         },
       },
@@ -5566,6 +5583,12 @@ export class WhatsAppService {
           orderBy: { openedAt: 'desc' },
           take: 1,
         },
+        autoReplyExecutions: {
+          where: { status: 'SENT', sentAt: { not: null } },
+          select: { id: true, sentAt: true, config: { select: { mode: true } } },
+          orderBy: { sentAt: 'desc' },
+          take: 1,
+        },
       },
     });
   }
@@ -7623,6 +7646,15 @@ export class WhatsAppService {
         }
       : null;
 
+    const activeAttendance = conversation.attendances?.[0] ?? null;
+    const latestAutoReply = conversation.autoReplyExecutions?.[0] ?? null;
+    const attendanceAutoReply =
+      activeAttendance &&
+      latestAutoReply?.sentAt &&
+      latestAutoReply.sentAt >= activeAttendance.openedAt
+        ? latestAutoReply
+        : null;
+
     return {
       id: conversation.id,
       whatsAppConnectionId: conversation.whatsAppConnectionId,
@@ -7641,7 +7673,17 @@ export class WhatsAppService {
       needsManualFollowUp: conversation.needsManualFollowUp,
       lastAutoReplyAt: conversation.lastAutoReplyAt,
       labels: (conversation.labelAssignments ?? []).map(({ label }) => label),
-      activeAttendance: conversation.attendances?.[0] ?? null,
+      activeAttendance: activeAttendance
+        ? {
+            ...activeAttendance,
+            autoReply: {
+              sent: Boolean(attendanceAutoReply),
+              lastSentAt: attendanceAutoReply?.sentAt ?? null,
+              mode: attendanceAutoReply?.config.mode ?? null,
+              executionId: attendanceAutoReply?.id ?? null,
+            },
+          }
+        : null,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };

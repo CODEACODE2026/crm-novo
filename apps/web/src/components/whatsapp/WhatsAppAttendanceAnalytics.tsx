@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
+  Bot,
   CheckCircle2,
   Clock3,
   MessageCircle,
@@ -382,6 +383,19 @@ export function WhatsAppAttendanceAnalyticsView({
                   <span>Respostas manuais</span>
                   <strong>{summary?.sentManualMessages ?? 0}</strong>
                 </div>
+                <div>
+                  <span>Com resposta automática</span>
+                  <strong>{summary?.attendancesWithAutoReply ?? 0}</strong>
+                  <small>
+                    {formatAttendanceAnalyticsPercentage(summary?.autoReplyCoverageRate ?? 0)} dos
+                    atendimentos
+                  </small>
+                </div>
+                <div>
+                  <span>Automáticas enviadas</span>
+                  <strong>{summary?.autoRepliesSentInPeriod ?? 0}</strong>
+                  <small>{summary?.pendingWithAutoReply ?? 0} ainda pendentes</small>
+                </div>
               </section>
 
               <Card className="attendance-ranking-card">
@@ -654,6 +668,11 @@ function OpenAttendanceList({
           {showStatus ? (
             <span className={`attendance-status-pill ${item.status.toLowerCase()}`}>
               {statusLabels[item.status]}
+            </span>
+          ) : null}
+          {item.hasAutoReply ? (
+            <span className="attendance-auto-reply-badge" title="Resposta automática enviada">
+              <Bot aria-hidden="true" size={13} /> Automática
             </span>
           ) : null}
           <div>

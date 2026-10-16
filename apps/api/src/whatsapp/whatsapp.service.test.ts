@@ -8900,6 +8900,23 @@ describe('WhatsAppService', () => {
       lastMessagePreview: 'Preview',
       unreadCount: 3,
       client: client({ name: 'Cliente Preferido', phone: '(44) 90000-0001' }),
+      attendances: [
+        {
+          id: 'attendance-active',
+          status: 'PENDING',
+          openedAt: new Date('2026-10-03T11:00:00.000Z'),
+          firstAgentReplyAt: null,
+          inboundMessagesCount: 1,
+          outboundMessagesCount: 0,
+        },
+      ],
+      autoReplyExecutions: [
+        {
+          id: 'auto-reply-execution',
+          sentAt: new Date('2026-10-03T11:01:00.000Z'),
+          config: { mode: 'AWAY' },
+        },
+      ],
     });
     const contactConversation = conversation({
       id: 'conversation-contact',
@@ -8960,6 +8977,15 @@ describe('WhatsAppService', () => {
       '5544999999999',
       '5544999999999',
     ]);
+    expect(result.items.at(0)?.activeAttendance).toMatchObject({
+      status: 'PENDING',
+      autoReply: {
+        sent: true,
+        lastSentAt: new Date('2026-10-03T11:01:00.000Z'),
+        mode: 'AWAY',
+        executionId: 'auto-reply-execution',
+      },
+    });
     expect(findManyArgs).toMatchObject({
       where: {
         status: 'OPEN',
@@ -8991,6 +9017,12 @@ describe('WhatsAppService', () => {
           outboundMessagesCount: true,
         },
         orderBy: { openedAt: 'desc' },
+        take: 1,
+      },
+      autoReplyExecutions: {
+        where: { status: 'SENT', sentAt: { not: null } },
+        select: { id: true, sentAt: true, config: { select: { mode: true } } },
+        orderBy: { sentAt: 'desc' },
         take: 1,
       },
     });

@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
+  Bot,
   CircleCheck,
   Copy,
   Download,
@@ -5173,6 +5174,12 @@ function ConversationListItem({
           {conversation.needsManualFollowUp ? (
             <span className="conversation-followup-badge">Retorno pendente</span>
           ) : null}
+          {conversation.activeAttendance?.status === 'PENDING' &&
+          conversation.activeAttendance.autoReply.sent ? (
+            <span className="attendance-auto-reply-badge" title="Resposta automática enviada">
+              <Bot aria-hidden="true" size={12} /> Automática
+            </span>
+          ) : null}
           <ConversationLabelChips labels={conversation.labels} limit={2} />
         </span>
       </button>
@@ -5259,6 +5266,21 @@ function ConversationHeader({
             {opening ? <span className="conversation-sync-badge">Carregando</span> : null}
             <ConversationLabelChips labels={conversation.labels} limit={3} />
           </div>
+          {conversation.activeAttendance?.status === 'PENDING' ? (
+            <div className="attendance-human-waiting">
+              <span>
+                Aguardando resposta humana há{' '}
+                {attendanceElapsedLabel(conversation.activeAttendance.openedAt)}
+              </span>
+              {conversation.activeAttendance.autoReply.sent ? (
+                <small>
+                  <Bot aria-hidden="true" size={12} /> Resposta automática enviada ·{' '}
+                  {autoReplyModeLabel(conversation.activeAttendance.autoReply.mode)} ·{' '}
+                  {formatAutoReplyTime(conversation.activeAttendance.autoReply.lastSentAt)}
+                </small>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
       <div className="conversation-header-actions">
@@ -8387,6 +8409,31 @@ function attendanceStatusLabel(status: WhatsAppAttendance['status']) {
   return 'Resolvido';
 }
 
+function autoReplyModeLabel(mode: WhatsAppAttendance['autoReply']['mode']) {
+  if (mode === 'AWAY') return 'Ausente';
+  if (mode === 'SERVICE_UNAVAILABLE') return 'Indisponibilidade';
+  if (mode === 'CUSTOM') return 'Personalizada';
+  return 'Automática';
+}
+
+function formatAutoReplyTime(value: string | null) {
+  if (!value) return 'horário indisponível';
+  return new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'America/Sao_Paulo',
+  }).format(new Date(value));
+}
+
+function formatAutoReplyDateTime(value: string | null) {
+  if (!value) return 'data indisponível';
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'America/Sao_Paulo',
+  }).format(new Date(value));
+}
+
 function ConversationAttendanceHistory({
   attendances,
   error,
@@ -8450,6 +8497,18 @@ function ConversationAttendanceHistory({
                 </dd>
               </div>
             </dl>
+            {attendance.autoReply.sent ? (
+              <div className="attendance-history-auto-reply">
+                <Bot aria-hidden="true" size={14} />
+                <span>
+                  Resposta automática: Sim · {autoReplyModeLabel(attendance.autoReply.mode)} ·{' '}
+                  {formatAutoReplyDateTime(attendance.autoReply.lastSentAt)}
+                  {attendance.autoReply.count && attendance.autoReply.count > 1
+                    ? ` · ${attendance.autoReply.count} envios`
+                    : ''}
+                </span>
+              </div>
+            ) : null}
             {attendance.resolutionNote ? <p>{attendance.resolutionNote}</p> : null}
             {attendance.resolvedBy ? (
               <small>Resolvido por {attendance.resolvedBy.name}</small>

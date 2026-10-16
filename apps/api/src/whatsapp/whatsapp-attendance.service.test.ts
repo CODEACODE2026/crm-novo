@@ -57,6 +57,7 @@ function service(tx = transaction()) {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
     },
+    whatsAppAutoReplyExecution: { findMany: vi.fn().mockResolvedValue([]) },
     client: { findUnique: vi.fn().mockResolvedValue({ id: 'client-id' }) },
     whatsAppAttendanceCategory: {
       createMany: vi.fn().mockResolvedValue({ count: 11 }),
@@ -265,6 +266,105 @@ describe('WhatsAppAttendanceService', () => {
     });
     expect(tx.whatsAppAttendance.update).not.toHaveBeenCalled();
     expect(tx.whatsAppMessage.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['AWAY', 'SERVICE_UNAVAILABLE', 'CUSTOM'] as const)(
+    'derives a provider-confirmed %s auto-reply inside the attendance window without changing human metrics',
+    async (mode) => {
+      const openedAt = new Date('2026-10-16T10:00:00.000Z');
+      const sentAt = new Date('2026-10-16T10:01:00.000Z');
+      const context = service();
+      context.prisma.whatsAppAttendance.findUnique.mockResolvedValue({
+        id: attendanceId,
+        conversationId,
+        whatsAppConnectionId: connectionId,
+        clientId: null,
+        status: 'PENDING',
+        openedAt,
+        firstAgentReplyAt: null,
+        resolvedAt: null,
+        category: null,
+        resolutionNote: null,
+        resolvedBy: null,
+        inboundMessagesCount: 1,
+        outboundMessagesCount: 0,
+        createdAt: openedAt,
+        updatedAt: openedAt,
+      });
+      context.prisma.whatsAppAutoReplyExecution.findMany.mockResolvedValue([
+        {
+          id: 'execution-id',
+          conversationId,
+          whatsAppConnectionId: connectionId,
+          sentAt,
+          config: { mode },
+        },
+        {
+          id: 'older-execution',
+          conversationId,
+          whatsAppConnectionId: connectionId,
+          sentAt: new Date('2026-10-16T09:59:00.000Z'),
+          config: { mode: 'CUSTOM' },
+        },
+      ]);
+
+      const result = await context.subject.getAttendance(attendanceId);
+
+      expect(result).toMatchObject({
+        status: 'PENDING',
+        firstAgentReplyAt: null,
+        outboundMessagesCount: 0,
+        autoReply: {
+          sent: true,
+          count: 1,
+          lastSentAt: sentAt,
+          mode,
+          executionId: 'execution-id',
+        },
+      });
+      const [findExecutionsInput] = context.prisma.whatsAppAutoReplyExecution.findMany.mock
+        .calls[0] as unknown as [{ where: { status: string; sentAt: { not: null; gte: Date } } }];
+      expect(findExecutionsInput.where).toMatchObject({
+        status: 'SENT',
+        sentAt: { not: null, gte: openedAt },
+      });
+    },
+  );
+
+  it('does not associate auto-replies sent after the attendance was resolved', async () => {
+    const openedAt = new Date('2026-10-16T10:00:00.000Z');
+    const resolvedAt = new Date('2026-10-16T10:10:00.000Z');
+    const context = service();
+    context.prisma.whatsAppAttendance.findUnique.mockResolvedValue({
+      id: attendanceId,
+      conversationId,
+      whatsAppConnectionId: connectionId,
+      clientId: null,
+      status: 'RESOLVED',
+      openedAt,
+      firstAgentReplyAt: null,
+      resolvedAt,
+      category: null,
+      resolutionNote: null,
+      resolvedBy: null,
+      inboundMessagesCount: 1,
+      outboundMessagesCount: 0,
+      createdAt: openedAt,
+      updatedAt: resolvedAt,
+    });
+    context.prisma.whatsAppAutoReplyExecution.findMany.mockResolvedValue([
+      {
+        id: 'late-execution',
+        conversationId,
+        whatsAppConnectionId: connectionId,
+        sentAt: new Date('2026-10-16T10:11:00.000Z'),
+        config: { mode: 'AWAY' },
+      },
+    ]);
+
+    await expect(context.subject.getAttendance(attendanceId)).resolves.toMatchObject({
+      autoReply: { sent: false, count: 0, lastSentAt: null, mode: null },
+    });
   });
 
   it('requires an active same-connection category to resolve an attendance', async () => {

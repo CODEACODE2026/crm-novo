@@ -167,6 +167,7 @@ import {
 
 type ConversationFilter = 'all' | 'unread' | 'followup' | 'clients' | 'guests';
 type AttendanceFilter = 'ACTIVE' | 'PENDING' | 'IN_PROGRESS' | 'ALL';
+type ContactDrawerTab = 'summary' | 'attendances' | 'financial';
 type StartConversationRecipientType = 'client' | 'guest';
 export type ConversationComposerMedia = {
   file: File;
@@ -353,6 +354,11 @@ const attendanceFilters = [
   { id: 'IN_PROGRESS', label: 'Em andamento' },
   { id: 'ALL', label: 'Todas' },
 ] satisfies Array<{ id: AttendanceFilter; label: string }>;
+const contactDrawerTabs = [
+  { id: 'summary', label: 'Resumo' },
+  { id: 'attendances', label: 'Atendimentos' },
+  { id: 'financial', label: 'Financeiro' },
+] satisfies Array<{ id: ContactDrawerTab; label: string }>;
 const avatarClientCacheTtlMs = 55 * 60 * 1000;
 const avatarClientConcurrency = 4;
 
@@ -3970,6 +3976,7 @@ export function WhatsAppInbox({
           linkClientError={linkClientError}
           linkingClient={linkingClient}
           open={contactPanelOpen}
+          waitingClockNow={waitingClockNow}
           onClose={() => setContactPanelOpen(false)}
           onLoadMoreAttendances={() => void loadMoreAttendanceHistory()}
           onCreateClient={(conversation) => void openGuestClientCreate(conversation)}
@@ -8643,6 +8650,7 @@ function ConversationClientPanel({
   open,
   pixBusyReceivableId,
   pixWhatsAppBusyIntentIds,
+  waitingClockNow,
   onClose,
   onCopyPix,
   onCreateClient,
@@ -8671,6 +8679,7 @@ function ConversationClientPanel({
   open: boolean;
   pixBusyReceivableId: string | null;
   pixWhatsAppBusyIntentIds: ReadonlySet<string>;
+  waitingClockNow: number;
   onClose: () => void;
   onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
@@ -8685,62 +8694,133 @@ function ConversationClientPanel({
   onOpenClient: (clientId: string) => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
+  const [activeTab, setActiveTab] = useState<ContactDrawerTab>('summary');
+
+  useEffect(() => {
+    setActiveTab('summary');
+  }, [conversation?.id, open]);
+
   if (!open) return null;
+
+  const loadedClient = contactInfo.client;
+
+  function selectTab(tab: ContactDrawerTab) {
+    setActiveTab(tab);
+  }
+
+  function handleTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+
+    const currentIndex = contactDrawerTabs.findIndex((tab) => tab.id === activeTab);
+    const nextIndex =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? contactDrawerTabs.length - 1
+          : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + contactDrawerTabs.length) %
+            contactDrawerTabs.length;
+    const nextTab = contactDrawerTabs[nextIndex];
+    if (!nextTab) return;
+
+    selectTab(nextTab.id);
+    event.currentTarget.parentElement
+      ?.querySelector<HTMLButtonElement>(`[data-contact-tab="${nextTab.id}"]`)
+      ?.focus();
+  }
 
   return (
     <div className="conversation-contact-drawer-backdrop" role="presentation" onMouseDown={onClose}>
       <aside
         className="conversation-client-panel conversation-contact-drawer"
-        aria-label="Informações do contato"
+        aria-labelledby="conversation-contact-name"
         aria-modal="true"
         role="dialog"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="conversation-contact-drawer-header">
-          <div>
-            <span className="metric-label">Atendimento</span>
-            <h2 id="conversation-client-panel-title">Contato</h2>
-          </div>
+          {conversation ? (
+            <ConversationContactHeader
+              avatar={avatar}
+              conversation={conversation}
+              linked={Boolean(conversation.client)}
+              linkedClient={loadedClient}
+              {...(loadedClient ? { onOpenClient: () => onOpenClient(loadedClient.id) } : {})}
+            />
+          ) : (
+            <h2 id="conversation-contact-name">Contato</h2>
+          )}
           <IconButton icon={X} label="Fechar informações do contato" onClick={onClose} />
         </header>
-        <ConversationClientPanelContent
-          attendances={attendances}
-          attendancesError={attendancesError}
-          attendancesHasMore={attendancesHasMore}
-          attendancesLoading={attendancesLoading}
-          avatar={avatar}
-          contactInfo={contactInfo}
-          conversation={conversation}
-          linkClientError={linkClientError}
-          linkingClient={linkingClient}
-          lifecycleBusyReferenceId={lifecycleBusyReferenceId}
-          lifecyclePlansLoading={lifecyclePlansLoading}
-          pixBusyReceivableId={pixBusyReceivableId}
-          pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
-          onCopyPix={onCopyPix}
-          onCreateClient={onCreateClient}
-          onGeneratePix={onGeneratePix}
-          onRecreatePix={onRecreatePix}
-          onReactivateReference={onReactivateReference}
-          onSendPixWhatsApp={onSendPixWhatsApp}
-          onRenewReference={onRenewReference}
-          onSaveInternalNotes={onSaveInternalNotes}
-          onLinkClient={onLinkClient}
-          onLoadMoreAttendances={onLoadMoreAttendances}
-          onOpenClient={onOpenClient}
-          onViewReceivable={onViewReceivable}
-        />
+        <div
+          aria-label="Seções das informações do contato"
+          className="conversation-contact-tabs"
+          role="tablist"
+        >
+          {contactDrawerTabs.map((tab) => (
+            <button
+              aria-controls={`conversation-contact-panel-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              className={activeTab === tab.id ? 'active' : ''}
+              data-contact-tab={tab.id}
+              id={`conversation-contact-tab-${tab.id}`}
+              key={tab.id}
+              role="tab"
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              type="button"
+              onClick={() => selectTab(tab.id)}
+              onKeyDown={handleTabKeyDown}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div
+          aria-labelledby={`conversation-contact-tab-${activeTab}`}
+          className="conversation-contact-tabpanel"
+          id={`conversation-contact-panel-${activeTab}`}
+          role="tabpanel"
+        >
+          <ConversationClientPanelContent
+            activeTab={activeTab}
+            attendances={attendances}
+            attendancesError={attendancesError}
+            attendancesHasMore={attendancesHasMore}
+            attendancesLoading={attendancesLoading}
+            contactInfo={contactInfo}
+            conversation={conversation}
+            linkClientError={linkClientError}
+            linkingClient={linkingClient}
+            lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+            lifecyclePlansLoading={lifecyclePlansLoading}
+            pixBusyReceivableId={pixBusyReceivableId}
+            pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
+            waitingClockNow={waitingClockNow}
+            onCopyPix={onCopyPix}
+            onCreateClient={onCreateClient}
+            onGeneratePix={onGeneratePix}
+            onRecreatePix={onRecreatePix}
+            onReactivateReference={onReactivateReference}
+            onSendPixWhatsApp={onSendPixWhatsApp}
+            onRenewReference={onRenewReference}
+            onSaveInternalNotes={onSaveInternalNotes}
+            onLinkClient={onLinkClient}
+            onLoadMoreAttendances={onLoadMoreAttendances}
+            onOpenClient={onOpenClient}
+            onViewReceivable={onViewReceivable}
+          />
+        </div>
       </aside>
     </div>
   );
 }
 
 function ConversationClientPanelContent({
+  activeTab,
   attendances,
   attendancesError,
   attendancesHasMore,
   attendancesLoading,
-  avatar,
   contactInfo,
   conversation,
   linkClientError,
@@ -8749,6 +8829,7 @@ function ConversationClientPanelContent({
   lifecyclePlansLoading,
   pixBusyReceivableId,
   pixWhatsAppBusyIntentIds,
+  waitingClockNow,
   onCopyPix,
   onCreateClient,
   onGeneratePix,
@@ -8762,11 +8843,11 @@ function ConversationClientPanelContent({
   onOpenClient,
   onViewReceivable,
 }: {
+  activeTab: ContactDrawerTab;
   attendances: WhatsAppAttendance[];
   attendancesError: string;
   attendancesHasMore: boolean;
   attendancesLoading: boolean;
-  avatar?: ConversationAvatarState | undefined;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
   linkClientError: string;
@@ -8775,6 +8856,7 @@ function ConversationClientPanelContent({
   lifecyclePlansLoading: boolean;
   pixBusyReceivableId: string | null;
   pixWhatsAppBusyIntentIds: ReadonlySet<string>;
+  waitingClockNow: number;
   onCopyPix: (intent: PaymentIntent) => void;
   onCreateClient: (conversation: WhatsAppConversation) => void;
   onGeneratePix: (receivable: Receivable) => void;
@@ -8810,6 +8892,12 @@ function ConversationClientPanelContent({
         renewals: client.renewals ?? [],
       })
     : [];
+  const hasFinancialData = Boolean(
+    client &&
+    ((client.references?.length ?? 0) > 0 ||
+      contactInfo.receivables.length > 0 ||
+      recentActivity.length > 0),
+  );
 
   useEffect(() => {
     notesContextRef.current = {
@@ -8881,15 +8969,9 @@ function ConversationClientPanelContent({
   const phoneLabel =
     normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
 
-  if (client) {
+  if (activeTab === 'attendances') {
     return (
-      <div className="conversation-context-card conversation-contact-info">
-        <ConversationContactHeader
-          avatar={avatar}
-          conversation={conversation}
-          linkedClient={client}
-          onOpenClient={() => onOpenClient(client.id)}
-        />
+      <div className="conversation-contact-tab-content">
         <ConversationAttendanceHistory
           attendances={attendances}
           error={attendancesError}
@@ -8897,12 +8979,105 @@ function ConversationClientPanelContent({
           loading={attendancesLoading}
           onLoadMore={onLoadMoreAttendances}
         />
+      </div>
+    );
+  }
+
+  const linkedConversation = Boolean(conversation.client);
+  if (linkedConversation && !client) {
+    return (
+      <div className="conversation-contact-tab-content">
         {contactInfo.loading ? (
-          <div className="conversation-loading-row">
+          <div className="conversation-loading-row" role="status">
             <Loader2 aria-hidden="true" size={15} />
             Carregando informações...
           </div>
         ) : null}
+        {contactInfo.error ? (
+          <div className="notice danger conversation-notice" role="alert">
+            {contactInfo.error}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (client && activeTab === 'financial' && !hasFinancialData) {
+    return (
+      <div className="conversation-contact-tab-content">
+        {contactInfo.loading ? (
+          <div className="conversation-loading-row" role="status">
+            <Loader2 aria-hidden="true" size={15} />
+            Atualizando informações financeiras...
+          </div>
+        ) : null}
+        {contactInfo.error ? (
+          <div className="notice danger conversation-notice" role="alert">
+            {contactInfo.error}
+          </div>
+        ) : null}
+        {!contactInfo.loading && !contactInfo.error ? (
+          <div className="conversation-empty-panel conversation-tab-empty">
+            <Info aria-hidden="true" size={22} />
+            <span>Nenhuma cobrança encontrada.</span>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (client && activeTab === 'financial') {
+    return (
+      <div className="conversation-contact-tab-content conversation-financial-tab">
+        {contactInfo.loading ? (
+          <div className="conversation-loading-row" role="status">
+            <Loader2 aria-hidden="true" size={15} />
+            Atualizando informações financeiras...
+          </div>
+        ) : null}
+        {contactInfo.error ? (
+          <div className="notice danger conversation-notice" role="alert">
+            {contactInfo.error}
+          </div>
+        ) : null}
+        {contactInfo.notice ? (
+          <div className="notice success conversation-notice">{contactInfo.notice}</div>
+        ) : null}
+        {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
+        <ConversationRecentActivity
+          clientId={client.id}
+          items={recentActivity}
+          receivables={contactInfo.receivables}
+          onViewReceivable={onViewReceivable}
+        />
+        <ConversationReferenceList
+          client={client}
+          lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+          lifecyclePlansLoading={lifecyclePlansLoading}
+          pixBusyReceivableId={pixBusyReceivableId}
+          pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
+          pixIntent={contactInfo.pixIntent}
+          receivables={contactInfo.receivables}
+          onCopyPix={onCopyPix}
+          onGeneratePix={onGeneratePix}
+          onRecreatePix={onRecreatePix}
+          onReactivateReference={onReactivateReference}
+          onSendPixWhatsApp={onSendPixWhatsApp}
+          onRenewReference={onRenewReference}
+          onOpenClient={onOpenClient}
+          onViewReceivable={onViewReceivable}
+        />
+      </div>
+    );
+  }
+
+  if (client) {
+    return (
+      <div className="conversation-contact-tab-content conversation-summary-tab">
+        <ConversationActiveAttendanceSummary
+          attendance={conversation.activeAttendance}
+          nowMs={waitingClockNow}
+        />
         {contactInfo.error ? (
           <div className="notice danger conversation-notice" role="alert">
             {contactInfo.error}
@@ -8936,7 +9111,7 @@ function ConversationClientPanelContent({
             </div>
           </dl>
         </section>
-        {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
+        {financialSummary ? <ConversationFinancialOverview summary={financialSummary} /> : null}
         <section className="conversation-contact-section conversation-internal-notes">
           <div className="conversation-contact-section-title">
             <span>Notas internas</span>
@@ -8992,29 +9167,6 @@ function ConversationClientPanelContent({
             </p>
           )}
         </section>
-        <ConversationRecentActivity
-          clientId={client.id}
-          items={recentActivity}
-          receivables={contactInfo.receivables}
-          onViewReceivable={onViewReceivable}
-        />
-        <ConversationReferenceList
-          client={client}
-          lifecycleBusyReferenceId={lifecycleBusyReferenceId}
-          lifecyclePlansLoading={lifecyclePlansLoading}
-          pixBusyReceivableId={pixBusyReceivableId}
-          pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
-          pixIntent={contactInfo.pixIntent}
-          receivables={contactInfo.receivables}
-          onCopyPix={onCopyPix}
-          onGeneratePix={onGeneratePix}
-          onRecreatePix={onRecreatePix}
-          onReactivateReference={onReactivateReference}
-          onSendPixWhatsApp={onSendPixWhatsApp}
-          onRenewReference={onRenewReference}
-          onOpenClient={onOpenClient}
-          onViewReceivable={onViewReceivable}
-        />
       </div>
     );
   }
@@ -9027,15 +9179,22 @@ function ConversationClientPanelContent({
     Boolean(selectedClient?.phoneNormalized) &&
     selectedClient?.phoneNormalized !== conversation.phoneNormalized;
 
+  if (activeTab === 'financial') {
+    return (
+      <div className="conversation-contact-tab-content">
+        <div className="conversation-empty-panel conversation-tab-empty">
+          <Info aria-hidden="true" size={22} />
+          <span>Este contato não está vinculado a um cliente.</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="conversation-context-card conversation-contact-info">
-      <ConversationContactHeader avatar={avatar} conversation={conversation} linkedClient={null} />
-      <ConversationAttendanceHistory
-        attendances={attendances}
-        error={attendancesError}
-        hasMore={attendancesHasMore}
-        loading={attendancesLoading}
-        onLoadMore={onLoadMoreAttendances}
+    <div className="conversation-contact-tab-content conversation-summary-tab">
+      <ConversationActiveAttendanceSummary
+        attendance={conversation.activeAttendance}
+        nowMs={waitingClockNow}
       />
       <section className="conversation-contact-section">
         <div className="conversation-contact-section-title">
@@ -9143,14 +9302,84 @@ function ConversationClientPanelContent({
   );
 }
 
+function ConversationActiveAttendanceSummary({
+  attendance,
+  nowMs,
+}: {
+  attendance: WhatsAppConversation['activeAttendance'];
+  nowMs: number;
+}) {
+  if (!attendance) return null;
+
+  const elapsedSeconds = getHumanWaitingSeconds(attendance.openedAt, nowMs);
+  const pending = attendance.status === 'PENDING';
+
+  return (
+    <section className="conversation-contact-section conversation-current-attendance">
+      <div className="conversation-contact-section-title">
+        <span>Atendimento atual</span>
+        <span className={`attendance-status ${attendance.status.toLowerCase()}`}>
+          {attendanceStatusLabel(attendance.status)}
+        </span>
+      </div>
+      <p>
+        <Clock3 aria-hidden="true" size={14} />
+        {pending ? 'Aguardando resposta humana há' : 'Aberto há'}{' '}
+        <strong>{formatWaitingDuration(elapsedSeconds)}</strong>
+      </p>
+      <small>
+        {attendance.inboundMessagesCount} recebidas · {attendance.outboundMessagesCount} manuais
+      </small>
+      {attendance.autoReply.sent ? (
+        <div className="attendance-history-auto-reply">
+          <Bot aria-hidden="true" size={14} />
+          <span>
+            Resposta automática enviada · {autoReplyModeLabel(attendance.autoReply.mode)} ·{' '}
+            {formatAutoReplyTime(attendance.autoReply.lastSentAt)}
+          </span>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ConversationFinancialOverview({ summary }: { summary: ContactFinancialSummary }) {
+  return (
+    <section className="conversation-contact-section conversation-financial-overview">
+      <div className="conversation-contact-section-title">
+        <span>Financeiro</span>
+        <span
+          className={`conversation-reference-status finance-summary-${summary.state.toLowerCase()}`}
+        >
+          {contactFinancialStateLabel(summary.state)}
+        </span>
+      </div>
+      <div className="conversation-financial-overview-grid">
+        <div>
+          <span>Em aberto</span>
+          <strong>{formatCurrency(summary.openAmount)}</strong>
+          <small>{contactChargeCountLabel(summary.openCount, false)}</small>
+        </div>
+        <div>
+          <span>Próximo vencimento</span>
+          <strong>{summary.nextDueDate ? formatDate(summary.nextDueDate) : '-'}</strong>
+          <small>{contactReferenceCountLabel(summary.activeReferenceCount)}</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ConversationContactHeader({
   avatar,
   conversation,
+  linked,
   linkedClient,
   onOpenClient,
 }: {
   avatar?: ConversationAvatarState | undefined;
   conversation: WhatsAppConversation;
+  linked: boolean;
   linkedClient: Client | null;
   onOpenClient?: () => void;
 }) {
@@ -9164,10 +9393,10 @@ function ConversationContactHeader({
         {imageUrl ? <img alt="" src={imageUrl} /> : conversationInitials(conversation)}
       </span>
       <div className="conversation-contact-profile-copy">
-        <h3>{conversation.displayName}</h3>
+        <h3 id="conversation-contact-name">{conversation.displayName}</h3>
         <p>{phoneLabel}</p>
-        <span className={`conversation-kind ${linkedClient ? 'client' : 'guest'}`}>
-          {linkedClient ? 'Cliente vinculado' : 'Contato não vinculado'}
+        <span className={`conversation-kind ${linked ? 'client' : 'guest'}`}>
+          {linked ? 'Cliente vinculado' : 'Contato não vinculado'}
         </span>
       </div>
       {linkedClient && onOpenClient ? (

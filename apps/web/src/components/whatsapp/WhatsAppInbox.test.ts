@@ -713,8 +713,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('label="Fechar informações do contato"');
     expect(whatsAppInboxSource).toContain('conversation-contact-profile-copy');
     expect(whatsAppInboxSource).toContain('conversation-client-summary-grid');
-    expect(whatsAppInboxSource).toContain("linkedClient ? 'Cliente vinculado'");
-    expect(whatsAppInboxSource).toContain('onOpenClient={() => onOpenClient(client.id)}');
+    expect(whatsAppInboxSource).toContain("linked ? 'Cliente vinculado'");
+    expect(whatsAppInboxSource).toContain('onOpenClient: () => onOpenClient(loadedClient.id)');
     expect(whatsAppInboxSource).toContain('Abrir cliente');
     expect(financialPosition).toBeGreaterThan(-1);
     expect(notesPosition).toBeGreaterThan(financialPosition);

@@ -5675,9 +5675,9 @@ video.conversation-saved-sticker-preview {
   box-sizing: border-box;
   height: 100%;
   border-left: 1px solid var(--border);
-  padding: 0 16px 20px;
+  padding: 0 16px;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .conversation-contact-drawer-backdrop {
@@ -5690,6 +5690,8 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-contact-drawer {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   width: min(430px, calc(100vw - 24px));
   max-width: 100%;
   background: var(--surface);
@@ -5713,12 +5715,11 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-contact-drawer-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  min-height: 52px;
+  min-height: 70px;
+  margin-inline: -16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  padding: 7px 12px 7px 16px;
 }
 
 .conversation-contact-drawer-header h2 {
@@ -5728,6 +5729,76 @@ video.conversation-saved-sticker-preview {
 
 .conversation-contact-drawer-header .metric-label {
   display: none;
+}
+
+.conversation-contact-drawer-header .conversation-contact-profile {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}
+
+.conversation-contact-tabs {
+  display: flex;
+  min-width: 0;
+  margin-inline: -16px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding-inline: 12px;
+  scrollbar-width: none;
+}
+
+.conversation-contact-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.conversation-contact-tabs button {
+  position: relative;
+  flex: 1 0 auto;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.conversation-contact-tabs button::after {
+  position: absolute;
+  right: 10px;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: transparent;
+  content: '';
+}
+
+.conversation-contact-tabs button:hover,
+.conversation-contact-tabs button:focus-visible,
+.conversation-contact-tabs button.active {
+  color: var(--accent);
+}
+
+.conversation-contact-tabs button.active::after {
+  background: var(--accent);
+}
+
+.conversation-contact-tabpanel {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 0 20px;
+}
+
+.conversation-contact-tab-content {
+  display: grid;
+  gap: 12px;
 }
 
 .conversation-contact-info,
@@ -5802,6 +5873,65 @@ video.conversation-saved-sticker-preview {
 .conversation-contact-section {
   border-top: 1px solid var(--border);
   padding-top: 16px;
+}
+
+.conversation-contact-tab-content > .conversation-contact-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.conversation-current-attendance p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.conversation-current-attendance > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.conversation-financial-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.conversation-financial-overview-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 9px;
+}
+
+.conversation-financial-overview-grid span,
+.conversation-financial-overview-grid small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-financial-overview-grid strong {
+  font-size: 13px;
+}
+
+.conversation-tab-empty {
+  min-height: 180px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 20px;
+}
+
+.conversation-contact-tabpanel .conversation-attendance-history article {
+  gap: 7px;
+  padding: 10px;
 }
 
 .conversation-contact-info .conversation-client-summary-grid {
@@ -12496,7 +12626,7 @@ tbody tr:hover,
   }
 
   .conversation-contact-drawer {
-    display: block;
+    display: grid;
   }
 
   .conversation-mobile-context {
@@ -15923,6 +16053,24 @@ tbody tr:hover,
     width: min(100vw, 440px);
   }
 
+  .conversation-contact-drawer-header {
+    min-height: 64px;
+    padding-block: 6px;
+  }
+
+  .conversation-contact-tabs {
+    padding-inline: 6px;
+  }
+
+  .conversation-contact-tabs button {
+    min-width: max-content;
+    padding-inline: 10px;
+  }
+
+  .conversation-contact-tabpanel {
+    padding-top: 10px;
+  }
+
   .conversation-contact-profile {
     grid-template-columns: 42px minmax(0, 1fr);
   }
@@ -15933,9 +16081,25 @@ tbody tr:hover,
   }
 
   .conversation-contact-profile > .ui-button {
-    grid-column: 2;
-    justify-self: start;
+    grid-column: auto;
+    grid-row: 1 / span 2;
+    justify-self: end;
     min-height: 36px;
+  }
+
+  .conversation-contact-drawer-header .conversation-contact-profile {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+  }
+
+  .conversation-contact-drawer-header .conversation-contact-profile > .ui-button {
+    grid-column: 2;
+    grid-row: auto;
+    justify-self: start;
+    min-height: 32px;
+  }
+
+  .conversation-financial-overview-grid {
+    gap: 6px;
   }
 
   .conversation-activity-item {

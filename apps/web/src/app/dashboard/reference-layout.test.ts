@@ -221,12 +221,14 @@ describe('client reference presentation source', () => {
       dashboardSource.indexOf('function clearWhatsAppRestoreQuery'),
     );
 
-    expect(restoreQuerySource).toContain('replaceDashboardLocation({');
+    expect(restoreQuerySource).toContain('const location = {');
     expect(restoreQuerySource).toContain("view: 'conversations'");
     expect(restoreQuerySource).toContain('conversationId: context.conversationId');
     expect(restoreQuerySource).toContain(
       '...(context.contactPanelOpen ? { contactPanelOpen: true } : {})',
     );
+    expect(restoreQuerySource).toContain('replaceDashboardLocation(location);');
+    expect(restoreQuerySource).toContain("pushDashboardLocation(location, 'conversation');");
     expect(restoreQuerySource).not.toContain('clientId');
     expect(restoreQuerySource).not.toContain('receivableId');
     expect(restoreQuerySource).not.toContain('tab');

@@ -1,14 +1,45 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { LogIn } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { buildApiUrl } from '../../lib/api';
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+
+    async function checkExistingSession() {
+      try {
+        const response = await fetch(buildApiUrl('/auth/me'), {
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        if (response.ok) {
+          router.replace('/dashboard');
+          return;
+        }
+      } catch (err) {
+        if (!active || (err instanceof Error && err.name === 'AbortError')) return;
+      } finally {
+        if (active) setCheckingSession(false);
+      }
+    }
+
+    void checkExistingSession();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -28,12 +59,20 @@ export default function LoginPage() {
         return;
       }
 
-      window.location.assign('/dashboard');
+      router.replace('/dashboard');
     } catch {
       setError('Não foi possível conectar a API.');
     } finally {
       setLoading(false);
     }
+  }
+
+  if (checkingSession) {
+    return (
+      <main className="login-page">
+        <section className="login-panel">Verificando sessão...</section>
+      </main>
+    );
   }
 
   return (

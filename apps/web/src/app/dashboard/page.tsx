@@ -95,6 +95,7 @@ import {
   buildDashboardLocationPath,
   isDashboardClientLocation,
   isDashboardConversationLocation,
+  parseDashboardLocation,
 } from './dashboard-location';
 import {
   formatUnreadBadge,
@@ -405,9 +406,15 @@ type WhatsAppReturnContext = {
   view: 'conversations';
 };
 
-type WhatsAppRestoreRequest = WhatsAppReturnContext & {
+type WhatsAppHistoryRestoreRequest = {
+  contactPanelOpen?: boolean;
+  conversationId: string | null;
   sequence: number;
+  view: 'conversations';
 };
+
+const dashboardHistoryStateKey = 'crmDashboardLocation';
+type DashboardHistoryState = 'conversation' | 'conversations-list';
 
 type FinanceTab = 'summary' | 'receivables' | 'entries' | 'expenses';
 type FinanceQuickFilterId =
@@ -447,14 +454,46 @@ function replaceDashboardQuery(params: Record<string, string | null | undefined>
   });
 
   const query = url.searchParams.toString();
-  window.history.replaceState(null, '', `${url.pathname}${query ? `?${query}` : ''}`);
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${url.pathname}${query ? `?${query}` : ''}`,
+  );
 }
 
 function replaceDashboardLocation(location: Parameters<typeof buildDashboardLocationPath>[1]) {
   if (typeof window === 'undefined') return;
 
   const url = new URL(window.location.href);
-  window.history.replaceState(null, '', buildDashboardLocationPath(url.pathname, location));
+  window.history.replaceState(
+    window.history.state,
+    '',
+    buildDashboardLocationPath(url.pathname, location),
+  );
+}
+
+function pushDashboardLocation(
+  location: Parameters<typeof buildDashboardLocationPath>[1],
+  state: DashboardHistoryState,
+) {
+  if (typeof window === 'undefined') return;
+
+  const url = new URL(window.location.href);
+  window.history.pushState(
+    { ...(window.history.state ?? {}), [dashboardHistoryStateKey]: state },
+    '',
+    buildDashboardLocationPath(url.pathname, location),
+  );
+}
+
+function currentDashboardHistoryState(): DashboardHistoryState | null {
+  if (typeof window === 'undefined') return null;
+
+  const state: unknown = window.history.state;
+  if (!state || typeof state !== 'object') return null;
+
+  const value = Reflect.get(state, dashboardHistoryStateKey) as unknown;
+  return value === 'conversation' || value === 'conversations-list' ? value : null;
 }
 
 function setWhatsAppReceivableQuery({
@@ -485,11 +524,24 @@ function setWhatsAppConversationQuery(context: {
   contactPanelOpen?: boolean;
   conversationId: string;
 }) {
-  replaceDashboardLocation({
+  const location = {
     view: 'conversations',
     conversationId: context.conversationId,
     ...(context.contactPanelOpen ? { contactPanelOpen: true } : {}),
-  });
+  } as const;
+
+  const currentParams = currentDashboardParams();
+  const currentConversationId = currentParams?.get('conversationId')?.trim();
+  if (currentParams && isDashboardConversationLocation(currentParams) && currentConversationId) {
+    replaceDashboardLocation(location);
+    return;
+  }
+
+  pushDashboardLocation(location, 'conversation');
+}
+
+function setWhatsAppConversationListLocation() {
+  pushDashboardLocation({ view: 'conversations', conversationId: null }, 'conversations-list');
 }
 
 function clearWhatsAppRestoreQuery() {
@@ -627,6 +679,8 @@ type DeletionDialogTarget =
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [sessionError, setSessionError] = useState('');
+  const [sessionReloadSequence, setSessionReloadSequence] = useState(0);
   const [view, setView] = useState<View>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -643,7 +697,7 @@ export default function DashboardPage() {
   const [clientDetailTabRequest, setClientDetailTabRequest] =
     useState<ClientDetailTabRequest | null>(null);
   const [whatsAppRestoreRequest, setWhatsAppRestoreRequest] =
-    useState<WhatsAppRestoreRequest | null>(null);
+    useState<WhatsAppHistoryRestoreRequest | null>(null);
   const [renewalTarget, setRenewalTarget] = useState<RenewalTarget | null>(null);
   const [reactivationTarget, setReactivationTarget] = useState<ReactivationTarget | null>(null);
   const [renewalReversalTarget, setRenewalReversalTarget] = useState<RenewalReversalTarget | null>(
@@ -710,26 +764,47 @@ export default function DashboardPage() {
   }, [clientsPage, planId, search, status]);
 
   useEffect(() => {
-    async function loadSession() {
-      try {
-        const response = await fetch(buildApiUrl('/auth/me'), { credentials: 'include' });
+    const controller = new AbortController();
+    let active = true;
 
-        if (!response.ok) {
-          window.location.assign('/login');
+    async function loadSession() {
+      setLoadingSession(true);
+      setSessionError('');
+
+      try {
+        const response = await fetch(buildApiUrl('/auth/me'), {
+          credentials: 'include',
+          signal: controller.signal,
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          window.location.replace('/login');
           return;
         }
 
+        if (!response.ok) throw new Error('Falha temporária ao validar a sessão.');
+
         const payload = (await response.json()) as { user: AuthenticatedUser };
-        setUser(payload.user);
-      } catch {
-        window.location.assign('/login');
+        if (active) setUser(payload.user);
+      } catch (err) {
+        if (!active || (err instanceof Error && err.name === 'AbortError')) return;
+        setSessionError(
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível validar a sessão. Verifique sua conexão e tente novamente.',
+        );
       } finally {
-        setLoadingSession(false);
+        if (active) setLoadingSession(false);
       }
     }
 
     void loadSession();
-  }, []);
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [sessionReloadSequence]);
 
   useEffect(() => {
     if (!loadingSession && user) {
@@ -818,6 +893,40 @@ export default function DashboardPage() {
     };
   }, [loadingSession, user]);
 
+  useEffect(() => {
+    if (loadingSession || !user || typeof window === 'undefined') return undefined;
+
+    const handleDashboardPopState = () => {
+      const location = parseDashboardLocation(new URLSearchParams(window.location.search));
+
+      if (location?.view === 'conversations') {
+        setClientDetailTabRequest(null);
+        setSelectedClient(null);
+        setWhatsAppRestoreRequest({
+          ...(location.contactPanelOpen ? { contactPanelOpen: true } : {}),
+          conversationId: location.conversationId ?? null,
+          sequence: Date.now(),
+          view: 'conversations',
+        });
+        setView('conversations');
+        return;
+      }
+
+      setWhatsAppRestoreRequest(null);
+      if (!location) {
+        setView('dashboard');
+        return;
+      }
+
+      if (location.view === 'clients') {
+        setView('clients');
+      }
+    };
+
+    window.addEventListener('popstate', handleDashboardPopState);
+    return () => window.removeEventListener('popstate', handleDashboardPopState);
+  }, [loadingSession, user]);
+
   async function reloadAfterMutation() {
     await loadData();
     setClientFormOpen(false);
@@ -900,10 +1009,46 @@ export default function DashboardPage() {
       setSettingsInitialSection('overview');
     }
 
+    if (nextView === 'conversations' && view !== 'conversations') {
+      setWhatsAppConversationListLocation();
+      setView('conversations');
+      return;
+    }
+
     clearWhatsAppRestoreQuery();
 
     setView(nextView);
   }
+
+  const handleBackToWhatsAppConversationList = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (currentDashboardHistoryState() === 'conversation') {
+      window.history.back();
+      return;
+    }
+
+    replaceDashboardLocation({ view: 'conversations', conversationId: null });
+    setWhatsAppRestoreRequest({
+      conversationId: null,
+      sequence: Date.now(),
+      view: 'conversations',
+    });
+    setView('conversations');
+  }, []);
+
+  const handleBackToDashboard = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (currentDashboardHistoryState() === 'conversations-list') {
+      window.history.back();
+      return;
+    }
+
+    clearWhatsAppRestoreQuery();
+    setWhatsAppRestoreRequest(null);
+    setView('dashboard');
+  }, []);
 
   function restoreWhatsAppContext(context: WhatsAppReturnContext) {
     setWhatsAppRestoreRequest({
@@ -1128,6 +1273,29 @@ export default function DashboardPage() {
     );
   }
 
+  if (!user) {
+    return (
+      <main className="login-page">
+        <section className="login-panel" aria-labelledby="session-error-title">
+          <h1 id="session-error-title" className="login-title">
+            Não foi possível validar sua sessão
+          </h1>
+          <p className="login-subtitle">
+            {sessionError || 'Verifique sua conexão e tente novamente.'}
+          </p>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => setSessionReloadSequence((current) => current + 1)}
+          >
+            <RefreshCw aria-hidden="true" size={18} />
+            Tentar novamente
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <WhatsAppRealtimeProvider value={whatsappRealtime}>
       <AdminShell
@@ -1294,7 +1462,8 @@ export default function DashboardPage() {
         {view === 'conversations' ? (
           <WhatsAppInbox
             restoreRequest={whatsAppRestoreRequest}
-            onBackToDashboard={() => handlePrimaryNavigation('dashboard')}
+            onBackToConversationList={handleBackToWhatsAppConversationList}
+            onBackToDashboard={handleBackToDashboard}
             onOpenAutoReplySettings={() => {
               setSettingsInitialSection('whatsapp');
               setView('settings');

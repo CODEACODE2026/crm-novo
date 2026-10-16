@@ -182,7 +182,7 @@ type ConversationOpenClientOptions = {
 
 type ConversationRestoreRequest = {
   contactPanelOpen?: boolean;
-  conversationId: string;
+  conversationId: string | null;
   sequence: number;
   view: 'conversations';
 };
@@ -446,6 +446,7 @@ export function stopConversationPixCopyEvent(
 }
 
 export function WhatsAppInbox({
+  onBackToConversationList,
   onBackToDashboard,
   onConversationLocationChange,
   onOpenAutoReplySettings,
@@ -455,6 +456,7 @@ export function WhatsAppInbox({
   onSummaryRefreshRequest,
   restoreRequest,
 }: {
+  onBackToConversationList: () => void;
   onBackToDashboard: () => void;
   onConversationLocationChange: (context: ConversationLocationContext) => void;
   onOpenAutoReplySettings: () => void;
@@ -1557,7 +1559,20 @@ export function WhatsAppInbox({
 
   useEffect(() => {
     const request = restoreRequest;
-    if (!request?.conversationId) return undefined;
+    if (!request) return undefined;
+
+    if (!request.conversationId) {
+      activeConversationIdRef.current = null;
+      openMessageSearchGenerationRef.current += 1;
+      resetMessageSearch();
+      setSelectedConversation(null);
+      setMessages([]);
+      messagesRef.current = [];
+      setContactPanelOpen(false);
+      setMobileMode('list');
+      onRestoreRequestConsumed?.(request.sequence);
+      return undefined;
+    }
 
     let active = true;
     const restoreConversationId = request.conversationId;
@@ -3625,7 +3640,7 @@ export function WhatsAppInbox({
                 resolving={resolving}
                 onAvatarError={handleAvatarImageError}
                 onAvatarPreview={openAvatarPreview}
-                onBack={() => setMobileMode('list')}
+                onBack={onBackToConversationList}
                 onOpenClientPanel={() => setContactPanelOpen(true)}
                 onResolve={() => void resolveSelectedConversation()}
                 onToggleSearch={() => {

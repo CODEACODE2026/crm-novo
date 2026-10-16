@@ -687,7 +687,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('conversationId');
     expect(whatsAppInboxSource).toContain('contactPanelOpen');
     expect(whatsAppInboxSource).toContain("tab: 'receivables'");
-    expect(whatsAppInboxSource).toContain('if (!request?.conversationId) return undefined');
+    expect(whatsAppInboxSource).toContain('if (!request.conversationId)');
     expect(whatsAppInboxSource).toContain('openContactPanel: restoreContactPanelOpen');
     expect(whatsAppInboxSource).toContain('onConversationLocationChange({');
     expect(whatsAppInboxSource).toContain('conversationId: selectedConversation.id');
@@ -3318,9 +3318,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('aria-label="Voltar ao Dashboard"');
     expect(whatsAppInboxSource).toContain('className="conversation-dashboard-back"');
     expect(whatsAppInboxSource).toContain('onClick={onBackToDashboard}');
-    expect(dashboardSource).toContain(
-      "onBackToDashboard={() => handlePrimaryNavigation('dashboard')}",
-    );
+    expect(dashboardSource).toContain('onBackToDashboard={handleBackToDashboard}');
     expect(globalStylesSource).toContain('.conversation-dashboard-back,');
     expect(globalStylesSource).toContain('.conversation-dashboard-back {');
     expect(globalStylesSource).toContain('flex: 0 0 44px;');

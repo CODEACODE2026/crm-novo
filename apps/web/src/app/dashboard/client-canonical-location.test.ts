@@ -10,9 +10,10 @@ const dashboardPageSource = dashboardSource.slice(
   dashboardSource.indexOf('export default function DashboardPage'),
   dashboardSource.indexOf('function viewTitle'),
 );
+const restoreEffectStart = dashboardPageSource.indexOf("if (requestedView === 'conversations')");
 const restoreEffectSource = dashboardPageSource.slice(
-  dashboardPageSource.indexOf("if (requestedView === 'conversations')"),
-  dashboardPageSource.indexOf('return () => {'),
+  restoreEffectStart,
+  dashboardPageSource.indexOf('  }, [loadingSession, user]);', restoreEffectStart),
 );
 const clientsViewSource = dashboardSource.slice(
   dashboardSource.indexOf('function ClientsView'),

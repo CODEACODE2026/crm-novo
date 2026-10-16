@@ -790,30 +790,176 @@
 }
 
 .conversation-attendance-item {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
-  display: grid;
-  gap: 0.4rem;
-  padding: 0.75rem;
+  background: var(--surface);
 }
 
-.conversation-attendance-item dl {
+.conversation-attendance-toggle {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 72px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 9px 34px 9px 10px;
+  text-align: left;
+}
+
+.conversation-attendance-toggle:hover {
+  background: var(--surface-soft);
+}
+
+.conversation-attendance-toggle:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.conversation-attendance-primary-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.conversation-attendance-primary-row > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attendance-primary-row .attendance-status {
+  flex: 0 0 auto;
+}
+
+.conversation-attendance-compact-date,
+.conversation-attendance-compact-metrics {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attendance-compact-date {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.conversation-attendance-compact-metrics {
+  justify-self: end;
+}
+
+.conversation-attendance-auto-reply-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.conversation-attendance-note-preview {
+  overflow: hidden;
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attendance-chevron {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  color: var(--muted);
+  transform: translateY(-50%);
+  transition: transform 140ms ease;
+}
+
+.conversation-attendance-item.is-expanded .conversation-attendance-chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.conversation-attendance-details {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.conversation-attendance-details > time,
+.conversation-attendance-details > small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.conversation-attendance-full-category,
+.conversation-attendance-full-note {
+  overflow-wrap: anywhere;
+}
+
+.conversation-attendance-details dl {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
   margin: 0;
 }
 
-.conversation-attendance-item dt,
-.conversation-attendance-item dd,
-.conversation-attendance-item p {
+.conversation-attendance-details dt,
+.conversation-attendance-details dd,
+.conversation-attendance-details p {
   margin: 0;
 }
 
-.conversation-attendance-item dt,
-.conversation-attendance-item small {
+.conversation-attendance-details dt,
+.conversation-attendance-details small {
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+@media (max-width: 620px) {
+  .conversation-attendance-list {
+    gap: 0.5rem;
+  }
+
+  .conversation-attendance-toggle {
+    min-height: 68px;
+    gap: 2px 8px;
+    padding: 8px 32px 8px 9px;
+  }
+
+  .conversation-attendance-primary-row {
+    gap: 6px;
+  }
+
+  .conversation-attendance-primary-row > strong {
+    font-size: 0.78rem;
+  }
+
+  .conversation-attendance-compact-date,
+  .conversation-attendance-compact-metrics,
+  .conversation-attendance-note-preview {
+    font-size: 0.67rem;
+  }
+
+  .conversation-attendance-details {
+    padding: 9px;
+  }
 }
 
 @media (max-width: 720px) {
@@ -5927,11 +6073,6 @@ video.conversation-saved-sticker-preview {
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
   padding: 20px;
-}
-
-.conversation-contact-tabpanel .conversation-attendance-history article {
-  gap: 7px;
-  padding: 10px;
 }
 
 .conversation-contact-info .conversation-client-summary-grid {

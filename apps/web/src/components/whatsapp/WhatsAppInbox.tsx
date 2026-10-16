@@ -20,6 +20,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
+  ChevronDown,
   CircleCheck,
   Clock3,
   Copy,
@@ -8509,6 +8510,31 @@ function attendanceDurationLabel(start: string, end: string) {
   return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`;
 }
 
+function attendanceCompactDurationLabel(start: string, end: string | null) {
+  if (!end) return '-';
+  const milliseconds = Math.max(0, new Date(end).getTime() - new Date(start).getTime());
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function formatAttendanceCompactDate(value: string) {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'America/Sao_Paulo',
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('day')}/${part('month')}/${part('year')} · ${part('hour')}:${part('minute')}`;
+}
+
 function attendanceElapsedLabel(openedAt: string) {
   return attendanceDurationLabel(openedAt, new Date().toISOString());
 }
@@ -8557,6 +8583,14 @@ function ConversationAttendanceHistory({
   loading: boolean;
   onLoadMore: () => void;
 }) {
+  const [expandedAttendanceId, setExpandedAttendanceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setExpandedAttendanceId((current) =>
+      current && attendances.some((attendance) => attendance.id === current) ? current : null,
+    );
+  }, [attendances]);
+
   return (
     <section className="conversation-contact-section conversation-attendance-history">
       <div className="conversation-contact-section-title">
@@ -8572,59 +8606,130 @@ function ConversationAttendanceHistory({
         <p className="muted-value">Nenhum atendimento registrado.</p>
       ) : null}
       <div className="conversation-attendance-list">
-        {attendances.map((attendance) => (
-          <article key={attendance.id} className="conversation-attendance-item">
-            <header>
-              <strong>
-                {attendance.category?.name ?? attendanceStatusLabel(attendance.status)}
-              </strong>
-              <span className={`attendance-status ${attendance.status.toLowerCase()}`}>
-                {attendanceStatusLabel(attendance.status)}
-              </span>
-            </header>
-            <small>
-              {new Intl.DateTimeFormat('pt-BR', {
-                dateStyle: 'short',
-                timeStyle: 'short',
-                timeZone: 'America/Sao_Paulo',
-              }).format(new Date(attendance.openedAt))}
-            </small>
-            <dl>
-              <div>
-                <dt>Primeira resposta</dt>
-                <dd>
-                  {attendance.firstAgentReplyAt
-                    ? attendanceDurationLabel(attendance.openedAt, attendance.firstAgentReplyAt)
-                    : '-'}
-                </dd>
-              </div>
-              <div>
-                <dt>Tempo total</dt>
-                <dd>
-                  {attendance.resolvedAt
-                    ? attendanceDurationLabel(attendance.openedAt, attendance.resolvedAt)
-                    : '-'}
-                </dd>
-              </div>
-            </dl>
-            {attendance.autoReply.sent ? (
-              <div className="attendance-history-auto-reply">
-                <Bot aria-hidden="true" size={14} />
-                <span>
-                  Resposta automática: Sim · {autoReplyModeLabel(attendance.autoReply.mode)} ·{' '}
-                  {formatAutoReplyDateTime(attendance.autoReply.lastSentAt)}
-                  {attendance.autoReply.count && attendance.autoReply.count > 1
-                    ? ` · ${attendance.autoReply.count} envios`
-                    : ''}
+        {attendances.map((attendance) => {
+          const expanded = expandedAttendanceId === attendance.id;
+          const detailsId = `attendance-history-details-${attendance.id}`;
+          const categoryName =
+            attendance.category?.name ?? attendanceStatusLabel(attendance.status);
+
+          return (
+            <article
+              key={attendance.id}
+              className={`conversation-attendance-item${expanded ? ' is-expanded' : ''}`}
+            >
+              <button
+                type="button"
+                className="conversation-attendance-toggle"
+                aria-expanded={expanded}
+                aria-controls={detailsId}
+                onClick={() =>
+                  setExpandedAttendanceId((current) =>
+                    current === attendance.id ? null : attendance.id,
+                  )
+                }
+              >
+                <span className="conversation-attendance-primary-row">
+                  <strong title={categoryName}>{categoryName}</strong>
+                  <span className={`attendance-status ${attendance.status.toLowerCase()}`}>
+                    {attendanceStatusLabel(attendance.status)}
+                  </span>
                 </span>
-              </div>
-            ) : null}
-            {attendance.resolutionNote ? <p>{attendance.resolutionNote}</p> : null}
-            {attendance.resolvedBy ? (
-              <small>Resolvido por {attendance.resolvedBy.name}</small>
-            ) : null}
-          </article>
-        ))}
+                <span className="conversation-attendance-compact-date">
+                  <time dateTime={attendance.openedAt}>
+                    {formatAttendanceCompactDate(attendance.openedAt)}
+                  </time>
+                  {attendance.autoReply.sent ? (
+                    <span
+                      className="conversation-attendance-auto-reply-indicator"
+                      title="Resposta automática enviada"
+                    >
+                      <Bot aria-hidden="true" size={13} />
+                      <span className="sr-only">Resposta automática enviada</span>
+                    </span>
+                  ) : null}
+                </span>
+                <span className="conversation-attendance-compact-metrics">
+                  Resp.{' '}
+                  {attendanceCompactDurationLabel(
+                    attendance.openedAt,
+                    attendance.firstAgentReplyAt,
+                  )}{' '}
+                  · Total{' '}
+                  {attendanceCompactDurationLabel(attendance.openedAt, attendance.resolvedAt)}
+                </span>
+                {attendance.resolutionNote ? (
+                  <span className="conversation-attendance-note-preview">
+                    {attendance.resolutionNote}
+                  </span>
+                ) : null}
+                <ChevronDown
+                  aria-hidden="true"
+                  className="conversation-attendance-chevron"
+                  size={17}
+                />
+              </button>
+              {expanded ? (
+                <div id={detailsId} className="conversation-attendance-details">
+                  <strong className="conversation-attendance-full-category">{categoryName}</strong>
+                  <time dateTime={attendance.openedAt}>
+                    {new Intl.DateTimeFormat('pt-BR', {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                      timeZone: 'America/Sao_Paulo',
+                    }).format(new Date(attendance.openedAt))}
+                  </time>
+                  <dl>
+                    <div>
+                      <dt>Primeira resposta</dt>
+                      <dd>
+                        {attendance.firstAgentReplyAt
+                          ? attendanceDurationLabel(
+                              attendance.openedAt,
+                              attendance.firstAgentReplyAt,
+                            )
+                          : '-'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Tempo total</dt>
+                      <dd>
+                        {attendance.resolvedAt
+                          ? attendanceDurationLabel(attendance.openedAt, attendance.resolvedAt)
+                          : '-'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Recebidas</dt>
+                      <dd>{attendance.inboundMessagesCount}</dd>
+                    </div>
+                    <div>
+                      <dt>Manuais</dt>
+                      <dd>{attendance.outboundMessagesCount}</dd>
+                    </div>
+                  </dl>
+                  {attendance.autoReply.sent ? (
+                    <div className="attendance-history-auto-reply">
+                      <Bot aria-hidden="true" size={14} />
+                      <span>
+                        Resposta automática: Sim · {autoReplyModeLabel(attendance.autoReply.mode)} ·{' '}
+                        {formatAutoReplyDateTime(attendance.autoReply.lastSentAt)}
+                        {attendance.autoReply.count && attendance.autoReply.count > 1
+                          ? ` · ${attendance.autoReply.count} envios`
+                          : ''}
+                      </span>
+                    </div>
+                  ) : null}
+                  {attendance.resolutionNote ? (
+                    <p className="conversation-attendance-full-note">{attendance.resolutionNote}</p>
+                  ) : null}
+                  {attendance.resolvedBy ? (
+                    <small>Resolvido por {attendance.resolvedBy.name}</small>
+                  ) : null}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
       </div>
       {hasMore ? (
         <Button disabled={loading} size="sm" variant="secondary" onClick={onLoadMore}>

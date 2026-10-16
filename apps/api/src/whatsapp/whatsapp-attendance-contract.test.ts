@@ -8,6 +8,10 @@ const attendanceSource = readFileSync(
   join(apiRoot, 'src/whatsapp/whatsapp-attendance.service.ts'),
   'utf8',
 );
+const analyticsSource = readFileSync(
+  join(apiRoot, 'src/whatsapp/whatsapp-attendance-analytics.service.ts'),
+  'utf8',
+);
 const migrationSource = readFileSync(
   join(apiRoot, 'prisma/migrations/20261016013000_add_whatsapp_attendances/migration.sql'),
   'utf8',
@@ -89,5 +93,15 @@ describe('ATENDIMENTO1 integration contracts', () => {
     expect(serviceSource).toContain('this.emitConversationUpdated(conversation.id)');
     expect(attendanceSource).toContain('this.realtime?.emitConversationUpdated(conversationId)');
     expect(attendanceSource).not.toMatch(/["']attendance\.(created|updated|resolved)/);
+  });
+
+  it('aggregates analytics in PostgreSQL with parametrized filters and Sao Paulo buckets', () => {
+    expect(analyticsSource).toContain("const analyticsTimeZone = 'America/Sao_Paulo'");
+    expect(analyticsSource).toContain('COUNT(*)::int AS "total"');
+    expect(analyticsSource).toContain('AVG(EXTRACT(EPOCH FROM');
+    expect(analyticsSource).toContain('date_trunc(${volumeGranularity}');
+    expect(analyticsSource).toContain('AT TIME ZONE ${analyticsTimeZone}');
+    expect(analyticsSource).toContain('Prisma.join(conditions');
+    expect(analyticsSource).not.toMatch(/\$queryRawUnsafe|resolutionNote|rawMetadata/);
   });
 });

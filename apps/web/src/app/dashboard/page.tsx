@@ -91,6 +91,7 @@ import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
 import { FinanceClientAutocomplete } from '../../components/clients/finance-client-autocomplete';
 import { WhatsAppInbox } from '../../components/whatsapp/WhatsAppInbox';
+import { WhatsAppAttendanceAnalyticsView } from '../../components/whatsapp/WhatsAppAttendanceAnalytics';
 import {
   buildDashboardLocationPath,
   isDashboardClientLocation,
@@ -375,6 +376,7 @@ import { sortPlansByDuration } from '../../lib/plan-utils';
 
 type View =
   | 'dashboard'
+  | 'attendances'
   | 'clients'
   | 'conversations'
   | 'finance'
@@ -427,6 +429,7 @@ type FinanceQuickFilterId =
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'attendances', label: 'Atendimentos', icon: BarChart3 },
   { id: 'clients', label: 'Clientes', icon: Users },
   { id: 'conversations', label: 'Conversas', icon: MessagesSquare },
   { id: 'referrals', label: 'Indicações', icon: Gift },
@@ -1363,6 +1366,16 @@ export default function DashboardPage() {
             }}
           />
         ) : null}
+        {view === 'attendances' ? (
+          <WhatsAppAttendanceAnalyticsView
+            onOpenClient={(clientId) => {
+              void getClient(clientId).then((client) => {
+                setSelectedClient(client);
+                navigateToClientDetail(clientId);
+              });
+            }}
+          />
+        ) : null}
         {view === 'clients' ? (
           <ClientsView
             clientFormOpen={clientFormOpen}
@@ -1626,6 +1639,7 @@ export default function DashboardPage() {
 
 function viewTitle(view: View) {
   const labels = {
+    attendances: 'Atendimentos',
     automations: 'Automações',
     billing: 'Cobranças',
     clients: 'Clientes',
@@ -1646,6 +1660,7 @@ function viewTitle(view: View) {
 
 function viewSubtitle(view: View) {
   const subtitles = {
+    attendances: 'Indicadores operacionais do atendimento WhatsApp',
     automations: 'Rotinas operacionais e recuperação',
     billing: 'Cobranças, envios e acompanhamento',
     clients: 'Base de clientes, referências e histórico',

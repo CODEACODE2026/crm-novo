@@ -58,6 +58,8 @@ import { ListWhatsAppAttendancesDto } from './dto/list-whatsapp-attendances.dto'
 import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
 import { UpdateWhatsAppAttendanceCategoryDto } from './dto/update-whatsapp-attendance-category.dto';
 import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
+import { WhatsAppAttendanceAnalyticsService } from './whatsapp-attendance-analytics.service';
+import { WhatsAppAttendanceAnalyticsDto } from './dto/whatsapp-attendance-analytics.dto';
 import { WhatsAppQuickRepliesService } from './whatsapp-quick-replies.service';
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppService } from './whatsapp.service';
@@ -95,6 +97,8 @@ export class WhatsAppController {
     private readonly autoReplyService: WhatsAppAutoReplyService,
     @Inject(WhatsAppAttendanceService)
     private readonly attendanceService: WhatsAppAttendanceService,
+    @Inject(WhatsAppAttendanceAnalyticsService)
+    private readonly attendanceAnalyticsService: WhatsAppAttendanceAnalyticsService,
   ) {}
 
   @Get('connection')
@@ -521,6 +525,11 @@ export class WhatsAppController {
     @Query() query: ListWhatsAppAttendancesDto,
   ) {
     return this.attendanceService.listConversationAttendances(id, query);
+  }
+
+  @Get('attendances/analytics')
+  attendanceAnalytics(@Query() query: WhatsAppAttendanceAnalyticsDto) {
+    return this.attendanceAnalyticsService.analytics(query);
   }
 
   @Get('attendances/:id')

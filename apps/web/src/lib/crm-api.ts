@@ -768,6 +768,63 @@ export interface WhatsAppAttendanceCategory {
   updatedAt?: string;
   _count?: { attendances: number };
 }
+export interface WhatsAppAttendanceAnalytics {
+  period: {
+    from: string;
+    to: string;
+    timezone: 'America/Sao_Paulo';
+    granularity: 'day' | 'month';
+  };
+  summary: {
+    totalAttendances: number;
+    pending: number;
+    inProgress: number;
+    resolved: number;
+    resolvedToday: number;
+    resolutionRate: number;
+    firstResponseAvgSeconds: number;
+    resolutionAvgSeconds: number;
+    receivedMessages: number;
+    sentManualMessages: number;
+  };
+  statusDistribution: Array<{
+    status: WhatsAppAttendanceStatus;
+    count: number;
+    percentage: number;
+  }>;
+  topCategories: Array<{
+    categoryId: string;
+    name: string;
+    color: WhatsAppConversationLabelColor;
+    count: number;
+    percentage: number;
+  }>;
+  topClients: Array<{
+    clientId: string;
+    clientName: string;
+    phone: string;
+    attendancesCount: number;
+    resolvedCount: number;
+    avgResolutionSeconds: number;
+  }>;
+  dailyVolume: Array<{ period: string; opened: number; resolved: number }>;
+  hourlyDistribution: Array<{ hour: number; count: number }>;
+  weekdayDistribution: Array<{ weekday: number; count: number }>;
+  waitingFirstResponse: WhatsAppAttendanceAnalyticsOpenItem[];
+  oldestOpenAttendances: WhatsAppAttendanceAnalyticsOpenItem[];
+}
+export interface WhatsAppAttendanceAnalyticsOpenItem {
+  attendanceId: string;
+  conversationId: string;
+  clientId: string | null;
+  clientName: string;
+  phone: string;
+  status: Exclude<WhatsAppAttendanceStatus, 'RESOLVED'>;
+  openedAt: string;
+  ageSeconds: number;
+  inboundMessagesCount: number;
+  outboundMessagesCount: number;
+}
 export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
 export type WhatsAppConversationMessageStatus =
   'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
@@ -3149,6 +3206,27 @@ export function resolveWhatsAppConversation(
 export function getWhatsAppActiveAttendance(conversationId: string) {
   return apiFetch<WhatsAppAttendance | null>(
     `/whatsapp/conversations/${conversationId}/attendance`,
+  );
+}
+
+export function getWhatsAppAttendanceAnalytics(
+  filters: {
+    connectionId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    categoryId?: string;
+    status?: WhatsAppAttendanceStatus;
+  } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.connectionId) params.set('connectionId', filters.connectionId);
+  if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) params.set('dateTo', filters.dateTo);
+  if (filters.categoryId) params.set('categoryId', filters.categoryId);
+  if (filters.status) params.set('status', filters.status);
+  const query = params.toString();
+  return apiFetch<WhatsAppAttendanceAnalytics>(
+    `/whatsapp/attendances/analytics${query ? `?${query}` : ''}`,
   );
 }
 

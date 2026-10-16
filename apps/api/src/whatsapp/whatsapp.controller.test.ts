@@ -167,12 +167,16 @@ describe('WhatsAppController conversation inbox endpoints', () => {
       getAttendance: vi.fn().mockResolvedValue({ id: 'attendance-id' }),
       listClientAttendances: vi.fn().mockResolvedValue({ items: [] }),
     };
+    const attendanceAnalytics = {
+      analytics: vi.fn().mockResolvedValue({ summary: { totalAttendances: 0 } }),
+    };
     const subject = new WhatsAppController(
       service as never,
       quickReplies as never,
       realtime as never,
       autoReply as never,
       attendance as never,
+      attendanceAnalytics as never,
     );
     const response = { setHeader: vi.fn() };
     const request = { on: vi.fn() };
@@ -328,6 +332,9 @@ describe('WhatsAppController conversation inbox endpoints', () => {
     await expect(
       subject.listClientAttendances('client-id', { page: 1, limit: 5 }),
     ).resolves.toEqual({ items: [] });
+    await expect(subject.attendanceAnalytics({})).resolves.toEqual({
+      summary: { totalAttendances: 0 },
+    });
     subject.events(request as never, response as never);
 
     expect(service.listConversations).toHaveBeenCalledWith({ page: 1, limit: 20 });

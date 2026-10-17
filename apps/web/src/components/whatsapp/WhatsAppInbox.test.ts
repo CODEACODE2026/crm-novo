@@ -2297,6 +2297,25 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(nextConversationListRequestGeneration(currentGeneration, true)).toBe(currentGeneration);
   });
 
+  it('preserves backend conversation order while updating existing rows and appending the next page', () => {
+    const current = [
+      conversation('pending-old', { lastMessageAt: '2026-10-01T10:00:00.000Z' }),
+      conversation('pending-new', { lastMessageAt: '2026-10-16T10:00:00.000Z' }),
+    ];
+    const incoming = [
+      conversation('pending-new', {
+        lastMessageAt: '2026-10-16T11:00:00.000Z',
+        unreadCount: 2,
+      }),
+      conversation('in-progress', { lastMessageAt: '2026-10-17T10:00:00.000Z' }),
+    ];
+
+    const merged = mergeConversationLists(current, incoming);
+
+    expect(merged.map((item) => item.id)).toEqual(['pending-old', 'pending-new', 'in-progress']);
+    expect(merged[1]?.unreadCount).toBe(2);
+  });
+
   it('discards stale SSE and polling list responses after read invalidates their generation', () => {
     const queryKey = JSON.stringify({ filter: 'all', search: '', statusFilter: '' });
     const sources = ['message.created', 'conversation.updated', 'polling'];
@@ -3040,6 +3059,24 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       whatsAppInboxSource.indexOf('function ConversationLabelManager('),
     );
     expect(forwardModalSource).toContain("attendanceStatus: 'ALL'");
+  });
+
+  it('uses backend attendance order for refresh, realtime replacement and pagination', () => {
+    const loadConversationsSource = whatsAppInboxSource.slice(
+      whatsAppInboxSource.indexOf('const loadConversations = useCallback('),
+      whatsAppInboxSource.indexOf('const loadMessages = useCallback('),
+    );
+    const mergeListsSource = whatsAppInboxSource.slice(
+      whatsAppInboxSource.indexOf('export function mergeConversationLists('),
+      whatsAppInboxSource.indexOf('export function mergeConversationById('),
+    );
+
+    expect(loadConversationsSource).toContain('pageSize: requestPageSize');
+    expect(loadConversationsSource).toContain('if (append)');
+    expect(loadConversationsSource).toContain('return payload.items');
+    expect(loadConversationsSource).toContain('refreshPageCount * conversationsPageSize');
+    expect(mergeListsSource).not.toContain('.sort(');
+    expect(whatsAppInboxSource).toContain('scheduleRealtimeListRefresh(true)');
   });
 
   it('keeps text bubbles dense, content-sized and aligned without horizontal overflow', () => {

@@ -210,6 +210,7 @@ type ConversationLocationContext = {
 };
 
 const conversationsPageSize = 20;
+const conversationsRefreshPageSizeLimit = 100;
 const conversationMessagesPageSize = 30;
 const conversationMessageSearchPageSize = 50;
 const firstConversationPage = 1;
@@ -1059,10 +1060,18 @@ export function WhatsAppInbox({
       }
 
       try {
+        const refreshPageCount = Math.max(
+          firstConversationPage,
+          Math.ceil(conversationsRef.current.length / conversationsPageSize),
+        );
+        const requestPage = preserveLoaded ? firstConversationPage : page;
+        const requestPageSize = preserveLoaded
+          ? Math.min(conversationsRefreshPageSizeLimit, refreshPageCount * conversationsPageSize)
+          : conversationsPageSize;
         const filters: Parameters<typeof listWhatsAppConversations>[0] = {
           attendanceStatus: attendanceFilter,
-          page,
-          pageSize: conversationsPageSize,
+          page: requestPage,
+          pageSize: requestPageSize,
         };
         if (search) filters.search = search;
         if (statusFilter) filters.status = statusFilter;
@@ -1087,13 +1096,18 @@ export function WhatsAppInbox({
         }
 
         setConversations((current) => {
-          if (append || preserveLoaded) {
+          if (append) {
             return mergeConversationLists(current, payload.items);
           }
           return payload.items;
         });
-        setConversationPage(page);
-        setHasMoreConversations(payload.pagination.hasMore ?? page < payload.pagination.totalPages);
+        const loadedPage = preserveLoaded
+          ? Math.max(firstConversationPage, Math.ceil(payload.items.length / conversationsPageSize))
+          : page;
+        setConversationPage(loadedPage);
+        setHasMoreConversations(
+          payload.pagination.hasMore ?? requestPage < payload.pagination.totalPages,
+        );
         setSummary(payload.summary);
         onSummaryChange(payload.summary);
         setSelectedConversation((current) => {
@@ -10669,27 +10683,22 @@ function upsertConversationList(
   conversation: WhatsAppConversation,
 ) {
   const existing = current.filter((item) => item.id !== conversation.id);
-  return [conversation, ...existing].sort(
-    (left, right) =>
-      conversationListSortTime(right) - conversationListSortTime(left) ||
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
-  );
+  return [conversation, ...existing];
 }
 
 export function mergeConversationLists(
   current: WhatsAppConversation[],
   incoming: WhatsAppConversation[],
 ) {
-  const map = new Map<string, WhatsAppConversation>();
-  for (const conversation of [...current, ...incoming]) {
-    map.set(conversation.id, conversation);
+  const incomingById = new Map(incoming.map((conversation) => [conversation.id, conversation]));
+  const currentIds = new Set(current.map((conversation) => conversation.id));
+  const merged = current.map((conversation) => incomingById.get(conversation.id) ?? conversation);
+  for (const conversation of incoming) {
+    if (!currentIds.has(conversation.id)) {
+      merged.push(conversation);
+    }
   }
-  return [...map.values()].sort(
-    (left, right) =>
-      conversationListSortTime(right) - conversationListSortTime(left) ||
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() ||
-      right.id.localeCompare(left.id),
-  );
+  return merged;
 }
 
 export function mergeConversationById(
@@ -10873,10 +10882,6 @@ function mergeMessageSearchResults(
     map.set(result.message.id, result);
   }
   return [...map.values()].sort(compareMessageSearchResultsByTime);
-}
-
-function conversationListSortTime(conversation: WhatsAppConversation) {
-  return conversation.lastMessageAt ? new Date(conversation.lastMessageAt).getTime() : 0;
 }
 
 function createConversationRequestId() {

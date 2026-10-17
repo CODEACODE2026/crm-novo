@@ -373,12 +373,16 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).not.toContain('const nextPage = messagePage + 1');
   });
 
-  it('keeps conversation list merge ordering compatible with backend pagination', () => {
-    expect(conversationsSource).toContain('function conversationListSortTime');
-    expect(conversationsSource).toContain('conversation.lastMessageAt');
-    expect(conversationsSource).toContain('new Date(right.createdAt).getTime()');
-    expect(conversationsSource).not.toContain('lastMessageAt ?? right.updatedAt');
-    expect(conversationsSource).not.toContain('lastMessageAt ?? left.updatedAt');
+  it('keeps the backend conversation order compatible with refresh and pagination', () => {
+    const mergeListsSource = conversationsSource.slice(
+      conversationsSource.indexOf('export function mergeConversationLists('),
+      conversationsSource.indexOf('export function mergeConversationById('),
+    );
+
+    expect(conversationsSource).not.toContain('function conversationListSortTime');
+    expect(mergeListsSource).not.toContain('.sort(');
+    expect(conversationsSource).toContain('pageSize: requestPageSize');
+    expect(conversationsSource).toContain('return payload.items');
   });
 
   it('supports message bubbles, non-text placeholders, send, failure and retry with a fresh request id', () => {

@@ -1028,6 +1028,7 @@ export class WhatsAppService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, pageSizeLimit);
     const where = this.buildConversationWhere(query);
+    const attendanceStatus = query.attendanceStatus ?? WhatsAppConversationAttendanceFilter.ACTIVE;
 
     if (query.labelId) {
       const label = await this.prisma.whatsAppConversationLabel.findUnique({
@@ -1042,53 +1043,103 @@ export class WhatsAppService {
       where.labelAssignments = { some: { labelId: query.labelId } };
     }
 
-    const [items, total, totalUnreadConversations, unreadMessages] = await this.prisma.$transaction(
-      [
-        this.prisma.whatsAppConversation.findMany({
-          where,
-          include: {
-            client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
-            whatsAppConnection: {
-              select: { name: true, providerInstanceName: true, providerUserId: true },
+    const conversationInclude = {
+      client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+      whatsAppConnection: {
+        select: { name: true, providerInstanceName: true, providerUserId: true },
+      },
+      labelAssignments: {
+        select: { label: { select: { id: true, name: true, color: true } } },
+        orderBy: { label: { name: 'asc' as const } },
+      },
+      attendances: {
+        where: { status: { in: ['PENDING', 'IN_PROGRESS'] as const } },
+        select: {
+          id: true,
+          status: true,
+          openedAt: true,
+          firstAgentReplyAt: true,
+          inboundMessagesCount: true,
+          outboundMessagesCount: true,
+        },
+        orderBy: { openedAt: 'desc' as const },
+        take: 1,
+      },
+      autoReplyExecutions: {
+        where: { status: 'SENT' as const, sentAt: { not: null } },
+        select: { id: true, sentAt: true, config: { select: { mode: true } } },
+        orderBy: { sentAt: 'desc' as const },
+        take: 1,
+      },
+    } satisfies Prisma.WhatsAppConversationInclude;
+
+    const { items, total, totalUnreadConversations, unreadMessages } =
+      await this.prisma.$transaction(async (tx) => {
+        let orderedItems: WhatsAppConversationForPresenter[];
+
+        if (attendanceStatus === WhatsAppConversationAttendanceFilter.ALL) {
+          orderedItems = await tx.whatsAppConversation.findMany({
+            where,
+            include: conversationInclude,
+            orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            skip: (page - 1) * limit,
+            take: limit,
+          });
+        } else {
+          const orderedAttendances = await tx.whatsAppAttendance.findMany({
+            where: {
+              conversation: where,
+              status:
+                attendanceStatus === WhatsAppConversationAttendanceFilter.ACTIVE
+                  ? { in: ['PENDING', 'IN_PROGRESS'] }
+                  : attendanceStatus,
             },
-            labelAssignments: {
-              select: { label: { select: { id: true, name: true, color: true } } },
-              orderBy: { label: { name: 'asc' } },
-            },
-            attendances: {
-              where: { status: { in: ['PENDING', 'IN_PROGRESS'] } },
-              select: {
-                id: true,
-                status: true,
-                openedAt: true,
-                firstAgentReplyAt: true,
-                inboundMessagesCount: true,
-                outboundMessagesCount: true,
-              },
-              orderBy: { openedAt: 'desc' },
-              take: 1,
-            },
-            autoReplyExecutions: {
-              where: { status: 'SENT', sentAt: { not: null } },
-              select: { id: true, sentAt: true, config: { select: { mode: true } } },
-              orderBy: { sentAt: 'desc' },
-              take: 1,
-            },
-          },
-          orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
-          skip: (page - 1) * limit,
-          take: limit,
-        }),
-        this.prisma.whatsAppConversation.count({ where }),
-        this.prisma.whatsAppConversation.count({
-          where: { ...where, unreadCount: { gt: 0 } },
-        }),
-        this.prisma.whatsAppConversation.aggregate({
-          where,
-          _sum: { unreadCount: true },
-        }),
-      ],
-    );
+            select: { conversationId: true },
+            // PostgreSQL enum order is PENDING, IN_PROGRESS, RESOLVED: ACTIVE keeps
+            // unanswered work ahead of longer-running attended conversations.
+            orderBy:
+              attendanceStatus === WhatsAppConversationAttendanceFilter.ACTIVE
+                ? [{ status: 'asc' }, { openedAt: 'asc' }, { conversationId: 'asc' }]
+                : [{ openedAt: 'asc' }, { conversationId: 'asc' }],
+            skip: (page - 1) * limit,
+            take: limit,
+          });
+          const orderedConversationIds = [
+            ...new Set(orderedAttendances.map((attendance) => attendance.conversationId)),
+          ];
+          const pageItems = orderedConversationIds.length
+            ? await tx.whatsAppConversation.findMany({
+                where: { id: { in: orderedConversationIds } },
+                include: conversationInclude,
+              })
+            : [];
+          const pageItemsById = new Map(pageItems.map((item) => [item.id, item]));
+
+          orderedItems = orderedConversationIds.flatMap((id) => {
+            const item = pageItemsById.get(id);
+            return item ? [item] : [];
+          });
+        }
+
+        const [conversationTotal, unreadConversationTotal, unreadMessageAggregate] =
+          await Promise.all([
+            tx.whatsAppConversation.count({ where }),
+            tx.whatsAppConversation.count({
+              where: { ...where, unreadCount: { gt: 0 } },
+            }),
+            tx.whatsAppConversation.aggregate({
+              where,
+              _sum: { unreadCount: true },
+            }),
+          ]);
+
+        return {
+          items: orderedItems,
+          total: conversationTotal,
+          totalUnreadConversations: unreadConversationTotal,
+          unreadMessages: unreadMessageAggregate,
+        };
+      });
 
     return {
       items: items.map((conversation) => this.presentConversation(conversation)),

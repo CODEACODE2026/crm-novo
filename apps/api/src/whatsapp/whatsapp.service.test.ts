@@ -23,11 +23,6 @@ const whatsAppServiceSource = readFileSync(
   join(process.cwd(), 'src/whatsapp/whatsapp.service.ts'),
   'utf8',
 );
-const prismaSchemaSource = readFileSync(join(process.cwd(), 'prisma/schema.prisma'), 'utf8');
-const attendanceMigrationSource = readFileSync(
-  join(process.cwd(), 'prisma/migrations/20261016013000_add_whatsapp_attendances/migration.sql'),
-  'utf8',
-);
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -8942,15 +8937,6 @@ describe('WhatsAppService', () => {
     });
     const { service, prisma } = serviceFactory({
       prismaOverrides: {
-        whatsAppAttendance: {
-          findMany: vi
-            .fn()
-            .mockResolvedValue([
-              { conversationId: linkedConversation.id },
-              { conversationId: contactConversation.id },
-              { conversationId: phoneConversation.id },
-            ]),
-        },
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(null),
           findMany: vi
@@ -8981,13 +8967,6 @@ describe('WhatsAppService', () => {
       skip?: number;
       take?: number;
     };
-    const attendanceFindManyArgs = (prisma.whatsAppAttendance.findMany as MockWithCalls).mock
-      .calls[0]?.[0] as {
-      where?: Record<string, unknown>;
-      orderBy?: unknown;
-      skip?: number;
-      take?: number;
-    };
 
     expect(result.pagination).toEqual({
       page: 2,
@@ -9014,23 +8993,17 @@ describe('WhatsAppService', () => {
     });
     expect(findManyArgs).toMatchObject({
       where: {
-        id: {
-          in: [linkedConversation.id, contactConversation.id, phoneConversation.id],
-        },
+        attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
+        status: 'OPEN',
+        whatsAppConnectionId: connection().id,
+        clientId: client().id,
+        unreadCount: { gt: 0 },
       },
-    });
-    expect(attendanceFindManyArgs).toMatchObject({
-      where: {
-        conversation: {
-          attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
-          status: 'OPEN',
-          whatsAppConnectionId: connection().id,
-          clientId: client().id,
-          unreadCount: { gt: 0 },
-        },
-        status: { in: ['PENDING', 'IN_PROGRESS'] },
-      },
-      orderBy: [{ status: 'asc' }, { openedAt: 'asc' }, { conversationId: 'asc' }],
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
       skip: 10,
       take: 10,
     });
@@ -9063,9 +9036,7 @@ describe('WhatsAppService', () => {
         take: 1,
       },
     });
-    const attendanceConversationWhere = attendanceFindManyArgs.where?.conversation as
-      Record<string, unknown> | undefined;
-    expect(attendanceConversationWhere?.OR as unknown[] | undefined).toEqual(
+    expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
       expect.arrayContaining([
         { contactName: { contains: '(44) 99999-9999', mode: 'insensitive' } },
         { phone: { contains: '(44) 99999-9999', mode: 'insensitive' } },
@@ -9075,7 +9046,7 @@ describe('WhatsAppService', () => {
         { client: { phoneNormalized: { contains: '5544999999999' } } },
       ]),
     );
-    expect(attendanceConversationWhere?.OR as unknown[] | undefined).not.toEqual(
+    expect(findManyArgs.where?.OR as unknown[] | undefined).not.toEqual(
       expect.arrayContaining([
         { lastMessagePreview: { contains: '(44) 99999-9999', mode: 'insensitive' } },
       ]),
@@ -9086,11 +9057,11 @@ describe('WhatsAppService', () => {
     const { service, prisma } = serviceFactory();
 
     await service.listConversations({ status: 'RESOLVED' });
-    const findManyArgs = (prisma.whatsAppAttendance.findMany as MockWithCalls).mock
+    const findManyArgs = (prisma.whatsAppConversation.findMany as MockWithCalls).mock
       .calls[0]?.[0] as { where?: Record<string, unknown> };
 
     expect(findManyArgs.where).toMatchObject({
-      conversation: { status: 'RESOLVED' },
+      status: 'RESOLVED',
     });
   });
 
@@ -9111,45 +9082,50 @@ describe('WhatsAppService', () => {
       attendanceStatus: WhatsAppConversationAttendanceFilter.ALL,
     });
 
-    const attendanceFindMany = prisma.whatsAppAttendance.findMany as MockWithCalls;
     const conversationFindMany = prisma.whatsAppConversation.findMany as MockWithCalls;
     const count = prisma.whatsAppConversation.count as MockWithCalls;
-    expect(attendanceFindMany.mock.calls[0]?.[0]).toMatchObject({
-      where: {
-        conversation: {
-          attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
-        },
-        status: { in: ['PENDING', 'IN_PROGRESS'] },
-      },
-      orderBy: [{ status: 'asc' }, { openedAt: 'asc' }, { conversationId: 'asc' }],
+    expect(prisma.whatsAppAttendance.findMany).not.toHaveBeenCalled();
+    expect(conversationFindMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } } },
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
       skip: 0,
       take: 20,
     });
-    expect(attendanceFindMany.mock.calls[1]?.[0]).toMatchObject({
-      where: {
-        conversation: {
-          attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
-        },
-        status: { in: ['PENDING', 'IN_PROGRESS'] },
-      },
+    expect(conversationFindMany.mock.calls[1]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } } },
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
     });
-    expect(attendanceFindMany.mock.calls[2]?.[0]).toMatchObject({
-      where: {
-        conversation: { attendances: { some: { status: 'PENDING' } } },
-        status: 'PENDING',
-      },
-      orderBy: [{ openedAt: 'asc' }, { conversationId: 'asc' }],
+    expect(conversationFindMany.mock.calls[2]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: 'PENDING' } } },
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
     });
-    expect(attendanceFindMany.mock.calls[3]?.[0]).toMatchObject({
-      where: {
-        conversation: { attendances: { some: { status: 'IN_PROGRESS' } } },
-        status: 'IN_PROGRESS',
-      },
-      orderBy: [{ openedAt: 'asc' }, { conversationId: 'asc' }],
+    expect(conversationFindMany.mock.calls[3]?.[0]).toMatchObject({
+      where: { attendances: { some: { status: 'IN_PROGRESS' } } },
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
     });
-    expect(conversationFindMany.mock.calls[0]?.[0]).toMatchObject({
+    expect(conversationFindMany.mock.calls[4]?.[0]).toMatchObject({
       where: {},
-      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
     });
     expect(count.mock.calls[0]?.[0]).toMatchObject({
       where: { attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } } },
@@ -9157,72 +9133,28 @@ describe('WhatsAppService', () => {
     expect(count.mock.calls[8]?.[0]).toMatchObject({ where: {} });
   });
 
-  it('locks ACTIVE status ordering to the persisted PostgreSQL enum order', () => {
-    const enumBlock = prismaSchemaSource.match(/enum WhatsAppAttendanceStatus \{[\s\S]*?\n\}/)?.[0];
-
-    expect(enumBlock).toContain('PENDING\n  IN_PROGRESS\n  RESOLVED');
-    expect(attendanceMigrationSource).toContain(
-      "CREATE TYPE \"WhatsAppAttendanceStatus\" AS ENUM ('PENDING', 'IN_PROGRESS', 'RESOLVED')",
-    );
-    expect(whatsAppServiceSource).toContain(
-      "[{ status: 'asc' }, { openedAt: 'asc' }, { conversationId: 'asc' }]",
-    );
-  });
-
-  it('defensively returns each conversation once when recomposing an attendance page', async () => {
-    const item = conversation({ id: '11111111-cccc-4111-8111-111111111111' });
-    const { service } = serviceFactory({
-      prismaOverrides: {
-        whatsAppAttendance: {
-          findMany: vi
-            .fn()
-            .mockResolvedValue([{ conversationId: item.id }, { conversationId: item.id }]),
-        },
-        whatsAppConversation: {
-          findUnique: vi.fn().mockResolvedValue(null),
-          findMany: vi.fn().mockResolvedValue([item]),
-          count: vi.fn().mockResolvedValue(1),
-          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
-          create: vi.fn().mockResolvedValue(conversation()),
-          update: vi.fn().mockResolvedValue(conversation()),
-        },
-      },
+  it('returns ACTIVE in recent-message order without grouping PENDING ahead of IN_PROGRESS', async () => {
+    const inProgressRecent = conversation({
+      id: '33333333-aaaa-4333-8333-333333333333',
+      lastMessageAt: new Date('2026-10-16T14:30:00.000Z'),
+      unreadCount: 99,
     });
-
-    const result = await service.listConversations({});
-
-    expect(result.items.map((conversationItem: { id: string }) => conversationItem.id)).toEqual([
-      item.id,
-    ]);
-  });
-
-  it('keeps the database attendance order through pagination without activity, auto-reply or unread priority', async () => {
+    const pendingRecent = conversation({
+      id: '22222222-aaaa-4222-8222-222222222222',
+      lastMessageAt: new Date('2026-10-16T13:30:00.000Z'),
+      unreadCount: 40,
+    });
     const pendingOld = conversation({
       id: '11111111-aaaa-4111-8111-111111111111',
       lastMessageAt: new Date('2026-10-16T12:30:00.000Z'),
       unreadCount: 0,
     });
-    const pendingNew = conversation({
-      id: '22222222-aaaa-4222-8222-222222222222',
-      lastMessageAt: new Date('2026-10-16T13:30:00.000Z'),
-      unreadCount: 40,
-    });
-    const inProgressOld = conversation({
-      id: '33333333-aaaa-4333-8333-333333333333',
-      lastMessageAt: new Date('2026-10-16T14:30:00.000Z'),
-      unreadCount: 99,
-    });
-    const orderedIds = [pendingOld.id, pendingNew.id, inProgressOld.id];
+    const databaseOrder = [inProgressRecent, pendingRecent, pendingOld];
     const { service, prisma } = serviceFactory({
       prismaOverrides: {
-        whatsAppAttendance: {
-          findMany: vi
-            .fn()
-            .mockResolvedValue(orderedIds.map((conversationId) => ({ conversationId }))),
-        },
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(null),
-          findMany: vi.fn().mockResolvedValue([inProgressOld, pendingNew, pendingOld]),
+          findMany: vi.fn().mockResolvedValue(databaseOrder),
           count: vi.fn().mockResolvedValue(3),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 139 } }),
           create: vi.fn().mockResolvedValue(conversation()),
@@ -9240,62 +9172,50 @@ describe('WhatsAppService', () => {
       hasClient: true,
     });
 
-    expect(result.items.map((item: { id: string }) => item.id)).toEqual(orderedIds);
-    expect(prisma.whatsAppAttendance.findMany).toHaveBeenCalledWith(
+    expect(result.items.map((item: { id: string }) => item.id)).toEqual(
+      databaseOrder.map((item) => item.id),
+    );
+    expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          conversation: expect.objectContaining({
-            OR: expect.any(Array),
-            unreadCount: { gt: 0 },
-            clientId: { not: null },
-          }),
-          status: { in: ['PENDING', 'IN_PROGRESS'] },
-        },
-        select: { conversationId: true },
-        orderBy: [{ status: 'asc' }, { openedAt: 'asc' }, { conversationId: 'asc' }],
+        where: expect.objectContaining({
+          attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
+          OR: expect.any(Array),
+          unreadCount: { gt: 0 },
+          clientId: { not: null },
+        }),
+        orderBy: [
+          { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
         skip: 3,
         take: 3,
       }),
     );
     const serializedOrder = JSON.stringify(
-      (prisma.whatsAppAttendance.findMany as MockWithCalls).mock.calls[0]?.[0],
+      (prisma.whatsAppConversation.findMany as MockWithCalls).mock.calls[0]?.[0],
     );
-    expect(serializedOrder).not.toContain('lastMessageAt');
+    expect(serializedOrder).not.toContain('"status":"asc"');
+    expect(serializedOrder).not.toContain('"openedAt":"asc"');
     expect(serializedOrder).not.toContain('lastAutoReplyAt');
     expect(serializedOrder).not.toContain('unreadCount":"desc');
   });
 
-  it('repositions manual replies, removes resolved attendances and inserts new pending work on refetch', async () => {
-    const pending = conversation({ id: '11111111-bbbb-4111-8111-111111111111' });
-    const inProgress = conversation({ id: '22222222-bbbb-4222-8222-222222222222' });
-    const newlyPending = conversation({ id: '33333333-bbbb-4333-8333-333333333333' });
-    const conversationsById = new Map(
-      [pending, inProgress, newlyPending].map((item) => [item.id, item]),
-    );
-    const attendanceFindMany = vi
-      .fn()
-      .mockResolvedValueOnce([{ conversationId: pending.id }, { conversationId: inProgress.id }])
-      .mockResolvedValueOnce([
-        { conversationId: newlyPending.id },
-        { conversationId: inProgress.id },
-        { conversationId: pending.id },
-      ])
-      .mockResolvedValueOnce([{ conversationId: newlyPending.id }, { conversationId: pending.id }]);
-    const conversationFindMany = vi.fn(({ where }: { where: { id: { in: string[] } } }) =>
-      Promise.resolve(
-        [...where.id.in]
-          .reverse()
-          .map((id) => conversationsById.get(id))
-          .filter(Boolean),
-      ),
-    );
-    const { service } = serviceFactory({
+  it('places conversations without lastMessageAt after conversations with real activity', async () => {
+    const recent = conversation({
+      id: '11111111-dddd-4111-8111-111111111111',
+      lastMessageAt: new Date('2026-10-17T20:00:00.000Z'),
+    });
+    const legacyWithoutMessage = conversation({
+      id: '22222222-dddd-4222-8222-222222222222',
+      lastMessageAt: null,
+    });
+    const { service, prisma } = serviceFactory({
       prismaOverrides: {
-        whatsAppAttendance: { findMany: attendanceFindMany },
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(null),
-          findMany: conversationFindMany,
-          count: vi.fn().mockResolvedValue(3),
+          findMany: vi.fn().mockResolvedValue([recent, legacyWithoutMessage]),
+          count: vi.fn().mockResolvedValue(2),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(conversation()),
           update: vi.fn().mockResolvedValue(conversation()),
@@ -9303,20 +9223,23 @@ describe('WhatsAppService', () => {
       },
     });
 
-    const first = await service.listConversations({});
-    const afterManualReply = await service.listConversations({});
-    const afterResolve = await service.listConversations({});
+    const result = await service.listConversations({
+      attendanceStatus: WhatsAppConversationAttendanceFilter.ALL,
+    });
 
-    expect(first.items.map((item: { id: string }) => item.id)).toEqual([pending.id, inProgress.id]);
-    expect(afterManualReply.items.map((item: { id: string }) => item.id)).toEqual([
-      newlyPending.id,
-      inProgress.id,
-      pending.id,
+    expect(result.items.map((item: { id: string }) => item.id)).toEqual([
+      recent.id,
+      legacyWithoutMessage.id,
     ]);
-    expect(afterResolve.items.map((item: { id: string }) => item.id)).toEqual([
-      newlyPending.id,
-      pending.id,
-    ]);
+    expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [
+          { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+      }),
+    );
   });
 
   it('filters client and guest conversations on the backend before pagination', async () => {
@@ -9324,15 +9247,31 @@ describe('WhatsAppService', () => {
 
     await service.listConversations({ hasClient: true });
     await service.listConversations({ hasClient: false });
-    const findMany = prisma.whatsAppAttendance.findMany as MockWithCalls;
+    const findMany = prisma.whatsAppConversation.findMany as MockWithCalls;
 
     expect(findMany.mock.calls[0]?.[0]).toMatchObject({
-      where: { conversation: { clientId: { not: null } } },
+      where: {
+        attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
+        clientId: { not: null },
+      },
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
       skip: 0,
       take: 20,
     });
     expect(findMany.mock.calls[1]?.[0]).toMatchObject({
-      where: { conversation: { clientId: null } },
+      where: {
+        attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
+        clientId: null,
+      },
+      orderBy: [
+        { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
       skip: 0,
       take: 20,
     });
@@ -12914,6 +12853,7 @@ describe('WhatsAppService', () => {
       expect.objectContaining({
         where: { id: conversationRecord.id },
         data: expect.objectContaining({
+          lastMessageAt: expect.any(Date),
           lastMessagePreview: 'Ola pelo CRM',
           needsManualFollowUp: false,
         }),
@@ -14860,20 +14800,23 @@ describe('WhatsApp conversation labels', () => {
       status: 'OPEN',
       search: 'Ana',
     });
-    expect(prisma.whatsAppAttendance.findMany).toHaveBeenCalledWith(
+    expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          conversation: expect.objectContaining({
-            whatsAppConnectionId: connection().id,
-            labelAssignments: { some: { labelId: label.id } },
-            unreadCount: { gt: 0 },
-            needsManualFollowUp: true,
-            clientId: null,
-            status: 'OPEN',
-            OR: expect.any(Array),
-          }),
+          attendances: { some: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
+          whatsAppConnectionId: connection().id,
+          labelAssignments: { some: { labelId: label.id } },
+          unreadCount: { gt: 0 },
+          needsManualFollowUp: true,
+          clientId: null,
+          status: 'OPEN',
+          OR: expect.any(Array),
         }),
-        orderBy: [{ status: 'asc' }, { openedAt: 'asc' }, { conversationId: 'asc' }],
+        orderBy: [
+          { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
         skip: 20,
         take: 20,
       }),

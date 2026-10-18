@@ -70,6 +70,7 @@ import {
   renderHighlightedSearchText,
 } from './WhatsAppSearch';
 import { WhatsAppImageLightbox } from './WhatsAppImageLightbox';
+import { WhatsAppImageAnnotationEditor } from './WhatsAppImageAnnotationEditor';
 import {
   ApiError,
   createClient,
@@ -563,6 +564,7 @@ export function WhatsAppInbox({
   const [labelManagerError, setLabelManagerError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
+  const [pendingImageAnnotation, setPendingImageAnnotation] = useState<File | null>(null);
   const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
   const [replyTarget, setReplyTarget] = useState<WhatsAppConversationMessage | null>(null);
   const [sending, setSending] = useState(false);
@@ -901,6 +903,7 @@ export function WhatsAppInbox({
   useEffect(() => {
     chatDropDepthRef.current = 0;
     setDropOverlayVisible(false);
+    setPendingImageAnnotation(null);
     setSelectedMedia((current) => {
       if (current?.previewUrl) {
         URL.revokeObjectURL(current.previewUrl);
@@ -2252,6 +2255,12 @@ export function WhatsAppInbox({
       return false;
     }
 
+    if (validation.kind === 'IMAGE') {
+      setPendingImageAnnotation(file);
+      setSendError(notice);
+      return true;
+    }
+
     const keepsStickerReply = replyTarget && validation.kind === 'STICKER';
     const replyNotice =
       replyTarget && !keepsStickerReply
@@ -2657,17 +2666,24 @@ export function WhatsAppInbox({
     {
       focusComposer = true,
       replyToOverride = null,
-    }: { focusComposer?: boolean; replyToOverride?: WhatsAppConversationMessage | null } = {},
+      mediaOverride = null,
+      ignoreReply = false,
+    }: {
+      focusComposer?: boolean;
+      replyToOverride?: WhatsAppConversationMessage | null;
+      mediaOverride?: ConversationComposerMedia | null;
+      ignoreReply?: boolean;
+    } = {},
   ) {
-    if (!selectedConversation || sending || sendingRef.current) return;
+    if (!selectedConversation || sending || sendingRef.current) return false;
 
     const body = (bodyOverride ?? selectedDraft).trim();
-    const mediaToSend = bodyOverride ? null : selectedMedia;
-    const replyToSend = bodyOverride ? replyToOverride : replyTarget;
-    if (!body && !mediaToSend) return;
+    const mediaToSend = bodyOverride ? null : (mediaOverride ?? selectedMedia);
+    const replyToSend = ignoreReply ? null : bodyOverride ? replyToOverride : replyTarget;
+    if (!body && !mediaToSend) return false;
     if (replyToSend && mediaToSend && mediaToSend.kind !== 'STICKER') {
       setSendError('Resposta com anexo ainda não está disponível. Envie uma resposta em texto.');
-      return;
+      return false;
     }
 
     sendingRef.current = true;
@@ -2681,6 +2697,7 @@ export function WhatsAppInbox({
           : current,
       );
     }
+    let sent = false;
     if (focusComposer) {
       scheduleComposerFocus(() => {
         composerRef.current?.focus();
@@ -2728,6 +2745,7 @@ export function WhatsAppInbox({
         );
         setReplyTarget(null);
       }
+      sent = true;
       await loadConversations({ preserveLoaded: true, silent: true });
     } catch (err) {
       setSendError(conversationErrorMessage(err, 'Falha ao enviar mensagem.'));
@@ -2783,6 +2801,28 @@ export function WhatsAppInbox({
       sendingRef.current = false;
       setSending(false);
     }
+    return sent;
+  }
+
+  function cancelImageAnnotation() {
+    setPendingImageAnnotation(null);
+    scheduleComposerFocus(() => composerRef.current?.focus());
+  }
+
+  async function sendAnnotatedImage(file: File) {
+    const validation = classifyConversationIncomingFile(file, { expectedKind: 'IMAGE' });
+    if (!validation.ok) return validation.error;
+
+    const sent = await sendCurrentMessage(undefined, {
+      focusComposer: false,
+      mediaOverride: { file, kind: 'IMAGE', previewUrl: null },
+      ignoreReply: true,
+    });
+    if (!sent) return 'Não foi possível enviar a imagem. Tente novamente.';
+
+    setPendingImageAnnotation(null);
+    scheduleComposerFocus(() => composerRef.current?.focus());
+    return null;
   }
 
   async function sendCurrentVoiceMessage(voice: ConversationVoiceDraft) {
@@ -4016,6 +4056,15 @@ export function WhatsAppInbox({
           lifecyclePlansLoading={contactLifecyclePlansLoading}
         />
       </div>
+      {pendingImageAnnotation ? (
+        <WhatsAppImageAnnotationEditor
+          key={`${pendingImageAnnotation.name}:${pendingImageAnnotation.size}:${pendingImageAnnotation.lastModified}`}
+          file={pendingImageAnnotation}
+          sending={sending}
+          onCancel={cancelImageAnnotation}
+          onSend={sendAnnotatedImage}
+        />
+      ) : null}
     </section>
   );
 }

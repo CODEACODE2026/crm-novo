@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClientEventType, Prisma } from '@prisma/client';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { RenewalsService } from './renewals.service';
@@ -594,6 +594,15 @@ async function expectCanceledReferenceRenewalBlock(action: () => Promise<unknown
 }
 
 describe('RenewalsService', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-16T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('exposes the structural fields required for renewal reversal execution', () => {
     const renewalReversalModel = Prisma.dmmf.datamodel.models.find(
       (model) => model.name === 'RenewalReversal',

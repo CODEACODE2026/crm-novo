@@ -16,6 +16,12 @@ export type ImageAnnotationStroke = {
   color: string;
   points: ImageAnnotationPoint[];
 };
+export type ImageAnnotationRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
 
 export const imageAnnotationColors = [
   { label: 'Vermelho', value: '#ef4444' },
@@ -25,10 +31,72 @@ export const imageAnnotationColors = [
 ] as const;
 
 export function clampImageAnnotationPoint(point: ImageAnnotationPoint): ImageAnnotationPoint {
+  const x = Number.isFinite(point.x) ? point.x : 0;
+  const y = Number.isFinite(point.y) ? point.y : 0;
   return {
-    x: Math.min(1, Math.max(0, point.x)),
-    y: Math.min(1, Math.max(0, point.y)),
+    x: Math.min(1, Math.max(0, x)),
+    y: Math.min(1, Math.max(0, y)),
   };
+}
+
+export function imageAnnotationPointFromRect(
+  rect: ImageAnnotationRect,
+  clientX: number,
+  clientY: number,
+) {
+  if (
+    !Number.isFinite(clientX) ||
+    !Number.isFinite(clientY) ||
+    !Number.isFinite(rect.left) ||
+    !Number.isFinite(rect.top) ||
+    !Number.isFinite(rect.width) ||
+    !Number.isFinite(rect.height) ||
+    rect.width <= 0 ||
+    rect.height <= 0
+  ) {
+    return null;
+  }
+
+  return clampImageAnnotationPoint({
+    x: (clientX - rect.left) / rect.width,
+    y: (clientY - rect.top) / rect.height,
+  });
+}
+
+type PointerCaptureElement = Partial<
+  Pick<HTMLElement, 'hasPointerCapture' | 'releasePointerCapture' | 'setPointerCapture'>
+>;
+
+export function safelySetImageAnnotationPointerCapture(
+  element: PointerCaptureElement,
+  pointerId: number,
+) {
+  if (typeof element.setPointerCapture !== 'function') return false;
+  try {
+    element.setPointerCapture(pointerId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function safelyReleaseImageAnnotationPointerCapture(
+  element: PointerCaptureElement,
+  pointerId: number,
+) {
+  if (
+    typeof element.hasPointerCapture !== 'function' ||
+    typeof element.releasePointerCapture !== 'function'
+  ) {
+    return false;
+  }
+  try {
+    if (!element.hasPointerCapture(pointerId)) return false;
+    element.releasePointerCapture(pointerId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function imageAnnotationOutputName(fileName: string, mimeType: string) {
@@ -146,16 +214,18 @@ export function WhatsAppImageAnnotationEditor({
   onCancel: () => void;
   onSend: (file: File) => Promise<string | null>;
 }) {
-  const [objectUrl] = useState(() => URL.createObjectURL(file));
+  const [objectUrl, setObjectUrl] = useState('');
   const [color, setColor] = useState<string>(imageAnnotationColors[0].value);
   const [strokes, setStrokes] = useState<ImageAnnotationStroke[]>([]);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
+  const [imageReady, setImageReady] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const onCancelRef = useRef(onCancel);
   const activePointerRef = useRef<number | null>(null);
+  const pointerCapturedRef = useRef(false);
   const strokesRef = useRef(strokes);
   const busy = exporting || sending;
   const busyRef = useRef(busy);
@@ -169,19 +239,28 @@ export function WhatsAppImageAnnotationEditor({
   }, [strokes]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
   }, []);
 
   useEffect(() => {
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [objectUrl]);
+    const nextObjectUrl = URL.createObjectURL(file);
+    setObjectUrl(nextObjectUrl);
+    setImageReady(false);
+    setStrokes([]);
+    setColor(imageAnnotationColors[0].value);
+    setError('');
+    activePointerRef.current = null;
+    pointerCapturedRef.current = false;
+    return () => URL.revokeObjectURL(nextObjectUrl);
+  }, [file]);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     const image = imageRef.current;
-    if (!canvas || !image) return;
+    if (!canvas || !image || !imageReady) return;
     const rect = image.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
 
@@ -194,11 +273,14 @@ export function WhatsAppImageAnnotationEditor({
     canvas.style.height = `${rect.height}px`;
 
     const context = canvas.getContext('2d');
-    if (!context) return;
+    if (!context) {
+      setError((current) => current || 'Não foi possível iniciar a edição desta imagem.');
+      return;
+    }
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     context.clearRect(0, 0, rect.width, rect.height);
     drawImageAnnotationStrokes(context, strokesRef.current, rect.width, rect.height);
-  }, []);
+  }, [imageReady]);
 
   useEffect(() => {
     redraw();
@@ -229,48 +311,56 @@ export function WhatsAppImageAnnotationEditor({
       window.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = previousOverflow;
       activePointerRef.current = null;
+      pointerCapturedRef.current = false;
     };
   }, []);
 
   function pointFromPointer(event: ReactPointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
-    return clampImageAnnotationPoint({
-      x: rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0,
-      y: rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0,
-    });
+    return imageAnnotationPointFromRect(rect, event.clientX, event.clientY);
   }
 
   function startStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (busy || activePointerRef.current !== null) return;
+    if (busy || !imageReady || activePointerRef.current !== null) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = pointFromPointer(event);
+    if (!point) {
+      setError('Não foi possível iniciar a edição desta imagem.');
+      return;
+    }
+    pointerCapturedRef.current = safelySetImageAnnotationPointerCapture(
+      event.currentTarget,
+      event.pointerId,
+    );
     activePointerRef.current = event.pointerId;
-    setStrokes((current) => [
-      ...current,
-      createImageAnnotationStroke(color, pointFromPointer(event)),
-    ]);
+    setStrokes((current) => [...current, createImageAnnotationStroke(color, point)]);
   }
 
   function continueStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (activePointerRef.current !== event.pointerId || busy) return;
+    if (activePointerRef.current !== event.pointerId || busy || !imageReady) return;
     event.preventDefault();
     event.stopPropagation();
     const point = pointFromPointer(event);
+    if (!point) return;
     setStrokes((current) => appendImageAnnotationPoint(current, point));
   }
 
   function finishStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (activePointerRef.current !== event.pointerId) return;
     activePointerRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
+    safelyReleaseImageAnnotationPointerCapture(event.currentTarget, event.pointerId);
+    pointerCapturedRef.current = false;
+  }
+
+  function finishUncapturedStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!pointerCapturedRef.current) finishStroke(event);
   }
 
   function resetEditor() {
     activePointerRef.current = null;
+    pointerCapturedRef.current = false;
     setStrokes([]);
     setColor(imageAnnotationColors[0].value);
     setError('');
@@ -278,7 +368,7 @@ export function WhatsAppImageAnnotationEditor({
 
   async function sendAnnotatedImage() {
     const image = imageRef.current;
-    if (!image || busyRef.current) return;
+    if (!image || !imageReady || busyRef.current) return;
     busyRef.current = true;
     setExporting(true);
     setError('');
@@ -326,7 +416,7 @@ export function WhatsAppImageAnnotationEditor({
           <button
             aria-label="Enviar imagem anotada"
             className="conversation-image-annotation-send top"
-            disabled={busy}
+            disabled={busy || !imageReady}
             type="button"
             onClick={() => void sendAnnotatedImage()}
           >
@@ -342,21 +432,34 @@ export function WhatsAppImageAnnotationEditor({
               ref={imageRef}
               alt="Prévia da imagem para anotação"
               draggable={false}
-              src={objectUrl}
-              onError={() => setError('Não foi possível carregar esta imagem para edição.')}
-              onLoad={redraw}
+              src={objectUrl || undefined}
+              onError={() => {
+                setImageReady(false);
+                setError('Não foi possível carregar esta imagem para edição.');
+              }}
+              onLoad={() => {
+                setImageReady(true);
+                setError('');
+              }}
             />
             <canvas
               ref={canvasRef}
+              aria-disabled={!imageReady}
               aria-label="Área de desenho sobre a imagem"
               className="conversation-image-annotation-canvas"
               role="img"
               onLostPointerCapture={finishStroke}
               onPointerCancel={finishStroke}
               onPointerDown={startStroke}
+              onPointerLeave={finishUncapturedStroke}
               onPointerMove={continueStroke}
               onPointerUp={finishStroke}
             />
+            {!imageReady && !error ? (
+              <span className="conversation-image-annotation-loading" role="status">
+                Preparando imagem...
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -365,6 +468,7 @@ export function WhatsAppImageAnnotationEditor({
             aria-label="Lápis selecionado"
             aria-pressed="true"
             className="is-selected"
+            disabled={busy || !imageReady}
             type="button"
           >
             <Pencil aria-hidden="true" size={18} />
@@ -440,7 +544,7 @@ export function WhatsAppImageAnnotationEditor({
           </button>
           <button
             className="conversation-image-annotation-send"
-            disabled={busy}
+            disabled={busy || !imageReady}
             type="button"
             onClick={() => void sendAnnotatedImage()}
           >

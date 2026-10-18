@@ -11,6 +11,9 @@ import {
   imageAnnotationCanvasBytes,
   imageAnnotationLineWidth,
   imageAnnotationOutputName,
+  imageAnnotationPointFromRect,
+  safelyReleaseImageAnnotationPointerCapture,
+  safelySetImageAnnotationPointerCapture,
   undoImageAnnotationStroke,
 } from './WhatsAppImageAnnotationEditor';
 
@@ -25,6 +28,37 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
     expect(createImageAnnotationStroke('#3b82f6', { x: 0.25, y: 0.75 })).toEqual({
       color: '#3b82f6',
       points: [{ x: 0.25, y: 0.75 }],
+    });
+  });
+
+  it('snapshots finite pointer coordinates before a React event can be invalidated', () => {
+    const point = imageAnnotationPointFromRect(
+      { left: 100, top: 50, width: 400, height: 200 },
+      300,
+      100,
+    );
+
+    expect(point).toEqual({ x: 0.5, y: 0.25 });
+    const startStrokeSource = editorSource.slice(
+      editorSource.indexOf('function startStroke'),
+      editorSource.indexOf('function continueStroke'),
+    );
+    expect(startStrokeSource.indexOf('const point = pointFromPointer(event)')).toBeLessThan(
+      startStrokeSource.indexOf('setStrokes((current)'),
+    );
+    expect(startStrokeSource).not.toContain('pointFromPointer(event))');
+  });
+
+  it('rejects zero-sized or non-finite pointer geometry without creating invalid strokes', () => {
+    expect(imageAnnotationPointFromRect({ left: 0, top: 0, width: 0, height: 100 }, 1, 1)).toBe(
+      null,
+    );
+    expect(
+      imageAnnotationPointFromRect({ left: 0, top: 0, width: 100, height: 100 }, Number.NaN, 1),
+    ).toBe(null);
+    expect(clampImageAnnotationPoint({ x: Number.NaN, y: Number.POSITIVE_INFINITY })).toEqual({
+      x: 0,
+      y: 0,
     });
   });
 
@@ -121,14 +155,76 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
     expect(editorSource).toContain('context.drawImage(image, 0, 0, canvas.width, canvas.height)');
   });
 
-  it('uses captured Pointer Events for mouse, touch and pen drawing', () => {
-    expect(editorSource).toContain('setPointerCapture(event.pointerId)');
+  it('uses guarded Pointer Events for mouse, touch and pen drawing', () => {
+    expect(editorSource).toContain('safelySetImageAnnotationPointerCapture(');
     expect(editorSource).toContain('onPointerDown={startStroke}');
     expect(editorSource).toContain('onPointerMove={continueStroke}');
     expect(editorSource).toContain('onPointerCancel={finishStroke}');
     expect(editorSource).toContain('onLostPointerCapture={finishStroke}');
+    expect(editorSource).toContain('onPointerLeave={finishUncapturedStroke}');
+    expect(editorSource).not.toContain('event.buttons');
     expect(stylesSource).toMatch(
       /\.conversation-image-annotation-canvas \{[\s\S]*?touch-action: none;/,
+    );
+  });
+
+  it('captures and releases a pointer when the browser supports it', () => {
+    const element = {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: vi.fn(() => true),
+      releasePointerCapture: vi.fn(),
+    };
+
+    expect(safelySetImageAnnotationPointerCapture(element, 7)).toBe(true);
+    expect(safelyReleaseImageAnnotationPointerCapture(element, 7)).toBe(true);
+    expect(element.setPointerCapture).toHaveBeenCalledWith(7);
+    expect(element.releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it('keeps drawing available when pointer capture is missing or throws', () => {
+    expect(safelySetImageAnnotationPointerCapture({}, 3)).toBe(false);
+    expect(safelyReleaseImageAnnotationPointerCapture({}, 3)).toBe(false);
+    expect(
+      safelySetImageAnnotationPointerCapture(
+        {
+          setPointerCapture: () => {
+            throw new DOMException('inactive pointer');
+          },
+        },
+        3,
+      ),
+    ).toBe(false);
+    expect(
+      safelyReleaseImageAnnotationPointerCapture(
+        {
+          hasPointerCapture: () => {
+            throw new DOMException('capture lost');
+          },
+          releasePointerCapture: vi.fn(),
+        },
+        3,
+      ),
+    ).toBe(false);
+  });
+
+  it('blocks drawing until the image is ready and handles a missing 2d context locally', () => {
+    expect(editorSource).toContain('if (busy || !imageReady || activePointerRef.current !== null)');
+    expect(editorSource).toContain('setImageReady(true)');
+    expect(editorSource).toContain('setImageReady(false)');
+    expect(editorSource).toContain("current || 'Não foi possível iniciar a edição desta imagem.'");
+    expect(editorSource).toContain('aria-disabled={!imageReady}');
+    expect(editorSource).toContain('Preparando imagem...');
+  });
+
+  it('creates the natural-resolution export canvas only during Send, never on pointerdown', () => {
+    const startStrokeSource = editorSource.slice(
+      editorSource.indexOf('function startStroke'),
+      editorSource.indexOf('function continueStroke'),
+    );
+    expect(startStrokeSource).not.toContain('document.createElement');
+    expect(startStrokeSource).not.toContain('naturalWidth');
+    expect(editorSource.indexOf("document.createElement('canvas')")).toBeLessThan(
+      editorSource.indexOf('function WhatsAppImageAnnotationEditor'),
     );
   });
 
@@ -149,7 +245,7 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
     expect(editorSource).toContain("document.body.style.overflow = 'hidden'");
     expect(editorSource).toContain('document.body.style.overflow = previousOverflow');
     expect(editorSource).toContain("event.key !== 'Escape'");
-    expect(editorSource).toContain('URL.revokeObjectURL(objectUrl)');
+    expect(editorSource).toContain('URL.revokeObjectURL(nextObjectUrl)');
     expect(editorSource).toContain('cancelRef.current?.focus()');
   });
 
@@ -208,7 +304,7 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
   });
 
   it('closes the synchronous double-submit window before canvas composition starts', () => {
-    expect(editorSource).toContain('if (!image || busyRef.current) return;');
+    expect(editorSource).toContain('if (!image || !imageReady || busyRef.current) return;');
     expect(editorSource).toContain('busyRef.current = true;');
     expect(editorSource).toContain('disabled={busy}');
   });
@@ -226,7 +322,9 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
       'key={`${pendingImageAnnotation.name}:${pendingImageAnnotation.size}:${pendingImageAnnotation.lastModified}`}',
     );
     expect(inboxSource).toContain('setPendingImageAnnotation(null)');
+    expect(editorSource).toContain('mountedRef.current = true');
     expect(editorSource).toContain('mountedRef.current = false');
+    expect(editorSource).toContain('const nextObjectUrl = URL.createObjectURL(file)');
     expect(editorSource).toContain('if (mountedRef.current) setExporting(false)');
   });
 

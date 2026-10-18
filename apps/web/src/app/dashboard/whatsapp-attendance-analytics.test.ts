@@ -3,8 +3,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  attendanceAnalyticsRangeFor,
+  buildAttendanceAnalyticsFilters,
   formatAttendanceAnalyticsDuration,
   formatAttendanceAnalyticsPercentage,
+  saoPauloToday,
 } from '../../components/whatsapp/WhatsAppAttendanceAnalytics';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +31,52 @@ describe('ATENDIMENTO2 analytics UI', () => {
     expect(formatAttendanceAnalyticsPercentage(0)).toBe('0%');
     expect(formatAttendanceAnalyticsPercentage(85)).toBe('85%');
     expect(formatAttendanceAnalyticsPercentage(83.3)).toBe('83.3%');
+  });
+
+  it('calculates every preset as Sao Paulo business dates', () => {
+    const today = '2026-10-16';
+
+    expect(attendanceAnalyticsRangeFor('today', '', '', today)).toEqual({
+      dateFrom: '2026-10-16',
+      dateTo: '2026-10-16',
+    });
+    expect(attendanceAnalyticsRangeFor('seven', '', '', today)).toEqual({
+      dateFrom: '2026-10-10',
+      dateTo: '2026-10-16',
+    });
+    expect(attendanceAnalyticsRangeFor('thirty', '', '', today)).toEqual({
+      dateFrom: '2026-09-17',
+      dateTo: '2026-10-16',
+    });
+    expect(attendanceAnalyticsRangeFor('month', '', '', today)).toEqual({
+      dateFrom: '2026-10-01',
+      dateTo: '2026-10-16',
+    });
+    expect(attendanceAnalyticsRangeFor('custom', '2026-09-02', '2026-09-08', today)).toEqual({
+      dateFrom: '2026-09-02',
+      dateTo: '2026-09-08',
+    });
+    expect(saoPauloToday(new Date('2026-10-17T02:30:00.000Z'))).toBe('2026-10-16');
+  });
+
+  it('builds the applied request from the current draft without losing dimensions', () => {
+    expect(
+      buildAttendanceAnalyticsFilters({
+        categoryId: 'category-id',
+        connectionId: 'connection-id',
+        customFrom: '',
+        customTo: '',
+        periodMode: 'seven',
+        status: 'RESOLVED',
+        today: '2026-10-16',
+      }),
+    ).toEqual({
+      dateFrom: '2026-10-10',
+      dateTo: '2026-10-16',
+      connectionId: 'connection-id',
+      categoryId: 'category-id',
+      status: 'RESOLVED',
+    });
   });
 
   it('adds a dedicated authenticated navigation view and API filters', () => {
@@ -109,6 +158,28 @@ describe('ATENDIMENTO2 analytics UI', () => {
     expect(componentSource).toContain('Tentar novamente');
     expect(componentSource).toContain('Ainda não há atendimentos no período selecionado.');
     expect(componentSource).not.toMatch(/resolutionNote|message\.text|rawMetadata/);
+  });
+
+  it('applies a filter snapshot and ignores stale analytics responses', () => {
+    expect(componentSource).toContain('const [appliedFilters, setAppliedFilters]');
+    expect(componentSource).toContain('setAppliedFilters(draftFilters)');
+    expect(componentSource).toContain('void loadAnalytics(draftFilters)');
+    expect(componentSource).toContain('analyticsRequestSequence.current + 1');
+    expect(componentSource).toContain('requestSequence !== analyticsRequestSequence.current');
+    expect(componentSource).toContain('!analyticsMounted.current');
+    expect(componentSource).toContain('analyticsMounted.current = false');
+    expect(componentSource).toContain('analyticsRequestSequence.current += 1');
+    expect(componentSource).toContain('void loadAnalytics(appliedFilters)');
+    expect(apiSource).toContain("{ cache: 'no-store' }");
+  });
+
+  it('rejects an incomplete custom draft before sending analytics', () => {
+    expect(attendanceAnalyticsRangeFor('custom', '', '2026-10-16', '2026-10-16')).toEqual({
+      dateFrom: '',
+      dateTo: '2026-10-16',
+    });
+    expect(componentSource).toContain('if (!draftFilters.dateFrom || !draftFilters.dateTo)');
+    expect(componentSource).toContain('Informe as duas datas do período personalizado.');
   });
 
   it('uses responsive two-column mobile cards and collapses safely at 390px', () => {

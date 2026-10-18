@@ -30,9 +30,11 @@ import {
   type WhatsAppConnection,
 } from '../../lib/crm-api';
 
-type PeriodMode = 'today' | 'seven' | 'thirty' | 'month' | 'custom';
+export type AttendanceAnalyticsPeriodMode = 'today' | 'seven' | 'thirty' | 'month' | 'custom';
 
-const periodOptions: Array<{ id: PeriodMode; label: string }> = [
+type AttendanceAnalyticsFilters = NonNullable<Parameters<typeof getWhatsAppAttendanceAnalytics>[0]>;
+
+const periodOptions: Array<{ id: AttendanceAnalyticsPeriodMode; label: string }> = [
   { id: 'today', label: 'Hoje' },
   { id: 'seven', label: '7 dias' },
   { id: 'thirty', label: '30 dias' },
@@ -63,13 +65,16 @@ export function formatAttendanceAnalyticsPercentage(value: number) {
   return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
-function saoPauloToday() {
-  return new Intl.DateTimeFormat('en-CA', {
+export function saoPauloToday(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date());
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  return `${value('year')}-${value('month')}-${value('day')}`;
 }
 
 function shiftDate(value: string, days: number) {
@@ -82,13 +87,43 @@ function monthStart(value: string) {
   return `${value.slice(0, 7)}-01`;
 }
 
-function rangeFor(mode: PeriodMode, customFrom: string, customTo: string) {
-  const today = saoPauloToday();
+export function attendanceAnalyticsRangeFor(
+  mode: AttendanceAnalyticsPeriodMode,
+  customFrom: string,
+  customTo: string,
+  today = saoPauloToday(),
+) {
   if (mode === 'today') return { dateFrom: today, dateTo: today };
   if (mode === 'seven') return { dateFrom: shiftDate(today, -6), dateTo: today };
   if (mode === 'thirty') return { dateFrom: shiftDate(today, -29), dateTo: today };
   if (mode === 'custom') return { dateFrom: customFrom, dateTo: customTo };
   return { dateFrom: monthStart(today), dateTo: today };
+}
+
+export function buildAttendanceAnalyticsFilters({
+  categoryId,
+  connectionId,
+  customFrom,
+  customTo,
+  periodMode,
+  status,
+  today = saoPauloToday(),
+}: {
+  categoryId: string;
+  connectionId: string;
+  customFrom: string;
+  customTo: string;
+  periodMode: AttendanceAnalyticsPeriodMode;
+  status: WhatsAppAttendanceStatus | '';
+  today?: string;
+}): AttendanceAnalyticsFilters {
+  const range = attendanceAnalyticsRangeFor(periodMode, customFrom, customTo, today);
+  return {
+    ...range,
+    ...(connectionId ? { connectionId } : {}),
+    ...(categoryId ? { categoryId } : {}),
+    ...(status ? { status } : {}),
+  };
 }
 
 export function WhatsAppAttendanceAnalyticsView({
@@ -98,7 +133,7 @@ export function WhatsAppAttendanceAnalyticsView({
 }) {
   const waitingClockNow = useWaitingClock();
   const today = useMemo(() => saoPauloToday(), []);
-  const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
+  const [periodMode, setPeriodMode] = useState<AttendanceAnalyticsPeriodMode>('month');
   const [customFrom, setCustomFrom] = useState(monthStart(today));
   const [customTo, setCustomTo] = useState(today);
   const [connectionId, setConnectionId] = useState('');
@@ -110,7 +145,22 @@ export function WhatsAppAttendanceAnalyticsView({
   const [loading, setLoading] = useState(true);
   const [filtersLoading, setFiltersLoading] = useState(true);
   const [error, setError] = useState('');
-  const initialAnalyticsLoaded = useRef(false);
+  const analyticsRequestSequence = useRef(0);
+  const analyticsMounted = useRef(false);
+  const initialAnalyticsFilters = useRef<AttendanceAnalyticsFilters>(
+    buildAttendanceAnalyticsFilters({
+      categoryId: '',
+      connectionId: '',
+      customFrom: monthStart(today),
+      customTo: today,
+      periodMode: 'month',
+      status: '',
+      today,
+    }),
+  );
+  const [appliedFilters, setAppliedFilters] = useState<AttendanceAnalyticsFilters>(
+    initialAnalyticsFilters.current,
+  );
 
   const loadFilters = useCallback(async () => {
     setFiltersLoading(true);
@@ -136,38 +186,62 @@ export function WhatsAppAttendanceAnalyticsView({
     }
   }, [connectionId]);
 
-  const loadAnalytics = useCallback(async () => {
-    const range = rangeFor(periodMode, customFrom, customTo);
-    if (!range.dateFrom || !range.dateTo) {
+  const draftFilters = useMemo(
+    () =>
+      buildAttendanceAnalyticsFilters({
+        categoryId,
+        connectionId,
+        customFrom,
+        customTo,
+        periodMode,
+        status,
+      }),
+    [categoryId, connectionId, customFrom, customTo, periodMode, status],
+  );
+
+  const loadAnalytics = useCallback(async (filters: AttendanceAnalyticsFilters) => {
+    if (!filters.dateFrom || !filters.dateTo) {
       setError('Informe as duas datas do período personalizado.');
       return;
     }
+    const requestSequence = analyticsRequestSequence.current + 1;
+    analyticsRequestSequence.current = requestSequence;
     setLoading(true);
     setError('');
     try {
-      setData(
-        await getWhatsAppAttendanceAnalytics({
-          ...range,
-          ...(connectionId ? { connectionId } : {}),
-          ...(categoryId ? { categoryId } : {}),
-          ...(status ? { status } : {}),
-        }),
-      );
+      const nextData = await getWhatsAppAttendanceAnalytics(filters);
+      if (!analyticsMounted.current || requestSequence !== analyticsRequestSequence.current) return;
+      setData(nextData);
     } catch (err) {
+      if (!analyticsMounted.current || requestSequence !== analyticsRequestSequence.current) return;
       setError(err instanceof Error ? err.message : 'Não foi possível carregar os atendimentos.');
     } finally {
-      setLoading(false);
+      if (analyticsMounted.current && requestSequence === analyticsRequestSequence.current) {
+        setLoading(false);
+      }
     }
-  }, [categoryId, connectionId, customFrom, customTo, periodMode, status]);
+  }, []);
+
+  const applyFilters = useCallback(() => {
+    if (!draftFilters.dateFrom || !draftFilters.dateTo) {
+      setError('Informe as duas datas do período personalizado.');
+      return;
+    }
+    setAppliedFilters(draftFilters);
+    void loadAnalytics(draftFilters);
+  }, [draftFilters, loadAnalytics]);
 
   useEffect(() => {
     void loadFilters();
   }, [loadFilters]);
 
   useEffect(() => {
-    if (initialAnalyticsLoaded.current) return;
-    initialAnalyticsLoaded.current = true;
-    void loadAnalytics();
+    analyticsMounted.current = true;
+    void loadAnalytics(initialAnalyticsFilters.current);
+    return () => {
+      analyticsMounted.current = false;
+      analyticsRequestSequence.current += 1;
+    };
   }, [loadAnalytics]);
 
   useEffect(() => {
@@ -188,7 +262,7 @@ export function WhatsAppAttendanceAnalyticsView({
             disabled={loading}
             type="button"
             variant="secondary"
-            onClick={() => void loadAnalytics()}
+            onClick={() => void loadAnalytics(appliedFilters)}
           >
             <RefreshCw aria-hidden="true" size={16} />
             Atualizar
@@ -271,7 +345,7 @@ export function WhatsAppAttendanceAnalyticsView({
             <option value="RESOLVED">Resolvido</option>
           </select>
         </label>
-        <Button disabled={loading} type="button" onClick={() => void loadAnalytics()}>
+        <Button disabled={loading} type="button" onClick={applyFilters}>
           Aplicar filtros
         </Button>
       </Card>
@@ -279,7 +353,11 @@ export function WhatsAppAttendanceAnalyticsView({
       {error ? (
         <div className="notice danger attendance-analytics-error" role="alert">
           <span>{error}</span>
-          <Button type="button" variant="secondary" onClick={() => void loadAnalytics()}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void loadAnalytics(appliedFilters)}
+          >
             Tentar novamente
           </Button>
         </div>

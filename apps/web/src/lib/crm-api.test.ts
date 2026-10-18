@@ -28,6 +28,7 @@ import {
   getReferralSummary,
   getReceivable,
   getReceivablesSummary,
+  getWhatsAppAttendanceAnalytics,
   getWhatsAppConversation,
   getWhatsAppAutoReply,
   getWhatsAppConversationMessagesAround,
@@ -113,6 +114,51 @@ describe('CRM UI formatters', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
 
     await expect(apiFetch('/plans/plan-id', { method: 'DELETE' })).resolves.toBeUndefined();
+  });
+
+  it('serializes attendance analytics dates and dimensions without cache reuse', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ summary: { totalAttendances: 7 } })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getWhatsAppAttendanceAnalytics({
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      categoryId: '22222222-2222-4222-8222-222222222222',
+      status: 'RESOLVED',
+      dateFrom: '2026-10-10',
+      dateTo: '2026-10-16',
+    });
+
+    const call = fetchMock.mock.calls[0] as [string, RequestInit] | undefined;
+    const url = new URL(call?.[0] ?? 'http://localhost');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      dateFrom: '2026-10-10',
+      dateTo: '2026-10-16',
+      categoryId: '22222222-2222-4222-8222-222222222222',
+      status: 'RESOLVED',
+    });
+    expect(call?.[1]).toMatchObject({ cache: 'no-store', credentials: 'include' });
+  });
+
+  it.each([
+    ['Hoje', '2026-10-16', '2026-10-16'],
+    ['7 dias', '2026-10-10', '2026-10-16'],
+    ['30 dias', '2026-09-17', '2026-10-16'],
+    ['Mês atual', '2026-10-01', '2026-10-16'],
+    ['Personalizado', '2026-09-02', '2026-09-08'],
+  ])('sends the %s analytics range in the request URL', async (_label, dateFrom, dateTo) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ summary: {} })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getWhatsAppAttendanceAnalytics({ dateFrom, dateTo });
+
+    const call = fetchMock.mock.calls[0] as [string, RequestInit] | undefined;
+    const url = new URL(call?.[0] ?? 'http://localhost');
+    expect(url.searchParams.get('dateFrom')).toBe(dateFrom);
+    expect(url.searchParams.get('dateTo')).toBe(dateTo);
+    expect(call?.[1]?.cache).toBe('no-store');
   });
 
   it('preserves HTTP status when an error response has no JSON body', async () => {

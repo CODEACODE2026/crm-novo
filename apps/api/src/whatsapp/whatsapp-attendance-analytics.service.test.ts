@@ -77,6 +77,16 @@ function completeResults() {
   ];
 }
 
+function queryDates(call: unknown[]) {
+  return call
+    .flatMap((part) => {
+      if (!part || Array.isArray(part) || typeof part !== 'object') return [];
+      const values = (part as { values?: unknown[] }).values;
+      return Array.isArray(values) ? values : [];
+    })
+    .filter((value): value is Date => value instanceof Date);
+}
+
 describe('WhatsAppAttendanceAnalyticsService', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -146,18 +156,61 @@ describe('WhatsAppAttendanceAnalyticsService', () => {
   it('converts Sao Paulo date boundaries to UTC before querying', async () => {
     const { subject, tx } = setup(completeResults());
     await subject.analytics({ dateFrom: '2026-10-01', dateTo: '2026-10-16' });
-    const queryParts = tx.$queryRaw.mock.calls[0] as unknown[];
-    const dates = queryParts
-      .flatMap((part) => {
-        if (!part || Array.isArray(part) || typeof part !== 'object') return [];
-        const values = (part as { values?: unknown[] }).values;
-        return Array.isArray(values) ? values : [];
-      })
-      .filter((value): value is Date => value instanceof Date);
+    const dates = queryDates(tx.$queryRaw.mock.calls[0] as unknown[]);
     expect(dates.map((date) => date.toISOString())).toEqual([
       '2026-10-01T03:00:00.000Z',
       '2026-10-17T02:59:59.999Z',
     ]);
+  });
+
+  it('uses explicit ranges for period KPIs and volume while keeping today and queues independent', async () => {
+    const todayRows = completeResults();
+    Object.assign(todayRows[0]![0] as object, {
+      total: 1,
+      pending: 1,
+      inProgress: 0,
+      resolved: 0,
+    });
+    todayRows[4] = [{ period: '2026-10-16', opened: 1, resolved: 0 }];
+    const today = setup(todayRows);
+    const todayResult = await today.subject.analytics({
+      dateFrom: '2026-10-16',
+      dateTo: '2026-10-16',
+    });
+
+    const sevenDayRows = completeResults();
+    Object.assign(sevenDayRows[0]![0] as object, {
+      total: 7,
+      pending: 2,
+      inProgress: 1,
+      resolved: 4,
+    });
+    sevenDayRows[4] = [
+      { period: '2026-10-10', opened: 2, resolved: 1 },
+      { period: '2026-10-16', opened: 5, resolved: 3 },
+    ];
+    const sevenDays = setup(sevenDayRows);
+    const sevenDayResult = await sevenDays.subject.analytics({
+      dateFrom: '2026-10-10',
+      dateTo: '2026-10-16',
+    });
+
+    expect(todayResult.summary.totalAttendances).toBe(1);
+    expect(sevenDayResult.summary.totalAttendances).toBe(7);
+    expect(todayResult.dailyVolume).toHaveLength(1);
+    expect(sevenDayResult.dailyVolume).toHaveLength(2);
+    expect(todayResult.summary.resolvedToday).toBe(sevenDayResult.summary.resolvedToday);
+    expect(todayResult.waitingFirstResponse).toEqual(sevenDayResult.waitingFirstResponse);
+    expect(
+      queryDates(today.tx.$queryRaw.mock.calls[0] as unknown[]).map((date) => date.toISOString()),
+    ).toEqual(['2026-10-16T03:00:00.000Z', '2026-10-17T02:59:59.999Z']);
+    expect(
+      queryDates(sevenDays.tx.$queryRaw.mock.calls[0] as unknown[]).map((date) =>
+        date.toISOString(),
+      ),
+    ).toEqual(['2026-10-10T03:00:00.000Z', '2026-10-17T02:59:59.999Z']);
+    expect(queryDates(today.tx.$queryRaw.mock.calls[7] as unknown[])).toEqual([]);
+    expect(queryDates(today.tx.$queryRaw.mock.calls[8] as unknown[])).toEqual([]);
   });
 
   it('rejects malformed dates, identifiers and statuses at the DTO boundary', async () => {

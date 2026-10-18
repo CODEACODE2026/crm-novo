@@ -3244,6 +3244,7 @@ export function getWhatsAppAttendanceAnalytics(
   const query = params.toString();
   return apiFetch<WhatsAppAttendanceAnalytics>(
     `/whatsapp/attendances/analytics${query ? `?${query}` : ''}`,
+    { cache: 'no-store' },
   );
 }
 

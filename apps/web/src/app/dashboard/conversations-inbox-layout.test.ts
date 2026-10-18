@@ -9,6 +9,10 @@ const whatsappInboxSource = readFileSync(
   join(currentDir, '../../components/whatsapp/WhatsAppInbox.tsx'),
   'utf8',
 );
+const whatsappImageLightboxSource = readFileSync(
+  join(currentDir, '../../components/whatsapp/WhatsAppImageLightbox.tsx'),
+  'utf8',
+);
 const whatsappSearchSource = readFileSync(
   join(currentDir, '../../components/whatsapp/WhatsAppSearch.tsx'),
   'utf8',
@@ -501,16 +505,19 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     );
     expect(conversationsSource).not.toContain('const autoPreview =');
     expect(conversationsSource).toContain('conversation-image-media');
-    expect(conversationsSource).toContain('conversation-image-lightbox');
-    expect(conversationsSource).toContain('aria-modal="true"');
+    expect(conversationsSource).toContain('WhatsAppImageLightbox');
+    expect(whatsappImageLightboxSource).toContain('conversation-image-lightbox');
+    expect(whatsappImageLightboxSource).toContain('aria-modal="true"');
     expect(conversationsSource).toContain('setImageLightboxOpen(true)');
-    expect(conversationsSource).toContain("event.key === 'Escape'");
-    expect(conversationsSource).toContain('onClick={closeImageLightbox}');
-    expect(conversationsSource).toContain('event.stopPropagation();');
+    expect(whatsappImageLightboxSource).toContain("event.key === 'Escape'");
+    expect(conversationsSource).toContain('onClose={closeImageLightbox}');
+    expect(whatsappImageLightboxSource).toContain('event.stopPropagation();');
     expect(conversationsSource).toContain('imageButtonRef.current?.focus()');
-    expect(conversationsSource).toContain("document.body.style.overflow = 'hidden'");
-    expect(conversationsSource).toContain('document.body.style.overflow = previousOverflow');
-    expect(conversationsSource).toContain('aria-label="Fechar imagem"');
+    expect(whatsappImageLightboxSource).toContain("document.body.style.overflow = 'hidden'");
+    expect(whatsappImageLightboxSource).toContain(
+      'document.body.style.overflow = previousOverflow',
+    );
+    expect(whatsappImageLightboxSource).toContain('aria-label="Fechar imagem"');
     expect(conversationsSource).toContain('URL.createObjectURL(blob)');
     expect(conversationsSource).toContain('URL.revokeObjectURL(mediaUrlRef.current)');
     expect(conversationsSource).toContain('mediaUrlRef.current = null;');
@@ -610,8 +617,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(stylesSource).toContain('grid-template-columns: auto minmax(0, 1fr) auto;');
     expect(stylesSource).toContain('.conversation-bubble.has-image-media');
     expect(stylesSource).toContain('.conversation-image-lightbox');
-    expect(stylesSource).toContain('max-width: calc(100vw - 20px);');
-    expect(stylesSource).toContain('touch-action: pinch-zoom;');
+    expect(stylesSource).toContain('left: max(10px, env(safe-area-inset-left));');
+    expect(stylesSource).toContain('touch-action: none;');
     expect(stylesSource).toContain('.conversation-media-loading::before');
     expect(stylesSource).toContain('.conversation-media-unavailable.image-placeholder');
     expect(stylesSource).toContain('.conversation-document-media.has-pdf-preview');

@@ -5086,31 +5086,47 @@ a {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  display: grid;
-  place-items: center;
+  overflow: hidden;
   min-width: 0;
-  padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
-    max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
   background: rgb(0 0 0 / 86%);
+  overscroll-behavior: contain;
 }
 
 .conversation-image-lightbox-stage {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(72px, calc(env(safe-area-inset-bottom) + 64px));
+  left: max(12px, env(safe-area-inset-left));
   display: grid;
-  max-width: 90vw;
-  max-height: 90vh;
+  overflow: hidden;
   place-items: center;
+  cursor: zoom-in;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.conversation-image-lightbox-stage[data-zoomed='true'] {
+  cursor: grab;
+}
+
+.conversation-image-lightbox-stage[data-dragging='true'] {
+  cursor: grabbing;
 }
 
 .conversation-image-lightbox-stage img {
   display: block;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: 100%;
+  max-height: 100%;
   width: auto;
   height: auto;
   object-fit: contain;
-  cursor: default;
-  touch-action: pinch-zoom;
+  transform-origin: center;
+  touch-action: none;
   user-select: none;
+  -webkit-user-drag: none;
+  will-change: transform;
 }
 
 .conversation-image-lightbox-close {
@@ -5119,8 +5135,8 @@ a {
   right: max(16px, env(safe-area-inset-right));
   z-index: 1001;
   display: inline-grid;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 999px;
@@ -5130,6 +5146,53 @@ a {
 
 .conversation-image-lightbox-close:hover {
   background: rgb(38 40 44 / 92%);
+}
+
+.conversation-image-lightbox-controls {
+  position: fixed;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 1001;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 999px;
+  background: rgb(20 22 24 / 88%);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 36%);
+  color: #fff;
+  transform: translateX(-50%);
+}
+
+.conversation-image-lightbox-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+}
+
+.conversation-image-lightbox-controls button:hover:not(:disabled) {
+  background: rgb(255 255 255 / 12%);
+}
+
+.conversation-image-lightbox-controls button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.conversation-image-lightbox-controls span {
+  min-width: 42px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .conversation-caption {
@@ -16168,19 +16231,22 @@ tbody tr:hover,
 
   .conversation-image-lightbox {
     min-height: 100dvh;
-    padding: max(12px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
-      max(12px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
 
-  .conversation-image-lightbox-stage,
-  .conversation-image-lightbox-stage img {
-    max-width: calc(100vw - 20px);
-    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  .conversation-image-lightbox-stage {
+    top: max(10px, env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(70px, calc(env(safe-area-inset-bottom) + 62px));
+    left: max(10px, env(safe-area-inset-left));
   }
 
   .conversation-image-lightbox-close {
     top: max(10px, env(safe-area-inset-top));
     right: max(10px, env(safe-area-inset-right));
+  }
+
+  .conversation-image-lightbox-controls {
+    bottom: max(10px, env(safe-area-inset-bottom));
   }
 
   .conversation-composer {

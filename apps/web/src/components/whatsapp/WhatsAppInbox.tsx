@@ -69,6 +69,7 @@ import {
   ConversationSearch,
   renderHighlightedSearchText,
 } from './WhatsAppSearch';
+import { WhatsAppImageLightbox } from './WhatsAppImageLightbox';
 import {
   ApiError,
   createClient,
@@ -6674,7 +6675,6 @@ function ConversationMediaContent({
   const loadingPromiseRef = useRef<Promise<string | null> | null>(null);
   const requestGenerationRef = useRef(0);
   const imageButtonRef = useRef<HTMLButtonElement | null>(null);
-  const lightboxCloseRef = useRef<HTMLButtonElement | null>(null);
   const isPdfDocument =
     message.type === 'DOCUMENT' && message.mediaMimeType?.toLowerCase() === 'application/pdf';
   const imageAutoVisible =
@@ -6763,27 +6763,6 @@ function ConversationMediaContent({
 
     void loadMedia();
   }, [loadMedia, mediaUrl, mediaVisible, message.type]);
-
-  useEffect(() => {
-    if (!imageLightboxOpen) return undefined;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.setTimeout(() => lightboxCloseRef.current?.focus(), 0);
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        closeImageLightbox();
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [closeImageLightbox, imageLightboxOpen]);
 
   async function openDocument() {
     const objectUrl = mediaUrl ?? (await loadMedia());
@@ -7011,30 +6990,7 @@ function ConversationMediaContent({
           <img alt={imageAlt} src={mediaUrl} />
         </button>
         {imageLightboxOpen ? (
-          <div
-            aria-modal="true"
-            className="conversation-image-lightbox"
-            role="dialog"
-            aria-label="Imagem da conversa"
-            onClick={closeImageLightbox}
-          >
-            <button
-              ref={lightboxCloseRef}
-              aria-label="Fechar imagem"
-              className="conversation-image-lightbox-close"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                closeImageLightbox();
-              }}
-            >
-              <X size={22} aria-hidden="true" />
-            </button>
-            <div className="conversation-image-lightbox-stage">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt={imageAlt} src={mediaUrl} onClick={(event) => event.stopPropagation()} />
-            </div>
-          </div>
+          <WhatsAppImageLightbox alt={imageAlt} src={mediaUrl} onClose={closeImageLightbox} />
         ) : null}
       </>
     );

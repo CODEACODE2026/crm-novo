@@ -235,7 +235,8 @@ export class KiragoWebhookNormalizer {
       const separator = line.indexOf(':');
       if (separator <= 0) continue;
       const header = line.slice(0, separator);
-      const property = header.split(';', 1)[0]?.toUpperCase();
+      const propertyWithGroup = header.split(';', 1)[0]?.trim();
+      const property = propertyWithGroup?.replace(/^[a-z0-9-]+\./i, '').toUpperCase();
       const value = decodeVcardText(
         line.slice(separator + 1),
         /(?:^|;)ENCODING=QUOTED-PRINTABLE(?:;|$)/i.test(header),

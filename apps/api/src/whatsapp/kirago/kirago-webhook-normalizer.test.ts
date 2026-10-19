@@ -187,6 +187,97 @@ describe('KiragoWebhookNormalizer', () => {
     });
   });
 
+  it('normalizes grouped vCard phone properties with parameters and mixed casing', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'grouped-contact', Type: 'contactMessage' },
+          Message: {
+            contactMessage: {
+              vcard:
+                'BEGIN:VCARD\nVERSION:3.0\nitem0.FN:Bruno\nitem1.TEL;TYPE=CELL;waid=5544999999999:+55 44 99999-9999\nITEM2.tel;TYPE=CELL:+55 44 98888-8888\nitem3.TEL;TYPE=VOICE:+55 44 97777-7777\nEND:VCARD',
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'contact',
+      contacts: [
+        {
+          displayName: 'Bruno',
+          phones: ['+55 44 99999-9999', '+55 44 98888-8888', '+55 44 97777-7777'],
+        },
+      ],
+    });
+  });
+
+  it('normalizes grouped phones across multiple contacts including a vCard 4 URI', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: {
+            ...payload().event.Info,
+            ID: 'grouped-contacts-array',
+            Type: 'contactsArrayMessage',
+          },
+          Message: {
+            contactsArrayMessage: {
+              contacts: [
+                {
+                  vcard:
+                    'BEGIN:VCARD\nVERSION:3.0\nitem0.N:Doe;Alice;;;\nitem1.TEL;TYPE=CELL:+1 202 555 0100\nitem2.TEL;TYPE=VOICE:+1 202 555 0101\nEND:VCARD',
+                },
+                {
+                  vcard:
+                    'BEGIN:VCARD\nVERSION:4.0\nitem0.FN:Bob\nITEM1.tel;VALUE=uri:tel:+44 20 7946 0958\nEND:VCARD',
+                },
+              ],
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'contacts',
+      contacts: [
+        { displayName: 'Alice Doe', phones: ['+1 202 555 0100', '+1 202 555 0101'] },
+        { displayName: 'Bob', phones: ['+44 20 7946 0958'] },
+      ],
+    });
+  });
+
+  it('ignores empty or malformed grouped phone properties without fabricating numbers', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: {
+            ...payload().event.Info,
+            ID: 'malformed-grouped-contact',
+            Type: 'contactMessage',
+          },
+          Message: {
+            contactMessage: {
+              displayName: 'No Phone',
+              vcard:
+                'BEGIN:VCARD\nVERSION:3.0\nFN:No Phone\nitem1.TEL;TYPE=CELL:\nitem2.:+55 44 99999-9999\nitem3.extra.TEL:+55 44 98888-8888\nEND:VCARD',
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'contact',
+      contacts: [{ displayName: 'No Phone', phones: [] }],
+    });
+  });
+
   it('normalizes multiple contacts, folded vCard lines and international phones', () => {
     const result = normalizer.normalize(
       payload({
@@ -279,7 +370,10 @@ describe('KiragoWebhookNormalizer', () => {
   });
 
   it('limits contact count, phone count and retained vCard size', () => {
-    const phones = Array.from({ length: 12 }, (_, index) => `TEL:+1 202 555 ${index}`);
+    const phones = Array.from(
+      { length: 12 },
+      (_, index) => `item${index + 1}.TEL;TYPE=CELL:+1 202 555 ${index}`,
+    );
     const result = normalizer.normalize(
       payload({
         event: {

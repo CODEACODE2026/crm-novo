@@ -142,6 +142,7 @@ import {
   type WhatsAppConversationLabelColor,
   type WhatsAppConversationMessage,
   type WhatsAppSavedSticker,
+  type WhatsAppSharedContact,
   type WhatsAppConversationMessageStatus,
   type WhatsAppConversationMessageType,
   type WhatsAppConversationMessagesCursor,
@@ -172,6 +173,20 @@ type ConversationFilter = 'all' | 'unread' | 'followup' | 'clients' | 'guests';
 type AttendanceFilter = 'ACTIVE' | 'PENDING' | 'IN_PROGRESS' | 'ALL';
 type ContactDrawerTab = 'summary' | 'attendances' | 'financial';
 type StartConversationRecipientType = 'client' | 'guest';
+type SharedContactActionResult = { feedback?: string } | void;
+type SharedContactAction = (
+  contact: WhatsAppSharedContact,
+  phone: string,
+  isCurrent: () => boolean,
+) => Promise<SharedContactActionResult>;
+type SharedContactConversationLookup = {
+  ambiguous: boolean;
+  conversation: WhatsAppConversation | null;
+};
+type StartConversationSeed = {
+  phone: string;
+  whatsAppConnectionId: string;
+} | null;
 export type ConversationComposerMedia = {
   file: File;
   kind: 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO' | 'STICKER';
@@ -283,6 +298,7 @@ const quickReplyMenuComposerGap = 8;
 const quickReplyMenuMobileMaxHeight = 280;
 const quickReplyMenuMobileMinHeight = 112;
 const conversationPresencePauseDelayMs = 3000;
+const sharedContactLookupCacheTtlMs = 30_000;
 
 type ConversationPresenceKind = 'text' | 'audio';
 type ConversationPresenceState = 'paused' | `composing:${ConversationPresenceKind}`;
@@ -476,6 +492,80 @@ export function stopConversationPixCopyEvent(
   event.stopPropagation();
 }
 
+export function sharedContactBrazilPhoneCandidates(value: string) {
+  const trimmed = value.trim();
+  const digits = trimmed.replace(/\D/g, '');
+
+  if (!digits || trimmed.startsWith('00')) return [];
+  if (trimmed.startsWith('+') && !digits.startsWith('55')) return [];
+
+  const withCountryCode = digits.startsWith('55') ? digits : `55${digits}`;
+  if (!/^55\d{10,11}$/.test(withCountryCode)) return [];
+
+  const candidates = new Set([withCountryCode]);
+  const subscriber = withCountryCode.slice(4);
+
+  if (/^[6-9]\d{7}$/.test(subscriber)) {
+    candidates.add(`${withCountryCode.slice(0, 4)}9${subscriber}`);
+  } else if (/^9[6-9]\d{7}$/.test(subscriber)) {
+    candidates.add(`${withCountryCode.slice(0, 4)}${subscriber.slice(1)}`);
+  }
+
+  return [...candidates];
+}
+
+export function findExactSharedContactConversation(
+  conversations: WhatsAppConversation[],
+  whatsAppConnectionId: string,
+  phoneCandidates: string[],
+) {
+  const candidates = new Set(phoneCandidates);
+  const matches = conversations.filter(
+    (conversation) =>
+      conversation.whatsAppConnectionId === whatsAppConnectionId &&
+      candidates.has(phoneDigits(conversation.phoneNormalized)),
+  );
+  const uniqueMatches = [
+    ...new Map(matches.map((conversation) => [conversation.id, conversation])).values(),
+  ];
+  return uniqueMatches.length === 1 ? (uniqueMatches[0] ?? null) : null;
+}
+
+export function hasAmbiguousSharedContactConversation(
+  conversations: WhatsAppConversation[],
+  whatsAppConnectionId: string,
+  phoneCandidates: string[],
+) {
+  const candidates = new Set(phoneCandidates);
+  return (
+    new Set(
+      conversations
+        .filter(
+          (conversation) =>
+            conversation.whatsAppConnectionId === whatsAppConnectionId &&
+            candidates.has(phoneDigits(conversation.phoneNormalized)),
+        )
+        .map((conversation) => conversation.id),
+    ).size > 1
+  );
+}
+
+export function findExactSharedContactClient(clients: ClientOption[], phoneCandidates: string[]) {
+  const candidates = new Set(phoneCandidates);
+  const exactMatches = clients.filter((client) =>
+    candidates.has(phoneDigits(client.phoneNormalized)),
+  );
+  return exactMatches.length === 1 ? (exactMatches[0] ?? null) : null;
+}
+
+export function shouldApplySharedContactActionResult(
+  sourceConversationId: string,
+  currentConversationId: string | null | undefined,
+  cardIsCurrent: boolean,
+) {
+  return cardIsCurrent && sourceConversationId === currentConversationId;
+}
+
 export function WhatsAppInbox({
   onBackToConversationList,
   onBackToDashboard,
@@ -617,6 +707,7 @@ export function WhatsAppInbox({
   );
   const [mobileMode, setMobileMode] = useState<'list' | 'chat'>('list');
   const [startConversationOpen, setStartConversationOpen] = useState(false);
+  const [startConversationSeed, setStartConversationSeed] = useState<StartConversationSeed>(null);
   const [startingConversation, setStartingConversation] = useState(false);
   const [startConversationError, setStartConversationError] = useState('');
   const [guestClientCreateConversation, setGuestClientCreateConversation] =
@@ -669,6 +760,16 @@ export function WhatsAppInbox({
   const editingMessageRef = useRef<string | null>(null);
   const forwardingRef = useRef(false);
   const startingConversationRef = useRef(false);
+  const sharedContactConversationLookupsRef = useRef(
+    new Map<string, Promise<SharedContactConversationLookup>>(),
+  );
+  const sharedContactClientLookupsRef = useRef(new Map<string, Promise<ClientOption | null>>());
+  const sharedContactConversationCacheRef = useRef(
+    new Map<string, { expiresAt: number; value: SharedContactConversationLookup }>(),
+  );
+  const sharedContactClientCacheRef = useRef(
+    new Map<string, { expiresAt: number; value: ClientOption | null }>(),
+  );
   const contactPixWhatsAppIntentIdsRef = useRef(new Set<string>());
   const realtimeListRefreshTimeoutRef = useRef<number | null>(null);
   const realtimeListReplaceRef = useRef(false);
@@ -1430,9 +1531,12 @@ export function WhatsAppInbox({
 
   const loadStartConversationConnections = useCallback(async () => {
     try {
-      setWhatsAppConnections(await listWhatsAppConnections());
+      const connections = await listWhatsAppConnections();
+      setWhatsAppConnections(connections);
+      return connections;
     } catch {
       setWhatsAppConnections([]);
+      return [];
     }
   }, []);
 
@@ -3617,6 +3721,233 @@ export function WhatsAppInbox({
     }
   }
 
+  function sharedContactActionContext(phone: string) {
+    const conversation = selectedConversationRef.current;
+    if (!conversation) {
+      return { error: 'Selecione uma conversa antes de usar este contato.' } as const;
+    }
+
+    const phoneCandidates = sharedContactBrazilPhoneCandidates(phone);
+    if (!phoneCandidates.length) {
+      return {
+        error: 'Número incompatível com o fluxo atual, que aceita telefones brasileiros.',
+      } as const;
+    }
+
+    return {
+      conversation,
+      phoneCandidates,
+      lookupKey: `${conversation.whatsAppConnectionId}:${[...phoneCandidates].sort().join(',')}`,
+    } as const;
+  }
+
+  async function findSharedContactConversation(
+    currentConversation: WhatsAppConversation,
+    phoneCandidates: string[],
+    lookupKey: string,
+  ) {
+    const localMatch = findExactSharedContactConversation(
+      conversationsRef.current,
+      currentConversation.whatsAppConnectionId,
+      phoneCandidates,
+    );
+    if (localMatch) return { ambiguous: false, conversation: localMatch };
+    if (
+      hasAmbiguousSharedContactConversation(
+        conversationsRef.current,
+        currentConversation.whatsAppConnectionId,
+        phoneCandidates,
+      )
+    ) {
+      return { ambiguous: true, conversation: null };
+    }
+
+    const cached = sharedContactConversationCacheRef.current.get(lookupKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    sharedContactConversationCacheRef.current.delete(lookupKey);
+
+    const existingLookup = sharedContactConversationLookupsRef.current.get(lookupKey);
+    if (existingLookup) return existingLookup;
+
+    const lookup = Promise.all(
+      phoneCandidates.map((candidate) =>
+        listWhatsAppConversations({
+          attendanceStatus: 'ALL',
+          page: 1,
+          pageSize: 20,
+          search: candidate,
+          whatsAppConnectionId: currentConversation.whatsAppConnectionId,
+        }),
+      ),
+    )
+      .then((pages) => {
+        const conversations = pages.flatMap((page) => page.items);
+        const result: SharedContactConversationLookup = {
+          ambiguous: hasAmbiguousSharedContactConversation(
+            conversations,
+            currentConversation.whatsAppConnectionId,
+            phoneCandidates,
+          ),
+          conversation: findExactSharedContactConversation(
+            conversations,
+            currentConversation.whatsAppConnectionId,
+            phoneCandidates,
+          ),
+        };
+        sharedContactConversationCacheRef.current.set(lookupKey, {
+          expiresAt: Date.now() + sharedContactLookupCacheTtlMs,
+          value: result,
+        });
+        return result;
+      })
+      .finally(() => sharedContactConversationLookupsRef.current.delete(lookupKey));
+
+    sharedContactConversationLookupsRef.current.set(lookupKey, lookup);
+    return lookup;
+  }
+
+  const startSharedContactConversation: SharedContactAction = async (
+    _contact,
+    phone,
+    isCurrent,
+  ) => {
+    const context = sharedContactActionContext(phone);
+    if ('error' in context) return { feedback: context.error };
+
+    try {
+      const lookup = await findSharedContactConversation(
+        context.conversation,
+        context.phoneCandidates,
+        context.lookupKey,
+      );
+      if (
+        !shouldApplySharedContactActionResult(
+          context.conversation.id,
+          selectedConversationRef.current?.id,
+          isCurrent(),
+        )
+      )
+        return;
+      if (lookup.ambiguous) {
+        return {
+          feedback:
+            'Há mais de uma conversa exata para as variantes deste telefone. Selecione a conversa manualmente.',
+        };
+      }
+      if (lookup.conversation) {
+        await selectConversation(lookup.conversation);
+        return;
+      }
+
+      const availableConnections = await loadStartConversationConnections();
+      if (
+        !shouldApplySharedContactActionResult(
+          context.conversation.id,
+          selectedConversationRef.current?.id,
+          isCurrent(),
+        )
+      )
+        return;
+      if (
+        !availableConnections.some(
+          (connection) => connection.id === context.conversation.whatsAppConnectionId,
+        )
+      ) {
+        return {
+          feedback: 'A conexão WhatsApp desta conversa não está disponível para iniciar um chat.',
+        };
+      }
+
+      setStartConversationError('');
+      setStartConversationSeed({
+        phone,
+        whatsAppConnectionId: context.conversation.whatsAppConnectionId,
+      });
+      setStartConversationOpen(true);
+      return;
+    } catch (err) {
+      return {
+        feedback: conversationErrorMessage(
+          err,
+          'Não foi possível localizar ou preparar a conversa.',
+        ),
+      };
+    }
+  };
+
+  const openSharedContactClient: SharedContactAction = async (_contact, phone, isCurrent) => {
+    const context = sharedContactActionContext(phone);
+    if ('error' in context) return { feedback: context.error };
+
+    const cached = sharedContactClientCacheRef.current.get(context.lookupKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      if (!cached.value) {
+        return {
+          feedback:
+            'Cliente não localizado com correspondência exata. O cadastro rápido não está disponível nesta etapa.',
+        };
+      }
+      if (
+        !shouldApplySharedContactActionResult(
+          context.conversation.id,
+          selectedConversationRef.current?.id,
+          isCurrent(),
+        )
+      )
+        return;
+      await onOpenClient(cached.value.id);
+      return;
+    }
+    sharedContactClientCacheRef.current.delete(context.lookupKey);
+
+    const existingLookup = sharedContactClientLookupsRef.current.get(context.lookupKey);
+    const lookup =
+      existingLookup ??
+      Promise.all(
+        context.phoneCandidates.map((candidate) => listClientOptions(candidate, { limit: 10 })),
+      )
+        .then((groups) => {
+          const clientsById = new Map<string, ClientOption>();
+          groups.flat().forEach((client) => clientsById.set(client.id, client));
+          const result = findExactSharedContactClient(
+            [...clientsById.values()],
+            context.phoneCandidates,
+          );
+          sharedContactClientCacheRef.current.set(context.lookupKey, {
+            expiresAt: Date.now() + sharedContactLookupCacheTtlMs,
+            value: result,
+          });
+          return result;
+        })
+        .finally(() => sharedContactClientLookupsRef.current.delete(context.lookupKey));
+
+    if (!existingLookup) sharedContactClientLookupsRef.current.set(context.lookupKey, lookup);
+
+    try {
+      const client = await lookup;
+      if (
+        !shouldApplySharedContactActionResult(
+          context.conversation.id,
+          selectedConversationRef.current?.id,
+          isCurrent(),
+        )
+      )
+        return;
+      if (!client) {
+        return {
+          feedback:
+            'Cliente não localizado com correspondência exata. O cadastro rápido não está disponível nesta etapa.',
+        };
+      }
+      await onOpenClient(client.id);
+      return;
+    } catch (err) {
+      return {
+        feedback: conversationErrorMessage(err, 'Não foi possível consultar ou abrir o cliente.'),
+      };
+    }
+  };
+
   async function startNewConversation(input: {
     body: string;
     client: ClientOption | null;
@@ -3648,6 +3979,7 @@ export function WhatsAppInbox({
       const result = await startWhatsAppConversation(payload);
 
       setStartConversationOpen(false);
+      setStartConversationSeed(null);
       setDrafts((current) => ({ ...current, [result.conversation.id]: '' }));
       setConversations((current) => upsertConversationList(current, result.conversation));
       setMessages([result.message]);
@@ -3679,9 +4011,15 @@ export function WhatsAppInbox({
         <StartConversationModal
           connections={whatsAppConnections}
           error={startConversationError}
+          initialConnectionId={startConversationSeed?.whatsAppConnectionId}
+          initialPhone={startConversationSeed?.phone}
+          initialRecipientType={startConversationSeed ? 'guest' : undefined}
           loading={startingConversation}
           onClose={() => {
-            if (!startingConversation) setStartConversationOpen(false);
+            if (!startingConversation) {
+              setStartConversationOpen(false);
+              setStartConversationSeed(null);
+            }
           }}
           onSubmit={(input) => void startNewConversation(input)}
         />
@@ -3843,6 +4181,7 @@ export function WhatsAppInbox({
           onSelect={(conversation) => void selectConversation(conversation)}
           onStartConversation={() => {
             setStartConversationError('');
+            setStartConversationSeed(null);
             void loadStartConversationConnections();
             setStartConversationOpen(true);
           }}
@@ -3966,6 +4305,8 @@ export function WhatsAppInbox({
                 onReply={selectReplyTarget}
                 onRetry={(message) => void retryConversationMessage(message)}
                 onSaveSticker={(message) => void saveStickerMessage(message)}
+                onStartSharedContactConversation={startSharedContactConversation}
+                onOpenSharedContactClient={openSharedContactClient}
               />
 
               <ConversationComposer
@@ -4518,12 +4859,18 @@ function ConversationForwardPreview({
 function StartConversationModal({
   connections,
   error,
+  initialConnectionId,
+  initialPhone,
+  initialRecipientType,
   loading,
   onClose,
   onSubmit,
 }: {
   connections: WhatsAppConnection[];
   error: string;
+  initialConnectionId?: string | undefined;
+  initialPhone?: string | undefined;
+  initialRecipientType?: StartConversationRecipientType | undefined;
   loading: boolean;
   onClose: () => void;
   onSubmit: (input: {
@@ -4534,11 +4881,13 @@ function StartConversationModal({
     whatsAppConnectionId: string;
   }) => void;
 }) {
-  const [recipientType, setRecipientType] = useState<StartConversationRecipientType>('client');
+  const [recipientType, setRecipientType] = useState<StartConversationRecipientType>(
+    initialRecipientType ?? 'client',
+  );
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
-  const [phone, setPhone] = useState('');
-  const [connectionId, setConnectionId] = useState(connections[0]?.id ?? '');
+  const [phone, setPhone] = useState(initialPhone ?? '');
+  const [connectionId, setConnectionId] = useState(initialConnectionId ?? connections[0]?.id ?? '');
   const [body, setBody] = useState('');
   const [localError, setLocalError] = useState('');
 
@@ -5536,6 +5885,8 @@ function ConversationMessages({
   onReply,
   onRetry,
   onSaveSticker,
+  onStartSharedContactConversation,
+  onOpenSharedContactClient,
   reactionErrors,
   reactionPickerMessageId,
   reactingMessageIds,
@@ -5579,6 +5930,8 @@ function ConversationMessages({
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   onSaveSticker: (message: WhatsAppConversationMessage) => void;
+  onStartSharedContactConversation: SharedContactAction;
+  onOpenSharedContactClient: SharedContactAction;
   reactionErrors: Record<string, string>;
   reactionPickerMessageId: string | null;
   reactingMessageIds: Set<string>;
@@ -5737,6 +6090,8 @@ function ConversationMessages({
                     onReply={onReply}
                     onRetry={onRetry}
                     onSaveSticker={onSaveSticker}
+                    onStartSharedContactConversation={onStartSharedContactConversation}
+                    onOpenSharedContactClient={onOpenSharedContactClient}
                   />
                 </Fragment>
               );
@@ -5972,6 +6327,8 @@ function ConversationBubble({
   onReply,
   onRetry,
   onSaveSticker,
+  onStartSharedContactConversation,
+  onOpenSharedContactClient,
 }: {
   conversationId: string;
   deleteConfirmOpen: boolean;
@@ -6006,6 +6363,8 @@ function ConversationBubble({
   onReply: (message: WhatsAppConversationMessage) => void;
   onRetry: (message: WhatsAppConversationMessage) => void;
   onSaveSticker: (message: WhatsAppConversationMessage) => void;
+  onStartSharedContactConversation: SharedContactAction;
+  onOpenSharedContactClient: SharedContactAction;
 }) {
   const outbound = message.direction === 'OUTBOUND';
   const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -6276,7 +6635,13 @@ function ConversationBubble({
         ) : text ? (
           <p>{renderHighlightedSearchText(text, searchTerm)}</p>
         ) : null}
-        {!message.deleted ? <ConversationContactContent message={message} /> : null}
+        {!message.deleted ? (
+          <ConversationContactContent
+            message={message}
+            onOpenClient={onOpenSharedContactClient}
+            onStartConversation={onStartSharedContactConversation}
+          />
+        ) : null}
         {!message.deleted ? (
           <ConversationMediaContent conversationId={conversationId} message={message} />
         ) : null}
@@ -6711,7 +7076,15 @@ function useMediaVisibility(enabled: boolean) {
   return { elementRef, visible };
 }
 
-function ConversationContactContent({ message }: { message: WhatsAppConversationMessage }) {
+export function ConversationContactContent({
+  message,
+  onOpenClient,
+  onStartConversation,
+}: {
+  message: WhatsAppConversationMessage;
+  onOpenClient: SharedContactAction;
+  onStartConversation: SharedContactAction;
+}) {
   if (message.type !== 'CONTACT' && message.type !== 'CONTACTS') return null;
 
   const sharedContacts = message.contacts ?? [];
@@ -6720,23 +7093,159 @@ function ConversationContactContent({ message }: { message: WhatsAppConversation
   return (
     <div className="conversation-shared-contacts" aria-label="Contatos compartilhados">
       {contacts.map((contact, index) => (
-        <div
-          className="conversation-shared-contact"
+        <SharedContactCard
+          contact={contact}
           key={`${contact.displayName ?? 'contact'}-${index}`}
-        >
-          <User aria-hidden="true" size={22} />
-          <div>
-            <strong>{contact.displayName || 'Contato sem nome'}</strong>
-            {contact.phones.length ? (
-              contact.phones.map((phone) => <span key={phone}>{phone}</span>)
-            ) : (
-              <span>Telefone não informado</span>
-            )}
-            <small>Contato compartilhado</small>
-          </div>
-        </div>
+          onOpenClient={onOpenClient}
+          onStartConversation={onStartConversation}
+        />
       ))}
     </div>
+  );
+}
+
+function SharedContactCard({
+  contact,
+  onOpenClient,
+  onStartConversation,
+}: {
+  contact: WhatsAppSharedContact;
+  onOpenClient: SharedContactAction;
+  onStartConversation: SharedContactAction;
+}) {
+  const actionablePhones = contact.phones.filter(
+    (phone, index, phones) =>
+      sharedContactBrazilPhoneCandidates(phone).length > 0 && phones.indexOf(phone) === index,
+  );
+  const actionContextKey = `${contact.displayName ?? ''}\u0000${contact.phones.join('\u0000')}`;
+  const defaultSelectedPhone = actionablePhones.length === 1 ? (actionablePhones[0] ?? '') : '';
+  const [selectedPhone, setSelectedPhone] = useState(defaultSelectedPhone);
+  const [busyAction, setBusyAction] = useState<'client' | 'conversation' | null>(null);
+  const [feedback, setFeedback] = useState('');
+  const actionGenerationRef = useRef(0);
+  const actionInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const selectedPhoneIsValid = actionablePhones.includes(selectedPhone);
+
+  useEffect(() => {
+    actionGenerationRef.current += 1;
+    actionInFlightRef.current = false;
+    setSelectedPhone(defaultSelectedPhone);
+    setBusyAction(null);
+    setFeedback('');
+  }, [actionContextKey, defaultSelectedPhone]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      actionGenerationRef.current += 1;
+      actionInFlightRef.current = false;
+    };
+  }, []);
+
+  async function runAction(action: 'client' | 'conversation') {
+    if (actionInFlightRef.current || !selectedPhoneIsValid) return;
+
+    actionInFlightRef.current = true;
+    const actionGeneration = actionGenerationRef.current + 1;
+    actionGenerationRef.current = actionGeneration;
+    const isCurrent = () => mountedRef.current && actionGenerationRef.current === actionGeneration;
+    setBusyAction(action);
+    setFeedback('');
+    try {
+      const result = await (action === 'conversation'
+        ? onStartConversation(contact, selectedPhone, isCurrent)
+        : onOpenClient(contact, selectedPhone, isCurrent));
+      if (!isCurrent()) return;
+      setFeedback(result?.feedback ?? '');
+    } catch {
+      if (!isCurrent()) return;
+      setFeedback('Não foi possível concluir a ação. Tente novamente.');
+    } finally {
+      if (isCurrent()) {
+        actionInFlightRef.current = false;
+        setBusyAction(null);
+      }
+    }
+  }
+
+  return (
+    <article className="conversation-shared-contact">
+      <User aria-hidden="true" size={22} />
+      <div className="conversation-shared-contact-content">
+        <strong>{contact.displayName || 'Contato sem nome'}</strong>
+        {contact.phones.length ? (
+          contact.phones.map((phone, index) => (
+            <span key={`${phone}-${index}`}>{phone || 'Telefone não informado'}</span>
+          ))
+        ) : (
+          <span>Telefone não informado</span>
+        )}
+        <small>Contato compartilhado</small>
+
+        {actionablePhones.length > 1 ? (
+          <label className="conversation-shared-contact-phone-picker">
+            <span>Telefone para a ação</span>
+            <select
+              aria-label={`Telefone para ${contact.displayName || 'contato compartilhado'}`}
+              disabled={busyAction !== null}
+              value={selectedPhone}
+              onChange={(event) => {
+                actionGenerationRef.current += 1;
+                setSelectedPhone(event.target.value);
+                setFeedback('');
+              }}
+            >
+              <option value="">Selecione um telefone</option>
+              {actionablePhones.map((phone) => (
+                <option key={phone} value={phone}>
+                  {phone}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
+        <div className="conversation-shared-contact-actions">
+          <button
+            type="button"
+            disabled={!selectedPhoneIsValid || busyAction !== null}
+            onClick={() => void runAction('conversation')}
+          >
+            {busyAction === 'conversation' ? (
+              <Loader2 aria-hidden="true" className="spin" size={14} />
+            ) : (
+              <MessagesSquare aria-hidden="true" size={14} />
+            )}
+            Iniciar conversa
+          </button>
+          <button
+            type="button"
+            disabled={!selectedPhoneIsValid || busyAction !== null}
+            onClick={() => void runAction('client')}
+          >
+            {busyAction === 'client' ? (
+              <Loader2 aria-hidden="true" className="spin" size={14} />
+            ) : (
+              <UserCheck aria-hidden="true" size={14} />
+            )}
+            Ver cliente
+          </button>
+        </div>
+
+        {!actionablePhones.length ? (
+          <span className="conversation-shared-contact-feedback" role="status">
+            Número indisponível ou incompatível com o fluxo brasileiro atual.
+          </span>
+        ) : feedback ? (
+          <span className="conversation-shared-contact-feedback" role="status">
+            {feedback}
+          </span>
+        ) : null}
+      </div>
+    </article>
   );
 }
 

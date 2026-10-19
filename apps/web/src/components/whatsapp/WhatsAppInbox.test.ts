@@ -13,6 +13,7 @@ import {
   calculateReactionPickerPosition,
   classifyContactPixState,
   classifyConversationIncomingFile,
+  ConversationContactContent,
   ConversationPixCopyAction,
   contactDrawerVisibleItems,
   contactReferenceFinancialState,
@@ -24,6 +25,9 @@ import {
   contactReceivablePaginationPages,
   contactReceivableAllowsPixAction,
   filterContactReferences,
+  findExactSharedContactClient,
+  findExactSharedContactConversation,
+  hasAmbiguousSharedContactConversation,
   contactRelevantReceivable,
   contactReceivablesForReference,
   conversationComposerActionMode,
@@ -52,6 +56,8 @@ import {
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
   savedStickerPreviewKind,
+  sharedContactBrazilPhoneCandidates,
+  shouldApplySharedContactActionResult,
   resolveConversationPixCopyAction,
   shouldAutoReadRealtimeMessage,
   shouldApplyConversationListResponse,
@@ -71,6 +77,7 @@ import {
 } from './whatsapp-quick-replies';
 import type {
   ClientEvent,
+  ClientOption,
   ClientReference,
   PaymentIntent,
   Receivable,
@@ -2544,6 +2551,147 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(whatsAppInboxSource).toContain('Telefone não informado');
     expect(whatsAppInboxSource).not.toContain('dangerouslySetInnerHTML');
     expect(globalStylesSource).toContain('.conversation-shared-contact');
+  });
+
+  it('builds exact Brazilian phone candidates without accepting unsupported international numbers', () => {
+    expect(sharedContactBrazilPhoneCandidates('+55 44 9821-2815')).toEqual([
+      '554498212815',
+      '5544998212815',
+    ]);
+    expect(sharedContactBrazilPhoneCandidates('55 44 99821-2815')).toEqual([
+      '5544998212815',
+      '554498212815',
+    ]);
+    expect(sharedContactBrazilPhoneCandidates('(44) 3333-2222')).toEqual(['554433332222']);
+    expect(sharedContactBrazilPhoneCandidates('+1 415 555 0100')).toEqual([]);
+    expect(sharedContactBrazilPhoneCandidates('001 415 555 0100')).toEqual([]);
+    expect(sharedContactBrazilPhoneCandidates('123')).toEqual([]);
+  });
+
+  it('matches a shared contact conversation only by exact phone and selected connection', () => {
+    const candidates = sharedContactBrazilPhoneCandidates('+55 44 9821-2815');
+    const expected = conversation('expected', { phoneNormalized: '5544998212815' });
+    const items = [
+      conversation('other-connection', {
+        phoneNormalized: '5544998212815',
+        whatsAppConnectionId: 'connection-2',
+      }),
+      conversation('partial', { phoneNormalized: '44554998212815' }),
+      expected,
+    ];
+
+    expect(findExactSharedContactConversation(items, 'connection-1', candidates)).toBe(expected);
+    expect(findExactSharedContactConversation(items, 'connection-3', candidates)).toBeNull();
+  });
+
+  it('blocks ambiguous legacy and canonical conversation matches', () => {
+    const candidates = sharedContactBrazilPhoneCandidates('+55 44 9821-2815');
+    const legacy = conversation('legacy', { phoneNormalized: '554498212815' });
+    const canonical = conversation('canonical', { phoneNormalized: '5544998212815' });
+
+    expect(
+      findExactSharedContactConversation([legacy, canonical], 'connection-1', candidates),
+    ).toBe(null);
+    expect(
+      hasAmbiguousSharedContactConversation([legacy, canonical], 'connection-1', candidates),
+    ).toBe(true);
+    expect(
+      hasAmbiguousSharedContactConversation([legacy, legacy], 'connection-1', candidates),
+    ).toBe(false);
+  });
+
+  it('discards stale shared-contact action responses after context changes', () => {
+    expect(shouldApplySharedContactActionResult('source', 'source', true)).toBe(true);
+    expect(shouldApplySharedContactActionResult('source', 'other', true)).toBe(false);
+    expect(shouldApplySharedContactActionResult('source', 'source', false)).toBe(false);
+    expect(shouldApplySharedContactActionResult('source', null, true)).toBe(false);
+  });
+
+  it('opens a client only for one unambiguous exact phone match', () => {
+    const candidates = sharedContactBrazilPhoneCandidates('+55 44 9821-2815');
+    const exact: ClientOption = {
+      email: null,
+      id: 'client-1',
+      name: 'Bruno',
+      phoneNormalized: '5544998212815',
+      preferredPixProvider: null,
+      reference: 'BRUNO',
+    };
+    const partial = { ...exact, id: 'client-2', phoneNormalized: '44554998212815' };
+
+    expect(findExactSharedContactClient([partial, exact], candidates)).toBe(exact);
+    expect(
+      findExactSharedContactClient(
+        [exact, { ...exact, id: 'client-3', phoneNormalized: '554498212815' }],
+        candidates,
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps shared contact actions explicit, accessible and free of automatic sends', () => {
+    const actionStart = whatsAppInboxSource.indexOf('const startSharedContactConversation');
+    const actionEnd = whatsAppInboxSource.indexOf('const openSharedContactClient', actionStart);
+    const startActionSource = whatsAppInboxSource.slice(actionStart, actionEnd);
+
+    expect(startActionSource).toContain('setStartConversationSeed');
+    expect(startActionSource).not.toContain('startWhatsAppConversation(');
+    expect(whatsAppInboxSource).toContain('Telefone para a ação');
+    expect(whatsAppInboxSource).toContain('Iniciar conversa');
+    expect(whatsAppInboxSource).toContain('Ver cliente');
+    expect(whatsAppInboxSource).toContain('disabled={!selectedPhoneIsValid');
+    expect(whatsAppInboxSource).toContain('actionInFlightRef.current');
+    expect(whatsAppInboxSource).toContain('shouldApplySharedContactActionResult');
+    expect(globalStylesSource).toContain('@media (max-width: 430px)');
+    expect(globalStylesSource).toContain(
+      '.conversation-shared-contact-actions button:focus-visible',
+    );
+  });
+
+  it('renders independent actions for one, many and phone-less shared contacts', () => {
+    const noop = () => Promise.resolve();
+    const singleMarkup = renderToStaticMarkup(
+      createElement(ConversationContactContent, {
+        message: message({
+          type: 'CONTACT',
+          contacts: [{ displayName: 'Bruno', phones: ['+55 44 99821-2815'] }],
+        }),
+        onOpenClient: noop,
+        onStartConversation: noop,
+      }),
+    );
+    const contacts = Array.from({ length: 10 }, (_, index) => ({
+      displayName: `Contato ${index + 1}`,
+      phones: index === 0 ? [] : [`+55 44 99821-${String(2800 + index)}`],
+    }));
+    const manyMarkup = renderToStaticMarkup(
+      createElement(ConversationContactContent, {
+        message: message({ type: 'CONTACTS', contacts }),
+        onOpenClient: noop,
+        onStartConversation: noop,
+      }),
+    );
+    const multiplePhonesMarkup = renderToStaticMarkup(
+      createElement(ConversationContactContent, {
+        message: message({
+          type: 'CONTACT',
+          contacts: [
+            {
+              displayName: 'João',
+              phones: ['+55 44 99821-2815', '+55 44 3333-2222'],
+            },
+          ],
+        }),
+        onOpenClient: noop,
+        onStartConversation: noop,
+      }),
+    );
+
+    expect(singleMarkup).toContain('Iniciar conversa');
+    expect(singleMarkup).toContain('Ver cliente');
+    expect(manyMarkup.match(/<article/g)).toHaveLength(10);
+    expect(manyMarkup).toContain('Telefone não informado');
+    expect(multiplePhonesMarkup).toContain('<select');
+    expect(multiplePhonesMarkup).toContain('Selecione um telefone');
   });
 
   it('treats available VIDEO as inline media and hides technical video placeholders', () => {

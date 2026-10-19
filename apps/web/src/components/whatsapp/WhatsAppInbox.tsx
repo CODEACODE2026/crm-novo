@@ -2771,18 +2771,25 @@ export function WhatsAppInbox({
       focusComposer = true,
       replyToOverride = null,
       mediaOverride = null,
+      mediaCaptionOverride,
       ignoreReply = false,
     }: {
       focusComposer?: boolean;
       replyToOverride?: WhatsAppConversationMessage | null;
       mediaOverride?: ConversationComposerMedia | null;
+      mediaCaptionOverride?: string;
       ignoreReply?: boolean;
     } = {},
   ) {
     if (!selectedConversation || sending || sendingRef.current) return false;
 
-    const body = (bodyOverride ?? selectedDraft).trim();
-    const mediaToSend = bodyOverride ? null : (mediaOverride ?? selectedMedia);
+    const hasMediaCaptionOverride = mediaCaptionOverride !== undefined;
+    const body = (mediaCaptionOverride ?? bodyOverride ?? selectedDraft).trim();
+    const mediaToSend = hasMediaCaptionOverride
+      ? mediaOverride
+      : bodyOverride
+        ? null
+        : (mediaOverride ?? selectedMedia);
     const replyToSend = ignoreReply ? null : bodyOverride ? replyToOverride : replyTarget;
     if (!body && !mediaToSend) return false;
     if (replyToSend && mediaToSend && mediaToSend.kind !== 'STICKER') {
@@ -2794,7 +2801,7 @@ export function WhatsAppInbox({
     setSending(true);
     setSendError('');
     pauseConversationPresence(selectedConversation.id);
-    if (!bodyOverride && !mediaToSend) {
+    if (bodyOverride === undefined && !hasMediaCaptionOverride && !mediaToSend) {
       setDrafts((current) =>
         (current[selectedConversation.id] ?? '').trim() === body
           ? { ...current, [selectedConversation.id]: '' }
@@ -2841,7 +2848,7 @@ export function WhatsAppInbox({
       if (mediaToSend) {
         clearComposerMedia();
       }
-      if (!bodyOverride) {
+      if (bodyOverride === undefined && !hasMediaCaptionOverride) {
         setDrafts((current) =>
           (current[selectedConversation.id] ?? '').trim() === body
             ? { ...current, [selectedConversation.id]: '' }
@@ -2914,13 +2921,14 @@ export function WhatsAppInbox({
     scheduleComposerFocus(() => composerRef.current?.focus());
   }
 
-  async function sendAnnotatedImage(file: File) {
+  async function sendAnnotatedImage(file: File, caption: string) {
     const validation = classifyConversationIncomingFile(file, { expectedKind: 'IMAGE' });
     if (!validation.ok) return validation.error;
 
     const sent = await sendCurrentMessage(undefined, {
       focusComposer: false,
       mediaOverride: { file, kind: 'IMAGE', previewUrl: null },
+      mediaCaptionOverride: caption,
       ignoreReply: true,
     });
     if (!sent) return 'Não foi possível enviar a imagem. Tente novamente.';

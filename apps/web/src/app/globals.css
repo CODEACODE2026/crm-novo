@@ -5334,7 +5334,7 @@ a {
 
 .conversation-image-annotation-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr) repeat(5, auto);
   width: min(960px, 100%);
   height: min(780px, calc(100dvh - 32px));
   overflow: hidden;
@@ -5380,7 +5380,8 @@ a {
 
 .conversation-image-annotation-header button,
 .conversation-image-annotation-footer button,
-.conversation-image-annotation-toolbar button {
+.conversation-image-annotation-toolbar button,
+.conversation-image-annotation-crop-controls button {
   min-width: 44px;
   min-height: 44px;
   border: 1px solid rgb(148 163 184 / 22%);
@@ -5392,7 +5393,8 @@ a {
 
 .conversation-image-annotation-header button,
 .conversation-image-annotation-footer button,
-.conversation-image-annotation-toolbar > button {
+.conversation-image-annotation-toolbar > button,
+.conversation-image-annotation-crop-controls button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5402,14 +5404,17 @@ a {
 
 .conversation-image-annotation-header button:disabled,
 .conversation-image-annotation-footer button:disabled,
-.conversation-image-annotation-toolbar button:disabled {
+.conversation-image-annotation-toolbar button:disabled,
+.conversation-image-annotation-crop-controls button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
 .conversation-image-annotation-header button:focus-visible,
 .conversation-image-annotation-footer button:focus-visible,
-.conversation-image-annotation-toolbar button:focus-visible {
+.conversation-image-annotation-toolbar button:focus-visible,
+.conversation-image-annotation-crop-controls button:focus-visible,
+.conversation-image-annotation-caption textarea:focus-visible {
   outline: 3px solid #38bdf8;
   outline-offset: 2px;
 }
@@ -5456,6 +5461,21 @@ a {
 
 .conversation-image-annotation-canvas[aria-disabled='true'] {
   cursor: wait;
+}
+
+.conversation-image-annotation-crop-selection {
+  position: absolute;
+  z-index: 2;
+  top: var(--crop-y);
+  left: var(--crop-x);
+  width: var(--crop-width);
+  height: var(--crop-height);
+  border: 2px solid #f8fafc;
+  background: rgb(56 189 248 / 8%);
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 65%),
+    0 0 0 9999px rgb(2 6 23 / 62%);
+  pointer-events: none;
 }
 
 .conversation-image-annotation-loading {
@@ -5524,6 +5544,61 @@ a {
   background: #052e16;
 }
 
+.conversation-image-annotation-crop-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid rgb(148 163 184 / 18%);
+  background: rgb(8 47 73 / 45%);
+}
+
+.conversation-image-annotation-crop-controls > span {
+  flex: 1;
+  min-width: 0;
+  color: #bae6fd;
+  font-size: 0.78rem;
+}
+
+.conversation-image-annotation-crop-confirm {
+  border-color: #0284c7 !important;
+  background: #0369a1 !important;
+  color: #fff !important;
+}
+
+.conversation-image-annotation-caption {
+  display: grid;
+  gap: 5px;
+  padding: 9px 12px 10px;
+  border-top: 1px solid rgb(148 163 184 / 18%);
+  background: #0f172a;
+}
+
+.conversation-image-annotation-caption > span {
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.conversation-image-annotation-caption textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 92px;
+  resize: vertical;
+  border: 1px solid rgb(148 163 184 / 30%);
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: rgb(30 41 59 / 80%);
+  color: #f8fafc;
+  font: inherit;
+  line-height: 1.35;
+}
+
+.conversation-image-annotation-caption textarea::placeholder {
+  color: #94a3b8;
+}
+
 .conversation-image-annotation-error {
   margin: 0 12px 10px;
 }
@@ -5551,6 +5626,9 @@ a {
   .conversation-image-annotation-panel {
     width: 100%;
     height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     border: 0;
     border-radius: 0;
   }
@@ -5571,7 +5649,7 @@ a {
   }
 
   .conversation-image-annotation-surface img {
-    max-height: calc(100dvh - 218px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 310px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   }
 
   .conversation-image-annotation-toolbar {
@@ -5581,6 +5659,23 @@ a {
 
   .conversation-image-annotation-toolbar > button span {
     display: none;
+  }
+  .conversation-image-annotation-crop-controls {
+    flex-wrap: wrap;
+    padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
+  }
+
+  .conversation-image-annotation-crop-controls > span {
+    flex-basis: 100%;
+  }
+
+  .conversation-image-annotation-caption {
+    padding-right: max(10px, env(safe-area-inset-right));
+    padding-left: max(10px, env(safe-area-inset-left));
+  }
+
+  .conversation-image-annotation-caption textarea {
+    resize: none;
   }
   .conversation-image-annotation-footer {
     display: none;

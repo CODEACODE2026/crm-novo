@@ -9,7 +9,7 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Pencil, RotateCcw, Send, Trash2, Undo2, X } from 'lucide-react';
+import { Check, Crop, Pencil, RotateCcw, Send, Trash2, Undo2, X } from 'lucide-react';
 
 export type ImageAnnotationPoint = { x: number; y: number };
 export type ImageAnnotationStroke = {
@@ -22,6 +22,7 @@ export type ImageAnnotationRect = {
   width: number;
   height: number;
 };
+export type ImageCropRect = { x: number; y: number; width: number; height: number };
 
 export const imageAnnotationColors = [
   { label: 'Vermelho', value: '#ef4444' },
@@ -102,6 +103,58 @@ export function safelyReleaseImageAnnotationPointerCapture(
 export function imageAnnotationOutputName(fileName: string, mimeType: string) {
   const baseName = fileName.replace(/\.[^.]+$/, '') || 'imagem';
   return `${baseName}-anotada.${mimeType === 'image/png' ? 'png' : 'jpg'}`;
+}
+
+export function imageCropOutputName(fileName: string, mimeType: string) {
+  const baseName = fileName.replace(/\.[^.]+$/, '') || 'imagem';
+  return `${baseName}-recortada.${mimeType === 'image/png' ? 'png' : 'jpg'}`;
+}
+
+export function imageCropRectFromPoints(
+  start: ImageAnnotationPoint,
+  end: ImageAnnotationPoint,
+): ImageCropRect {
+  const first = clampImageAnnotationPoint(start);
+  const last = clampImageAnnotationPoint(end);
+  return {
+    x: Math.min(first.x, last.x),
+    y: Math.min(first.y, last.y),
+    width: Math.abs(last.x - first.x),
+    height: Math.abs(last.y - first.y),
+  };
+}
+
+export function isImageCropRectValid(rect: ImageCropRect | null) {
+  return Boolean(rect && rect.width >= 0.02 && rect.height >= 0.02);
+}
+
+export function imageCropPixelRect(
+  crop: ImageCropRect,
+  naturalWidth: number,
+  naturalHeight: number,
+) {
+  if (
+    !isImageCropRectValid(crop) ||
+    !Number.isFinite(naturalWidth) ||
+    !Number.isFinite(naturalHeight) ||
+    naturalWidth <= 0 ||
+    naturalHeight <= 0
+  ) {
+    return null;
+  }
+
+  const left = Math.min(1, Math.max(0, crop.x));
+  const top = Math.min(1, Math.max(0, crop.y));
+  const right = Math.min(1, Math.max(0, crop.x + crop.width));
+  const bottom = Math.min(1, Math.max(0, crop.y + crop.height));
+  const x = Math.floor(left * naturalWidth);
+  const y = Math.floor(top * naturalHeight);
+  const rightPixel = Math.ceil(right * naturalWidth);
+  const bottomPixel = Math.ceil(bottom * naturalHeight);
+  const width = rightPixel - x;
+  const height = bottomPixel - y;
+
+  return width > 0 && height > 0 ? { x, y, width, height } : null;
 }
 
 export function imageAnnotationLineWidth(width: number, height: number) {
@@ -203,6 +256,44 @@ export async function exportAnnotatedImageFile(
   });
 }
 
+export async function exportCroppedImageFile(
+  file: File,
+  image: HTMLImageElement,
+  crop: ImageCropRect,
+) {
+  const pixels = imageCropPixelRect(crop, image.naturalWidth, image.naturalHeight);
+  if (!pixels) {
+    throw new Error('Selecione uma área válida para recortar.');
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = pixels.width;
+  canvas.height = pixels.height;
+  const context = canvas.getContext('2d');
+  if (!context || canvas.width <= 0 || canvas.height <= 0) {
+    throw new Error('Não foi possível preparar o recorte desta imagem.');
+  }
+
+  context.drawImage(
+    image,
+    pixels.x,
+    pixels.y,
+    canvas.width,
+    canvas.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+
+  const mimeType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+  const blob = await canvasToBlob(canvas, mimeType, mimeType === 'image/jpeg' ? 0.92 : undefined);
+  return new File([blob], imageCropOutputName(file.name, mimeType), {
+    type: mimeType,
+    lastModified: Date.now(),
+  });
+}
+
 export function WhatsAppImageAnnotationEditor({
   file,
   sending,
@@ -212,11 +303,16 @@ export function WhatsAppImageAnnotationEditor({
   file: File;
   sending: boolean;
   onCancel: () => void;
-  onSend: (file: File) => Promise<string | null>;
+  onSend: (file: File, caption: string) => Promise<string | null>;
 }) {
+  const [workingFile, setWorkingFile] = useState(file);
   const [objectUrl, setObjectUrl] = useState('');
   const [color, setColor] = useState<string>(imageAnnotationColors[0].value);
   const [strokes, setStrokes] = useState<ImageAnnotationStroke[]>([]);
+  const [caption, setCaption] = useState('');
+  const [cropMode, setCropMode] = useState(false);
+  const [cropRect, setCropRect] = useState<ImageCropRect | null>(null);
+  const [cropping, setCropping] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [imageReady, setImageReady] = useState(false);
@@ -226,12 +322,15 @@ export function WhatsAppImageAnnotationEditor({
   const onCancelRef = useRef(onCancel);
   const activePointerRef = useRef<number | null>(null);
   const pointerCapturedRef = useRef(false);
+  const cropStartRef = useRef<ImageAnnotationPoint | null>(null);
+  const cropModeRef = useRef(cropMode);
   const strokesRef = useRef(strokes);
-  const busy = exporting || sending;
+  const busy = cropping || exporting || sending;
   const busyRef = useRef(busy);
   const mountedRef = useRef(true);
 
   busyRef.current = busy;
+  cropModeRef.current = cropMode;
   onCancelRef.current = onCancel;
 
   useEffect(() => {
@@ -246,16 +345,24 @@ export function WhatsAppImageAnnotationEditor({
   }, []);
 
   useEffect(() => {
-    const nextObjectUrl = URL.createObjectURL(file);
-    setObjectUrl(nextObjectUrl);
-    setImageReady(false);
+    setWorkingFile(file);
     setStrokes([]);
+    setCaption('');
+    setCropMode(false);
+    setCropRect(null);
     setColor(imageAnnotationColors[0].value);
     setError('');
     activePointerRef.current = null;
+    cropStartRef.current = null;
     pointerCapturedRef.current = false;
-    return () => URL.revokeObjectURL(nextObjectUrl);
   }, [file]);
+
+  useEffect(() => {
+    const nextObjectUrl = URL.createObjectURL(workingFile);
+    setObjectUrl(nextObjectUrl);
+    setImageReady(false);
+    return () => URL.revokeObjectURL(nextObjectUrl);
+  }, [workingFile]);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -302,7 +409,15 @@ export function WhatsAppImageAnnotationEditor({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape' || busyRef.current) return;
       event.preventDefault();
-      onCancelRef.current();
+      if (cropModeRef.current) {
+        setCropMode(false);
+        setCropRect(null);
+        activePointerRef.current = null;
+        cropStartRef.current = null;
+        pointerCapturedRef.current = false;
+      } else {
+        onCancelRef.current();
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown);
@@ -311,6 +426,7 @@ export function WhatsAppImageAnnotationEditor({
       window.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = previousOverflow;
       activePointerRef.current = null;
+      cropStartRef.current = null;
       pointerCapturedRef.current = false;
     };
   }, []);
@@ -335,7 +451,12 @@ export function WhatsAppImageAnnotationEditor({
       event.pointerId,
     );
     activePointerRef.current = event.pointerId;
-    setStrokes((current) => [...current, createImageAnnotationStroke(color, point)]);
+    if (cropMode) {
+      cropStartRef.current = point;
+      setCropRect(imageCropRectFromPoints(point, point));
+    } else {
+      setStrokes((current) => [...current, createImageAnnotationStroke(color, point)]);
+    }
   }
 
   function continueStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -344,12 +465,18 @@ export function WhatsAppImageAnnotationEditor({
     event.stopPropagation();
     const point = pointFromPointer(event);
     if (!point) return;
-    setStrokes((current) => appendImageAnnotationPoint(current, point));
+    if (cropMode) {
+      const start = cropStartRef.current;
+      if (start) setCropRect(imageCropRectFromPoints(start, point));
+    } else {
+      setStrokes((current) => appendImageAnnotationPoint(current, point));
+    }
   }
 
   function finishStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (activePointerRef.current !== event.pointerId) return;
     activePointerRef.current = null;
+    cropStartRef.current = null;
     safelyReleaseImageAnnotationPointerCapture(event.currentTarget, event.pointerId);
     pointerCapturedRef.current = false;
   }
@@ -361,9 +488,62 @@ export function WhatsAppImageAnnotationEditor({
   function resetEditor() {
     activePointerRef.current = null;
     pointerCapturedRef.current = false;
+    cropStartRef.current = null;
+    setWorkingFile(file);
     setStrokes([]);
+    setCaption('');
+    setCropMode(false);
+    setCropRect(null);
     setColor(imageAnnotationColors[0].value);
     setError('');
+  }
+
+  function startCrop() {
+    if (busyRef.current || !imageReady) return;
+    if (strokesRef.current.length > 0) {
+      setError('Limpe ou resete o desenho antes de recortar a imagem.');
+      return;
+    }
+    setError('');
+    setCropMode(true);
+    setCropRect(null);
+  }
+
+  function cancelCrop() {
+    if (busyRef.current) return;
+    activePointerRef.current = null;
+    cropStartRef.current = null;
+    pointerCapturedRef.current = false;
+    setCropMode(false);
+    setCropRect(null);
+    setError('');
+  }
+
+  async function confirmCrop() {
+    const image = imageRef.current;
+    if (!image || !imageReady || !isImageCropRectValid(cropRect) || busyRef.current) {
+      if (!isImageCropRectValid(cropRect)) setError('Selecione uma área válida para recortar.');
+      return;
+    }
+    busyRef.current = true;
+    setCropping(true);
+    setError('');
+    try {
+      const croppedFile = await exportCroppedImageFile(workingFile, image, cropRect!);
+      if (!mountedRef.current) return;
+      setImageReady(false);
+      setWorkingFile(croppedFile);
+      setStrokes([]);
+      setCropMode(false);
+      setCropRect(null);
+    } catch (caught) {
+      if (mountedRef.current) {
+        setError(caught instanceof Error ? caught.message : 'Não foi possível recortar a imagem.');
+      }
+    } finally {
+      busyRef.current = false;
+      if (mountedRef.current) setCropping(false);
+    }
   }
 
   async function sendAnnotatedImage() {
@@ -373,8 +553,8 @@ export function WhatsAppImageAnnotationEditor({
     setExporting(true);
     setError('');
     try {
-      const annotatedFile = await exportAnnotatedImageFile(file, image, strokesRef.current);
-      const sendError = await onSend(annotatedFile);
+      const annotatedFile = await exportAnnotatedImageFile(workingFile, image, strokesRef.current);
+      const sendError = await onSend(annotatedFile, caption.trim());
       if (sendError && mountedRef.current) setError(sendError);
     } catch (caught) {
       if (mountedRef.current) {
@@ -411,12 +591,14 @@ export function WhatsAppImageAnnotationEditor({
           </button>
           <div>
             <strong>Editar imagem</strong>
-            <span>Desenhe sobre a foto antes de enviar</span>
+            <span>
+              {cropMode ? 'Selecione a área do recorte' : 'Recorte, desenhe e adicione uma legenda'}
+            </span>
           </div>
           <button
             aria-label="Enviar imagem anotada"
             className="conversation-image-annotation-send top"
-            disabled={busy || !imageReady}
+            disabled={busy || !imageReady || cropMode}
             type="button"
             onClick={() => void sendAnnotatedImage()}
           >
@@ -445,7 +627,9 @@ export function WhatsAppImageAnnotationEditor({
             <canvas
               ref={canvasRef}
               aria-disabled={!imageReady}
-              aria-label="Área de desenho sobre a imagem"
+              aria-label={
+                cropMode ? 'Área de seleção do recorte' : 'Área de desenho sobre a imagem'
+              }
               className="conversation-image-annotation-canvas"
               role="img"
               onLostPointerCapture={finishStroke}
@@ -455,6 +639,20 @@ export function WhatsAppImageAnnotationEditor({
               onPointerMove={continueStroke}
               onPointerUp={finishStroke}
             />
+            {cropMode && cropRect ? (
+              <span
+                aria-hidden="true"
+                className="conversation-image-annotation-crop-selection"
+                style={
+                  {
+                    '--crop-x': `${cropRect.x * 100}%`,
+                    '--crop-y': `${cropRect.y * 100}%`,
+                    '--crop-width': `${cropRect.width * 100}%`,
+                    '--crop-height': `${cropRect.height * 100}%`,
+                  } as CSSProperties
+                }
+              />
+            ) : null}
             {!imageReady && !error ? (
               <span className="conversation-image-annotation-loading" role="status">
                 Preparando imagem...
@@ -466,13 +664,25 @@ export function WhatsAppImageAnnotationEditor({
         <div className="conversation-image-annotation-toolbar" aria-label="Ferramentas de edição">
           <button
             aria-label="Lápis selecionado"
-            aria-pressed="true"
-            className="is-selected"
-            disabled={busy || !imageReady}
+            aria-pressed={!cropMode}
+            className={!cropMode ? 'is-selected' : ''}
+            disabled={busy || !imageReady || cropMode}
             type="button"
           >
             <Pencil aria-hidden="true" size={18} />
             <span>Lápis</span>
+          </button>
+
+          <button
+            aria-label="Recortar imagem"
+            aria-pressed={cropMode}
+            className={cropMode ? 'is-selected' : ''}
+            disabled={busy || !imageReady}
+            type="button"
+            onClick={startCrop}
+          >
+            <Crop aria-hidden="true" size={18} />
+            <span>Recortar</span>
           </button>
 
           <div className="conversation-image-annotation-colors" aria-label="Cor do lápis">
@@ -484,7 +694,7 @@ export function WhatsAppImageAnnotationEditor({
                   aria-label={`Usar cor ${option.label}`}
                   aria-pressed={selected}
                   className={selected ? 'is-selected' : ''}
-                  disabled={busy}
+                  disabled={busy || cropMode}
                   style={{ '--annotation-color': option.value } as CSSProperties}
                   type="button"
                   onClick={() => setColor(option.value)}
@@ -499,7 +709,7 @@ export function WhatsAppImageAnnotationEditor({
 
           <button
             aria-label="Desfazer último traço"
-            disabled={busy || strokes.length === 0}
+            disabled={busy || cropMode || strokes.length === 0}
             type="button"
             onClick={() => setStrokes(undoImageAnnotationStroke)}
           >
@@ -508,7 +718,7 @@ export function WhatsAppImageAnnotationEditor({
           </button>
           <button
             aria-label="Limpar todas as anotações"
-            disabled={busy || strokes.length === 0}
+            disabled={busy || cropMode || strokes.length === 0}
             type="button"
             onClick={() => setStrokes([])}
           >
@@ -516,8 +726,15 @@ export function WhatsAppImageAnnotationEditor({
             <span>Limpar</span>
           </button>
           <button
-            aria-label="Resetar desenho"
-            disabled={busy || (strokes.length === 0 && color === imageAnnotationColors[0].value)}
+            aria-label="Resetar edição"
+            disabled={
+              busy ||
+              (workingFile === file &&
+                strokes.length === 0 &&
+                caption.length === 0 &&
+                color === imageAnnotationColors[0].value &&
+                !cropMode)
+            }
             type="button"
             onClick={resetEditor}
           >
@@ -525,6 +742,40 @@ export function WhatsAppImageAnnotationEditor({
             <span>Resetar</span>
           </button>
         </div>
+
+        {cropMode ? (
+          <div
+            aria-label="Controles de recorte"
+            className="conversation-image-annotation-crop-controls"
+            role="group"
+          >
+            <span>Arraste sobre a imagem para selecionar a área.</span>
+            <button disabled={busy} type="button" onClick={cancelCrop}>
+              Cancelar recorte
+            </button>
+            <button
+              className="conversation-image-annotation-crop-confirm"
+              disabled={busy || !isImageCropRectValid(cropRect)}
+              type="button"
+              onClick={() => void confirmCrop()}
+            >
+              <Check aria-hidden="true" size={17} />
+              {cropping ? 'Recortando...' : 'Confirmar recorte'}
+            </button>
+          </div>
+        ) : null}
+
+        <label className="conversation-image-annotation-caption">
+          <span>Legenda</span>
+          <textarea
+            disabled={busy}
+            maxLength={2000}
+            placeholder="Adicione uma legenda (opcional)"
+            rows={2}
+            value={caption}
+            onChange={(event) => setCaption(event.target.value)}
+          />
+        </label>
 
         {error ? (
           <div className="notice danger conversation-image-annotation-error" role="alert">
@@ -544,7 +795,7 @@ export function WhatsAppImageAnnotationEditor({
           </button>
           <button
             className="conversation-image-annotation-send"
-            disabled={busy || !imageReady}
+            disabled={busy || !imageReady || cropMode}
             type="button"
             onClick={() => void sendAnnotatedImage()}
           >

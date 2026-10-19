@@ -8,10 +8,15 @@ import {
   createImageAnnotationStroke,
   drawImageAnnotationStrokes,
   exportAnnotatedImageFile,
+  exportCroppedImageFile,
   imageAnnotationCanvasBytes,
   imageAnnotationLineWidth,
   imageAnnotationOutputName,
   imageAnnotationPointFromRect,
+  imageCropOutputName,
+  imageCropPixelRect,
+  imageCropRectFromPoints,
+  isImageCropRectValid,
   safelyReleaseImageAnnotationPointerCapture,
   safelySetImageAnnotationPointerCapture,
   undoImageAnnotationStroke,
@@ -234,7 +239,7 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
     expect(editorSource).toContain('aria-label="Desfazer último traço"');
     expect(editorSource).toContain('setStrokes(undoImageAnnotationStroke)');
     expect(editorSource).toContain('aria-label="Limpar todas as anotações"');
-    expect(editorSource).toContain('aria-label="Resetar desenho"');
+    expect(editorSource).toContain('aria-label="Resetar edição"');
     expect(editorSource).toContain('setColor(imageAnnotationColors[0].value)');
   });
 
@@ -267,7 +272,9 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
 
   it('cancels without sending and reuses the existing media send path on confirmation', () => {
     const cancelStart = inboxSource.indexOf('function cancelImageAnnotation()');
-    const sendStart = inboxSource.indexOf('async function sendAnnotatedImage(file: File)');
+    const sendStart = inboxSource.indexOf(
+      'async function sendAnnotatedImage(file: File, caption: string)',
+    );
     const cancelSource = inboxSource.slice(cancelStart, sendStart);
     const sendSource = inboxSource.slice(
       sendStart,
@@ -324,7 +331,7 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
     expect(inboxSource).toContain('setPendingImageAnnotation(null)');
     expect(editorSource).toContain('mountedRef.current = true');
     expect(editorSource).toContain('mountedRef.current = false');
-    expect(editorSource).toContain('const nextObjectUrl = URL.createObjectURL(file)');
+    expect(editorSource).toContain('const nextObjectUrl = URL.createObjectURL(workingFile)');
     expect(editorSource).toContain('if (mountedRef.current) setExporting(false)');
   });
 
@@ -334,10 +341,193 @@ describe('CHAT-MEDIA-ANNOTATE1 image annotation editor', () => {
     expect(stylesSource).toContain('env(safe-area-inset-top)');
     expect(stylesSource).toContain('@media (max-width: 620px)');
     expect(stylesSource).toMatch(
-      /\.conversation-image-annotation-toolbar button \{[\s\S]*?min-width: 44px;[\s\S]*?min-height: 44px;/,
+      /\.conversation-image-annotation-toolbar button,[\s\S]*?\{[\s\S]*?min-width: 44px;[\s\S]*?min-height: 44px;/,
     );
     expect(editorSource).toContain('aria-label="Cancelar edição da imagem"');
     expect(editorSource).toContain('aria-label="Enviar imagem anotada"');
     expect(stylesSource).toContain('outline: 3px solid #38bdf8;');
+  });
+});
+
+describe('CHAT-MEDIA-ANNOTATE2 caption and crop', () => {
+  it('normalizes crop geometry for every drag direction and rejects unsafe tiny selections', () => {
+    expect(imageCropRectFromPoints({ x: 0.8, y: 0.7 }, { x: 0.2, y: 0.1 })).toEqual({
+      x: 0.2,
+      y: 0.1,
+      width: 0.6000000000000001,
+      height: 0.6,
+    });
+    expect(imageCropRectFromPoints({ x: -1, y: 2 }, { x: 2, y: -1 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    });
+    expect(isImageCropRectValid({ x: 0, y: 0, width: 0.5, height: 0.5 })).toBe(true);
+    expect(isImageCropRectValid({ x: 0, y: 0, width: 0.01, height: 0.5 })).toBe(false);
+    expect(isImageCropRectValid(null)).toBe(false);
+  });
+
+  it('creates coherent crop output names for PNG and JPEG', () => {
+    expect(imageCropOutputName('alpha.png', 'image/png')).toBe('alpha-recortada.png');
+    expect(imageCropOutputName('camera.jpeg', 'image/jpeg')).toBe('camera-recortada.jpg');
+  });
+
+  it('maps visual crop coordinates to natural pixels for every image proportion', () => {
+    const crop = { x: 0.25, y: 0.2, width: 0.5, height: 0.6 };
+    expect(imageCropPixelRect(crop, 1000, 1000)).toEqual({
+      x: 250,
+      y: 200,
+      width: 500,
+      height: 600,
+    });
+    expect(imageCropPixelRect(crop, 4000, 2000)).toEqual({
+      x: 1000,
+      y: 400,
+      width: 2000,
+      height: 1200,
+    });
+    expect(imageCropPixelRect(crop, 600, 1200)).toEqual({
+      x: 150,
+      y: 240,
+      width: 300,
+      height: 720,
+    });
+    expect(imageCropPixelRect(crop, 20, 10)).toEqual({
+      x: 5,
+      y: 2,
+      width: 10,
+      height: 6,
+    });
+  });
+
+  it('clamps crop pixels at image borders and rejects rectangles outside the image', () => {
+    expect(imageCropPixelRect({ x: -0.2, y: 0.9, width: 0.7, height: 0.3 }, 101, 99)).toEqual({
+      x: 0,
+      y: 89,
+      width: 51,
+      height: 10,
+    });
+    expect(imageCropPixelRect({ x: 2, y: 2, width: 0.5, height: 0.5 }, 100, 100)).toBe(null);
+    expect(imageCropPixelRect({ x: 0, y: 0, width: 0.01, height: 1 }, 100, 100)).toBe(null);
+  });
+
+  it('exports the selected source rectangle without a network request or PNG background fill', () => {
+    const cropExportSource = editorSource.slice(
+      editorSource.indexOf('export async function exportCroppedImageFile'),
+      editorSource.indexOf('export function WhatsAppImageAnnotationEditor'),
+    );
+    expect(exportCroppedImageFile).toBeTypeOf('function');
+    expect(cropExportSource).toContain('context.drawImage(');
+    expect(cropExportSource).toContain('imageCropPixelRect(');
+    expect(cropExportSource).toContain('pixels.x');
+    expect(cropExportSource).toContain('pixels.y');
+    expect(cropExportSource).toContain('imageCropOutputName');
+    expect(cropExportSource).not.toContain('fetch(');
+    expect(cropExportSource).not.toContain('fillRect(');
+  });
+
+  it('composes a cropped PNG with the expected natural canvas dimensions and source rectangle', async () => {
+    const drawImage = vi.fn();
+    const toBlob = vi.fn((callback: BlobCallback, mimeType?: string) => {
+      callback(new Blob(['cropped'], { type: mimeType ?? '' }));
+    });
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage }),
+        toBlob,
+      })),
+    });
+
+    try {
+      const file = new File(['original'], 'alpha.png', { type: 'image/png' });
+      const image = { naturalWidth: 800, naturalHeight: 600 } as HTMLImageElement;
+      const result = await exportCroppedImageFile(file, image, {
+        x: 0.25,
+        y: 0.1,
+        width: 0.5,
+        height: 0.75,
+      });
+
+      expect(drawImage).toHaveBeenCalledWith(image, 200, 60, 400, 450, 0, 0, 400, 450);
+      expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', undefined);
+      expect(result.name).toBe('alpha-recortada.png');
+      expect(result.type).toBe('image/png');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('offers an optional editable caption and sends its trimmed final value', () => {
+    expect(editorSource).toContain('placeholder="Adicione uma legenda (opcional)"');
+    expect(editorSource).toContain('maxLength={2000}');
+    expect(editorSource).toContain('value={caption}');
+    expect(editorSource).toContain('setCaption(event.target.value)');
+    expect(editorSource).toContain('onSend(annotatedFile, caption.trim())');
+    expect(editorSource).not.toContain('onBlur={sendAnnotatedImage}');
+  });
+
+  it('routes image captions through the existing media send path without consuming composer state', () => {
+    const sendStart = inboxSource.indexOf('async function sendCurrentMessage(');
+    const sendEnd = inboxSource.indexOf('function cancelImageAnnotation()', sendStart);
+    const sendSource = inboxSource.slice(sendStart, sendEnd);
+    expect(sendSource).toContain('mediaCaptionOverride?: string');
+    expect(sendSource).toContain(
+      'const body = (mediaCaptionOverride ?? bodyOverride ?? selectedDraft).trim()',
+    );
+    expect(sendSource).toContain('caption: body');
+    expect(sendSource).toContain('bodyOverride === undefined && !hasMediaCaptionOverride');
+    expect(inboxSource).toContain('mediaCaptionOverride: caption');
+  });
+
+  it('supports crop enter, confirm, cancel and Escape without sending', () => {
+    expect(editorSource).toContain('aria-label="Recortar imagem"');
+    expect(editorSource).toContain('aria-label="Controles de recorte"');
+    expect(editorSource).toContain('void confirmCrop()');
+    expect(editorSource).toContain('onClick={cancelCrop}');
+    expect(editorSource).toContain('if (cropModeRef.current)');
+    expect(editorSource).toContain('setCropMode(false)');
+    expect(editorSource).toContain('setCropRect(null)');
+  });
+
+  it('requires crop before drawing and preserves drawing after a confirmed crop', () => {
+    expect(editorSource).toContain(
+      "setError('Limpe ou resete o desenho antes de recortar a imagem.')",
+    );
+    expect(editorSource).toContain('setWorkingFile(croppedFile)');
+    expect(editorSource).toContain('exportAnnotatedImageFile(');
+    expect(editorSource).toContain('workingFile,');
+    expect(editorSource).toContain('disabled={busy || !imageReady || cropMode}');
+  });
+
+  it('resets crop, drawing, color and caption back to the original file', () => {
+    const resetStart = editorSource.indexOf('function resetEditor()');
+    const resetEnd = editorSource.indexOf('function startCrop()', resetStart);
+    const resetSource = editorSource.slice(resetStart, resetEnd);
+    expect(resetSource).toContain('setWorkingFile(file)');
+    expect(resetSource).toContain('setStrokes([])');
+    expect(resetSource).toContain("setCaption('')");
+    expect(resetSource).toContain('setCropMode(false)');
+    expect(resetSource).toContain('setCropRect(null)');
+  });
+
+  it('guards crop and send against double activation and stale unmounted updates', () => {
+    expect(editorSource).toContain('busyRef.current = true');
+    expect(editorSource).toContain('if (!mountedRef.current) return');
+    expect(editorSource).toContain('if (mountedRef.current) setCropping(false)');
+    expect(editorSource).toContain('if (mountedRef.current) setExporting(false)');
+  });
+
+  it('keeps crop and caption usable within mobile safe-area layout', () => {
+    expect(stylesSource).toContain('.conversation-image-annotation-crop-selection');
+    expect(stylesSource).toContain('pointer-events: none;');
+    expect(stylesSource).toContain('.conversation-image-annotation-crop-controls');
+    expect(stylesSource).toContain('.conversation-image-annotation-caption textarea');
+    expect(stylesSource).toContain('max-height: calc(100dvh - 310px');
+    expect(stylesSource).toContain('env(safe-area-inset-left)');
+    expect(stylesSource).toContain('overflow-y: auto;');
+    expect(stylesSource).toContain('overscroll-behavior: contain;');
   });
 });

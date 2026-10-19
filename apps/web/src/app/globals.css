@@ -6513,11 +6513,11 @@ video.conversation-saved-sticker-preview {
 
 .conversation-activity-item {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr);
   align-items: start;
-  gap: 9px;
+  gap: 8px;
   border-bottom: 1px solid var(--border);
-  padding: 10px 0;
+  padding: 8px 0;
 }
 
 .conversation-activity-item:first-child {
@@ -6557,10 +6557,10 @@ video.conversation-saved-sticker-preview {
   gap: 4px;
 }
 
-.conversation-activity-main > div {
+.conversation-activity-heading {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: baseline;
   gap: 4px 8px;
 }
@@ -6586,6 +6586,19 @@ video.conversation-saved-sticker-preview {
   margin: 0;
 }
 
+.conversation-activity-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
+
+.conversation-activity-meta span + span::before {
+  margin-right: 6px;
+  color: var(--border);
+  content: '·';
+}
+
 .conversation-activity-main .ui-button {
   justify-self: start;
   min-height: 26px;
@@ -6593,9 +6606,17 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-activity-amount {
+  flex: 0 0 auto;
   color: var(--text);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.conversation-activity-toggle,
+.conversation-reference-list-toggle {
+  justify-self: start;
+  min-height: 44px;
 }
 
 .conversation-activity-empty {
@@ -6660,18 +6681,59 @@ video.conversation-saved-sticker-preview {
   padding: 0;
 }
 
+.conversation-reference-filters {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.conversation-reference-filters button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.conversation-reference-filters button:hover,
+.conversation-reference-filters button:focus-visible,
+.conversation-reference-filters button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.conversation-reference-filter-empty {
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 12px;
+}
+
 .conversation-reference-toggle {
   position: relative;
   display: grid;
   width: 100%;
-  min-height: 82px;
+  min-height: 68px;
   min-width: 0;
-  gap: 4px;
+  gap: 5px;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 9px 34px 9px 10px;
+  padding: 8px 34px 8px 10px;
   text-align: left;
 }
 
@@ -6686,8 +6748,7 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-reference-primary-row,
-.conversation-reference-secondary-row,
-.conversation-reference-compact-meta {
+.conversation-reference-secondary-row {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -6700,9 +6761,10 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-reference-primary-row > strong,
-.conversation-reference-secondary-row > span:first-child,
+.conversation-reference-summary,
+.conversation-reference-summary > span,
 .conversation-reference-financial-text,
-.conversation-reference-compact-meta > span {
+.conversation-reference-status {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6720,19 +6782,26 @@ video.conversation-saved-sticker-preview {
 }
 
 .conversation-reference-secondary-row,
-.conversation-reference-compact-meta,
 .conversation-reference-financial-text {
   color: var(--muted);
   font-size: 0.7rem;
   line-height: 1.25;
 }
 
-.conversation-reference-compact-meta {
-  justify-content: flex-start;
+.conversation-reference-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0;
 }
 
-.conversation-reference-compact-meta > span + span::before {
+.conversation-reference-summary > span {
+  flex: 0 1 auto;
+}
+
+.conversation-reference-summary > span + span::before {
   margin-right: 7px;
+  margin-left: 7px;
   color: var(--border);
   content: '·';
 }
@@ -16679,24 +16748,14 @@ tbody tr:hover,
     gap: 6px;
   }
 
-  .conversation-activity-item {
-    grid-template-columns: 10px minmax(0, 1fr);
-  }
-
-  .conversation-activity-amount {
-    grid-column: 2;
-    justify-self: end;
-  }
-
   .conversation-reference-toggle {
-    min-height: 78px;
-    gap: 3px;
-    padding: 8px 32px 8px 9px;
+    min-height: 64px;
+    gap: 4px;
+    padding: 7px 32px 7px 9px;
   }
 
   .conversation-reference-primary-row,
-  .conversation-reference-secondary-row,
-  .conversation-reference-compact-meta {
+  .conversation-reference-secondary-row {
     gap: 5px;
   }
 
@@ -16705,12 +16764,12 @@ tbody tr:hover,
   }
 
   .conversation-reference-secondary-row,
-  .conversation-reference-compact-meta,
   .conversation-reference-financial-text {
     font-size: 0.67rem;
   }
 
-  .conversation-reference-compact-meta > span + span::before {
+  .conversation-reference-summary > span + span::before {
+    margin-left: 5px;
     margin-right: 5px;
   }
 

@@ -9168,12 +9168,6 @@ function ConversationClientPanelContent({
           <div className="notice success conversation-notice">{contactInfo.notice}</div>
         ) : null}
         {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
-        <ConversationRecentActivity
-          clientId={client.id}
-          items={recentActivity}
-          receivables={contactInfo.receivables}
-          onViewReceivable={onViewReceivable}
-        />
         <ConversationReferenceList
           client={client}
           lifecycleBusyReferenceId={lifecycleBusyReferenceId}
@@ -9189,6 +9183,12 @@ function ConversationClientPanelContent({
           onSendPixWhatsApp={onSendPixWhatsApp}
           onRenewReference={onRenewReference}
           onOpenClient={onOpenClient}
+          onViewReceivable={onViewReceivable}
+        />
+        <ConversationRecentActivity
+          clientId={client.id}
+          items={recentActivity}
+          receivables={contactInfo.receivables}
           onViewReceivable={onViewReceivable}
         />
       </div>
@@ -9612,6 +9612,14 @@ function ConversationRecentActivity({
   receivables: Receivable[];
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const activityIdentity = items.map((item) => item.id).join('|');
+  const visibleItems = contactDrawerVisibleItems(items, showAll, 3);
+
+  useEffect(() => {
+    setShowAll(false);
+  }, [clientId, activityIdentity]);
+
   return (
     <section className="conversation-contact-section conversation-recent-activity">
       <div className="conversation-contact-section-title">
@@ -9619,47 +9627,61 @@ function ConversationRecentActivity({
         <small>{items.length}</small>
       </div>
       {items.length ? (
-        <div className="conversation-activity-list">
-          {items.map((item) => {
-            const receivable = item.receivableId
-              ? receivables.find((candidate) => candidate.id === item.receivableId)
-              : null;
-            const canViewReceivable = Boolean(
-              receivable && receivable.sourceKind !== 'LEGACY_IMPORT',
-            );
+        <>
+          <div className="conversation-activity-list">
+            {visibleItems.map((item) => {
+              const receivable = item.receivableId
+                ? receivables.find((candidate) => candidate.id === item.receivableId)
+                : null;
+              const canViewReceivable = Boolean(
+                receivable && receivable.sourceKind !== 'LEGACY_IMPORT',
+              );
 
-            return (
-              <article className="conversation-activity-item" key={item.id}>
-                <span
-                  className={`conversation-activity-dot activity-${item.type.toLowerCase()}`}
-                  aria-hidden="true"
-                />
-                <div className="conversation-activity-main">
-                  <div>
-                    <strong>{item.title}</strong>
-                    <span>{formatDateTime(item.occurredAt)}</span>
+              return (
+                <article className="conversation-activity-item" key={item.id}>
+                  <span
+                    className={`conversation-activity-dot activity-${item.type.toLowerCase()}`}
+                    aria-hidden="true"
+                  />
+                  <div className="conversation-activity-main">
+                    <div className="conversation-activity-heading">
+                      <strong>{item.title}</strong>
+                      {item.amount ? (
+                        <strong className="conversation-activity-amount">
+                          {formatCurrency(item.amount)}
+                        </strong>
+                      ) : null}
+                    </div>
+                    <p className="conversation-activity-meta">
+                      <span>{formatDateTime(item.occurredAt)}</span>
+                      {item.subtitle ? <span>{item.subtitle}</span> : null}
+                    </p>
+                    {canViewReceivable && receivable ? (
+                      <Button
+                        icon={Eye}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onViewReceivable(clientId, receivable)}
+                      >
+                        Ver cobrança
+                      </Button>
+                    ) : null}
                   </div>
-                  {item.subtitle ? <p>{item.subtitle}</p> : null}
-                  {canViewReceivable && receivable ? (
-                    <Button
-                      icon={Eye}
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => onViewReceivable(clientId, receivable)}
-                    >
-                      Ver cobrança
-                    </Button>
-                  ) : null}
-                </div>
-                {item.amount ? (
-                  <strong className="conversation-activity-amount">
-                    {formatCurrency(item.amount)}
-                  </strong>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
+                </article>
+              );
+            })}
+          </div>
+          {items.length > 3 ? (
+            <Button
+              className="conversation-activity-toggle"
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowAll((current) => !current)}
+            >
+              {showAll ? 'Recolher atividades' : 'Ver mais atividades'}
+            </Button>
+          ) : null}
+        </>
       ) : (
         <div className="conversation-activity-empty">Nenhuma atividade recente</div>
       )}
@@ -9700,9 +9722,13 @@ function ConversationReferenceList({
   onOpenClient: (clientId: string) => void;
   onViewReceivable: (clientId: string, receivable: Receivable) => void;
 }) {
-  const references = sortContactReferences(client.references ?? []);
+  const references = sortContactReferences(client.references ?? [], receivables);
   const referenceIdentity = references.map((reference) => reference.id).join('|');
   const [expandedReferenceId, setExpandedReferenceId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ContactReferenceFilter>('ALL');
+  const [showAll, setShowAll] = useState(false);
+  const filteredReferences = filterContactReferences(references, receivables, filter);
+  const visibleReferences = contactDrawerVisibleItems(filteredReferences, showAll, 4);
 
   useEffect(() => {
     setExpandedReferenceId((current) =>
@@ -9710,45 +9736,94 @@ function ConversationReferenceList({
     );
   }, [client.id, referenceIdentity]);
 
+  useEffect(() => {
+    setFilter('ALL');
+    setShowAll(false);
+  }, [client.id]);
+
+  function selectFilter(nextFilter: ContactReferenceFilter) {
+    setFilter(nextFilter);
+    setShowAll(false);
+    setExpandedReferenceId(null);
+  }
+
   return (
-    <section className="conversation-contact-section">
+    <section className="conversation-contact-section conversation-reference-section">
       <div className="conversation-contact-section-title">
-        <span>Referências</span>
-        <small>{references.length}</small>
+        <span>Referências ({references.length})</span>
+        {filter !== 'ALL' ? <small>{filteredReferences.length} encontradas</small> : null}
       </div>
       {references.length ? (
-        <div className="conversation-reference-list">
-          {references.map((reference) => {
-            const expanded = expandedReferenceId === reference.id;
-            return (
-              <ConversationReferenceCard
-                key={reference.id}
-                clientId={client.id}
-                expanded={expanded}
-                lifecycleBusyReferenceId={lifecycleBusyReferenceId}
-                lifecyclePlansLoading={lifecyclePlansLoading}
-                pixBusyReceivableId={pixBusyReceivableId}
-                pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
-                pixIntent={pixIntent}
-                receivables={contactReceivablesForReference(receivables, reference.id)}
-                reference={reference}
-                onCopyPix={onCopyPix}
-                onGeneratePix={onGeneratePix}
-                onRecreatePix={onRecreatePix}
-                onReactivateReference={onReactivateReference}
-                onSendPixWhatsApp={onSendPixWhatsApp}
-                onRenewReference={onRenewReference}
-                onOpenClient={onOpenClient}
-                onToggle={() =>
-                  setExpandedReferenceId((current) =>
-                    current === reference.id ? null : reference.id,
-                  )
-                }
-                onViewReceivable={onViewReceivable}
-              />
-            );
-          })}
-        </div>
+        <>
+          {references.length > 1 ? (
+            <div className="conversation-reference-filters" aria-label="Filtrar referências">
+              {contactReferenceFilters.map((option) => (
+                <button
+                  aria-pressed={filter === option.id}
+                  className={filter === option.id ? 'is-active' : ''}
+                  key={option.id}
+                  type="button"
+                  onClick={() => selectFilter(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {filteredReferences.length ? (
+            <div className="conversation-reference-list">
+              {visibleReferences.map((reference) => {
+                const expanded = expandedReferenceId === reference.id;
+                return (
+                  <ConversationReferenceCard
+                    key={reference.id}
+                    clientId={client.id}
+                    expanded={expanded}
+                    lifecycleBusyReferenceId={lifecycleBusyReferenceId}
+                    lifecyclePlansLoading={lifecyclePlansLoading}
+                    pixBusyReceivableId={pixBusyReceivableId}
+                    pixWhatsAppBusyIntentIds={pixWhatsAppBusyIntentIds}
+                    pixIntent={pixIntent}
+                    receivables={contactReceivablesForReference(receivables, reference.id)}
+                    reference={reference}
+                    onCopyPix={onCopyPix}
+                    onGeneratePix={onGeneratePix}
+                    onRecreatePix={onRecreatePix}
+                    onReactivateReference={onReactivateReference}
+                    onSendPixWhatsApp={onSendPixWhatsApp}
+                    onRenewReference={onRenewReference}
+                    onOpenClient={onOpenClient}
+                    onToggle={() =>
+                      setExpandedReferenceId((current) =>
+                        current === reference.id ? null : reference.id,
+                      )
+                    }
+                    onViewReceivable={onViewReceivable}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="conversation-reference-filter-empty">
+              Nenhuma referência neste filtro.
+            </div>
+          )}
+          {filteredReferences.length > 4 ? (
+            <Button
+              className="conversation-reference-list-toggle"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setShowAll((current) => !current);
+                setExpandedReferenceId(null);
+              }}
+            >
+              {showAll
+                ? 'Recolher referências'
+                : `Ver todas as referências (${filteredReferences.length})`}
+            </Button>
+          ) : null}
+        </>
       ) : (
         <div className="conversation-empty-panel">
           <Info aria-hidden="true" size={22} />
@@ -9840,19 +9915,20 @@ function ConversationReferenceCard({
           <ConversationStatusBadge status={reference.status} />
         </span>
         <span className="conversation-reference-secondary-row">
-          <span title={reference.plan?.name ?? undefined}>
-            {reference.plan?.name ?? 'Plano não informado'}
+          <span
+            className="conversation-reference-summary"
+            title={reference.plan?.name ?? undefined}
+          >
+            <span>{reference.plan?.name ?? 'Plano não informado'}</span>
+            <span>{formatCurrency(reference.recurringValue)}</span>
+            <span>Vence {formatDate(reference.dueDate)}</span>
+            {pixSummary ? <span>{pixSummary}</span> : null}
           </span>
           {openReceivable ? (
             <ConversationReceivableStatusBadge status={openReceivable.displayStatus} />
           ) : (
             <span className="conversation-reference-financial-text">{financialStatus}</span>
           )}
-        </span>
-        <span className="conversation-reference-compact-meta">
-          <span>{formatCurrency(reference.recurringValue)}</span>
-          <span>Vence {formatDate(reference.dueDate)}</span>
-          {pixSummary ? <span>{pixSummary}</span> : null}
         </span>
         <ChevronDown aria-hidden="true" className="conversation-reference-chevron" size={17} />
       </button>
@@ -10013,19 +10089,80 @@ function ConversationReceivableStatusBadge({ status }: { status: Receivable['dis
   );
 }
 
-export function sortContactReferences(references: ClientReference[]) {
-  const rank: Record<Client['status'], number> = {
-    ATIVO: 0,
-    PENDENTE_PAGAMENTO: 1,
-    INATIVO: 2,
-    CANCELADO: 3,
-  };
+export type ContactReferenceFilter = 'ALL' | 'OPEN' | 'OVERDUE' | 'ACTIVE' | 'CANCELED';
+export type ContactReferenceFinancialState = 'OVERDUE' | 'OPEN' | 'CLEAR';
 
-  return [...references].sort((a, b) => {
-    const statusDiff = rank[a.status] - rank[b.status];
-    if (statusDiff !== 0) return statusDiff;
-    return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+export function contactDrawerVisibleItems<T>(items: T[], showAll: boolean, initialLimit: number) {
+  return showAll ? items : items.slice(0, Math.max(0, initialLimit));
+}
+
+const contactReferenceFilters: Array<{ id: ContactReferenceFilter; label: string }> = [
+  { id: 'ALL', label: 'Todas' },
+  { id: 'OPEN', label: 'Em aberto' },
+  { id: 'OVERDUE', label: 'Vencidas' },
+  { id: 'ACTIVE', label: 'Ativas' },
+  { id: 'CANCELED', label: 'Canceladas' },
+];
+
+export function contactReferenceFinancialState(
+  reference: ClientReference,
+  receivables: Receivable[],
+): ContactReferenceFinancialState {
+  const referenceReceivables = contactReceivablesForReference(receivables, reference.id).filter(
+    (receivable) => receivable.sourceKind !== 'LEGACY_IMPORT',
+  );
+  if (
+    referenceReceivables.some(
+      (receivable) => receivable.status === 'PENDENTE' && receivable.displayStatus === 'VENCIDO',
+    )
+  ) {
+    return 'OVERDUE';
+  }
+  if (referenceReceivables.some((receivable) => contactReceivableAllowsPixAction(receivable))) {
+    return 'OPEN';
+  }
+  return 'CLEAR';
+}
+
+export function filterContactReferences(
+  references: ClientReference[],
+  receivables: Receivable[],
+  filter: ContactReferenceFilter,
+) {
+  if (filter === 'ALL') return references;
+  return references.filter((reference) => {
+    if (filter === 'ACTIVE') return reference.status === 'ATIVO';
+    if (filter === 'CANCELED') return reference.status === 'CANCELADO';
+    const financialState = contactReferenceFinancialState(reference, receivables);
+    return filter === 'OVERDUE'
+      ? financialState === 'OVERDUE'
+      : financialState === 'OPEN' || financialState === 'OVERDUE';
   });
+}
+
+export function sortContactReferences(
+  references: ClientReference[],
+  receivables: Receivable[] = [],
+) {
+  const rank = (reference: ClientReference) => {
+    const financialState = contactReferenceFinancialState(reference, receivables);
+    if (financialState === 'OVERDUE') return 0;
+    if (financialState === 'OPEN') return 1;
+    if (reference.status === 'ATIVO') return 2;
+    if (reference.status === 'PENDENTE_PAGAMENTO') return 3;
+    if (reference.status === 'INATIVO') return 4;
+    return 5;
+  };
+  const indexed = references.map((reference, index) => ({
+    index,
+    rank: rank(reference),
+    reference,
+  }));
+  return indexed
+    .sort((a, b) => {
+      return a.rank - b.rank || a.index - b.index;
+    })
+    .map(({ reference }) => reference);
 }
 
 export type ContactReferencePrimaryAction =

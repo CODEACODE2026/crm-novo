@@ -44,6 +44,8 @@ describe('CONTACT-DRAWER-FINANCIAL-REFERENCES-COMPACT1 contract', () => {
     expect(toggleSource).toContain('formatCurrency(reference.recurringValue)');
     expect(toggleSource).toContain('formatDate(reference.dueDate)');
     expect(toggleSource).toContain('pixSummary');
+    expect(toggleSource).toContain('conversation-reference-summary');
+    expect(toggleSource).not.toContain('conversation-reference-compact-meta');
   });
 
   it('does not invent PIX or financial values when those records are absent', () => {
@@ -95,8 +97,8 @@ describe('CONTACT-DRAWER-FINANCIAL-REFERENCES-COMPACT1 contract', () => {
   });
 
   it('keeps compact dimensions and touch-sized stacked mobile actions', () => {
-    expect(stylesSource).toContain('min-height: 82px');
-    expect(stylesSource).toContain('min-height: 78px');
+    expect(stylesSource).toContain('min-height: 68px');
+    expect(stylesSource).toContain('min-height: 64px');
     expect(stylesSource).toContain('.conversation-reference-details .ui-button');
     expect(stylesSource).toContain('min-height: 44px');
     expect(stylesSource).toContain('grid-template-columns: 1fr');
@@ -109,5 +111,35 @@ describe('CONTACT-DRAWER-FINANCIAL-REFERENCES-COMPACT1 contract', () => {
     expect(inboxSource).toContain('function ConversationRecentActivity(');
     expect(inboxSource).toContain('Atividade recente');
     expect(listSource).not.toContain('ConversationRecentActivity');
+  });
+
+  it('adds safe local filters, stable attention ordering and a four-reference summary', () => {
+    expect(listSource).toContain("useState<ContactReferenceFilter>('ALL')");
+    expect(listSource).toContain('filterContactReferences(references, receivables, filter)');
+    expect(listSource).toContain('contactDrawerVisibleItems(filteredReferences, showAll, 4)');
+    expect(listSource).toContain('Referências ({references.length})');
+    expect(listSource).toContain('Ver todas as referências (${filteredReferences.length})');
+    expect(listSource).toContain('Recolher referências');
+    expect(listSource).toContain('Nenhuma referência neste filtro.');
+    expect(stylesSource).toContain('.conversation-reference-filters');
+    expect(stylesSource).toContain('overflow-x: auto');
+    expect(stylesSource).toContain('min-height: 44px');
+  });
+
+  it('places references before the compact three-item activity timeline', () => {
+    const financialBlock = inboxSource.slice(
+      inboxSource.indexOf("if (client && activeTab === 'financial')"),
+      inboxSource.indexOf(
+        'if (client) {',
+        inboxSource.indexOf("if (client && activeTab === 'financial')"),
+      ),
+    );
+    expect(financialBlock.indexOf('<ConversationReferenceList')).toBeLessThan(
+      financialBlock.indexOf('<ConversationRecentActivity'),
+    );
+    expect(inboxSource).toContain('contactDrawerVisibleItems(items, showAll, 3)');
+    expect(inboxSource).toContain('Ver mais atividades');
+    expect(inboxSource).toContain('Recolher atividades');
+    expect(stylesSource).toContain('.conversation-activity-meta');
   });
 });

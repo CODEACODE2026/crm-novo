@@ -14,6 +14,8 @@ import {
   classifyContactPixState,
   classifyConversationIncomingFile,
   ConversationPixCopyAction,
+  contactDrawerVisibleItems,
+  contactReferenceFinancialState,
   contactReferenceActionMatrix,
   contactOpenReceivable,
   contactPixCanSendWhatsApp,
@@ -21,6 +23,7 @@ import {
   contactPixWhatsAppButtonLabel,
   contactReceivablePaginationPages,
   contactReceivableAllowsPixAction,
+  filterContactReferences,
   contactRelevantReceivable,
   contactReceivablesForReference,
   conversationComposerActionMode,
@@ -1409,6 +1412,96 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(
       sortContactReferences([canceled, pending, active]).map((reference) => reference.id),
     ).toEqual(['active', 'pending', 'canceled']);
+  });
+
+  it('classifies only current unpaid receivables as open or overdue', () => {
+    const reference = contactReference('reference-1');
+    const historicalPaid = receivable('paid-overdue-history', {
+      clientReferenceId: reference.id,
+      displayStatus: 'PAGO',
+      dueDate: '2025-01-01',
+      paidAt: '2025-01-02',
+      status: 'PAGO',
+    });
+    const pending = receivable('pending', {
+      clientReferenceId: reference.id,
+      displayStatus: 'PENDENTE',
+      status: 'PENDENTE',
+    });
+    const overdue = receivable('overdue', {
+      clientReferenceId: reference.id,
+      displayStatus: 'VENCIDO',
+      status: 'PENDENTE',
+    });
+
+    expect(contactReferenceFinancialState(reference, [historicalPaid])).toBe('CLEAR');
+    expect(contactReferenceFinancialState(reference, [historicalPaid, pending])).toBe('OPEN');
+    expect(contactReferenceFinancialState(reference, [historicalPaid, pending, overdue])).toBe(
+      'OVERDUE',
+    );
+  });
+
+  it('filters reference and financial statuses without mixing their semantics', () => {
+    const active = contactReference('active', { status: 'ATIVO' });
+    const canceled = contactReference('canceled', { status: 'CANCELADO' });
+    const overdue = contactReference('overdue', { status: 'INATIVO' });
+    const receivables = [
+      receivable('overdue-charge', {
+        clientReferenceId: overdue.id,
+        displayStatus: 'VENCIDO',
+        status: 'PENDENTE',
+      }),
+    ];
+    const references = [active, canceled, overdue];
+
+    expect(filterContactReferences(references, receivables, 'ALL')).toEqual(references);
+    expect(filterContactReferences(references, receivables, 'ACTIVE')).toEqual([active]);
+    expect(filterContactReferences(references, receivables, 'CANCELED')).toEqual([canceled]);
+    expect(filterContactReferences(references, receivables, 'OVERDUE')).toEqual([overdue]);
+    expect(filterContactReferences(references, receivables, 'OPEN')).toEqual([overdue]);
+    expect(filterContactReferences([canceled], [], 'ACTIVE')).toEqual([]);
+  });
+
+  it('sorts financial attention first while preserving stable order inside each group', () => {
+    const clearFirst = contactReference('clear-first');
+    const open = contactReference('open');
+    const overdueFirst = contactReference('overdue-first');
+    const overdueSecond = contactReference('overdue-second');
+    const clearSecond = contactReference('clear-second');
+    const references = [clearFirst, open, overdueFirst, overdueSecond, clearSecond];
+    const receivables = [
+      receivable('open-charge', {
+        clientReferenceId: open.id,
+        displayStatus: 'PENDENTE',
+        status: 'PENDENTE',
+      }),
+      receivable('overdue-first-charge', {
+        clientReferenceId: overdueFirst.id,
+        displayStatus: 'VENCIDO',
+        status: 'PENDENTE',
+      }),
+      receivable('overdue-second-charge', {
+        clientReferenceId: overdueSecond.id,
+        displayStatus: 'VENCIDO',
+        status: 'PENDENTE',
+      }),
+    ];
+
+    expect(sortContactReferences(references, receivables).map((reference) => reference.id)).toEqual(
+      ['overdue-first', 'overdue-second', 'open', 'clear-first', 'clear-second'],
+    );
+  });
+
+  it('limits references to four and activities to three without deleting loaded data', () => {
+    const items = Array.from({ length: 8 }, (_, index) => `item-${index + 1}`);
+    expect(contactDrawerVisibleItems([], false, 4)).toEqual([]);
+    expect(contactDrawerVisibleItems(items.slice(0, 1), false, 4)).toEqual(items.slice(0, 1));
+    expect(contactDrawerVisibleItems(items.slice(0, 4), false, 4)).toEqual(items.slice(0, 4));
+    expect(contactDrawerVisibleItems(items, false, 4)).toEqual(items.slice(0, 4));
+    expect(contactDrawerVisibleItems(items.slice(0, 3), false, 3)).toEqual(items.slice(0, 3));
+    expect(contactDrawerVisibleItems(items, false, 3)).toEqual(items.slice(0, 3));
+    expect(contactDrawerVisibleItems(items, true, 4)).toEqual(items);
+    expect(contactDrawerVisibleItems(items, false, -1)).toEqual([]);
   });
 
   it('dedupes outbound presence state transitions locally', () => {

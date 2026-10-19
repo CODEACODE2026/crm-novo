@@ -153,6 +153,7 @@ import {
   createReceivablePix,
   createReceivablesPix,
   createPlan,
+  createReferral,
   createWhatsAppQuickReply,
   createWhatsAppConversationLabel,
   createWhatsAppAttendanceCategory,
@@ -217,6 +218,7 @@ import {
   updateFinancialCategory,
   updateFinancialTransaction,
   updatePlan,
+  updateReferral,
   connectWhatsApp,
   createWhatsAppConnection,
   disconnectWhatsApp,
@@ -325,6 +327,7 @@ import {
   type RecoveryCampaignStatus,
   type RecoverySummary,
   type Referral,
+  type ReferralRewardType,
   type ReferralStatus,
   type ReferralSummary,
   type WhatsAppConnection,
@@ -4336,6 +4339,14 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   const [rewardClientReferenceId, setRewardClientReferenceId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [management, setManagement] = useState<
+    { mode: 'create' } | { mode: 'edit'; referral: Referral } | null
+  >(null);
+  const [managementSaving, setManagementSaving] = useState(false);
+  const [managementError, setManagementError] = useState('');
+  const managementSavingRef = useRef(false);
+  const referralMutationRef = useRef<string | null>(null);
+  const [referralMutation, setReferralMutation] = useState<string | null>(null);
 
   const loadReferrals = useCallback(async () => {
     setLoading(true);
@@ -4390,6 +4401,10 @@ function ReferralsView({ clients }: { clients: Client[] }) {
   }
 
   async function applyReward(referral: Referral) {
+    const mutationKey = `apply:${referral.id}`;
+    if (referralMutationRef.current) return;
+    referralMutationRef.current = mutationKey;
+    setReferralMutation(mutationKey);
     setError('');
 
     try {
@@ -4403,6 +4418,9 @@ function ReferralsView({ clients }: { clients: Client[] }) {
       await loadReferrals();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível aplicar o benefício.');
+    } finally {
+      referralMutationRef.current = null;
+      setReferralMutation(null);
     }
   }
 
@@ -4414,6 +4432,11 @@ function ReferralsView({ clients }: { clients: Client[] }) {
       return;
     }
 
+    const mutationKey = `cancel:${referral.id}`;
+    if (referralMutationRef.current) return;
+    referralMutationRef.current = mutationKey;
+    setReferralMutation(mutationKey);
+
     setError('');
     try {
       await cancelReferral(referral.id, reason);
@@ -4422,6 +4445,54 @@ function ReferralsView({ clients }: { clients: Client[] }) {
       await loadReferrals();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível cancelar a indicação.');
+    } finally {
+      referralMutationRef.current = null;
+      setReferralMutation(null);
+    }
+  }
+
+  async function saveReferralManagement(payload: ReferralManagementPayload) {
+    if (!management || managementSavingRef.current) return;
+
+    managementSavingRef.current = true;
+    setManagementSaving(true);
+    setError('');
+    try {
+      if (management.mode === 'create') {
+        await createReferral(payload);
+      } else {
+        await updateReferral(management.referral.id, {
+          referrerClientId: payload.referrerClientId,
+          rewardType: payload.rewardType,
+          ...(payload.rewardValue !== undefined ? { rewardValue: payload.rewardValue } : {}),
+          ...(payload.rewardDescription !== undefined
+            ? { rewardDescription: payload.rewardDescription }
+            : {}),
+          expectedUpdatedAt: management.referral.updatedAt,
+        });
+      }
+      setManagement(null);
+      await loadReferrals();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível salvar a indicação.';
+      setManagementError(message);
+      if (management.mode === 'edit') {
+        try {
+          const current = await getReferral(management.referral.id);
+          if (current.status === 'PENDING') {
+            setManagement({ mode: 'edit', referral: current });
+          } else {
+            setManagement(null);
+            setError(message);
+          }
+          await loadReferrals();
+        } catch {
+          // Preserve the original mutation error when refresh is unavailable.
+        }
+      }
+    } finally {
+      managementSavingRef.current = false;
+      setManagementSaving(false);
     }
   }
 
@@ -4446,6 +4517,17 @@ function ReferralsView({ clients }: { clients: Client[] }) {
         title="Indicações"
         subtitle="Acompanhe indicações, qualificações e benefícios dos clientes."
         icon={UsersRound}
+        actions={
+          <Button
+            icon={Plus}
+            onClick={() => {
+              setManagementError('');
+              setManagement({ mode: 'create' });
+            }}
+          >
+            Nova indicação
+          </Button>
+        }
       />
       {error ? <div className="notice danger">{error}</div> : null}
 
@@ -4465,6 +4547,19 @@ function ReferralsView({ clients }: { clients: Client[] }) {
         <SectionHeader
           eyebrow="Indicações"
           title="Acompanhe o ciclo das indicações realizadas pelos clientes."
+          action={
+            <Button
+              className="referrals-mobile-create"
+              icon={Plus}
+              size="sm"
+              onClick={() => {
+                setManagementError('');
+                setManagement({ mode: 'create' });
+              }}
+            >
+              Nova
+            </Button>
+          }
         />
         <div className="toolbar referrals-toolbar">
           <div className="search-row">
@@ -4545,6 +4640,11 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                   <td>
                     <strong>{referralRewardTypeLabel(referral.rewardType)}</strong>
                     <span>{referralBenefitLabel(referral)}</span>
+                    <span
+                      className={`referral-origin origin-${referral.origin === 'MANUAL' ? 'manual' : 'automatic'}`}
+                    >
+                      {referralOriginLabel(referral)}
+                    </span>
                   </td>
                   <td className="date-column">
                     {referral.qualifiedAt ? formatDateTime(referral.qualifiedAt) : '—'}
@@ -4575,6 +4675,18 @@ function ReferralsView({ clients }: { clients: Client[] }) {
                       {referral.status !== 'REWARDED' && referral.status !== 'CANCELED' ? (
                         <ActionMenu
                           items={[
+                            ...(referral.status === 'PENDING'
+                              ? [
+                                  {
+                                    icon: Pencil,
+                                    label: 'Editar',
+                                    onSelect: () => {
+                                      setManagementError('');
+                                      setManagement({ mode: 'edit' as const, referral });
+                                    },
+                                  },
+                                ]
+                              : []),
                             {
                               danger: true,
                               icon: XCircle,
@@ -4626,6 +4738,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
           clients={clients}
           referral={confirming}
           rewardClientReferenceId={rewardClientReferenceId}
+          saving={referralMutation === `apply:${confirming.id}`}
           onApply={() => void applyReward(confirming)}
           onChangeReference={setRewardClientReferenceId}
           onClose={() => setConfirming(null)}
@@ -4646,6 +4759,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
               <IconButton
                 icon={X}
                 label="Fechar cancelamento da indicação"
+                disabled={referralMutation === `cancel:${canceling.id}`}
                 onClick={() => setCanceling(null)}
               />
             </header>
@@ -4658,21 +4772,239 @@ function ReferralsView({ clients }: { clients: Client[] }) {
             </label>
             <div className="form-actions">
               <div className="button-row">
-                <Button onClick={() => setCanceling(null)}>Cancelar</Button>
                 <Button
+                  disabled={referralMutation === `cancel:${canceling.id}`}
+                  onClick={() => setCanceling(null)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  disabled={referralMutation === `cancel:${canceling.id}`}
                   icon={XCircle}
                   variant="danger"
                   onClick={() => void cancelCurrentReferral(canceling)}
                 >
-                  Confirmar cancelamento
+                  {referralMutation === `cancel:${canceling.id}`
+                    ? 'Cancelando...'
+                    : 'Confirmar cancelamento'}
                 </Button>
               </div>
             </div>
           </section>
         </div>
       ) : null}
+      {management ? (
+        <ReferralManagementModal
+          key={management.mode === 'edit' ? management.referral.id : 'new-referral'}
+          mode={management.mode}
+          referral={management.mode === 'edit' ? management.referral : null}
+          saving={managementSaving}
+          serverError={managementError}
+          onClose={() => {
+            if (!managementSaving) setManagement(null);
+          }}
+          onSubmit={(payload) => void saveReferralManagement(payload)}
+        />
+      ) : null}
     </section>
   );
+}
+
+type ReferralManagementPayload = {
+  referredClientId: string;
+  referrerClientId: string;
+  rewardType: ReferralRewardType;
+  rewardValue?: number;
+  rewardDescription?: string;
+};
+
+function ReferralManagementModal({
+  mode,
+  referral,
+  saving,
+  serverError,
+  onClose,
+  onSubmit,
+}: {
+  mode: 'create' | 'edit';
+  referral: Referral | null;
+  saving: boolean;
+  serverError: string;
+  onClose: () => void;
+  onSubmit: (payload: ReferralManagementPayload) => void;
+}) {
+  const [referredClientId, setReferredClientId] = useState(referral?.referredClientId ?? '');
+  const [referrerClientId, setReferrerClientId] = useState(referral?.referrerClientId ?? '');
+  const [rewardType, setRewardType] = useState<ReferralRewardType>(
+    referral?.rewardType ?? 'FREE_MONTH',
+  );
+  const [rewardValue, setRewardValue] = useState(referral?.rewardValue ?? '');
+  const [rewardDescription, setRewardDescription] = useState(referral?.rewardDescription ?? '');
+  const [validationError, setValidationError] = useState('');
+  const referrerOption = useMemo(
+    () => (referral ? referralClientOption(referral.referrerClient) : null),
+    [referral],
+  );
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setValidationError('');
+
+    if (!referredClientId || !referrerClientId) {
+      setValidationError('Selecione o cliente indicador e o cliente indicado.');
+      return;
+    }
+    if (referredClientId === referrerClientId) {
+      setValidationError('O cliente não pode indicar a si mesmo.');
+      return;
+    }
+    const numericRewardValue = rewardValue ? Number(rewardValue) : undefined;
+    if (
+      rewardType === 'CREDIT' &&
+      (!Number.isFinite(numericRewardValue) || numericRewardValue! < 0)
+    ) {
+      setValidationError('Informe um valor de crédito válido.');
+      return;
+    }
+    if (rewardType === 'CUSTOM' && !rewardDescription.trim()) {
+      setValidationError('Informe a descrição do benefício personalizado.');
+      return;
+    }
+
+    onSubmit({
+      referredClientId,
+      referrerClientId,
+      rewardType,
+      ...(rewardType === 'CREDIT' ? { rewardValue: Number(rewardValue) } : {}),
+      ...(rewardType === 'CUSTOM' ? { rewardDescription: rewardDescription.trim() } : {}),
+    });
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal referral-management-modal"
+        aria-labelledby="referral-management-title"
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon" aria-hidden="true">
+            {mode === 'create' ? <Plus size={16} /> : <Pencil size={16} />}
+          </span>
+          <div>
+            <span className="metric-label">Gerenciamento de indicação</span>
+            <h2 id="referral-management-title">
+              {mode === 'create' ? 'Nova indicação' : 'Editar indicação pendente'}
+            </h2>
+            <p>
+              {mode === 'create'
+                ? 'Selecione dois clientes existentes. O sistema avaliará pagamentos anteriores.'
+                : 'O cliente indicado permanece imutável.'}
+            </p>
+          </div>
+          <IconButton
+            icon={X}
+            label="Fechar gerenciamento de indicação"
+            disabled={saving}
+            onClick={onClose}
+          />
+        </header>
+
+        <form className="referral-management-form" onSubmit={submit}>
+          <div className="referral-management-grid">
+            <div className="field">
+              <span>Indicador</span>
+              <ClientReferralSelect
+                allowEmpty={false}
+                emptyLabel="Selecione o indicador"
+                initialOption={referrerOption}
+                label="Cliente indicador"
+                placeholder="Pesquisar indicador"
+                value={referrerClientId}
+                onChange={setReferrerClientId}
+              />
+            </div>
+
+            {mode === 'create' ? (
+              <div className="field">
+                <span>Indicado</span>
+                <ClientReferralSelect
+                  allowEmpty={false}
+                  emptyLabel="Selecione o indicado"
+                  label="Cliente indicado"
+                  placeholder="Pesquisar indicado"
+                  value={referredClientId}
+                  onChange={setReferredClientId}
+                />
+              </div>
+            ) : (
+              <label className="field">
+                <span>Indicado</span>
+                <input disabled value={referral?.referredClient.name ?? ''} />
+              </label>
+            )}
+
+            <label className="field">
+              <span>Benefício</span>
+              <select
+                value={rewardType}
+                onChange={(event) => setRewardType(event.target.value as ReferralRewardType)}
+              >
+                <option value="FREE_MONTH">Mês grátis</option>
+                <option value="CREDIT">Crédito</option>
+                <option value="CUSTOM">Personalizado</option>
+              </select>
+            </label>
+
+            {rewardType === 'CREDIT' ? (
+              <label className="field">
+                <span>Valor do crédito</span>
+                <input
+                  min="0"
+                  step="0.01"
+                  type="number"
+                  value={rewardValue}
+                  onChange={(event) => setRewardValue(event.target.value)}
+                />
+              </label>
+            ) : null}
+
+            {rewardType === 'CUSTOM' ? (
+              <label className="field referral-management-description">
+                <span>Descrição do benefício</span>
+                <textarea
+                  value={rewardDescription}
+                  onChange={(event) => setRewardDescription(event.target.value)}
+                />
+              </label>
+            ) : null}
+          </div>
+
+          {validationError || serverError ? (
+            <div className="notice danger">{validationError || serverError}</div>
+          ) : null}
+          <div className="form-actions">
+            <Button disabled={saving} type="button" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button disabled={saving} icon={Save} type="submit">
+              {saving ? 'Salvando...' : 'Salvar indicação'}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function referralClientOption(client: Referral['referrerClient']): ClientOption {
+  return {
+    id: client.id,
+    email: null,
+    name: client.name,
+    reference: client.reference,
+    phoneNormalized: client.phoneNormalized ?? '',
+    preferredPixProvider: null,
+  };
 }
 
 function ReferralClientCell({ client }: { client: Referral['referredClient'] }) {
@@ -4714,6 +5046,10 @@ function referralRewardTypeLabel(type: Referral['rewardType']) {
   } satisfies Record<Referral['rewardType'], string>;
 
   return labels[type];
+}
+
+function referralOriginLabel(referral: Pick<Referral, 'origin'>) {
+  return referral.origin === 'MANUAL' ? 'Manual' : 'Automática';
 }
 
 function referralBenefitLabel(
@@ -4758,6 +5094,7 @@ function ReferralDetailModal({
             ['Indicador', referral.referrerClient.name],
             ['Indicado', referral.referredClient.name],
             ['Data da indicação', formatDateTime(referral.createdAt)],
+            ['Origem', referralOriginLabel(referral)],
             ['Status', referralStatusLabel(referral.status)],
             ['Tipo de benefício', referralRewardTypeLabel(referral.rewardType)],
             ['Qualificada em', referral.qualifiedAt ? formatDateTime(referral.qualifiedAt) : null],
@@ -4792,9 +5129,44 @@ function ReferralDetailModal({
         </div>
 
         <ReferralProgress referral={referral} />
+        <section className="referral-history" aria-labelledby="referral-history-title">
+          <div className="referral-history-heading">
+            <History aria-hidden="true" size={16} />
+            <h3 id="referral-history-title">Histórico da indicação</h3>
+          </div>
+          {referral.history?.length ? (
+            <ol>
+              {referral.history.map((entry) => (
+                <li key={entry.id}>
+                  <span className="referral-history-marker" aria-hidden="true" />
+                  <div>
+                    <strong>{referralHistoryActionLabel(entry.action)}</strong>
+                    <span>{formatDateTime(entry.createdAt)}</span>
+                    {entry.actor ? <small>Responsável: {entry.actor.name}</small> : null}
+                    {entry.reason ? <p>{entry.reason}</p> : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="referral-history-empty">
+              Histórico detalhado indisponível para registros anteriores.
+            </p>
+          )}
+        </section>
       </section>
     </div>
   );
+}
+
+function referralHistoryActionLabel(action: NonNullable<Referral['history']>[number]['action']) {
+  return {
+    CREATED: 'Indicação criada',
+    QUALIFIED: 'Indicação qualificada',
+    UPDATED: 'Dados alterados',
+    REWARD_APPLIED: 'Benefício aplicado',
+    CANCELED: 'Indicação cancelada',
+  }[action];
 }
 
 function ReferralProgress({ referral }: { referral: Referral }) {
@@ -4880,6 +5252,7 @@ function ReferralRewardModal({
   onClose,
   referral,
   rewardClientReferenceId,
+  saving,
 }: {
   clients: Client[];
   onApply: () => void;
@@ -4887,6 +5260,7 @@ function ReferralRewardModal({
   onClose: () => void;
   referral: Referral;
   rewardClientReferenceId: string;
+  saving: boolean;
 }) {
   const referrer = clients.find((client) => client.id === referral.referrerClientId);
   const eligibleReferences =
@@ -4897,7 +5271,8 @@ function ReferralRewardModal({
   const freeMonthPreview = buildFreeMonthPreview(selectedReference);
   const canApplyFreeMonthReward =
     Boolean(rewardClientReferenceId) && Boolean(selectedReference) && Boolean(freeMonthPreview);
-  const isApplyDisabled = referral.rewardType === 'FREE_MONTH' && !canApplyFreeMonthReward;
+  const isApplyDisabled =
+    saving || (referral.rewardType === 'FREE_MONTH' && !canApplyFreeMonthReward);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -4911,7 +5286,12 @@ function ReferralRewardModal({
             <h2 id="referral-reward-title">Aplicar benefício</h2>
             <p>Conceda o benefício ao cliente que realizou a indicação.</p>
           </div>
-          <IconButton icon={X} label="Fechar aplicação de benefício" onClick={onClose} />
+          <IconButton
+            icon={X}
+            label="Fechar aplicação de benefício"
+            disabled={saving}
+            onClick={onClose}
+          />
         </header>
 
         <div className="referral-detail-grid">
@@ -4979,9 +5359,11 @@ function ReferralRewardModal({
 
         <div className="form-actions">
           <div className="button-row">
-            <Button onClick={onClose}>Cancelar</Button>
+            <Button disabled={saving} onClick={onClose}>
+              Cancelar
+            </Button>
             <Button disabled={isApplyDisabled} icon={Gift} variant="primary" onClick={onApply}>
-              Aplicar benefício
+              {saving ? 'Aplicando...' : 'Aplicar benefício'}
             </Button>
           </div>
         </div>

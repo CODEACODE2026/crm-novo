@@ -1,11 +1,24 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { ApplyReferralRewardDto } from './dto/apply-referral-reward.dto';
 import { CancelReferralDto } from './dto/cancel-referral.dto';
+import { CreateReferralDto } from './dto/create-referral.dto';
 import { ListReferralsDto } from './dto/list-referrals.dto';
+import { UpdateReferralDto } from './dto/update-referral.dto';
 import { ReferralsService } from './referrals.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
@@ -28,6 +41,20 @@ export class ReferralsController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.referralsService.get(id);
+  }
+
+  @Post()
+  create(@Body() dto: CreateReferralDto, @Req() request: AuthenticatedRequest) {
+    return this.referralsService.createManual(dto, request.user.id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateReferralDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.referralsService.update(id, dto, request.user.id);
   }
 
   @Post(':id/apply-reward')

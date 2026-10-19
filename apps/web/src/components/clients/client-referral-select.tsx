@@ -9,14 +9,27 @@ export const CLIENT_REFERRAL_SEARCH_DEBOUNCE_MS = 300;
 interface ClientReferralSelectProps {
   value: string;
   onChange: (clientId: string) => void;
+  allowEmpty?: boolean;
+  emptyLabel?: string;
+  initialOption?: ClientOption | null;
+  label?: string;
+  placeholder?: string;
 }
 
-export function ClientReferralSelect({ value, onChange }: ClientReferralSelectProps) {
+export function ClientReferralSelect({
+  value,
+  onChange,
+  allowEmpty = true,
+  emptyLabel = 'Sem indicação',
+  initialOption = null,
+  label = 'Indicado por',
+  placeholder = 'Pesquisar cliente',
+}: ClientReferralSelectProps) {
   const [search, setSearch] = useState('');
   const [options, setOptions] = useState<ClientOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState<ClientOption | null>(null);
+  const [selected, setSelected] = useState<ClientOption | null>(initialOption);
   const requestIdRef = useRef(0);
 
   const visibleOptions = useMemo(
@@ -27,8 +40,10 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
   useEffect(() => {
     if (!value) {
       setSelected(null);
+    } else if (initialOption?.id === value) {
+      setSelected(initialOption);
     }
-  }, [value]);
+  }, [initialOption, value]);
 
   useEffect(() => {
     if (!search.trim()) {
@@ -73,9 +88,9 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
         <div className="autocomplete-control">
           <Search aria-hidden="true" size={16} />
           <input
-            aria-label="Indicado por"
+            aria-label={label}
             autoComplete="off"
-            placeholder={selected ? selected.name : 'Pesquisar cliente'}
+            placeholder={selected ? selected.name : placeholder}
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
@@ -85,7 +100,7 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
           />
           {value ? (
             <button
-              aria-label="Limpar indicador"
+              aria-label={`Limpar ${label.toLocaleLowerCase()}`}
               className="inline-icon-button"
               type="button"
               onClick={() => selectOption(null)}
@@ -97,14 +112,16 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
 
         {open && (search.trim() || value) ? (
           <div className="autocomplete-menu">
-            <button
-              className="autocomplete-option"
-              type="button"
-              onClick={() => selectOption(null)}
-            >
-              <strong>Sem indicação</strong>
-              <span>Não vincular indicador</span>
-            </button>
+            {allowEmpty ? (
+              <button
+                className="autocomplete-option"
+                type="button"
+                onClick={() => selectOption(null)}
+              >
+                <strong>{emptyLabel}</strong>
+                <span>Não vincular cliente</span>
+              </button>
+            ) : null}
 
             {loading ? <div className="autocomplete-status">Carregando...</div> : null}
 
@@ -140,7 +157,7 @@ export function ClientReferralSelect({ value, onChange }: ClientReferralSelectPr
             </span>
           </>
         ) : (
-          <span>Sem indicação</span>
+          <span>{emptyLabel}</span>
         )}
       </div>
     </div>

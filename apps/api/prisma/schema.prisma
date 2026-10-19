@@ -64,6 +64,19 @@ enum ReferralRewardType {
   CUSTOM
 }
 
+enum ReferralOrigin {
+  AUTOMATIC
+  MANUAL
+}
+
+enum ReferralHistoryAction {
+  CREATED
+  QUALIFIED
+  UPDATED
+  CANCELED
+  REWARD_APPLIED
+}
+
 enum ReceivableStatus {
   PENDENTE
   PAGO
@@ -320,6 +333,8 @@ model User {
   createdReactivations    ClientReferenceReactivation[] @relation("ClientReferenceReactivationCreatedBy")
   createdTransactions     FinancialTransaction[]        @relation("FinancialTransactionCreatedBy")
   createdReferrals        Referral[]                    @relation("ReferralCreatedBy")
+  canceledReferrals       Referral[]                    @relation("ReferralCanceledBy")
+  referralHistoryEntries  ReferralHistory[]             @relation("ReferralHistoryActor")
   createdPaymentGroups    PaymentGroup[]                @relation("PaymentGroupCreatedBy")
   receivableAuditEvents   ReceivableAuditEvent[]        @relation("ReceivableAuditEventActor")
   resolvedAttendances     WhatsAppAttendance[]          @relation("WhatsAppAttendanceResolvedBy")
@@ -1104,6 +1119,7 @@ model Receivable {
   paymentIntents             PaymentIntent[]
   billingResponses           BillingResponse[]
   auditEvents                ReceivableAuditEvent[]
+  qualifiedReferrals         Referral[]                   @relation("ReferralQualificationReceivable")
 
   @@index([clientId])
   @@index([clientReferenceId])
@@ -1348,36 +1364,63 @@ model FinancialTransaction {
 }
 
 model Referral {
-  id                      String             @id @default(uuid()) @db.Uuid
-  referredClientId        String             @unique @db.Uuid
-  referrerClientId        String             @db.Uuid
-  status                  ReferralStatus     @default(PENDING)
-  rewardType              ReferralRewardType @default(FREE_MONTH)
-  rewardValue             Decimal?           @db.Decimal(12, 2)
-  rewardDescription       String?
-  qualifiedAt             DateTime?
-  appliedAt               DateTime?
-  canceledAt              DateTime?
-  cancellationReason      String?
-  appliedPreviousDueDate  DateTime?          @db.Date
-  appliedNewDueDate       DateTime?          @db.Date
-  rewardClientReferenceId String?            @db.Uuid
-  createdByUserId         String?            @db.Uuid
-  createdAt               DateTime           @default(now())
-  updatedAt               DateTime           @updatedAt
-  referredClient          Client             @relation("ReferralReferredClient", fields: [referredClientId], references: [id], onDelete: Restrict)
-  referrerClient          Client             @relation("ReferralReferrerClient", fields: [referrerClientId], references: [id], onDelete: Restrict)
-  rewardClientReference   ClientReference?   @relation("ReferralRewardClientReference", fields: [rewardClientReferenceId], references: [id], onDelete: SetNull)
-  createdBy               User?              @relation("ReferralCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  id                        String             @id @default(uuid()) @db.Uuid
+  referredClientId          String             @unique @db.Uuid
+  referrerClientId          String             @db.Uuid
+  status                    ReferralStatus     @default(PENDING)
+  rewardType                ReferralRewardType @default(FREE_MONTH)
+  origin                    ReferralOrigin     @default(AUTOMATIC)
+  rewardValue               Decimal?           @db.Decimal(12, 2)
+  rewardDescription         String?
+  qualifiedAt               DateTime?
+  appliedAt                 DateTime?
+  canceledAt                DateTime?
+  cancellationReason        String?
+  appliedPreviousDueDate    DateTime?          @db.Date
+  appliedNewDueDate         DateTime?          @db.Date
+  rewardClientReferenceId   String?            @db.Uuid
+  qualificationReceivableId String?            @db.Uuid
+  createdByUserId           String?            @db.Uuid
+  canceledByUserId          String?            @db.Uuid
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  referredClient            Client             @relation("ReferralReferredClient", fields: [referredClientId], references: [id], onDelete: Restrict)
+  referrerClient            Client             @relation("ReferralReferrerClient", fields: [referrerClientId], references: [id], onDelete: Restrict)
+  rewardClientReference     ClientReference?   @relation("ReferralRewardClientReference", fields: [rewardClientReferenceId], references: [id], onDelete: SetNull)
+  qualificationReceivable   Receivable?        @relation("ReferralQualificationReceivable", fields: [qualificationReceivableId], references: [id], onDelete: SetNull)
+  createdBy                 User?              @relation("ReferralCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  canceledBy                User?              @relation("ReferralCanceledBy", fields: [canceledByUserId], references: [id], onDelete: SetNull)
+  history                   ReferralHistory[]
 
   @@index([referrerClientId])
   @@index([status])
   @@index([rewardType])
+  @@index([origin])
   @@index([rewardClientReferenceId])
+  @@index([qualificationReceivableId])
+  @@index([canceledByUserId])
   @@index([createdAt])
   @@index([qualifiedAt])
   @@index([appliedAt])
   @@map("referrals")
+}
+
+model ReferralHistory {
+  id          String                @id @default(uuid()) @db.Uuid
+  referralId  String                @db.Uuid
+  action      ReferralHistoryAction
+  actorUserId String?               @db.Uuid
+  reason      String?
+  before      Json?
+  after       Json?
+  createdAt   DateTime              @default(now())
+  referral    Referral              @relation(fields: [referralId], references: [id], onDelete: Cascade)
+  actor       User?                 @relation("ReferralHistoryActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([referralId, createdAt])
+  @@index([actorUserId])
+  @@index([action])
+  @@map("referral_history")
 }
 
 model ClientStatusHistory {

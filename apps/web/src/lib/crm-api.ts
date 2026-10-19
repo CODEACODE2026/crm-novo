@@ -188,6 +188,9 @@ export type ConfigurablePaymentProvider = Extract<
 >;
 export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
 export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
+export type ReferralOrigin = 'AUTOMATIC' | 'MANUAL';
+export type ReferralHistoryAction =
+  'CREATED' | 'QUALIFIED' | 'UPDATED' | 'CANCELED' | 'REWARD_APPLIED';
 export type RenewalStatus = 'ACTIVE' | 'REVERTED';
 
 export interface Renewal {
@@ -426,6 +429,7 @@ export interface Referral {
   referrerClientId: string;
   status: ReferralStatus;
   rewardType: ReferralRewardType;
+  origin: ReferralOrigin;
   rewardValue: string | null;
   rewardDescription: string | null;
   qualifiedAt: string | null;
@@ -439,6 +443,15 @@ export interface Referral {
   referredClient: ReferralClientSummary;
   referrerClient: ReferralClientSummary;
   rewardLabel: string;
+  history?: Array<{
+    id: string;
+    action: ReferralHistoryAction;
+    actor: { id: string; name: string } | null;
+    reason: string | null;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+    createdAt: string;
+  }>;
   rewardPreview: {
     referrerStatus: ClientStatus;
     selectedClientReferenceId?: string | null;
@@ -2330,6 +2343,35 @@ export function getReferralSummary(
 
 export function getReferral(id: string) {
   return apiFetch<Referral>(`/referrals/${id}`);
+}
+
+export function createReferral(payload: {
+  referredClientId: string;
+  referrerClientId: string;
+  rewardType: ReferralRewardType;
+  rewardValue?: number;
+  rewardDescription?: string;
+}) {
+  return apiFetch<Referral>('/referrals', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateReferral(
+  id: string,
+  payload: {
+    referrerClientId: string;
+    rewardType: ReferralRewardType;
+    rewardValue?: number;
+    rewardDescription?: string;
+    expectedUpdatedAt: string;
+  },
+) {
+  return apiFetch<Referral>(`/referrals/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function applyReferralReward(

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { formatBusinessDate } from '../clients/utils/business-date';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ReferralsService } from './referrals.service';
+import { inspectReferralQualificationEvidence } from './referral-qualification';
 
 type ReconciliationTx = Prisma.TransactionClient | PrismaService;
 
@@ -12,10 +13,6 @@ type ReferralForReconciliation = Prisma.ReferralGetPayload<{
     referrerClient: { include: { references: true } };
     rewardClientReference: true;
   };
-}>;
-
-type InitialActivationReceivable = Prisma.ReceivableGetPayload<{
-  include: { clientReference: true };
 }>;
 
 export type ReferralReconciliationRow = {
@@ -141,13 +138,16 @@ export class ReferralReconciliationService {
   }
 
   private async inspectReferral(tx: ReconciliationTx, referral: ReferralForReconciliation) {
-    const receivable = await this.findInitialActivationEvidence(tx, referral.referredClientId);
+    const eligibility = await inspectReferralQualificationEvidence(
+      tx,
+      referral.status,
+      referral.referredClientId,
+    );
+    const receivable = eligibility.receivable;
     const reference =
       receivable?.clientReference ??
       referral.referredClient.references.find((item) => item.status === 'ATIVO') ??
       null;
-    const eligibility = this.evaluateEligibility(referral, receivable);
-
     return {
       referralId: referral.id,
       referrer: {
@@ -170,67 +170,6 @@ export class ReferralReconciliationService {
       eligible: eligibility.eligible,
       reason: eligibility.reason,
     } satisfies ReferralReconciliationRow;
-  }
-
-  private async findInitialActivationEvidence(tx: ReconciliationTx, referredClientId: string) {
-    const paidActiveReceivable = await tx.receivable.findFirst({
-      where: {
-        clientId: referredClientId,
-        purpose: 'INITIAL_ACTIVATION',
-        status: 'PAGO',
-        clientReference: { status: 'ATIVO' },
-      },
-      include: { clientReference: true },
-      orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }],
-    });
-
-    if (paidActiveReceivable) {
-      return paidActiveReceivable;
-    }
-
-    return tx.receivable.findFirst({
-      where: {
-        clientId: referredClientId,
-        purpose: 'INITIAL_ACTIVATION',
-      },
-      include: { clientReference: true },
-      orderBy: [{ createdAt: 'asc' }],
-    });
-  }
-
-  private evaluateEligibility(
-    referral: ReferralForReconciliation,
-    receivable: InitialActivationReceivable | null,
-  ) {
-    if (referral.status !== 'PENDING') {
-      return { eligible: false, reason: `Referral ${referral.status} nao e reconciliavel.` };
-    }
-
-    if (!receivable) {
-      return {
-        eligible: false,
-        reason: 'Nao ha INITIAL_ACTIVATION do cliente indicado vinculada a ClientReference.',
-      };
-    }
-
-    if (receivable.status !== 'PAGO') {
-      return {
-        eligible: false,
-        reason: `INITIAL_ACTIVATION ${receivable.status}; pagamento PAGO exigido.`,
-      };
-    }
-
-    if (receivable.clientReference!.status !== 'ATIVO') {
-      return {
-        eligible: false,
-        reason: `ClientReference ${receivable.clientReference!.status}; status ATIVO exigido.`,
-      };
-    }
-
-    return {
-      eligible: true,
-      reason: 'Referral PENDING com INITIAL_ACTIVATION PAGO e ClientReference ATIVO.',
-    };
   }
 
   private referralState(referral: ReferralForReconciliation) {

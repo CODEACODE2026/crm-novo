@@ -127,7 +127,7 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('function ReferralRewardModal');
     expect(dashboardSource).toContain('Conceda o benefício ao cliente que realizou a indicação.');
     expect(dashboardSource).toContain('onClick={onApply}');
-    expect(dashboardSource).toContain('onClick={onClose}>Cancelar</Button>');
+    expect(dashboardSource).toContain('<Button disabled={saving} onClick={onClose}>');
     expect(dashboardSource).toContain('label="Fechar aplicação de benefício"');
     expect(dashboardSource).not.toContain('onClick={() => void applyReward(referral)}');
   });
@@ -179,6 +179,46 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain("referral.status !== 'CANCELED'");
     expect(dashboardSource).toContain('referral-cancel-modal');
     expect(dashboardSource).toContain('Confirmar cancelamento');
+  });
+
+  it('adds manual creation and pending-only editing without exposing destructive deletion', () => {
+    expect(dashboardSource).toContain('Nova indicação');
+    expect(dashboardSource).toContain('function ReferralManagementModal');
+    expect(dashboardSource).toContain("management.mode === 'create'");
+    expect(dashboardSource).toContain("referral.status === 'PENDING'");
+    expect(dashboardSource).toContain('O cliente indicado permanece imutável.');
+    expect(dashboardSource).toContain('expectedUpdatedAt: management.referral.updatedAt');
+    expect(apiSource).toContain("return apiFetch<Referral>('/referrals'");
+    expect(apiSource).toContain("method: 'PATCH'");
+    expect(dashboardSource).not.toContain('Excluir indicação');
+    expect(dashboardSource).toContain('if (!management || managementSavingRef.current) return;');
+    expect(dashboardSource).toContain('managementSavingRef.current = true;');
+    expect(dashboardSource).toContain('if (referralMutationRef.current) return;');
+    expect(dashboardSource).toContain('referralMutation === `apply:${confirming.id}`');
+    expect(dashboardSource).toContain('referralMutation === `cancel:${canceling.id}`');
+  });
+
+  it('shows origin and real referral history with legacy fallback', () => {
+    expect(dashboardSource).toContain("referral.origin === 'MANUAL' ? 'Manual' : 'Automática'");
+    expect(dashboardSource).toContain('referralOriginLabel(referral)');
+    expect(dashboardSource).toContain('Histórico da indicação');
+    expect(dashboardSource).toContain('referral.history?.length');
+    expect(dashboardSource).toContain('Responsável: {entry.actor.name}');
+    expect(dashboardSource).toContain(
+      'Histórico detalhado indisponível para registros anteriores.',
+    );
+    expect(stylesSource).toContain('.referral-history');
+    expect(stylesSource).toContain('.referral-origin.origin-manual');
+  });
+
+  it('keeps referral management accessible on mobile', () => {
+    expect(dashboardSource).toContain('className="referrals-mobile-create"');
+    expect(referralsMobileSource).toContain('.referrals-mobile-create');
+    expect(referralsMobileSource).toContain('display: inline-flex;');
+    expect(referralsMobileSource).toContain('.referral-management-grid');
+    expect(referralsMobileSource).toContain('grid-template-columns: 1fr;');
+    expect(referralsMobileSource).toContain('100dvh');
+    expect(stylesSource).toContain('.referral-management-modal');
   });
 
   it('refines client workspace referrals as read-only received and made sections', () => {

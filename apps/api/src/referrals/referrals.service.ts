@@ -6,7 +6,13 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { Prisma, ReferralRewardType } from '@prisma/client';
+import {
+  Prisma,
+  type Referral,
+  type ReferralHistoryAction,
+  type ReferralOrigin,
+  ReferralRewardType,
+} from '@prisma/client';
 import {
   addCalendarMonthsPreservingAnchor,
   formatBusinessDate,
@@ -16,7 +22,13 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { ApplyReferralRewardDto } from './dto/apply-referral-reward.dto';
 import { CancelReferralDto } from './dto/cancel-referral.dto';
+import { CreateReferralDto } from './dto/create-referral.dto';
 import { ListReferralsDto } from './dto/list-referrals.dto';
+import { UpdateReferralDto } from './dto/update-referral.dto';
+import {
+  inspectReferralQualificationEvidence,
+  lockReferralInitialActivationEvidence,
+} from './referral-qualification';
 
 type ReferralTx = Prisma.TransactionClient | PrismaService;
 
@@ -28,12 +40,22 @@ type ReferralWithClients = Prisma.ReferralGetPayload<{
   };
 }>;
 
+type ReferralWithHistory = Prisma.ReferralGetPayload<{
+  include: {
+    referredClient: { include: { references: true } };
+    referrerClient: { include: { references: true } };
+    rewardClientReference: true;
+    history: { include: { actor: { select: { id: true; name: true } } } };
+  };
+}>;
+
 export type CreateReferralInput = {
   referredClientId: string;
   referrerClientId?: string | null | undefined;
   rewardType?: ReferralRewardType | undefined;
   rewardValue?: number | Prisma.Decimal | null | undefined;
   rewardDescription?: string | null | undefined;
+  origin?: ReferralOrigin | undefined;
   actorUserId?: string | null | undefined;
 };
 
@@ -104,12 +126,122 @@ export class ReferralsService {
         referredClient: { include: { references: true } },
         referrerClient: { include: { references: true } },
         rewardClientReference: true,
+        history: {
+          include: { actor: { select: { id: true, name: true } } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        },
       },
     });
 
     if (!referral) {
       throw new NotFoundException('Indicacao nao encontrada.');
     }
+
+    return this.presentReferral(referral);
+  }
+
+  async createManual(dto: CreateReferralDto, actorUserId: string) {
+    const referralId = await this.prisma.$transaction(async (tx) => {
+      await lockReferralInitialActivationEvidence(tx, dto.referredClientId);
+
+      const created = await this.createPending(tx, {
+        referredClientId: dto.referredClientId,
+        referrerClientId: dto.referrerClientId,
+        rewardType: dto.rewardType,
+        rewardValue: dto.rewardValue,
+        rewardDescription: dto.rewardDescription,
+        origin: 'MANUAL',
+        actorUserId,
+      });
+
+      if (!created) {
+        throw new BadRequestException('Cliente indicador obrigatorio para indicacao manual.');
+      }
+
+      const evidence = await inspectReferralQualificationEvidence(
+        tx,
+        created.status,
+        created.referredClientId,
+      );
+
+      if (evidence.eligible && evidence.receivable) {
+        await this.qualifyAfterInitialActivation(
+          tx,
+          created.referredClientId,
+          evidence.receivable.id,
+          actorUserId,
+        );
+      }
+
+      return created.id;
+    });
+
+    return this.get(referralId);
+  }
+
+  async update(id: string, dto: UpdateReferralDto, actorUserId: string) {
+    const referral = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.referral.findUnique({
+        where: { id },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
+      });
+
+      if (!current) throw new NotFoundException('Indicacao nao encontrada.');
+      if (current.status !== 'PENDING') {
+        throw new ConflictException('Apenas indicacoes pendentes podem ser editadas.');
+      }
+      if (current.referredClientId === dto.referrerClientId) {
+        throw new BadRequestException('Cliente nao pode indicar a si mesmo.');
+      }
+
+      this.validateRewardInput(dto.rewardType, dto.rewardValue, dto.rewardDescription);
+      const referrer = await tx.client.findUnique({ where: { id: dto.referrerClientId } });
+      if (!referrer) throw new NotFoundException('Cliente indicador nao encontrado.');
+
+      const updated = await tx.referral.updateMany({
+        where: {
+          id,
+          status: 'PENDING',
+          updatedAt: new Date(dto.expectedUpdatedAt),
+        },
+        data: {
+          referrerClientId: dto.referrerClientId,
+          rewardType: dto.rewardType,
+          rewardValue: dto.rewardType === 'CREDIT' ? (dto.rewardValue ?? null) : null,
+          rewardDescription: this.optionalTrim(dto.rewardDescription),
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new ConflictException(
+          'Indicacao alterada por outro processo. Atualize os dados e tente novamente.',
+        );
+      }
+
+      const next = await tx.referral.findUnique({
+        where: { id },
+        include: {
+          referredClient: { include: { references: true } },
+          referrerClient: { include: { references: true } },
+          rewardClientReference: true,
+        },
+      });
+      if (!next) throw new NotFoundException('Indicacao nao encontrada.');
+
+      await this.recordHistory(tx, {
+        referralId: id,
+        action: 'UPDATED',
+        actorUserId,
+        before: current,
+        after: next,
+      });
+
+      return next;
+    });
 
     return this.presentReferral(referral);
   }
@@ -150,8 +282,16 @@ export class ReferralsService {
           rewardType: input.rewardType ?? 'FREE_MONTH',
           rewardValue: input.rewardValue ?? null,
           rewardDescription: this.optionalTrim(input.rewardDescription),
+          origin: input.origin ?? 'AUTOMATIC',
           createdByUserId: input.actorUserId ?? null,
         },
+      });
+
+      await this.recordHistory(tx, {
+        referralId: referral.id,
+        action: 'CREATED',
+        actorUserId: input.actorUserId ?? null,
+        after: referral,
       });
 
       await tx.clientEvent.createMany({
@@ -205,7 +345,7 @@ export class ReferralsService {
     const qualifiedAt = new Date();
     const updated = await tx.referral.updateMany({
       where: { id: referral.id, status: 'PENDING' },
-      data: { status: 'QUALIFIED', qualifiedAt },
+      data: { status: 'QUALIFIED', qualifiedAt, qualificationReceivableId: receivableId },
     });
 
     if (updated.count !== 1) {
@@ -231,7 +371,18 @@ export class ReferralsService {
       ],
     });
 
-    return tx.referral.findUnique({ where: { id: referral.id } });
+    const qualified = await tx.referral.findUnique({ where: { id: referral.id } });
+    if (qualified) {
+      await this.recordHistory(tx, {
+        referralId: referral.id,
+        action: 'QUALIFIED',
+        actorUserId,
+        before: referral,
+        after: qualified,
+      });
+    }
+
+    return qualified;
   }
 
   async cancelPendingForClientBeforePayment(
@@ -257,7 +408,12 @@ export class ReferralsService {
     const cancellationReason = reason || 'Cliente indicado cancelado antes do primeiro pagamento.';
     const updated = await tx.referral.updateMany({
       where: { id: referral.id, status: 'PENDING' },
-      data: { status: 'CANCELED', canceledAt, cancellationReason },
+      data: {
+        status: 'CANCELED',
+        canceledAt,
+        canceledByUserId: actorUserId,
+        cancellationReason,
+      },
     });
 
     if (updated.count !== 1) {
@@ -275,7 +431,19 @@ export class ReferralsService {
       },
     });
 
-    return tx.referral.findUnique({ where: { id: referral.id } });
+    const canceled = await tx.referral.findUnique({ where: { id: referral.id } });
+    if (canceled) {
+      await this.recordHistory(tx, {
+        referralId: referral.id,
+        action: 'CANCELED',
+        actorUserId,
+        reason: cancellationReason,
+        before: referral,
+        after: canceled,
+      });
+    }
+
+    return canceled;
   }
 
   async applyReward(id: string, dto: ApplyReferralRewardDto, actorUserId: string) {
@@ -299,11 +467,21 @@ export class ReferralsService {
 
       const rewardDescription = this.resolveRewardDescription(current, dto);
       const rewardValue = this.resolveRewardValue(current, dto);
+      const appliedAt = new Date();
+      const claimed = await tx.referral.updateMany({
+        where: { id, status: 'QUALIFIED' },
+        data: { status: 'REWARDED', appliedAt },
+      });
+
+      if (claimed.count !== 1) {
+        throw new ConflictException(
+          'Indicacao alterada por outro processo. Atualize os dados e tente novamente.',
+        );
+      }
+
       let appliedPreviousDueDate: Date | null = null;
       let appliedNewDueDate: Date | null = null;
       const data: Prisma.ReferralUpdateInput = {
-        status: 'REWARDED',
-        appliedAt: new Date(),
         rewardValue,
         rewardDescription,
       };
@@ -396,6 +574,14 @@ export class ReferralsService {
         },
       });
 
+      await this.recordHistory(tx, {
+        referralId: current.id,
+        action: 'REWARD_APPLIED',
+        actorUserId,
+        before: current,
+        after: updated,
+      });
+
       return updated;
     });
 
@@ -403,6 +589,11 @@ export class ReferralsService {
   }
 
   async cancel(id: string, dto: CancelReferralDto, actorUserId: string) {
+    const reason = dto.reason.trim();
+    if (reason.length < 3) {
+      throw new BadRequestException('Motivo do cancelamento deve ter ao menos 3 caracteres.');
+    }
+
     const referral = await this.prisma.$transaction(async (tx) => {
       const current = await tx.referral.findUnique({
         where: { id },
@@ -425,29 +616,51 @@ export class ReferralsService {
         return current;
       }
 
-      const updated = await tx.referral.update({
-        where: { id },
+      const canceledAt = new Date();
+      const claimed = await tx.referral.updateMany({
+        where: { id, status: current.status },
         data: {
           status: 'CANCELED',
-          canceledAt: new Date(),
-          cancellationReason: dto.reason.trim(),
+          canceledAt,
+          canceledByUserId: actorUserId,
+          cancellationReason: reason,
         },
+      });
+
+      if (claimed.count !== 1) {
+        throw new ConflictException(
+          'Indicacao alterada por outro processo. Atualize os dados e tente novamente.',
+        );
+      }
+
+      const updated = await tx.referral.findUnique({
+        where: { id },
         include: {
           referredClient: { include: { references: true } },
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
       });
+      if (!updated) throw new NotFoundException('Indicacao nao encontrada.');
 
       await tx.clientEvent.create({
         data: {
           clientId: current.referredClientId,
           type: 'REFERRAL_CANCELED',
           title: 'Indicacao cancelada.',
-          description: dto.reason.trim(),
+          description: reason,
           metadata: { referralId: current.id, referrerClientId: current.referrerClientId },
           createdByUserId: actorUserId,
         },
+      });
+
+      await this.recordHistory(tx, {
+        referralId: current.id,
+        action: 'CANCELED',
+        actorUserId,
+        reason,
+        before: current,
+        after: updated,
       });
 
       return updated;
@@ -513,7 +726,7 @@ export class ReferralsService {
     });
   }
 
-  private presentReferral(referral: ReferralWithClients) {
+  private presentReferral(referral: ReferralWithClients | ReferralWithHistory) {
     const previewNewDueDate =
       referral.status === 'QUALIFIED' &&
       referral.rewardType === 'FREE_MONTH' &&
@@ -524,6 +737,8 @@ export class ReferralsService {
             referral.rewardClientReference.billingAnchorDay,
           )
         : null;
+
+    const history = 'history' in referral ? referral.history : undefined;
 
     return {
       ...referral,
@@ -542,6 +757,19 @@ export class ReferralsService {
       referredClient: this.presentClientSummary(referral.referredClient),
       referrerClient: this.presentClientSummary(referral.referrerClient),
       rewardLabel: this.rewardLabel(referral),
+      ...(history
+        ? {
+            history: history.map((entry) => ({
+              id: entry.id,
+              action: entry.action,
+              actor: entry.actor,
+              reason: entry.reason,
+              before: entry.before,
+              after: entry.after,
+              createdAt: entry.createdAt.toISOString(),
+            })),
+          }
+        : {}),
       rewardPreview:
         referral.status === 'QUALIFIED'
           ? {
@@ -589,9 +817,109 @@ export class ReferralsService {
       throw new BadRequestException('Descricao do beneficio customizado e obrigatoria.');
     }
 
-    if (rewardType === 'CREDIT' && rewardValue === undefined) {
+    if (rewardType === 'CREDIT' && (rewardValue === undefined || rewardValue === null)) {
       throw new BadRequestException('Valor do credito e obrigatorio.');
     }
+  }
+
+  private async recordHistory(
+    tx: ReferralTx,
+    input: {
+      referralId: string;
+      action: ReferralHistoryAction;
+      actorUserId: string | null;
+      reason?: string | null;
+      before?: Pick<
+        Referral,
+        | 'referredClientId'
+        | 'referrerClientId'
+        | 'status'
+        | 'origin'
+        | 'rewardType'
+        | 'rewardValue'
+        | 'rewardDescription'
+        | 'qualificationReceivableId'
+        | 'rewardClientReferenceId'
+        | 'qualifiedAt'
+        | 'appliedAt'
+        | 'canceledAt'
+        | 'cancellationReason'
+        | 'appliedPreviousDueDate'
+        | 'appliedNewDueDate'
+      >;
+      after?: Pick<
+        Referral,
+        | 'referredClientId'
+        | 'referrerClientId'
+        | 'status'
+        | 'origin'
+        | 'rewardType'
+        | 'rewardValue'
+        | 'rewardDescription'
+        | 'qualificationReceivableId'
+        | 'rewardClientReferenceId'
+        | 'qualifiedAt'
+        | 'appliedAt'
+        | 'canceledAt'
+        | 'cancellationReason'
+        | 'appliedPreviousDueDate'
+        | 'appliedNewDueDate'
+      >;
+    },
+  ) {
+    await tx.referralHistory.create({
+      data: {
+        referralId: input.referralId,
+        action: input.action,
+        actorUserId: input.actorUserId,
+        reason: input.reason ?? null,
+        ...(input.before ? { before: this.historySnapshot(input.before) } : {}),
+        ...(input.after ? { after: this.historySnapshot(input.after) } : {}),
+      },
+    });
+  }
+
+  private historySnapshot(
+    referral: Pick<
+      Referral,
+      | 'referredClientId'
+      | 'referrerClientId'
+      | 'status'
+      | 'origin'
+      | 'rewardType'
+      | 'rewardValue'
+      | 'rewardDescription'
+      | 'qualificationReceivableId'
+      | 'rewardClientReferenceId'
+      | 'qualifiedAt'
+      | 'appliedAt'
+      | 'canceledAt'
+      | 'cancellationReason'
+      | 'appliedPreviousDueDate'
+      | 'appliedNewDueDate'
+    >,
+  ): Prisma.InputJsonObject {
+    return {
+      referredClientId: referral.referredClientId,
+      referrerClientId: referral.referrerClientId,
+      status: referral.status,
+      origin: referral.origin,
+      rewardType: referral.rewardType,
+      rewardValue: referral.rewardValue?.toString() ?? null,
+      rewardDescription: referral.rewardDescription,
+      qualificationReceivableId: referral.qualificationReceivableId,
+      rewardClientReferenceId: referral.rewardClientReferenceId,
+      qualifiedAt: referral.qualifiedAt?.toISOString() ?? null,
+      appliedAt: referral.appliedAt?.toISOString() ?? null,
+      canceledAt: referral.canceledAt?.toISOString() ?? null,
+      cancellationReason: referral.cancellationReason,
+      appliedPreviousDueDate: referral.appliedPreviousDueDate
+        ? formatBusinessDate(referral.appliedPreviousDueDate)
+        : null,
+      appliedNewDueDate: referral.appliedNewDueDate
+        ? formatBusinessDate(referral.appliedNewDueDate)
+        : null,
+    };
   }
 
   private resolveRewardValue(referral: ReferralWithClients, dto: ApplyReferralRewardDto) {

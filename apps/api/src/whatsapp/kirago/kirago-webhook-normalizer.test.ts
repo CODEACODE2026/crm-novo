@@ -157,6 +157,153 @@ describe('KiragoWebhookNormalizer', () => {
     });
   });
 
+  it('normalizes a shared contact without confusing it with the sender name', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'contact-provider-id', Type: 'contactMessage' },
+          Message: {
+            contactMessage: {
+              displayName: 'João da Silva',
+              vcard:
+                'BEGIN:VCARD\nVERSION:3.0\nFN:João da Silva\nTEL;TYPE=CELL:+55 44 99999-9999\nEND:VCARD',
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      contactName: 'Lucas',
+      messageType: 'contact',
+      text: null,
+      contacts: [
+        {
+          displayName: 'João da Silva',
+          phones: ['+55 44 99999-9999'],
+        },
+      ],
+    });
+  });
+
+  it('normalizes multiple contacts, folded vCard lines and international phones', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: {
+            ...payload().event.Info,
+            ID: 'contacts-provider-id',
+            Type: 'contactsArrayMessage',
+          },
+          Message: {
+            contactsArrayMessage: {
+              contacts: [
+                {
+                  vcard:
+                    'BEGIN:VCARD\r\nVERSION:3.0\r\nN:Doe;Jane;Ann;Dr.;Jr.\r\nTEL;TYPE=CELL:+1 202 555 0100\r\nEND:VCARD',
+                },
+                {
+                  vcard:
+                    'BEGIN:VCARD\nVERSION:3.0\nFN;ENCODING=QUOTED-PRINTABLE:Mar=C3=ADa =\nGarc=C3=ADa\nTEL;TYPE=CELL:tel:+34 612 34 56 78\nTEL;TYPE=WORK:+34 910 00 00 00\nEND:VCARD',
+                },
+              ],
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'contacts',
+      contacts: [
+        { displayName: 'Dr. Jane Ann Doe Jr.', phones: ['+1 202 555 0100'] },
+        {
+          displayName: 'María García',
+          phones: ['+34 612 34 56 78', '+34 910 00 00 00'],
+        },
+      ],
+    });
+  });
+
+  it('keeps the plural type when only Info.Type identifies a contacts array', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: {
+            ...payload().event.Info,
+            ID: 'contacts-type-only',
+            Type: 'contactsArrayMessage',
+          },
+          Message: {},
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'contacts',
+      contacts: [],
+    });
+  });
+
+  it('keeps recognized malformed or missing contact payloads renderable with safe placeholders', () => {
+    const malformed = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'malformed-contact', Type: 'contactMessage' },
+          Message: { contactMessage: { vcard: 'not-a-vcard' } },
+        },
+      }),
+      receivedAt,
+    );
+    const missing = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'missing-contact', Type: 'contactMessage' },
+          Message: { contactMessage: {} },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(malformed).toMatchObject({
+      messageType: 'contact',
+      contacts: [{ displayName: null, phones: [], vcard: 'not-a-vcard' }],
+    });
+    expect(missing).toMatchObject({
+      messageType: 'contact',
+      contacts: [{ displayName: null, phones: [], vcard: null }],
+    });
+  });
+
+  it('limits contact count, phone count and retained vCard size', () => {
+    const phones = Array.from({ length: 12 }, (_, index) => `TEL:+1 202 555 ${index}`);
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, ID: 'limited-contacts', Type: 'contactsArrayMessage' },
+          Message: {
+            contactsArrayMessage: {
+              contacts: Array.from({ length: 55 }, (_, index) => ({
+                displayName: `Contact ${index}`,
+                vcard: `BEGIN:VCARD\nFN:Contact ${index}\n${phones.join('\n')}\nNOTE:${'x'.repeat(70_000)}\nEND:VCARD`,
+              })),
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result?.kind).toBe('MESSAGE');
+    if (result?.kind !== 'MESSAGE') throw new Error('Expected message');
+    expect(result.contacts).toHaveLength(50);
+    expect(result.contacts?.[0]?.phones).toHaveLength(10);
+    expect(result.contacts?.[0]?.vcard).toHaveLength(64 * 1024);
+  });
+
   it('normalizes inbound reply context from extended text contextInfo', () => {
     const result = normalizer.normalize(
       payload({

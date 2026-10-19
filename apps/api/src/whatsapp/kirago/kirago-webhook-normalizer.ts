@@ -37,6 +37,12 @@ export type NormalizedProviderJids = {
   lids: string[];
 };
 
+export type NormalizedWhatsAppContact = {
+  displayName: string | null;
+  phones: string[];
+  vcard: string | null;
+};
+
 export type NormalizedWhatsAppMessage = {
   kind: 'MESSAGE';
   provider: 'KIRAGO';
@@ -55,6 +61,7 @@ export type NormalizedWhatsAppMessage = {
   mediaDownloadMetadata: NormalizedMediaDownloadMetadata | null;
   replyContext: NormalizedReplyContext | null;
   providerJids: NormalizedProviderJids | null;
+  contacts?: NormalizedWhatsAppContact[] | null;
 };
 
 export type NormalizedWhatsAppReceipt = {
@@ -112,6 +119,12 @@ const messageTypeMap: Record<string, NormalizedMessageType> = {
   conversation: 'text',
 };
 
+const maxContactCount = 50;
+const maxContactPhones = 10;
+const maxContactNameLength = 200;
+const maxContactPhoneLength = 80;
+const maxVcardLength = 64 * 1024;
+
 export class KiragoWebhookNormalizer {
   normalize(payload: unknown, receivedAt = new Date()): NormalizedKiragoWebhook | null {
     const body = asRecord(payload);
@@ -139,6 +152,7 @@ export class KiragoWebhookNormalizer {
     const direction = info?.IsFromMe === true ? 'OUTGOING' : 'INCOMING';
     const phone = isGroup ? null : this.extractPhone(body, info);
     const messageType = this.extractMessageType(message, info);
+    const contacts = this.extractContacts(message, messageType);
 
     return {
       kind: 'MESSAGE',
@@ -154,11 +168,96 @@ export class KiragoWebhookNormalizer {
       messageTimestamp: this.parseTimestamp(info?.Timestamp),
       receivedAt,
       isGroup,
-      mediaMetadata: this.extractMediaMetadata(message, messageType),
+      mediaMetadata:
+        contacts === null
+          ? this.extractMediaMetadata(message, messageType)
+          : { kind: messageType, contacts },
       mediaDownloadMetadata: this.extractMediaDownloadMetadata(message, messageType),
       replyContext: this.extractReplyContext(message, messageType),
       providerJids: this.extractProviderJids(body, info),
+      contacts,
     };
+  }
+
+  private extractContacts(
+    message: RecordValue | null,
+    messageType: NormalizedMessageType,
+  ): NormalizedWhatsAppContact[] | null {
+    if (messageType !== 'contact' && messageType !== 'contacts') {
+      return null;
+    }
+
+    const source =
+      messageType === 'contact'
+        ? asRecord(message?.contactMessage)
+        : asRecord(message?.contactsArrayMessage);
+    if (!source) {
+      return [];
+    }
+
+    const entries =
+      messageType === 'contacts'
+        ? arrayOrEmpty(firstOwnValue(source, ['contacts', 'Contacts'])).slice(0, maxContactCount)
+        : [source];
+
+    return entries.map((entry) => this.normalizeContact(asRecord(entry) ?? {}));
+  }
+
+  private normalizeContact(source: RecordValue): NormalizedWhatsAppContact {
+    const vcard = limitedString(firstOwnValue(source, ['vcard', 'Vcard', 'VCard']), maxVcardLength);
+    const parsed = this.parseVcard(vcard);
+    const explicitName = limitedString(
+      firstOwnValue(source, ['displayName', 'DisplayName', 'name', 'Name']),
+      maxContactNameLength,
+    );
+
+    return {
+      displayName: explicitName ?? parsed.displayName,
+      phones: parsed.phones,
+      vcard,
+    };
+  }
+
+  private parseVcard(
+    vcard: string | null,
+  ): Pick<NormalizedWhatsAppContact, 'displayName' | 'phones'> {
+    if (!vcard) {
+      return { displayName: null, phones: [] };
+    }
+
+    const unfolded = vcard.replace(/=\r?\n/g, '').replace(/\r?\n[ \t]/g, '');
+    const lines = unfolded.split(/\r?\n/);
+    let formattedName: string | null = null;
+    let structuredName: string | null = null;
+    const phones: string[] = [];
+
+    for (const line of lines) {
+      const separator = line.indexOf(':');
+      if (separator <= 0) continue;
+      const header = line.slice(0, separator);
+      const property = header.split(';', 1)[0]?.toUpperCase();
+      const value = decodeVcardText(
+        line.slice(separator + 1),
+        /(?:^|;)ENCODING=QUOTED-PRINTABLE(?:;|$)/i.test(header),
+      );
+
+      if (property === 'FN' && !formattedName) {
+        formattedName = limitedString(value, maxContactNameLength);
+      } else if (property === 'N' && !structuredName) {
+        const [family, given, additional, prefix, suffix] = value
+          .split(';', 5)
+          .map((part) => part.trim());
+        structuredName = limitedString(
+          [prefix, given, additional, family, suffix].filter(Boolean).join(' '),
+          maxContactNameLength,
+        );
+      } else if (property === 'TEL' && phones.length < maxContactPhones) {
+        const phone = limitedString(value.replace(/^tel:/i, ''), maxContactPhoneLength);
+        if (phone && !phones.includes(phone)) phones.push(phone);
+      }
+    }
+
+    return { displayName: formattedName ?? structuredName, phones };
   }
 
   private normalizeReceipt(body: RecordValue, receivedAt: Date): NormalizedWhatsAppReceipt {
@@ -447,6 +546,8 @@ export class KiragoWebhookNormalizer {
     if (infoType.includes('document')) return 'document';
     if (infoType.includes('sticker')) return 'sticker';
     if (infoType.includes('location')) return 'location';
+    if (infoType.includes('contactsarray') || infoType.includes('contacts_array'))
+      return 'contacts';
     if (infoType.includes('contact')) return 'contact';
     if (infoType.includes('reaction')) return 'reaction';
     if (infoType.includes('button')) return 'button_response';
@@ -576,6 +677,12 @@ export class KiragoWebhookNormalizer {
       records.push(asRecord(message?.extendedTextMessage));
     }
 
+    if (messageType === 'contact') {
+      records.push(asRecord(message?.contactMessage));
+    } else if (messageType === 'contacts') {
+      records.push(asRecord(message?.contactsArrayMessage));
+    }
+
     if (key) {
       records.push(asRecord(message?.[key]));
     }
@@ -619,6 +726,8 @@ export class KiragoWebhookNormalizer {
     if (quotedMessage.stickerMessage) return 'Figurinha';
     if (quotedMessage.documentMessage) return 'Documento';
     if (quotedMessage.locationMessage || quotedMessage.liveLocationMessage) return 'Localização';
+    if (quotedMessage.contactMessage) return 'Contato compartilhado';
+    if (quotedMessage.contactsArrayMessage) return 'Contatos compartilhados';
 
     return null;
   }
@@ -639,6 +748,35 @@ function asRecord(value: unknown): RecordValue | null {
 
 function stringOrNull(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function limitedString(value: unknown, maxLength: number) {
+  if (typeof value !== 'string') return null;
+  const text = value.slice(0, maxLength).trim();
+  return text || null;
+}
+
+function arrayOrEmpty(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function decodeVcardText(value: string, quotedPrintable = false) {
+  const decoded = quotedPrintable
+    ? value.replace(/(?:=[a-f0-9]{2})+/gi, (sequence) => {
+        const bytes = sequence
+          .slice(1)
+          .split('=')
+          .map((hex) => Number.parseInt(hex, 16));
+        return Buffer.from(bytes).toString('utf8');
+      })
+    : value;
+
+  return decoded
+    .replace(/\\n/gi, '\n')
+    .replace(/\\,/g, ',')
+    .replace(/\\;/g, ';')
+    .replace(/\\\\/g, '\\')
+    .trim();
 }
 
 function normalizeLowerString(value: unknown) {

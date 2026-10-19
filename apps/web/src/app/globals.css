@@ -4248,6 +4248,50 @@ a {
   white-space: pre-wrap;
 }
 
+.conversation-shared-contacts {
+  display: grid;
+  gap: 6px;
+  min-width: min(260px, 64vw);
+}
+
+.conversation-shared-contact {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--background));
+  padding: 10px;
+}
+
+.conversation-shared-contact > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.conversation-shared-contact > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.conversation-shared-contact strong,
+.conversation-shared-contact span,
+.conversation-shared-contact small {
+  overflow-wrap: anywhere;
+}
+
+.conversation-shared-contact strong {
+  font-size: 13px;
+}
+
+.conversation-shared-contact span,
+.conversation-shared-contact small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .conversation-pix-copy {
   display: grid;
   gap: 5px;

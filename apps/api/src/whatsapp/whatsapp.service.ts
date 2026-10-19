@@ -4718,6 +4718,7 @@ export class WhatsAppService {
             lastMessagePreview: this.conversationLastMessagePreview(messageType, {
               text: normalized.text,
               mediaFileName: media.mediaFileName,
+              ...(normalized.contacts ? { contactCount: normalized.contacts.length } : {}),
             }),
             ...(direction === 'INBOUND'
               ? {
@@ -4940,6 +4941,7 @@ export class WhatsAppService {
         lastMessagePreview: this.conversationLastMessagePreview(messageType, {
           text: updated.text,
           mediaFileName: updated.mediaFileName,
+          ...(normalized.contacts ? { contactCount: normalized.contacts.length } : {}),
         }),
       },
     });
@@ -7818,6 +7820,7 @@ export class WhatsAppService {
       mediaFileName: deleted ? null : message.mediaFileName,
       mediaSizeBytes: deleted ? null : message.mediaSizeBytes,
       mediaDurationSeconds: deleted ? null : message.mediaDurationSeconds,
+      contacts: deleted ? [] : this.presentConversationContacts(metadata.contacts),
       reactions: deleted ? [] : this.presentMessageReactions(message.reactions ?? []),
       mediaAvailable: deleted ? false : this.hasAvailableMedia(message),
       retryAction: this.conversationMessageRetryAction(message),
@@ -8041,7 +8044,14 @@ export class WhatsAppService {
         messageTimestamp: message.messageTimestamp,
         receivedAt: message.receivedAt,
         contactName: message.contactName,
-        mediaMetadata: message.mediaMetadata,
+        mediaMetadata:
+          message.messageType === 'CONTACT' || message.messageType === 'CONTACTS'
+            ? {
+                contacts: this.presentConversationContacts(
+                  this.asRecord(message.mediaMetadata)?.contacts,
+                ),
+              }
+            : message.mediaMetadata,
       })),
     };
   }
@@ -8151,8 +8161,8 @@ export class WhatsAppService {
       sticker: 'STICKER',
       location: 'LOCATION',
       live_location: 'LOCATION',
-      contact: 'UNKNOWN',
-      contacts: 'UNKNOWN',
+      contact: 'CONTACT',
+      contacts: 'CONTACTS',
       reaction: 'UNKNOWN',
       button_response: 'BUTTON',
       list_response: 'BUTTON',
@@ -8172,9 +8182,17 @@ export class WhatsAppService {
       return false;
     }
 
-    return ['image', 'video', 'audio', 'document', 'sticker', 'location', 'live_location'].includes(
-      normalized.messageType,
-    );
+    return [
+      'image',
+      'video',
+      'audio',
+      'document',
+      'sticker',
+      'location',
+      'live_location',
+      'contact',
+      'contacts',
+    ].includes(normalized.messageType);
   }
 
   private conversationMessageText(type: WhatsAppConversationMessageType, text: string | null) {
@@ -8187,7 +8205,7 @@ export class WhatsAppService {
 
   private conversationLastMessagePreview(
     type: WhatsAppConversationMessageType,
-    input: { text: string | null; mediaFileName?: string | null },
+    input: { text: string | null; mediaFileName?: string | null; contactCount?: number },
   ) {
     const text = input.text?.trim();
 
@@ -8201,6 +8219,11 @@ export class WhatsAppService {
     if (type === 'VIDEO') return '[Video]';
     if (type === 'STICKER') return '[Figurinha]';
     if (type === 'LOCATION') return '[Localizacao]';
+    if (type === 'CONTACT') return 'Contato compartilhado';
+    if (type === 'CONTACTS') {
+      const count = input.contactCount ?? 0;
+      return count > 0 ? `${count} contatos compartilhados` : 'Contatos compartilhados';
+    }
     if (type === 'BUTTON') return '[Resposta interativa]';
     return '[Mensagem]';
   }
@@ -8227,6 +8250,8 @@ export class WhatsAppService {
     if (message.type === 'VIDEO') return 'Vídeo';
     if (message.type === 'STICKER') return 'Figurinha';
     if (message.type === 'LOCATION') return 'Localização';
+    if (message.type === 'CONTACT') return 'Contato compartilhado';
+    if (message.type === 'CONTACTS') return 'Contatos compartilhados';
 
     return 'Mensagem';
   }
@@ -8289,6 +8314,10 @@ export class WhatsAppService {
       };
     }
 
+    if (normalized.contacts) {
+      metadata.contacts = normalized.contacts;
+    }
+
     if (normalized.replyContext) {
       metadata.replyContext = {
         providerMessageId: normalized.replyContext.providerMessageId,
@@ -8302,6 +8331,26 @@ export class WhatsAppService {
     }
 
     return metadata;
+  }
+
+  private presentConversationContacts(value: unknown) {
+    if (!Array.isArray(value)) return [];
+
+    return value.slice(0, 50).map((entry) => {
+      const contact = this.asRecord(entry);
+      const displayName =
+        typeof contact?.displayName === 'string' && contact.displayName.trim()
+          ? contact.displayName.trim().slice(0, 200)
+          : null;
+      const phones = Array.isArray(contact?.phones)
+        ? contact.phones
+            .filter((phone): phone is string => typeof phone === 'string' && Boolean(phone.trim()))
+            .slice(0, 10)
+            .map((phone) => phone.trim().slice(0, 80))
+        : [];
+
+      return { displayName, phones };
+    });
   }
 
   private optionalMetadataString(metadata: Record<string, unknown> | null, key: string) {

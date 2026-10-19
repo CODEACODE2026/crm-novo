@@ -2767,6 +2767,7 @@ export function WhatsAppInbox({
         mediaFileName: mediaToSend?.file.name ?? null,
         mediaMimeType: mediaToSend?.file.type ?? null,
         mediaSizeBytes: mediaToSend?.file.size ?? null,
+        contacts: [],
         retryAction: mediaToSend ? 'SELECT_FILE_AGAIN' : 'RETRY',
         messageDispatchId: null,
         providerMessageId: null,
@@ -5787,7 +5788,9 @@ export function isRenderableConversationMessage(message: WhatsAppConversationMes
     message.type === 'AUDIO' ||
     message.type === 'DOCUMENT' ||
     message.type === 'STICKER' ||
-    message.type === 'LOCATION'
+    message.type === 'LOCATION' ||
+    message.type === 'CONTACT' ||
+    message.type === 'CONTACTS'
   );
 }
 
@@ -6273,6 +6276,7 @@ function ConversationBubble({
         ) : text ? (
           <p>{renderHighlightedSearchText(text, searchTerm)}</p>
         ) : null}
+        {!message.deleted ? <ConversationContactContent message={message} /> : null}
         {!message.deleted ? (
           <ConversationMediaContent conversationId={conversationId} message={message} />
         ) : null}
@@ -6705,6 +6709,35 @@ function useMediaVisibility(enabled: boolean) {
   }, [enabled, visible]);
 
   return { elementRef, visible };
+}
+
+function ConversationContactContent({ message }: { message: WhatsAppConversationMessage }) {
+  if (message.type !== 'CONTACT' && message.type !== 'CONTACTS') return null;
+
+  const sharedContacts = message.contacts ?? [];
+  const contacts = sharedContacts.length ? sharedContacts : [{ displayName: null, phones: [] }];
+
+  return (
+    <div className="conversation-shared-contacts" aria-label="Contatos compartilhados">
+      {contacts.map((contact, index) => (
+        <div
+          className="conversation-shared-contact"
+          key={`${contact.displayName ?? 'contact'}-${index}`}
+        >
+          <User aria-hidden="true" size={22} />
+          <div>
+            <strong>{contact.displayName || 'Contato sem nome'}</strong>
+            {contact.phones.length ? (
+              contact.phones.map((phone) => <span key={phone}>{phone}</span>)
+            ) : (
+              <span>Telefone não informado</span>
+            )}
+            <small>Contato compartilhado</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ConversationMediaContent({
@@ -11173,6 +11206,12 @@ function conversationMessageStatusSymbol(status: WhatsAppConversationMessageStat
 function conversationLastMessagePreview(message: WhatsAppConversationMessage) {
   const text = message.text?.trim();
   if (text) return text;
+  if (message.type === 'CONTACT') return 'Contato compartilhado';
+  if (message.type === 'CONTACTS') {
+    return message.contacts?.length
+      ? `${message.contacts.length} contatos compartilhados`
+      : 'Contatos compartilhados';
+  }
   if (message.type === 'IMAGE') return '[Imagem]';
   if (message.type === 'DOCUMENT') return message.mediaFileName || 'Documento';
   return conversationMessagePlaceholder(message.type) || '[Mensagem]';
@@ -11220,6 +11259,8 @@ function conversationMessagePlaceholder(type: WhatsAppConversationMessageType) {
   const labels = {
     AUDIO: '',
     BUTTON: '[Mensagem interativa]',
+    CONTACT: '[Contato compartilhado]',
+    CONTACTS: '[Contatos compartilhados]',
     DOCUMENT: '',
     IMAGE: '[Imagem]',
     LOCATION: '[Localização]',
@@ -11266,7 +11307,13 @@ export function isTechnicalVideoPlaceholder(text: string | null | undefined) {
 export function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
   if (message.deleted) return 'Mensagem apagada';
   if (message.type === 'TEXT') return message.text || '';
-  if (message.type === 'IMAGE' || message.type === 'STICKER') return '';
+  if (
+    message.type === 'IMAGE' ||
+    message.type === 'STICKER' ||
+    message.type === 'CONTACT' ||
+    message.type === 'CONTACTS'
+  )
+    return '';
   return conversationMessagePlaceholder(message.type);
 }
 
@@ -11293,6 +11340,8 @@ function conversationMessageQuotePreview(message: WhatsAppConversationMessage) {
   if (message.type === 'VIDEO') return 'Vídeo';
   if (message.type === 'STICKER') return 'Figurinha';
   if (message.type === 'LOCATION') return 'Localização';
+  if (message.type === 'CONTACT') return 'Contato compartilhado';
+  if (message.type === 'CONTACTS') return 'Contatos compartilhados';
   return 'Mensagem';
 }
 

@@ -165,6 +165,7 @@ function message(
     mediaFileName: null,
     mediaSizeBytes: null,
     mediaDurationSeconds: null,
+    contacts: [],
     reactions: [],
     mediaAvailable: false,
     retryAction: null,
@@ -1717,9 +1718,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(conversationMediaUnavailableText('VIDEO')).toBe('[Vídeo]');
     expect(whatsAppInboxSource).toContain('if (!message.mediaAvailable)');
     expect(whatsAppInboxSource).toContain('role="status"');
-    expect(whatsAppInboxSource).toContain(
-      "if (message.type === 'IMAGE' || message.type === 'STICKER') return '';",
-    );
+    expect(whatsAppInboxSource).toContain("message.type === 'IMAGE'");
+    expect(whatsAppInboxSource).toContain("message.type === 'STICKER'");
   });
 
   it('keeps the attachment menu focused on media uploads and the saved sticker library', () => {
@@ -2515,6 +2515,35 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     ).toBe(true);
     expect(isRenderableConversationMessage(message({ type: 'VIDEO', text: null }))).toBe(true);
     expect(isRenderableConversationMessage(message({ type: 'LOCATION', text: null }))).toBe(true);
+    expect(
+      isRenderableConversationMessage(
+        message({
+          type: 'CONTACT',
+          text: null,
+          contacts: [{ displayName: 'João', phones: ['+55 44 99999-9999'] }],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isRenderableConversationMessage(message({ type: 'CONTACTS', text: null, contacts: [] })),
+    ).toBe(true);
+  });
+
+  it('renders shared contact cards without treating vCard content as HTML', () => {
+    expect(
+      conversationMessageDisplayText(
+        message({
+          type: 'CONTACT',
+          text: null,
+          contacts: [{ displayName: 'João', phones: ['+55 44 99999-9999'] }],
+        }),
+      ),
+    ).toBe('');
+    expect(whatsAppInboxSource).toContain('function ConversationContactContent');
+    expect(whatsAppInboxSource).toContain("contact.displayName || 'Contato sem nome'");
+    expect(whatsAppInboxSource).toContain('Telefone não informado');
+    expect(whatsAppInboxSource).not.toContain('dangerouslySetInnerHTML');
+    expect(globalStylesSource).toContain('.conversation-shared-contact');
   });
 
   it('treats available VIDEO as inline media and hides technical video placeholders', () => {

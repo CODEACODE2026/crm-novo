@@ -844,7 +844,22 @@ export type WhatsAppConversationMessageDirection = 'INBOUND' | 'OUTBOUND';
 export type WhatsAppConversationMessageStatus =
   'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
 export type WhatsAppConversationMessageType =
-  'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'STICKER' | 'LOCATION' | 'BUTTON' | 'UNKNOWN';
+  | 'TEXT'
+  | 'IMAGE'
+  | 'AUDIO'
+  | 'DOCUMENT'
+  | 'VIDEO'
+  | 'STICKER'
+  | 'LOCATION'
+  | 'CONTACT'
+  | 'CONTACTS'
+  | 'BUTTON'
+  | 'UNKNOWN';
+
+export interface WhatsAppSharedContact {
+  displayName: string | null;
+  phones: string[];
+}
 
 export interface WhatsAppConversation {
   id: string;
@@ -927,6 +942,7 @@ export interface WhatsAppConversationMessage {
   mediaFileName: string | null;
   mediaSizeBytes: number | null;
   mediaDurationSeconds: number | null;
+  contacts: WhatsAppSharedContact[];
   reactions: WhatsAppMessageReaction[];
   mediaAvailable: boolean;
   retryAction: 'RETRY' | 'SELECT_FILE_AGAIN' | 'RECORD_AGAIN' | null;

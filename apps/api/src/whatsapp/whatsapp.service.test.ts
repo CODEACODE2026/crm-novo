@@ -758,6 +758,11 @@ function serviceFactory({
     tryReplyToInbound: vi.fn().mockResolvedValue({ sent: false, reason: 'disabled' }),
     ...autoReplyOverrides,
   };
+  const attendance = {
+    recordInboundMessage: vi.fn().mockResolvedValue(undefined),
+    recordManualOutboundMessage: vi.fn().mockResolvedValue(undefined),
+    resolveActiveAttendance: vi.fn().mockResolvedValue(undefined),
+  };
 
   return {
     service: new WhatsAppService(
@@ -773,6 +778,7 @@ function serviceFactory({
       realtime as never,
       undefined,
       autoReply as never,
+      attendance as never,
     ),
     prisma,
     provider,
@@ -783,6 +789,7 @@ function serviceFactory({
     voiceConversion,
     realtime,
     autoReply,
+    attendance,
     txClientReferenceUpdate,
     txReceivableUpdate,
   };
@@ -1987,6 +1994,36 @@ describe('WhatsAppService', () => {
       });
     },
   );
+
+  it('presents only sanitized contact fields and never exposes the vCard', () => {
+    const { service } = serviceFactory();
+    const privateService = service as unknown as {
+      presentConversationMessage: (message: ReturnType<typeof conversationMessage>) => {
+        contacts: Array<{ displayName: string | null; phones: string[] }>;
+      };
+    };
+
+    const presented = privateService.presentConversationMessage(
+      conversationMessage({
+        type: 'CONTACT',
+        rawMetadata: {
+          originalType: 'contact',
+          contacts: [
+            {
+              displayName: 'João da Silva',
+              phones: ['+55 44 99999-9999'],
+              vcard: 'BEGIN:VCARD\nNOTE:private\nEND:VCARD',
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(presented.contacts).toEqual([
+      { displayName: 'João da Silva', phones: ['+55 44 99999-9999'] },
+    ]);
+    expect(presented).not.toHaveProperty('rawMetadata');
+  });
 
   it('sends MP4 conversation media as VIDEO with caption and provider id persistence', async () => {
     const { service, provider, prisma, mediaStorage } = serviceFactory({
@@ -7292,6 +7329,54 @@ describe('WhatsAppService', () => {
     );
   });
 
+  it('persists an external outgoing contact without unread, waitlist or Attendance side effects', async () => {
+    const { service, prisma, normalizer, realtime, attendance } = serviceFactory();
+    const contacts = [
+      {
+        displayName: 'João da Silva',
+        phones: ['+55 44 99999-9999'],
+        vcard: 'BEGIN:VCARD\nFN:João da Silva\nEND:VCARD',
+      },
+    ];
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('', {
+        direction: 'OUTGOING',
+        messageId: 'external-outgoing-contact',
+        messageType: 'contact',
+        text: null,
+        contacts,
+        mediaMetadata: { kind: 'contact', contacts },
+      }),
+    );
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      action: 'external_outgoing_message_persisted',
+      conversation: { action: 'external_outgoing_message_persisted' },
+    });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          direction: 'OUTBOUND',
+          type: 'CONTACT',
+          rawMetadata: expect.objectContaining({ contacts }),
+        }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.not.objectContaining({ unreadCount: expect.anything(), status: 'OPEN' }),
+      }),
+    );
+    expect(prisma.whatsAppInboundMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+    expect(attendance.recordInboundMessage).not.toHaveBeenCalled();
+    expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+      conversation().id,
+      expect.any(String),
+      'OUTBOUND',
+    );
+  });
+
   it('creates a conversation and inbound message on the first eligible inbound webhook', async () => {
     const { service, prisma, normalizer, realtime, autoReply } = serviceFactory();
     normalizer.normalize.mockReturnValue(
@@ -7452,6 +7537,86 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      'contact',
+      'CONTACT',
+      [
+        {
+          displayName: 'João da Silva',
+          phones: ['+55 44 99999-9999'],
+          vcard: 'BEGIN:VCARD\nEND:VCARD',
+        },
+      ],
+      'Contato compartilhado',
+    ],
+    [
+      'contacts',
+      'CONTACTS',
+      [
+        { displayName: 'Ana', phones: ['+55 11 90000-0001'], vcard: 'BEGIN:VCARD\nEND:VCARD' },
+        { displayName: null, phones: [], vcard: null },
+      ],
+      '2 contatos compartilhados',
+    ],
+  ])(
+    'persists inbound %s messages, updates unread preview and emits realtime',
+    async (messageType, conversationType, contacts, preview) => {
+      const { service, prisma, normalizer, realtime, attendance } = serviceFactory();
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound('', {
+          messageId: `${messageType}-provider-id`,
+          messageType,
+          text: null,
+          contacts,
+          mediaMetadata: { kind: messageType, contacts },
+        }),
+      );
+
+      await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+        processed: true,
+        action: 'client_exists',
+        conversation: { processed: true, action: 'conversation_message_persisted' },
+      });
+      expect(prisma.whatsAppInboundMessage.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            messageType: conversationType,
+            mediaMetadata: { kind: messageType, contacts },
+          }),
+        }),
+      );
+      expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: conversationType,
+            rawMetadata: expect.objectContaining({ contacts, originalType: messageType }),
+          }),
+        }),
+      );
+      expect(prisma.whatsAppConversation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            lastMessagePreview: preview,
+            unreadCount: { increment: 1 },
+          }),
+        }),
+      );
+      expect(realtime.emitMessageCreated).toHaveBeenCalledWith(
+        conversation().id,
+        expect.any(String),
+        'INBOUND',
+      );
+      expect(attendance.recordInboundMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          conversationId: conversation().id,
+          connectionId: connection().id,
+        }),
+      );
+    },
+  );
 
   it.each([
     ['null text', null, null, null],
@@ -8894,6 +9059,53 @@ describe('WhatsAppService', () => {
         { phoneNormalized: { contains: '5544999999999' } },
       ]),
     );
+  });
+
+  it('sanitizes shared contact metadata in pending contact details', async () => {
+    const inboundMessage = {
+      id: 'contact-inbound-id',
+      providerMessageId: 'contact-provider-id',
+      phoneNormalized: '5544999999999',
+      direction: 'INCOMING',
+      messageType: 'CONTACT',
+      text: null,
+      messageTimestamp: now,
+      receivedAt: now,
+      contactName: 'Lucas',
+      mediaMetadata: {
+        kind: 'contact',
+        contacts: [
+          {
+            displayName: 'João da Silva',
+            phones: ['+55 44 99999-9999'],
+            vcard: 'BEGIN:VCARD\nNOTE:private\nURL:https://private.example\nEND:VCARD',
+          },
+        ],
+      },
+    };
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppPendingContact: {
+          upsert: vi.fn(),
+          update: vi.fn(),
+          findUnique: vi.fn().mockResolvedValue(
+            pendingContact({
+              inboundMessages: [inboundMessage],
+            }),
+          ),
+          findMany: vi.fn(),
+          count: vi.fn(),
+        },
+      },
+    });
+
+    const result = await service.getPendingContact(pendingContact().id);
+
+    expect(result.inboundMessages[0]?.mediaMetadata).toEqual({
+      contacts: [{ displayName: 'João da Silva', phones: ['+55 44 99999-9999'] }],
+    });
+    expect(JSON.stringify(result)).not.toContain('BEGIN:VCARD');
+    expect(JSON.stringify(result)).not.toContain('private.example');
   });
 
   it('lists conversations with search, filters, pagination, summary and display names', async () => {

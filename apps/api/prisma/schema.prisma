@@ -272,6 +272,8 @@ enum WhatsAppConversationMessageType {
   VIDEO
   STICKER
   LOCATION
+  CONTACT
+  CONTACTS
   BUTTON
   UNKNOWN
 }

@@ -19,17 +19,17 @@ export const ATTENDANCE_RESOLUTION_GRACE_MINUTES = 15;
 const activeAttendanceStatuses: WhatsAppAttendanceStatus[] = ['PENDING', 'IN_PROGRESS'];
 const resolutionNoteMaxLength = 4000;
 const defaultCategories = [
-  ['Suporte técnico', 'BLUE'],
-  ['Dúvida / orientação', 'TEAL'],
-  ['Novo produto / serviço', 'GREEN'],
-  ['Financeiro / cobrança', 'YELLOW'],
-  ['Renovação', 'PURPLE'],
-  ['Alteração de cadastro', 'GRAY'],
-  ['Problema / indisponibilidade', 'RED'],
-  ['Configuração', 'ORANGE'],
-  ['Cancelamento', 'PINK'],
-  ['Comercial', 'GREEN'],
-  ['Outro', 'GRAY'],
+  { systemKey: 'technical_support', name: 'Suporte técnico', color: 'BLUE' },
+  { systemKey: 'guidance', name: 'Dúvida / orientação', color: 'TEAL' },
+  { systemKey: 'new_product_service', name: 'Novo produto / serviço', color: 'GREEN' },
+  { systemKey: 'finance_billing', name: 'Financeiro / cobrança', color: 'YELLOW' },
+  { systemKey: 'renewal', name: 'Renovação', color: 'PURPLE' },
+  { systemKey: 'registration_change', name: 'Alteração de cadastro', color: 'GRAY' },
+  { systemKey: 'outage_issue', name: 'Problema / indisponibilidade', color: 'RED' },
+  { systemKey: 'configuration', name: 'Configuração', color: 'ORANGE' },
+  { systemKey: 'cancellation', name: 'Cancelamento', color: 'PINK' },
+  { systemKey: 'commercial', name: 'Comercial', color: 'GREEN' },
+  { systemKey: 'other', name: 'Outro', color: 'GRAY' },
 ] as const;
 
 type AttendanceTransaction = Prisma.TransactionClient;
@@ -52,15 +52,44 @@ export class WhatsAppAttendanceService {
 
   async ensureDefaultCategories(connectionId: string) {
     await this.requireConnection(connectionId);
-    await this.prisma.whatsAppAttendanceCategory.createMany({
-      data: defaultCategories.map(([name, color], sortOrder) => ({
-        whatsAppConnectionId: connectionId,
-        name,
-        normalizedName: this.normalizeName(name),
-        color,
-        sortOrder,
-      })),
-      skipDuplicates: true,
+    await this.prisma.$transaction(async (tx) => {
+      const systemKeys = defaultCategories.map(({ systemKey }) => systemKey);
+      const existing = await tx.whatsAppAttendanceCategory.findMany({
+        where: { whatsAppConnectionId: connectionId, systemKey: { in: systemKeys } },
+        select: { systemKey: true },
+      });
+      const existingKeys = new Set(
+        existing.flatMap(({ systemKey }) => (systemKey ? [systemKey] : [])),
+      );
+      const missing = defaultCategories.filter(({ systemKey }) => !existingKeys.has(systemKey));
+      if (missing.length === 0) return;
+
+      await tx.whatsAppAttendanceCategory.createMany({
+        data: missing.map(({ systemKey, name, color }) => ({
+          whatsAppConnectionId: connectionId,
+          systemKey,
+          name,
+          normalizedName: this.normalizeName(name),
+          color,
+          sortOrder: defaultCategories.findIndex((category) => category.systemKey === systemKey),
+        })),
+        skipDuplicates: true,
+      });
+      const provisioned = await tx.whatsAppAttendanceCategory.findMany({
+        where: { whatsAppConnectionId: connectionId, systemKey: { in: systemKeys } },
+        select: { systemKey: true },
+      });
+      const provisionedKeys = new Set(
+        provisioned.flatMap(({ systemKey }) => (systemKey ? [systemKey] : [])),
+      );
+      const conflicts = missing.filter(({ systemKey }) => !provisionedKeys.has(systemKey));
+      if (conflicts.length > 0) {
+        throw new ConflictException(
+          `Nao foi possivel provisionar categorias padrao por conflito de nome: ${conflicts
+            .map(({ name }) => name)
+            .join(', ')}. Revise as categorias personalizadas desta conexao.`,
+        );
+      }
     });
   }
 
@@ -75,6 +104,7 @@ export class WhatsAppAttendanceService {
         id: true,
         whatsAppConnectionId: true,
         name: true,
+        systemKey: true,
         color: true,
         isActive: true,
         sortOrder: true,
@@ -130,17 +160,30 @@ export class WhatsAppAttendanceService {
   }
 
   async removeCategory(connectionId: string, categoryId: string) {
-    await this.requireCategory(connectionId, categoryId);
-    const used = await this.prisma.whatsAppAttendance.count({ where: { categoryId } });
-    if (used > 0) {
-      const category = await this.prisma.whatsAppAttendanceCategory.update({
-        where: { id: categoryId },
-        data: { isActive: false },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "whatsapp_attendance_categories"
+        WHERE "id" = ${categoryId}::uuid
+          AND "whatsAppConnectionId" = ${connectionId}::uuid
+        FOR UPDATE
+      `);
+      const category = await tx.whatsAppAttendanceCategory.findFirst({
+        where: { id: categoryId, whatsAppConnectionId: connectionId },
       });
-      return { deleted: false, deactivated: true, category };
-    }
-    await this.prisma.whatsAppAttendanceCategory.delete({ where: { id: categoryId } });
-    return { deleted: true, deactivated: false, id: categoryId };
+      if (!category) throw new NotFoundException('Categoria de atendimento nao encontrada.');
+
+      const used = await tx.whatsAppAttendance.count({ where: { categoryId } });
+      if (used > 0 || category.systemKey !== null) {
+        const deactivated = await tx.whatsAppAttendanceCategory.update({
+          where: { id: categoryId },
+          data: { isActive: false },
+        });
+        return { deleted: false, deactivated: true, category: deactivated };
+      }
+      await tx.whatsAppAttendanceCategory.delete({ where: { id: categoryId } });
+      return { deleted: true, deactivated: false, id: categoryId };
+    });
   }
 
   async recordInboundMessage(

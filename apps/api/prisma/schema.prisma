@@ -782,6 +782,7 @@ model WhatsAppAttendanceCategory {
   whatsAppConnectionId String                         @db.Uuid
   name                 String
   normalizedName       String
+  systemKey            String?
   color                WhatsAppConversationLabelColor
   isActive             Boolean                        @default(true)
   sortOrder            Int                            @default(0)
@@ -791,6 +792,7 @@ model WhatsAppAttendanceCategory {
   attendances          WhatsAppAttendance[]
 
   @@unique([whatsAppConnectionId, normalizedName], map: "whatsapp_attendance_categories_connection_normalized_key")
+  @@unique([whatsAppConnectionId, systemKey], map: "whatsapp_attendance_categories_connection_system_key")
   @@index([whatsAppConnectionId, isActive, sortOrder], map: "whatsapp_attendance_categories_connection_active_order_idx")
   @@map("whatsapp_attendance_categories")
 }

@@ -26,8 +26,19 @@ const automationsSource = dashboardSource.slice(
   dashboardSource.indexOf('function AutomationsView'),
   dashboardSource.indexOf('function RecoveryCampaignDetailModal'),
 );
+const attendanceCategoriesSource = dashboardSource.slice(
+  dashboardSource.indexOf('function SettingsWhatsAppAttendanceCategoriesPanel'),
+  dashboardSource.indexOf('function SettingsWhatsAppQuickRepliesPanel'),
+);
 
 describe('Settings V2 SET1 shell contracts', () => {
+  it('reports category deactivation separately from physical removal', () => {
+    expect(attendanceCategoriesSource).toContain(
+      'Categoria desativada. Ela não aparecerá nos novos atendimentos.',
+    );
+    expect(attendanceCategoriesSource).toContain("'Categoria removida.'");
+    expect(attendanceCategoriesSource).not.toContain('Categoria em uso desativada.');
+  });
   it('opens Settings on Visão geral and declares only SET1 internal sections', () => {
     expect(dashboardSource).toContain("useState<SettingsSection>('overview')");
     expect(settingsViewSource).toContain('useState<SettingsSection>(initialSection)');

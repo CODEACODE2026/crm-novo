@@ -7258,7 +7258,11 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
     setError('');
     try {
       const result = await deleteWhatsAppAttendanceCategory(selectedConnectionId, category.id);
-      setNotice(result.deactivated ? 'Categoria em uso desativada.' : 'Categoria removida.');
+      setNotice(
+        result.deactivated
+          ? 'Categoria desativada. Ela não aparecerá nos novos atendimentos.'
+          : 'Categoria removida.',
+      );
       await load();
     } catch (removeError) {
       setError(removeError instanceof Error ? removeError.message : 'Falha ao remover categoria.');

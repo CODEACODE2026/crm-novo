@@ -11,10 +11,24 @@ const connectionId = '22222222-2222-4222-8222-222222222222';
 const messageId = '33333333-3333-4333-8333-333333333333';
 const attendanceId = '44444444-4444-4444-8444-444444444444';
 const categoryId = '55555555-5555-4555-8555-555555555555';
+const defaultSystemKeys = [
+  'technical_support',
+  'guidance',
+  'new_product_service',
+  'finance_billing',
+  'renewal',
+  'registration_change',
+  'outage_issue',
+  'configuration',
+  'cancellation',
+  'commercial',
+  'other',
+];
 
 function transaction(overrides: Record<string, unknown> = {}) {
   const tx = {
     $executeRaw: vi.fn().mockResolvedValue(1),
+    $queryRaw: vi.fn().mockResolvedValue([{ id: categoryId }]),
     whatsAppMessage: {
       findUnique: vi.fn().mockResolvedValue({
         attendanceId: null,
@@ -26,6 +40,7 @@ function transaction(overrides: Record<string, unknown> = {}) {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({ id: attendanceId }),
       update: vi.fn().mockResolvedValue({ id: attendanceId }),
+      count: vi.fn().mockResolvedValue(0),
     },
     whatsAppConversation: {
       findUnique: vi.fn().mockResolvedValue({
@@ -36,7 +51,20 @@ function transaction(overrides: Record<string, unknown> = {}) {
       update: vi.fn().mockResolvedValue({ id: conversationId, status: 'RESOLVED' }),
     },
     whatsAppAttendanceCategory: {
-      findFirst: vi.fn().mockResolvedValue({ id: categoryId, isActive: true }),
+      findMany: vi.fn().mockResolvedValue(
+        defaultSystemKeys.map((systemKey) => ({
+          systemKey,
+        })),
+      ),
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: categoryId,
+        isActive: true,
+        normalizedName: 'categoria personalizada',
+        systemKey: null,
+      }),
+      update: vi.fn().mockResolvedValue({ id: categoryId, isActive: false }),
+      delete: vi.fn().mockResolvedValue({ id: categoryId }),
     },
     ...overrides,
   };
@@ -414,21 +442,40 @@ describe('WhatsAppAttendanceService', () => {
   });
 
   it('creates default categories idempotently with normalized pt-BR names', async () => {
-    const context = service();
-    context.prisma.whatsAppAttendanceCategory.createMany
-      .mockResolvedValueOnce({ count: 11 })
-      .mockResolvedValueOnce({ count: 0 });
+    const tx = transaction();
+    tx.whatsAppAttendanceCategory.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(defaultSystemKeys.map((systemKey) => ({ systemKey })))
+      .mockResolvedValueOnce(defaultSystemKeys.map((systemKey) => ({ systemKey })));
+    tx.whatsAppAttendanceCategory.createMany.mockResolvedValue({ count: 11 });
+    const context = service(tx);
     await context.subject.ensureDefaultCategories(connectionId);
     await context.subject.ensureDefaultCategories(connectionId);
-    expect(context.prisma.whatsAppAttendanceCategory.createMany).toHaveBeenCalledTimes(2);
-    expect(context.prisma.whatsAppAttendanceCategory.createMany).toHaveBeenLastCalledWith(
+    expect(tx.whatsAppAttendanceCategory.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.whatsAppAttendanceCategory.createMany).toHaveBeenCalledWith(
       expect.objectContaining({ skipDuplicates: true }),
     );
-    const [createManyInput] = context.prisma.whatsAppAttendanceCategory.createMany.mock
-      .calls[0] as unknown as [{ data: Array<Record<string, unknown>> }];
+    const [createManyInput] = tx.whatsAppAttendanceCategory.createMany.mock.calls[0] as unknown as [
+      { data: Array<Record<string, unknown>> },
+    ];
     const { data } = createManyInput;
     expect(data).toHaveLength(11);
-    expect(data[0]).toMatchObject({ name: 'Suporte técnico', normalizedName: 'suporte técnico' });
+    expect(data[0]).toMatchObject({
+      systemKey: 'technical_support',
+      name: 'Suporte técnico',
+      normalizedName: 'suporte técnico',
+    });
+  });
+
+  it('rolls back provisioning and reports an explicit custom-name conflict', async () => {
+    const tx = transaction();
+    tx.whatsAppAttendanceCategory.findMany.mockResolvedValue([]);
+    tx.whatsAppAttendanceCategory.createMany.mockResolvedValue({ count: 10 });
+    const context = service(tx);
+
+    await expect(context.subject.ensureDefaultCategories(connectionId)).rejects.toThrow(
+      'conflito de nome',
+    );
   });
 
   it('maps a case-insensitive duplicate category constraint to conflict', async () => {
@@ -516,30 +563,158 @@ describe('WhatsAppAttendanceService', () => {
     expect(context.prisma.whatsAppAttendanceCategory.update).not.toHaveBeenCalled();
   });
 
-  it('deactivates a category already used by attendance history', async () => {
-    const context = service();
-    context.prisma.whatsAppAttendance.count.mockResolvedValue(1);
+  it('deactivates a custom category already used by attendance history', async () => {
+    const tx = transaction();
+    tx.whatsAppAttendance.count.mockResolvedValue(1);
+    const context = service(tx);
     await expect(context.subject.removeCategory(connectionId, categoryId)).resolves.toMatchObject({
       deleted: false,
       deactivated: true,
     });
-    expect(context.prisma.whatsAppAttendanceCategory.update).toHaveBeenCalledWith({
+    expect(tx.whatsAppAttendanceCategory.update).toHaveBeenCalledWith({
       where: { id: categoryId },
       data: { isActive: false },
     });
-    expect(context.prisma.whatsAppAttendanceCategory.delete).not.toHaveBeenCalled();
+    expect(tx.whatsAppAttendanceCategory.delete).not.toHaveBeenCalled();
   });
 
-  it('deletes only an unused category after validating its connection', async () => {
-    const context = service();
+  it('deactivates an unused default category without replacing its identifier', async () => {
+    const tx = transaction();
+    tx.whatsAppAttendanceCategory.findFirst.mockResolvedValue({
+      id: categoryId,
+      isActive: true,
+      normalizedName: 'suporte técnico',
+      systemKey: 'technical_support',
+    });
+    const context = service(tx);
+    await expect(context.subject.removeCategory(connectionId, categoryId)).resolves.toMatchObject({
+      deleted: false,
+      deactivated: true,
+      category: { id: categoryId, isActive: false },
+    });
+    expect(tx.whatsAppAttendanceCategory.update).toHaveBeenCalledWith({
+      where: { id: categoryId },
+      data: { isActive: false },
+    });
+    expect(tx.whatsAppAttendanceCategory.delete).not.toHaveBeenCalled();
+  });
+
+  it('deactivates a default category with attendance history', async () => {
+    const tx = transaction();
+    tx.whatsAppAttendanceCategory.findFirst.mockResolvedValue({
+      id: categoryId,
+      isActive: true,
+      normalizedName: 'financeiro / cobrança',
+      systemKey: 'finance_billing',
+    });
+    tx.whatsAppAttendance.count.mockResolvedValue(3);
+    const context = service(tx);
+
+    await expect(context.subject.removeCategory(connectionId, categoryId)).resolves.toMatchObject({
+      deleted: false,
+      deactivated: true,
+    });
+    expect(tx.whatsAppAttendanceCategory.update).toHaveBeenCalledWith({
+      where: { id: categoryId },
+      data: { isActive: false },
+    });
+    expect(tx.whatsAppAttendanceCategory.delete).not.toHaveBeenCalled();
+  });
+
+  it('keeps repeated removal of an inactive default category idempotent', async () => {
+    const tx = transaction();
+    tx.whatsAppAttendanceCategory.findFirst.mockResolvedValue({
+      id: categoryId,
+      isActive: false,
+      normalizedName: 'renovação',
+      systemKey: 'renewal',
+    });
+    const context = service(tx);
+
+    await expect(context.subject.removeCategory(connectionId, categoryId)).resolves.toMatchObject({
+      deleted: false,
+      deactivated: true,
+      category: { id: categoryId, isActive: false },
+    });
+    expect(tx.whatsAppAttendanceCategory.delete).not.toHaveBeenCalled();
+  });
+
+  it('rejects removal when the category does not belong to the requested connection', async () => {
+    const tx = transaction();
+    tx.whatsAppAttendanceCategory.findFirst.mockResolvedValue(null);
+    const context = service(tx);
+
+    await expect(context.subject.removeCategory(connectionId, categoryId)).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(tx.whatsAppAttendance.count).not.toHaveBeenCalled();
+    expect(tx.whatsAppAttendanceCategory.update).not.toHaveBeenCalled();
+    expect(tx.whatsAppAttendanceCategory.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes only an unused custom category after locking and validating its connection', async () => {
+    const tx = transaction();
+    const context = service(tx);
     await expect(context.subject.removeCategory(connectionId, categoryId)).resolves.toEqual({
       deleted: true,
       deactivated: false,
       id: categoryId,
     });
-    expect(context.prisma.whatsAppAttendanceCategory.delete).toHaveBeenCalledWith({
+    expect(context.prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    const [lockQuery] = tx.$queryRaw.mock.calls[0] as unknown as [{ text: string }];
+    expect(lockQuery.text).toContain('FOR UPDATE');
+    expect(lockQuery.text).toContain('"whatsAppConnectionId"');
+    expect(tx.whatsAppAttendanceCategory.findFirst).toHaveBeenCalledWith({
+      where: { id: categoryId, whatsAppConnectionId: connectionId },
+    });
+    expect(tx.whatsAppAttendanceCategory.delete).toHaveBeenCalledWith({
       where: { id: categoryId },
     });
+    const lockOrder = tx.$queryRaw.mock.invocationCallOrder[0];
+    const countOrder = tx.whatsAppAttendance.count.mock.invocationCallOrder[0];
+    const deleteOrder = tx.whatsAppAttendanceCategory.delete.mock.invocationCallOrder[0];
+    if (lockOrder === undefined || countOrder === undefined || deleteOrder === undefined) {
+      throw new Error('Expected lock, usage count and delete to execute.');
+    }
+    expect(lockOrder).toBeLessThan(countOrder);
+    expect(countOrder).toBeLessThan(deleteOrder);
+  });
+
+  it('keeps an inactive default category during the next default provisioning and admin refetch', async () => {
+    const tx = transaction();
+    const context = service(tx);
+    context.prisma.whatsAppAttendanceCategory.findMany.mockResolvedValue([
+      {
+        id: categoryId,
+        name: 'Suporte premium',
+        systemKey: 'technical_support',
+        isActive: false,
+      },
+    ]);
+
+    await expect(context.subject.listCategories(connectionId)).resolves.toEqual([
+      {
+        id: categoryId,
+        name: 'Suporte premium',
+        systemKey: 'technical_support',
+        isActive: false,
+      },
+    ]);
+    expect(tx.whatsAppAttendanceCategory.createMany).not.toHaveBeenCalled();
+    expect(context.prisma.whatsAppAttendanceCategory.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { whatsAppConnectionId: connectionId } }),
+    );
+  });
+
+  it('returns only active categories to operational consumers', async () => {
+    const context = service();
+    await context.subject.listCategories(connectionId, false);
+    expect(context.prisma.whatsAppAttendanceCategory.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { whatsAppConnectionId: connectionId, isActive: true },
+      }),
+    );
   });
 
   it('paginates attendance history and derives hasMore without loading it in conversation lists', async () => {

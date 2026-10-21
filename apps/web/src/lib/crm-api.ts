@@ -791,6 +791,7 @@ export interface WhatsAppAttendanceCategory {
   id: string;
   whatsAppConnectionId: string;
   name: string;
+  systemKey: string | null;
   color: WhatsAppConversationLabelColor;
   isActive: boolean;
   sortOrder: number;

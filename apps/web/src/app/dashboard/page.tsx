@@ -8,10 +8,12 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity,
   ArrowRight,
@@ -5904,6 +5906,7 @@ function SettingsView({
   const [healthError, setHealthError] = useState('');
   const [quickRepliesError, setQuickRepliesError] = useState('');
   const [autoRepliesError, setAutoRepliesError] = useState('');
+  const [whatsAppSettingsDirty, setWhatsAppSettingsDirty] = useState(false);
   const [billingError, setBillingError] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
   const loadingRef = useRef(false);
@@ -5912,6 +5915,7 @@ function SettingsView({
   const recoverySaveRef = useRef(false);
   const quickRepliesLoadedRef = useRef(false);
   const autoRepliesLoadedRef = useRef(false);
+  const autoReplySaveRef = useRef(false);
 
   useEffect(() => {
     setActiveSection(initialSection);
@@ -6010,7 +6014,8 @@ function SettingsView({
       endsAt: string | null;
     },
   ) {
-    if (autoReplySavingConnectionId) return;
+    if (autoReplySaveRef.current) return;
+    autoReplySaveRef.current = true;
     setAutoReplySavingConnectionId(config.whatsAppConnectionId);
     setAutoRepliesError('');
     setNotice('');
@@ -6028,6 +6033,7 @@ function SettingsView({
       );
     } finally {
       setAutoReplySavingConnectionId(null);
+      autoReplySaveRef.current = false;
     }
   }
 
@@ -6048,6 +6054,7 @@ function SettingsView({
       setQuickRepliesError(
         err instanceof Error ? err.message : 'Não foi possível salvar resposta rápida.',
       );
+      throw err;
     }
   }
 
@@ -6312,6 +6319,17 @@ function SettingsView({
     settingsSections.find((section) => section.id === activeSection) ?? settingsSections[0]!;
 
   function openSection(section: SettingsSection) {
+    if (
+      activeSection === 'whatsapp' &&
+      section !== 'whatsapp' &&
+      whatsAppSettingsDirty &&
+      !window.confirm('Existem alterações não salvas no WhatsApp. Deseja sair sem salvar?')
+    ) {
+      return;
+    }
+    if (activeSection === 'whatsapp' && section !== 'whatsapp') {
+      setWhatsAppSettingsDirty(false);
+    }
     setActiveSection(section);
     setNotice('');
     setError('');
@@ -6431,6 +6449,7 @@ function SettingsView({
               onSave={saveQuickReply}
               onToggle={toggleQuickReply}
               onDelete={deleteQuickReply}
+              onDirtyChange={setWhatsAppSettingsDirty}
             />
           ) : null}
 
@@ -6751,35 +6770,168 @@ const whatsappLabelColors: WhatsAppConversationLabelColor[] = [
   'GRAY',
 ];
 
-function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAutoReplyConfig[] }) {
-  const [connectionId, setConnectionId] = useState('');
-  const selectedConnectionId = connectionId || connections[0]?.whatsAppConnectionId || '';
+type WhatsAppSettingsTab = 'auto-reply' | 'labels' | 'categories' | 'quick-replies';
+
+const whatsAppSettingsTabs = [
+  { id: 'auto-reply', label: 'Resposta automática', icon: Bot },
+  { id: 'labels', label: 'Etiquetas', icon: Layers },
+  { id: 'categories', label: 'Categorias de resolução', icon: ListChecks },
+  { id: 'quick-replies', label: 'Respostas rápidas', icon: MessageSquareText },
+] satisfies Array<{ id: WhatsAppSettingsTab; label: string; icon: LucideIcon }>;
+
+function SettingsWhatsAppModal({
+  children,
+  closeDisabled = false,
+  description,
+  open,
+  title,
+  onClose,
+}: {
+  children: ReactNode;
+  closeDisabled?: boolean;
+  description: string;
+  open: boolean;
+  title: string;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const previousOverflow = document.body.style.overflow;
+    returnFocusRef.current = document.activeElement as HTMLElement | null;
+    document.body.style.overflow = 'hidden';
+    window.setTimeout(() => {
+      dialog
+        ?.querySelector<HTMLElement>('[data-autofocus], input, textarea, select, button')
+        ?.focus();
+    }, 0);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.setTimeout(() => returnFocusRef.current?.focus(), 0);
+    };
+  }, [open]);
+
+  if (!open || typeof document === 'undefined') return null;
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      if (!closeDisabled) onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (!focusable.length) {
+      event.preventDefault();
+      event.currentTarget.focus();
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return createPortal(
+    <div
+      className="modal-backdrop settings-whatsapp-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (!closeDisabled && event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        aria-describedby={descriptionId}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="modal settings-whatsapp-editor-modal"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+      >
+        <header className="modal-header">
+          <div>
+            <h2 id={titleId}>{title}</h2>
+            <p id={descriptionId}>{description}</p>
+          </div>
+          <IconButton disabled={closeDisabled} icon={X} label="Fechar" onClick={onClose} />
+        </header>
+        {children}
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function SettingsWhatsAppLabelsPanel({
+  active,
+  selectedConnectionId,
+  onBusyChange,
+  onDirtyChange,
+}: {
+  active: boolean;
+  selectedConnectionId: string;
+  onBusyChange: (busy: boolean) => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const [labels, setLabels] = useState<WhatsAppConversationLabelAdmin[]>([]);
   const [editing, setEditing] = useState<WhatsAppConversationLabelAdmin | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [name, setName] = useState('');
   const [color, setColor] = useState<WhatsAppConversationLabelColor>('BLUE');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const loadSequenceRef = useRef(0);
+  const saveRef = useRef(false);
+
+  const dirty = Boolean(
+    modalOpen &&
+    (editing
+      ? name !== editing.name || color !== editing.color
+      : Boolean(name.trim()) || color !== 'BLUE'),
+  );
+
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const load = useCallback(async () => {
+    if (!active) return;
     if (!selectedConnectionId) {
       setLabels([]);
       return;
     }
+    const sequence = ++loadSequenceRef.current;
     setLoading(true);
     setError('');
     try {
-      setLabels(await listWhatsAppConversationLabels(selectedConnectionId));
+      const nextLabels = await listWhatsAppConversationLabels(selectedConnectionId);
+      if (sequence === loadSequenceRef.current) setLabels(nextLabels);
     } catch (loadError) {
-      setError(
-        loadError instanceof Error ? loadError.message : 'Não foi possível carregar etiquetas.',
-      );
+      if (sequence === loadSequenceRef.current) {
+        setError(
+          loadError instanceof Error ? loadError.message : 'Não foi possível carregar etiquetas.',
+        );
+      }
     } finally {
-      setLoading(false);
+      if (sequence === loadSequenceRef.current) setLoading(false);
     }
-  }, [selectedConnectionId]);
+  }, [active, selectedConnectionId]);
 
   useEffect(() => {
     void load();
@@ -6791,9 +6943,18 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
     setColor('BLUE');
   }
 
+  function closeModal() {
+    if (saving) return;
+    if (dirty && !window.confirm('Descartar alterações não salvas da etiqueta?')) return;
+    setModalOpen(false);
+    reset();
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedConnectionId || !name.trim() || saving) return;
+    if (!selectedConnectionId || !name.trim() || saveRef.current) return;
+    saveRef.current = true;
+    onBusyChange(true);
     setSaving(true);
     setError('');
     setNotice('');
@@ -6809,6 +6970,7 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
         setNotice('Etiqueta criada.');
       }
       reset();
+      setModalOpen(false);
       await load();
     } catch (saveError) {
       setError(
@@ -6816,13 +6978,17 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
       );
     } finally {
       setSaving(false);
+      saveRef.current = false;
+      onBusyChange(false);
     }
   }
 
   async function remove(label: WhatsAppConversationLabelAdmin) {
-    if (!selectedConnectionId || saving) return;
+    if (!selectedConnectionId || saving || saveRef.current) return;
     if (!window.confirm(`Excluir a etiqueta “${label.name}”? As conversas não serão excluídas.`))
       return;
+    saveRef.current = true;
+    onBusyChange(true);
     setSaving(true);
     setError('');
     try {
@@ -6836,6 +7002,8 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
       );
     } finally {
       setSaving(false);
+      saveRef.current = false;
+      onBusyChange(false);
     }
   }
 
@@ -6846,67 +7014,25 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
     >
       <div className="panel-header">
         <div>
-          <span className="metric-label">WhatsApp</span>
           <h3 id="settings-whatsapp-labels-title">Etiquetas</h3>
-          <p>Organize conversas com nomes e cores próprios para cada conexão.</p>
+          <p>Organize suas conversas com etiquetas e cores personalizadas.</p>
         </div>
-      </div>
-      <label className="field">
-        <span>Conexão</span>
-        <select
-          value={selectedConnectionId}
-          onChange={(event) => {
-            setConnectionId(event.target.value);
-            setLabels([]);
-            setError('');
-            setNotice('');
+        <Button
+          disabled={!selectedConnectionId}
+          icon={Plus}
+          size="sm"
+          onClick={() => {
             reset();
+            setModalOpen(true);
           }}
         >
-          {!connections.length ? <option value="">Nenhuma conexão</option> : null}
-          {connections.map((connection) => (
-            <option key={connection.whatsAppConnectionId} value={connection.whatsAppConnectionId}>
-              {connection.connectionName}
-            </option>
-          ))}
-        </select>
-      </label>
+          Nova etiqueta
+        </Button>
+      </div>
       {error ? <div className="notice danger">{error}</div> : null}
       {notice ? <div className="notice success">{notice}</div> : null}
-      <form className="whatsapp-label-settings-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>{editing ? 'Editar nome' : 'Nova etiqueta'}</span>
-          <input
-            maxLength={40}
-            placeholder="Urgente"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <div className="whatsapp-label-settings-palette" aria-label="Cor da etiqueta">
-          {whatsappLabelColors.map((item) => (
-            <button
-              aria-label={`Cor ${item.toLowerCase()}`}
-              aria-pressed={color === item}
-              className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
-              key={item}
-              type="button"
-              onClick={() => setColor(item)}
-            />
-          ))}
-        </div>
-        <div className="settings-quick-reply-form-actions">
-          {editing ? (
-            <Button variant="ghost" type="button" onClick={reset}>
-              Cancelar
-            </Button>
-          ) : null}
-          <Button disabled={!selectedConnectionId || !name.trim()} loading={saving} type="submit">
-            {editing ? 'Salvar' : 'Criar'}
-          </Button>
-        </div>
-      </form>
       <div className="whatsapp-label-settings-list" aria-busy={loading}>
+        {loading ? <p className="settings-whatsapp-empty">Carregando etiquetas...</p> : null}
         {labels.map((label) => (
           <div key={label.id} className="whatsapp-label-settings-row">
             <span
@@ -6915,37 +7041,95 @@ function SettingsWhatsAppLabelsPanel({ connections }: { connections: WhatsAppAut
             />
             <strong>{label.name}</strong>
             <small>{label._count?.assignments ?? 0} conversas</small>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setEditing(label);
-                setName(label.name);
-                setColor(label.color);
-              }}
-            >
-              Editar
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => void remove(label)}>
-              Excluir
-            </Button>
+            <ActionMenu
+              label={`Ações da etiqueta ${label.name}`}
+              items={[
+                {
+                  icon: Pencil,
+                  label: 'Editar',
+                  onSelect: () => {
+                    setEditing(label);
+                    setName(label.name);
+                    setColor(label.color);
+                    setModalOpen(true);
+                  },
+                },
+                {
+                  danger: true,
+                  icon: Trash2,
+                  label: 'Excluir',
+                  onSelect: () => void remove(label),
+                },
+              ]}
+            />
           </div>
         ))}
-        {!labels.length && !loading ? <p>Nenhuma etiqueta criada.</p> : null}
+        {!labels.length && !loading ? (
+          <p className="settings-whatsapp-empty">Nenhuma etiqueta criada nesta conexão.</p>
+        ) : null}
       </div>
+      <SettingsWhatsAppModal
+        closeDisabled={saving}
+        description="Defina um nome curto e uma cor para identificar conversas."
+        open={active && modalOpen}
+        title={editing ? 'Editar etiqueta' : 'Nova etiqueta'}
+        onClose={closeModal}
+      >
+        <form className="settings-whatsapp-modal-form" onSubmit={(event) => void submit(event)}>
+          {error ? <div className="notice danger">{error}</div> : null}
+          <label className="field">
+            <span>Nome</span>
+            <input
+              data-autofocus
+              maxLength={40}
+              placeholder="Urgente"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <fieldset className="settings-whatsapp-color-fieldset">
+            <legend>Cor</legend>
+            <div className="whatsapp-label-settings-palette" aria-label="Cor da etiqueta">
+              {whatsappLabelColors.map((item) => (
+                <button
+                  aria-label={`Cor ${item.toLowerCase()}`}
+                  aria-pressed={color === item}
+                  className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
+                  key={item}
+                  type="button"
+                  onClick={() => setColor(item)}
+                />
+              ))}
+            </div>
+          </fieldset>
+          <div className="settings-whatsapp-modal-actions">
+            <Button disabled={saving} variant="secondary" onClick={closeModal}>
+              Cancelar
+            </Button>
+            <Button disabled={!selectedConnectionId || !name.trim()} loading={saving} type="submit">
+              Salvar
+            </Button>
+          </div>
+        </form>
+      </SettingsWhatsAppModal>
     </section>
   );
 }
 
 function SettingsWhatsAppAttendanceCategoriesPanel({
-  connections,
+  active,
+  selectedConnectionId,
+  onBusyChange,
+  onDirtyChange,
 }: {
-  connections: WhatsAppAutoReplyConfig[];
+  active: boolean;
+  selectedConnectionId: string;
+  onBusyChange: (busy: boolean) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
-  const [connectionId, setConnectionId] = useState('');
-  const selectedConnectionId = connectionId || connections[0]?.whatsAppConnectionId || '';
   const [categories, setCategories] = useState<WhatsAppAttendanceCategory[]>([]);
   const [editing, setEditing] = useState<WhatsAppAttendanceCategory | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [name, setName] = useState('');
   const [color, setColor] = useState<WhatsAppConversationLabelColor>('BLUE');
   const [sortOrder, setSortOrder] = useState('0');
@@ -6953,19 +7137,35 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const loadSequenceRef = useRef(0);
+  const saveRef = useRef(false);
+
+  const dirty = Boolean(
+    modalOpen &&
+    (editing
+      ? name !== editing.name || color !== editing.color || sortOrder !== String(editing.sortOrder)
+      : Boolean(name.trim()) || color !== 'BLUE' || sortOrder !== '0'),
+  );
+
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const load = useCallback(async () => {
+    if (!active) return;
     if (!selectedConnectionId) return setCategories([]);
+    const sequence = ++loadSequenceRef.current;
     setLoading(true);
     setError('');
     try {
-      setCategories(await listWhatsAppAttendanceCategories(selectedConnectionId));
+      const nextCategories = await listWhatsAppAttendanceCategories(selectedConnectionId);
+      if (sequence === loadSequenceRef.current) setCategories(nextCategories);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Falha ao carregar categorias.');
+      if (sequence === loadSequenceRef.current) {
+        setError(loadError instanceof Error ? loadError.message : 'Falha ao carregar categorias.');
+      }
     } finally {
-      setLoading(false);
+      if (sequence === loadSequenceRef.current) setLoading(false);
     }
-  }, [selectedConnectionId]);
+  }, [active, selectedConnectionId]);
 
   useEffect(() => {
     void load();
@@ -6978,11 +7178,26 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
     setSortOrder('0');
   }
 
+  function closeModal() {
+    if (saving) return;
+    if (dirty && !window.confirm('Descartar alterações não salvas da categoria?')) return;
+    setModalOpen(false);
+    reset();
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const order = Number(sortOrder);
-    if (!selectedConnectionId || !name.trim() || !Number.isInteger(order) || order < 0 || saving)
+    if (
+      !selectedConnectionId ||
+      !name.trim() ||
+      !Number.isInteger(order) ||
+      order < 0 ||
+      saveRef.current
+    )
       return;
+    saveRef.current = true;
+    onBusyChange(true);
     setSaving(true);
     setError('');
     setNotice('');
@@ -7003,16 +7218,21 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
         setNotice('Categoria criada.');
       }
       reset();
+      setModalOpen(false);
       await load();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Falha ao salvar categoria.');
     } finally {
       setSaving(false);
+      saveRef.current = false;
+      onBusyChange(false);
     }
   }
 
   async function toggle(category: WhatsAppAttendanceCategory) {
-    if (saving) return;
+    if (saving || saveRef.current) return;
+    saveRef.current = true;
+    onBusyChange(true);
     setSaving(true);
     setError('');
     try {
@@ -7024,11 +7244,16 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
       setError(toggleError instanceof Error ? toggleError.message : 'Falha ao alterar categoria.');
     } finally {
       setSaving(false);
+      saveRef.current = false;
+      onBusyChange(false);
     }
   }
 
   async function remove(category: WhatsAppAttendanceCategory) {
-    if (saving || !window.confirm(`Remover a categoria “${category.name}”?`)) return;
+    if (saving || saveRef.current || !window.confirm(`Remover a categoria “${category.name}”?`))
+      return;
+    saveRef.current = true;
+    onBusyChange(true);
     setSaving(true);
     setError('');
     try {
@@ -7039,6 +7264,8 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
       setError(removeError instanceof Error ? removeError.message : 'Falha ao remover categoria.');
     } finally {
       setSaving(false);
+      saveRef.current = false;
+      onBusyChange(false);
     }
   }
 
@@ -7046,93 +7273,125 @@ function SettingsWhatsAppAttendanceCategoriesPanel({
     <section className="settings-auto-reply-card settings-attendance-categories">
       <div className="panel-header">
         <div>
-          <span className="metric-label">Atendimentos</span>
           <h3>Categorias de resolução</h3>
-          <p>Categorias obrigatórias para encerrar episódios de atendimento.</p>
+          <p>Configure os motivos utilizados para finalizar atendimentos.</p>
         </div>
-      </div>
-      <label className="field">
-        <span>Conexão</span>
-        <select
-          value={selectedConnectionId}
-          onChange={(event) => setConnectionId(event.target.value)}
+        <Button
+          disabled={!selectedConnectionId}
+          icon={Plus}
+          size="sm"
+          onClick={() => {
+            reset();
+            setModalOpen(true);
+          }}
         >
-          {!connections.length ? <option value="">Nenhuma conexão</option> : null}
-          {connections.map((connection) => (
-            <option key={connection.whatsAppConnectionId} value={connection.whatsAppConnectionId}>
-              {connection.connectionName}
-            </option>
-          ))}
-        </select>
-      </label>
+          Nova categoria
+        </Button>
+      </div>
       {error ? <div className="notice danger">{error}</div> : null}
       {notice ? <div className="notice success">{notice}</div> : null}
-      <form className="whatsapp-label-settings-form" onSubmit={(event) => void submit(event)}>
-        <label className="field">
-          <span>{editing ? 'Editar categoria' : 'Nova categoria'}</span>
-          <input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} />
-        </label>
-        <label className="field">
-          <span>Ordem</span>
-          <input
-            min={0}
-            type="number"
-            value={sortOrder}
-            onChange={(event) => setSortOrder(event.target.value)}
-          />
-        </label>
-        <div className="whatsapp-label-settings-palette" aria-label="Cor da categoria">
-          {whatsappLabelColors.map((item) => (
-            <button
-              aria-label={`Cor ${item.toLowerCase()}`}
-              aria-pressed={color === item}
-              className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
-              key={item}
-              type="button"
-              onClick={() => setColor(item)}
-            />
-          ))}
-        </div>
-        <div className="settings-quick-reply-form-actions">
-          {editing ? (
-            <Button type="button" variant="ghost" onClick={reset}>
-              Cancelar
-            </Button>
-          ) : null}
-          <Button disabled={!selectedConnectionId || !name.trim()} loading={saving} type="submit">
-            {editing ? 'Salvar' : 'Criar'}
-          </Button>
-        </div>
-      </form>
       <div className="whatsapp-label-settings-list" aria-busy={loading}>
+        {loading ? <p className="settings-whatsapp-empty">Carregando categorias...</p> : null}
         {categories.map((category) => (
           <div key={category.id} className="whatsapp-label-settings-row">
-            <span className={`whatsapp-label-dot color-${category.color.toLowerCase()}`} />
+            <span
+              aria-hidden="true"
+              className={`whatsapp-label-dot color-${category.color.toLowerCase()}`}
+            />
             <strong>{category.name}</strong>
             <small>
-              {category.isActive ? 'Ativa' : 'Inativa'} · {category._count?.attendances ?? 0}
+              <span className={`settings-whatsapp-status ${category.isActive ? 'active' : ''}`}>
+                {category.isActive ? 'Ativa' : 'Inativa'}
+              </span>{' '}
+              · {category._count?.attendances ?? 0} atendimentos · ordem {category.sortOrder}
             </small>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setEditing(category);
-                setName(category.name);
-                setColor(category.color);
-                setSortOrder(String(category.sortOrder));
-              }}
-            >
-              Editar
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => void toggle(category)}>
-              {category.isActive ? 'Desativar' : 'Ativar'}
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => void remove(category)}>
-              Remover
-            </Button>
+            <ActionMenu
+              label={`Ações da categoria ${category.name}`}
+              items={[
+                {
+                  icon: Pencil,
+                  label: 'Editar',
+                  onSelect: () => {
+                    setEditing(category);
+                    setName(category.name);
+                    setColor(category.color);
+                    setSortOrder(String(category.sortOrder));
+                    setModalOpen(true);
+                  },
+                },
+                {
+                  icon: category.isActive ? ToggleLeft : Power,
+                  label: category.isActive ? 'Desativar' : 'Ativar',
+                  onSelect: () => void toggle(category),
+                },
+                {
+                  danger: true,
+                  icon: Trash2,
+                  label: 'Remover',
+                  onSelect: () => void remove(category),
+                },
+              ]}
+            />
           </div>
         ))}
+        {!categories.length && !loading ? (
+          <p className="settings-whatsapp-empty">Nenhuma categoria criada nesta conexão.</p>
+        ) : null}
       </div>
+      <SettingsWhatsAppModal
+        closeDisabled={saving}
+        description="Defina o nome, a cor e a ordem usada no encerramento do atendimento."
+        open={active && modalOpen}
+        title={editing ? 'Editar categoria' : 'Nova categoria'}
+        onClose={closeModal}
+      >
+        <form className="settings-whatsapp-modal-form" onSubmit={(event) => void submit(event)}>
+          {error ? <div className="notice danger">{error}</div> : null}
+          <div className="settings-whatsapp-form-grid">
+            <label className="field">
+              <span>Nome</span>
+              <input
+                data-autofocus
+                maxLength={80}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Ordem</span>
+              <input
+                min={0}
+                type="number"
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value)}
+              />
+            </label>
+          </div>
+          <fieldset className="settings-whatsapp-color-fieldset">
+            <legend>Cor</legend>
+            <div className="whatsapp-label-settings-palette" aria-label="Cor da categoria">
+              {whatsappLabelColors.map((item) => (
+                <button
+                  aria-label={`Cor ${item.toLowerCase()}`}
+                  aria-pressed={color === item}
+                  className={`color-${item.toLowerCase()} ${color === item ? 'active' : ''}`}
+                  key={item}
+                  type="button"
+                  onClick={() => setColor(item)}
+                />
+              ))}
+            </div>
+          </fieldset>
+          <div className="settings-whatsapp-modal-actions">
+            <Button disabled={saving} variant="secondary" onClick={closeModal}>
+              Cancelar
+            </Button>
+            <Button disabled={!selectedConnectionId || !name.trim()} loading={saving} type="submit">
+              Salvar
+            </Button>
+          </div>
+        </form>
+      </SettingsWhatsAppModal>
     </section>
   );
 }
@@ -7152,6 +7411,7 @@ function SettingsWhatsAppQuickRepliesPanel({
   onSave,
   onToggle,
   onDelete,
+  onDirtyChange,
 }: {
   autoReplyConfigs: WhatsAppAutoReplyConfig[];
   autoReplyError: string;
@@ -7178,10 +7438,12 @@ function SettingsWhatsAppQuickRepliesPanel({
   onSave: (payload: Partial<WhatsAppQuickReplyPayload>, id?: string) => Promise<void>;
   onToggle: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
   onDelete: (reply: WhatsAppQuickReplyAdmin) => Promise<void>;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
-  const [selectedAutoReplyConnectionId, setSelectedAutoReplyConnectionId] = useState('');
+  const [activeTab, setActiveTab] = useState<WhatsAppSettingsTab>('auto-reply');
+  const [selectedConnectionId, setSelectedConnectionId] = useState('');
   const selectedAutoReply =
-    autoReplyConfigs.find((item) => item.whatsAppConnectionId === selectedAutoReplyConnectionId) ??
+    autoReplyConfigs.find((item) => item.whatsAppConnectionId === selectedConnectionId) ??
     autoReplyConfigs[0] ??
     null;
   const [autoReplyMode, setAutoReplyMode] = useState<WhatsAppAutoReplyMode>('AWAY');
@@ -7191,10 +7453,19 @@ function SettingsWhatsAppQuickRepliesPanel({
   const [autoReplyScheduled, setAutoReplyScheduled] = useState(false);
   const [autoReplyStartsAt, setAutoReplyStartsAt] = useState('');
   const [autoReplyEndsAt, setAutoReplyEndsAt] = useState('');
+  const [labelsDirty, setLabelsDirty] = useState(false);
+  const [categoriesDirty, setCategoriesDirty] = useState(false);
+  const [connectionMutationBusy, setConnectionMutationBusy] = useState(false);
+  const connectionMutationRef = useRef(false);
+
+  function setPerConnectionMutationBusy(busy: boolean) {
+    connectionMutationRef.current = busy;
+    setConnectionMutationBusy(busy);
+  }
 
   useEffect(() => {
     if (!selectedAutoReply) return;
-    setSelectedAutoReplyConnectionId(selectedAutoReply.whatsAppConnectionId);
+    setSelectedConnectionId(selectedAutoReply.whatsAppConnectionId);
     setAutoReplyMode(selectedAutoReply.mode);
     setAutoReplyMessage(selectedAutoReply.message);
     setAutoReplyCooldown(String(selectedAutoReply.cooldownMinutes));
@@ -7215,6 +7486,17 @@ function SettingsWhatsAppQuickRepliesPanel({
       !autoReplyEndsAt ||
       autoReplyStartsAt < autoReplyEndsAt),
   );
+  const autoReplyDirty = Boolean(
+    selectedAutoReply &&
+    (autoReplyMode !== selectedAutoReply.mode ||
+      autoReplyMessage !== selectedAutoReply.message ||
+      parsedAutoReplyCooldown !== selectedAutoReply.cooldownMinutes ||
+      autoReplyAudience !== selectedAutoReply.audience ||
+      autoReplyScheduled !== Boolean(selectedAutoReply.startsAt || selectedAutoReply.endsAt) ||
+      autoReplyStartsAt !== toDateTimeLocalValue(selectedAutoReply.startsAt) ||
+      autoReplyEndsAt !== toDateTimeLocalValue(selectedAutoReply.endsAt)),
+  );
+  const autoReplyStatus = selectedAutoReply?.enabled ? 'ATIVA' : 'INATIVA';
 
   function changeAutoReplyMode(mode: WhatsAppAutoReplyMode) {
     setAutoReplyMode(mode);
@@ -7239,6 +7521,14 @@ function SettingsWhatsAppQuickRepliesPanel({
 
   async function disableAutoReply() {
     if (!selectedAutoReply) return;
+    if (
+      autoReplyDirty &&
+      !window.confirm(
+        'Desativar usará a última configuração salva e descartará estas alterações. Deseja continuar?',
+      )
+    ) {
+      return;
+    }
     await onSaveAutoReply(selectedAutoReply, {
       enabled: false,
       mode: selectedAutoReply.mode,
@@ -7250,6 +7540,8 @@ function SettingsWhatsAppQuickRepliesPanel({
     });
   }
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [quickReplyModalOpen, setQuickReplyModalOpen] = useState(false);
+  const [quickReplySearch, setQuickReplySearch] = useState('');
   const [label, setLabel] = useState('');
   const [text, setText] = useState('');
   const [isActive, setIsActive] = useState(true);
@@ -7258,6 +7550,9 @@ function SettingsWhatsAppQuickRepliesPanel({
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WhatsAppQuickReplyAdmin | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const quickReplySaveRef = useRef(false);
+  const quickReplyToggleRef = useRef(false);
+  const quickReplyDeleteRef = useRef(false);
   const editingReply = replies.find((reply) => reply.id === editingId) ?? null;
   const parsedSortOrder = Number(sortOrder);
   const formValid =
@@ -7265,6 +7560,35 @@ function SettingsWhatsAppQuickRepliesPanel({
     Boolean(text.trim()) &&
     Number.isInteger(parsedSortOrder) &&
     parsedSortOrder >= 0;
+  const quickReplyDirty = Boolean(
+    quickReplyModalOpen &&
+    (editingReply
+      ? label !== editingReply.label ||
+        text !== editingReply.text ||
+        isActive !== editingReply.isActive ||
+        sortOrder !== String(editingReply.sortOrder)
+      : Boolean(label.trim()) || Boolean(text.trim()) || !isActive || sortOrder !== '0'),
+  );
+  const anyDirty = autoReplyDirty || labelsDirty || categoriesDirty || quickReplyDirty;
+  const normalizedQuickReplySearch = quickReplySearch.trim().toLocaleLowerCase('pt-BR');
+  const filteredReplies = normalizedQuickReplySearch
+    ? replies.filter(
+        (reply) =>
+          reply.label.toLocaleLowerCase('pt-BR').includes(normalizedQuickReplySearch) ||
+          reply.text.toLocaleLowerCase('pt-BR').includes(normalizedQuickReplySearch),
+      )
+    : replies;
+
+  useEffect(() => onDirtyChange(anyDirty), [anyDirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (!anyDirty) return;
+    function protectDraft(event: BeforeUnloadEvent) {
+      event.preventDefault();
+    }
+    window.addEventListener('beforeunload', protectDraft);
+    return () => window.removeEventListener('beforeunload', protectDraft);
+  }, [anyDirty]);
 
   function resetForm() {
     setEditingId(null);
@@ -7280,12 +7604,23 @@ function SettingsWhatsAppQuickRepliesPanel({
     setText(reply.text);
     setIsActive(reply.isActive);
     setSortOrder(String(reply.sortOrder));
+    setQuickReplyModalOpen(true);
+  }
+
+  function closeQuickReplyModal() {
+    if (saving) return;
+    if (quickReplyDirty && !window.confirm('Descartar alterações não salvas da resposta rápida?')) {
+      return;
+    }
+    setQuickReplyModalOpen(false);
+    resetForm();
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!formValid || saving) return;
+    if (!formValid || quickReplySaveRef.current) return;
 
+    quickReplySaveRef.current = true;
     setSaving(true);
     try {
       await onSave(
@@ -7298,25 +7633,34 @@ function SettingsWhatsAppQuickRepliesPanel({
         editingId ?? undefined,
       );
       resetForm();
+      setQuickReplyModalOpen(false);
+    } catch {
+      // The parent exposes the API error; keep the draft open for correction or retry.
     } finally {
       setSaving(false);
+      quickReplySaveRef.current = false;
     }
   }
 
   async function toggleReply(reply: WhatsAppQuickReplyAdmin) {
-    if (togglingId) return;
+    if (quickReplyToggleRef.current) return;
 
+    quickReplyToggleRef.current = true;
     setTogglingId(reply.id);
     try {
       await onToggle(reply);
+    } catch {
+      // The parent exposes the API error and keeps the previous status.
     } finally {
       setTogglingId(null);
+      quickReplyToggleRef.current = false;
     }
   }
 
   async function confirmDelete() {
-    if (!deleteTarget || deletingId) return;
+    if (!deleteTarget || quickReplyDeleteRef.current) return;
 
+    quickReplyDeleteRef.current = true;
     setDeletingId(deleteTarget.id);
     try {
       await onDelete(deleteTarget);
@@ -7328,42 +7672,138 @@ function SettingsWhatsAppQuickRepliesPanel({
       // The parent sets the visible error. Keep the confirmation open so the item is not removed.
     } finally {
       setDeletingId(null);
+      quickReplyDeleteRef.current = false;
     }
+  }
+
+  function changeConnection(nextConnectionId: string) {
+    if (autoReplySavingConnectionId || connectionMutationRef.current) return;
+    if (
+      nextConnectionId !== selectedAutoReply?.whatsAppConnectionId &&
+      anyDirty &&
+      !window.confirm('Existem alterações não salvas. Deseja trocar de conexão e descartá-las?')
+    ) {
+      return;
+    }
+    setSelectedConnectionId(nextConnectionId);
+    setLabelsDirty(false);
+    setCategoriesDirty(false);
+  }
+
+  function refreshAutoReplies() {
+    if (
+      autoReplyDirty &&
+      !window.confirm('Atualizar agora descartará as alterações não salvas. Deseja continuar?')
+    ) {
+      return;
+    }
+    void onRefreshAutoReplies();
+  }
+
+  function handleTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const nextIndex =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? whatsAppSettingsTabs.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + whatsAppSettingsTabs.length) %
+            whatsAppSettingsTabs.length;
+    const nextTab = whatsAppSettingsTabs[nextIndex]!;
+    setActiveTab(nextTab.id);
+    document.getElementById(`settings-whatsapp-tab-${nextTab.id}`)?.focus();
   }
 
   return (
     <div className="settings-v2-panel settings-whatsapp-quick-replies">
-      <section className="settings-auto-reply-card" aria-labelledby="settings-auto-reply-title">
+      <header className="settings-whatsapp-hub-header">
+        <div>
+          <span className="metric-label">Central de configurações</span>
+          <h2>Configurações do WhatsApp</h2>
+          <p>Gerencie respostas automáticas, etiquetas, atendimentos e mensagens rápidas.</p>
+        </div>
+        <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenWhatsApp}>
+          Abrir WhatsApp
+        </Button>
+      </header>
+
+      <div
+        aria-label="Áreas das configurações do WhatsApp"
+        className="settings-whatsapp-tabs"
+        role="tablist"
+      >
+        {whatsAppSettingsTabs.map((tab, index) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              aria-controls={`settings-whatsapp-panel-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              className={activeTab === tab.id ? 'active' : ''}
+              id={`settings-whatsapp-tab-${tab.id}`}
+              key={tab.id}
+              role="tab"
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
+            >
+              <Icon aria-hidden="true" size={16} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab !== 'quick-replies' ? (
+        <label className="field settings-whatsapp-connection-field">
+          <span>Conexão WhatsApp</span>
+          <select
+            disabled={
+              autoReplyLoading ||
+              Boolean(autoReplySavingConnectionId) ||
+              connectionMutationBusy ||
+              !autoReplyConfigs.length
+            }
+            value={selectedAutoReply?.whatsAppConnectionId ?? ''}
+            onChange={(event) => changeConnection(event.target.value)}
+          >
+            {!autoReplyConfigs.length ? <option value="">Nenhuma conexão disponível</option> : null}
+            {autoReplyConfigs.map((config) => (
+              <option key={config.whatsAppConnectionId} value={config.whatsAppConnectionId}>
+                {config.connectionName}
+              </option>
+            ))}
+          </select>
+          <small>Os dados das três primeiras abas pertencem à conexão selecionada.</small>
+        </label>
+      ) : (
+        <p className="settings-whatsapp-global-note">
+          Respostas rápidas ativas ficam disponíveis no slash menu de todas as conexões.
+        </p>
+      )}
+
+      <section
+        aria-labelledby="settings-whatsapp-tab-auto-reply"
+        className="settings-auto-reply-card settings-whatsapp-tab-panel"
+        hidden={activeTab !== 'auto-reply'}
+        id="settings-whatsapp-panel-auto-reply"
+        role="tabpanel"
+      >
         <div className="panel-header">
           <div>
-            <span className="metric-label">WhatsApp</span>
             <h3 id="settings-auto-reply-title">Resposta automática</h3>
-            <p>Responda uma vez por período e mantenha a conversa aguardando retorno manual.</p>
+            <p>Configure mensagens automáticas para os clientes.</p>
           </div>
           <span
             className={`finance-status-pill ${selectedAutoReply?.enabled ? 'tone-success' : 'tone-muted'}`}
           >
-            {selectedAutoReply?.enabled ? 'ATIVA' : 'INATIVA'}
+            {autoReplyStatus}
           </span>
         </div>
 
         {autoReplyError ? <div className="notice danger">{autoReplyError}</div> : null}
         <div className="settings-auto-reply-grid">
-          <label className="field">
-            <span>Conexão</span>
-            <select
-              disabled={autoReplyLoading || !autoReplyConfigs.length}
-              value={selectedAutoReply?.whatsAppConnectionId ?? ''}
-              onChange={(event) => setSelectedAutoReplyConnectionId(event.target.value)}
-            >
-              {!autoReplyConfigs.length ? <option value="">Nenhuma conexão</option> : null}
-              {autoReplyConfigs.map((config) => (
-                <option key={config.whatsAppConnectionId} value={config.whatsAppConnectionId}>
-                  {config.connectionName}
-                </option>
-              ))}
-            </select>
-          </label>
           <label className="field">
             <span>Tipo</span>
             <select
@@ -7415,43 +7855,49 @@ function SettingsWhatsAppQuickRepliesPanel({
             onChange={(event) => setAutoReplyMessage(event.target.value)}
           />
         </label>
-        <label className="settings-template-active-toggle">
-          <input
-            checked={autoReplyScheduled}
+        <div className="settings-auto-reply-schedule">
+          <button
+            aria-expanded={autoReplyScheduled}
             disabled={!selectedAutoReply}
-            type="checkbox"
-            onChange={(event) => setAutoReplyScheduled(event.target.checked)}
-          />
-          <span>Programar período opcional</span>
-        </label>
-        {autoReplyScheduled ? (
-          <div className="settings-auto-reply-grid">
-            <label className="field">
-              <span>Início</span>
-              <input
-                type="datetime-local"
-                value={autoReplyStartsAt}
-                onChange={(event) => setAutoReplyStartsAt(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Fim</span>
-              <input
-                type="datetime-local"
-                value={autoReplyEndsAt}
-                onChange={(event) => setAutoReplyEndsAt(event.target.value)}
-              />
-            </label>
-          </div>
-        ) : null}
+            type="button"
+            onClick={() => setAutoReplyScheduled((current) => !current)}
+          >
+            <CalendarClock aria-hidden="true" size={16} />
+            <span>
+              <strong>Programação opcional</strong>
+              <small>{autoReplyScheduled ? 'Período habilitado' : 'Sem período definido'}</small>
+            </span>
+          </button>
+          {autoReplyScheduled ? (
+            <div className="settings-auto-reply-grid">
+              <label className="field">
+                <span>Data e hora inicial</span>
+                <input
+                  type="datetime-local"
+                  value={autoReplyStartsAt}
+                  onChange={(event) => setAutoReplyStartsAt(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Data e hora final</span>
+                <input
+                  type="datetime-local"
+                  value={autoReplyEndsAt}
+                  onChange={(event) => setAutoReplyEndsAt(event.target.value)}
+                />
+              </label>
+            </div>
+          ) : null}
+        </div>
         <small>Fuso operacional: America/Sao_Paulo. Persistência em UTC.</small>
         <div className="settings-quick-reply-form-actions">
           <Button
+            disabled={Boolean(autoReplySavingConnectionId)}
             icon={RefreshCcw}
             loading={autoReplyLoading}
             type="button"
             variant="secondary"
-            onClick={() => void onRefreshAutoReplies()}
+            onClick={refreshAutoReplies}
           >
             Atualizar
           </Button>
@@ -7477,51 +7923,173 @@ function SettingsWhatsAppQuickRepliesPanel({
         </div>
       </section>
 
-      <SettingsWhatsAppLabelsPanel connections={autoReplyConfigs} />
-      <SettingsWhatsAppAttendanceCategoriesPanel connections={autoReplyConfigs} />
-
-      <div className="settings-v2-toolbar">
-        <Button icon={ArrowRight} size="sm" variant="secondary" onClick={onOpenWhatsApp}>
-          Abrir WhatsApp
-        </Button>
-        <Button
-          icon={RefreshCcw}
-          loading={loading}
-          size="sm"
-          variant="secondary"
-          onClick={() => void onRefresh()}
-        >
-          Atualizar
-        </Button>
+      <div
+        aria-labelledby="settings-whatsapp-tab-labels"
+        className="settings-whatsapp-tab-panel"
+        hidden={activeTab !== 'labels'}
+        id="settings-whatsapp-panel-labels"
+        role="tabpanel"
+      >
+        <SettingsWhatsAppLabelsPanel
+          active={activeTab === 'labels'}
+          key={`labels-${selectedAutoReply?.whatsAppConnectionId ?? 'none'}`}
+          selectedConnectionId={selectedAutoReply?.whatsAppConnectionId ?? ''}
+          onBusyChange={setPerConnectionMutationBusy}
+          onDirtyChange={setLabelsDirty}
+        />
       </div>
 
-      {error ? <div className="notice danger">{error}</div> : null}
+      <div
+        aria-labelledby="settings-whatsapp-tab-categories"
+        className="settings-whatsapp-tab-panel"
+        hidden={activeTab !== 'categories'}
+        id="settings-whatsapp-panel-categories"
+        role="tabpanel"
+      >
+        <SettingsWhatsAppAttendanceCategoriesPanel
+          active={activeTab === 'categories'}
+          key={`categories-${selectedAutoReply?.whatsAppConnectionId ?? 'none'}`}
+          selectedConnectionId={selectedAutoReply?.whatsAppConnectionId ?? ''}
+          onBusyChange={setPerConnectionMutationBusy}
+          onDirtyChange={setCategoriesDirty}
+        />
+      </div>
 
-      <form className="settings-quick-reply-form" onSubmit={(event) => void submit(event)}>
+      <section
+        aria-labelledby="settings-whatsapp-tab-quick-replies"
+        className="settings-whatsapp-tab-panel settings-whatsapp-quick-panel"
+        hidden={activeTab !== 'quick-replies'}
+        id="settings-whatsapp-panel-quick-replies"
+        role="tabpanel"
+      >
         <div className="panel-header">
           <div>
-            <h3>{editingReply ? 'Editar resposta rápida' : 'Nova resposta rápida'}</h3>
-            <p>Respostas ativas aparecem no slash menu do Inbox.</p>
+            <h3>Respostas rápidas</h3>
+            <p>Crie mensagens prontas para agilizar o atendimento pelo WhatsApp.</p>
+          </div>
+          <div className="settings-whatsapp-heading-actions">
+            <Button
+              icon={RefreshCcw}
+              loading={loading}
+              size="sm"
+              variant="secondary"
+              onClick={() => void onRefresh()}
+            >
+              Atualizar
+            </Button>
+            <Button
+              icon={Plus}
+              size="sm"
+              onClick={() => {
+                resetForm();
+                setQuickReplyModalOpen(true);
+              }}
+            >
+              Nova resposta rápida
+            </Button>
           </div>
         </div>
-        <div className="settings-quick-reply-form-grid">
+        {error ? <div className="notice danger">{error}</div> : null}
+        <label className="field settings-whatsapp-search">
+          <span className="sr-only">Pesquisar respostas rápidas</span>
+          <Search aria-hidden="true" size={16} />
+          <input
+            placeholder="Pesquisar por título ou mensagem"
+            type="search"
+            value={quickReplySearch}
+            onChange={(event) => setQuickReplySearch(event.target.value)}
+          />
+        </label>
+
+        <div className="settings-quick-reply-list" aria-busy={loading}>
+          {loading && !replies.length ? (
+            <span className="settings-quick-reply-empty">Carregando respostas...</span>
+          ) : null}
+          {!loading && !filteredReplies.length ? (
+            <span className="settings-quick-reply-empty">Nenhuma resposta rápida cadastrada.</span>
+          ) : null}
+          {filteredReplies.map((reply) => (
+            <article className="settings-quick-reply-item" key={reply.id}>
+              <div>
+                <div className="settings-quick-reply-title-row">
+                  <strong>{reply.label}</strong>
+                  <span
+                    className={`finance-status-pill ${reply.isActive ? 'tone-success' : 'tone-muted'}`}
+                  >
+                    {reply.isActive ? 'Ativo' : 'Inativo'}
+                  </span>
+                </div>
+                <p>{reply.text}</p>
+              </div>
+              <dl>
+                <div>
+                  <dt>Ordem</dt>
+                  <dd>{reply.sortOrder}</dd>
+                </div>
+              </dl>
+              <ActionMenu
+                label={`Ações da resposta ${reply.label}`}
+                items={[
+                  { icon: Pencil, label: 'Editar', onSelect: () => editReply(reply) },
+                  {
+                    disabled: Boolean(togglingId),
+                    icon: reply.isActive ? ToggleLeft : Power,
+                    label: reply.isActive ? 'Desativar' : 'Ativar',
+                    onSelect: () => void toggleReply(reply),
+                  },
+                  {
+                    danger: true,
+                    disabled: Boolean(deletingId),
+                    icon: Trash2,
+                    label: 'Excluir',
+                    onSelect: () => setDeleteTarget(reply),
+                  },
+                ]}
+              />
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <SettingsWhatsAppModal
+        closeDisabled={saving}
+        description="Defina o título, o conteúdo e a disponibilidade no slash menu do Inbox."
+        open={quickReplyModalOpen}
+        title={editingReply ? 'Editar resposta rápida' : 'Nova resposta rápida'}
+        onClose={closeQuickReplyModal}
+      >
+        <form className="settings-whatsapp-modal-form" onSubmit={(event) => void submit(event)}>
+          {error ? <div className="notice danger">{error}</div> : null}
+          <div className="settings-whatsapp-form-grid">
+            <label className="field">
+              <span>Título</span>
+              <input
+                data-autofocus
+                maxLength={80}
+                placeholder="PIX expirado"
+                value={label}
+                onChange={(event) => setLabel(event.target.value)}
+              />
+            </label>
+            <label className="field settings-quick-reply-order-field">
+              <span>Ordem</span>
+              <input
+                min={0}
+                step={1}
+                type="number"
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value)}
+              />
+            </label>
+          </div>
           <label className="field">
-            <span>Título</span>
-            <input
-              maxLength={80}
-              placeholder="PIX expirado"
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-            />
-          </label>
-          <label className="field settings-quick-reply-order-field">
-            <span>Ordem</span>
-            <input
-              min={0}
-              step={1}
-              type="number"
-              value={sortOrder}
-              onChange={(event) => setSortOrder(event.target.value)}
+            <span>Mensagem</span>
+            <textarea
+              maxLength={2000}
+              placeholder="Esse PIX expirou. Posso gerar uma nova cobrança para você."
+              rows={5}
+              value={text}
+              onChange={(event) => setText(event.target.value)}
             />
           </label>
           <label className="settings-template-active-toggle">
@@ -7532,129 +8100,50 @@ function SettingsWhatsAppQuickRepliesPanel({
             />
             <span>Ativo</span>
           </label>
-        </div>
-        <label className="field">
-          <span>Mensagem</span>
-          <textarea
-            maxLength={2000}
-            placeholder="Esse PIX expirou. Posso gerar uma nova cobrança para você."
-            rows={4}
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-          />
-        </label>
-        <div className="settings-quick-reply-form-actions">
-          {editingReply ? (
-            <Button type="button" variant="secondary" onClick={resetForm}>
+          <div className="settings-whatsapp-modal-actions">
+            <Button disabled={saving} variant="secondary" onClick={closeQuickReplyModal}>
               Cancelar
             </Button>
-          ) : null}
-          <Button disabled={!formValid} icon={Save} loading={saving} type="submit">
-            {editingReply ? 'Salvar resposta' : 'Criar resposta'}
-          </Button>
-        </div>
-      </form>
-
-      <div className="settings-quick-reply-list" aria-busy={loading}>
-        {loading && !replies.length ? (
-          <span className="settings-quick-reply-empty">Carregando respostas...</span>
-        ) : null}
-        {!loading && !replies.length ? (
-          <span className="settings-quick-reply-empty">Nenhuma resposta rápida cadastrada.</span>
-        ) : null}
-        {replies.map((reply) => (
-          <article className="settings-quick-reply-item" key={reply.id}>
-            <div>
-              <div className="settings-quick-reply-title-row">
-                <strong>{reply.label}</strong>
-                <span
-                  className={`finance-status-pill ${reply.isActive ? 'tone-success' : 'tone-muted'}`}
-                >
-                  {reply.isActive ? 'Ativo' : 'Inativo'}
-                </span>
-              </div>
-              <p>{reply.text}</p>
-            </div>
-            <dl>
-              <div>
-                <dt>Ordem</dt>
-                <dd>{reply.sortOrder}</dd>
-              </div>
-            </dl>
-            <div className="settings-quick-reply-actions">
-              <Button icon={Pencil} size="sm" variant="secondary" onClick={() => editReply(reply)}>
-                Editar
-              </Button>
-              <Button
-                icon={reply.isActive ? ToggleLeft : Power}
-                disabled={Boolean(togglingId)}
-                loading={togglingId === reply.id}
-                size="sm"
-                variant="secondary"
-                onClick={() => void toggleReply(reply)}
-              >
-                {reply.isActive ? 'Desativar' : 'Ativar'}
-              </Button>
-              <Button
-                icon={Trash2}
-                disabled={Boolean(deletingId)}
-                size="sm"
-                variant="danger"
-                onClick={() => setDeleteTarget(reply)}
-              >
-                {deletingId === reply.id ? 'Excluindo...' : 'Excluir'}
-              </Button>
-            </div>
-          </article>
-        ))}
-      </div>
+            <Button disabled={!formValid} icon={Save} loading={saving} type="submit">
+              Salvar resposta
+            </Button>
+          </div>
+        </form>
+      </SettingsWhatsAppModal>
       {deleteTarget ? (
-        <div className="modal-backdrop" role="presentation">
-          <section
-            className="modal settings-quick-reply-delete-modal"
-            aria-labelledby="quick-reply-delete-title"
-          >
-            <header className="modal-header modal-header-with-icon">
-              <span className="modal-icon danger" aria-hidden="true">
-                <Trash2 size={16} />
-              </span>
-              <div>
-                <span className="metric-label">Exclusão definitiva</span>
-                <h2 id="quick-reply-delete-title">Excluir resposta rápida?</h2>
-                <p>Esta ação removerá definitivamente a resposta rápida "{deleteTarget.label}".</p>
-              </div>
-              <IconButton
-                disabled={Boolean(deletingId)}
-                icon={X}
-                label="Fechar confirmação de exclusão"
-                onClick={() => setDeleteTarget(null)}
-              />
-            </header>
+        <SettingsWhatsAppModal
+          closeDisabled={Boolean(deletingId)}
+          description={`Esta ação removerá definitivamente a resposta rápida “${deleteTarget.label}”.`}
+          open
+          title="Excluir resposta rápida?"
+          onClose={() => {
+            if (!deletingId) setDeleteTarget(null);
+          }}
+        >
+          <div className="settings-whatsapp-modal-form">
             <div className="notice danger">
               A resposta não aparecerá mais no painel nem no slash menu quando o Inbox carregar a
               lista do banco.
             </div>
-            <div className="form-actions">
-              <div className="button-row">
-                <Button
-                  disabled={Boolean(deletingId)}
-                  variant="secondary"
-                  onClick={() => setDeleteTarget(null)}
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  icon={Trash2}
-                  disabled={deletingId === deleteTarget.id}
-                  variant="danger"
-                  onClick={() => void confirmDelete()}
-                >
-                  {deletingId === deleteTarget.id ? 'Excluindo...' : 'Excluir'}
-                </Button>
-              </div>
+            <div className="settings-whatsapp-modal-actions">
+              <Button
+                disabled={Boolean(deletingId)}
+                variant="secondary"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                icon={Trash2}
+                loading={deletingId === deleteTarget.id}
+                variant="danger"
+                onClick={() => void confirmDelete()}
+              >
+                Excluir
+              </Button>
             </div>
-          </section>
-        </div>
+          </div>
+        </SettingsWhatsAppModal>
       ) : null}
     </div>
   );

@@ -426,15 +426,17 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsViewSource).toContain('await updateWhatsAppQuickReply(id, payload);');
     expect(settingsViewSource).toContain('await deleteWhatsAppQuickReply(reply.id);');
     expect(settingsSource).toContain('function SettingsWhatsAppQuickRepliesPanel');
-    expect(settingsSource).toContain('Respostas ativas aparecem no slash menu do Inbox.');
+    expect(settingsSource).toContain(
+      'Respostas rápidas ativas ficam disponíveis no slash menu de todas as conexões.',
+    );
     expect(settingsSource).toContain('Título');
     expect(settingsSource).toContain('Mensagem');
     expect(settingsSource).toContain('Ordem');
     expect(settingsSource).toContain('Ativo');
     expect(settingsSource).toContain('Desativar');
     expect(settingsSource).toContain('Excluir resposta rápida?');
-    expect(settingsSource).toContain('Excluindo...');
-    expect(stylesSource).toContain('.settings-quick-reply-form');
+    expect(settingsSource).toContain('quickReplyDeleteRef.current');
+    expect(stylesSource).toContain('.settings-whatsapp-editor-modal');
     expect(stylesSource).toContain('.settings-quick-reply-item');
     expect(stylesSource).toContain('.settings-quick-reply-delete-modal');
   });
@@ -447,7 +449,7 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsSource).toContain('Somente clientes vinculados');
     expect(settingsSource).toContain('Somente contatos não vinculados');
     expect(settingsSource).toContain('Desativar resposta automática');
-    expect(settingsSource).toContain('Programar período opcional');
+    expect(settingsSource).toContain('Programação opcional');
     expect(settingsSource).toContain('America/Sao_Paulo');
     expect(settingsSource).not.toContain('providerTokenEncrypted');
   });
@@ -462,6 +464,69 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(settingsSource).toContain('aria-label="Cor da etiqueta"');
     expect(stylesSource).toContain('.settings-whatsapp-labels');
     expect(stylesSource).toContain('.whatsapp-label-settings-row');
+  });
+
+  it('organizes WhatsApp settings in accessible keyboard tabs without unmounting drafts', () => {
+    expect(settingsSource).toContain("type WhatsAppSettingsTab = 'auto-reply'");
+    expect(settingsSource).toContain("{ id: 'labels', label: 'Etiquetas', icon: Layers }");
+    expect(settingsSource).toContain('role="tablist"');
+    expect(settingsSource).toContain('role="tab"');
+    expect(settingsSource).toContain('role="tabpanel"');
+    expect(settingsSource).toContain("['ArrowLeft', 'ArrowRight', 'Home', 'End']");
+    expect(settingsSource).toContain("hidden={activeTab !== 'auto-reply'}");
+    expect(settingsSource).toContain("hidden={activeTab !== 'labels'}");
+    expect(settingsSource).toContain("hidden={activeTab !== 'categories'}");
+    expect(settingsSource).toContain("hidden={activeTab !== 'quick-replies'}");
+    expect(stylesSource).toContain('.settings-whatsapp-tabs');
+    expect(stylesSource).toContain('overflow-x: auto;');
+  });
+
+  it('protects WhatsApp drafts, connection identity and stale per-connection responses', () => {
+    expect(settingsViewSource).toContain('whatsAppSettingsDirty');
+    expect(settingsViewSource).toContain('Existem alterações não salvas no WhatsApp');
+    expect(settingsSource).toContain('Existem alterações não salvas. Deseja trocar de conexão');
+    expect(settingsSource).toContain('const anyDirty =');
+    expect(settingsSource).toContain('loadSequenceRef.current');
+    expect(settingsSource).toContain('sequence === loadSequenceRef.current');
+    expect(settingsSource).toContain('quickReplySaveRef.current');
+    expect(settingsSource).toContain('autoReplySaveRef.current');
+    expect(settingsSource).toContain('connectionMutationRef.current');
+    expect(settingsSource).toContain(
+      'autoReplySavingConnectionId || connectionMutationRef.current',
+    );
+    expect(settingsSource).toContain('Desativar usará a última configuração salva');
+    expect(settingsViewSource).toContain('setWhatsAppSettingsDirty(false)');
+  });
+
+  it('uses compact action menus and accessible responsive editors for WhatsApp CRUD', () => {
+    expect(settingsSource).toContain('function SettingsWhatsAppModal');
+    expect(settingsSource).toContain('createPortal(');
+    expect(settingsSource).toContain('aria-modal="true"');
+    expect(settingsSource).toContain("event.key === 'Escape'");
+    expect(settingsSource).toContain("event.key !== 'Tab'");
+    expect(settingsSource).toContain('returnFocusRef.current?.focus()');
+    expect(settingsSource).toContain('if (!closeDisabled) onClose()');
+    expect(settingsSource).toContain('closeDisabled={saving}');
+    expect(settingsSource).toContain('closeDisabled={Boolean(deletingId)}');
+    expect(settingsSource).toContain('if (saving || saveRef.current) return;');
+    expect(settingsSource).toContain('Ações da etiqueta');
+    expect(settingsSource).toContain('Ações da categoria');
+    expect(settingsSource).toContain('Ações da resposta');
+    expect(settingsSource).toContain('Nova etiqueta');
+    expect(settingsSource).toContain('Nova categoria');
+    expect(settingsSource).toContain('Nova resposta rápida');
+    expect(stylesSource).toContain('.settings-whatsapp-editor-modal');
+    expect(stylesSource).toContain('max-height: calc(100dvh');
+    expect(stylesSource).toContain('env(safe-area-inset-bottom)');
+  });
+
+  it('keeps quick-reply failures editable and adds local title/content search', () => {
+    expect(settingsViewSource).toContain('throw err;');
+    expect(settingsSource).toContain('keep the draft open for correction or retry');
+    expect(settingsSource).toContain('normalizedQuickReplySearch');
+    expect(settingsSource).toContain('reply.label.toLocaleLowerCase');
+    expect(settingsSource).toContain('reply.text.toLocaleLowerCase');
+    expect(settingsSource).toContain('Pesquisar por título ou mensagem');
   });
 
   it('renders Sistema as a read-only health panel without exposing secrets', () => {

@@ -13041,6 +13041,10 @@ tbody tr:hover,
   min-width: 0;
 }
 
+.settings-whatsapp-tab-panel[hidden] {
+  display: none !important;
+}
+
 .settings-whatsapp-tab-panel.settings-auto-reply-card,
 .settings-whatsapp-tab-panel .settings-auto-reply-card {
   border-bottom: 0;

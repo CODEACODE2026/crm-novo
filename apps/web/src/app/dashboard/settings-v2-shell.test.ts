@@ -481,6 +481,21 @@ describe('Settings V2 SET1 shell contracts', () => {
     expect(stylesSource).toContain('overflow-x: auto;');
   });
 
+  it('keeps every inactive WhatsApp tab panel out of layout and focus despite display overrides', () => {
+    const hiddenPanelRule = stylesSource.match(
+      /\.settings-whatsapp-tab-panel\[hidden\]\s*\{([^}]*)\}/,
+    )?.[1];
+    const autoReplyCardRule = stylesSource.match(/\.settings-auto-reply-card\s*\{([^}]*)\}/)?.[1];
+
+    expect(hiddenPanelRule).toBeDefined();
+    expect(hiddenPanelRule).toMatch(/display:\s*none\s*!important;/);
+    expect(autoReplyCardRule).toMatch(/display:\s*grid;/);
+    expect(settingsSource).toContain("hidden={activeTab !== 'auto-reply'}");
+    expect(settingsSource).toContain("hidden={activeTab !== 'labels'}");
+    expect(settingsSource).toContain("hidden={activeTab !== 'categories'}");
+    expect(settingsSource).toContain("hidden={activeTab !== 'quick-replies'}");
+  });
+
   it('protects WhatsApp drafts, connection identity and stale per-connection responses', () => {
     expect(settingsViewSource).toContain('whatsAppSettingsDirty');
     expect(settingsViewSource).toContain('Existem alterações não salvas no WhatsApp');

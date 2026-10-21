@@ -35,6 +35,7 @@ type ReferralTx = Prisma.TransactionClient | PrismaService;
 type ReferralWithClients = Prisma.ReferralGetPayload<{
   include: {
     referredClient: { include: { references: true } };
+    referredClientReference: true;
     referrerClient: { include: { references: true } };
     rewardClientReference: true;
   };
@@ -43,6 +44,7 @@ type ReferralWithClients = Prisma.ReferralGetPayload<{
 type ReferralWithHistory = Prisma.ReferralGetPayload<{
   include: {
     referredClient: { include: { references: true } };
+    referredClientReference: true;
     referrerClient: { include: { references: true } };
     rewardClientReference: true;
     history: { include: { actor: { select: { id: true; name: true } } } };
@@ -51,6 +53,7 @@ type ReferralWithHistory = Prisma.ReferralGetPayload<{
 
 export type CreateReferralInput = {
   referredClientId: string;
+  referredClientReferenceId: string;
   referrerClientId?: string | null | undefined;
   rewardType?: ReferralRewardType | undefined;
   rewardValue?: number | Prisma.Decimal | null | undefined;
@@ -80,6 +83,7 @@ export class ReferralsService {
         where,
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -124,6 +128,7 @@ export class ReferralsService {
       where: { id },
       include: {
         referredClient: { include: { references: true } },
+        referredClientReference: true,
         referrerClient: { include: { references: true } },
         rewardClientReference: true,
         history: {
@@ -142,10 +147,15 @@ export class ReferralsService {
 
   async createManual(dto: CreateReferralDto, actorUserId: string) {
     const referralId = await this.prisma.$transaction(async (tx) => {
-      await lockReferralInitialActivationEvidence(tx, dto.referredClientId);
+      await lockReferralInitialActivationEvidence(
+        tx,
+        dto.referredClientId,
+        dto.referredClientReferenceId,
+      );
 
       const created = await this.createPending(tx, {
         referredClientId: dto.referredClientId,
+        referredClientReferenceId: dto.referredClientReferenceId,
         referrerClientId: dto.referrerClientId,
         rewardType: dto.rewardType,
         rewardValue: dto.rewardValue,
@@ -162,12 +172,14 @@ export class ReferralsService {
         tx,
         created.status,
         created.referredClientId,
+        created.referredClientReferenceId!,
       );
 
       if (evidence.eligible && evidence.receivable) {
         await this.qualifyAfterInitialActivation(
           tx,
           created.referredClientId,
+          created.referredClientReferenceId!,
           evidence.receivable.id,
           actorUserId,
         );
@@ -185,6 +197,7 @@ export class ReferralsService {
         where: { id },
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -226,6 +239,7 @@ export class ReferralsService {
         where: { id },
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -261,10 +275,24 @@ export class ReferralsService {
       throw new BadRequestException('Cliente nao pode indicar a si mesmo.');
     }
 
-    const [referredClient, referrerClient] = await Promise.all([
-      tx.client.findUnique({ where: { id: input.referredClientId } }),
-      tx.client.findUnique({ where: { id: input.referrerClientId } }),
-    ]);
+    const [referredClient, referrerClient, referredClientReference, unresolvedLegacy] =
+      await Promise.all([
+        tx.client.findUnique({ where: { id: input.referredClientId } }),
+        tx.client.findUnique({ where: { id: input.referrerClientId } }),
+        tx.clientReference.findFirst({
+          where: {
+            id: input.referredClientReferenceId,
+            clientId: input.referredClientId,
+          },
+        }),
+        tx.referral.findFirst({
+          where: {
+            referredClientId: input.referredClientId,
+            referredClientReferenceId: null,
+            status: 'PENDING',
+          },
+        }),
+      ]);
 
     if (!referredClient) {
       throw new NotFoundException('Cliente indicado nao encontrado.');
@@ -274,10 +302,27 @@ export class ReferralsService {
       throw new NotFoundException('Cliente indicador nao encontrado.');
     }
 
+    if (!referredClientReference) {
+      throw new NotFoundException('Referencia indicada nao encontrada para o cliente informado.');
+    }
+
+    if (!['PENDENTE_PAGAMENTO', 'ATIVO'].includes(referredClientReference.status)) {
+      throw new ConflictException(
+        'Referencia indicada precisa estar aguardando pagamento ou ativa.',
+      );
+    }
+
+    if (unresolvedLegacy) {
+      throw new ConflictException(
+        'Cliente possui indicacao legada pendente sem referencia definida.',
+      );
+    }
+
     try {
       const referral = await tx.referral.create({
         data: {
           referredClientId: input.referredClientId,
+          referredClientReferenceId: input.referredClientReferenceId,
           referrerClientId: input.referrerClientId,
           rewardType: input.rewardType ?? 'FREE_MONTH',
           rewardValue: input.rewardValue ?? null,
@@ -300,14 +345,22 @@ export class ReferralsService {
             clientId: referredClient.id,
             type: 'REFERRAL_CREATED',
             title: `Cliente cadastrado por indicacao de ${referrerClient.name}.`,
-            metadata: { referralId: referral.id, referrerClientId: referrerClient.id },
+            metadata: {
+              referralId: referral.id,
+              referredClientReferenceId: input.referredClientReferenceId,
+              referrerClientId: referrerClient.id,
+            },
             createdByUserId: input.actorUserId ?? null,
           },
           {
             clientId: referrerClient.id,
             type: 'REFERRAL_CREATED',
             title: `${referredClient.name} cadastrado como sua indicacao.`,
-            metadata: { referralId: referral.id, referredClientId: referredClient.id },
+            metadata: {
+              referralId: referral.id,
+              referredClientId: referredClient.id,
+              referredClientReferenceId: input.referredClientReferenceId,
+            },
             createdByUserId: input.actorUserId ?? null,
           },
         ],
@@ -316,7 +369,7 @@ export class ReferralsService {
       return referral;
     } catch (error) {
       if (this.isUniqueConstraint(error)) {
-        throw new ConflictException('Cliente indicado ja possui indicacao principal.');
+        throw new ConflictException('Referencia indicada ja possui indicacao.');
       }
 
       throw error;
@@ -326,21 +379,40 @@ export class ReferralsService {
   async qualifyAfterInitialActivation(
     tx: Prisma.TransactionClient,
     referredClientId: string,
+    referredClientReferenceId: string,
     receivableId: string,
     actorUserId: string | null,
   ) {
     const referral = await tx.referral.findUnique({
-      where: { referredClientId },
+      where: { referredClientReferenceId },
       include: {
         referredClient: { include: { references: true } },
+        referredClientReference: true,
         referrerClient: { include: { references: true } },
         rewardClientReference: true,
       },
     });
 
-    if (!referral || referral.status !== 'PENDING') {
+    if (
+      !referral ||
+      referral.referredClientId !== referredClientId ||
+      referral.status !== 'PENDING'
+    ) {
       return null;
     }
+
+    const evidence = await tx.receivable.findFirst({
+      where: {
+        id: receivableId,
+        clientId: referredClientId,
+        clientReferenceId: referredClientReferenceId,
+        purpose: 'INITIAL_ACTIVATION',
+        status: 'PAGO',
+        clientReference: { status: 'ATIVO' },
+      },
+    });
+
+    if (!evidence) return null;
 
     const qualifiedAt = new Date();
     const updated = await tx.referral.updateMany({
@@ -358,14 +430,19 @@ export class ReferralsService {
           clientId: referral.referredClientId,
           type: 'REFERRAL_QUALIFIED',
           title: 'Indicacao qualificada pelo primeiro pagamento.',
-          metadata: { referralId: referral.id, receivableId },
+          metadata: { referralId: referral.id, referredClientReferenceId, receivableId },
           createdByUserId: actorUserId,
         },
         {
           clientId: referral.referrerClientId,
           type: 'REFERRAL_QUALIFIED',
           title: `Indicacao de ${referral.referredClient.name} qualificada.`,
-          metadata: { referralId: referral.id, referredClientId, receivableId },
+          metadata: {
+            referralId: referral.id,
+            referredClientId,
+            referredClientReferenceId,
+            receivableId,
+          },
           createdByUserId: actorUserId,
         },
       ],
@@ -385,22 +462,28 @@ export class ReferralsService {
     return qualified;
   }
 
-  async cancelPendingForClientBeforePayment(
+  async cancelPendingForReferenceBeforePayment(
     tx: Prisma.TransactionClient,
     referredClientId: string,
+    referredClientReferenceId: string,
     reason: string | null,
     actorUserId: string | null,
   ) {
     const referral = await tx.referral.findUnique({
-      where: { referredClientId },
+      where: { referredClientReferenceId },
       include: {
         referredClient: { include: { references: true } },
+        referredClientReference: true,
         referrerClient: { include: { references: true } },
         rewardClientReference: true,
       },
     });
 
-    if (!referral || referral.status !== 'PENDING') {
+    if (
+      !referral ||
+      referral.referredClientId !== referredClientId ||
+      referral.status !== 'PENDING'
+    ) {
       return null;
     }
 
@@ -426,7 +509,11 @@ export class ReferralsService {
         type: 'REFERRAL_CANCELED',
         title: 'Indicacao cancelada antes do primeiro pagamento.',
         description: cancellationReason,
-        metadata: { referralId: referral.id, referrerClientId: referral.referrerClientId },
+        metadata: {
+          referralId: referral.id,
+          referredClientReferenceId,
+          referrerClientId: referral.referrerClientId,
+        },
         createdByUserId: actorUserId,
       },
     });
@@ -452,6 +539,7 @@ export class ReferralsService {
         where: { id },
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -547,6 +635,7 @@ export class ReferralsService {
         data,
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -599,6 +688,7 @@ export class ReferralsService {
         where: { id },
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -637,6 +727,7 @@ export class ReferralsService {
         where: { id },
         include: {
           referredClient: { include: { references: true } },
+          referredClientReference: true,
           referrerClient: { include: { references: true } },
           rewardClientReference: true,
         },
@@ -692,6 +783,7 @@ export class ReferralsService {
           },
         },
         { referredClient: { phoneNormalized: { contains: search } } },
+        { referredClientReference: { reference: { contains: search, mode: 'insensitive' } } },
         { referrerClient: { name: { contains: search, mode: 'insensitive' } } },
         {
           referrerClient: {
@@ -755,6 +847,13 @@ export class ReferralsService {
       createdAt: referral.createdAt.toISOString(),
       updatedAt: referral.updatedAt.toISOString(),
       referredClient: this.presentClientSummary(referral.referredClient),
+      referredClientReference: referral.referredClientReference
+        ? {
+            id: referral.referredClientReference.id,
+            reference: referral.referredClientReference.reference,
+            status: referral.referredClientReference.status,
+          }
+        : null,
       referrerClient: this.presentClientSummary(referral.referrerClient),
       rewardLabel: this.rewardLabel(referral),
       ...(history
@@ -832,6 +931,7 @@ export class ReferralsService {
       before?: Pick<
         Referral,
         | 'referredClientId'
+        | 'referredClientReferenceId'
         | 'referrerClientId'
         | 'status'
         | 'origin'
@@ -850,6 +950,7 @@ export class ReferralsService {
       after?: Pick<
         Referral,
         | 'referredClientId'
+        | 'referredClientReferenceId'
         | 'referrerClientId'
         | 'status'
         | 'origin'
@@ -883,6 +984,7 @@ export class ReferralsService {
     referral: Pick<
       Referral,
       | 'referredClientId'
+      | 'referredClientReferenceId'
       | 'referrerClientId'
       | 'status'
       | 'origin'
@@ -901,6 +1003,7 @@ export class ReferralsService {
   ): Prisma.InputJsonObject {
     return {
       referredClientId: referral.referredClientId,
+      referredClientReferenceId: referral.referredClientReferenceId,
       referrerClientId: referral.referrerClientId,
       status: referral.status,
       origin: referral.origin,

@@ -62,6 +62,7 @@ export interface Client {
   messageDispatches?: ClientMessageDispatch[];
   initialActivation?: InitialActivationResult | null;
   referralReceived?: ClientReferralReceived | null;
+  referralsReceived?: ClientReferralReceived[];
   referralsMade?: ClientReferralsMade;
 }
 
@@ -426,6 +427,7 @@ export interface ReferralClientSummary {
 export interface Referral {
   id: string;
   referredClientId: string;
+  referredClientReferenceId: string | null;
   referrerClientId: string;
   status: ReferralStatus;
   rewardType: ReferralRewardType;
@@ -441,6 +443,7 @@ export interface Referral {
   createdAt: string;
   updatedAt: string;
   referredClient: ReferralClientSummary;
+  referredClientReference: ReferralTargetReference | null;
   referrerClient: ReferralClientSummary;
   rewardLabel: string;
   history?: Array<{
@@ -462,8 +465,11 @@ export interface Referral {
   } | null;
 }
 
+export type ReferralTargetReference = Pick<ClientReference, 'id' | 'reference' | 'status'>;
+
 export interface ClientReferralReceived {
   id: string;
+  referredClientReferenceId: string | null;
   referrerClientId: string;
   status: ReferralStatus;
   rewardType: ReferralRewardType;
@@ -472,6 +478,7 @@ export interface ClientReferralReceived {
   qualifiedAt: string | null;
   appliedAt: string | null;
   canceledAt: string | null;
+  referredClientReference: ReferralTargetReference | null;
   referrerClient: Pick<ReferralClientSummary, 'id' | 'name' | 'reference' | 'status'>;
 }
 
@@ -482,12 +489,14 @@ export interface ClientReferralsMade {
   items: Array<{
     id: string;
     referredClientId: string;
+    referredClientReferenceId: string | null;
     status: ReferralStatus;
     rewardType: ReferralRewardType;
     rewardValue: string | null;
     rewardDescription: string | null;
     qualifiedAt: string | null;
     appliedAt: string | null;
+    referredClientReference: ReferralTargetReference | null;
     referredClient: Pick<ReferralClientSummary, 'id' | 'name' | 'reference' | 'status'>;
   }>;
 }
@@ -2347,6 +2356,7 @@ export function getReferral(id: string) {
 
 export function createReferral(payload: {
   referredClientId: string;
+  referredClientReferenceId: string;
   referrerClientId: string;
   rewardType: ReferralRewardType;
   rewardValue?: number;

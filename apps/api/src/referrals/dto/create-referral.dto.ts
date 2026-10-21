@@ -7,6 +7,9 @@ export class CreateReferralDto {
   referredClientId!: string;
 
   @IsUUID()
+  referredClientReferenceId!: string;
+
+  @IsUUID()
   referrerClientId!: string;
 
   @IsOptional()

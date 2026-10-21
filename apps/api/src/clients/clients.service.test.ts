@@ -971,6 +971,7 @@ describe('ClientsService manual client creation', () => {
 
     expect(fake.referralsService.createPending).toHaveBeenCalledWith(fake.prisma, {
       referredClientId: fake.clients[0]!.id,
+      referredClientReferenceId: fake.references[0]!.id,
       referrerClientId: 'referrer-id',
       rewardType: 'FREE_MONTH',
       rewardValue: undefined,
@@ -1000,6 +1001,7 @@ describe('ClientsService manual client creation', () => {
     expect(fake.receivables).toHaveLength(0);
     expect(fake.referralsService.createPending).toHaveBeenCalledWith(fake.prisma, {
       referredClientId: fake.clients[0]!.id,
+      referredClientReferenceId: fake.references[0]!.id,
       referrerClientId: 'referrer-id',
       rewardType: 'FREE_MONTH',
       rewardValue: undefined,
@@ -1103,6 +1105,61 @@ describe('ClientsService manual reference creation', () => {
         initialReceivablePurpose: 'INITIAL_ACTIVATION',
       },
     });
+    expect(fake.referralsService.createPending).not.toHaveBeenCalled();
+  });
+
+  it('creates the reference, activation receivable and targeted referral in one transaction', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.createReference(
+      'existing-client-id',
+      {
+        reference: 'IND-001',
+        planId: 'plan-id',
+        recurringValue: 30,
+        dueDate: '2026-10-01',
+        billingNoticeDays: 3,
+        referrerClientId: 'referrer-id',
+        referralRewardType: 'FREE_MONTH',
+      },
+      'user-id',
+    );
+
+    expect(fake.referralsService.createPending).toHaveBeenCalledWith(fake.prisma, {
+      referredClientId: 'existing-client-id',
+      referredClientReferenceId: fake.references[0]!.id,
+      referrerClientId: 'referrer-id',
+      rewardType: 'FREE_MONTH',
+      rewardValue: undefined,
+      rewardDescription: undefined,
+      origin: 'MANUAL',
+      actorUserId: 'user-id',
+    });
+    expect(fake.receivables[0]).toMatchObject({
+      clientReferenceId: fake.references[0]!.id,
+      purpose: 'INITIAL_ACTIVATION',
+    });
+  });
+
+  it('rejects referral reward data without a referrer before opening a transaction', async () => {
+    const fake = createClientCreationService();
+
+    await expect(
+      fake.service.createReference(
+        'existing-client-id',
+        {
+          reference: 'IND-002',
+          planId: 'plan-id',
+          recurringValue: 30,
+          dueDate: '2026-10-01',
+          billingNoticeDays: 3,
+          referralRewardType: 'FREE_MONTH',
+        },
+        'user-id',
+      ),
+    ).rejects.toThrow('Cliente indicador obrigatorio');
+
+    expect(fake.prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 
@@ -1428,6 +1485,27 @@ describe('ClientsService legacy client updates', () => {
 });
 
 describe('ClientsService destructive client removal', () => {
+  it('blocks physical reference removal when it is a referral target', async () => {
+    const fake = createClientRemovalService();
+
+    await expect(
+      fake.service.removeReference('reference-1', { confirmation: 'REMOVER' }),
+    ).rejects.toThrow('Referencia vinculada a indicacao nao pode ser removida');
+
+    expect(fake.prisma.clientReference.delete).not.toHaveBeenCalled();
+  });
+
+  it('blocks physical client removal when it would erase referral history', async () => {
+    const fake = createClientRemovalService({ clientReferralCount: 1 });
+
+    await expect(fake.service.remove('client-id', { confirmation: 'REMOVER' })).rejects.toThrow(
+      'Cliente vinculado a indicacao nao pode ser removido',
+    );
+
+    expect(fake.prisma.referral.deleteMany).not.toHaveBeenCalled();
+    expect(fake.prisma.client.delete).not.toHaveBeenCalled();
+  });
+
   it('removes current dependent rows before restricted parents in one transaction', async () => {
     const fake = createClientRemovalService();
 
@@ -1436,7 +1514,6 @@ describe('ClientsService destructive client removal', () => {
     expect(fake.calls).toEqual([
       'paymentWebhookEvent.deleteMany',
       'billingResponse.deleteMany',
-      'referral.deleteMany',
       'referral.updateMany',
       'whatsAppInboundMessage.deleteMany',
       'whatsAppPendingContact.deleteMany',
@@ -1796,7 +1873,15 @@ function baseClientReference() {
   };
 }
 
-function createClientRemovalService({ failAt }: { failAt?: string } = {}) {
+function createClientRemovalService({
+  failAt,
+  clientReferralCount = 0,
+  referenceReferralCount = 1,
+}: {
+  failAt?: string;
+  clientReferralCount?: number;
+  referenceReferralCount?: number;
+} = {}) {
   const calls: string[] = [];
   let transactionRolledBack = false;
   const record = (name: string) =>
@@ -1820,8 +1905,22 @@ function createClientRemovalService({ failAt }: { failAt?: string } = {}) {
       delete: record('client.delete'),
     },
     clientReference: {
+      findUnique: vi.fn().mockResolvedValue({
+        ...baseClientReference(),
+        id: 'reference-1',
+        plan: {
+          id: 'plan-id',
+          name: 'Mensal',
+          durationMonths: 1,
+          defaultValue: new Prisma.Decimal('100.00'),
+          active: true,
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+        },
+      }),
       findMany: vi.fn().mockResolvedValue([{ id: 'reference-1' }]),
       count,
+      delete: record('clientReference.delete'),
       deleteMany: record('clientReference.deleteMany'),
     },
     receivable: {
@@ -1891,7 +1990,13 @@ function createClientRemovalService({ failAt }: { failAt?: string } = {}) {
       deleteMany: record('clientEvent.deleteMany'),
     },
     referral: {
-      count,
+      count: vi.fn(({ where }: { where: Record<string, unknown> }) => {
+        if ('referredClientReferenceId' in where) return Promise.resolve(referenceReferralCount);
+        if ('referredClientId' in where || 'referrerClientId' in where) {
+          return Promise.resolve(clientReferralCount);
+        }
+        return Promise.resolve(1);
+      }),
       deleteMany: record('referral.deleteMany'),
       updateMany: record('referral.updateMany'),
     },

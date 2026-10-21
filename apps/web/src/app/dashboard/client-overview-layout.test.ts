@@ -249,11 +249,11 @@ describe('client overview presentation source', () => {
   it('separates received and made referrals with read-only mini KPIs and compact lists', () => {
     expect(clientMoreSource).toContain('Indicação recebida');
     expect(clientMoreSource).toContain('Indicações feitas');
-    expect(clientMoreSource).toContain('selectedClient.referralReceived.referrerClient.name');
-    expect(clientMoreSource).toContain('referralBenefitLabel(selectedClient.referralReceived)');
-    expect(clientMoreSource).toContain(
-      'referralStatusLabel(selectedClient.referralReceived.status)',
-    );
+    expect(clientMoreSource).toContain('clientReceivedReferrals(selectedClient).map');
+    expect(clientMoreSource).toContain('referral.referrerClient.name');
+    expect(clientMoreSource).toContain('referralBenefitLabel(referral)');
+    expect(clientMoreSource).toContain('referralStatusLabel(referral.status)');
+    expect(clientMoreSource).toContain('referralReferenceLabel(referral.referredClientReference)');
     expect(clientMoreSource).toContain('selectedClient.referralsMade?.total ?? 0');
     expect(clientMoreSource).toContain('selectedClient.referralsMade?.qualified ?? 0');
     expect(clientMoreSource).toContain('selectedClient.referralsMade?.rewarded ?? 0');

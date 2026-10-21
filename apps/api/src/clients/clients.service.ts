@@ -57,10 +57,13 @@ type ClientWithRelations = Prisma.ClientGetPayload<{
         steps: { include: { template: true; dispatch: true }; orderBy: { stepNumber: 'asc' } };
       };
     };
-    referralReceived: { include: { referrerClient: true } };
+    referralsReceived: {
+      orderBy: { createdAt: 'desc' };
+      include: { referredClientReference: true; referrerClient: true };
+    };
     referralsMade: {
       orderBy: { createdAt: 'desc' };
-      include: { referredClient: true };
+      include: { referredClient: true; referredClientReference: true };
     };
     references: { orderBy: { createdAt: 'asc' }; include: { plan: true } };
   };
@@ -77,10 +80,13 @@ type ClientDetailWithRelations = Prisma.ClientGetPayload<{
         steps: { include: { template: true; dispatch: true }; orderBy: { stepNumber: 'asc' } };
       };
     };
-    referralReceived: { include: { referrerClient: true } };
+    referralsReceived: {
+      orderBy: { createdAt: 'desc' };
+      include: { referredClientReference: true; referrerClient: true };
+    };
     referralsMade: {
       orderBy: { createdAt: 'desc' };
-      include: { referredClient: true };
+      include: { referredClient: true; referredClientReference: true };
     };
     references: { orderBy: { createdAt: 'asc' }; include: { plan: true } };
   };
@@ -127,10 +133,13 @@ export class ClientsService {
               },
             },
           },
-          referralReceived: { include: { referrerClient: true } },
+          referralsReceived: {
+            orderBy: { createdAt: 'desc' },
+            include: { referredClientReference: true, referrerClient: true },
+          },
           referralsMade: {
             orderBy: { createdAt: 'desc' },
-            include: { referredClient: true },
+            include: { referredClient: true, referredClientReference: true },
           },
           references: { orderBy: { createdAt: 'asc' }, include: { plan: true } },
         },
@@ -197,10 +206,13 @@ export class ClientsService {
             steps: { include: { template: true, dispatch: true }, orderBy: { stepNumber: 'asc' } },
           },
         },
-        referralReceived: { include: { referrerClient: true } },
+        referralsReceived: {
+          orderBy: { createdAt: 'desc' },
+          include: { referredClientReference: true, referrerClient: true },
+        },
         referralsMade: {
           orderBy: { createdAt: 'desc' },
-          include: { referredClient: true },
+          include: { referredClient: true, referredClientReference: true },
         },
         references: { orderBy: { createdAt: 'asc' }, include: { plan: true } },
       },
@@ -313,6 +325,7 @@ export class ClientsService {
 
         await this.referralsService.createPending(tx, {
           referredClientId: created.id,
+          referredClientReferenceId: clientReference.id,
           referrerClientId: dto.referrerClientId,
           rewardType: dto.referralRewardType,
           rewardValue: dto.referralRewardValue,
@@ -402,6 +415,16 @@ export class ClientsService {
   async createReference(clientId: string, dto: CreateClientReferenceDto, actorUserId: string) {
     await this.ensureExists(clientId);
     await this.plansService.ensureActivePlan(dto.planId);
+    if (
+      !dto.referrerClientId &&
+      (dto.referralRewardType !== undefined ||
+        dto.referralRewardValue !== undefined ||
+        dto.referralRewardDescription !== undefined)
+    ) {
+      throw new BadRequestException(
+        'Cliente indicador obrigatorio quando houver configuracao de indicacao.',
+      );
+    }
     const dueDate = parseBusinessDate(dto.dueDate);
 
     try {
@@ -447,6 +470,19 @@ export class ClientsService {
             createdByUserId: actorUserId,
           },
         });
+
+        if (dto.referrerClientId) {
+          await this.referralsService.createPending(tx, {
+            referredClientId: clientId,
+            referredClientReferenceId: created.id,
+            referrerClientId: dto.referrerClientId,
+            rewardType: dto.referralRewardType,
+            rewardValue: dto.referralRewardValue,
+            rewardDescription: dto.referralRewardDescription,
+            origin: 'MANUAL',
+            actorUserId,
+          });
+        }
 
         return created;
       });
@@ -638,9 +674,10 @@ export class ClientsService {
       }
 
       if (reference.status === 'PENDENTE_PAGAMENTO' && dto.status === 'CANCELADO') {
-        await this.referralsService.cancelPendingForClientBeforePayment(
+        await this.referralsService.cancelPendingForReferenceBeforePayment(
           tx,
           reference.clientId,
+          reference.id,
           reason,
           actorUserId,
         );
@@ -668,7 +705,12 @@ export class ClientsService {
 
   async removeReference(id: string, dto: DeleteClientConfirmationDto) {
     this.ensureDeleteConfirmed(dto);
-    await this.previewRemoveReference(id);
+    const preview = await this.previewRemoveReference(id);
+    if (preview.counts.referralsReceived > 0) {
+      throw new ConflictException(
+        'Referencia vinculada a indicacao nao pode ser removida; utilize cancelamento.',
+      );
+    }
     const counts = await this.runDestructiveRemoval(() => this.deleteReferenceTree(id));
 
     return { id, removed: true, counts };
@@ -693,7 +735,12 @@ export class ClientsService {
 
   async remove(id: string, dto: DeleteClientConfirmationDto) {
     this.ensureDeleteConfirmed(dto);
-    await this.previewRemove(id);
+    const preview = await this.previewRemove(id);
+    if (preview.counts.referralsReceived > 0 || preview.counts.referralsMade > 0) {
+      throw new ConflictException(
+        'Cliente vinculado a indicacao nao pode ser removido; preserve o historico da indicacao.',
+      );
+    }
     const counts = await this.runDestructiveRemoval(() => this.deleteClientTree(id));
 
     return { id, removed: true, counts };
@@ -953,25 +1000,13 @@ export class ClientsService {
                   : null,
               })),
             })),
-            referralReceived: client.referralReceived
-              ? {
-                  id: client.referralReceived.id,
-                  referrerClientId: client.referralReceived.referrerClientId,
-                  status: client.referralReceived.status,
-                  rewardType: client.referralReceived.rewardType,
-                  rewardValue: client.referralReceived.rewardValue?.toString() ?? null,
-                  rewardDescription: client.referralReceived.rewardDescription,
-                  qualifiedAt: client.referralReceived.qualifiedAt?.toISOString() ?? null,
-                  appliedAt: client.referralReceived.appliedAt?.toISOString() ?? null,
-                  canceledAt: client.referralReceived.canceledAt?.toISOString() ?? null,
-                  referrerClient: {
-                    id: client.referralReceived.referrerClient.id,
-                    name: client.referralReceived.referrerClient.name,
-                    reference: client.referralReceived.referrerClient.reference,
-                    status: client.referralReceived.referrerClient.status,
-                  },
-                }
-              : null,
+            referralsReceived: (client.referralsReceived ?? []).map((referral) =>
+              this.presentReceivedReferral(referral),
+            ),
+            referralReceived:
+              (client.referralsReceived ?? []).length === 1 && client.referralsReceived?.[0]
+                ? this.presentReceivedReferral(client.referralsReceived[0])
+                : null,
             referralsMade: {
               total: client.referralsMade.length,
               qualified: client.referralsMade.filter((referral) => referral.status === 'QUALIFIED')
@@ -981,6 +1016,7 @@ export class ClientsService {
               items: client.referralsMade.map((referral) => ({
                 id: referral.id,
                 referredClientId: referral.referredClientId,
+                referredClientReferenceId: referral.referredClientReferenceId,
                 status: referral.status,
                 rewardType: referral.rewardType,
                 rewardValue: referral.rewardValue?.toString() ?? null,
@@ -993,10 +1029,45 @@ export class ClientsService {
                   reference: referral.referredClient.reference,
                   status: referral.referredClient.status,
                 },
+                referredClientReference: referral.referredClientReference
+                  ? {
+                      id: referral.referredClientReference.id,
+                      reference: referral.referredClientReference.reference,
+                      status: referral.referredClientReference.status,
+                    }
+                  : null,
               })),
             },
           }
         : {}),
+    };
+  }
+
+  private presentReceivedReferral(referral: ClientWithRelations['referralsReceived'][number]) {
+    return {
+      id: referral.id,
+      referredClientReferenceId: referral.referredClientReferenceId,
+      referrerClientId: referral.referrerClientId,
+      status: referral.status,
+      rewardType: referral.rewardType,
+      rewardValue: referral.rewardValue?.toString() ?? null,
+      rewardDescription: referral.rewardDescription,
+      qualifiedAt: referral.qualifiedAt?.toISOString() ?? null,
+      appliedAt: referral.appliedAt?.toISOString() ?? null,
+      canceledAt: referral.canceledAt?.toISOString() ?? null,
+      referredClientReference: referral.referredClientReference
+        ? {
+            id: referral.referredClientReference.id,
+            reference: referral.referredClientReference.reference,
+            status: referral.referredClientReference.status,
+          }
+        : null,
+      referrerClient: {
+        id: referral.referrerClient.id,
+        name: referral.referrerClient.name,
+        reference: referral.referrerClient.reference,
+        status: referral.referrerClient.status,
+      },
     };
   }
 
@@ -1053,6 +1124,7 @@ export class ClientsService {
       billingResponses,
       financialTransactions,
       statusHistory,
+      referralsReceived,
       referralsUpdated,
     ] = await this.prisma.$transaction([
       this.prisma.renewal.count({ where: { clientReferenceId } }),
@@ -1079,6 +1151,7 @@ export class ClientsService {
         where: { OR: [{ clientReferenceId }, { receivableId: { in: receivableIds } }] },
       }),
       this.prisma.clientStatusHistory.count({ where: { clientReferenceId } }),
+      this.prisma.referral.count({ where: { referredClientReferenceId: clientReferenceId } }),
       this.prisma.referral.count({ where: { rewardClientReferenceId: clientReferenceId } }),
     ]);
 
@@ -1099,6 +1172,7 @@ export class ClientsService {
         billingResponses +
         financialTransactions +
         statusHistory +
+        referralsReceived +
         referralsUpdated,
       clientReferences: 1,
       renewals,
@@ -1115,6 +1189,7 @@ export class ClientsService {
       billingResponses,
       financialTransactions,
       statusHistory,
+      referralsReceived,
       referralsUpdated,
     };
   }
@@ -1328,9 +1403,6 @@ export class ClientsService {
         where: { paymentIntentId: { in: paymentIntentIds } },
       });
       await tx.billingResponse.deleteMany({ where: { clientId } });
-      await tx.referral.deleteMany({
-        where: { OR: [{ referredClientId: clientId }, { referrerClientId: clientId }] },
-      });
       await tx.referral.updateMany({
         where: { rewardClientReferenceId: { in: clientReferenceIds } },
         data: { rewardClientReferenceId: null },

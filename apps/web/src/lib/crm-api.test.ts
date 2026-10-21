@@ -8,9 +8,11 @@ import {
   confirmRenewalReversal,
   createReferenceReactivation,
   createClient,
+  createClientReference,
   createManualCharge,
   createReceivablePix,
   createReceivablesPix,
+  createReferral,
   createWhatsAppRealtimeEventSource,
   createWhatsAppConversationLabel,
   deleteWhatsAppSavedSticker,
@@ -1385,6 +1387,64 @@ describe('CRM UI formatters', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ clientReferenceId: 'reference-id' }),
+      }),
+    );
+  });
+
+  it('creates a manual referral with the exact referred reference target', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createReferral({
+      referredClientId: 'referred-client-id',
+      referredClientReferenceId: 'referred-reference-id',
+      referrerClientId: 'referrer-client-id',
+      rewardType: 'FREE_MONTH',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/referrals'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          referredClientId: 'referred-client-id',
+          referredClientReferenceId: 'referred-reference-id',
+          referrerClientId: 'referrer-client-id',
+          rewardType: 'FREE_MONTH',
+        }),
+      }),
+    );
+  });
+
+  it('creates a referred client reference in one atomic API request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createClientReference('referred-client-id', {
+      reference: 'Novo contrato',
+      planId: 'plan-id',
+      recurringValue: 100,
+      dueDate: '2026-11-10',
+      billingNoticeDays: 5,
+      referrerClientId: 'referrer-client-id',
+      referralRewardType: 'FREE_MONTH',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/clients/referred-client-id/references'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          reference: 'Novo contrato',
+          planId: 'plan-id',
+          recurringValue: 100,
+          dueDate: '2026-11-10',
+          billingNoticeDays: 5,
+          referrerClientId: 'referrer-client-id',
+          referralRewardType: 'FREE_MONTH',
+        }),
       }),
     );
   });

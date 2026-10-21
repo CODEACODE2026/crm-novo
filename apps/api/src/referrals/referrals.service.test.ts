@@ -104,6 +104,7 @@ function createReferralPrisma() {
   const receivables: Array<
     Record<string, unknown> & {
       clientId: string;
+      clientReferenceId: string;
       purpose: string;
       status: string;
       clientReference?: (typeof clientReferences)[number];
@@ -153,6 +154,9 @@ function createReferralPrisma() {
     rewardClientReference:
       clientReferences.find((reference) => reference.id === referral.rewardClientReferenceId) ??
       null,
+    referredClientReference:
+      clientReferences.find((reference) => reference.id === referral.referredClientReferenceId) ??
+      null,
   });
 
   const tx: MockTx = {
@@ -190,11 +194,15 @@ function createReferralPrisma() {
     },
     referral: {
       create: ({ data }: { data: Record<string, unknown> }) => {
-        if (referrals.some((referral) => referral.referredClientId === data.referredClientId)) {
+        if (
+          referrals.some(
+            (referral) => referral.referredClientReferenceId === data.referredClientReferenceId,
+          )
+        ) {
           throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
             code: 'P2002',
             clientVersion: 'test',
-            meta: { target: ['referredClientId'] },
+            meta: { target: ['referredClientReferenceId'] },
           });
         }
 
@@ -224,18 +232,29 @@ function createReferralPrisma() {
         where,
         include,
       }: {
-        where: { id?: string; referredClientId?: string };
+        where: { id?: string; referredClientReferenceId?: string };
         include?: unknown;
       }) => {
         const referral =
           referrals.find(
             (item) =>
               (where.id === undefined || item.id === where.id) &&
-              (where.referredClientId === undefined ||
-                item.referredClientId === where.referredClientId),
+              (where.referredClientReferenceId === undefined ||
+                item.referredClientReferenceId === where.referredClientReferenceId),
           ) ?? null;
         return Promise.resolve(referral && include ? includeClients(referral) : referral);
       },
+      findFirst: ({ where }: { where: Record<string, unknown> }) =>
+        Promise.resolve(
+          referrals.find(
+            (item) =>
+              (where.referredClientId === undefined ||
+                item.referredClientId === where.referredClientId) &&
+              (where.referredClientReferenceId === undefined ||
+                item.referredClientReferenceId === where.referredClientReferenceId) &&
+              (where.status === undefined || item.status === where.status),
+          ) ?? null,
+        ),
       updateMany: referralUpdateMany,
       update: ({
         where,
@@ -290,17 +309,48 @@ function createReferralPrisma() {
     receivable: {
       findFirst: ({ where }: { where: Record<string, unknown> }) => {
         const clientReferenceWhere = where.clientReference as { status?: string } | undefined;
-        return Promise.resolve(
-          receivables.find(
+        const found = receivables.find(
+          (receivable) =>
+            (where.id === undefined || receivable.id === where.id) &&
+            receivable.clientId === where.clientId &&
+            (where.clientReferenceId === undefined ||
+              receivable.clientReferenceId === where.clientReferenceId) &&
+            receivable.purpose === where.purpose &&
+            (where.status === undefined || receivable.status === where.status) &&
+            (clientReferenceWhere?.status === undefined ||
+              receivable.clientReference?.status === clientReferenceWhere.status),
+        );
+        if (found) return Promise.resolve(found);
+
+        if (where.id && where.clientReferenceId && where.status === 'PAGO') {
+          const clientReference = clientReferences.find(
+            (reference) => reference.id === where.clientReferenceId,
+          );
+          return Promise.resolve(
+            clientReference
+              ? {
+                  id: where.id,
+                  clientId: where.clientId,
+                  clientReferenceId: where.clientReferenceId,
+                  purpose: where.purpose,
+                  status: where.status,
+                  clientReference,
+                }
+              : null,
+          );
+        }
+
+        return Promise.resolve(null);
+      },
+      findMany: ({ where }: { where: Record<string, unknown> }) =>
+        Promise.resolve(
+          receivables.filter(
             (receivable) =>
               receivable.clientId === where.clientId &&
-              receivable.purpose === where.purpose &&
-              (where.status === undefined || receivable.status === where.status) &&
-              (clientReferenceWhere?.status === undefined ||
-                receivable.clientReference?.status === clientReferenceWhere.status),
-          ) ?? null,
-        );
-      },
+              receivable.clientReferenceId === where.clientReferenceId &&
+              receivable.purpose === where.purpose,
+          ),
+        ),
     },
     $transaction: async <T>(input: Promise<T>[] | ((client: MockTx) => Promise<T>)) =>
       Array.isArray(input) ? Promise.all(input) : input(tx),
@@ -379,6 +429,7 @@ function createReferralListPrisma(statuses: ReferralStatus[]) {
     return {
       id: `bbbbbbbb-bbbb-4bbb-8bbb-${String(index + 1).padStart(12, '0')}`,
       referredClientId: referredClient.id,
+      referredClientReferenceId: referredClient.references[0]!.id,
       referrerClientId: referrerClient.id,
       status,
       rewardType: 'FREE_MONTH',
@@ -392,6 +443,7 @@ function createReferralListPrisma(statuses: ReferralStatus[]) {
       appliedNewDueDate: null,
       rewardClientReferenceId: null,
       rewardClientReference: null,
+      referredClientReference: referredClient.references[0]!,
       referredClient,
       referrerClient,
       createdAt: new Date(`2026-09-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`),
@@ -444,6 +496,17 @@ function createReferralListPrisma(statuses: ReferralStatus[]) {
       if (
         clientWhere.references &&
         !matchesReference(referral.referredClient.references, clientWhere.references)
+      ) {
+        return false;
+      }
+    }
+    if (where.referredClientReference) {
+      const referenceWhere = where.referredClientReference as {
+        reference?: { contains: string };
+      };
+      if (
+        referenceWhere.reference &&
+        !matchesText(referral.referredClientReference.reference, referenceWhere.reference)
       ) {
         return false;
       }
@@ -617,6 +680,7 @@ describe('ReferralsService', () => {
     await expect(
       service.createPending(fake.prisma as never, {
         referredClientId: fake.clients[1]!.id,
+        referredClientReferenceId: fake.clientReferences[1]!.id,
         actorUserId,
       }),
     ).resolves.toBeNull();
@@ -629,6 +693,7 @@ describe('ReferralsService', () => {
 
     const referral = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
       actorUserId,
     });
@@ -654,6 +719,7 @@ describe('ReferralsService', () => {
     const referral = await service.createManual(
       {
         referredClientId: fake.clients[1]!.id,
+        referredClientReferenceId: fake.clientReferences[1]!.id,
         referrerClientId: fake.clients[0]!.id,
         rewardType: 'FREE_MONTH',
       },
@@ -664,6 +730,28 @@ describe('ReferralsService', () => {
     expect(fake.history.map((entry) => entry.action)).toEqual(['CREATED']);
   });
 
+  it.each(['INATIVO', 'CANCELADO'] as const)(
+    'rejects a manual referral targeting a %s reference',
+    async (status) => {
+      const fake = createReferralPrisma();
+      const service = new ReferralsService(fake.prisma as never);
+      fake.clientReferences[1]!.status = status;
+
+      await expect(
+        service.createManual(
+          {
+            referredClientId: fake.clients[1]!.id,
+            referredClientReferenceId: fake.clientReferences[1]!.id,
+            referrerClientId: fake.clients[0]!.id,
+            rewardType: 'FREE_MONTH',
+          },
+          actorUserId,
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(fake.referrals).toHaveLength(0);
+    },
+  );
+
   it('qualifies a manual referral from prior paid initial activation evidence only', async () => {
     const fake = createReferralPrisma();
     const service = new ReferralsService(fake.prisma as never);
@@ -671,6 +759,7 @@ describe('ReferralsService', () => {
     fake.receivables.push({
       id: 'initial-paid',
       clientId: fake.clients[1]!.id,
+      clientReferenceId: fake.clientReferences[1]!.id,
       purpose: 'INITIAL_ACTIVATION',
       status: 'PAGO',
       paidAt: new Date('2026-09-10T00:00:00.000Z'),
@@ -681,6 +770,7 @@ describe('ReferralsService', () => {
     const referral = await service.createManual(
       {
         referredClientId: fake.clients[1]!.id,
+        referredClientReferenceId: fake.clientReferences[1]!.id,
         referrerClientId: fake.clients[0]!.id,
         rewardType: 'FREE_MONTH',
       },
@@ -701,6 +791,7 @@ describe('ReferralsService', () => {
     fake.receivables.push({
       id: 'renewal-paid',
       clientId: fake.clients[1]!.id,
+      clientReferenceId: fake.clientReferences[1]!.id,
       purpose: 'RENEWAL',
       status: 'PAGO',
       clientReference: fake.clientReferences[1]!,
@@ -709,6 +800,7 @@ describe('ReferralsService', () => {
     const referral = await service.createManual(
       {
         referredClientId: fake.clients[1]!.id,
+        referredClientReferenceId: fake.clientReferences[1]!.id,
         referrerClientId: fake.clients[0]!.id,
         rewardType: 'FREE_MONTH',
       },
@@ -723,6 +815,7 @@ describe('ReferralsService', () => {
     const service = new ReferralsService(fake.prisma as never);
     const created = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
       actorUserId,
     });
@@ -767,6 +860,7 @@ describe('ReferralsService', () => {
       const service = new ReferralsService(fake.prisma as never);
       const created = await service.createPending(fake.prisma as never, {
         referredClientId: fake.clients[1]!.id,
+        referredClientReferenceId: fake.clientReferences[1]!.id,
         referrerClientId: fake.clients[0]!.id,
       });
       fake.referrals[0]!.status = status;
@@ -792,17 +886,20 @@ describe('ReferralsService', () => {
     await expect(
       service.createPending(fake.prisma as never, {
         referredClientId: fake.clients[0]!.id,
+        referredClientReferenceId: fake.clientReferences[0]!.id,
         referrerClientId: fake.clients[0]!.id,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
     });
     await expect(
       service.createPending(fake.prisma as never, {
         referredClientId: fake.clients[1]!.id,
+        referredClientReferenceId: fake.clientReferences[1]!.id,
         referrerClientId: fake.clients[2]!.id,
       }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -814,17 +911,20 @@ describe('ReferralsService', () => {
 
     await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
     });
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'receivable-1',
       actorUserId,
     );
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'receivable-1',
       actorUserId,
     );
@@ -839,11 +939,13 @@ describe('ReferralsService', () => {
 
     const created = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
     });
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'receivable-1',
       actorUserId,
     );
@@ -883,11 +985,13 @@ describe('ReferralsService', () => {
 
     const created = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
     });
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'receivable-1',
       actorUserId,
     );
@@ -936,11 +1040,13 @@ describe('ReferralsService', () => {
 
     const created = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[2]!.id,
     });
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'receivable-1',
       actorUserId,
     );
@@ -962,11 +1068,13 @@ describe('ReferralsService', () => {
 
     await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
     });
-    await service.cancelPendingForClientBeforePayment(
+    await service.cancelPendingForReferenceBeforePayment(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'Desistiu antes de pagar.',
       actorUserId,
     );
@@ -978,17 +1086,52 @@ describe('ReferralsService', () => {
     expect(fake.events.some((event) => event.type === 'REFERRAL_CANCELED')).toBe(true);
   });
 
+  it('cancels only the referral for the canceled reference', async () => {
+    const fake = createReferralPrisma();
+    const service = new ReferralsService(fake.prisma as never);
+    const secondReference = {
+      ...fake.clientReferences[1]!,
+      id: 'ref-joao-second',
+      reference: 'JOA-002',
+    };
+    fake.clientReferences.push(secondReference);
+
+    await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
+      referrerClientId: fake.clients[0]!.id,
+    });
+    await service.createPending(fake.prisma as never, {
+      referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: secondReference.id,
+      referrerClientId: fake.clients[2]!.id,
+    });
+
+    await service.cancelPendingForReferenceBeforePayment(
+      fake.prisma as never,
+      fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
+      'Primeira referencia cancelada.',
+      actorUserId,
+    );
+
+    expect(fake.referrals[0]).toMatchObject({ status: 'CANCELED' });
+    expect(fake.referrals[1]).toMatchObject({ status: 'PENDING' });
+  });
+
   it('cancels pending and qualified referrals once with actor, reason and conditional status', async () => {
     const fake = createReferralPrisma();
     const service = new ReferralsService(fake.prisma as never);
     const created = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
       actorUserId,
     });
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'initial-paid',
       actorUserId,
     );
@@ -1032,11 +1175,13 @@ describe('ReferralsService', () => {
     const service = new ReferralsService(fake.prisma as never);
     const created = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
     });
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'initial-paid',
       actorUserId,
     );
@@ -1063,6 +1208,7 @@ describe('ReferralsService', () => {
 
     const credit = await service.createPending(fake.prisma as never, {
       referredClientId: fake.clients[1]!.id,
+      referredClientReferenceId: fake.clientReferences[1]!.id,
       referrerClientId: fake.clients[0]!.id,
       rewardType: 'CREDIT',
       rewardValue: 25,
@@ -1070,6 +1216,7 @@ describe('ReferralsService', () => {
     await service.qualifyAfterInitialActivation(
       fake.prisma as never,
       fake.clients[1]!.id,
+      fake.clientReferences[1]!.id,
       'receivable-1',
       actorUserId,
     );
@@ -1079,6 +1226,7 @@ describe('ReferralsService', () => {
     await expect(
       service.createPending(fake.prisma as never, {
         referredClientId: fake.clients[2]!.id,
+        referredClientReferenceId: fake.clientReferences[2]!.id,
         referrerClientId: fake.clients[0]!.id,
         rewardType: 'CUSTOM',
       }),

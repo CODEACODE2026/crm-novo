@@ -10,6 +10,7 @@ type ReconciliationTx = Prisma.TransactionClient | PrismaService;
 type ReferralForReconciliation = Prisma.ReferralGetPayload<{
   include: {
     referredClient: { include: { references: true } };
+    referredClientReference: true;
     referrerClient: { include: { references: true } };
     rewardClientReference: true;
   };
@@ -81,6 +82,7 @@ export class ReferralReconciliationService {
       await this.referralsService.qualifyAfterInitialActivation(
         tx,
         referral.referredClientId,
+        referral.referredClientReferenceId!,
         candidate.initialActivationReceivableId,
         actorUserId,
       );
@@ -112,6 +114,7 @@ export class ReferralReconciliationService {
       where: { status: 'PENDING' },
       include: {
         referredClient: { include: { references: true } },
+        referredClientReference: true,
         referrerClient: { include: { references: true } },
         rewardClientReference: true,
       },
@@ -125,6 +128,7 @@ export class ReferralReconciliationService {
       where: { id: referralId },
       include: {
         referredClient: { include: { references: true } },
+        referredClientReference: true,
         referrerClient: { include: { references: true } },
         rewardClientReference: true,
       },
@@ -138,16 +142,39 @@ export class ReferralReconciliationService {
   }
 
   private async inspectReferral(tx: ReconciliationTx, referral: ReferralForReconciliation) {
+    if (!referral.referredClientReferenceId || !referral.referredClientReference) {
+      return {
+        referralId: referral.id,
+        referrer: {
+          id: referral.referrerClient.id,
+          name: referral.referrerClient.name,
+          reference: referral.referrerClient.reference,
+        },
+        referred: {
+          id: referral.referredClient.id,
+          name: referral.referredClient.name,
+          reference: referral.referredClient.reference,
+        },
+        referralStatus: referral.status,
+        rewardType: referral.rewardType,
+        clientReference: null,
+        referenceStatus: null,
+        initialActivationReceivableId: null,
+        paymentStatus: null,
+        paidAt: null,
+        eligible: false,
+        reason: 'Indicacao legada sem referencia indicada; associacao automatica bloqueada.',
+      } satisfies ReferralReconciliationRow;
+    }
+
     const eligibility = await inspectReferralQualificationEvidence(
       tx,
       referral.status,
       referral.referredClientId,
+      referral.referredClientReferenceId,
     );
     const receivable = eligibility.receivable;
-    const reference =
-      receivable?.clientReference ??
-      referral.referredClient.references.find((item) => item.status === 'ATIVO') ??
-      null;
+    const reference = referral.referredClientReference;
     return {
       referralId: referral.id,
       referrer: {

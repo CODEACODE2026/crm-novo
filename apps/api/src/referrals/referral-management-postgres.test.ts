@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { parseBusinessDate } from '../clients/utils/business-date';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
+import { ReferralReconciliationService } from './referral-reconciliation.service';
 import { ReferralsService } from './referrals.service';
 
 const runDatabaseTests = process.env.RUN_DATABASE_TESTS === '1';
@@ -138,17 +139,9 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
   it('serializes manual creation behind an in-flight initial payment and still qualifies once', async () => {
     const fixture = await createFixture();
     await prisma.referral.delete({ where: { id: fixture.referralId } });
-    const referredReference = await prisma.clientReference.create({
-      data: {
-        clientId: fixture.referredClientId,
-        reference: `PAY-${randomUUID()}`,
-        planId: fixture.planId,
-        recurringValue: 100,
-        dueDate: parseBusinessDate('2026-01-31'),
-        billingAnchorDay: 31,
-        billingNoticeDays: 3,
-        status: 'PENDENTE_PAGAMENTO',
-      },
+    const referredReference = await prisma.clientReference.update({
+      where: { id: fixture.referredClientReferenceId },
+      data: { status: 'PENDENTE_PAGAMENTO' },
     });
     const receivable = await prisma.receivable.create({
       data: {
@@ -183,6 +176,7 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
       await service.qualifyAfterInitialActivation(
         tx,
         fixture.referredClientId,
+        referredReference.id,
         receivable.id,
         fixture.actorId,
       );
@@ -196,6 +190,7 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
       .createManual(
         {
           referredClientId: fixture.referredClientId,
+          referredClientReferenceId: referredReference.id,
           referrerClientId: fixture.referrerClientId,
           rewardType: 'FREE_MONTH',
         },
@@ -219,14 +214,236 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
       }),
     ).resolves.toBe(0);
     const createdReferral = await prisma.referral.findUniqueOrThrow({
-      where: { referredClientId: fixture.referredClientId },
+      where: { referredClientReferenceId: referredReference.id },
       include: { history: true },
     });
     expect(createdReferral.history.map((entry) => entry.action)).toEqual(['CREATED', 'QUALIFIED']);
   });
 
+  it('allows independent referrals for different references and rejects a duplicate target', async () => {
+    const fixture = await createFixture();
+    const secondReference = await createReferredReference(fixture, 'SECOND');
+
+    await expect(
+      prisma.referral.create({
+        data: {
+          referredClientId: fixture.referredClientId,
+          referredClientReferenceId: secondReference.id,
+          referrerClientId: fixture.referrerClientId,
+          rewardType: 'CREDIT',
+          rewardValue: 10,
+          createdByUserId: fixture.actorId,
+        },
+      }),
+    ).resolves.toMatchObject({ referredClientReferenceId: secondReference.id });
+
+    await expect(
+      prisma.referral.create({
+        data: {
+          referredClientId: fixture.referredClientId,
+          referredClientReferenceId: secondReference.id,
+          referrerClientId: fixture.referrerClientId,
+          rewardType: 'CUSTOM',
+          rewardDescription: 'Duplicada',
+          createdByUserId: fixture.actorId,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  it('allows only one winner when two manual creations target the same reference', async () => {
+    const fixture = await createFixture();
+    await prisma.referral.delete({ where: { id: fixture.referralId } });
+    const service = createService();
+    const payload = {
+      referredClientId: fixture.referredClientId,
+      referredClientReferenceId: fixture.referredClientReferenceId,
+      referrerClientId: fixture.referrerClientId,
+      rewardType: 'FREE_MONTH' as const,
+    };
+
+    const outcomes = await Promise.allSettled([
+      service.createManual(payload, fixture.actorId),
+      service.createManual(payload, fixture.actorId),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    await expect(
+      prisma.referral.count({
+        where: { referredClientReferenceId: fixture.referredClientReferenceId },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.referralHistory.count({
+        where: {
+          referral: { referredClientReferenceId: fixture.referredClientReferenceId },
+          action: 'CREATED',
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it('keeps a canceled referral occupying its exact reference', async () => {
+    const fixture = await createFixture();
+    const service = createService();
+
+    await service.cancel(
+      fixture.referralId,
+      { reason: 'Cancelamento preserva a referencia.' },
+      fixture.actorId,
+    );
+
+    await expect(
+      service.createManual(
+        {
+          referredClientId: fixture.referredClientId,
+          referredClientReferenceId: fixture.referredClientReferenceId,
+          referrerClientId: fixture.referrerClientId,
+          rewardType: 'FREE_MONTH',
+        },
+        fixture.actorId,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('cancels only the referral attached to the requested reference', async () => {
+    const fixture = await createFixture();
+    await prisma.referral.update({
+      where: { id: fixture.referralId },
+      data: { status: 'PENDING', qualifiedAt: null },
+    });
+    const otherReference = await createReferredReference(fixture, 'ISOLATED-CANCEL');
+    const otherReferral = await prisma.referral.create({
+      data: {
+        referredClientId: fixture.referredClientId,
+        referredClientReferenceId: otherReference.id,
+        referrerClientId: fixture.referrerClientId,
+        status: 'PENDING',
+        rewardType: 'FREE_MONTH',
+        createdByUserId: fixture.actorId,
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      createService().cancelPendingForReferenceBeforePayment(
+        tx,
+        fixture.referredClientId,
+        fixture.referredClientReferenceId,
+        'Referencia cancelada.',
+        fixture.actorId,
+      ),
+    );
+
+    await expect(
+      prisma.referral.findUniqueOrThrow({ where: { id: fixture.referralId } }),
+    ).resolves.toMatchObject({ status: 'CANCELED' });
+    await expect(
+      prisma.referral.findUniqueOrThrow({ where: { id: otherReferral.id } }),
+    ).resolves.toMatchObject({ status: 'PENDING' });
+  });
+
+  it('enforces reference deletion protection at the database boundary', async () => {
+    const fixture = await createFixture();
+
+    await expect(
+      prisma.clientReference.delete({ where: { id: fixture.referredClientReferenceId } }),
+    ).rejects.toMatchObject({ code: 'P2003' });
+  });
+
+  it('rejects a reference target that belongs to another client', async () => {
+    const fixture = await createFixture();
+
+    await expect(
+      prisma.referral.create({
+        data: {
+          referredClientId: fixture.referredClientId,
+          referredClientReferenceId: fixture.referrerReferenceId,
+          referrerClientId: fixture.referrerClientId,
+          rewardType: 'FREE_MONTH',
+          createdByUserId: fixture.actorId,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'P2003' });
+  });
+
+  it('does not qualify a referral with payment from another reference of the same client', async () => {
+    const fixture = await createFixture();
+    await prisma.referral.update({
+      where: { id: fixture.referralId },
+      data: { status: 'PENDING', qualifiedAt: null },
+    });
+    const otherReference = await createReferredReference(fixture, 'OTHER');
+    await prisma.receivable.create({
+      data: {
+        clientId: fixture.referredClientId,
+        clientReferenceId: otherReference.id,
+        purpose: 'INITIAL_ACTIVATION',
+        description: 'Other reference activation',
+        amount: 100,
+        dueDate: parseBusinessDate('2026-01-31'),
+        status: 'PAGO',
+        paidAt: parseBusinessDate('2026-01-31'),
+      },
+    });
+    const referrals = createService();
+    const reconciliation = new ReferralReconciliationService(prisma as never, referrals);
+
+    await expect(reconciliation.apply(fixture.referralId, fixture.actorId)).resolves.toMatchObject({
+      applied: false,
+      candidate: { eligible: false, initialActivationReceivableId: null },
+    });
+    await expect(
+      prisma.referral.findUniqueOrThrow({ where: { id: fixture.referralId } }),
+    ).resolves.toMatchObject({ status: 'PENDING', qualificationReceivableId: null });
+  });
+
+  it('blocks a new targeted referral while an unresolved legacy referral is pending', async () => {
+    const fixture = await createFixture();
+    await prisma.referral.delete({ where: { id: fixture.referralId } });
+    await prisma.referral.create({
+      data: {
+        referredClientId: fixture.referredClientId,
+        referrerClientId: fixture.referrerClientId,
+        status: 'PENDING',
+        rewardType: 'FREE_MONTH',
+        createdByUserId: fixture.actorId,
+      },
+    });
+
+    await expect(
+      createService().createManual(
+        {
+          referredClientId: fixture.referredClientId,
+          referredClientReferenceId: fixture.referredClientReferenceId,
+          referrerClientId: fixture.referrerClientId,
+          rewardType: 'FREE_MONTH',
+        },
+        fixture.actorId,
+      ),
+    ).rejects.toThrow('Cliente possui indicacao legada pendente sem referencia definida.');
+  });
+
   function createService() {
     return new ReferralsService(prisma as never, new ReceivableCycleService(prisma as never));
+  }
+
+  async function createReferredReference(
+    fixture: Awaited<ReturnType<typeof createFixture>>,
+    label: string,
+  ) {
+    return prisma.clientReference.create({
+      data: {
+        clientId: fixture.referredClientId,
+        reference: `${label}-${randomUUID()}`,
+        planId: fixture.planId,
+        recurringValue: 100,
+        dueDate: parseBusinessDate('2026-01-31'),
+        billingAnchorDay: 31,
+        billingNoticeDays: 3,
+        status: 'ATIVO',
+      },
+    });
   }
 
   async function createFixture(options: { rewardType?: 'CREDIT' | 'FREE_MONTH' } = {}) {
@@ -261,9 +478,22 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
         status: 'ATIVO',
       },
     });
+    const referredReference = await prisma.clientReference.create({
+      data: {
+        clientId: referred.id,
+        reference: referred.reference,
+        planId: plan.id,
+        recurringValue: 100,
+        dueDate: parseBusinessDate('2026-01-31'),
+        billingAnchorDay: 31,
+        billingNoticeDays: 3,
+        status: 'ATIVO',
+      },
+    });
     const referral = await prisma.referral.create({
       data: {
         referredClientId: referred.id,
+        referredClientReferenceId: referredReference.id,
         referrerClientId: referrer.id,
         status: 'QUALIFIED',
         rewardType: options.rewardType ?? 'CREDIT',
@@ -278,6 +508,7 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
       planId: plan.id,
       referralId: referral.id,
       referredClientId: referred.id,
+      referredClientReferenceId: referredReference.id,
       referrerClientId: referrer.id,
       referrerReferenceId: referrerReference.id,
     };

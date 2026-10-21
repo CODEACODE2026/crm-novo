@@ -6,11 +6,13 @@ type ReferralQualificationTx = Prisma.TransactionClient | PrismaService;
 export async function lockReferralInitialActivationEvidence(
   tx: ReferralQualificationTx,
   referredClientId: string,
+  referredClientReferenceId: string,
 ) {
   await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT "id"
     FROM "receivables"
     WHERE "clientId" = ${referredClientId}::uuid
+      AND "clientReferenceId" = ${referredClientReferenceId}::uuid
       AND "purpose" = 'INITIAL_ACTIVATION'
     ORDER BY "createdAt" ASC
     FOR UPDATE
@@ -21,28 +23,21 @@ export async function inspectReferralQualificationEvidence(
   tx: ReferralQualificationTx,
   referralStatus: ReferralStatus,
   referredClientId: string,
+  referredClientReferenceId: string,
 ) {
-  const paidActiveReceivable = await tx.receivable.findFirst({
+  const receivables = await tx.receivable.findMany({
     where: {
       clientId: referredClientId,
+      clientReferenceId: referredClientReferenceId,
       purpose: 'INITIAL_ACTIVATION',
-      status: 'PAGO',
-      clientReference: { status: 'ATIVO' },
     },
     include: { clientReference: true },
     orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }],
   });
-
-  const receivable =
-    paidActiveReceivable ??
-    (await tx.receivable.findFirst({
-      where: {
-        clientId: referredClientId,
-        purpose: 'INITIAL_ACTIVATION',
-      },
-      include: { clientReference: true },
-      orderBy: [{ createdAt: 'asc' }],
-    }));
+  const eligibleReceivables = receivables.filter(
+    (receivable) => receivable.status === 'PAGO' && receivable.clientReference?.status === 'ATIVO',
+  );
+  const receivable = eligibleReceivables[0] ?? receivables[0] ?? null;
 
   if (referralStatus !== 'PENDING') {
     return {
@@ -55,7 +50,15 @@ export async function inspectReferralQualificationEvidence(
   if (!receivable) {
     return {
       eligible: false,
-      reason: 'Nao ha INITIAL_ACTIVATION do cliente indicado vinculada a ClientReference.',
+      reason: 'Nao ha INITIAL_ACTIVATION vinculada a referencia indicada.',
+      receivable: null,
+    };
+  }
+
+  if (eligibleReceivables.length > 1) {
+    return {
+      eligible: false,
+      reason: 'Ha mais de uma INITIAL_ACTIVATION paga para a referencia indicada.',
       receivable: null,
     };
   }
@@ -78,7 +81,8 @@ export async function inspectReferralQualificationEvidence(
 
   return {
     eligible: true,
-    reason: 'Referral PENDING com INITIAL_ACTIVATION PAGO e ClientReference ATIVO.',
+    reason:
+      'Referral PENDING com INITIAL_ACTIVATION PAGO da referencia indicada e ClientReference ATIVO.',
     receivable,
   };
 }

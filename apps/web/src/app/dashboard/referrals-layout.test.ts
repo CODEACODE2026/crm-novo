@@ -29,7 +29,7 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(stylesSource).toContain('.referrals-workspace');
   });
 
-  it('keeps the toolbar and table bound to existing referral fields only', () => {
+  it('keeps the table compact while identifying the exact referred reference', () => {
     expect(dashboardSource).toContain('placeholder="Buscar indicador ou indicado"');
     expect(dashboardSource).toContain('aria-label="Status da indicação"');
     expect(dashboardSource).toContain('aria-label="Indicador"');
@@ -39,6 +39,11 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('<th className="finance-status-column">Status</th>');
     expect(dashboardSource).toContain('<th>Benefício</th>');
     expect(dashboardSource).toContain('function ReferralClientCell');
+    expect(dashboardSource).toContain('targetReference={referral.referredClientReference}');
+    expect(dashboardSource).toContain("'Indicação legada — referência não identificada'");
+    expect(dashboardSource).toContain(
+      "['Referência indicada', referralReferenceLabel(referral.referredClientReference)]",
+    );
     expect(dashboardSource).not.toContain('referral-client-role');
     expect(dashboardSource).not.toContain('Referência do indicador</th>');
     expect(dashboardSource).not.toContain('referência que indicou');
@@ -187,6 +192,15 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain("management.mode === 'create'");
     expect(dashboardSource).toContain("referral.status === 'PENDING'");
     expect(dashboardSource).toContain('O cliente indicado permanece imutável.');
+    expect(dashboardSource).toContain('referredClientReferenceId');
+    expect(dashboardSource).toContain('listClientReferences(referredClientId)');
+    expect(dashboardSource).toContain('Selecione a referência específica do cliente indicado.');
+    expect(dashboardSource).toContain("mode === 'create' && !referredClientReferenceId");
+    expect(dashboardSource).toContain("setReferredClientReferenceId('')");
+    expect(dashboardSource).toContain("['PENDENTE_PAGAMENTO', 'ATIVO'].includes(reference.status)");
+    expect(dashboardSource).toContain(
+      'value={referralReferenceLabel(referral?.referredClientReference)}',
+    );
     expect(dashboardSource).toContain('expectedUpdatedAt: management.referral.updatedAt');
     expect(apiSource).toContain("return apiFetch<Referral>('/referrals'");
     expect(apiSource).toContain("method: 'PATCH'");
@@ -225,9 +239,13 @@ describe('referrals UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('client-referrals-panel');
     expect(dashboardSource).toContain('Indicação recebida');
     expect(dashboardSource).toContain('Indicações feitas');
+    expect(dashboardSource).toContain('clientReceivedReferrals(selectedClient).map');
+    expect(dashboardSource).toContain('referralReferenceLabel(referral.referredClientReference)');
     expect(dashboardSource).toContain('Este cliente não possui indicação recebida.');
     expect(dashboardSource).toContain('Nenhuma indicação realizada.');
     expect(dashboardSource).toContain('client-referral-summary');
+    expect(apiSource).toContain('referralsReceived?: ClientReferralReceived[];');
+    expect(apiSource).toContain('referredClientReference: ReferralTargetReference | null;');
     expect(stylesSource).toContain('.client-referral-section');
   });
 

@@ -392,7 +392,7 @@ model Client {
   whatsappInboundMessages WhatsAppInboundMessage[]
   whatsappConversations   WhatsAppConversation[]
   whatsappAttendances     WhatsAppAttendance[]
-  referralReceived        Referral?                     @relation("ReferralReferredClient")
+  referralsReceived       Referral[]                    @relation("ReferralReferredClient")
   referralsMade           Referral[]                    @relation("ReferralReferrerClient")
 
   @@index([status])
@@ -436,7 +436,9 @@ model ClientReference {
   financialTransactions FinancialTransaction[]
   statusHistory         ClientStatusHistory[]
   rewardedReferrals     Referral[]                    @relation("ReferralRewardClientReference")
+  referredReferrals     Referral[]                    @relation("ReferralReferredClientReference")
 
+  @@unique([id, clientId])
   @@index([clientId])
   @@index([planId])
   @@index([status])
@@ -1119,7 +1121,7 @@ model Receivable {
   paymentIntents             PaymentIntent[]
   billingResponses           BillingResponse[]
   auditEvents                ReceivableAuditEvent[]
-  qualifiedReferrals         Referral[]                   @relation("ReferralQualificationReceivable")
+  qualifiedReferral          Referral?                    @relation("ReferralQualificationReceivable")
 
   @@index([clientId])
   @@index([clientReferenceId])
@@ -1365,7 +1367,8 @@ model FinancialTransaction {
 
 model Referral {
   id                        String             @id @default(uuid()) @db.Uuid
-  referredClientId          String             @unique @db.Uuid
+  referredClientId          String             @db.Uuid
+  referredClientReferenceId String?            @unique @db.Uuid
   referrerClientId          String             @db.Uuid
   status                    ReferralStatus     @default(PENDING)
   rewardType                ReferralRewardType @default(FREE_MONTH)
@@ -1379,12 +1382,13 @@ model Referral {
   appliedPreviousDueDate    DateTime?          @db.Date
   appliedNewDueDate         DateTime?          @db.Date
   rewardClientReferenceId   String?            @db.Uuid
-  qualificationReceivableId String?            @db.Uuid
+  qualificationReceivableId String?            @unique @db.Uuid
   createdByUserId           String?            @db.Uuid
   canceledByUserId          String?            @db.Uuid
   createdAt                 DateTime           @default(now())
   updatedAt                 DateTime           @updatedAt
   referredClient            Client             @relation("ReferralReferredClient", fields: [referredClientId], references: [id], onDelete: Restrict)
+  referredClientReference   ClientReference?   @relation("ReferralReferredClientReference", fields: [referredClientReferenceId, referredClientId], references: [id, clientId], onDelete: Restrict)
   referrerClient            Client             @relation("ReferralReferrerClient", fields: [referrerClientId], references: [id], onDelete: Restrict)
   rewardClientReference     ClientReference?   @relation("ReferralRewardClientReference", fields: [rewardClientReferenceId], references: [id], onDelete: SetNull)
   qualificationReceivable   Receivable?        @relation("ReferralQualificationReceivable", fields: [qualificationReceivableId], references: [id], onDelete: SetNull)
@@ -1393,11 +1397,11 @@ model Referral {
   history                   ReferralHistory[]
 
   @@index([referrerClientId])
+  @@index([referredClientId])
   @@index([status])
   @@index([rewardType])
   @@index([origin])
   @@index([rewardClientReferenceId])
-  @@index([qualificationReceivableId])
   @@index([canceledByUserId])
   @@index([createdAt])
   @@index([qualifiedAt])

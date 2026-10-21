@@ -6,6 +6,7 @@ import { ReferralReconciliationService } from './referral-reconciliation.service
 type TestReferral = {
   id: string;
   referredClientId: string;
+  referredClientReferenceId: string | null;
   referrerClientId: string;
   status: 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
   rewardType: 'FREE_MONTH';
@@ -43,14 +44,13 @@ type ReconciliationTestTx = {
     }) => Promise<{ count: number }>;
   };
   receivable: {
-    findFirst: (args: {
+    findMany: (args: {
       where: {
         clientId: string;
+        clientReferenceId: string;
         purpose: string;
-        status?: string;
-        clientReference?: { status: string };
       };
-    }) => Promise<unknown>;
+    }) => Promise<unknown[]>;
   };
   clientEvent: {
     createMany: (args: { data: Array<Record<string, unknown>> }) => Promise<{ count: number }>;
@@ -86,6 +86,7 @@ function createReconciliationFixture() {
     {
       id: 'referral-id',
       referredClientId: 'referred-id',
+      referredClientReferenceId: 'reference-id',
       referrerClientId: 'referrer-id',
       status: 'PENDING',
       rewardType: 'FREE_MONTH',
@@ -138,6 +139,8 @@ function createReconciliationFixture() {
       ),
     },
     rewardClientReference: null,
+    referredClientReference:
+      references.find((reference) => reference.id === referral.referredClientReferenceId) ?? null,
   });
 
   const tx: ReconciliationTestTx = {
@@ -175,38 +178,31 @@ function createReconciliationFixture() {
       },
     },
     receivable: {
-      findFirst: ({
+      findMany: ({
         where,
       }: {
         where: {
           clientId: string;
+          clientReferenceId: string;
           purpose: string;
-          status?: string;
-          clientReference?: { status: string };
         };
       }) => {
-        const receivable =
-          receivables.find((item) => {
-            const reference = references.find(
-              (candidate) => candidate.id === item.clientReferenceId,
-            );
-            return (
-              item.clientId === where.clientId &&
-              item.purpose === where.purpose &&
-              (!where.status || item.status === where.status) &&
-              (!where.clientReference || reference?.status === where.clientReference.status)
-            );
-          }) ?? null;
+        const matches = receivables.filter((item) => {
+          const reference = references.find((candidate) => candidate.id === item.clientReferenceId);
+          return (
+            item.clientId === where.clientId &&
+            item.clientReferenceId === where.clientReferenceId &&
+            item.purpose === where.purpose &&
+            Boolean(reference)
+          );
+        });
 
         return Promise.resolve(
-          receivable
-            ? {
-                ...receivable,
-                clientReference: references.find(
-                  (item) => item.id === receivable.clientReferenceId,
-                )!,
-              }
-            : null,
+          matches.map((receivable) => ({
+            ...receivable,
+            clientReference: references.find((item) => item.id === receivable.clientReferenceId)!,
+            createdAt: receivable.dueDate,
+          })),
         );
       },
     },
@@ -224,10 +220,15 @@ function createReconciliationFixture() {
       async (
         transaction: typeof tx,
         referredClientId: string,
+        referredClientReferenceId: string,
         receivableId: string,
         actorUserId: string | null,
       ) => {
-        const referral = referrals.find((item) => item.referredClientId === referredClientId);
+        const referral = referrals.find(
+          (item) =>
+            item.referredClientId === referredClientId &&
+            item.referredClientReferenceId === referredClientReferenceId,
+        );
         if (!referral || referral.status !== 'PENDING') return null;
         referral.status = 'QUALIFIED';
         referral.qualifiedAt = new Date('2026-09-17T00:00:00.000Z');
@@ -347,6 +348,7 @@ describe('ReferralReconciliationService', () => {
     expect(fake.referralsService.qualifyAfterInitialActivation).toHaveBeenCalledWith(
       fake.prisma,
       'referred-id',
+      'reference-id',
       'initial-paid-id',
       'actor-id',
     );

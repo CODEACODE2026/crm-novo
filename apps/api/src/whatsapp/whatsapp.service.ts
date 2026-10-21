@@ -3517,6 +3517,7 @@ export class WhatsAppService {
 
         await this.referralsService?.createPending(tx, {
           referredClientId: created.id,
+          referredClientReferenceId: clientReference.id,
           referrerClientId: dto.referrerClientId,
           rewardType: dto.referralRewardType,
           rewardValue: dto.referralRewardValue,

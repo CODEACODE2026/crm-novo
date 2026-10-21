@@ -3226,9 +3226,14 @@ export class FinanceService {
       throw new ConflictException('Servico de indicacoes indisponivel para qualificar indicacao.');
     }
 
+    if (!receivable.clientReferenceId) {
+      return;
+    }
+
     await this.referralsService.qualifyAfterInitialActivation(
       tx,
       receivable.clientId!,
+      receivable.clientReferenceId,
       receivableId,
       actorUserId,
     );

@@ -9552,6 +9552,12 @@ tbody tr:hover,
   margin: 0;
 }
 
+.referral-client-cell small {
+  color: var(--info);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .referrals-table .empty-state {
   display: grid;
   justify-items: center;
@@ -9628,6 +9634,55 @@ tbody tr:hover,
 .referral-management-description textarea {
   min-height: 88px;
   resize: vertical;
+}
+
+.referral-target-reference {
+  grid-column: 1 / -1;
+}
+
+.reference-referral-origin {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.reference-referral-origin > div:first-child,
+.reference-referral-fields {
+  display: grid;
+  gap: 6px;
+}
+
+.reference-referral-origin > div:first-child span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.reference-origin-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reference-origin-options label {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 3%);
+  padding: 8px 10px;
+}
+
+.reference-referral-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.reference-referral-fields .field-help {
+  grid-column: 1 / -1;
 }
 
 .referral-detail-grid {
@@ -17820,6 +17875,23 @@ tbody tr:hover,
 
   .referral-management-description {
     grid-column: auto;
+  }
+
+  .referral-target-reference {
+    grid-column: auto;
+  }
+
+  .reference-referral-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .reference-referral-fields .field-help {
+    grid-column: auto;
+  }
+
+  .reference-origin-options {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .referral-management-modal {

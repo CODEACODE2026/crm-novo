@@ -184,6 +184,7 @@ import {
   ignoreWhatsAppPendingContact,
   listFinancialCategories,
   listClients,
+  listClientReferences,
   listFinancialTransactions,
   listPaymentProviderCredentials,
   listPlans,
@@ -4624,7 +4625,10 @@ function ReferralsView({ clients }: { clients: Client[] }) {
               {items.map((referral) => (
                 <tr key={referral.id}>
                   <td>
-                    <ReferralClientCell client={referral.referredClient} />
+                    <ReferralClientCell
+                      client={referral.referredClient}
+                      targetReference={referral.referredClientReference}
+                    />
                   </td>
                   <td>
                     <ReferralClientCell client={referral.referrerClient} />
@@ -4812,6 +4816,7 @@ function ReferralsView({ clients }: { clients: Client[] }) {
 
 type ReferralManagementPayload = {
   referredClientId: string;
+  referredClientReferenceId: string;
   referrerClientId: string;
   rewardType: ReferralRewardType;
   rewardValue?: number;
@@ -4834,6 +4839,12 @@ function ReferralManagementModal({
   onSubmit: (payload: ReferralManagementPayload) => void;
 }) {
   const [referredClientId, setReferredClientId] = useState(referral?.referredClientId ?? '');
+  const [referredClientReferenceId, setReferredClientReferenceId] = useState(
+    referral?.referredClientReferenceId ?? '',
+  );
+  const [referredClientReferences, setReferredClientReferences] = useState<ClientReference[]>([]);
+  const [referencesLoading, setReferencesLoading] = useState(false);
+  const [referencesError, setReferencesError] = useState('');
   const [referrerClientId, setReferrerClientId] = useState(referral?.referrerClientId ?? '');
   const [rewardType, setRewardType] = useState<ReferralRewardType>(
     referral?.rewardType ?? 'FREE_MONTH',
@@ -4846,12 +4857,56 @@ function ReferralManagementModal({
     [referral],
   );
 
+  useEffect(() => {
+    if (mode !== 'create' || !referredClientId) {
+      setReferredClientReferences([]);
+      setReferencesLoading(false);
+      setReferencesError('');
+      return;
+    }
+
+    let active = true;
+    setReferredClientReferenceId('');
+    setReferredClientReferences([]);
+    setReferencesLoading(true);
+    setReferencesError('');
+
+    void listClientReferences(referredClientId)
+      .then((references) => {
+        if (!active) return;
+        setReferredClientReferences(
+          references.filter((reference) =>
+            ['PENDENTE_PAGAMENTO', 'ATIVO'].includes(reference.status),
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setReferencesError(
+          error instanceof Error
+            ? error.message
+            : 'Não foi possível carregar as referências do cliente indicado.',
+        );
+      })
+      .finally(() => {
+        if (active) setReferencesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [mode, referredClientId]);
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setValidationError('');
 
     if (!referredClientId || !referrerClientId) {
       setValidationError('Selecione o cliente indicador e o cliente indicado.');
+      return;
+    }
+    if (mode === 'create' && !referredClientReferenceId) {
+      setValidationError('Selecione a referência específica do cliente indicado.');
       return;
     }
     if (referredClientId === referrerClientId) {
@@ -4873,6 +4928,7 @@ function ReferralManagementModal({
 
     onSubmit({
       referredClientId,
+      referredClientReferenceId,
       referrerClientId,
       rewardType,
       ...(rewardType === 'CREDIT' ? { rewardValue: Number(rewardValue) } : {}),
@@ -4933,13 +4989,56 @@ function ReferralManagementModal({
                   label="Cliente indicado"
                   placeholder="Pesquisar indicado"
                   value={referredClientId}
-                  onChange={setReferredClientId}
+                  onChange={(clientId) => {
+                    setReferredClientId(clientId);
+                    setReferredClientReferenceId('');
+                  }}
                 />
               </div>
             ) : (
               <label className="field">
                 <span>Indicado</span>
                 <input disabled value={referral?.referredClient.name ?? ''} />
+              </label>
+            )}
+
+            {mode === 'create' ? (
+              <label className="field referral-target-reference">
+                <span>Referência indicada</span>
+                <select
+                  required
+                  disabled={!referredClientId || referencesLoading}
+                  value={referredClientReferenceId}
+                  onChange={(event) => setReferredClientReferenceId(event.target.value)}
+                >
+                  <option value="">
+                    {referencesLoading
+                      ? 'Carregando referências...'
+                      : referredClientId
+                        ? 'Selecione a referência'
+                        : 'Selecione primeiro o cliente indicado'}
+                  </option>
+                  {referredClientReferences.map((clientReference) => (
+                    <option key={clientReference.id} value={clientReference.id}>
+                      {clientReference.reference} · {clientReference.plan.name} ·{' '}
+                      {clientStatusLabel(clientReference.status)}
+                    </option>
+                  ))}
+                </select>
+                {referencesError ? (
+                  <small className="error-message">{referencesError}</small>
+                ) : null}
+                {!referencesLoading &&
+                referredClientId &&
+                !referencesError &&
+                !referredClientReferences.length ? (
+                  <small>O cliente indicado não possui referências disponíveis.</small>
+                ) : null}
+              </label>
+            ) : (
+              <label className="field referral-target-reference">
+                <span>Referência indicada</span>
+                <input disabled value={referralReferenceLabel(referral?.referredClientReference)} />
               </label>
             )}
 
@@ -5007,11 +5106,28 @@ function referralClientOption(client: Referral['referrerClient']): ClientOption 
   };
 }
 
-function ReferralClientCell({ client }: { client: Referral['referredClient'] }) {
+function referralReferenceLabel(reference: Referral['referredClientReference'] | undefined) {
+  return reference?.reference ?? 'Indicação legada — referência não identificada';
+}
+
+function clientReceivedReferrals(client: Client) {
+  return client.referralsReceived ?? (client.referralReceived ? [client.referralReceived] : []);
+}
+
+function ReferralClientCell({
+  client,
+  targetReference,
+}: {
+  client: Referral['referredClient'];
+  targetReference?: Referral['referredClientReference'];
+}) {
   return (
     <div className="referral-client-cell">
       <strong>{client.name}</strong>
       <span>{client.reference}</span>
+      {targetReference !== undefined ? (
+        <small>{referralReferenceLabel(targetReference)}</small>
+      ) : null}
     </div>
   );
 }
@@ -5093,6 +5209,7 @@ function ReferralDetailModal({
           {[
             ['Indicador', referral.referrerClient.name],
             ['Indicado', referral.referredClient.name],
+            ['Referência indicada', referralReferenceLabel(referral.referredClientReference)],
             ['Data da indicação', formatDateTime(referral.createdAt)],
             ['Origem', referralOriginLabel(referral)],
             ['Status', referralStatusLabel(referral.status)],
@@ -10792,36 +10909,42 @@ function ClientsView({
                         </span>
                         <h4>Indicação recebida</h4>
                       </div>
-                      {selectedClient.referralReceived ? (
-                        <article className="client-referral-card">
-                          <div>
-                            <span>Indicado por</span>
-                            <strong>{selectedClient.referralReceived.referrerClient.name}</strong>
-                          </div>
-                          <div>
-                            <span>Benefício</span>
-                            <strong>{referralBenefitLabel(selectedClient.referralReceived)}</strong>
-                          </div>
-                          <span
-                            className={`finance-status-pill tone-${referralStatusTone(
-                              selectedClient.referralReceived.status,
-                            )}`}
-                          >
-                            {referralStatusLabel(selectedClient.referralReceived.status)}
-                          </span>
-                          {selectedClient.referralReceived.qualifiedAt ? (
-                            <small>
-                              Qualificada em{' '}
-                              {formatDateTime(selectedClient.referralReceived.qualifiedAt)}
-                            </small>
-                          ) : null}
-                          {selectedClient.referralReceived.appliedAt ? (
-                            <small>
-                              Benefício aplicado em{' '}
-                              {formatDateTime(selectedClient.referralReceived.appliedAt)}
-                            </small>
-                          ) : null}
-                        </article>
+                      {clientReceivedReferrals(selectedClient).length ? (
+                        <div className="client-referral-list">
+                          {clientReceivedReferrals(selectedClient).map((referral) => (
+                            <article className="client-referral-card" key={referral.id}>
+                              <div>
+                                <span>Referência indicada</span>
+                                <strong>
+                                  {referralReferenceLabel(referral.referredClientReference)}
+                                </strong>
+                              </div>
+                              <div>
+                                <span>Indicado por</span>
+                                <strong>{referral.referrerClient.name}</strong>
+                              </div>
+                              <div>
+                                <span>Benefício</span>
+                                <strong>{referralBenefitLabel(referral)}</strong>
+                              </div>
+                              <span
+                                className={`finance-status-pill tone-${referralStatusTone(
+                                  referral.status,
+                                )}`}
+                              >
+                                {referralStatusLabel(referral.status)}
+                              </span>
+                              {referral.qualifiedAt ? (
+                                <small>Qualificada em {formatDateTime(referral.qualifiedAt)}</small>
+                              ) : null}
+                              {referral.appliedAt ? (
+                                <small>
+                                  Benefício aplicado em {formatDateTime(referral.appliedAt)}
+                                </small>
+                              ) : null}
+                            </article>
+                          ))}
+                        </div>
                       ) : (
                         <div className="client-more-empty compact">
                           <Inbox aria-hidden="true" size={18} />
@@ -10859,6 +10982,9 @@ function ClientsView({
                             <article className="client-referral-card" key={referral.id}>
                               <div>
                                 <strong>{referral.referredClient.name}</strong>
+                                <span>
+                                  {referralReferenceLabel(referral.referredClientReference)}
+                                </span>
                                 <span>{referralBenefitLabel(referral)}</span>
                               </div>
                               <span
@@ -11333,6 +11459,7 @@ function ClientsView({
                 />
               </header>
               <ClientReferenceForm
+                client={selectedClient}
                 plans={plans}
                 reference={editingReference}
                 onCancel={() => {
@@ -15039,11 +15166,13 @@ function referenceLifecycleActionLabel(reference?: Pick<ClientReference, 'status
 }
 
 function ClientReferenceForm({
+  client,
   plans,
   reference,
   onCancel,
   onSubmit,
 }: {
+  client: Pick<Client, 'id' | 'name'>;
   plans: Plan[];
   reference: ClientReference | null;
   onCancel: () => void;
@@ -15061,8 +15190,14 @@ function ClientReferenceForm({
     String(reference?.billingNoticeDays ?? 5),
   );
   const [notes, setNotes] = useState(reference?.notes ?? '');
+  const [contractOrigin, setContractOrigin] = useState<'NORMAL' | 'REFERRAL'>('NORMAL');
+  const [referrerClientId, setReferrerClientId] = useState('');
+  const [referralRewardType, setReferralRewardType] = useState<ReferralRewardType>('FREE_MONTH');
+  const [referralRewardValue, setReferralRewardValue] = useState('');
+  const [referralRewardDescription, setReferralRewardDescription] = useState('');
   const [activeTab, setActiveTab] = useState<'data' | 'billing'>('data');
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [error, setError] = useState('');
   const creatingReference = !reference;
 
@@ -15074,7 +15209,34 @@ function ClientReferenceForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingRef.current) return;
     setError('');
+    if (creatingReference && contractOrigin === 'REFERRAL') {
+      if (!referrerClientId) {
+        setError('Selecione o cliente indicador.');
+        return;
+      }
+      if (referrerClientId === client.id) {
+        setError('O cliente não pode indicar a si mesmo.');
+        return;
+      }
+      const numericReferralRewardValue = Number(referralRewardValue);
+      if (
+        referralRewardType === 'CREDIT' &&
+        (!referralRewardValue ||
+          !Number.isFinite(numericReferralRewardValue) ||
+          numericReferralRewardValue < 0)
+      ) {
+        setError('Informe um valor de crédito válido.');
+        return;
+      }
+      if (referralRewardType === 'CUSTOM' && !referralRewardDescription.trim()) {
+        setError('Informe a descrição do benefício personalizado.');
+        return;
+      }
+    }
+
+    savingRef.current = true;
     setSaving(true);
 
     try {
@@ -15085,14 +15247,23 @@ function ClientReferenceForm({
         dueDate,
         billingNoticeDays: Number(billingNoticeDays),
         notes: notes || undefined,
-        referrerClientId: undefined,
-        referralRewardType: undefined,
-        referralRewardValue: undefined,
-        referralRewardDescription: undefined,
+        ...(creatingReference && contractOrigin === 'REFERRAL'
+          ? {
+              referrerClientId,
+              referralRewardType,
+              ...(referralRewardType === 'CREDIT'
+                ? { referralRewardValue: Number(referralRewardValue) }
+                : {}),
+              ...(referralRewardType === 'CUSTOM'
+                ? { referralRewardDescription: referralRewardDescription.trim() }
+                : {}),
+            }
+          : {}),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível salvar a referência.');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -15177,6 +15348,93 @@ function ClientReferenceForm({
             <span>Observações</span>
             <input value={notes} onChange={(event) => setNotes(event.target.value)} />
           </label>
+          {creatingReference ? (
+            <section className="reference-referral-origin form-grid-full">
+              <div>
+                <strong>Origem da contratação</strong>
+                <span>Defina se esta nova contratação foi originada por indicação.</span>
+              </div>
+              <div
+                className="reference-origin-options"
+                role="radiogroup"
+                aria-label="Origem da contratação"
+              >
+                <label>
+                  <input
+                    checked={contractOrigin === 'NORMAL'}
+                    name="reference-contract-origin"
+                    type="radio"
+                    value="NORMAL"
+                    onChange={() => setContractOrigin('NORMAL')}
+                  />
+                  Contratação normal
+                </label>
+                <label>
+                  <input
+                    checked={contractOrigin === 'REFERRAL'}
+                    name="reference-contract-origin"
+                    type="radio"
+                    value="REFERRAL"
+                    onChange={() => setContractOrigin('REFERRAL')}
+                  />
+                  Contratação por indicação
+                </label>
+              </div>
+              {contractOrigin === 'REFERRAL' ? (
+                <div className="reference-referral-fields">
+                  <div className="field">
+                    <span>Cliente indicador</span>
+                    <ClientReferralSelect
+                      allowEmpty={false}
+                      emptyLabel="Selecione o indicador"
+                      label="Cliente indicador da nova referência"
+                      placeholder="Pesquisar indicador"
+                      value={referrerClientId}
+                      onChange={setReferrerClientId}
+                    />
+                  </div>
+                  <label className="field">
+                    <span>Benefício previsto</span>
+                    <select
+                      value={referralRewardType}
+                      onChange={(event) =>
+                        setReferralRewardType(event.target.value as ReferralRewardType)
+                      }
+                    >
+                      <option value="FREE_MONTH">Mês grátis</option>
+                      <option value="CREDIT">Crédito</option>
+                      <option value="CUSTOM">Personalizado</option>
+                    </select>
+                  </label>
+                  {referralRewardType === 'CREDIT' ? (
+                    <label className="field">
+                      <span>Valor do crédito</span>
+                      <input
+                        min="0"
+                        step="0.01"
+                        type="number"
+                        value={referralRewardValue}
+                        onChange={(event) => setReferralRewardValue(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                  {referralRewardType === 'CUSTOM' ? (
+                    <label className="field">
+                      <span>Descrição do benefício</span>
+                      <input
+                        value={referralRewardDescription}
+                        onChange={(event) => setReferralRewardDescription(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                  <p className="field-help">
+                    A referência, o recebível inicial e a indicação serão criados na mesma operação.
+                    O benefício continuará dependendo de aplicação administrativa.
+                  </p>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
         </div>
       ) : null}
       {activeTab === 'billing' ? (

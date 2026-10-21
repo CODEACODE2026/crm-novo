@@ -4415,6 +4415,7 @@ describe('FinanceService', () => {
     expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
       fake.tx,
       fake.client.id,
+      fake.clientReference.id,
       fake.receivable.id,
       actorUserId,
     );
@@ -4591,6 +4592,7 @@ describe('FinanceService', () => {
     expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
       fake.tx,
       fake.client.id,
+      fake.clientReference.id,
       fake.receivable.id,
       actorUserId,
     );
@@ -4634,6 +4636,7 @@ describe('FinanceService', () => {
     expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
       fake.tx,
       fake.client.id,
+      fake.clientReference.id,
       fake.receivable.id,
       actorUserId,
     );
@@ -4723,6 +4726,7 @@ describe('FinanceService', () => {
       expect(referrals.qualifyAfterInitialActivation).toHaveBeenCalledWith(
         fake.tx,
         fake.client.id,
+        fake.clientReference.id,
         fake.receivable.id,
         actorUserId,
       );

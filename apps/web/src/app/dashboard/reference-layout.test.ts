@@ -33,6 +33,26 @@ describe('client reference presentation source', () => {
     expect(dashboardSource).not.toContain('reference-side-panel');
   });
 
+  it('adds referral origin only to new references and preserves one atomic submit', () => {
+    const formSource = dashboardSource.slice(
+      dashboardSource.indexOf('function ClientReferenceForm'),
+      dashboardSource.indexOf('function RenewalReversalModal'),
+    );
+
+    expect(formSource).toContain('Origem da contratação');
+    expect(formSource).toContain('Contratação normal');
+    expect(formSource).toContain('Contratação por indicação');
+    expect(formSource).toContain("contractOrigin === 'REFERRAL'");
+    expect(formSource).toContain('referrerClientId');
+    expect(formSource).toContain('referralRewardType');
+    expect(formSource).toContain('if (referrerClientId === client.id)');
+    expect(formSource).toContain('if (savingRef.current) return;');
+    expect(formSource.match(/await onSubmit\(/g)).toHaveLength(1);
+    expect(formSource).not.toContain('createReferral(');
+    expect(stylesSource).toContain('.reference-referral-origin');
+    expect(stylesSource).toContain('.reference-referral-fields');
+  });
+
   it('keeps the old large inactive guidance out of the references body', () => {
     expect(dashboardSource).not.toContain('INATIVO = serviço temporariamente parado');
     expect(dashboardSource).toContain('Sobre referências');

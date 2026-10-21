@@ -1,5 +1,15 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsNumber, IsOptional, IsString, IsUUID, Min, MinLength } from 'class-validator';
+import { ReferralRewardType } from '@prisma/client';
+import {
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreateClientReferenceDto {
   @IsString()
@@ -25,4 +35,22 @@ export class CreateClientReferenceDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsUUID()
+  referrerClientId?: string;
+
+  @IsOptional()
+  @IsEnum(ReferralRewardType)
+  referralRewardType?: ReferralRewardType;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  referralRewardValue?: number;
+
+  @IsOptional()
+  @IsString()
+  referralRewardDescription?: string;
 }

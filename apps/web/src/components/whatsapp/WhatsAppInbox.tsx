@@ -11,6 +11,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -6447,19 +6448,6 @@ function ConversationBubble({
     >
       <div className="conversation-message-mobile-actions">
         <ActionMenu items={mobileActionItems} label="Ações da mensagem" />
-        {deleteConfirmOpen ? (
-          <div className="conversation-delete-confirm" role="dialog" aria-label="Apagar mensagem">
-            <span>Apagar esta mensagem?</span>
-            <div>
-              <button type="button" disabled={deleting} onClick={() => onDeleteConfirmChange(null)}>
-                Cancelar
-              </button>
-              <button type="button" disabled={deleting} onClick={() => onDelete(message)}>
-                {deleting ? 'Apagando...' : 'Apagar'}
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
       <button
         className="conversation-reply-action"
@@ -6702,7 +6690,143 @@ function ConversationBubble({
         ) : null}
       </div>
       {!outbound ? actionRail : null}
+      {deleteConfirmOpen ? (
+        <ConversationMobileDeleteConfirmation
+          deleting={deleting}
+          message={message}
+          onDelete={onDelete}
+          onDeleteConfirmChange={onDeleteConfirmChange}
+        />
+      ) : null}
     </article>
+  );
+}
+
+function ConversationMobileDeleteConfirmation({
+  deleting,
+  message,
+  onDelete,
+  onDeleteConfirmChange,
+}: {
+  deleting: boolean;
+  message: WhatsAppConversationMessage;
+  onDelete: (message: WhatsAppConversationMessage) => void;
+  onDeleteConfirmChange: (messageId: string | null) => void;
+}) {
+  const [mobile, setMobile] = useState(false);
+  const titleId = useId();
+  const descriptionId = useId();
+  const modalRef = useRef<HTMLElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const deletingRef = useRef(deleting);
+  const onDeleteRef = useRef(onDelete);
+  const onDeleteConfirmChangeRef = useRef(onDeleteConfirmChange);
+
+  useEffect(() => {
+    deletingRef.current = deleting;
+    onDeleteRef.current = onDelete;
+    onDeleteConfirmChangeRef.current = onDeleteConfirmChange;
+  }, [deleting, onDelete, onDeleteConfirmChange]);
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 620px)');
+    const update = () => setMobile(query.matches);
+
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    if (!mobile) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    cancelButtonRef.current?.focus();
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape' && !deletingRef.current) {
+        event.preventDefault();
+        onDeleteConfirmChangeRef.current(null);
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(
+        modalRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [],
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+
+      if (!first || !last) {
+        event.preventDefault();
+        modalRef.current?.focus();
+        return;
+      }
+
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || !modalRef.current?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [mobile]);
+
+  useEffect(() => {
+    if (!mobile) return;
+    if (deleting) {
+      modalRef.current?.focus();
+    } else {
+      cancelButtonRef.current?.focus();
+    }
+  }, [deleting, mobile]);
+
+  if (!mobile) return null;
+
+  return createPortal(
+    <div className="conversation-delete-modal-backdrop" role="presentation">
+      <section
+        ref={modalRef}
+        aria-describedby={descriptionId}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="conversation-delete-modal"
+        role="dialog"
+        tabIndex={-1}
+      >
+        <h2 id={titleId}>Apagar esta mensagem?</h2>
+        <p id={descriptionId}>Confirme para continuar ou cancele para manter a mensagem.</p>
+        <div>
+          <button
+            ref={cancelButtonRef}
+            type="button"
+            disabled={deleting}
+            onClick={() => onDeleteConfirmChangeRef.current(null)}
+          >
+            Cancelar
+          </button>
+          <button type="button" disabled={deleting} onClick={() => onDeleteRef.current(message)}>
+            {deleting ? 'Apagando...' : 'Apagar'}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body,
   );
 }
 

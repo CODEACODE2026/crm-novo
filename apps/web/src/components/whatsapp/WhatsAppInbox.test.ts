@@ -2753,6 +2753,28 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-delete-confirm');
   });
 
+  it('uses a viewport-safe accessible modal for mobile message deletion confirmation', () => {
+    expect(whatsAppInboxSource).toContain('ConversationMobileDeleteConfirmation');
+    expect(whatsAppInboxSource).toContain("window.matchMedia('(max-width: 620px)')");
+    expect(whatsAppInboxSource).toContain('className="conversation-delete-modal-backdrop"');
+    expect(whatsAppInboxSource).toContain('aria-modal="true"');
+    expect(whatsAppInboxSource).toContain('aria-labelledby={titleId}');
+    expect(whatsAppInboxSource).toContain('aria-describedby={descriptionId}');
+    expect(whatsAppInboxSource).toContain("event.key === 'Escape'");
+    expect(whatsAppInboxSource).toContain('cancelButtonRef.current?.focus()');
+    expect(whatsAppInboxSource).toContain('modalRef.current?.focus()');
+    expect(whatsAppInboxSource).toContain('tabIndex={-1}');
+    expect(globalStylesSource).toContain('.conversation-delete-modal-backdrop {');
+    expect(globalStylesSource).toContain('position: fixed;');
+    expect(globalStylesSource).toContain('height: var(--chat-viewport-height, 100dvh);');
+    expect(globalStylesSource).toContain('max-width: calc(100vw - 32px);');
+    expect(globalStylesSource).toContain('env(safe-area-inset-left)');
+    expect(globalStylesSource).toContain('min-height: 44px;');
+    expect(globalStylesSource).not.toContain(
+      '.conversation-message-mobile-actions .conversation-delete-confirm',
+    );
+  });
+
   it('offers inline edit only for non-deleted outbound provider-backed text messages', () => {
     expect(
       isEditEligibleConversationMessage(

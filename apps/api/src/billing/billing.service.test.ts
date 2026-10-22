@@ -268,6 +268,7 @@ function serviceFactory({
   existingFutureDispatch?: ReturnType<typeof dispatch> | null;
   currentReceivables?: ReceivableWithReference[];
 } = {}) {
+  let storedDispatch = dispatchForProcessing;
   const clientEventCreate = vi.fn().mockResolvedValue({});
   const clientEventFindFirst = vi.fn().mockResolvedValue(existingClientEvent);
   const billingResponseCreate = vi.fn();
@@ -280,60 +281,59 @@ function serviceFactory({
     };
     const createdItems = data.items?.create ?? data.items;
 
-    return Promise.resolve(
-      dispatch({
-        ...dispatchForProcessing,
-        ...data,
-        receivable: updatedReceivable ?? dispatchForProcessing.receivable,
-        clientReference: updatedReference ?? dispatchForProcessing.clientReference,
-        items: Array.isArray(createdItems)
-          ? createdItems.map((item: Record<string, unknown>, index: number) => {
-              const receivableRecord = (currentReceivables?.find(
-                (current) => current.id === item.receivableId,
-              ) ??
-                updatedReceivable ??
-                dispatchForProcessing.receivable) as ReceivableWithReference;
-              const referenceRecord =
-                receivableRecord.clientReference ??
-                updatedReference ??
-                dispatchForProcessing.clientReference;
+    storedDispatch = dispatch({
+      ...dispatchForProcessing,
+      ...data,
+      receivable: updatedReceivable ?? dispatchForProcessing.receivable,
+      clientReference: updatedReference ?? dispatchForProcessing.clientReference,
+      items: Array.isArray(createdItems)
+        ? createdItems.map((item: Record<string, unknown>, index: number) => {
+            const receivableRecord = (currentReceivables?.find(
+              (current) => current.id === item.receivableId,
+            ) ??
+              updatedReceivable ??
+              dispatchForProcessing.receivable) as ReceivableWithReference;
+            const referenceRecord =
+              receivableRecord.clientReference ??
+              updatedReference ??
+              dispatchForProcessing.clientReference;
 
-              return {
-                id: `updated-item-${index + 1}`,
+            return {
+              id: `updated-item-${index + 1}`,
+              messageDispatchId: dispatchForProcessing.id,
+              receivableId: receivableRecord.id,
+              clientReferenceId: referenceRecord.id,
+              amount: receivableRecord.amount,
+              dueDate: receivableRecord.dueDate,
+              referenceSnapshot: referenceRecord.reference,
+              statusSnapshot: receivableRecord.status,
+              createdAt: now,
+              updatedAt: now,
+              receivable: receivableRecord,
+              clientReference: referenceRecord,
+            };
+          })
+        : updatedReceivable
+          ? [
+              {
+                id: 'updated-item',
                 messageDispatchId: dispatchForProcessing.id,
-                receivableId: receivableRecord.id,
-                clientReferenceId: referenceRecord.id,
-                amount: receivableRecord.amount,
-                dueDate: receivableRecord.dueDate,
-                referenceSnapshot: referenceRecord.reference,
-                statusSnapshot: receivableRecord.status,
+                receivableId: updatedReceivable.id,
+                clientReferenceId: updatedReceivable.clientReferenceId,
+                amount: updatedReceivable.amount,
+                dueDate: updatedReceivable.dueDate,
+                referenceSnapshot: updatedReference?.reference ?? '',
+                statusSnapshot: updatedReceivable.status,
                 createdAt: now,
                 updatedAt: now,
-                receivable: receivableRecord,
-                clientReference: referenceRecord,
-              };
-            })
-          : updatedReceivable
-            ? [
-                {
-                  id: 'updated-item',
-                  messageDispatchId: dispatchForProcessing.id,
-                  receivableId: updatedReceivable.id,
-                  clientReferenceId: updatedReceivable.clientReferenceId,
-                  amount: updatedReceivable.amount,
-                  dueDate: updatedReceivable.dueDate,
-                  referenceSnapshot: updatedReference?.reference ?? '',
-                  statusSnapshot: updatedReceivable.status,
-                  createdAt: now,
-                  updatedAt: now,
-                  receivable: updatedReceivable,
-                  clientReference: updatedReference,
-                },
-              ]
-            : dispatchWithOptionalItems.items,
-        status: data.status ?? dispatchForProcessing.status,
-      }),
-    );
+                receivable: updatedReceivable,
+                clientReference: updatedReference,
+              },
+            ]
+          : dispatchWithOptionalItems.items,
+      status: data.status ?? dispatchForProcessing.status,
+    });
+    return Promise.resolve(storedDispatch);
   });
   const updateMany = vi.fn().mockImplementation(({ data }) => {
     if (data?.status === 'PROCESSING') {
@@ -418,7 +418,7 @@ function serviceFactory({
       updateMany,
       findMany: vi.fn().mockResolvedValue([dispatch()]),
       findFirst: findExistingFutureDispatch,
-      findUnique: vi.fn().mockResolvedValue(dispatchForProcessing),
+      findUnique: vi.fn().mockImplementation(() => Promise.resolve(storedDispatch)),
       update: updateDispatch,
       count: vi.fn().mockResolvedValue(0),
     },
@@ -506,6 +506,92 @@ function updateManyArgs(updateMany: ReturnType<typeof vi.fn>) {
 }
 
 describe('BillingService', () => {
+  it.each([
+    [
+      'canonical international identity',
+      { phone: '+1 (407) 639-0665', phoneNormalized: '14076390665', phoneE164: '+14076390665' },
+    ],
+    [
+      'legacy-corrupted international identity',
+      { phone: '+1 (407) 639-0665', phoneNormalized: '5514076390665', phoneE164: null },
+    ],
+  ])('does not schedule billing for a %s', async (_label, phoneOverrides) => {
+    const createDispatch = vi.fn();
+    const { provider, service } = serviceFactory({
+      clients: [client(phoneOverrides)],
+      createDispatch,
+    });
+
+    const result = await service.reconcile(now);
+
+    expect(result).toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('ignores a preexisting international dispatch before calling the provider', async () => {
+    const foreignClient = client({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    const providerSendText = vi.fn();
+    const foreignDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      phone: '351912345678',
+      client: foreignClient,
+    });
+    const { service, updateDispatch } = serviceFactory({
+      dispatchForProcessing: foreignDispatch,
+      providerSendText,
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+        }),
+      }),
+    );
+  });
+
+  it('revalidates the client after resolving the connection and blocks a concurrent phone change', async () => {
+    const mutableClient = client();
+    const currentDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      client: mutableClient,
+    });
+    const { prisma, provider, service, updateDispatch } = serviceFactory({
+      dispatchForProcessing: currentDispatch,
+    });
+    prisma.whatsAppConnection.findFirst.mockImplementationOnce(() => {
+      Object.assign(mutableClient, {
+        phone: '+1 (407) 639-0665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+      });
+      return Promise.resolve(connection());
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+        }),
+      }),
+    );
+  });
+
   it.each([
     [0, '2026-09-15T12:00:00.000Z'],
     [1, '2026-09-14T12:00:00.000Z'],

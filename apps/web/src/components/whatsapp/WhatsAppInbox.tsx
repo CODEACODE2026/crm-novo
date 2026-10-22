@@ -3482,10 +3482,14 @@ export function WhatsAppInbox({
     setGuestClientCreatedUnlinked(null);
 
     try {
-      const duplicate = await findDuplicateClientByPhone(
-        payload.phone,
-        guestClientCreateConversation.phoneNormalized,
-      );
+      const duplicate =
+        guestClientCreateConversation.phoneE164 &&
+        !guestClientCreateConversation.phoneE164.startsWith('+55')
+          ? null
+          : await findDuplicateClientByPhone(
+              payload.phone,
+              guestClientCreateConversation.phoneNormalized,
+            );
 
       if (duplicate) {
         setGuestClientDuplicate(duplicate);
@@ -5673,9 +5677,7 @@ function ConversationListItem({
           ) : null}
         </span>
         <span className="conversation-list-meta-row">
-          <span>
-            {normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone}
-          </span>
+          <span>{conversationDisplayPhone(conversation)}</span>
           <span className={`conversation-kind ${conversation.client ? 'client' : 'guest'}`}>
             {conversation.client ? 'Cliente' : 'Avulso'}
           </span>
@@ -5738,8 +5740,7 @@ function ConversationHeader({
   onManageLabels: () => void;
 }) {
   const instanceLabel = conversationInstanceLabel(conversation.instanceName);
-  const phoneLabel =
-    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const phoneLabel = conversationDisplayPhone(conversation);
   const pendingWaitingSeconds =
     conversation.activeAttendance?.status === 'PENDING'
       ? getHumanWaitingSeconds(conversation.activeAttendance.openedAt, waitingClockNow)
@@ -7316,6 +7317,12 @@ function SharedContactCard({
           <span>Telefone não informado</span>
         )}
         <small>Contato compartilhado</small>
+
+        {contact.phones.length > 0 && actionablePhones.length === 0 ? (
+          <p className="conversation-shared-contact-feedback" role="status">
+            Ações para telefone internacional ficam indisponíveis até a ativação coordenada.
+          </p>
+        ) : null}
 
         {actionablePhones.length > 1 ? (
           <label className="conversation-shared-contact-phone-picker">
@@ -9764,8 +9771,7 @@ function ConversationClientPanelContent({
     );
   }
 
-  const phoneLabel =
-    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const phoneLabel = conversationDisplayPhone(conversation);
 
   if (activeTab === 'attendances') {
     return (
@@ -10181,8 +10187,7 @@ function ConversationContactHeader({
   linkedClient: Client | null;
   onOpenClient?: () => void;
 }) {
-  const phoneLabel =
-    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const phoneLabel = conversationDisplayPhone(conversation);
   const imageUrl = avatar?.response?.available ? avatar.response.url : null;
 
   return (
@@ -11351,8 +11356,7 @@ function GuestConversationClientModal({
   onRetryLink: (client: ClientOption) => void;
   onSubmit: (payload: ClientPayload) => Promise<void>;
 }) {
-  const conversationPhone =
-    normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+  const conversationPhone = conversationDisplayPhone(conversation);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -11457,15 +11461,34 @@ function phoneDigits(value: string | null | undefined) {
   return value?.replace(/\D/g, '') ?? '';
 }
 
-function phoneDigitsCompatible(left: string, right: string) {
+function conversationDisplayPhone(conversation: WhatsAppConversation) {
+  if (conversation.phoneE164 && !conversation.phoneE164.startsWith('+55')) {
+    return conversation.phoneE164;
+  }
+
+  return normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+}
+
+export function phoneDigitsCompatible(left: string, right: string) {
   const leftDigits = phoneDigits(left);
   const rightDigits = phoneDigits(right);
 
   if (!leftDigits || !rightDigits) return false;
   if (leftDigits === rightDigits) return true;
-  if (Math.min(leftDigits.length, rightDigits.length) < 10) return false;
+  if (!leftDigits.startsWith('55') || !rightDigits.startsWith('55')) return false;
 
-  return leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits);
+  const leftNational = leftDigits.slice(2);
+  const rightNational = rightDigits.slice(2);
+  if (![10, 11].includes(leftNational.length) || ![10, 11].includes(rightNational.length)) {
+    return false;
+  }
+
+  const shorter = leftNational.length < rightNational.length ? leftNational : rightNational;
+  const longer = leftNational.length > rightNational.length ? leftNational : rightNational;
+
+  if (shorter.length !== 10 || longer.length !== 11) return false;
+
+  return longer.startsWith(`${shorter.slice(0, 2)}9`) && longer.slice(3) === shorter.slice(2);
 }
 
 function clientOptionFromClient(client: Client): ClientOption {

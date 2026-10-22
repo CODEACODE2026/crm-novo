@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, WhatsAppAutoReplyAudience, WhatsAppAutoReplyMode } from '@prisma/client';
 import { createHash } from 'crypto';
+import { normalizePhone } from '../common/phone/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from './provider/whatsapp-provider';
@@ -108,6 +109,12 @@ export class WhatsAppAutoReplyService {
     });
     if (!context || !this.connectionOperational(context.whatsAppConnection)) {
       return { sent: false, reason: 'ineligible_connection' as const };
+    }
+    if (context.phoneE164) {
+      const identity = normalizePhone(context.phoneE164);
+      if (identity.status !== 'valid' || identity.country !== 'BR') {
+        return { sent: false, reason: 'international_outbound_disabled' as const };
+      }
     }
 
     const config = await this.prisma.whatsAppAutoReplyConfig.findUnique({

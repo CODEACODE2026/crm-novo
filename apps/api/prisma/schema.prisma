@@ -363,6 +363,7 @@ model Client {
   name                    String
   phone                   String
   phoneNormalized         String
+  phoneE164               String?                       @db.VarChar(16)
   email                   String?
   reference               String                        @unique
   planId                  String                        @db.Uuid
@@ -399,6 +400,7 @@ model Client {
   @@index([planId])
   @@index([dueDate])
   @@index([createdAt])
+  @@index([phoneE164])
   @@map("clients")
 }
 
@@ -681,6 +683,7 @@ model WhatsAppPendingContact {
   whatsAppConnectionId String                       @db.Uuid
   phone                String
   phoneNormalized      String
+  phoneE164            String?                      @db.VarChar(16)
   contactName          String?
   status               WhatsAppPendingContactStatus @default(PENDENTE)
   firstMessageText     String?
@@ -753,6 +756,7 @@ model WhatsAppConversation {
   contactName          String?
   phone                String
   phoneNormalized      String
+  phoneE164            String?                               @db.VarChar(16)
   status               WhatsAppConversationStatus            @default(OPEN)
   lastMessageAt        DateTime?
   lastMessagePreview   String?

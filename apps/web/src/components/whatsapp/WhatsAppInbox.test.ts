@@ -55,6 +55,7 @@ import {
   nextConversationPresenceState,
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
+  phoneDigitsCompatible,
   savedStickerPreviewKind,
   sharedContactBrazilPhoneCandidates,
   shouldApplySharedContactActionResult,
@@ -313,6 +314,12 @@ function pixCopyInFlight(): ConversationPixCopyInFlight {
 }
 
 describe('WhatsAppInbox unread reconciliation helpers', () => {
+  it('limits legacy 8/9 digit aliases to proven Brazilian identities', () => {
+    expect(phoneDigitsCompatible('554499999999', '5544999999999')).toBe(true);
+    expect(phoneDigitsCompatible('14076390665', '5514076390665')).toBe(false);
+    expect(phoneDigitsCompatible('351912345678', '5512912345678')).toBe(false);
+  });
+
   it('builds WhatsApp-style avatar initials and falls back for missing names', () => {
     expect(conversationInitials(conversation('1', { displayName: 'Maria Silva' }))).toBe('MS');
     expect(conversationInitials(conversation('1', { displayName: '  João   ' }))).toBe('J');
@@ -2566,6 +2573,26 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(sharedContactBrazilPhoneCandidates('+1 415 555 0100')).toEqual([]);
     expect(sharedContactBrazilPhoneCandidates('001 415 555 0100')).toEqual([]);
     expect(sharedContactBrazilPhoneCandidates('123')).toEqual([]);
+  });
+
+  it('shows international shared contacts but keeps their operational actions unavailable', () => {
+    const markup = renderToStaticMarkup(
+      createElement(ConversationContactContent, {
+        message: message({
+          type: 'CONTACT',
+          text: null,
+          contacts: [{ displayName: 'Orlando', phones: ['+1 (407) 639-0665'] }],
+        }),
+        onOpenClient: vi.fn(),
+        onStartConversation: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain('+1 (407) 639-0665');
+    expect(markup).toContain(
+      'Ações para telefone internacional ficam indisponíveis até a ativação coordenada.',
+    );
+    expect(markup.match(/disabled=""/g)).toHaveLength(2);
   });
 
   it('matches a shared contact conversation only by exact phone and selected connection', () => {

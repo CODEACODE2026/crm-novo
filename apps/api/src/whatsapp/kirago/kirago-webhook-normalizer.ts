@@ -1,3 +1,4 @@
+import { normalizePhone } from '../../common/phone/phone-normalizer';
 import { normalizeBrazilPhone } from '../../clients/utils/phone-normalizer';
 
 export type NormalizedMessageType =
@@ -49,6 +50,8 @@ export type NormalizedWhatsAppMessage = {
   instanceName: string | null;
   providerUserId: string | null;
   phone: string | null;
+  phoneE164?: string | null;
+  phoneCountry?: string | null;
   contactName: string | null;
   messageId: string | null;
   direction: 'INCOMING' | 'OUTGOING';
@@ -150,7 +153,7 @@ export class KiragoWebhookNormalizer {
     const message = asRecord(event?.Message);
     const isGroup = this.isGroup(body, info);
     const direction = info?.IsFromMe === true ? 'OUTGOING' : 'INCOMING';
-    const phone = isGroup ? null : this.extractPhone(body, info);
+    const phoneIdentity = isGroup ? null : this.extractPhoneIdentity(body, info);
     const messageType = this.extractMessageType(message, info);
     const contacts = this.extractContacts(message, messageType);
 
@@ -159,7 +162,9 @@ export class KiragoWebhookNormalizer {
       provider: 'KIRAGO',
       instanceName: stringOrNull(body.instanceName),
       providerUserId: stringOrNull(body.userID),
-      phone,
+      phone: phoneIdentity?.phone ?? null,
+      phoneE164: phoneIdentity?.phoneE164 ?? null,
+      phoneCountry: phoneIdentity?.country ?? null,
       contactName: this.extractTrustedContactName(body, info, direction),
       messageId: stringOrNull(info?.ID),
       direction,
@@ -377,7 +382,7 @@ export class KiragoWebhookNormalizer {
     return null;
   }
 
-  private extractPhone(body: RecordValue, info: RecordValue | null) {
+  private extractPhoneIdentity(body: RecordValue, info: RecordValue | null) {
     const jid = asRecord(body.jid);
     const candidates = [
       asRecord(jid?.contact)?.pn,
@@ -440,7 +445,11 @@ export class KiragoWebhookNormalizer {
     return raw && /@lid$/i.test(raw) ? raw : null;
   }
 
-  private tryNormalizeProviderPhone(value: unknown) {
+  private tryNormalizeProviderPhone(value: unknown): {
+    phone: string;
+    phoneE164: string | null;
+    country: string | null;
+  } | null {
     if (typeof value !== 'string' || !value.trim()) {
       return null;
     }
@@ -461,8 +470,26 @@ export class KiragoWebhookNormalizer {
       return null;
     }
 
+    const digits = cleaned.replace(/\D/g, '');
+    const explicit = normalizePhone(cleaned.startsWith('+') ? cleaned : `+${digits}`);
+
+    if (explicit.status === 'valid') {
+      return {
+        phone: explicit.digits,
+        phoneE164: explicit.e164,
+        country: explicit.country,
+      };
+    }
+
+    // KiraGo still emits the historical Brazilian eight/nine-digit variants.
+    // Keep that compatibility only when the provider identity explicitly carries DDI 55.
+    if (!digits.startsWith('55')) {
+      return null;
+    }
+
     try {
-      return normalizeBrazilPhone(cleaned);
+      const phone = normalizeBrazilPhone(digits);
+      return { phone, phoneE164: `+${phone}`, country: 'BR' };
     } catch {
       return null;
     }

@@ -499,6 +499,116 @@ function createService(
 }
 
 describe('RecoveryService', () => {
+  it.each([
+    [
+      'canonical international identity',
+      { phone: '+44 7911 123456', phoneNormalized: '447911123456', phoneE164: '+447911123456' },
+    ],
+    [
+      'legacy-corrupted international identity',
+      { phone: '+1 (407) 639-0665', phoneNormalized: '5514076390665', phoneE164: null },
+    ],
+  ])('does not create a recovery campaign or dispatch for a %s', async (_label, phoneOverrides) => {
+    const foreignClient = { ...baseClient, ...phoneOverrides };
+    const foreignReference = reference({ client: foreignClient });
+    const foreignReceivable = receivable({
+      client: foreignClient,
+      clientReference: foreignReference,
+    });
+    const { campaigns, dispatches, events, provider, service, steps } = createService({
+      receivables: [foreignReceivable],
+    });
+
+    await service.reconcile();
+
+    expect(campaigns).toHaveLength(0);
+    expect(steps).toHaveLength(0);
+    expect(dispatches).toHaveLength(0);
+    expect(events).toHaveLength(0);
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('ignores an already scheduled recovery after the client becomes international', async () => {
+    const testClient = { ...baseClient };
+    const testReference = reference({ client: testClient });
+    const testReceivable = receivable({ client: testClient, clientReference: testReference });
+    const { dispatches, provider, service } = createService({ receivables: [testReceivable] });
+    await service.reconcile();
+    expect(dispatches.length).toBeGreaterThan(0);
+
+    Object.assign(testClient, {
+      phone: '+54 9 11 2345-6789',
+      phoneNormalized: '5491123456789',
+      phoneE164: '+5491123456789',
+    });
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'));
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(dispatches[0]).toMatchObject({
+      status: 'IGNORED',
+      errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+    });
+  });
+
+  it('revalidates the client after resolving the connection and blocks a concurrent phone change', async () => {
+    const testClient = { ...baseClient };
+    const testReference = reference({ client: testClient });
+    const testReceivable = receivable({ client: testClient, clientReference: testReference });
+    const { dispatches, provider, service, tx } = createService({ receivables: [testReceivable] });
+    await service.reconcile();
+    expect(dispatches.length).toBeGreaterThan(0);
+
+    tx.whatsAppConnection.findFirst.mockImplementationOnce(() => {
+      Object.assign(testClient, {
+        phone: '+44 7911 123456',
+        phoneNormalized: '447911123456',
+        phoneE164: '+447911123456',
+      });
+      return Promise.resolve({
+        id: 'connection-1',
+        providerTokenEncrypted: 'encrypted',
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+    });
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'));
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(dispatches[0]).toMatchObject({
+      status: 'IGNORED',
+      errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+    });
+  });
+
+  it('cancels an active campaign that becomes international without changing its receivable', async () => {
+    const testClient = { ...baseClient };
+    const testReference = reference({ client: testClient });
+    const testReceivable = receivable({ client: testClient, clientReference: testReference });
+    const { campaigns, dispatches, events, provider, service } = createService({
+      receivables: [testReceivable],
+    });
+    await service.reconcile();
+
+    Object.assign(testClient, {
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    await service.reconcile();
+
+    expect(campaigns[0]).toMatchObject({
+      status: 'CANCELADA',
+      cancelReason: 'Envio de recuperacao internacional ainda nao esta habilitado.',
+    });
+    expect(dispatches.every((dispatch) => dispatch.status === 'CANCELED')).toBe(true);
+    expect(testReceivable).toMatchObject({ status: 'PENDENTE', amount: new Prisma.Decimal(50) });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'RECOVERY_CAMPAIGN_CANCELED' }));
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
   it('starts recovery from overdue receivable dueDate with default D+3/D+7/D+15/D+30 steps', async () => {
     vi.setSystemTime(new Date('2026-09-14T12:00:00.000Z'));
     const { campaigns, dispatches, service, steps } = createService();

@@ -214,6 +214,7 @@ function pendingContact(overrides: Record<string, unknown> = {}) {
     whatsAppConnectionId: connection().id,
     phone: '5544999999999',
     phoneNormalized: '5544999999999',
+    phoneE164: null,
     contactName: 'Lucas',
     status: 'PENDENTE',
     firstMessageText: 'Ola',
@@ -375,6 +376,12 @@ function serviceFactory({
 } = {}) {
   const txClientReferenceUpdate = vi.fn();
   const txReceivableUpdate = vi.fn();
+  const txClientCreate = vi.fn().mockResolvedValue({
+    ...client(),
+    recurringValue: 50,
+    dueDate: now,
+    plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
+  });
   const prisma = {
     whatsAppConnection: {
       findFirst: vi.fn().mockResolvedValue(currentConnection),
@@ -418,7 +425,9 @@ function serviceFactory({
       }),
     },
     messageDispatch: {
-      create: vi.fn().mockResolvedValue(dispatch()),
+      create: vi.fn((args: { data?: Record<string, unknown> }) =>
+        Promise.resolve(dispatch(args.data ?? {})),
+      ),
       update: vi.fn(
         (args: {
           data?: {
@@ -606,12 +615,7 @@ function serviceFactory({
       return callback({
         client: {
           findUnique: prisma.client.findUnique,
-          create: vi.fn().mockResolvedValue({
-            ...client(),
-            recurringValue: 50,
-            dueDate: now,
-            plan: { id: 'plan-id', name: 'Mensal', durationMonths: 1, defaultValue: 50 },
-          }),
+          create: txClientCreate,
         },
         clientReference: {
           create: vi.fn().mockResolvedValue(clientReference()),
@@ -790,6 +794,8 @@ function serviceFactory({
     realtime,
     autoReply,
     attendance,
+    plans,
+    txClientCreate,
     txClientReferenceUpdate,
     txReceivableUpdate,
   };
@@ -1516,6 +1522,31 @@ describe('WhatsAppService', () => {
     });
     expect(result.status).toBe('SENT');
     expect(result.providerMessageId).toBe('provider-id');
+  });
+
+  it('revalidates the client immediately before a manual provider call', async () => {
+    const findUnique = vi
+      .fn()
+      .mockResolvedValueOnce(client())
+      .mockResolvedValueOnce(
+        client({
+          phone: '+1 (407) 639-0665',
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+        }),
+      );
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: { client: { findUnique, findMany: vi.fn().mockResolvedValue([]) } },
+    });
+
+    const result = await service.sendManualMessage(
+      { clientId: client().id, body: 'Mensagem', requestId: 'request-id' },
+      'user-id',
+    );
+
+    expect(result.status).toBe('FAILED');
+    expect(provider.sendText).not.toHaveBeenCalled();
   });
 
   it('records FAILED dispatch with sanitized error after provider failure', async () => {
@@ -4142,6 +4173,88 @@ describe('WhatsAppService', () => {
     });
   });
 
+  it('blocks PIX WhatsApp for an international client before dispatch or provider calls', async () => {
+    const internationalClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalIntent = manualChargePaymentIntent({
+      receivable: manualChargeReceivable({ client: internationalClient }),
+    });
+    const { service, provider, prisma } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(internationalIntent),
+          findFirst: vi.fn().mockResolvedValue({
+            id: internationalIntent.id,
+            receivableId: internationalIntent.receivableId,
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    await expect(
+      service.sendPixPaymentIntent(internationalIntent.id, 'user-id'),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' }),
+    });
+
+    expect(prisma.messageDispatch.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
+  it('revalidates PIX identity immediately before the provider call', async () => {
+    const initialIntent = manualChargePaymentIntent({
+      receivable: manualChargeReceivable({
+        purpose: 'INITIAL_ACTIVATION',
+        clientReferenceId: clientReference().id,
+        clientReference: clientReference(),
+        client: client(),
+      }),
+    });
+    const changedIntent = manualChargePaymentIntent({
+      receivable: manualChargeReceivable({
+        purpose: 'INITIAL_ACTIVATION',
+        clientReferenceId: clientReference().id,
+        clientReference: clientReference(),
+        client: client({
+          phone: '+351 912 345 678',
+          phoneNormalized: '351912345678',
+          phoneE164: '+351912345678',
+        }),
+      }),
+    });
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(initialIntent)
+            .mockResolvedValueOnce(changedIntent),
+          findFirst: vi.fn().mockResolvedValue({
+            id: initialIntent.id,
+            receivableId: initialIntent.receivableId,
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent(initialIntent.id, 'user-id');
+
+    expect(result).toMatchObject({ success: false, status: 'FAILED' });
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
   it('sends MANUAL_CHARGE to a guest without requiring Client or ClientEvent', async () => {
     const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
@@ -4552,6 +4665,7 @@ describe('WhatsAppService', () => {
           findUniqueOrThrow: vi.fn().mockResolvedValue(
             dispatch({
               status: 'FAILED',
+              phone: '5511988887777',
               requestId: 'manual-charge-pix:manual-payment-intent-id',
               idempotencyKey: 'manual-charge-pix:manual-payment-intent-id',
             }),
@@ -4565,7 +4679,7 @@ describe('WhatsAppService', () => {
     expect(result).toMatchObject({ success: true, reused: false });
     expect(provider.sendButtons).toHaveBeenCalledTimes(1);
     expect(finance.createReceivablePix).not.toHaveBeenCalled();
-    expect(prisma.paymentIntent.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.paymentIntent.findUnique).toHaveBeenCalledTimes(2);
     expect(prisma.receivableAuditEvent.create).toHaveBeenCalledTimes(1);
   });
 
@@ -8864,6 +8978,77 @@ describe('WhatsAppService', () => {
     expect(rootFindFirst).toHaveBeenCalledTimes(1);
     expect(txMessageCreate).toHaveBeenCalledTimes(1);
     expect(txConversationUpdate).not.toHaveBeenCalled();
+  });
+
+  it('retries a webhook after a concurrent conversation identity P2002', async () => {
+    const identityConflict = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: 'whatsapp_conversations_connection_phone_e164_unique' },
+    });
+    const existingConversation = conversation({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const createdMessage = conversationMessage({
+      id: 'international-concurrent-message',
+      conversationId: existingConversation.id,
+      providerMessageId: 'international-concurrent-provider-message',
+      direction: 'INBOUND',
+    });
+    let transactionCall = 0;
+    const transaction = vi.fn(async (input: unknown) => {
+      transactionCall += 1;
+      const callback = input as (tx: unknown) => Promise<unknown>;
+
+      if (transactionCall === 1) {
+        return callback({
+          whatsAppInboundMessage: {
+            create: vi.fn().mockResolvedValue({ id: 'inbound-id' }),
+          },
+        });
+      }
+
+      if (transactionCall === 2) {
+        throw identityConflict;
+      }
+
+      return callback({
+        whatsAppConversation: {
+          findFirst: vi.fn().mockResolvedValue(existingConversation),
+          findUnique: vi.fn().mockResolvedValue(existingConversation),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(existingConversation),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue(createdMessage),
+        },
+      });
+    });
+    const { service, normalizer } = serviceFactory({
+      prismaOverrides: { $transaction: transaction },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Hello', {
+        messageId: 'international-concurrent-provider-message',
+        phone: '14076390665',
+        phoneE164: '+14076390665',
+        phoneCountry: 'US',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      conversation: {
+        processed: true,
+        action: 'conversation_message_persisted',
+        conversationId: existingConversation.id,
+      },
+    });
+    expect(transaction).toHaveBeenCalledTimes(3);
   });
 
   it('does not recover unrelated P2002 as a WhatsApp duplicate', async () => {
@@ -13985,6 +14170,33 @@ describe('WhatsAppService', () => {
     });
   });
 
+  it('blocks an explicit international destination before creating a conversation', async () => {
+    const activeConnection = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+    });
+    const { service, prisma, provider } = serviceFactory({ currentConnection: activeConnection });
+
+    await expect(
+      service.startConversation(
+        {
+          whatsAppConnectionId: activeConnection.id,
+          phone: '+1 (407) 639-0665',
+          body: 'Nao enviar',
+          requestId: '6bc15154-2415-4ef7-8a8d-2b1dd024f980',
+        },
+        'actor-user-id',
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' }),
+    });
+
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
   it('rejects start when an existing phone conversation belongs to another client', async () => {
     const activeConnection = connection({
       status: 'CONNECTED',
@@ -14133,6 +14345,114 @@ describe('WhatsAppService', () => {
       initialReceivableId: 'initial-receivable-id',
     });
     expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['US', '+14076390665'],
+    ['PT', '+351912345678'],
+    ['GB', '+442079460958'],
+    ['AR', '+5491123456789'],
+  ])(
+    'blocks a pending contact from %s before client, reference or receivable writes',
+    async (_country, phoneE164) => {
+      const pending = pendingContact({
+        phone: phoneE164.slice(1),
+        phoneNormalized: phoneE164.slice(1),
+        phoneE164,
+      });
+      const transaction = vi.fn();
+      const { service, plans, txClientCreate } = serviceFactory({
+        prismaOverrides: {
+          $transaction: transaction,
+          whatsAppPendingContact: {
+            findUnique: vi.fn().mockResolvedValue(pending),
+          },
+        },
+      });
+
+      await expect(
+        service.approvePendingContact(
+          pending.id,
+          {
+            name: 'Contato internacional',
+            reference: 'internacional001',
+            planId: '55555555-5555-4555-8555-555555555555',
+            recurringValue: 50,
+            dueDate: '2026-10-10',
+            billingNoticeDays: 0,
+            generateInitialReceivable: true,
+          },
+          'user-id',
+        ),
+      ).rejects.toThrow('aguarda a integracao segura de telefones internacionais');
+
+      expect(plans.ensureActivePlan).not.toHaveBeenCalled();
+      expect(transaction).not.toHaveBeenCalled();
+      expect(txClientCreate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('dual-writes a proven Brazilian pending contact only when the flag is enabled', async () => {
+    const { service, txClientCreate } = serviceFactory({
+      configOverrides: { PHONE_INTERNATIONAL_ENABLED: 'true' },
+    });
+
+    await service.approvePendingContact(
+      pendingContact().id,
+      {
+        name: 'Lucas',
+        reference: 'lucas001',
+        planId: '55555555-5555-4555-8555-555555555555',
+        recurringValue: 50,
+        dueDate: '2026-10-10',
+        billingNoticeDays: 0,
+        generateInitialReceivable: false,
+      },
+      'user-id',
+    );
+
+    expect(txClientCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phone: '5544999999999',
+          phoneNormalized: '5544999999999',
+          phoneE164: '+5544999999999',
+        }),
+      }),
+    );
+  });
+
+  it('blocks divergent pending-contact phone identities before opening a transaction', async () => {
+    const pending = pendingContact({ phoneE164: '+5511999991234' });
+    const transaction = vi.fn();
+    const { service, plans, txClientCreate } = serviceFactory({
+      prismaOverrides: {
+        $transaction: transaction,
+        whatsAppPendingContact: {
+          findUnique: vi.fn().mockResolvedValue(pending),
+        },
+      },
+    });
+
+    await expect(
+      service.approvePendingContact(
+        pending.id,
+        {
+          name: 'Contato divergente',
+          reference: 'divergente001',
+          planId: '55555555-5555-4555-8555-555555555555',
+          recurringValue: 50,
+          dueDate: '2026-10-10',
+          billingNoticeDays: 0,
+          generateInitialReceivable: true,
+        },
+        'user-id',
+      ),
+    ).rejects.toThrow('identidades de telefone do contato estao divergentes');
+
+    expect(plans.ensureActivePlan).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(txClientCreate).not.toHaveBeenCalled();
   });
 
   it('approves a pending contact without initial receivable when requested', async () => {
@@ -15033,5 +15353,161 @@ describe('WhatsApp conversation labels', () => {
         take: 20,
       }),
     );
+  });
+
+  it('persists a proven international inbound identity without client suffix matching or auto-reply', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const { service, normalizer, prisma, autoReply, attendance } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: { client: { findMany } },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Hello from Orlando', {
+        phone: '14076390665',
+        phoneE164: '+14076390665',
+        phoneCountry: 'US',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      action: 'pending_contact_upserted',
+      conversation: { action: 'conversation_message_persisted' },
+    });
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { phoneE164: '+14076390665' },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
+    expect(prisma.whatsAppPendingContact.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+        }),
+      }),
+    );
+    expect(prisma.whatsAppConversation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+        }),
+      }),
+    );
+    expect(attendance.recordInboundMessage).toHaveBeenCalledOnce();
+    expect(autoReply.tryReplyToInbound).not.toHaveBeenCalled();
+  });
+
+  it.each(['conversation', 'pending contact'] as const)(
+    'preserves raw inbound but blocks a duplicate when a %s has the exact legacy-corrupted identity',
+    async (legacyKind) => {
+      const legacyCorruptedPhone = '5514076390665';
+      const { service, normalizer, prisma, autoReply, attendance } = serviceFactory({
+        currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+        prismaOverrides: {
+          client: { findMany: vi.fn().mockResolvedValue([]) },
+          whatsAppConversation: {
+            findMany: vi
+              .fn()
+              .mockResolvedValue(
+                legacyKind === 'conversation'
+                  ? [conversation({ phoneNormalized: legacyCorruptedPhone, phoneE164: null })]
+                  : [],
+              ),
+            create: vi.fn(),
+          },
+          whatsAppPendingContact: {
+            findMany: vi
+              .fn()
+              .mockResolvedValue(
+                legacyKind === 'pending contact'
+                  ? [pendingContact({ phoneNormalized: legacyCorruptedPhone, phoneE164: null })]
+                  : [],
+              ),
+            upsert: vi.fn(),
+          },
+        },
+      });
+      normalizer.normalize.mockReturnValue(
+        normalizedInbound('Do not split history', {
+          phone: '14076390665',
+          phoneE164: '+14076390665',
+          phoneCountry: 'US',
+          messageId: `legacy-conflict-${legacyKind}`,
+        }),
+      );
+
+      const result = await service.receiveWebhook({ type: 'Message' });
+
+      expect(result).toMatchObject({
+        processed: false,
+        action: 'ambiguous_legacy_phone_identity',
+        inboundMessageId: 'inbound-id',
+      });
+      expect(prisma.whatsAppInboundMessage.create).toHaveBeenCalledOnce();
+      expect(prisma.whatsAppPendingContact.upsert).not.toHaveBeenCalled();
+      expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+      expect(attendance.recordInboundMessage).not.toHaveBeenCalled();
+      expect(autoReply.tryReplyToInbound).not.toHaveBeenCalled();
+    },
+  );
+
+  it('blocks international text, media and retry before local pending writes or provider calls', async () => {
+    const internationalConversation = conversation({
+      phone: '14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const messageCreate = vi.fn();
+    const messageUpdateMany = vi.fn();
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(
+            conversationMessage({
+              status: 'FAILED',
+              conversation: internationalConversation,
+              whatsAppConnection: internationalConversation.whatsAppConnection,
+            }),
+          ),
+          create: messageCreate,
+          updateMany: messageUpdateMany,
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationTextMessage(internationalConversation.id, {
+        body: 'Unsafe outbound',
+        requestId: 'international-text',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, {
+        file: {
+          buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+          mimetype: 'image/jpeg',
+          originalname: 'image.jpg',
+          size: 4,
+        },
+        requestId: 'international-media',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
+    await expect(service.retryConversationMessage(conversationMessage().id)).rejects.toMatchObject({
+      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
+    });
+
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(messageUpdateMany).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(provider.sendImage).not.toHaveBeenCalled();
   });
 });

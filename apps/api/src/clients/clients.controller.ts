@@ -44,6 +44,11 @@ export class ClientsController {
     return this.clientsService.options(query);
   }
 
+  @Get('capabilities/phone')
+  phoneCapabilities() {
+    return this.clientsService.phoneCapabilities();
+  }
+
   @Get('references/:referenceId')
   getReference(@Param('referenceId') referenceId: string) {
     return this.clientsService.getReference(referenceId);

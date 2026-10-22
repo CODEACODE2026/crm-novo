@@ -1,5 +1,5 @@
 import { PaymentProviderCode } from '@prisma/client';
-import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 
 export class UpdateClientDto {
   @IsOptional()
@@ -11,6 +11,11 @@ export class UpdateClientDto {
   @IsString()
   @MinLength(8)
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z]{2}$/)
+  phoneCountry?: string;
 
   @IsOptional()
   @IsEmail()

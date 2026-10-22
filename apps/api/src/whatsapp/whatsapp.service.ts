@@ -28,6 +28,7 @@ import {
 } from '@prisma/client';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { comparePhoneIdentities, normalizePhone } from '../common/phone/phone-normalizer';
 import { FinanceService } from '../finance/finance.service';
 import { PlansService } from '../plans/plans.service';
 import { ReferralsService } from '../referrals/referrals.service';
@@ -753,6 +754,7 @@ export class WhatsAppService {
       throw new BadRequestException('Cliente nao possui telefone valido.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(client);
     const phone = normalizeBrazilPhone(client.phoneNormalized);
     const body = dto.body.trim();
 
@@ -776,6 +778,19 @@ export class WhatsAppService {
     }
 
     try {
+      const latestClient = await this.prisma.client.findUnique({ where: { id: client.id } });
+
+      if (!latestClient?.phoneNormalized) {
+        throw new ConflictException('Cliente nao possui mais telefone valido para WhatsApp.');
+      }
+
+      this.assertInternationalWhatsAppOutboundBlocked(latestClient);
+      if (normalizeBrazilPhone(latestClient.phoneNormalized) !== dispatch.phone) {
+        throw new ConflictException(
+          'Telefone do cliente foi alterado antes do envio. Tente novamente.',
+        );
+      }
+
       const result = await this.mapProviderError(() =>
         this.provider.sendText(instanceToken, { phone, body, requestId }),
       );
@@ -831,35 +846,12 @@ export class WhatsAppService {
       throw new ConflictException('Conexao WhatsApp nao esta operacional.');
     }
 
-    const intent = await this.prisma.paymentIntent.findUnique({
-      where: { id: paymentIntentId },
-      include: {
-        receivable: {
-          include: {
-            client: true,
-            clientReference: true,
-          },
-        },
-        paymentGroup: {
-          include: {
-            client: true,
-            items: {
-              include: {
-                receivable: {
-                  include: {
-                    clientReference: true,
-                  },
-                },
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-          },
-        },
-      },
-    });
+    const intent = await this.loadPixPaymentIntent(paymentIntentId);
 
     this.validatePixIntentForWhatsApp(intent);
     const context = await this.buildPixWhatsAppContext(intent);
+    this.assertInternationalWhatsAppOutboundBlocked(context.client);
+    this.assertInternationalWhatsAppPhoneBlocked(context.phone);
     const template = buildPixWhatsAppTemplate({
       amount: intent.amount,
       pixCopyPaste: intent.pixCopyPaste ?? '',
@@ -920,6 +912,23 @@ export class WhatsAppService {
     }
 
     try {
+      const latestIntent = await this.loadPixPaymentIntent(paymentIntentId);
+      this.validatePixIntentForWhatsApp(latestIntent);
+      const latestContext = await this.buildPixWhatsAppContext(latestIntent);
+      this.assertInternationalWhatsAppOutboundBlocked(latestContext.client);
+      this.assertInternationalWhatsAppPhoneBlocked(latestContext.phone);
+
+      if (
+        latestContext.phone !== dispatch.phone ||
+        latestIntent.pixCopyPaste !== intent.pixCopyPaste ||
+        latestIntent.providerTransactionId !== intent.providerTransactionId ||
+        latestIntent.amount.toString() !== intent.amount.toString()
+      ) {
+        throw new ConflictException(
+          'Dados do PIX ou destinatario foram alterados antes do envio. Tente novamente.',
+        );
+      }
+
       const result = await this.mapProviderError(() =>
         this.provider.sendButtons(instanceToken, {
           phone: context.phone,
@@ -1271,7 +1280,13 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    const phone = this.tryNormalizePhone(conversation.phoneNormalized);
+    const canonicalIdentity = conversation.phoneE164
+      ? normalizePhone(conversation.phoneE164)
+      : null;
+    const phone =
+      canonicalIdentity?.status === 'valid'
+        ? canonicalIdentity.digits
+        : this.tryNormalizePhone(conversation.phoneNormalized);
 
     if (!phone) {
       return { available: false, url: null };
@@ -1815,7 +1830,13 @@ export class WhatsAppService {
     const client = dto.clientId
       ? await this.prisma.client.findUnique({
           where: { id: dto.clientId },
-          select: { id: true, name: true, phone: true, phoneNormalized: true },
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            phoneNormalized: true,
+            phoneE164: true,
+          },
         })
       : null;
 
@@ -1825,6 +1846,19 @@ export class WhatsAppService {
 
     if (client && !client.phoneNormalized) {
       throw new BadRequestException('Cliente nao possui telefone valido para WhatsApp.');
+    }
+
+    this.assertInternationalWhatsAppOutboundBlocked(client);
+
+    const directPhone = client ? null : dto.phone?.trim();
+    if (directPhone?.startsWith('+')) {
+      const directIdentity = normalizePhone(directPhone);
+
+      if (directIdentity.status !== 'valid') {
+        throw new BadRequestException('Telefone invalido para WhatsApp.');
+      }
+
+      this.assertInternationalWhatsAppOutboundBlocked({ phoneE164: directIdentity.e164 });
     }
 
     const phone = normalizeBrazilPhone(client?.phoneNormalized ?? dto.phone ?? '');
@@ -1897,6 +1931,7 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(conversation);
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -2205,6 +2240,7 @@ export class WhatsAppService {
       throw new BadRequestException('Conversa WhatsApp sem telefone disponivel.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(conversation);
     const connection = conversation.whatsAppConnection;
 
     if (
@@ -2263,6 +2299,7 @@ export class WhatsAppService {
     }
 
     const conversation = target.conversation;
+    this.assertInternationalWhatsAppOutboundBlocked(conversation);
     const connection = conversation.whatsAppConnection;
 
     if (
@@ -2349,6 +2386,7 @@ export class WhatsAppService {
     }
 
     const conversation = target.conversation;
+    this.assertInternationalWhatsAppOutboundBlocked(conversation);
     const connection = conversation.whatsAppConnection;
 
     if (
@@ -2422,6 +2460,7 @@ export class WhatsAppService {
       }
 
       const conversation = target.conversation;
+      this.assertInternationalWhatsAppOutboundBlocked(conversation);
       const connection = conversation.whatsAppConnection;
 
       if (
@@ -2565,6 +2604,7 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(conversation);
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -2776,6 +2816,7 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(conversation);
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -2916,6 +2957,7 @@ export class WhatsAppService {
       throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(message.conversation);
     if (message.direction !== 'OUTBOUND') {
       throw new ConflictException('Somente mensagens outbound podem ser reenviadas.');
     }
@@ -3428,6 +3470,8 @@ export class WhatsAppService {
       });
     }
 
+    const approvedPhoneE164 = this.requireBrazilianPendingContactPhone(pending);
+
     const dueDate = parseBusinessDate(dto.dueDate);
     await this.plansService.ensureActivePlan(dto.planId);
     const generateInitialReceivable = dto.generateInitialReceivable ?? true;
@@ -3440,6 +3484,10 @@ export class WhatsAppService {
             name: dto.name.trim(),
             phone: pending.phone,
             phoneNormalized: pending.phoneNormalized,
+            phoneE164:
+              this.config.get<string>('PHONE_INTERNATIONAL_ENABLED') === 'true'
+                ? approvedPhoneE164
+                : null,
             email: this.optionalTrim(dto.email),
             reference: dto.reference.trim(),
             planId: dto.planId,
@@ -3541,6 +3589,37 @@ export class WhatsAppService {
     }
   }
 
+  private requireBrazilianPendingContactPhone(pending: {
+    phone: string;
+    phoneNormalized: string;
+    phoneE164?: string | null;
+  }) {
+    const legacyIdentity = normalizePhone(`+${pending.phoneNormalized}`);
+
+    if (legacyIdentity.status !== 'valid' || legacyIdentity.country !== 'BR') {
+      throw new ConflictException(
+        'A aprovacao deste contato aguarda a integracao segura de telefones internacionais.',
+      );
+    }
+
+    if (!pending.phoneE164) return legacyIdentity.e164;
+
+    const canonicalIdentity = normalizePhone(pending.phoneE164);
+    const comparison = comparePhoneIdentities(pending.phoneE164, legacyIdentity.e164);
+
+    if (
+      canonicalIdentity.status !== 'valid' ||
+      canonicalIdentity.country !== 'BR' ||
+      comparison.status !== 'match'
+    ) {
+      throw new ConflictException(
+        'As identidades de telefone do contato estao divergentes e exigem revisao.',
+      );
+    }
+
+    return canonicalIdentity.e164;
+  }
+
   private async processInitialActivationAfterApproval(input: {
     clientId: string;
     receivableId: string | null;
@@ -3634,6 +3713,7 @@ export class WhatsAppService {
       throw new ConflictException('Conexao WhatsApp nao esta operacional.');
     }
 
+    this.assertInternationalWhatsAppOutboundBlocked(receivable.client);
     const phone = normalizeBrazilPhone(receivable.client!.phoneNormalized);
     const body = this.renderInitialActivationTemplate(template.content, {
       nome: receivable.client!.name,
@@ -3665,6 +3745,29 @@ export class WhatsAppService {
     }
 
     try {
+      const latestReceivable = await this.prisma.receivable.findUnique({
+        where: { id: receivableId },
+        include: { client: true, clientReference: { include: { plan: true } } },
+      });
+
+      if (
+        !latestReceivable ||
+        latestReceivable.clientId !== clientId ||
+        latestReceivable.status !== 'PENDENTE' ||
+        !latestReceivable.client?.phoneNormalized
+      ) {
+        throw new ConflictException(
+          'Cobranca ou destinatario foi alterado antes do envio. Tente novamente.',
+        );
+      }
+
+      this.assertInternationalWhatsAppOutboundBlocked(latestReceivable.client);
+      if (normalizeBrazilPhone(latestReceivable.client.phoneNormalized) !== dispatch.phone) {
+        throw new ConflictException(
+          'Telefone do cliente foi alterado antes do envio. Tente novamente.',
+        );
+      }
+
       const sentResult = await this.mapProviderError(() =>
         this.provider.sendText(instanceToken, { phone, body, requestId }),
       );
@@ -3759,7 +3862,7 @@ export class WhatsAppService {
       return { received: true, processed: false, reason: 'connection_not_found' };
     }
 
-    const clients = await this.findClientsForIncomingPhone(incoming.phone);
+    const clients = await this.findClientsForIncomingPhone(incoming);
 
     if (normalized.direction === 'OUTGOING') {
       const conversationResult = await this.processConversationWebhookSafely(
@@ -3775,9 +3878,22 @@ export class WhatsAppService {
       };
     }
 
-    const legacyResult = await this.processIncomingWebhook(connection.id, incoming, clients);
+    const ambiguousLegacyIdentity = await this.hasAmbiguousLegacyInternationalIdentity(
+      connection.id,
+      incoming,
+    );
+    const legacyResult = await this.processIncomingWebhook(
+      connection.id,
+      incoming,
+      clients,
+      ambiguousLegacyIdentity,
+    );
 
     if (legacyResult.action === 'duplicate_message') {
+      return { received: true, ...legacyResult };
+    }
+
+    if (legacyResult.action === 'ambiguous_legacy_phone_identity') {
       return { received: true, ...legacyResult };
     }
 
@@ -3786,7 +3902,7 @@ export class WhatsAppService {
       incoming,
       clients,
     );
-    await this.triggerAutoReplySafely(connection.id, conversationResult);
+    await this.triggerAutoReplySafely(connection.id, conversationResult, incoming);
     return { received: true, ...legacyResult, conversation: conversationResult };
   }
 
@@ -3798,8 +3914,10 @@ export class WhatsAppService {
       messageId?: string;
       processed?: boolean;
     },
+    normalized: Pick<NormalizedWhatsAppMessage, 'phoneCountry'>,
   ) {
     if (
+      (normalized.phoneCountry !== undefined && normalized.phoneCountry !== 'BR') ||
       !this.autoReplyService ||
       !result.processed ||
       result.action !== 'conversation_message_persisted' ||
@@ -4405,6 +4523,7 @@ export class WhatsAppService {
     connectionId: string,
     normalized: NormalizedWhatsAppMessage & { phone: string },
     clients: Array<{ id: string }>,
+    ambiguousLegacyIdentity = false,
   ) {
     const client = clients.length === 1 ? clients[0] : null;
 
@@ -4427,6 +4546,14 @@ export class WhatsAppService {
             mediaMetadata: (normalized.mediaMetadata ?? Prisma.JsonNull) as Prisma.InputJsonValue,
           },
         });
+
+        if (ambiguousLegacyIdentity) {
+          return {
+            processed: false,
+            action: 'ambiguous_legacy_phone_identity',
+            inboundMessageId: inbound.id,
+          };
+        }
 
         if (client) {
           return { processed: true, action: 'client_exists', inboundMessageId: inbound.id };
@@ -4452,6 +4579,7 @@ export class WhatsAppService {
             whatsAppConnectionId: connectionId,
             phone: normalized.phone,
             phoneNormalized: normalized.phone,
+            phoneE164: normalized.phoneE164 ?? null,
             contactName: normalized.contactName,
             status: 'PENDENTE',
             firstMessageText: normalized.text,
@@ -4498,10 +4626,20 @@ export class WhatsAppService {
     try {
       return await this.processConversationWebhook(connection, normalized, clients);
     } catch (error) {
-      const message = this.sanitizeError(error);
+      let failure = error;
+
+      if (this.isConversationIdentityConflict(error)) {
+        try {
+          return await this.processConversationWebhook(connection, normalized, clients);
+        } catch (retryError) {
+          failure = retryError;
+        }
+      }
+
+      const message = this.sanitizeError(failure);
       this.logger.warn(
         `Falha ao persistir historico conversacional WhatsApp: operation=processConversationWebhook ${this.prismaErrorLogDetails(
-          error,
+          failure,
         )} message=${message}`,
       );
       return {
@@ -4998,14 +5136,7 @@ export class WhatsAppService {
     },
   ): Promise<WhatsAppConversation> {
     const { connection, normalized, matchedClientId } = input;
-    const existing = await tx.whatsAppConversation.findUnique({
-      where: {
-        whatsAppConnectionId_phoneNormalized: {
-          whatsAppConnectionId: connection.id,
-          phoneNormalized: normalized.phone,
-        },
-      },
-    });
+    const existing = await this.findWebhookConversationByIdentity(tx, connection.id, normalized);
 
     if (!existing) {
       const contactName = this.trustedWebhookContactName(normalized, connection);
@@ -5020,6 +5151,7 @@ export class WhatsAppService {
           contactName,
           phone: normalized.phone,
           phoneNormalized: normalized.phone,
+          phoneE164: normalized.phoneE164 ?? null,
           status: 'OPEN',
         },
       });
@@ -5030,6 +5162,9 @@ export class WhatsAppService {
       ...(contactName ? { contactName } : {}),
       ...(normalized.instanceName ? { instanceName: normalized.instanceName } : {}),
       ...(normalized.providerUserId ? { externalInstanceId: normalized.providerUserId } : {}),
+      ...(normalized.phoneE164 && existing.phoneE164 === null
+        ? { phoneE164: normalized.phoneE164 }
+        : {}),
       ...(existing.clientId === null && matchedClientId
         ? { client: { connect: { id: matchedClientId } } }
         : {}),
@@ -5042,6 +5177,29 @@ export class WhatsAppService {
     return tx.whatsAppConversation.update({
       where: { id: existing.id },
       data,
+    });
+  }
+
+  private async findWebhookConversationByIdentity(
+    tx: Prisma.TransactionClient,
+    whatsAppConnectionId: string,
+    normalized: Pick<NormalizedWhatsAppMessage, 'phone' | 'phoneE164'> & { phone: string },
+  ) {
+    if (normalized.phoneE164) {
+      const canonical = await tx.whatsAppConversation.findFirst({
+        where: { whatsAppConnectionId, phoneE164: normalized.phoneE164 },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (canonical) return canonical;
+    }
+
+    return tx.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId,
+          phoneNormalized: normalized.phone,
+        },
+      },
     });
   }
 
@@ -5135,7 +5293,19 @@ export class WhatsAppService {
   }
 
   private brazilPhoneMatchingCandidates(phoneNormalized: string) {
-    const normalized = this.tryNormalizePhone(phoneNormalized);
+    const digits = phoneNormalized.replace(/\D/g, '');
+    const identity = normalizePhone(`+${digits}`);
+
+    if (identity.status === 'valid' && identity.country !== 'BR') {
+      return [identity.digits];
+    }
+
+    const normalized =
+      identity.status === 'valid' && identity.country === 'BR'
+        ? identity.digits
+        : digits.startsWith('55')
+          ? this.tryNormalizePhone(digits)
+          : null;
     if (!normalized) {
       return [];
     }
@@ -5473,7 +5643,11 @@ export class WhatsAppService {
       return null;
     }
 
-    return this.tryNormalizePhone(raw.replace(/@s\.whatsapp\.net$/i, '').split(':')[0] ?? raw);
+    const cleaned = raw.replace(/@s\.whatsapp\.net$/i, '').split(':')[0] ?? raw;
+    const digits = cleaned.replace(/\D/g, '');
+    const identity = normalizePhone(cleaned.startsWith('+') ? cleaned : `+${digits}`);
+    if (identity.status === 'valid') return identity.digits;
+    return digits.startsWith('55') ? this.tryNormalizePhone(digits) : null;
   }
 
   private buildConversationWhere(
@@ -5521,7 +5695,9 @@ export class WhatsAppService {
         return where;
       }
 
-      const normalizedPhone = this.tryNormalizePhone(search);
+      const canonical = normalizePhone(search);
+      const normalizedPhone =
+        canonical.status === 'valid' ? canonical.digits : this.tryNormalizePhone(search);
       where.OR = [
         { contactName: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search, mode: 'insensitive' } },
@@ -5531,6 +5707,8 @@ export class WhatsAppService {
         ...(normalizedPhone
           ? [{ client: { phoneNormalized: { contains: normalizedPhone } } }]
           : []),
+        ...(canonical.status === 'valid' ? [{ phoneE164: canonical.e164 }] : []),
+        ...(canonical.status === 'valid' ? [{ client: { phoneE164: canonical.e164 } }] : []),
       ];
     }
 
@@ -6674,10 +6852,13 @@ export class WhatsAppService {
 
     if (query.search) {
       const search = query.search.trim();
-      const normalizedPhone = this.tryNormalizePhone(search);
+      const canonical = normalizePhone(search);
+      const normalizedPhone =
+        canonical.status === 'valid' ? canonical.digits : this.tryNormalizePhone(search);
       where.OR = [
         { contactName: { contains: search, mode: 'insensitive' } },
         ...(normalizedPhone ? [{ phoneNormalized: { contains: normalizedPhone } }] : []),
+        ...(canonical.status === 'valid' ? [{ phoneE164: canonical.e164 }] : []),
       ];
     }
 
@@ -6702,6 +6883,7 @@ export class WhatsAppService {
     normalized: NormalizedWhatsAppMessage & { phone: string },
   ): Prisma.WhatsAppPendingContactUpdateInput {
     return {
+      ...(normalized.phoneE164 ? { phoneE164: normalized.phoneE164 } : {}),
       ...(normalized.contactName ? { contactName: normalized.contactName } : {}),
       lastMessageText: normalized.text,
       lastMessageType: this.toPrismaMessageType(normalized.messageType),
@@ -6732,6 +6914,31 @@ export class WhatsAppService {
     }
   }
 
+  private assertInternationalWhatsAppOutboundBlocked(
+    input: { phoneE164?: string | null } | null | undefined,
+  ) {
+    if (!input?.phoneE164) return;
+
+    const identity = normalizePhone(input.phoneE164);
+    if (identity.status === 'valid' && identity.country === 'BR') return;
+
+    throw new ConflictException({
+      code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED',
+      message:
+        'Envios para telefones internacionais permanecem indisponiveis ate a conclusao da migracao coordenada.',
+    });
+  }
+
+  private assertInternationalWhatsAppPhoneBlocked(phone: string) {
+    const digits = phone.replace(/\D/g, '');
+    if (!digits) return;
+
+    const identity = normalizePhone(`+${digits}`);
+    if (identity.status !== 'valid' || identity.country === 'BR') return;
+
+    this.assertInternationalWhatsAppOutboundBlocked({ phoneE164: identity.e164 });
+  }
+
   private resolveKiragoMarkReadPhone(conversationId: string, phoneNormalized: string) {
     const legacyVariant = brazilCanonicalMobileToLegacyVariant(phoneNormalized);
 
@@ -6752,20 +6959,76 @@ export class WhatsAppService {
     });
   }
 
-  private async findClientsForIncomingPhone(phoneNormalized: string) {
-    const exactMatches = await this.findClientsByPhone(phoneNormalized);
+  private async hasAmbiguousLegacyInternationalIdentity(
+    whatsAppConnectionId: string,
+    normalized: Pick<NormalizedWhatsAppMessage, 'phone' | 'phoneE164'> & { phone: string },
+  ) {
+    if (!normalized.phoneE164) return false;
+
+    const canonical = normalizePhone(normalized.phoneE164);
+    if (canonical.status !== 'valid' || canonical.country === 'BR') return false;
+
+    const legacyCorruptedPhone = this.tryNormalizePhone(normalized.phone);
+    if (!legacyCorruptedPhone || legacyCorruptedPhone === normalized.phone) return false;
+
+    const [conversations, pendingContacts] = await Promise.all([
+      this.prisma.whatsAppConversation.findMany({
+        where: {
+          whatsAppConnectionId,
+          phoneNormalized: legacyCorruptedPhone,
+          phoneE164: null,
+        },
+        select: { id: true },
+        take: 1,
+      }),
+      this.prisma.whatsAppPendingContact.findMany({
+        where: {
+          whatsAppConnectionId,
+          phoneNormalized: legacyCorruptedPhone,
+          phoneE164: null,
+        },
+        select: { id: true },
+        take: 1,
+      }),
+    ]);
+
+    return conversations.length > 0 || pendingContacts.length > 0;
+  }
+
+  private async findClientsForIncomingPhone(
+    normalized: Pick<NormalizedWhatsAppMessage, 'phone' | 'phoneE164' | 'phoneCountry'> & {
+      phone: string;
+    },
+  ) {
+    if (normalized.phoneE164 && normalized.phoneCountry !== 'BR') {
+      const canonicalMatches = await this.prisma.client.findMany({
+        where: { phoneE164: normalized.phoneE164 },
+        orderBy: { createdAt: 'asc' },
+        take: 2,
+      });
+      return canonicalMatches;
+    }
+
+    const exactMatches = await this.findClientsByPhone(normalized.phone);
 
     if (exactMatches.length > 0) {
       return exactMatches;
     }
 
-    const legacyVariant = brazilLegacyMobileVariant(phoneNormalized);
+    const legacyVariant = brazilLegacyMobileVariant(normalized.phone);
 
-    if (!legacyVariant) {
-      return exactMatches;
+    if (legacyVariant) {
+      const legacyMatches = await this.findClientsByPhone(legacyVariant);
+      if (legacyMatches.length > 0) return legacyMatches;
     }
 
-    return this.findClientsByPhone(legacyVariant);
+    if (!normalized.phoneE164) return exactMatches;
+
+    return this.prisma.client.findMany({
+      where: { phoneE164: normalized.phoneE164 },
+      orderBy: { createdAt: 'asc' },
+      take: 2,
+    });
   }
 
   private async createPendingDispatch(input: {
@@ -7232,6 +7495,35 @@ export class WhatsAppService {
     };
   }
 
+  private loadPixPaymentIntent(paymentIntentId: string) {
+    return this.prisma.paymentIntent.findUnique({
+      where: { id: paymentIntentId },
+      include: {
+        receivable: {
+          include: {
+            client: true,
+            clientReference: true,
+          },
+        },
+        paymentGroup: {
+          include: {
+            client: true,
+            items: {
+              include: {
+                receivable: {
+                  include: {
+                    clientReference: true,
+                  },
+                },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        },
+      },
+    });
+  }
+
   private validatePixIntentForWhatsApp(
     intent: PixPaymentIntentForWhatsApp | null,
   ): asserts intent is PixPaymentIntentForWhatsApp {
@@ -7688,6 +7980,7 @@ export class WhatsAppService {
       contactName,
       phone: conversation.phone,
       phoneNormalized: conversation.phoneNormalized,
+      phoneE164: conversation.phoneE164,
       status: conversation.status,
       lastMessageAt: conversation.lastMessageAt,
       lastMessagePreview: conversation.lastMessagePreview,
@@ -7992,6 +8285,7 @@ export class WhatsAppService {
       whatsAppConnectionId: contact.whatsAppConnectionId,
       phone: contact.phone,
       phoneNormalized: contact.phoneNormalized,
+      phoneE164: contact.phoneE164,
       contactName: contact.contactName,
       status: contact.status,
       firstMessageText: contact.firstMessageText,
@@ -8740,6 +9034,25 @@ export class WhatsAppService {
 
     const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : '';
     return target.includes('providerMessageId') || target.includes('requestId');
+  }
+
+  private isConversationIdentityConflict(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+      return false;
+    }
+
+    const rawTarget = error.meta?.target;
+    const target = Array.isArray(rawTarget)
+      ? rawTarget.join(',')
+      : typeof rawTarget === 'string'
+        ? rawTarget
+        : '';
+
+    return (
+      target.includes('phoneE164') ||
+      target.includes('phoneNormalized') ||
+      target.includes('whatsapp_conversations_connection_phone_e164_unique')
+    );
   }
 
   private isPrismaUniqueConstraint(error: unknown) {

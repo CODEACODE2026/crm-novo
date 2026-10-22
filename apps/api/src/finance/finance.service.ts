@@ -29,7 +29,7 @@ import {
   parseSaoPauloBusinessDate,
   getBusinessDateDay,
 } from '../clients/utils/business-date';
-import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
+import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
@@ -1041,6 +1041,7 @@ export class FinanceService {
         if (!client) {
           throw new ConflictException('Contas agrupadas exigem cliente cadastrado.');
         }
+        const operationalPayerPhone = this.requireBrazilianFinancialPhone(client);
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
@@ -1071,7 +1072,7 @@ export class FinanceService {
           description,
           expiresAt,
           clientName: client.name,
-          payerPhone: client.phoneNormalized,
+          payerPhone: operationalPayerPhone,
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -1197,6 +1198,7 @@ export class FinanceService {
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
+        const operationalPayerPhone = this.requireBrazilianFinancialPhone(client);
         const providerPix = await this.paymentProvider.createPix({
           provider: dto.provider,
           receivableId: currentIntent.paymentGroupId,
@@ -1204,7 +1206,7 @@ export class FinanceService {
           description,
           expiresAt,
           clientName: client.name,
-          payerPhone: client.phoneNormalized,
+          payerPhone: operationalPayerPhone,
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -2729,6 +2731,7 @@ export class FinanceService {
         throw new BadRequestException('Cliente obrigatorio para cobranca avulsa cadastrada.');
       }
 
+      await this.acquireClientPhoneLock(tx, dto.clientId);
       const client = await tx.client.findUnique({ where: { id: dto.clientId } });
 
       if (!client) {
@@ -2739,7 +2742,7 @@ export class FinanceService {
         clientId: client.id,
         payerName: client.name,
         payerPhone: client.phone,
-        payerPhoneNormalized: client.phoneNormalized,
+        payerPhoneNormalized: this.requireBrazilianFinancialPhone(client),
       };
     }
 
@@ -2758,18 +2761,23 @@ export class FinanceService {
       throw new BadRequestException('Telefone do pagador obrigatorio.');
     }
 
-    let payerPhoneNormalized: string;
-    try {
-      payerPhoneNormalized = normalizeBrazilPhone(payerPhone);
-    } catch {
-      throw new BadRequestException('Telefone do pagador invalido.');
+    const payerIdentity = resolveBrazilianOperationalPhone({
+      phone: payerPhone,
+      phoneNormalized: payerPhone,
+    });
+    if (payerIdentity.status !== 'valid') {
+      throw new BadRequestException(
+        payerIdentity.reason === 'INTERNATIONAL_PHONE'
+          ? 'Telefone internacional do pagador ainda nao esta habilitado.'
+          : 'Telefone do pagador invalido.',
+      );
     }
 
     return {
       clientId: null,
       payerName,
       payerPhone,
-      payerPhoneNormalized,
+      payerPhoneNormalized: payerIdentity.digits,
     };
   }
 
@@ -2793,7 +2801,10 @@ export class FinanceService {
 
       return {
         name: receivable.payerName,
-        phoneNormalized: receivable.payerPhoneNormalized,
+        phoneNormalized: this.requireBrazilianFinancialPhone({
+          phone: receivable.payerPhone,
+          phoneNormalized: receivable.payerPhoneNormalized,
+        }),
       };
     }
 
@@ -2803,8 +2814,30 @@ export class FinanceService {
 
     return {
       name: receivable.client.name,
-      phoneNormalized: receivable.client.phoneNormalized,
+      phoneNormalized: this.requireBrazilianFinancialPhone(receivable.client),
     };
+  }
+
+  private requireBrazilianFinancialPhone(input: {
+    phone?: string | null;
+    phoneNormalized: string;
+    phoneE164?: string | null;
+  }) {
+    const identity = resolveBrazilianOperationalPhone(input);
+
+    if (identity.status === 'valid') {
+      return identity.digits;
+    }
+
+    if (identity.reason === 'INTERNATIONAL_PHONE') {
+      throw new ConflictException('Operacao financeira internacional ainda nao esta habilitada.');
+    }
+
+    if (identity.reason === 'PHONE_IDENTITY_MISMATCH') {
+      throw new ConflictException('Identidades telefonicas do pagador estao divergentes.');
+    }
+
+    throw new ConflictException('Telefone do pagador invalido.');
   }
 
   private async resolvePixProvider(input: {
@@ -4176,7 +4209,22 @@ export class FinanceService {
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
         `pix:receivable:${receivableId}`,
       );
+      await executable.$executeRawUnsafe(
+        'SELECT c.id FROM clients c JOIN receivables r ON r."clientId" = c.id WHERE r.id = $1::uuid FOR UPDATE OF c',
+        receivableId,
+      );
     }
+  }
+
+  private async acquireClientPhoneLock(tx: Prisma.TransactionClient, clientId: string) {
+    const executable = tx as Prisma.TransactionClient & {
+      $executeRawUnsafe?: (query: string, ...values: unknown[]) => Promise<unknown>;
+    };
+
+    await executable.$executeRawUnsafe?.(
+      'SELECT id FROM clients WHERE id = $1::uuid FOR UPDATE',
+      clientId,
+    );
   }
 
   private async ensureNoActivePixForReceivables(

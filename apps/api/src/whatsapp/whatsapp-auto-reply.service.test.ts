@@ -495,4 +495,21 @@ describe('WhatsAppAutoReplyService', () => {
       }),
     ).resolves.toMatchObject({ sent: true });
   });
+
+  it('blocks international auto-reply before reserving a message or calling the provider', async () => {
+    const { service, prisma, provider } = factory({
+      context: context({ phoneNormalized: '14076390665', phoneE164: '+14076390665' }),
+    });
+
+    await expect(
+      service.tryReplyToInbound({
+        whatsAppConnectionId: connectionId,
+        conversationId,
+        triggerMessageId,
+      }),
+    ).resolves.toEqual({ sent: false, reason: 'international_outbound_disabled' });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
 });

@@ -974,4 +974,56 @@ describe('KiragoWebhookNormalizer', () => {
 
     expect(result?.phone).toBe('5544998212815');
   });
+
+  it.each([
+    ['US', '14076390665@s.whatsapp.net', '+14076390665'],
+    ['PT', '351912345678@s.whatsapp.net', '+351912345678'],
+    ['GB', '442079460958@s.whatsapp.net', '+442079460958'],
+    ['AR', '5491123456789@s.whatsapp.net', '+5491123456789'],
+  ])(
+    'preserves an explicit %s provider identity without fabricating DDI 55',
+    (country, jid, e164) => {
+      const result = normalizer.normalize(
+        payload({
+          jid: { contact: { pn: jid }, chat: { pn: jid }, sender: { pn: jid } },
+          event: {
+            Info: { ...payload().event.Info, Chat: jid, Sender: jid },
+            Message: { conversation: 'International inbound' },
+          },
+        }),
+        receivedAt,
+      );
+
+      expect(result).toMatchObject({
+        phone: e164.slice(1),
+        phoneE164: e164,
+        phoneCountry: country,
+      });
+      expect(result?.phone).not.toMatch(/^55/);
+    },
+  );
+
+  it('keeps a pure LID separate from telephone identity even when it contains many digits', () => {
+    const result = normalizer.normalize(
+      payload({
+        jid: {
+          contact: { pn: '14076390665@lid' },
+          chat: { raw: '14076390665@lid' },
+          sender: { raw: '14076390665@lid' },
+        },
+        event: {
+          Info: {
+            ...payload().event.Info,
+            Chat: '14076390665@lid',
+            Sender: '14076390665@lid',
+            SenderAlt: undefined,
+          },
+          Message: { conversation: 'LID only' },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({ phone: null, phoneE164: null, phoneCountry: null });
+  });
 });

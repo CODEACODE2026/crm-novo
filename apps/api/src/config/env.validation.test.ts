@@ -19,6 +19,21 @@ function productionEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe('validateEnv', () => {
+  it('defaults the international phone feature to disabled when absent', () => {
+    expect(validateEnv({ NODE_ENV: 'test' }).PHONE_INTERNATIONAL_ENABLED).toBeUndefined();
+  });
+
+  it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_ENABLED=%s', (value) => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_ENABLED: value })).toMatchObject({
+      PHONE_INTERNATIONAL_ENABLED: value,
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])('rejects invalid PHONE_INTERNATIONAL_ENABLED=%j', (value) => {
+    expect(() => validateEnv({ PHONE_INTERNATIONAL_ENABLED: value })).toThrow(
+      'PHONE_INTERNATIONAL_ENABLED deve ser true ou false.',
+    );
+  });
   it('accepts a complete production env', () => {
     const env = productionEnv();
 

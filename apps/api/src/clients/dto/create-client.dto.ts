@@ -6,6 +6,7 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  Matches,
   IsString,
   IsUUID,
   Min,
@@ -21,6 +22,11 @@ export class CreateClientDto {
   @IsString()
   @MinLength(8)
   phone!: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z]{2}$/)
+  phoneCountry?: string;
 
   @IsOptional()
   @IsEmail()

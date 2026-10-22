@@ -77,4 +77,25 @@ describe('ClientForm manual initial billing source', () => {
     expect(clientFormSource).toContain('event.target instanceof HTMLTextAreaElement');
     expect(clientFormSource).toContain('event.preventDefault()');
   });
+
+  it('loads backend phone capabilities and only exposes country controls when enabled', () => {
+    expect(clientFormSource).toContain('getClientPhoneCapabilities()');
+    expect(clientFormSource).toContain('phoneCapabilities?.enabled === true');
+    expect(clientFormSource).toContain('País do telefone');
+    expect(clientFormSource).toContain('supportedCountries.map');
+    expect(clientFormSource).toContain('(+{item.callingCode})');
+  });
+
+  it('does not rewrite an unchanged phone during edits', () => {
+    expect(clientFormSource).toContain('const phoneChanged = phone !== initialPhone');
+    expect(clientFormSource).toContain('if (phoneChanged)');
+    expect(clientFormSource).toContain('payload.phone = phone');
+    expect(clientFormSource).not.toContain('const payload: ClientUpdatePayload = { name, phone }');
+  });
+
+  it('blocks foreign persistence until WhatsApp and Billing are ready', () => {
+    expect(clientFormSource).toContain('internationalWriteBlocked');
+    expect(clientFormSource).toContain('integração segura com WhatsApp e Billing');
+    expect(clientFormSource).toContain('disabled={loading || internationalWriteBlocked}');
+  });
 });

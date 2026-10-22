@@ -21,7 +21,7 @@ import {
 } from '@prisma/client';
 import { BillingTemplateRenderer } from '../billing/billing-template-renderer';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
-import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
+import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
@@ -448,6 +448,11 @@ export class RecoveryService {
       return null;
     }
 
+    const operationalPhone = resolveBrazilianOperationalPhone(client);
+    if (operationalPhone.status !== 'valid') {
+      return null;
+    }
+
     const existing = await tx.recoveryCampaign.findFirst({
       where: {
         ...(receivableId ? { receivableId } : { clientId: client.id }),
@@ -532,7 +537,7 @@ export class RecoveryService {
           recoveryCampaignId: campaign.id,
           templateId: template.id,
           whatsAppConnectionId: connection?.id ?? null,
-          phone: normalizeBrazilPhone(client.phoneNormalized),
+          phone: operationalPhone.digits,
           body: renderedContent,
           renderedContent,
           origin: 'RECOVERY',
@@ -604,6 +609,15 @@ export class RecoveryService {
     const expectedStepNumbers = new Set(stepsConfig.map((step) => step.stepNumber));
     const templates = await this.ensureRecoveryTemplates(this.prisma);
     const connection = await this.findOperationalConnection(this.prisma, null);
+    const operationalPhone = resolveBrazilianOperationalPhone(campaign.client);
+
+    if (operationalPhone.status !== 'valid') {
+      const blocker = this.recoveryPhoneBlockReason(operationalPhone.reason);
+      await this.prisma.$transaction((tx) =>
+        this.cancelCampaignById(tx, campaign.id, blocker.message, blocker.code, undefined),
+      );
+      return { kept, created, canceled: canceled + 1 };
+    }
 
     for (const expected of stepsConfig) {
       const step = campaign.steps.find((item) => item.stepNumber === expected.stepNumber);
@@ -726,7 +740,7 @@ export class RecoveryService {
               recoveryCampaignId: campaign.id,
               templateId: template.id,
               whatsAppConnectionId: connection?.id ?? null,
-              phone: normalizeBrazilPhone(campaign.client.phoneNormalized),
+              phone: operationalPhone.digits,
               body: renderedContent,
               renderedContent,
               origin: 'RECOVERY',
@@ -825,13 +839,41 @@ export class RecoveryService {
       );
     }
 
-    const body = dispatch.renderedContent ?? dispatch.body;
-    const requestId = dispatch.idempotencyKey ?? dispatch.requestId;
+    const latestDispatch = await this.prisma.messageDispatch.findUnique({
+      where: { id },
+      include: {
+        client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
+        receivable: true,
+        template: true,
+        whatsAppConnection: true,
+        recoveryCampaign: { include: { steps: true } },
+        recoveryStep: true,
+      },
+    });
+
+    if (!latestDispatch) {
+      return { id, status: 'missing' };
+    }
+
+    const latestIneligible = await this.findIneligibleReason(latestDispatch);
+
+    if (latestIneligible) {
+      const updated = await this.markIneligible(
+        latestDispatch,
+        latestIneligible.code,
+        latestIneligible.message,
+      );
+      return this.presentDispatch(updated);
+    }
+
+    const body = latestDispatch.renderedContent ?? latestDispatch.body;
+    const requestId = latestDispatch.idempotencyKey ?? latestDispatch.requestId;
 
     try {
       const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
       const result = await this.provider.sendText(instanceToken, {
-        phone: dispatch.phone,
+        phone: latestDispatch.phone,
         body,
         requestId,
       });
@@ -859,21 +901,25 @@ export class RecoveryService {
           },
         });
 
-        if (dispatch.recoveryStep) {
+        if (latestDispatch.recoveryStep) {
           await tx.recoveryCampaignStep.update({
-            where: { id: dispatch.recoveryStep.id },
+            where: { id: latestDispatch.recoveryStep.id },
             data: { status: 'SENT', sentAt: new Date() },
           });
         }
 
-        if (dispatch.client && dispatch.recoveryCampaign && dispatch.recoveryStep) {
-          await this.ensureSentTimelineEvent(tx, dispatch.client.id, id, {
-            campaignId: dispatch.recoveryCampaign.id,
-            stepNumber: dispatch.recoveryStep.stepNumber,
-            delayDays: dispatch.recoveryStep.delayDays,
+        if (
+          latestDispatch.client &&
+          latestDispatch.recoveryCampaign &&
+          latestDispatch.recoveryStep
+        ) {
+          await this.ensureSentTimelineEvent(tx, latestDispatch.client.id, id, {
+            campaignId: latestDispatch.recoveryCampaign.id,
+            stepNumber: latestDispatch.recoveryStep.stepNumber,
+            delayDays: latestDispatch.recoveryStep.delayDays,
           });
 
-          await this.completeIfFinished(tx, dispatch.recoveryCampaign.id);
+          await this.completeIfFinished(tx, latestDispatch.recoveryCampaign.id);
         }
 
         return sent;
@@ -881,7 +927,7 @@ export class RecoveryService {
 
       return this.presentDispatch(updated);
     } catch (error) {
-      return this.markRetry(dispatch, 'PROVIDER_ERROR', this.sanitizeError(error), now);
+      return this.markRetry(latestDispatch, 'PROVIDER_ERROR', this.sanitizeError(error), now);
     }
   }
 
@@ -999,13 +1045,39 @@ export class RecoveryService {
       };
     }
 
-    try {
-      normalizeBrazilPhone(dispatch.phone);
-    } catch {
-      return { code: 'INVALID_PHONE', message: 'Telefone da recuperacao invalido.' };
+    const operationalPhone = resolveBrazilianOperationalPhone(dispatch.client);
+    if (operationalPhone.status !== 'valid') {
+      return this.recoveryPhoneBlockReason(operationalPhone.reason);
+    }
+
+    if (dispatch.phone !== operationalPhone.digits) {
+      return {
+        code: 'PHONE_IDENTITY_MISMATCH',
+        message: 'Destinatario da recuperacao diverge da identidade atual do cliente.',
+      };
     }
 
     return null;
+  }
+
+  private recoveryPhoneBlockReason(
+    reason: 'INTERNATIONAL_PHONE' | 'INVALID_PHONE' | 'PHONE_IDENTITY_MISMATCH',
+  ) {
+    if (reason === 'INTERNATIONAL_PHONE') {
+      return {
+        code: 'INTERNATIONAL_PHONE_BLOCKED',
+        message: 'Envio de recuperacao internacional ainda nao esta habilitado.',
+      };
+    }
+
+    if (reason === 'PHONE_IDENTITY_MISMATCH') {
+      return {
+        code: 'PHONE_IDENTITY_MISMATCH',
+        message: 'Identidades telefonicas do cliente estao divergentes.',
+      };
+    }
+
+    return { code: 'INVALID_PHONE', message: 'Telefone da recuperacao invalido.' };
   }
 
   private async markIneligible(

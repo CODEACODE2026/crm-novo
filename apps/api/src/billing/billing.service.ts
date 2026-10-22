@@ -20,9 +20,9 @@ import {
   type WhatsAppConnection,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
-import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
@@ -177,6 +177,12 @@ export class BillingService {
 
     for (const group of scheduledGroups) {
       const selectedTemplate = group.items.length > 1 ? groupedTemplate : template;
+      const operationalPhone = resolveBrazilianOperationalPhone(group.client);
+
+      if (operationalPhone.status !== 'valid') {
+        skipped += group.items.length;
+        continue;
+      }
 
       if (!selectedTemplate.active) {
         skipped += group.items.length;
@@ -220,7 +226,7 @@ export class BillingService {
             receivableId: firstItem.receivable.id,
             templateId: selectedTemplate.id,
             whatsAppConnectionId: connection.id,
-            phone: normalizeBrazilPhone(group.client.phoneNormalized),
+            phone: operationalPhone.digits,
             body: renderedContent,
             renderedContent,
             origin: 'BILLING',
@@ -798,6 +804,60 @@ export class BillingService {
       );
     }
 
+    const latestDispatch = await this.prisma.messageDispatch.findUnique({
+      where: { id },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+          orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+        },
+        template: true,
+        whatsAppConnection: true,
+      },
+    });
+
+    if (!latestDispatch) {
+      return { id, status: 'missing' };
+    }
+
+    const latestIneligible = this.findIneligibleReason(latestDispatch);
+
+    if (latestIneligible) {
+      const status = latestIneligible.code === 'RECEIVABLE_CANCELED' ? 'CANCELED' : 'IGNORED';
+      const updated = await this.prisma.messageDispatch.update({
+        where: { id },
+        data: {
+          status,
+          errorCode: latestIneligible.code,
+          errorMessage: latestIneligible.message,
+        },
+        include: {
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
+          template: true,
+          whatsAppConnection: true,
+        },
+      });
+
+      return this.presentDispatch(updated);
+    }
+
+    dispatch = latestDispatch;
+
     const body = dispatch.renderedContent ?? dispatch.body;
     const requestId = dispatch.idempotencyKey ?? dispatch.requestId;
 
@@ -1030,10 +1090,20 @@ export class BillingService {
       return { code: 'CLIENT_REFERENCE_NOT_ACTIVE', message: 'Referencia nao esta ativa.' };
     }
 
-    try {
-      normalizeBrazilPhone(dispatch.phone);
-    } catch {
-      return { code: 'INVALID_PHONE', message: 'Telefone da cobranca invalido.' };
+    if (!dispatch.client) {
+      return { code: 'CLIENT_MISSING', message: 'Cliente da cobranca nao encontrado.' };
+    }
+
+    const operationalPhone = resolveBrazilianOperationalPhone(dispatch.client);
+    if (operationalPhone.status !== 'valid') {
+      return this.billingPhoneBlockReason(operationalPhone.reason);
+    }
+
+    if (dispatch.phone !== operationalPhone.digits) {
+      return {
+        code: 'PHONE_IDENTITY_MISMATCH',
+        message: 'Destinatario da cobranca diverge da identidade atual do cliente.',
+      };
     }
 
     if (!dispatch.receivable) {
@@ -1069,7 +1139,7 @@ export class BillingService {
       };
     }
 
-    if (!dispatch.client || intent.clientId !== dispatch.client.id) {
+    if (intent.clientId !== dispatch.client.id) {
       return {
         code: 'BILLING_INTENT_MISMATCH',
         message: 'Intencao de cobranca nao corresponde aos dados atuais.',
@@ -1114,9 +1184,7 @@ export class BillingService {
     template: MessageTemplate,
     connection: WhatsAppConnection | null,
   ) {
-    try {
-      normalizeBrazilPhone(client.phoneNormalized);
-    } catch {
+    if (resolveBrazilianOperationalPhone(client).status !== 'valid') {
       return true;
     }
 
@@ -1254,12 +1322,27 @@ export class BillingService {
       return false;
     }
 
-    try {
-      normalizeBrazilPhone(client.phoneNormalized);
-      return true;
-    } catch {
-      return false;
+    return resolveBrazilianOperationalPhone(client).status === 'valid';
+  }
+
+  private billingPhoneBlockReason(
+    reason: 'INTERNATIONAL_PHONE' | 'INVALID_PHONE' | 'PHONE_IDENTITY_MISMATCH',
+  ) {
+    if (reason === 'INTERNATIONAL_PHONE') {
+      return {
+        code: 'INTERNATIONAL_PHONE_BLOCKED',
+        message: 'Envio financeiro internacional ainda nao esta habilitado.',
+      };
     }
+
+    if (reason === 'PHONE_IDENTITY_MISMATCH') {
+      return {
+        code: 'PHONE_IDENTITY_MISMATCH',
+        message: 'Identidades telefonicas do cliente estao divergentes.',
+      };
+    }
+
+    return { code: 'INVALID_PHONE', message: 'Telefone da cobranca invalido.' };
   }
 
   private async cancelObsoleteFutureDispatches(

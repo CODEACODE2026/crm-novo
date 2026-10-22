@@ -17,6 +17,8 @@ const weakSecretPatterns = [
 export function validateEnv(config: EnvConfig) {
   const nodeEnv = config.NODE_ENV ?? 'development';
 
+  validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_ENABLED');
+
   if (nodeEnv === 'production') {
     requireValue(config, 'DATABASE_URL');
     requireValue(config, 'JWT_SECRET');
@@ -34,6 +36,13 @@ export function validateEnv(config: EnvConfig) {
   }
 
   return config;
+}
+
+function validateOptionalBooleanFlag(config: EnvConfig, key: string) {
+  const value = config[key];
+  if (value !== undefined && value !== 'true' && value !== 'false') {
+    throw new Error(`${key} deve ser true ou false.`);
+  }
 }
 
 function requireValue(config: EnvConfig, key: string) {

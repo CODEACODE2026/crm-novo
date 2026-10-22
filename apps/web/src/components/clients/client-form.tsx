@@ -4,7 +4,9 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useStat
 import { Save } from 'lucide-react';
 import {
   listPaymentProviderCredentials,
+  getClientPhoneCapabilities,
   type Client,
+  type ClientPhoneCapabilities,
   type ClientPayload,
   type ClientUpdatePayload,
   type ConfigurablePaymentProvider,
@@ -68,6 +70,8 @@ export function ClientForm({
   const [name, setName] = useState(client?.name ?? initialValues?.name ?? '');
   const initialPhone = client?.phone ?? initialValues?.phone ?? '';
   const [phone, setPhone] = useState(initialPhone);
+  const [phoneCapabilities, setPhoneCapabilities] = useState<ClientPhoneCapabilities | null>(null);
+  const [phoneCountry, setPhoneCountry] = useState(client?.phoneCountry ?? 'BR');
   const [email, setEmail] = useState(client?.email ?? initialValues?.email ?? '');
   const [reference, setReference] = useState(client?.reference ?? initialValues?.reference ?? '');
   const [planId, setPlanId] = useState(initialPlan?.id ?? '');
@@ -149,6 +153,41 @@ export function ClientForm({
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+
+    void getClientPhoneCapabilities()
+      .then((capabilities) => {
+        if (active) setPhoneCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (active) setPhoneCapabilities(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const internationalPhoneEnabled = phoneCapabilities?.enabled === true;
+  const phoneChanged = phone !== initialPhone;
+  const internationalWriteBlocked =
+    internationalPhoneEnabled &&
+    phoneCountry !== 'BR' &&
+    phoneCapabilities.internationalWriteEnabled !== true &&
+    (!editing || phoneChanged);
+  const supportedCountries = useMemo(() => {
+    const displayNames = new Intl.DisplayNames(['pt-BR'], { type: 'region' });
+    return [...(phoneCapabilities?.supportedCountries ?? [])].sort((left, right) => {
+      if (left.country === 'BR') return -1;
+      if (right.country === 'BR') return 1;
+      return (displayNames.of(left.country) ?? left.country).localeCompare(
+        displayNames.of(right.country) ?? right.country,
+        'pt-BR',
+      );
+    });
+  }, [phoneCapabilities]);
+
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
     const selectedPlan = sortedPlans.find((plan) => plan.id === nextPlanId);
@@ -171,7 +210,11 @@ export function ClientForm({
 
     try {
       if (editing) {
-        const payload: ClientUpdatePayload = { name, phone };
+        const payload: ClientUpdatePayload = { name };
+        if (phoneChanged) {
+          payload.phone = phone;
+          if (internationalPhoneEnabled) payload.phoneCountry = phoneCountry;
+        }
         const nextPreferredPixProvider =
           preferredPixProvider && preferredPixProvider !== unavailableProviderValue
             ? preferredPixProvider
@@ -204,6 +247,7 @@ export function ClientForm({
             : null,
         generateInitialReceivable,
       };
+      if (internationalPhoneEnabled) payload.phoneCountry = phoneCountry;
 
       if (email) payload.email = email;
       if (notes) payload.notes = notes;
@@ -245,6 +289,23 @@ export function ClientForm({
               <span>Nome</span>
               <input required value={name} onChange={(event) => setName(event.target.value)} />
             </label>
+            {internationalPhoneEnabled ? (
+              <label className="field">
+                <span>País do telefone</span>
+                <select
+                  value={phoneCountry}
+                  onChange={(event) => setPhoneCountry(event.target.value)}
+                >
+                  {supportedCountries.map((item) => (
+                    <option key={item.country} value={item.country}>
+                      {new Intl.DisplayNames(['pt-BR'], { type: 'region' }).of(item.country) ??
+                        item.country}{' '}
+                      (+{item.callingCode})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <label className="field">
               <span>WhatsApp</span>
               <input required value={phone} onChange={(event) => setPhone(event.target.value)} />
@@ -252,6 +313,12 @@ export function ClientForm({
                 <small>Telefone alterado a partir da conversa original: {initialPhone}</small>
               ) : null}
             </label>
+            {internationalWriteBlocked ? (
+              <div className="notice warning compact-notice form-grid-full" role="status">
+                O telefone foi reconhecido, mas o cadastro internacional será liberado somente após
+                a integração segura com WhatsApp e Billing.
+              </div>
+            ) : null}
             <label className="field">
               <span>E-mail</span>
               <input
@@ -431,7 +498,13 @@ export function ClientForm({
               Cancelar
             </Button>
           ) : null}
-          <Button disabled={loading} icon={Save} loading={loading} type="submit" variant="primary">
+          <Button
+            disabled={loading || internationalWriteBlocked}
+            icon={Save}
+            loading={loading}
+            type="submit"
+            variant="primary"
+          >
             {submitLabel}
           </Button>
         </div>

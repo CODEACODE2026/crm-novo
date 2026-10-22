@@ -1376,6 +1376,23 @@ describe('LegacyImportService', () => {
     expect(result.rows[1]?.errors).toEqual(expect.arrayContaining(['DUPLICATE_LEGACY_ID_IN_FILE']));
   });
 
+  it('rejects an explicit foreign phone before the legacy import can fabricate DDI 55', async () => {
+    const { service, writes } = createService();
+
+    const preview = await service.previewClients(
+      envelope([{ ...baseClient, id: 124, phone: '+1 (407) 639-0665' }]),
+    );
+
+    expect(preview.rows[0]).toMatchObject({
+      classification: 'INVALID',
+      phoneNormalized: null,
+    });
+    expect(preview.rows[0]?.errors).toContain('INVALID_PHONE');
+    expect(writes.clientCreate).not.toHaveBeenCalled();
+    expect(writes.clientReferenceCreate).not.toHaveBeenCalled();
+    expect(writes.receivableCreate).not.toHaveBeenCalled();
+  });
+
   it('keeps skipped status precedence over import-only validation errors', async () => {
     const { service } = createService();
 

@@ -1956,6 +1956,30 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
 }
 
 describe('FinanceService', () => {
+  it.each([
+    [
+      'canonical international identity',
+      { phone: '+1 (407) 639-0665', phoneNormalized: '14076390665', phoneE164: '+14076390665' },
+    ],
+    [
+      'legacy-corrupted international identity',
+      { phone: '+1 (407) 639-0665', phoneNormalized: '5514076390665', phoneE164: null },
+    ],
+  ])('blocks PIX creation for a %s before calling the provider', async (_label, phoneOverrides) => {
+    const fake = createFinancePrisma();
+    Object.assign(fake.client, phoneOverrides);
+    const service = createFinanceService(fake);
+
+    await expect(service.createReceivablePix(fake.receivable.id, actorUserId)).rejects.toThrow(
+      'internacional',
+    );
+
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
   it('rejects empty or whitespace-only financial category names', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(fake.prisma as never, {} as never, {} as never, {} as never);
@@ -3580,7 +3604,7 @@ describe('FinanceService', () => {
       expect.objectContaining({ amount: new Prisma.Decimal('120.00') }),
     );
     expect(fake.transactions).toHaveLength(3);
-    expect(fake.prisma.$executeRawUnsafe).toHaveBeenCalledTimes(3);
+    expect(fake.prisma.$executeRawUnsafe).toHaveBeenCalledTimes(6);
     expect(fake.prisma.$executeRawUnsafe).toHaveBeenNthCalledWith(
       1,
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
@@ -3796,7 +3820,7 @@ describe('FinanceService', () => {
     await service.createReceivablesPix({ receivableIds: shuffled }, actorUserId);
 
     expect(fake.prisma.$executeRawUnsafe.mock.calls.map((call) => call[1])).toEqual(
-      [...shuffled].sort().map((id) => `pix:receivable:${id}`),
+      [...shuffled].sort().flatMap((id) => [`pix:receivable:${id}`, id]),
     );
   });
 
@@ -9529,6 +9553,30 @@ describe('FinanceService', () => {
       fake.auditEvents.filter((event) => event.eventType === 'MANUAL_CHARGE_CREATED'),
     ).toHaveLength(1);
     expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('rejects an international guest manual charge without creating a financial snapshot', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.createManualCharge(
+        {
+          description: 'Cobranca internacional bloqueada',
+          categoryId: fake.entryCategory.id,
+          amount: 88.75,
+          dueDate: '2026-10-21',
+          payerType: ManualChargePayerType.GUEST,
+          payerName: 'Cliente Internacional',
+          payerPhone: '+351 912 345 678',
+          idempotencyKey: 'manual-key-international-blocked',
+        },
+        actorUserId,
+      ),
+    ).rejects.toThrow('internacional');
+
+    expect(fake.auditEvents).toHaveLength(0);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
   });
 
   it.each([

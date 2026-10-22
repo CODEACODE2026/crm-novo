@@ -41,6 +41,8 @@ export interface Client {
   name: string;
   phone: string;
   phoneNormalized: string;
+  phoneE164?: string | null;
+  phoneCountry?: string | null;
   email: string | null;
   reference: string;
   planId: string;
@@ -895,6 +897,7 @@ export interface WhatsAppConversation {
   contactName: string | null;
   phone: string;
   phoneNormalized: string;
+  phoneE164?: string | null;
   status: WhatsAppConversationStatus;
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
@@ -1594,6 +1597,7 @@ export interface WhatsAppPendingContact {
   whatsAppConnectionId: string;
   phone: string;
   phoneNormalized: string;
+  phoneE164?: string | null;
   contactName: string | null;
   status: WhatsAppPendingContactStatus;
   firstMessageText: string | null;
@@ -1690,6 +1694,7 @@ export interface PaginatedReferrals {
 export interface ClientPayload {
   name: string;
   phone: string;
+  phoneCountry?: string | undefined;
   email?: string | undefined;
   reference: string;
   planId: string;
@@ -1708,6 +1713,7 @@ export interface ClientPayload {
 export interface ClientUpdatePayload {
   name?: string | undefined;
   phone?: string | undefined;
+  phoneCountry?: string | undefined;
   email?: string | undefined;
   notes?: string | undefined;
   preferredPixProvider?: PaymentProviderCode | null | undefined;
@@ -2081,6 +2087,17 @@ export function importLegacyClients(payload: unknown) {
 
 export function getClient(id: string) {
   return apiFetch<Client>(`/clients/${id}`);
+}
+
+export interface ClientPhoneCapabilities {
+  enabled: boolean;
+  internationalWriteEnabled: boolean;
+  defaultCountry: 'BR';
+  supportedCountries: Array<{ country: string; callingCode: string }>;
+}
+
+export function getClientPhoneCapabilities() {
+  return apiFetch<ClientPhoneCapabilities>('/clients/capabilities/phone');
 }
 
 export function getClientEvents(id: string, filters: { page?: number; pageSize?: number } = {}) {

@@ -22,6 +22,7 @@ import {
   parseSaoPauloBusinessDate,
 } from '../clients/utils/business-date';
 import { normalizeBrazilPhone } from '../clients/utils/phone-normalizer';
+import { normalizePhone } from '../common/phone/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { isSchedulerDisabled } from '../config/security';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
@@ -1577,6 +1578,14 @@ export class LegacyImportService {
     }
 
     try {
+      if (value.trim().startsWith('+')) {
+        const explicit = normalizePhone(value);
+
+        if (explicit.status !== 'valid' || explicit.country !== 'BR') {
+          throw new Error('Legacy import accepts only Brazilian phone identities.');
+        }
+      }
+
       return normalizeBrazilPhone(value);
     } catch {
       errors.push('INVALID_PHONE');

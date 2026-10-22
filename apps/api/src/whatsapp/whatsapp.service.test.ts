@@ -2029,6 +2029,70 @@ describe('WhatsAppService', () => {
     },
   );
 
+  it('does not retry an existing failed international PIX dispatch', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const internationalClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalIntent = manualChargePaymentIntent({
+      receivable: manualChargeReceivable({
+        client: internationalClient,
+        payerPhone: internationalClient.phone,
+        payerPhoneNormalized: internationalClient.phoneNormalized,
+      }),
+    });
+    const internationalConversation = conversation({
+      clientId: internationalClient.id,
+      phone: internationalClient.phone,
+      phoneNormalized: internationalClient.phoneNormalized,
+      phoneE164: '+14076390665',
+      client: internationalClient,
+    });
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      configOverrides: { PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED: 'true' },
+      prismaOverrides: {
+        paymentIntent: {
+          findUnique: vi.fn().mockResolvedValue(internationalIntent),
+          findFirst: vi.fn().mockResolvedValue({
+            id: internationalIntent.id,
+            receivableId: internationalIntent.receivableId,
+            paymentGroupId: null,
+            status: 'WAITING_PAYMENT',
+            createdAt: now,
+          }),
+        },
+        messageDispatch: {
+          create: vi.fn().mockRejectedValue(duplicateError),
+          update: vi.fn(),
+          findMany: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue(
+            dispatch({
+              status: 'FAILED',
+              phone: internationalClient.phoneNormalized,
+              requestId: `pix-whatsapp:${internationalIntent.id}`,
+              idempotencyKey: `pix-whatsapp:${internationalIntent.id}`,
+            }),
+          ),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+        },
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent(internationalIntent.id, 'user-id');
+
+    expect(result).toMatchObject({ success: false, status: 'FAILED', reused: true });
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+  });
+
   it('presents only sanitized contact fields and never exposes the vCard', () => {
     const { service } = serviceFactory();
     const privateService = service as unknown as {
@@ -4183,7 +4247,11 @@ describe('WhatsAppService', () => {
       phoneE164: '+14076390665',
     });
     const internationalIntent = manualChargePaymentIntent({
-      receivable: manualChargeReceivable({ client: internationalClient }),
+      receivable: manualChargeReceivable({
+        client: internationalClient,
+        payerPhone: internationalClient.phone,
+        payerPhoneNormalized: internationalClient.phoneNormalized,
+      }),
     });
     const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
@@ -4211,6 +4279,68 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(provider.sendButtons).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['EUA', '+1 (407) 639-0665', '14076390665', '+14076390665'],
+    ['Portugal', '+351 912 345 678', '351912345678', '+351912345678'],
+  ])(
+    'sends a gated manual PIX to an existing proven %s conversation as text only',
+    async (_country, phone, phoneNormalized, phoneE164) => {
+      const internationalClient = client({ phone, phoneNormalized, phoneE164 });
+      const internationalIntent = manualChargePaymentIntent({
+        receivable: manualChargeReceivable({
+          client: internationalClient,
+          payerPhone: phone,
+          payerPhoneNormalized: phoneNormalized,
+        }),
+      });
+      const internationalConversation = conversation({
+        clientId: internationalClient.id,
+        phone,
+        phoneNormalized,
+        phoneE164,
+        client: internationalClient,
+      });
+      const { service, provider, prisma } = serviceFactory({
+        currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+        configOverrides: { PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED: 'true' },
+        prismaOverrides: {
+          paymentIntent: {
+            findUnique: vi.fn().mockResolvedValue(internationalIntent),
+            findFirst: vi.fn().mockResolvedValue({
+              id: internationalIntent.id,
+              receivableId: internationalIntent.receivableId,
+              paymentGroupId: null,
+              status: 'WAITING_PAYMENT',
+              createdAt: now,
+            }),
+          },
+          whatsAppConversation: {
+            findUnique: vi.fn().mockResolvedValue(internationalConversation),
+            findFirst: vi.fn().mockResolvedValue(null),
+            findMany: vi.fn().mockResolvedValue([]),
+            count: vi.fn().mockResolvedValue(0),
+            aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+            create: vi.fn(),
+            update: vi.fn().mockResolvedValue(internationalConversation),
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findUniqueOrThrow: vi.fn().mockResolvedValue(internationalConversation),
+          },
+        },
+      });
+
+      const result = await service.sendPixPaymentIntent(internationalIntent.id, 'user-id');
+
+      expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+        phone: phoneNormalized,
+        body: expect.stringContaining('MANUAL-PIX-COPY-PASTE-CURRENT'),
+        requestId: `pix-whatsapp:${internationalIntent.id}`,
+      });
+      expect(provider.sendButtons).not.toHaveBeenCalled();
+      expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: true, status: 'SENT' });
+    },
+  );
 
   it('revalidates PIX identity immediately before the provider call', async () => {
     const initialIntent = manualChargePaymentIntent({

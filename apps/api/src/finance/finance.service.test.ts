@@ -734,7 +734,9 @@ function createFinancePrisma() {
       ensureEligiblePixCreationProvider: vi.fn().mockResolvedValue(undefined),
       getWebhookSecret: vi.fn().mockResolvedValue('webhook-secret'),
     },
-    config: { get: () => undefined },
+    config: {
+      get: vi.fn((key: string): string | undefined => new Map<string, string>().get(key)),
+    },
     webhookEvents,
     tx,
   };
@@ -1946,7 +1948,9 @@ function createGroupedFinancePrisma(options: { rollbackOnError?: boolean } = {})
     credentials: {
       ensureEligiblePixCreationProvider: vi.fn().mockResolvedValue(undefined),
     },
-    config: { get: () => undefined },
+    config: {
+      get: vi.fn((key: string): string | undefined => new Map<string, string>().get(key)),
+    },
     cycle,
     recovery,
     setFailTransactionAt: (index: number) => {
@@ -1978,6 +1982,52 @@ describe('FinanceService', () => {
     expect(fake.paymentIntents).toHaveLength(0);
     expect(fake.receivable.status).toBe('PENDENTE');
     expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    ['EUA', '+1 (407) 639-0665', '14076390665', '+14076390665'],
+    ['Portugal', '+351 912 345 678', '351912345678', '+351912345678'],
+  ])(
+    'creates a gated manual PIX for a proven %s identity without fabricating DDI 55',
+    async (_country, phone, phoneNormalized, phoneE164) => {
+      const fake = createFinancePrisma();
+      Object.assign(fake.client, { phone, phoneNormalized, phoneE164 });
+      fake.config.get.mockImplementation((key: string) =>
+        key === 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED' ? 'true' : undefined,
+      );
+      const service = createFinanceService(fake);
+
+      const intent = await service.createReceivablePix(
+        fake.receivable.id,
+        actorUserId,
+        {},
+        { allowInternationalManual: true },
+      );
+
+      expect(intent).toMatchObject({ receivableId: fake.receivable.id });
+      expect(fake.provider.createPix).toHaveBeenCalledWith(
+        expect.objectContaining({ payerPhone: phoneNormalized }),
+      );
+      expect(fake.paymentIntents).toHaveLength(1);
+      expect(fake.receivable.status).toBe('PENDENTE');
+      expect(fake.transactions).toHaveLength(0);
+    },
+  );
+
+  it('keeps manual international PIX blocked without explicit authenticated authorization', async () => {
+    const fake = createFinancePrisma();
+    Object.assign(fake.client, {
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    fake.config.get.mockReturnValue('true');
+    const service = createFinanceService(fake);
+
+    await expect(service.createReceivablePix(fake.receivable.id, actorUserId)).rejects.toThrow(
+      'internacional',
+    );
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
   });
 
   it('rejects empty or whitespace-only financial category names', async () => {
@@ -3803,6 +3853,31 @@ describe('FinanceService', () => {
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.paymentGroups).toHaveLength(1);
+    expect(fake.paymentIntents).toHaveLength(1);
+  });
+
+  it('creates one gated grouped PIX for a proven international client', async () => {
+    const fake = createGroupedFinancePrisma();
+    Object.assign(fake.client, {
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED' ? 'true' : undefined,
+    );
+    const service = createFinanceService(fake as never);
+    const ids = [fake.receivables[0]!.id, fake.receivables[1]!.id];
+
+    await service.createReceivablesPix({ receivableIds: ids }, actorUserId, {
+      allowInternationalManual: true,
+    });
+
+    expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ payerPhone: '351912345678' }),
+    );
     expect(fake.paymentGroups).toHaveLength(1);
     expect(fake.paymentIntents).toHaveLength(1);
   });
@@ -5667,6 +5742,47 @@ describe('FinanceService', () => {
     expect(fake.receivable.status).toBe('PENDENTE');
     expect(fake.receivable.paidAt).toBeNull();
     expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('replaces a gated international PIX without changing its canonical payer', async () => {
+    const fake = createFinancePrisma();
+    Object.assign(fake.client, {
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED' ? 'true' : undefined,
+    );
+    const service = createFinanceService(fake);
+    const authorization = { allowInternationalManual: true };
+    const previous = await service.createReceivablePix(
+      fake.receivable.id,
+      actorUserId,
+      {},
+      authorization,
+    );
+    fake.provider.createPix.mockClear();
+
+    const next = await service.replaceReceivablePix(
+      fake.receivable.id,
+      {
+        provider: previous.provider,
+        expectedCurrentIntentId: previous.id,
+        idempotencyKey: `pix-replace:${fake.receivable.id}:${previous.id}`,
+      },
+      actorUserId,
+      authorization,
+    );
+
+    expect(next.id).not.toBe(previous.id);
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ payerPhone: '14076390665' }),
+    );
+    expect(fake.paymentIntents.map((intent) => intent.status)).toEqual([
+      'SUPERSEDED',
+      'WAITING_PAYMENT',
+    ]);
   });
 
   it('allows manual FastPIX replacement without creating another receivable', async () => {

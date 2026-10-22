@@ -29,4 +29,59 @@ describe('FinanceController', () => {
     });
     expect(financeService.resolvePaymentIntentPixCopy).toHaveBeenCalledWith('intent-1');
   });
+
+  it('marks only authenticated controller PIX mutations as manually authorized', async () => {
+    const financeService = {
+      createReceivablePix: vi.fn().mockResolvedValue(undefined),
+      replaceReceivablePix: vi.fn().mockResolvedValue(undefined),
+      createReceivablesPix: vi.fn().mockResolvedValue(undefined),
+      replaceReceivablesPix: vi.fn().mockResolvedValue(undefined),
+    };
+    const controller = new FinanceController(financeService as never, {} as never);
+    const request = { user: { id: 'user-1' } } as never;
+
+    await controller.createReceivablePix('receivable-1', {}, request);
+    await controller.replaceReceivablePix(
+      'receivable-1',
+      {
+        provider: 'FASTFLOW',
+        expectedCurrentIntentId: 'intent-1',
+        idempotencyKey: 'replace-1',
+      },
+      request,
+    );
+    await controller.createReceivablesPix({ receivableIds: ['receivable-1'] }, request);
+    await controller.replaceReceivablesPix(
+      {
+        receivableIds: ['receivable-1'],
+        provider: 'FASTFLOW',
+        expectedCurrentIntentId: 'intent-1',
+        idempotencyKey: 'group-replace-1',
+      },
+      request,
+    );
+
+    expect(financeService.createReceivablePix).toHaveBeenCalledWith(
+      'receivable-1',
+      'user-1',
+      {},
+      { allowInternationalManual: true },
+    );
+    expect(financeService.replaceReceivablePix).toHaveBeenCalledWith(
+      'receivable-1',
+      expect.any(Object),
+      'user-1',
+      { allowInternationalManual: true },
+    );
+    expect(financeService.createReceivablesPix).toHaveBeenCalledWith(
+      { receivableIds: ['receivable-1'] },
+      'user-1',
+      { allowInternationalManual: true },
+    );
+    expect(financeService.replaceReceivablesPix).toHaveBeenCalledWith(
+      expect.any(Object),
+      'user-1',
+      { allowInternationalManual: true },
+    );
+  });
 });

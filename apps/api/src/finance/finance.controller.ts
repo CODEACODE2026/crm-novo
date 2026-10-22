@@ -125,7 +125,9 @@ export class FinanceController {
     @Body() dto: { provider?: PaymentProviderCode },
     @Req() request: AuthenticatedRequest,
   ) {
-    return this.financeService.createReceivablePix(id, request.user.id, dto);
+    return this.financeService.createReceivablePix(id, request.user.id, dto, {
+      allowInternationalManual: true,
+    });
   }
 
   @Get('receivables/:id/pix/replace-preview')
@@ -142,7 +144,9 @@ export class FinanceController {
     @Body() dto: ReplaceReceivablePixDto,
     @Req() request: AuthenticatedRequest,
   ) {
-    return this.financeService.replaceReceivablePix(id, dto, request.user.id);
+    return this.financeService.replaceReceivablePix(id, dto, request.user.id, {
+      allowInternationalManual: true,
+    });
   }
 
   @Get('receivables/:id/pix/replace-recovery-preview')
@@ -181,7 +185,9 @@ export class FinanceController {
 
   @Post('receivables/pix')
   createReceivablesPix(@Body() dto: CreateReceivablesPixDto, @Req() request: AuthenticatedRequest) {
-    return this.financeService.createReceivablesPix(dto, request.user.id);
+    return this.financeService.createReceivablesPix(dto, request.user.id, {
+      allowInternationalManual: true,
+    });
   }
 
   @Post('receivables/pix/replace')
@@ -189,7 +195,9 @@ export class FinanceController {
     @Body() dto: ReplaceReceivablesPixDto,
     @Req() request: AuthenticatedRequest,
   ) {
-    return this.financeService.replaceReceivablesPix(dto, request.user.id);
+    return this.financeService.replaceReceivablesPix(dto, request.user.id, {
+      allowInternationalManual: true,
+    });
   }
 
   @Get('receivables/:id/payment-intents')

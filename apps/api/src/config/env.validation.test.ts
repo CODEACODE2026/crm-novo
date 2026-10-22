@@ -53,6 +53,21 @@ describe('validateEnv', () => {
     });
   });
 
+  it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED=%s', (value) => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED: value })).toMatchObject({
+      PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED: value,
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED=%j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED: value })).toThrow(
+        'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED deve ser true ou false.',
+      );
+    },
+  );
+
   it.each(['TRUE', '1', 'yes', ''])(
     'rejects invalid PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED=%j',
     (value) => {

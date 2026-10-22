@@ -30,6 +30,7 @@ import {
   getBusinessDateDay,
 } from '../clients/utils/business-date';
 import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
+import { resolveWhatsAppOutboundPhone } from '../common/phone/whatsapp-outbound-phone';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
@@ -602,6 +603,7 @@ export class FinanceService {
     id: string,
     actorUserId: string,
     dto: { provider?: PaymentProviderCode } = {},
+    authorization: { allowInternationalManual?: boolean } = {},
   ) {
     try {
       const intent = await this.prisma.$transaction(async (tx) => {
@@ -637,7 +639,10 @@ export class FinanceService {
         }
 
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
-        const pixPayer = this.resolveReceivablePixPayer(receivable);
+        const pixPayer = this.resolveReceivablePixPayer(
+          receivable,
+          authorization.allowInternationalManual === true,
+        );
         const provider = await this.resolvePixProvider({
           explicitProvider: dto.provider,
           client: receivable.client,
@@ -739,7 +744,12 @@ export class FinanceService {
     return this.presentPixReplacementPreview(inspection, dto.provider);
   }
 
-  async replaceReceivablePix(id: string, dto: ReplaceReceivablePixDto, actorUserId: string) {
+  async replaceReceivablePix(
+    id: string,
+    dto: ReplaceReceivablePixDto,
+    actorUserId: string,
+    authorization: { allowInternationalManual?: boolean } = {},
+  ) {
     try {
       const intent = await this.prisma.$transaction(async (tx) => {
         await this.acquirePixCreationLocks(tx, [id]);
@@ -779,7 +789,10 @@ export class FinanceService {
         this.throwPixReplacementBlockers(inspection.blockers);
 
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
-        const pixPayer = this.resolveReceivablePixPayer(receivable);
+        const pixPayer = this.resolveReceivablePixPayer(
+          receivable,
+          authorization.allowInternationalManual === true,
+        );
         const providerPix = await this.paymentProvider.createPix({
           provider: dto.provider,
           receivableId: receivable.id,
@@ -1027,7 +1040,11 @@ export class FinanceService {
     return this.presentPaymentIntent(recovery.intent);
   }
 
-  async createReceivablesPix(dto: CreateReceivablesPixDto, actorUserId: string) {
+  async createReceivablesPix(
+    dto: CreateReceivablesPixDto,
+    actorUserId: string,
+    authorization: { allowInternationalManual?: boolean } = {},
+  ) {
     const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
 
     try {
@@ -1041,7 +1058,10 @@ export class FinanceService {
         if (!client) {
           throw new ConflictException('Contas agrupadas exigem cliente cadastrado.');
         }
-        const operationalPayerPhone = this.requireBrazilianFinancialPhone(client);
+        const operationalPayerPhone = this.requireFinancialPhone(
+          client,
+          authorization.allowInternationalManual === true,
+        );
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
@@ -1126,7 +1146,11 @@ export class FinanceService {
     }
   }
 
-  async replaceReceivablesPix(dto: ReplaceReceivablesPixDto, actorUserId: string) {
+  async replaceReceivablesPix(
+    dto: ReplaceReceivablesPixDto,
+    actorUserId: string,
+    authorization: { allowInternationalManual?: boolean } = {},
+  ) {
     const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
 
     try {
@@ -1198,7 +1222,10 @@ export class FinanceService {
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
-        const operationalPayerPhone = this.requireBrazilianFinancialPhone(client);
+        const operationalPayerPhone = this.requireFinancialPhone(
+          client,
+          authorization.allowInternationalManual === true,
+        );
         const providerPix = await this.paymentProvider.createPix({
           provider: dto.provider,
           receivableId: currentIntent.paymentGroupId,
@@ -2793,6 +2820,7 @@ export class FinanceService {
 
   private resolveReceivablePixPayer(
     receivable: Prisma.ReceivableGetPayload<{ include: { client: true } }>,
+    allowInternationalManual = false,
   ) {
     if (receivable.purpose === 'MANUAL_CHARGE') {
       if (!receivable.payerName || !receivable.payerPhoneNormalized) {
@@ -2801,10 +2829,19 @@ export class FinanceService {
 
       return {
         name: receivable.payerName,
-        phoneNormalized: this.requireBrazilianFinancialPhone({
-          phone: receivable.payerPhone,
-          phoneNormalized: receivable.payerPhoneNormalized,
-        }),
+        phoneNormalized: this.requireFinancialPhone(
+          receivable.client
+            ? {
+                phone: receivable.payerPhone,
+                phoneNormalized: receivable.payerPhoneNormalized,
+                phoneE164: receivable.client.phoneE164,
+              }
+            : {
+                phone: receivable.payerPhone,
+                phoneNormalized: receivable.payerPhoneNormalized,
+              },
+          allowInternationalManual,
+        ),
       };
     }
 
@@ -2814,8 +2851,40 @@ export class FinanceService {
 
     return {
       name: receivable.client.name,
-      phoneNormalized: this.requireBrazilianFinancialPhone(receivable.client),
+      phoneNormalized: this.requireFinancialPhone(receivable.client, allowInternationalManual),
     };
+  }
+
+  private requireFinancialPhone(
+    input: {
+      phone?: string | null;
+      phoneNormalized: string;
+      phoneE164?: string | null;
+    },
+    allowInternationalManual: boolean,
+  ) {
+    if (!allowInternationalManual) {
+      return this.requireBrazilianFinancialPhone(input);
+    }
+
+    const resolved = resolveWhatsAppOutboundPhone({
+      ...input,
+      operation: 'MANUAL_PIX',
+      internationalManualPixEnabled:
+        this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
+    });
+
+    if (resolved.status === 'allowed') return resolved.digits;
+    if (resolved.reason === 'BLOCKED_FLAG_DISABLED') {
+      throw new ConflictException('PIX manual internacional esta desabilitado.');
+    }
+    if (resolved.reason === 'BLOCKED_UNSUPPORTED_OPERATION') {
+      throw new ConflictException('Operacao financeira internacional ainda nao esta habilitada.');
+    }
+    if (resolved.reason === 'BLOCKED_MISMATCH') {
+      throw new ConflictException('Identidades telefonicas do pagador estao divergentes.');
+    }
+    throw new ConflictException('Telefone do pagador invalido.');
   }
 
   private requireBrazilianFinancialPhone(input: {

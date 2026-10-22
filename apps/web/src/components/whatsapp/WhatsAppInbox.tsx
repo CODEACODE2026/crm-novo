@@ -659,6 +659,7 @@ export function WhatsAppInbox({
     useState(false);
   const [internationalMessageActionsEnabled, setInternationalMessageActionsEnabled] =
     useState(false);
+  const [internationalManualPixEnabled, setInternationalManualPixEnabled] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [pendingImageAnnotation, setPendingImageAnnotation] = useState<File | null>(null);
   const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
@@ -824,12 +825,14 @@ export function WhatsAppInbox({
           setInternationalMessageActionsEnabled(
             capabilities.internationalMessageActionsEnabled === true,
           );
+          setInternationalManualPixEnabled(capabilities.internationalManualPixEnabled === true);
         }
       })
       .catch(() => {
         if (!canceled) {
           setInternationalManualTextSendEnabled(false);
           setInternationalMessageActionsEnabled(false);
+          setInternationalManualPixEnabled(false);
         }
       });
     return () => {
@@ -4467,6 +4470,7 @@ export function WhatsAppInbox({
           attendancesLoading={attendanceHistoryLoading}
           avatar={selectedConversation ? conversationAvatars[selectedConversation.id] : undefined}
           contactInfo={contactInfo}
+          internationalManualPixEnabled={internationalManualPixEnabled}
           pixBusyReceivableId={contactPixReceivableId}
           pixWhatsAppBusyIntentIds={contactPixWhatsAppIntentIds}
           conversation={selectedConversation}
@@ -9572,6 +9576,7 @@ function ConversationClientPanel({
   avatar,
   contactInfo,
   conversation,
+  internationalManualPixEnabled,
   linkClientError,
   linkingClient,
   lifecycleBusyReferenceId,
@@ -9601,6 +9606,7 @@ function ConversationClientPanel({
   avatar?: ConversationAvatarState | undefined;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
+  internationalManualPixEnabled: boolean;
   linkClientError: string;
   linkingClient: boolean;
   lifecycleBusyReferenceId: string | null;
@@ -9718,6 +9724,7 @@ function ConversationClientPanel({
             attendancesLoading={attendancesLoading}
             contactInfo={contactInfo}
             conversation={conversation}
+            internationalManualPixEnabled={internationalManualPixEnabled}
             linkClientError={linkClientError}
             linkingClient={linkingClient}
             lifecycleBusyReferenceId={lifecycleBusyReferenceId}
@@ -9752,6 +9759,7 @@ function ConversationClientPanelContent({
   attendancesLoading,
   contactInfo,
   conversation,
+  internationalManualPixEnabled,
   linkClientError,
   linkingClient,
   lifecycleBusyReferenceId,
@@ -9779,6 +9787,7 @@ function ConversationClientPanelContent({
   attendancesLoading: boolean;
   contactInfo: ConversationContactInfoState;
   conversation: WhatsAppConversation | null;
+  internationalManualPixEnabled: boolean;
   linkClientError: string;
   linkingClient: boolean;
   lifecycleBusyReferenceId: string | null;
@@ -9973,7 +9982,9 @@ function ConversationClientPanelContent({
         ) : null}
         {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
         <ConversationReferenceList
-          allowPixWhatsApp={!isInternationalWhatsAppConversation(conversation)}
+          allowPixWhatsApp={
+            !isInternationalWhatsAppConversation(conversation) || internationalManualPixEnabled
+          }
           client={client}
           lifecycleBusyReferenceId={lifecycleBusyReferenceId}
           lifecyclePlansLoading={lifecyclePlansLoading}

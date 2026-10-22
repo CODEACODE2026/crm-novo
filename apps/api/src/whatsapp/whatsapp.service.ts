@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   HttpException,
@@ -325,6 +326,7 @@ type PixWhatsAppContext =
       clientEventClientId: string;
       receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
       phone: string;
+      internationalTextOnly: boolean;
       dispatchItems: [];
       description: string;
       metadata: Record<string, unknown>;
@@ -336,6 +338,7 @@ type PixWhatsAppContext =
       clientEventClientId: string | null;
       receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
       phone: string;
+      internationalTextOnly: boolean;
       dispatchItems: [];
       description: string;
       metadata: Record<string, unknown>;
@@ -347,6 +350,7 @@ type PixWhatsAppContext =
       clientEventClientId: string;
       paymentGroup: NonNullable<PixPaymentIntentForWhatsApp['paymentGroup']>;
       phone: string;
+      internationalTextOnly: boolean;
       dispatchItems: PixWhatsAppDispatchItem[];
       description: string;
       metadata: Record<string, unknown>;
@@ -834,7 +838,7 @@ export class WhatsAppService {
         where: { id: dispatch.id },
         data: {
           status: 'FAILED',
-          errorMessage: this.sanitizeError(error),
+          errorMessage: this.sanitizePixSendError(error),
         },
         include: { client: true, whatsAppConnection: true },
       });
@@ -854,28 +858,9 @@ export class WhatsAppService {
 
     this.validatePixIntentForWhatsApp(intent);
     const context = await this.buildPixWhatsAppContext(intent);
-    this.resolveWhatsAppOutboundRecipient({ phoneNormalized: context.phone }, 'BR_OPERATIONAL');
-    if (context.client?.phoneE164) {
-      this.assertInternationalWhatsAppOutboundBlocked(context.client);
-    }
-    const template = buildPixWhatsAppTemplate({
-      amount: intent.amount,
-      pixCopyPaste: intent.pixCopyPaste ?? '',
-      context: context.kind,
-      ...(context.kind === 'MANUAL_CHARGE'
-        ? {
-            payerName: context.receivable.payerName ?? undefined,
-            description: context.receivable.description,
-            dueDate: this.formatDisplayDate(context.receivable.dueDate),
-            expiresAt: intent.expiresAt ? this.formatDisplayDate(intent.expiresAt) : null,
-          }
-        : {}),
-      ...(context.kind === 'GROUPED'
-        ? { itemCount: context.dispatchItems.length, items: context.templateItems }
-        : {}),
-    });
+    await this.assertExistingInternationalPixConversation(connection, context);
+    const template = this.buildPixDeliveryTemplate(context, intent);
     const requestId = `pix-whatsapp:${intent.id}`;
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
     const { dispatch, created } = await this.createPendingDispatch({
       clientId: context.client?.id ?? null,
       connectionId: connection.id,
@@ -900,6 +885,10 @@ export class WhatsAppService {
         : {}),
     });
 
+    if (!created && context.internationalTextOnly && dispatch.status !== 'SENT') {
+      return this.presentPixSendResult(dispatch, false, true);
+    }
+
     if ((!created && dispatch.status !== 'FAILED') || dispatch.status === 'SENT') {
       if (dispatch.status === 'SENT') {
         const message = await this.ensureSentPixWhatsAppConversationMessage({
@@ -918,19 +907,25 @@ export class WhatsAppService {
     }
 
     try {
+      const latestConnection = await this.requireConnection();
+      if (
+        latestConnection.id !== connection.id ||
+        latestConnection.status !== 'CONNECTED' ||
+        !latestConnection.connected ||
+        !latestConnection.loggedIn
+      ) {
+        throw new ConflictException('Conexao WhatsApp foi alterada antes do envio.');
+      }
       const latestIntent = await this.loadPixPaymentIntent(paymentIntentId);
       this.validatePixIntentForWhatsApp(latestIntent);
       const latestContext = await this.buildPixWhatsAppContext(latestIntent);
-      this.resolveWhatsAppOutboundRecipient(
-        { phoneNormalized: latestContext.phone },
-        'BR_OPERATIONAL',
-      );
-      if (latestContext.client?.phoneE164) {
-        this.assertInternationalWhatsAppOutboundBlocked(latestContext.client);
-      }
+      await this.assertExistingInternationalPixConversation(latestConnection, latestContext);
+      const latestTemplate = this.buildPixDeliveryTemplate(latestContext, latestIntent);
 
       if (
         latestContext.phone !== dispatch.phone ||
+        latestContext.internationalTextOnly !== context.internationalTextOnly ||
+        latestTemplate.body !== template.body ||
         latestIntent.pixCopyPaste !== intent.pixCopyPaste ||
         latestIntent.providerTransactionId !== intent.providerTransactionId ||
         latestIntent.amount.toString() !== intent.amount.toString()
@@ -940,14 +935,26 @@ export class WhatsAppService {
         );
       }
 
+      const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
       const result = await this.mapProviderError(() =>
-        this.provider.sendButtons(instanceToken, {
-          phone: context.phone,
-          title: template.title,
-          body: template.body,
-          buttons: [template.button],
-        }),
+        latestContext.internationalTextOnly
+          ? this.provider.sendText(instanceToken, {
+              phone: latestContext.phone,
+              body: latestTemplate.body,
+              requestId,
+            })
+          : this.provider.sendButtons(instanceToken, {
+              phone: latestContext.phone,
+              title: latestTemplate.title,
+              body: latestTemplate.body,
+              buttons: [latestTemplate.button],
+            }),
       );
+      if (!result.providerMessageId) {
+        throw new BadGatewayException(
+          'Kirago confirmou a requisicao sem retornar identificador da mensagem.',
+        );
+      }
 
       const { dispatch: updated, message } = await this.prisma.$transaction(async (tx) => {
         const sent = await tx.messageDispatch.update({
@@ -979,45 +986,43 @@ export class WhatsAppService {
                 paymentIntentId: intent.id,
                 provider: intent.provider,
                 providerTransactionId: intent.providerTransactionId,
-                phoneMasked: this.maskPhone(context.phone),
-                amount: intent.amount.toString(),
+                phoneMasked: this.maskPhone(latestContext.phone),
+                amount: latestIntent.amount.toString(),
                 channel: 'WHATSAPP',
-                ...context.metadata,
+                ...latestContext.metadata,
               },
               createdByUserId: actorUserId,
             },
           });
         }
 
-        if (context.kind === 'MANUAL_CHARGE') {
+        if (latestContext.kind === 'MANUAL_CHARGE') {
           await this.createManualChargeWhatsAppAuditEvent(tx, {
             actorUserId,
             dispatchId: sent.id,
-            intent,
-            phone: context.phone,
-            receivable: context.receivable,
+            intent: latestIntent,
+            phone: latestContext.phone,
+            receivable: latestContext.receivable,
           });
         }
 
-        const pixMessage = await this.upsertPixWhatsAppConversationMessage(tx, {
-          connection,
-          context,
+        const message = await this.upsertPixWhatsAppConversationMessage(tx, {
+          connection: latestConnection,
+          context: latestContext,
           dispatch: sent,
-          intent,
-          template,
+          intent: latestIntent,
+          template: latestTemplate,
         });
 
-        return { dispatch: sent, message: pixMessage };
+        return { dispatch: sent, message };
       });
 
-      if (message) {
-        if (message.created) {
-          this.emitMessageCreated(message.conversationId, message.id, message.direction);
-        } else {
-          this.emitMessageUpdated(message.conversationId, message.id);
-        }
-        this.emitConversationUpdated(message.conversationId);
+      if (message?.created) {
+        this.emitMessageCreated(message.conversationId, message.id, message.direction);
+      } else if (message) {
+        this.emitMessageUpdated(message.conversationId, message.id);
       }
+      if (message) this.emitConversationUpdated(message.conversationId);
 
       return this.presentPixSendResult(updated, true, false);
     } catch (error) {
@@ -1025,13 +1030,42 @@ export class WhatsAppService {
         where: { id: dispatch.id },
         data: {
           status: 'FAILED',
-          errorMessage: this.sanitizePixSendError(error),
+          errorMessage: this.sanitizeError(error),
         },
         include: { client: true, whatsAppConnection: true },
       });
 
       return this.presentPixSendResult(updated, false);
     }
+  }
+
+  private buildPixDeliveryTemplate(
+    context: PixWhatsAppContext,
+    intent: PixPaymentIntentForWhatsApp,
+  ) {
+    const template = buildPixWhatsAppTemplate({
+      amount: intent.amount,
+      pixCopyPaste: intent.pixCopyPaste ?? '',
+      context: context.kind,
+      ...(context.kind === 'MANUAL_CHARGE'
+        ? {
+            payerName: context.receivable.payerName ?? undefined,
+            description: context.receivable.description,
+            dueDate: this.formatDisplayDate(context.receivable.dueDate),
+            expiresAt: intent.expiresAt ? this.formatDisplayDate(intent.expiresAt) : null,
+          }
+        : {}),
+      ...(context.kind === 'GROUPED'
+        ? { itemCount: context.dispatchItems.length, items: context.templateItems }
+        : {}),
+    });
+
+    return context.internationalTextOnly
+      ? {
+          ...template,
+          body: `${template.body}\n\nPIX copia e cola:\n${intent.pixCopyPaste ?? ''}`,
+        }
+      : template;
   }
 
   async listMessages() {
@@ -7219,6 +7253,8 @@ export class WhatsAppService {
         this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
       internationalMessageActionsEnabled:
         this.config.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
+      internationalManualPixEnabled:
+        this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
       ...(input?.phone !== undefined ? { phone: input.phone } : {}),
       ...(input?.phoneNormalized !== undefined ? { phoneNormalized: input.phoneNormalized } : {}),
       ...(input?.phoneE164 !== undefined ? { phoneE164: input.phoneE164 } : {}),
@@ -7247,7 +7283,8 @@ export class WhatsAppService {
     kind:
       | 'BR_OPERATIONAL'
       | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
-      | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED',
+      | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
   ) {
     if (kind === 'BR_OPERATIONAL' || !conversation.client) return;
     const clientIdentity = conversation.client.phoneE164
@@ -7607,6 +7644,23 @@ export class WhatsAppService {
       context: PixWhatsAppContext;
     },
   ) {
+    if (input.context.internationalTextOnly) {
+      const existing = await tx.whatsAppConversation.findUnique({
+        where: {
+          whatsAppConnectionId_phoneNormalized: {
+            whatsAppConnectionId: input.connection.id,
+            phoneNormalized: input.context.phone,
+          },
+        },
+      });
+      if (!existing || existing.clientId !== input.context.client?.id) {
+        throw new ConflictException(
+          'Conversa internacional deixou de estar vinculada ao cliente correto.',
+        );
+      }
+      return existing;
+    }
+
     const existing = await this.findConversationByBrazilPhoneCandidates(
       tx,
       input.connection.id,
@@ -7750,7 +7804,7 @@ export class WhatsAppService {
   }) {
     return {
       source: 'pix_whatsapp_send',
-      originalType: 'buttons',
+      originalType: input.context.internationalTextOnly ? 'text' : 'buttons',
       isFromMe: true,
       paymentIntentId: input.intent.id,
       messageDispatchId: input.dispatch.id,
@@ -7793,14 +7847,26 @@ export class WhatsAppService {
           throw new BadRequestException('Cobranca avulsa sem pagador valido para WhatsApp.');
         }
 
-        const phone = normalizeBrazilPhone(receivable.payerPhoneNormalized);
+        const recipient = this.resolveManualPixRecipient(
+          receivable.client
+            ? {
+                phone: receivable.payerPhone,
+                phoneNormalized: receivable.payerPhoneNormalized,
+                phoneE164: receivable.client.phoneE164,
+              }
+            : {
+                phone: receivable.payerPhone,
+                phoneNormalized: receivable.payerPhoneNormalized,
+              },
+        );
 
         return {
           kind: 'MANUAL_CHARGE',
           client: receivable.client,
           clientEventClientId: receivable.clientId ?? null,
           receivable,
-          phone,
+          phone: recipient.digits,
+          internationalTextOnly: recipient.international,
           dispatchItems: [],
           description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
           metadata: {
@@ -7811,14 +7877,15 @@ export class WhatsAppService {
       }
 
       const client = receivable.client!;
-      const phone = normalizeBrazilPhone(client.phoneNormalized);
+      const recipient = this.resolveManualPixRecipient(client);
 
       return {
         kind: 'INDIVIDUAL',
         client,
         clientEventClientId: client.id,
         receivable,
-        phone,
+        phone: recipient.digits,
+        internationalTextOnly: recipient.international,
         dispatchItems: [],
         description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
         metadata: {
@@ -7847,7 +7914,7 @@ export class WhatsAppService {
       );
     }
 
-    const phone = normalizeBrazilPhone(paymentGroup.client.phoneNormalized);
+    const recipient = this.resolveManualPixRecipient(paymentGroup.client);
     const dispatchItems = paymentGroup.items.map((item) => ({
       receivableId: item.receivableId,
       clientReferenceId: item.receivable.clientReferenceId!,
@@ -7862,7 +7929,8 @@ export class WhatsAppService {
       client: paymentGroup.client,
       clientEventClientId: paymentGroup.client.id,
       paymentGroup,
-      phone,
+      phone: recipient.digits,
+      internationalTextOnly: recipient.international,
       dispatchItems,
       description: `${paymentGroup.items.length} contas. Total: ${this.formatCurrency(intent.amount)}.`,
       metadata: {
@@ -7876,6 +7944,52 @@ export class WhatsAppService {
         amount: item.amount,
       })),
     };
+  }
+
+  private resolveManualPixRecipient(input: {
+    phone?: string | null;
+    phoneNormalized?: string | null;
+    phoneE164?: string | null;
+  }) {
+    const resolved = this.resolveWhatsAppOutboundRecipient(input, 'MANUAL_PIX');
+    return {
+      digits: resolved.digits,
+      international: resolved.kind === 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
+    };
+  }
+
+  private async assertExistingInternationalPixConversation(
+    connection: WhatsAppConnection,
+    context: PixWhatsAppContext,
+  ) {
+    if (!context.internationalTextOnly) return;
+    if (!context.client?.id) {
+      throw new ConflictException(
+        'PIX internacional exige cliente cadastrado e conversa existente.',
+      );
+    }
+
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: connection.id,
+          phoneNormalized: context.phone,
+        },
+      },
+      include: { client: true },
+    });
+
+    if (!conversation || conversation.clientId !== context.client.id) {
+      throw new ConflictException(
+        'PIX internacional exige conversa existente vinculada ao cliente correto.',
+      );
+    }
+
+    const resolved = this.resolveWhatsAppOutboundRecipient(conversation, 'MANUAL_PIX');
+    if (resolved.digits !== context.phone) {
+      throw new ConflictException('Identidade da conversa internacional esta divergente.');
+    }
+    this.assertLinkedClientIdentity(conversation, resolved.e164, resolved.kind);
   }
 
   private loadPixPaymentIntent(paymentIntentId: string) {
@@ -7936,7 +8050,18 @@ export class WhatsAppService {
           throw new BadRequestException('Cobranca avulsa sem telefone valido para WhatsApp.');
         }
 
-        normalizeBrazilPhone(intent.receivable.payerPhoneNormalized);
+        this.resolveManualPixRecipient(
+          intent.receivable.client
+            ? {
+                phone: intent.receivable.payerPhone,
+                phoneNormalized: intent.receivable.payerPhoneNormalized,
+                phoneE164: intent.receivable.client.phoneE164,
+              }
+            : {
+                phone: intent.receivable.payerPhone,
+                phoneNormalized: intent.receivable.payerPhoneNormalized,
+              },
+        );
 
         if (!intent.receivable.payerName) {
           throw new BadRequestException('Cobranca avulsa sem pagador valido para WhatsApp.');

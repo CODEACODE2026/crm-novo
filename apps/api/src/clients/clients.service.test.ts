@@ -965,6 +965,7 @@ describe('ClientsService manual client creation', () => {
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: false,
+      internationalManualPixEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
@@ -976,6 +977,7 @@ describe('ClientsService manual client creation', () => {
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: false,
+      internationalManualPixEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
     });
@@ -997,6 +999,7 @@ describe('ClientsService manual client creation', () => {
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: true,
       internationalMessageActionsEnabled: false,
+      internationalManualPixEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
@@ -1009,6 +1012,18 @@ describe('ClientsService manual client creation', () => {
     ).toMatchObject({
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: true,
+      internationalWhatsAppSendEnabled: false,
+      internationalBillingSendEnabled: false,
+    });
+  });
+
+  it('publishes manual international PIX independently and fail-closed by default', () => {
+    expect(
+      createClientCreationService(false, false, false, false, true).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalManualTextSendEnabled: false,
+      internationalMessageActionsEnabled: false,
+      internationalManualPixEnabled: true,
       internationalWhatsAppSendEnabled: false,
       internationalBillingSendEnabled: false,
     });
@@ -1839,6 +1854,7 @@ function createClientCreationService(
   internationalClientWriteEnabled = false,
   internationalManualTextSendEnabled = false,
   internationalMessageActionsEnabled = false,
+  internationalManualPixEnabled = false,
 ) {
   const plan = {
     id: 'plan-id',
@@ -1987,6 +2003,9 @@ function createClientCreationService(
         }
         if (key === 'PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') {
           return internationalMessageActionsEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') {
+          return internationalManualPixEnabled ? 'true' : undefined;
         }
         return undefined;
       }),

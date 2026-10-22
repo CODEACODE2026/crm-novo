@@ -2097,6 +2097,7 @@ export interface ClientPhoneCapabilities {
   internationalWhatsAppSendEnabled: boolean;
   internationalManualTextSendEnabled?: boolean;
   internationalMessageActionsEnabled?: boolean;
+  internationalManualPixEnabled?: boolean;
   internationalBillingSendEnabled: boolean;
   defaultCountry: 'BR';
   supportedCountries: Array<{ country: string; callingCode: string }>;

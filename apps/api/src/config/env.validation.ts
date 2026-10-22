@@ -21,6 +21,7 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED');
 
   if (nodeEnv === 'production') {
     requireValue(config, 'DATABASE_URL');

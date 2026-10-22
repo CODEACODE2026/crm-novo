@@ -139,6 +139,7 @@ describe('international manual text capability', () => {
     expect(whatsAppInboxSource).toContain(
       'capabilities.internationalMessageActionsEnabled === true',
     );
+    expect(whatsAppInboxSource).toContain('capabilities.internationalManualPixEnabled === true');
     expect(whatsAppInboxSource).toContain(
       'selectedConversationIsInternational && !internationalMessageActionsEnabled',
     );
@@ -147,6 +148,9 @@ describe('international manual text capability', () => {
     );
     expect(whatsAppInboxSource).toContain('textOnly={internationalTextOnly}');
     expect(whatsAppInboxSource).toContain('disabled={blocked || textOnly');
+    expect(whatsAppInboxSource).toContain(
+      '!isInternationalWhatsAppConversation(conversation) || internationalManualPixEnabled',
+    );
   });
 });
 

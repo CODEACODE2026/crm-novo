@@ -18,6 +18,9 @@ describe.skipIf(!runDatabaseTests)('international WhatsApp identity persistence'
     await prisma.whatsAppMessage.deleteMany({
       where: { conversationId: { in: [...createdConversationIds] } },
     });
+    await prisma.messageDispatch.deleteMany({
+      where: { whatsAppConnectionId: { in: [...createdConnectionIds] } },
+    });
     await prisma.whatsAppConversation.deleteMany({
       where: { id: { in: [...createdConversationIds] } },
     });
@@ -179,6 +182,35 @@ describe.skipIf(!runDatabaseTests)('international WhatsApp identity persistence'
       phoneNormalized: '14076390665',
       phoneE164: '+14076390665',
     });
+  });
+
+  it('persists one manual international PIX dispatch under concurrent retries', async () => {
+    const connection = await createConnection();
+    const requestId = unique('PHONE-INTERNATIONAL-PIX-MANUAL1');
+    const data = {
+      whatsAppConnectionId: connection.id,
+      phone: '14076390665',
+      body: 'Cobranca PIX internacional simulada',
+      origin: 'MANUAL' as const,
+      status: 'PENDING' as const,
+      requestId,
+      idempotencyKey: requestId,
+    };
+
+    const attempts = await Promise.allSettled([
+      prisma.messageDispatch.create({ data }),
+      prisma.messageDispatch.create({ data }),
+    ]);
+
+    expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    await expect(prisma.messageDispatch.findMany({ where: { requestId } })).resolves.toEqual([
+      expect.objectContaining({
+        phone: '14076390665',
+        origin: 'MANUAL',
+        status: 'PENDING',
+      }),
+    ]);
   });
 
   async function createConnection() {

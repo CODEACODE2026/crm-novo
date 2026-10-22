@@ -964,6 +964,7 @@ describe('ClientsService manual client creation', () => {
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
+      internationalMessageActionsEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
@@ -974,6 +975,7 @@ describe('ClientsService manual client creation', () => {
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
+      internationalMessageActionsEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
     });
@@ -994,9 +996,21 @@ describe('ClientsService manual client creation', () => {
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: true,
+      internationalMessageActionsEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
+    });
+  });
+
+  it('publishes international message actions independently and fail-closed by default', () => {
+    expect(
+      createClientCreationService(false, false, false, true).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalManualTextSendEnabled: false,
+      internationalMessageActionsEnabled: true,
+      internationalWhatsAppSendEnabled: false,
+      internationalBillingSendEnabled: false,
     });
   });
 
@@ -1824,6 +1838,7 @@ function createClientCreationService(
   phoneInternationalEnabled = false,
   internationalClientWriteEnabled = false,
   internationalManualTextSendEnabled = false,
+  internationalMessageActionsEnabled = false,
 ) {
   const plan = {
     id: 'plan-id',
@@ -1969,6 +1984,9 @@ function createClientCreationService(
         }
         if (key === 'PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') {
           return internationalManualTextSendEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') {
+          return internationalMessageActionsEnabled ? 'true' : undefined;
         }
         return undefined;
       }),

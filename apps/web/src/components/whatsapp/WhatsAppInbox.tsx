@@ -657,6 +657,8 @@ export function WhatsAppInbox({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [internationalManualTextSendEnabled, setInternationalManualTextSendEnabled] =
     useState(false);
+  const [internationalMessageActionsEnabled, setInternationalMessageActionsEnabled] =
+    useState(false);
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [pendingImageAnnotation, setPendingImageAnnotation] = useState<File | null>(null);
   const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
@@ -819,10 +821,16 @@ export function WhatsAppInbox({
           setInternationalManualTextSendEnabled(
             capabilities.internationalManualTextSendEnabled === true,
           );
+          setInternationalMessageActionsEnabled(
+            capabilities.internationalMessageActionsEnabled === true,
+          );
         }
       })
       .catch(() => {
-        if (!canceled) setInternationalManualTextSendEnabled(false);
+        if (!canceled) {
+          setInternationalManualTextSendEnabled(false);
+          setInternationalMessageActionsEnabled(false);
+        }
       });
     return () => {
       canceled = true;
@@ -2691,6 +2699,10 @@ export function WhatsAppInbox({
   }
 
   function selectReplyTarget(message: WhatsAppConversationMessage) {
+    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) {
+      setSendError('Respostas internacionais ainda não estão habilitadas para esta conversa.');
+      return;
+    }
     setReplyTarget(message);
     setSendError('');
     scheduleComposerFocus(() => {
@@ -2824,8 +2836,12 @@ export function WhatsAppInbox({
         setSendError('O envio internacional ainda não está habilitado para esta conversa.');
         return false;
       }
-      if (mediaToSend || replyToSend || bodyOverride !== undefined) {
+      if (mediaToSend || bodyOverride !== undefined) {
         setSendError('Conversas internacionais permitem somente texto manual simples nesta etapa.');
+        return false;
+      }
+      if (replyToSend && !internationalMessageActionsEnabled) {
+        setSendError('Respostas internacionais ainda não estão habilitadas para esta conversa.');
         return false;
       }
     }
@@ -3573,6 +3589,7 @@ export function WhatsAppInbox({
 
   async function updateConversationReaction(message: WhatsAppConversationMessage, emoji: string) {
     if (!selectedConversation) return;
+    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) return;
     if (message.deleted) return;
     if (reactingMessagesRef.current.has(message.id)) return;
 
@@ -3607,6 +3624,7 @@ export function WhatsAppInbox({
 
   async function deleteConversationMessage(message: WhatsAppConversationMessage) {
     if (!selectedConversation) return;
+    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) return;
     if (!isDeleteEligibleConversationMessage(message)) return;
     if (deletingMessagesRef.current.has(message.id)) return;
 
@@ -3641,6 +3659,7 @@ export function WhatsAppInbox({
   }
 
   function startEditingConversationMessage(message: WhatsAppConversationMessage) {
+    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) return;
     if (!isEditEligibleConversationMessage(message) || savingEditMessageId) return;
     editingMessageRef.current = message.id;
     setEditingMessageId(message.id);
@@ -4327,7 +4346,10 @@ export function WhatsAppInbox({
 
               <ConversationMessages
                 conversationId={selectedConversation.id}
-                outboundActionsDisabled={selectedConversationIsInternational}
+                outboundActionsDisabled={
+                  selectedConversationIsInternational && !internationalMessageActionsEnabled
+                }
+                restrictedOutboundActionsDisabled={selectedConversationIsInternational}
                 messages={messages}
                 hasOlder={hasOlderMessages}
                 loading={messagesLoading}
@@ -5926,6 +5948,7 @@ function ConversationHeader({
 function ConversationMessages({
   conversationId,
   outboundActionsDisabled,
+  restrictedOutboundActionsDisabled,
   hasOlder,
   hasNewer,
   loading,
@@ -5972,6 +5995,7 @@ function ConversationMessages({
 }: {
   conversationId: string;
   outboundActionsDisabled: boolean;
+  restrictedOutboundActionsDisabled: boolean;
   hasOlder: boolean;
   hasNewer: boolean;
   loading: boolean;
@@ -6129,6 +6153,7 @@ function ConversationMessages({
                   <ConversationBubble
                     conversationId={conversationId}
                     outboundActionsDisabled={outboundActionsDisabled}
+                    restrictedOutboundActionsDisabled={restrictedOutboundActionsDisabled}
                     highlighted={targetMessageId === message.id}
                     message={message}
                     deleteConfirmOpen={deleteConfirmMessageId === message.id}
@@ -6373,6 +6398,7 @@ function isAllowedConversationDocument(mimeType: string, extension: string) {
 function ConversationBubble({
   conversationId,
   outboundActionsDisabled,
+  restrictedOutboundActionsDisabled,
   deleteConfirmOpen,
   deleteError,
   deleting,
@@ -6410,6 +6436,7 @@ function ConversationBubble({
 }: {
   conversationId: string;
   outboundActionsDisabled: boolean;
+  restrictedOutboundActionsDisabled: boolean;
   deleteConfirmOpen: boolean;
   deleteError: string;
   deleting: boolean;
@@ -6487,7 +6514,7 @@ function ConversationBubble({
           {
             label: 'Encaminhar',
             icon: ForwardIcon,
-            disabled: outboundActionsDisabled,
+            disabled: restrictedOutboundActionsDisabled,
             onSelect: () => onForward(message),
           },
         ]
@@ -6563,7 +6590,7 @@ function ConversationBubble({
           type="button"
           title="Encaminhar"
           aria-label="Encaminhar mensagem"
-          disabled={outboundActionsDisabled}
+          disabled={restrictedOutboundActionsDisabled}
           onClick={() => onForward(message)}
         >
           <ForwardIcon aria-hidden="true" size={14} />
@@ -6759,7 +6786,7 @@ function ConversationBubble({
             {message.retryAction === 'RETRY' ? (
               <button
                 className="conversation-message-retry"
-                disabled={outboundActionsDisabled || retrying}
+                disabled={restrictedOutboundActionsDisabled || retrying}
                 type="button"
                 onClick={() => onRetry(message)}
               >

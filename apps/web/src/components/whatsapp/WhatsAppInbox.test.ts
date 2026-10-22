@@ -132,12 +132,18 @@ describe('international manual text capability', () => {
     ).toBe(false);
   });
 
-  it('treats missing capability as disabled and keeps non-text actions blocked in source', () => {
+  it('treats missing capabilities as disabled and keeps unsupported actions blocked in source', () => {
     expect(whatsAppInboxSource).toContain(
       'capabilities.internationalManualTextSendEnabled === true',
     );
     expect(whatsAppInboxSource).toContain(
-      'outboundActionsDisabled={selectedConversationIsInternational}',
+      'capabilities.internationalMessageActionsEnabled === true',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'selectedConversationIsInternational && !internationalMessageActionsEnabled',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'restrictedOutboundActionsDisabled={selectedConversationIsInternational}',
     );
     expect(whatsAppInboxSource).toContain('textOnly={internationalTextOnly}');
     expect(whatsAppInboxSource).toContain('disabled={blocked || textOnly');

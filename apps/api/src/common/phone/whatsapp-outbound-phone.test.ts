@@ -91,4 +91,39 @@ describe('resolveWhatsAppOutboundPhone', () => {
       }),
     ).toEqual({ status: 'blocked', reason: 'BLOCKED_UNSUPPORTED_OPERATION' });
   });
+
+  it.each([
+    ['US', '+14076390665', '14076390665'],
+    ['CA', '+14165550123', '14165550123'],
+    ['PT', '+351912345678', '351912345678'],
+    ['GB', '+447911123456', '447911123456'],
+    ['AR', '+5491123456789', '5491123456789'],
+  ])(
+    'allows proven %s identity for a manual message action only with its own flag',
+    (_, e164, digits) => {
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: e164,
+          phoneNormalized: digits,
+          phoneE164: e164,
+          operation: 'MANUAL_CONVERSATION_ACTION',
+          internationalManualTextEnabled: true,
+        }),
+      ).toEqual({ status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' });
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: e164,
+          phoneNormalized: digits,
+          phoneE164: e164,
+          operation: 'MANUAL_CONVERSATION_ACTION',
+          internationalMessageActionsEnabled: true,
+        }),
+      ).toEqual({
+        status: 'allowed',
+        kind: 'INTERNATIONAL_MANUAL_ACTION_ALLOWED',
+        digits,
+        e164,
+      });
+    },
+  );
 });

@@ -1,7 +1,8 @@
 import { resolveBrazilianOperationalPhone } from './brazilian-operational-phone';
 import { comparePhoneIdentities, normalizePhone } from './phone-normalizer';
 
-export type WhatsAppOutboundOperation = 'BR_OPERATIONAL' | 'MANUAL_CONVERSATION_TEXT';
+export type WhatsAppOutboundOperation =
+  'BR_OPERATIONAL' | 'MANUAL_CONVERSATION_TEXT' | 'MANUAL_CONVERSATION_ACTION';
 
 export type WhatsAppOutboundPhoneInput = {
   phone?: string | null;
@@ -9,12 +10,16 @@ export type WhatsAppOutboundPhoneInput = {
   phoneE164?: string | null;
   operation: WhatsAppOutboundOperation;
   internationalManualTextEnabled?: boolean;
+  internationalMessageActionsEnabled?: boolean;
 };
 
 export type WhatsAppOutboundPhoneResult =
   | {
       status: 'allowed';
-      kind: 'BR_OPERATIONAL' | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED';
+      kind:
+        | 'BR_OPERATIONAL'
+        | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
+        | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED';
       digits: string;
       e164: string;
     }
@@ -67,16 +72,23 @@ export function resolveWhatsAppOutboundPhone(
       }
     }
 
-    if (input.operation !== 'MANUAL_CONVERSATION_TEXT') {
+    if (input.operation === 'BR_OPERATIONAL') {
       return { status: 'blocked', reason: 'BLOCKED_UNSUPPORTED_OPERATION' };
     }
-    if (!input.internationalManualTextEnabled) {
+    const enabled =
+      input.operation === 'MANUAL_CONVERSATION_TEXT'
+        ? input.internationalManualTextEnabled
+        : input.internationalMessageActionsEnabled;
+    if (!enabled) {
       return { status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' };
     }
 
     return {
       status: 'allowed',
-      kind: 'INTERNATIONAL_MANUAL_TEXT_ALLOWED',
+      kind:
+        input.operation === 'MANUAL_CONVERSATION_TEXT'
+          ? 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
+          : 'INTERNATIONAL_MANUAL_ACTION_ALLOWED',
       digits: canonical.digits,
       e164: canonical.e164,
     };

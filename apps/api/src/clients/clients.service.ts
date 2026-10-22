@@ -122,6 +122,8 @@ export class ClientsService {
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
+      internationalMessageActionsEnabled:
+        this.configService?.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR' as const,
       supportedCountries: enabled ? listSupportedPhoneCountries() : [],

@@ -10828,6 +10828,7 @@ describe('WhatsAppService', () => {
     const findFirst = vi
       .fn()
       .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(target)
       .mockResolvedValueOnce({ id: '99999999-9999-4999-8999-999999999999' });
     const { service, prisma, realtime } = serviceFactory({
       prismaOverrides: {
@@ -10892,7 +10893,9 @@ describe('WhatsAppService', () => {
     const findFirst = vi
       .fn()
       .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(target)
       .mockResolvedValueOnce({ id: target.id })
+      .mockResolvedValueOnce({ ...target, text: 'Primeira edicao' })
       .mockResolvedValueOnce({ ...target, text: 'Primeira edicao' })
       .mockResolvedValueOnce({ id: target.id });
     const update = vi.fn((args: { data: { text: string; editedAt: Date } }) =>
@@ -10957,6 +10960,8 @@ describe('WhatsAppService', () => {
       .mockResolvedValueOnce(undefined);
     const findFirst = vi
       .fn()
+      .mockResolvedValueOnce(target)
+      .mockResolvedValueOnce(target)
       .mockResolvedValueOnce(target)
       .mockResolvedValueOnce(target)
       .mockResolvedValueOnce({ id: target.id });
@@ -13281,7 +13286,7 @@ describe('WhatsAppService', () => {
       'needsManualFollowUp: false',
     );
     expect(
-      segment('async editConversationMessage', 'private async withMessageEditLock'),
+      segment('async editConversationMessage', 'private async withMessageActionLock'),
     ).not.toContain('needsManualFollowUp');
     expect(
       segment('private async processMessageReceiptWebhook', 'private buildReceiptStatusUpdate'),
@@ -15905,7 +15910,10 @@ describe('WhatsApp conversation labels', () => {
     const { service, provider } = serviceFactory({
       configOverrides: { PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: 'true' },
       prismaOverrides: {
-        whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(internationalConversation) },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
         whatsAppMessage: { create: messageCreate },
       },
     });
@@ -15917,7 +15925,7 @@ describe('WhatsApp conversation labels', () => {
         replyToMessageId: conversationMessage().id,
       }),
     ).rejects.toMatchObject({
-      response: { code: 'WHATSAPP_INTERNATIONAL_OPERATION_UNSUPPORTED' },
+      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
     });
     await expect(
       service.sendConversationMediaMessage(internationalConversation.id, {
@@ -15977,5 +15985,298 @@ describe('WhatsApp conversation labels', () => {
       internationalConversation.id,
       pending.id,
     );
+  });
+
+  it('sends an international reply with canonical Phone and ContextInfo when both manual flags are enabled', async () => {
+    const linkedClient = client({ phoneE164: '+14076390665' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const replyTarget = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      direction: 'INBOUND',
+      providerMessageId: 'provider-inbound-us',
+      text: 'Original',
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true',
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findUnique: vi.fn().mockResolvedValue(replyTarget),
+          create: vi
+            .fn()
+            .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+              Promise.resolve(conversationMessage({ ...data, status: 'PENDING' })),
+            ),
+          update: vi
+            .fn()
+            .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+              Promise.resolve(conversationMessage({ ...data })),
+            ),
+        },
+      },
+    });
+
+    await service.sendConversationTextMessage(internationalConversation.id, {
+      body: 'Reply safely',
+      requestId: 'international-reply-actions1',
+      replyToMessageId: replyTarget.id,
+    });
+
+    expect(provider.sendText).toHaveBeenCalledWith('instance-token', {
+      phone: '14076390665',
+      body: 'Reply safely',
+      requestId: 'international-reply-actions1',
+      reply: {
+        stanzaId: 'provider-inbound-us',
+        participant: '14076390665@s.whatsapp.net',
+        quotedText: 'Original',
+      },
+    });
+  });
+
+  it('keeps international reply blocked unless text and action flags are both enabled', async () => {
+    const internationalConversation = conversation({
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({ providerMessageId: 'provider-inbound-us' });
+    const { service, provider } = serviceFactory({
+      configOverrides: { PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true' },
+      prismaOverrides: {
+        whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(internationalConversation) },
+        whatsAppMessage: { findUnique: vi.fn().mockResolvedValue(target) },
+      },
+    });
+
+    await expect(
+      service.sendConversationTextMessage(internationalConversation.id, {
+        body: 'Blocked reply',
+        replyToMessageId: target.id,
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
+    });
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('fails the pending reply when the quoted message changes before the provider call', async () => {
+    const internationalConversation = conversation({
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const replyTarget = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      providerMessageId: 'provider-inbound-changing',
+      text: 'Original',
+    });
+    const pending = conversationMessage({ status: 'PENDING', requestId: 'changing-reply' });
+    const messageUpdate = vi.fn().mockResolvedValue({ ...pending, status: 'FAILED' });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true',
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(replyTarget)
+            .mockResolvedValueOnce({ ...replyTarget, deletedAt: new Date() }),
+          create: vi.fn().mockResolvedValue(pending),
+          update: messageUpdate,
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationTextMessage(internationalConversation.id, {
+        body: 'Do not send stale quote',
+        requestId: 'changing-reply',
+        replyToMessageId: replyTarget.id,
+      }),
+    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_REPLY_TARGET_CHANGED' } });
+
+    expect(messageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+    );
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('uses the canonical international recipient for reaction, edit and delete actions', async () => {
+    const linkedClient = client({ phoneE164: '+351912345678' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+351912345678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      direction: 'OUTBOUND',
+      type: 'TEXT',
+      text: 'Original',
+      providerMessageId: 'provider-outbound-pt',
+      conversation: internationalConversation,
+      reactions: [],
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: { PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true' },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(target),
+          findUniqueOrThrow: vi.fn().mockResolvedValue({ ...target, reactions: [] }),
+          update: vi.fn().mockImplementation(({ data }) => Promise.resolve({ ...target, ...data })),
+        },
+      },
+    });
+
+    await service.updateConversationMessageReaction(internationalConversation.id, target.id, {
+      emoji: '❤️',
+    });
+    await service.editConversationMessage(internationalConversation.id, target.id, {
+      body: 'Edited safely',
+    });
+    await service.deleteConversationMessage(internationalConversation.id, target.id);
+
+    expect(provider.sendReaction).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '351912345678', providerMessageId: 'provider-outbound-pt' }),
+    );
+    expect(provider.editMessage).toHaveBeenCalledWith('instance-token', {
+      phone: '351912345678',
+      providerMessageId: 'provider-outbound-pt',
+      body: 'Edited safely',
+    });
+    expect(provider.deleteMessage).toHaveBeenCalledWith('instance-token', {
+      phone: '351912345678',
+      providerMessageId: 'provider-outbound-pt',
+    });
+  });
+
+  it('serializes duplicate international deletes and calls the provider only once', async () => {
+    const internationalConversation = conversation({
+      phone: '+447911123456',
+      phoneNormalized: '447911123456',
+      phoneE164: '+447911123456',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      direction: 'OUTBOUND',
+      providerMessageId: 'provider-outbound-gb',
+      conversation: internationalConversation,
+    });
+    let deletedAt: Date | null = null;
+    const currentTarget = () => ({ ...target, deletedAt, deletedForEveryone: Boolean(deletedAt) });
+    const { service, provider } = serviceFactory({
+      configOverrides: { PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true' },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi.fn().mockImplementation(() => Promise.resolve(currentTarget())),
+          update: vi.fn().mockImplementation(() => {
+            deletedAt = new Date();
+            return Promise.resolve(currentTarget());
+          }),
+        },
+      },
+    });
+
+    await Promise.all([
+      service.deleteConversationMessage(internationalConversation.id, target.id),
+      service.deleteConversationMessage(internationalConversation.id, target.id),
+    ]);
+
+    expect(provider.deleteMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks international actions before the provider when the action flag is disabled', async () => {
+    const internationalConversation = conversation({
+      phone: '+5491123456789',
+      phoneNormalized: '5491123456789',
+      phoneE164: '+5491123456789',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const target = conversationMessage({
+      providerMessageId: 'provider-ar',
+      conversation: internationalConversation,
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: { whatsAppMessage: { findFirst: vi.fn().mockResolvedValue(target) } },
+    });
+
+    await expect(
+      service.updateConversationMessageReaction(internationalConversation.id, target.id, {
+        emoji: '👍',
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
+    });
+    expect(provider.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the current international connection before a message action provider call', async () => {
+    const active = connection({ status: 'CONNECTED', connected: true, loggedIn: true });
+    const inactive = connection({ ...active, status: 'DISCONNECTED', connected: false });
+    const initialConversation = conversation({
+      phone: '+14165550123',
+      phoneNormalized: '14165550123',
+      phoneE164: '+14165550123',
+      whatsAppConnection: active,
+    });
+    const currentConversation = conversation({
+      ...initialConversation,
+      whatsAppConnection: inactive,
+    });
+    const initialTarget = conversationMessage({
+      providerMessageId: 'provider-ca',
+      conversation: initialConversation,
+    });
+    const currentTarget = { ...initialTarget, conversation: currentConversation };
+    const { service, provider } = serviceFactory({
+      configOverrides: { PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true' },
+      prismaOverrides: {
+        whatsAppMessage: {
+          findFirst: vi
+            .fn()
+            .mockResolvedValueOnce(initialTarget)
+            .mockResolvedValueOnce(currentTarget),
+        },
+      },
+    });
+
+    await expect(
+      service.updateConversationMessageReaction(initialConversation.id, initialTarget.id, {
+        emoji: '👍',
+      }),
+    ).rejects.toThrow('nao esta mais operacional');
+    expect(provider.sendReaction).not.toHaveBeenCalled();
   });
 });

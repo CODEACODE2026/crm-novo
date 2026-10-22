@@ -467,7 +467,7 @@ export class WhatsAppService {
   private readonly chatPresenceRemoteLidLookupInFlight = new Map<string, Promise<string | null>>();
   private readonly avatarCache = new Map<string, WhatsAppAvatarCacheValue>();
   private readonly avatarInFlight = new Map<string, Promise<GetUserAvatarResult>>();
-  private readonly messageEditQueue = new Map<string, Promise<void>>();
+  private readonly messageActionQueue = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -1939,19 +1939,24 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    const recipient = this.resolveWhatsAppOutboundRecipient(
-      conversation,
-      'MANUAL_CONVERSATION_TEXT',
-    );
+    const operation: WhatsAppOutboundOperation = dto.replyToMessageId
+      ? 'MANUAL_CONVERSATION_ACTION'
+      : 'MANUAL_CONVERSATION_TEXT';
+    const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     if (
-      recipient.kind === 'INTERNATIONAL_MANUAL_TEXT_ALLOWED' &&
-      (dto.replyToMessageId || forwardMetadata)
+      recipient.kind === 'INTERNATIONAL_MANUAL_ACTION_ALLOWED' &&
+      this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') !== 'true'
     ) {
       throw new ConflictException({
+        code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED',
+        message: 'O envio manual internacional esta desabilitado.',
+      });
+    }
+    if (recipient.kind !== 'BR_OPERATIONAL' && forwardMetadata) {
+      throw new ConflictException({
         code: 'WHATSAPP_INTERNATIONAL_OPERATION_UNSUPPORTED',
-        message:
-          'Nesta etapa, conversas internacionais permitem somente texto manual simples sem resposta citada ou encaminhamento.',
+        message: 'Encaminhamento internacional ainda nao esta homologado.',
       });
     }
     const connection = conversation.whatsAppConnection;
@@ -1970,6 +1975,7 @@ export class WhatsAppService {
     const replyTarget = await this.resolveConversationReplyTarget(
       conversation,
       dto.replyToMessageId,
+      recipient.digits,
     );
     const pendingResult = await this.createPendingConversationTextMessage(conversation, {
       body,
@@ -1992,10 +1998,7 @@ export class WhatsAppService {
       if (!latestConversation) {
         throw new NotFoundException('Conversa WhatsApp nao encontrada.');
       }
-      latestRecipient = this.resolveWhatsAppOutboundRecipient(
-        latestConversation,
-        'MANUAL_CONVERSATION_TEXT',
-      );
+      latestRecipient = this.resolveWhatsAppOutboundRecipient(latestConversation, operation);
       this.assertLinkedClientIdentity(
         latestConversation,
         latestRecipient.e164,
@@ -2032,16 +2035,46 @@ export class WhatsAppService {
     }
 
     const latestConnection = latestConversation.whatsAppConnection;
-    const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
+    let latestReplyTarget: ResolvedWhatsAppReplyTarget | null;
+    try {
+      latestReplyTarget = await this.resolveConversationReplyTarget(
+        latestConversation,
+        dto.replyToMessageId,
+        latestRecipient.digits,
+      );
+    } catch (error) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A mensagem citada nao passou na revalidacao anterior ao envio.',
+      );
+      throw error;
+    }
+    if (
+      latestReplyTarget?.message.providerMessageId !== replyTarget?.message.providerMessageId ||
+      latestReplyTarget?.message.id !== replyTarget?.message.id ||
+      latestReplyTarget?.quotedText !== replyTarget?.quotedText
+    ) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A mensagem citada mudou antes do envio.',
+      );
+      throw new ConflictException({
+        code: 'WHATSAPP_REPLY_TARGET_CHANGED',
+        message: 'A mensagem citada mudou antes do envio. Tente novamente.',
+      });
+    }
     let result: { providerMessageId: string | null; sentAt?: Date | null };
 
     try {
+      const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
       result = await this.mapConnectionProviderError(latestConnection, () =>
         this.provider.sendText(instanceToken, {
           phone: latestRecipient.digits,
           body,
           requestId,
-          ...(replyTarget ? { reply: replyTarget.providerReply } : {}),
+          ...(latestReplyTarget ? { reply: latestReplyTarget.providerReply } : {}),
         }),
       );
     } catch (error) {
@@ -2073,7 +2106,7 @@ export class WhatsAppService {
       rawMetadata: pending.rawMetadata,
     });
 
-    if (latestRecipient.kind === 'INTERNATIONAL_MANUAL_TEXT_ALLOWED' && !result.providerMessageId) {
+    if (latestRecipient.kind !== 'BR_OPERATIONAL' && !result.providerMessageId) {
       return this.keepConversationMessagePendingAfterProviderSuccess({
         conversationId: conversation.id,
         error: new Error('Kirago confirmou a requisicao sem retornar providerMessageId.'),
@@ -2364,6 +2397,16 @@ export class WhatsAppService {
     messageId: string,
     dto: UpdateWhatsAppMessageReactionDto,
   ) {
+    return this.withMessageActionLock(messageId, () =>
+      this.updateConversationMessageReactionUnlocked(conversationId, messageId, dto),
+    );
+  }
+
+  private async updateConversationMessageReactionUnlocked(
+    conversationId: string,
+    messageId: string,
+    dto: UpdateWhatsAppMessageReactionDto,
+  ) {
     const emoji = dto.emoji ?? null;
 
     if (emoji !== null && !this.isAllowedReactionEmoji(emoji)) {
@@ -2373,7 +2416,7 @@ export class WhatsAppService {
     const target = await this.prisma.whatsAppMessage.findFirst({
       where: { id: messageId, conversationId },
       include: {
-        conversation: { include: { whatsAppConnection: true } },
+        conversation: { include: { whatsAppConnection: true, client: true } },
         ...whatsappMessageReplyInclude,
       },
     });
@@ -2383,7 +2426,11 @@ export class WhatsAppService {
     }
 
     const conversation = target.conversation;
-    this.assertInternationalWhatsAppOutboundBlocked(conversation);
+    const recipient = this.resolveWhatsAppOutboundRecipient(
+      conversation,
+      'MANUAL_CONVERSATION_ACTION',
+    );
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
     if (
@@ -2406,13 +2453,27 @@ export class WhatsAppService {
       throw new ConflictException('Mensagem apagada nao pode receber reacao.');
     }
 
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    const latest = await this.revalidateConversationMessageActionTarget(
+      conversationId,
+      messageId,
+      target.providerMessageId,
+    );
+    if (latest.target.deletedAt || latest.target.deletedForEveryone) {
+      throw new ConflictException('Mensagem apagada nao pode receber reacao.');
+    }
+    const ownReaction = latest.target.reactions.find(
+      (reaction) => reaction.reactorKey === this.ownReactionKey(),
+    );
+    if (emoji !== null && ownReaction?.emoji === emoji) {
+      return this.presentConversationMessage(latest.target);
+    }
+    const instanceToken = this.encryption.decrypt(latest.connection.providerTokenEncrypted);
 
-    await this.mapConnectionProviderError(connection, () =>
+    await this.mapConnectionProviderError(latest.connection, () =>
       this.provider.sendReaction(instanceToken, {
-        phone: conversation.phoneNormalized,
-        providerMessageId: target.providerMessageId!,
-        isOwnMessage: target.direction === 'OUTBOUND',
+        phone: latest.recipient.digits,
+        providerMessageId: latest.target.providerMessageId!,
+        isOwnMessage: latest.target.direction === 'OUTBOUND',
         emoji,
       }),
     );
@@ -2457,10 +2518,16 @@ export class WhatsAppService {
   }
 
   async deleteConversationMessage(conversationId: string, messageId: string) {
+    return this.withMessageActionLock(messageId, () =>
+      this.deleteConversationMessageUnlocked(conversationId, messageId),
+    );
+  }
+
+  private async deleteConversationMessageUnlocked(conversationId: string, messageId: string) {
     const target = await this.prisma.whatsAppMessage.findFirst({
       where: { id: messageId, conversationId },
       include: {
-        conversation: { include: { whatsAppConnection: true } },
+        conversation: { include: { whatsAppConnection: true, client: true } },
         ...whatsappMessageReplyInclude,
       },
     });
@@ -2470,7 +2537,11 @@ export class WhatsAppService {
     }
 
     const conversation = target.conversation;
-    this.assertInternationalWhatsAppOutboundBlocked(conversation);
+    const recipient = this.resolveWhatsAppOutboundRecipient(
+      conversation,
+      'MANUAL_CONVERSATION_ACTION',
+    );
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
     if (
@@ -2497,12 +2568,23 @@ export class WhatsAppService {
       throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
     }
 
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    const latest = await this.revalidateConversationMessageActionTarget(
+      conversationId,
+      messageId,
+      target.providerMessageId,
+    );
+    if (latest.target.deletedAt || latest.target.deletedForEveryone) {
+      return this.presentConversationMessage(latest.target);
+    }
+    if (latest.target.direction !== 'OUTBOUND') {
+      throw new ConflictException('Somente mensagens enviadas pelo CRM podem ser apagadas.');
+    }
+    const instanceToken = this.encryption.decrypt(latest.connection.providerTokenEncrypted);
 
-    await this.mapConnectionProviderError(connection, () =>
+    await this.mapConnectionProviderError(latest.connection, () =>
       this.provider.deleteMessage(instanceToken, {
-        phone: conversation.phoneNormalized,
-        providerMessageId: target.providerMessageId!,
+        phone: latest.recipient.digits,
+        providerMessageId: latest.target.providerMessageId!,
       }),
     );
 
@@ -2524,7 +2606,7 @@ export class WhatsAppService {
     messageId: string,
     dto: EditWhatsAppConversationMessageDto,
   ) {
-    return this.withMessageEditLock(messageId, async () => {
+    return this.withMessageActionLock(messageId, async () => {
       const body = dto.body.trim();
 
       if (!body) {
@@ -2534,7 +2616,7 @@ export class WhatsAppService {
       const target = await this.prisma.whatsAppMessage.findFirst({
         where: { id: messageId, conversationId },
         include: {
-          conversation: { include: { whatsAppConnection: true } },
+          conversation: { include: { whatsAppConnection: true, client: true } },
           ...whatsappMessageReplyInclude,
         },
       });
@@ -2544,7 +2626,11 @@ export class WhatsAppService {
       }
 
       const conversation = target.conversation;
-      this.assertInternationalWhatsAppOutboundBlocked(conversation);
+      const recipient = this.resolveWhatsAppOutboundRecipient(
+        conversation,
+        'MANUAL_CONVERSATION_ACTION',
+      );
+      this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
       const connection = conversation.whatsAppConnection;
 
       if (
@@ -2579,12 +2665,29 @@ export class WhatsAppService {
         throw new ConflictException('Conexao WhatsApp da conversa nao esta operacional.');
       }
 
-      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+      const latest = await this.revalidateConversationMessageActionTarget(
+        conversationId,
+        messageId,
+        target.providerMessageId,
+      );
+      if (latest.target.direction !== 'OUTBOUND') {
+        throw new ConflictException('Somente mensagens enviadas pelo CRM podem ser editadas.');
+      }
+      if (latest.target.type !== 'TEXT') {
+        throw new ConflictException('Somente mensagens de texto podem ser editadas.');
+      }
+      if (latest.target.deletedAt || latest.target.deletedForEveryone) {
+        throw new ConflictException('Mensagem apagada nao pode ser editada.');
+      }
+      if (body === latest.target.text?.trim()) {
+        throw new ConflictException('O novo texto deve ser diferente do texto atual.');
+      }
+      const instanceToken = this.encryption.decrypt(latest.connection.providerTokenEncrypted);
 
-      await this.mapConnectionProviderError(connection, () =>
+      await this.mapConnectionProviderError(latest.connection, () =>
         this.provider.editMessage(instanceToken, {
-          phone: conversation.phoneNormalized,
-          providerMessageId: target.providerMessageId!,
+          phone: latest.recipient.digits,
+          providerMessageId: latest.target.providerMessageId!,
           body,
         }),
       );
@@ -2626,14 +2729,14 @@ export class WhatsAppService {
     });
   }
 
-  private async withMessageEditLock<T>(messageId: string, action: () => Promise<T>): Promise<T> {
-    const previous = this.messageEditQueue.get(messageId) ?? Promise.resolve();
+  private async withMessageActionLock<T>(messageId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.messageActionQueue.get(messageId) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => {
       release = resolve;
     });
     const queued = previous.catch(() => undefined).then(() => current);
-    this.messageEditQueue.set(messageId, queued);
+    this.messageActionQueue.set(messageId, queued);
 
     await previous.catch(() => undefined);
 
@@ -2641,8 +2744,8 @@ export class WhatsAppService {
       return await action();
     } finally {
       release();
-      if (this.messageEditQueue.get(messageId) === queued) {
-        this.messageEditQueue.delete(messageId);
+      if (this.messageActionQueue.get(messageId) === queued) {
+        this.messageActionQueue.delete(messageId);
       }
     }
   }
@@ -6289,6 +6392,7 @@ export class WhatsAppService {
   private async resolveConversationReplyTarget(
     conversation: WhatsAppConversation,
     replyToMessageId: string | undefined,
+    participantDigits = conversation.phoneNormalized,
   ): Promise<ResolvedWhatsAppReplyTarget | null> {
     if (!replyToMessageId) {
       return null;
@@ -6332,7 +6436,7 @@ export class WhatsAppService {
       message,
       providerReply: {
         stanzaId: message.providerMessageId,
-        participant: this.privateConversationParticipantJid(conversation),
+        participant: this.privateConversationParticipantJid(participantDigits),
         quotedText,
       },
       quotedText,
@@ -7113,6 +7217,8 @@ export class WhatsAppService {
       operation,
       internationalManualTextEnabled:
         this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
+      internationalMessageActionsEnabled:
+        this.config.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
       ...(input?.phone !== undefined ? { phone: input.phone } : {}),
       ...(input?.phoneNormalized !== undefined ? { phoneNormalized: input.phoneNormalized } : {}),
       ...(input?.phoneE164 !== undefined ? { phoneE164: input.phoneE164 } : {}),
@@ -7138,9 +7244,12 @@ export class WhatsAppService {
       client?: { phoneE164?: string | null } | null;
     },
     conversationE164: string,
-    kind: 'BR_OPERATIONAL' | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED',
+    kind:
+      | 'BR_OPERATIONAL'
+      | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED',
   ) {
-    if (kind !== 'INTERNATIONAL_MANUAL_TEXT_ALLOWED' || !conversation.client) return;
+    if (kind === 'BR_OPERATIONAL' || !conversation.client) return;
     const clientIdentity = conversation.client.phoneE164
       ? normalizePhone(conversation.client.phoneE164)
       : null;
@@ -7153,6 +7262,48 @@ export class WhatsAppService {
         message: 'A identidade do cliente diverge da conversa internacional.',
       });
     }
+  }
+
+  private async revalidateConversationMessageActionTarget(
+    conversationId: string,
+    messageId: string,
+    expectedProviderMessageId: string,
+  ) {
+    const target = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, conversationId },
+      include: {
+        conversation: { include: { whatsAppConnection: true, client: true } },
+        ...whatsappMessageReplyInclude,
+      },
+    });
+    if (!target) {
+      throw new NotFoundException('Mensagem WhatsApp nao encontrada nesta conversa.');
+    }
+
+    const conversation = target.conversation;
+    const recipient = this.resolveWhatsAppOutboundRecipient(
+      conversation,
+      'MANUAL_CONVERSATION_ACTION',
+    );
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
+    const connection = conversation.whatsAppConnection;
+    if (
+      target.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
+      target.provider !== conversation.provider ||
+      connection.id !== conversation.whatsAppConnectionId ||
+      connection.provider !== conversation.provider ||
+      target.providerMessageId !== expectedProviderMessageId
+    ) {
+      throw new ConflictException({
+        code: 'WHATSAPP_MESSAGE_ACTION_TARGET_CHANGED',
+        message: 'A identidade da mensagem mudou antes da operacao. Tente novamente.',
+      });
+    }
+    if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta mais operacional.');
+    }
+
+    return { connection, conversation, recipient, target };
   }
 
   private async failPendingConversationMessage(
@@ -8797,9 +8948,10 @@ export class WhatsAppService {
   }
 
   private privateConversationParticipantJid(
-    conversation: Pick<WhatsAppConversation, 'phoneNormalized'>,
+    input: Pick<WhatsAppConversation, 'phoneNormalized'> | string,
   ) {
-    return `${conversation.phoneNormalized}@s.whatsapp.net`;
+    const phone = typeof input === 'string' ? input : input.phoneNormalized;
+    return `${phone}@s.whatsapp.net`;
   }
 
   private conversationMediaFields(mediaMetadata: Record<string, unknown> | null) {

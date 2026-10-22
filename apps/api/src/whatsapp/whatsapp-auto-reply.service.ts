@@ -1,7 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, WhatsAppAutoReplyAudience, WhatsAppAutoReplyMode } from '@prisma/client';
 import { createHash } from 'crypto';
-import { normalizePhone } from '../common/phone/phone-normalizer';
+import { resolveWhatsAppOutboundPhone } from '../common/phone/whatsapp-outbound-phone';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from './provider/whatsapp-provider';
@@ -110,11 +110,14 @@ export class WhatsAppAutoReplyService {
     if (!context || !this.connectionOperational(context.whatsAppConnection)) {
       return { sent: false, reason: 'ineligible_connection' as const };
     }
-    if (context.phoneE164) {
-      const identity = normalizePhone(context.phoneE164);
-      if (identity.status !== 'valid' || identity.country !== 'BR') {
-        return { sent: false, reason: 'international_outbound_disabled' as const };
-      }
+    const recipient = resolveWhatsAppOutboundPhone({
+      phone: context.phone,
+      phoneNormalized: context.phoneNormalized,
+      phoneE164: context.phoneE164,
+      operation: 'BR_OPERATIONAL',
+    });
+    if (recipient.status !== 'allowed') {
+      return { sent: false, reason: 'international_outbound_disabled' as const };
     }
 
     const config = await this.prisma.whatsAppAutoReplyConfig.findUnique({
@@ -207,7 +210,7 @@ export class WhatsAppAutoReplyService {
       providerResult = await this.provider.sendText(
         this.encryption.decrypt(context.whatsAppConnection.providerTokenEncrypted),
         {
-          phone: context.phoneNormalized,
+          phone: recipient.digits,
           body: config.message.trim(),
           requestId,
         },

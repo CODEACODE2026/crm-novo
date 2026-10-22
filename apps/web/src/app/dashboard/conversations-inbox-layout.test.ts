@@ -414,13 +414,15 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('loading={sending}');
     expect(conversationsSource).toContain('const hasText = Boolean(draft.trim());');
     expect(conversationsSource).toContain(
-      'const hasSendableContent = Boolean(hasText || selectedMedia);',
+      'const hasSendableContent = Boolean(hasText || (!textOnly && selectedMedia));',
     );
     expect(conversationsSource).toContain(
       'const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);',
     );
     expect(conversationsSource).toContain("const shouldShowSendAction = actionMode === 'SEND';");
-    expect(conversationsSource).toContain('const canSend = hasSendableContent && !sending;');
+    expect(conversationsSource).toContain(
+      'const canSend = hasSendableContent && !sending && !blocked;',
+    );
     expect(conversationsSource).toContain('disabled={!canSend}');
     expect(conversationsSource).toContain('{shouldShowSendAction ? (');
     expect(conversationsSource).toContain('aria-label="Enviar mensagem"');
@@ -652,21 +654,14 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain(
       'function handleIncomingFileList(files: FileList | File[])',
     );
-    expect(conversationsSource).toContain(
-      'onDragEnter={selectedConversation ? handleChatDragEnter : undefined}',
-    );
-    expect(conversationsSource).toContain(
-      'onDragLeave={selectedConversation ? handleChatDragLeave : undefined}',
-    );
-    expect(conversationsSource).toContain(
-      'onDragOver={selectedConversation ? handleChatDragOver : undefined}',
-    );
-    expect(conversationsSource).toContain(
-      'onDrop={selectedConversation ? handleChatDrop : undefined}',
-    );
-    expect(conversationsSource).toContain(
-      'onPaste={selectedConversation ? handleChatPaste : undefined}',
-    );
+    expect(
+      conversationsSource.match(/selectedConversation && !selectedConversationIsInternational/g),
+    ).toHaveLength(5);
+    expect(conversationsSource).toContain('? handleChatDragEnter');
+    expect(conversationsSource).toContain('? handleChatDragLeave');
+    expect(conversationsSource).toContain('? handleChatDragOver');
+    expect(conversationsSource).toContain('? handleChatDrop');
+    expect(conversationsSource).toContain('? handleChatPaste');
     expect(conversationsSource).toContain('chatDropDepthRef.current += 1;');
     expect(conversationsSource).toContain(
       'chatDropDepthRef.current = Math.max(0, chatDropDepthRef.current - 1);',

@@ -41,6 +41,21 @@ describe('validateEnv', () => {
     });
   });
 
+  it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED=%s', (value) => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: value })).toMatchObject({
+      PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: value,
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED=%j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: value })).toThrow(
+        'PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED deve ser true ou false.',
+      );
+    },
+  );
+
   it.each(['TRUE', '1', 'yes', ''])(
     'rejects invalid PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED=%j',
     (value) => {

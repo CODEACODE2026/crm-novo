@@ -44,6 +44,7 @@ import {
   isDeleteEligibleConversationMessage,
   isEditEligibleConversationMessage,
   isForwardEligibleConversationMessage,
+  isInternationalWhatsAppConversation,
   isAvailableInlineConversationMedia,
   isRenderableConversationMessage,
   isTechnicalVideoPlaceholder,
@@ -116,6 +117,32 @@ const referenceLifecycleModalsSource = readFileSync(
   'utf8',
 );
 const globalStylesSource = readFileSync(join(currentDir, '../../app/globals.css'), 'utf8');
+
+describe('international manual text capability', () => {
+  it('identifies international conversations from canonical persisted identity', () => {
+    expect(
+      isInternationalWhatsAppConversation(
+        conversation('us', { phoneE164: '+14076390665', phoneCountry: 'US' }),
+      ),
+    ).toBe(true);
+    expect(
+      isInternationalWhatsAppConversation(
+        conversation('br', { phoneE164: '+5511999991234', phoneCountry: 'BR' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('treats missing capability as disabled and keeps non-text actions blocked in source', () => {
+    expect(whatsAppInboxSource).toContain(
+      'capabilities.internationalManualTextSendEnabled === true',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'outboundActionsDisabled={selectedConversationIsInternational}',
+    );
+    expect(whatsAppInboxSource).toContain('textOnly={internationalTextOnly}');
+    expect(whatsAppInboxSource).toContain('disabled={blocked || textOnly');
+  });
+});
 
 function conversation(
   id: string,
@@ -1588,9 +1615,8 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       'noteTextComposerActivity(selectedConversation.id, value)',
     );
     expect(whatsAppInboxSource).toContain('pauseConversationPresence(selectedConversation.id)');
-    expect(whatsAppInboxSource).toContain(
-      'onBlur={() => pauseConversationPresence(selectedConversation.id)}',
-    );
+    expect(whatsAppInboxSource).toContain('if (!selectedConversationIsInternational)');
+    expect(whatsAppInboxSource).toContain('pauseConversationPresence(selectedConversation.id)');
     expect(whatsAppInboxSource).toContain('document.visibilityState ===');
     expect(whatsAppInboxSource).toContain('onVoiceRecordingChangeRef.current(true)');
     expect(whatsAppInboxSource).toContain('onVoiceRecordingChangeRef.current(false)');

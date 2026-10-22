@@ -29,6 +29,10 @@ import {
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { comparePhoneIdentities, normalizePhone } from '../common/phone/phone-normalizer';
+import {
+  resolveWhatsAppOutboundPhone,
+  type WhatsAppOutboundOperation,
+} from '../common/phone/whatsapp-outbound-phone';
 import { FinanceService } from '../finance/finance.service';
 import { PlansService } from '../plans/plans.service';
 import { ReferralsService } from '../referrals/referrals.service';
@@ -754,8 +758,8 @@ export class WhatsAppService {
       throw new BadRequestException('Cliente nao possui telefone valido.');
     }
 
-    this.assertInternationalWhatsAppOutboundBlocked(client);
-    const phone = normalizeBrazilPhone(client.phoneNormalized);
+    const initialRecipient = this.resolveWhatsAppOutboundRecipient(client, 'BR_OPERATIONAL');
+    const phone = initialRecipient.digits;
     const body = dto.body.trim();
 
     if (!body) {
@@ -784,8 +788,8 @@ export class WhatsAppService {
         throw new ConflictException('Cliente nao possui mais telefone valido para WhatsApp.');
       }
 
-      this.assertInternationalWhatsAppOutboundBlocked(latestClient);
-      if (normalizeBrazilPhone(latestClient.phoneNormalized) !== dispatch.phone) {
+      const latestRecipient = this.resolveWhatsAppOutboundRecipient(latestClient, 'BR_OPERATIONAL');
+      if (latestRecipient.digits !== dispatch.phone) {
         throw new ConflictException(
           'Telefone do cliente foi alterado antes do envio. Tente novamente.',
         );
@@ -850,8 +854,10 @@ export class WhatsAppService {
 
     this.validatePixIntentForWhatsApp(intent);
     const context = await this.buildPixWhatsAppContext(intent);
-    this.assertInternationalWhatsAppOutboundBlocked(context.client);
-    this.assertInternationalWhatsAppPhoneBlocked(context.phone);
+    this.resolveWhatsAppOutboundRecipient({ phoneNormalized: context.phone }, 'BR_OPERATIONAL');
+    if (context.client?.phoneE164) {
+      this.assertInternationalWhatsAppOutboundBlocked(context.client);
+    }
     const template = buildPixWhatsAppTemplate({
       amount: intent.amount,
       pixCopyPaste: intent.pixCopyPaste ?? '',
@@ -915,8 +921,13 @@ export class WhatsAppService {
       const latestIntent = await this.loadPixPaymentIntent(paymentIntentId);
       this.validatePixIntentForWhatsApp(latestIntent);
       const latestContext = await this.buildPixWhatsAppContext(latestIntent);
-      this.assertInternationalWhatsAppOutboundBlocked(latestContext.client);
-      this.assertInternationalWhatsAppPhoneBlocked(latestContext.phone);
+      this.resolveWhatsAppOutboundRecipient(
+        { phoneNormalized: latestContext.phone },
+        'BR_OPERATIONAL',
+      );
+      if (latestContext.client?.phoneE164) {
+        this.assertInternationalWhatsAppOutboundBlocked(latestContext.client);
+      }
 
       if (
         latestContext.phone !== dispatch.phone ||
@@ -1848,20 +1859,17 @@ export class WhatsAppService {
       throw new BadRequestException('Cliente nao possui telefone valido para WhatsApp.');
     }
 
-    this.assertInternationalWhatsAppOutboundBlocked(client);
-
     const directPhone = client ? null : dto.phone?.trim();
-    if (directPhone?.startsWith('+')) {
-      const directIdentity = normalizePhone(directPhone);
-
-      if (directIdentity.status !== 'valid') {
-        throw new BadRequestException('Telefone invalido para WhatsApp.');
-      }
-
-      this.assertInternationalWhatsAppOutboundBlocked({ phoneE164: directIdentity.e164 });
-    }
-
-    const phone = normalizeBrazilPhone(client?.phoneNormalized ?? dto.phone ?? '');
+    const directIdentity = directPhone?.startsWith('+') ? normalizePhone(directPhone) : null;
+    const phone = this.resolveWhatsAppOutboundRecipient(
+      client ?? {
+        phone: directPhone ?? null,
+        phoneNormalized:
+          directIdentity?.status === 'valid' ? directIdentity.digits : (directPhone ?? null),
+        phoneE164: directIdentity?.status === 'valid' ? directIdentity.e164 : null,
+      },
+      'BR_OPERATIONAL',
+    ).digits;
     const requestId = dto.requestId.trim();
     const existingMessage = await this.findConversationMessageByRequestId(connection.id, requestId);
 
@@ -1924,14 +1932,28 @@ export class WhatsAppService {
     const requestId = dto.requestId?.trim() || randomUUID();
     const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
-      include: { whatsAppConnection: true },
+      include: { whatsAppConnection: true, client: true },
     });
 
     if (!conversation) {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    this.assertInternationalWhatsAppOutboundBlocked(conversation);
+    const recipient = this.resolveWhatsAppOutboundRecipient(
+      conversation,
+      'MANUAL_CONVERSATION_TEXT',
+    );
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
+    if (
+      recipient.kind === 'INTERNATIONAL_MANUAL_TEXT_ALLOWED' &&
+      (dto.replyToMessageId || forwardMetadata)
+    ) {
+      throw new ConflictException({
+        code: 'WHATSAPP_INTERNATIONAL_OPERATION_UNSUPPORTED',
+        message:
+          'Nesta etapa, conversas internacionais permitem somente texto manual simples sem resposta citada ou encaminhamento.',
+      });
+    }
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -1949,20 +1971,74 @@ export class WhatsAppService {
       conversation,
       dto.replyToMessageId,
     );
-    const pending = await this.createPendingConversationTextMessage(conversation, {
+    const pendingResult = await this.createPendingConversationTextMessage(conversation, {
       body,
       requestId,
       replyTarget,
       ...(forwardMetadata ? { forwardMetadata } : {}),
     });
+    if (!pendingResult.created) {
+      return this.presentConversationMessage(pendingResult.message);
+    }
+    const pending = pendingResult.message;
 
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let latestConversation;
+    let latestRecipient;
+    try {
+      latestConversation = await this.prisma.whatsAppConversation.findUnique({
+        where: { id: conversation.id },
+        include: { client: true, whatsAppConnection: true },
+      });
+      if (!latestConversation) {
+        throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+      }
+      latestRecipient = this.resolveWhatsAppOutboundRecipient(
+        latestConversation,
+        'MANUAL_CONVERSATION_TEXT',
+      );
+      this.assertLinkedClientIdentity(
+        latestConversation,
+        latestRecipient.e164,
+        latestRecipient.kind,
+      );
+      if (
+        latestConversation.whatsAppConnection.status !== 'CONNECTED' ||
+        !latestConversation.whatsAppConnection.connected ||
+        !latestConversation.whatsAppConnection.loggedIn
+      ) {
+        throw new ConflictException('Conexao WhatsApp da conversa nao esta mais operacional.');
+      }
+    } catch (error) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A identidade da conversa nao passou na revalidacao anterior ao envio.',
+      );
+      throw error;
+    }
+    if (
+      latestRecipient.digits !== recipient.digits ||
+      latestConversation.whatsAppConnectionId !== connection.id
+    ) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A identidade da conversa mudou antes do envio.',
+      );
+      throw new ConflictException({
+        code: 'WHATSAPP_OUTBOUND_IDENTITY_CHANGED',
+        message: 'A identidade da conversa mudou antes do envio. Tente novamente.',
+      });
+    }
+
+    const latestConnection = latestConversation.whatsAppConnection;
+    const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
     let result: { providerMessageId: string | null; sentAt?: Date | null };
 
     try {
-      result = await this.mapConnectionProviderError(connection, () =>
+      result = await this.mapConnectionProviderError(latestConnection, () =>
         this.provider.sendText(instanceToken, {
-          phone: conversation.phoneNormalized,
+          phone: latestRecipient.digits,
           body,
           requestId,
           ...(replyTarget ? { reply: replyTarget.providerReply } : {}),
@@ -1996,6 +2072,14 @@ export class WhatsAppService {
       providerMessageId: result.providerMessageId,
       rawMetadata: pending.rawMetadata,
     });
+
+    if (latestRecipient.kind === 'INTERNATIONAL_MANUAL_TEXT_ALLOWED' && !result.providerMessageId) {
+      return this.keepConversationMessagePendingAfterProviderSuccess({
+        conversationId: conversation.id,
+        error: new Error('Kirago confirmou a requisicao sem retornar providerMessageId.'),
+        messageId: pending.id,
+      });
+    }
 
     const sentAt = result.sentAt ?? new Date();
 
@@ -6265,7 +6349,7 @@ export class WhatsAppService {
     },
   ) {
     try {
-      return await this.prisma.whatsAppMessage.create({
+      const message = await this.prisma.whatsAppMessage.create({
         data: buildWhatsAppMessageCreateDataForConversation(conversation, {
           provider: 'KIRAGO',
           providerMessageId: null,
@@ -6290,6 +6374,7 @@ export class WhatsAppService {
           mediaDurationSeconds: null,
         }),
       });
+      return { message, created: true as const };
     } catch (error) {
       if (!this.isDuplicateConversationMessage(error)) {
         throw error;
@@ -6302,7 +6387,7 @@ export class WhatsAppService {
 
       if (existing) {
         this.assertMessageBelongsToConversation(existing, conversation.id);
-        return existing;
+        return { message: existing, created: false as const };
       }
 
       throw error;
@@ -7009,28 +7094,81 @@ export class WhatsAppService {
   }
 
   private assertInternationalWhatsAppOutboundBlocked(
-    input: { phoneE164?: string | null } | null | undefined,
+    input:
+      | { phone?: string | null; phoneNormalized?: string | null; phoneE164?: string | null }
+      | null
+      | undefined,
   ) {
-    if (!input?.phoneE164) return;
+    this.resolveWhatsAppOutboundRecipient(input, 'BR_OPERATIONAL');
+  }
 
-    const identity = normalizePhone(input.phoneE164);
-    if (identity.status === 'valid' && identity.country === 'BR') return;
+  private resolveWhatsAppOutboundRecipient(
+    input:
+      | { phone?: string | null; phoneNormalized?: string | null; phoneE164?: string | null }
+      | null
+      | undefined,
+    operation: WhatsAppOutboundOperation,
+  ) {
+    const resolved = resolveWhatsAppOutboundPhone({
+      operation,
+      internationalManualTextEnabled:
+        this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
+      ...(input?.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input?.phoneNormalized !== undefined ? { phoneNormalized: input.phoneNormalized } : {}),
+      ...(input?.phoneE164 !== undefined ? { phoneE164: input.phoneE164 } : {}),
+    });
+    if (resolved.status === 'allowed') return resolved;
 
+    const disabled =
+      resolved.reason === 'BLOCKED_FLAG_DISABLED' ||
+      resolved.reason === 'BLOCKED_UNSUPPORTED_OPERATION';
     throw new ConflictException({
-      code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED',
-      message:
-        'Envios para telefones internacionais permanecem indisponiveis ate a conclusao da migracao coordenada.',
+      code: disabled
+        ? 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED'
+        : 'WHATSAPP_OUTBOUND_IDENTITY_UNSAFE',
+      message: disabled
+        ? 'O envio manual internacional esta desabilitado.'
+        : 'A identidade telefonica da conversa nao e segura para envio.',
+      reason: resolved.reason,
     });
   }
 
-  private assertInternationalWhatsAppPhoneBlocked(phone: string) {
-    const digits = phone.replace(/\D/g, '');
-    if (!digits) return;
+  private assertLinkedClientIdentity(
+    conversation: {
+      client?: { phoneE164?: string | null } | null;
+    },
+    conversationE164: string,
+    kind: 'BR_OPERATIONAL' | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED',
+  ) {
+    if (kind !== 'INTERNATIONAL_MANUAL_TEXT_ALLOWED' || !conversation.client) return;
+    const clientIdentity = conversation.client.phoneE164
+      ? normalizePhone(conversation.client.phoneE164)
+      : null;
+    if (
+      clientIdentity?.status !== 'valid' ||
+      comparePhoneIdentities(clientIdentity.e164, conversationE164).status !== 'match'
+    ) {
+      throw new ConflictException({
+        code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
+        message: 'A identidade do cliente diverge da conversa internacional.',
+      });
+    }
+  }
 
-    const identity = normalizePhone(`+${digits}`);
-    if (identity.status !== 'valid' || identity.country === 'BR') return;
-
-    this.assertInternationalWhatsAppOutboundBlocked({ phoneE164: identity.e164 });
+  private async failPendingConversationMessage(
+    messageId: string,
+    conversationId: string,
+    errorMessage: string,
+  ) {
+    await this.prisma.whatsAppMessage.update({
+      where: { id: messageId },
+      data: {
+        status: 'FAILED',
+        failedAt: new Date(),
+        rawMetadata: { source: 'manual_outbound_send', errorMessage },
+      },
+    });
+    this.emitMessageUpdated(conversationId, messageId);
   }
 
   private resolveKiragoMarkReadPhone(conversationId: string, phoneNormalized: string) {

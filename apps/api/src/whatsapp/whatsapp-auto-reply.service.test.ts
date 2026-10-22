@@ -135,6 +135,26 @@ describe('WhatsAppAutoReplyService', () => {
   beforeEach(() => vi.useFakeTimers().setSystemTime(now));
   afterEach(() => vi.useRealTimers());
 
+  it('fails closed before persistence when a legacy row contains an explicit international phone', async () => {
+    const { service, prisma, provider } = factory({
+      context: context({
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: null,
+      }),
+    });
+
+    await expect(
+      service.tryReplyToInbound({
+        whatsAppConnectionId: connectionId,
+        conversationId,
+        triggerMessageId,
+      }),
+    ).resolves.toEqual({ sent: false, reason: 'international_outbound_disabled' });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
   it('requires a message when enabling and validates the optional schedule', async () => {
     const { service } = factory();
     await expect(

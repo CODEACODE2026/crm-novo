@@ -963,6 +963,7 @@ describe('ClientsService manual client creation', () => {
       internationalWriteEnabled: false,
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
+      internationalManualTextSendEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
@@ -972,6 +973,7 @@ describe('ClientsService manual client creation', () => {
       internationalWriteEnabled: false,
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
+      internationalManualTextSendEnabled: false,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
     });
@@ -983,6 +985,19 @@ describe('ClientsService manual client creation', () => {
         { country: 'GB', callingCode: '44' },
       ]),
     );
+  });
+
+  it('publishes manual international text independently without broad outbound capabilities', () => {
+    expect(createClientCreationService(false, false, true).service.phoneCapabilities()).toEqual({
+      enabled: false,
+      internationalWriteEnabled: false,
+      internationalClientWriteEnabled: false,
+      internationalWhatsAppSendEnabled: false,
+      internationalManualTextSendEnabled: true,
+      internationalBillingSendEnabled: false,
+      defaultCountry: 'BR',
+      supportedCountries: [],
+    });
   });
 
   it('accepts an uppercase ISO-shaped phone country at the DTO boundary', async () => {
@@ -1808,6 +1823,7 @@ describe('ClientsService destructive client removal', () => {
 function createClientCreationService(
   phoneInternationalEnabled = false,
   internationalClientWriteEnabled = false,
+  internationalManualTextSendEnabled = false,
 ) {
   const plan = {
     id: 'plan-id',
@@ -1950,6 +1966,9 @@ function createClientCreationService(
         }
         if (key === 'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') {
           return internationalClientWriteEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') {
+          return internationalManualTextSendEnabled ? 'true' : undefined;
         }
         return undefined;
       }),

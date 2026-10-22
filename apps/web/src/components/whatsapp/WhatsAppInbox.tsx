@@ -86,6 +86,7 @@ import {
   formatCurrency,
   formatDate,
   getClient,
+  getClientPhoneCapabilities,
   getPaymentIntentPixCopy,
   listWhatsAppQuickReplies,
   listWhatsAppAutoReplies,
@@ -654,6 +655,8 @@ export function WhatsAppInbox({
   const [labelManagerSaving, setLabelManagerSaving] = useState(false);
   const [labelManagerError, setLabelManagerError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [internationalManualTextSendEnabled, setInternationalManualTextSendEnabled] =
+    useState(false);
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [pendingImageAnnotation, setPendingImageAnnotation] = useState<File | null>(null);
   const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
@@ -801,6 +804,30 @@ export function WhatsAppInbox({
   const presencePauseTimeoutsRef = useRef<Record<string, number>>({});
 
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
+  const selectedConversationIsInternational =
+    isInternationalWhatsAppConversation(selectedConversation);
+  const internationalComposerBlocked =
+    selectedConversationIsInternational && !internationalManualTextSendEnabled;
+  const internationalTextOnly =
+    selectedConversationIsInternational && internationalManualTextSendEnabled;
+
+  useEffect(() => {
+    let canceled = false;
+    void getClientPhoneCapabilities()
+      .then((capabilities) => {
+        if (!canceled) {
+          setInternationalManualTextSendEnabled(
+            capabilities.internationalManualTextSendEnabled === true,
+          );
+        }
+      })
+      .catch(() => {
+        if (!canceled) setInternationalManualTextSendEnabled(false);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -2792,6 +2819,16 @@ export function WhatsAppInbox({
         ? null
         : (mediaOverride ?? selectedMedia);
     const replyToSend = ignoreReply ? null : bodyOverride ? replyToOverride : replyTarget;
+    if (selectedConversationIsInternational) {
+      if (!internationalManualTextSendEnabled) {
+        setSendError('O envio internacional ainda não está habilitado para esta conversa.');
+        return false;
+      }
+      if (mediaToSend || replyToSend || bodyOverride !== undefined) {
+        setSendError('Conversas internacionais permitem somente texto manual simples nesta etapa.');
+        return false;
+      }
+    }
     if (!body && !mediaToSend) return false;
     if (replyToSend && mediaToSend && mediaToSend.kind !== 'STICKER') {
       setSendError('Resposta com anexo ainda não está disponível. Envie uma resposta em texto.');
@@ -4201,11 +4238,31 @@ export function WhatsAppInbox({
         <section
           className="conversation-chat-panel"
           aria-label="Chat da conversa"
-          onDragEnter={selectedConversation ? handleChatDragEnter : undefined}
-          onDragLeave={selectedConversation ? handleChatDragLeave : undefined}
-          onDragOver={selectedConversation ? handleChatDragOver : undefined}
-          onDrop={selectedConversation ? handleChatDrop : undefined}
-          onPaste={selectedConversation ? handleChatPaste : undefined}
+          onDragEnter={
+            selectedConversation && !selectedConversationIsInternational
+              ? handleChatDragEnter
+              : undefined
+          }
+          onDragLeave={
+            selectedConversation && !selectedConversationIsInternational
+              ? handleChatDragLeave
+              : undefined
+          }
+          onDragOver={
+            selectedConversation && !selectedConversationIsInternational
+              ? handleChatDragOver
+              : undefined
+          }
+          onDrop={
+            selectedConversation && !selectedConversationIsInternational
+              ? handleChatDrop
+              : undefined
+          }
+          onPaste={
+            selectedConversation && !selectedConversationIsInternational
+              ? handleChatPaste
+              : undefined
+          }
         >
           {selectedConversation ? (
             <>
@@ -4270,6 +4327,7 @@ export function WhatsAppInbox({
 
               <ConversationMessages
                 conversationId={selectedConversation.id}
+                outboundActionsDisabled={selectedConversationIsInternational}
                 messages={messages}
                 hasOlder={hasOlderMessages}
                 loading={messagesLoading}
@@ -4336,14 +4394,22 @@ export function WhatsAppInbox({
                 replyTarget={replyTarget}
                 selectedMedia={selectedMedia}
                 sending={sending}
+                blocked={internationalComposerBlocked}
+                textOnly={internationalTextOnly}
                 onChange={(value) => {
                   setDrafts((current) => ({
                     ...current,
                     [selectedConversation.id]: value,
                   }));
-                  noteTextComposerActivity(selectedConversation.id, value);
+                  if (!selectedConversationIsInternational) {
+                    noteTextComposerActivity(selectedConversation.id, value);
+                  }
                 }}
-                onBlur={() => pauseConversationPresence(selectedConversation.id)}
+                onBlur={() => {
+                  if (!selectedConversationIsInternational) {
+                    pauseConversationPresence(selectedConversation.id);
+                  }
+                }}
                 onRemoveMedia={clearComposerMedia}
                 onCancelReply={() => setReplyTarget(null)}
                 onSelectMedia={selectComposerMedia}
@@ -4356,9 +4422,11 @@ export function WhatsAppInbox({
                 onLoadSavedStickers={() => void loadSavedStickers()}
                 onSendSavedSticker={(sticker) => void sendSavedStickerFromLibrary(sticker)}
                 onSendVoice={(voice) => sendCurrentVoiceMessage(voice)}
-                onVoiceRecordingChange={(recording) =>
-                  noteAudioRecordingPresence(selectedConversation.id, recording)
-                }
+                onVoiceRecordingChange={(recording) => {
+                  if (!selectedConversationIsInternational) {
+                    noteAudioRecordingPresence(selectedConversation.id, recording);
+                  }
+                }}
               />
             </>
           ) : (
@@ -5857,6 +5925,7 @@ function ConversationHeader({
 
 function ConversationMessages({
   conversationId,
+  outboundActionsDisabled,
   hasOlder,
   hasNewer,
   loading,
@@ -5902,6 +5971,7 @@ function ConversationMessages({
   targetSearchTerm,
 }: {
   conversationId: string;
+  outboundActionsDisabled: boolean;
   hasOlder: boolean;
   hasNewer: boolean;
   loading: boolean;
@@ -6058,6 +6128,7 @@ function ConversationMessages({
                   ) : null}
                   <ConversationBubble
                     conversationId={conversationId}
+                    outboundActionsDisabled={outboundActionsDisabled}
                     highlighted={targetMessageId === message.id}
                     message={message}
                     deleteConfirmOpen={deleteConfirmMessageId === message.id}
@@ -6301,6 +6372,7 @@ function isAllowedConversationDocument(mimeType: string, extension: string) {
 
 function ConversationBubble({
   conversationId,
+  outboundActionsDisabled,
   deleteConfirmOpen,
   deleteError,
   deleting,
@@ -6337,6 +6409,7 @@ function ConversationBubble({
   onOpenSharedContactClient,
 }: {
   conversationId: string;
+  outboundActionsDisabled: boolean;
   deleteConfirmOpen: boolean;
   deleteError: string;
   deleting: boolean;
@@ -6393,7 +6466,12 @@ function ConversationBubble({
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
   const mobileActionItems: ActionMenuItem[] = [
-    { label: 'Responder', icon: Reply, onSelect: () => onReply(message) },
+    {
+      label: 'Responder',
+      icon: Reply,
+      disabled: outboundActionsDisabled,
+      onSelect: () => onReply(message),
+    },
     ...(canSaveSticker
       ? [
           {
@@ -6405,14 +6483,21 @@ function ConversationBubble({
         ]
       : []),
     ...(forwardEligible
-      ? [{ label: 'Encaminhar', icon: ForwardIcon, onSelect: () => onForward(message) }]
+      ? [
+          {
+            label: 'Encaminhar',
+            icon: ForwardIcon,
+            disabled: outboundActionsDisabled,
+            onSelect: () => onForward(message),
+          },
+        ]
       : []),
     ...(editEligible
       ? [
           {
             label: savingEdit ? 'Salvando edição...' : 'Editar',
             icon: Pencil,
-            disabled: savingEdit,
+            disabled: outboundActionsDisabled || savingEdit,
             onSelect: () => onEdit(message),
           },
         ]
@@ -6420,7 +6505,7 @@ function ConversationBubble({
     ...(!message.deleted
       ? allowedWhatsAppReactionEmojis.map((emoji) => ({
           label: `Reagir com ${emoji}`,
-          disabled: reacting,
+          disabled: outboundActionsDisabled || reacting,
           onSelect: () => onReaction(message, emoji),
           section: 'Reagir',
         }))
@@ -6431,7 +6516,7 @@ function ConversationBubble({
             label: deleting ? 'Apagando...' : 'Apagar',
             icon: Trash2,
             danger: true,
-            disabled: deleting,
+            disabled: outboundActionsDisabled || deleting,
             onSelect: () => onDeleteConfirmChange(message.id),
             section: 'Mensagem',
           },
@@ -6451,6 +6536,7 @@ function ConversationBubble({
         type="button"
         title="Responder"
         aria-label="Responder mensagem"
+        disabled={outboundActionsDisabled}
         onClick={() => onReply(message)}
       >
         <Reply aria-hidden="true" size={14} />
@@ -6477,6 +6563,7 @@ function ConversationBubble({
           type="button"
           title="Encaminhar"
           aria-label="Encaminhar mensagem"
+          disabled={outboundActionsDisabled}
           onClick={() => onForward(message)}
         >
           <ForwardIcon aria-hidden="true" size={14} />
@@ -6489,7 +6576,7 @@ function ConversationBubble({
           title="Editar"
           aria-label="Editar mensagem"
           aria-expanded={editing}
-          disabled={savingEdit}
+          disabled={outboundActionsDisabled || savingEdit}
           onClick={() => onEdit(message)}
         >
           {savingEdit ? (
@@ -6507,7 +6594,7 @@ function ConversationBubble({
             title="Apagar"
             aria-label="Apagar mensagem"
             aria-expanded={deleteConfirmOpen}
-            disabled={deleting}
+            disabled={outboundActionsDisabled || deleting}
             onClick={() => onDeleteConfirmChange(deleteConfirmOpen ? null : message.id)}
           >
             {deleting ? (
@@ -6544,7 +6631,7 @@ function ConversationBubble({
             title="Reagir"
             aria-label="Reagir à mensagem"
             aria-expanded={reactionPickerOpen}
-            disabled={reacting}
+            disabled={outboundActionsDisabled || reacting}
             onClick={() => onReactionPickerChange(reactionPickerOpen ? null : message.id)}
           >
             {reacting ? (
@@ -6672,7 +6759,7 @@ function ConversationBubble({
             {message.retryAction === 'RETRY' ? (
               <button
                 className="conversation-message-retry"
-                disabled={retrying}
+                disabled={outboundActionsDisabled || retrying}
                 type="button"
                 onClick={() => onRetry(message)}
               >
@@ -7976,6 +8063,7 @@ function ConversationAudioPlayer({
 }
 
 function ConversationComposer({
+  blocked,
   composerRef,
   conversationId,
   draft,
@@ -7993,6 +8081,7 @@ function ConversationComposer({
   replyTarget,
   selectedMedia,
   sending,
+  textOnly,
   onChange,
   onBlur,
   onCancelReply,
@@ -8006,6 +8095,7 @@ function ConversationComposer({
   onSendVoice,
   onVoiceRecordingChange,
 }: {
+  blocked: boolean;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   conversationId: string;
   draft: string;
@@ -8023,6 +8113,7 @@ function ConversationComposer({
   replyTarget: WhatsAppConversationMessage | null;
   selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
+  textOnly: boolean;
   onChange: (value: string) => void;
   onBlur: () => void;
   onCancelReply: () => void;
@@ -8082,10 +8173,10 @@ function ConversationComposer({
   const [quickReplyMenuViewportStyle, setQuickReplyMenuViewportStyle] =
     useState<React.CSSProperties>({});
   const hasText = Boolean(draft.trim());
-  const hasSendableContent = Boolean(hasText || selectedMedia);
+  const hasSendableContent = Boolean(hasText || (!textOnly && selectedMedia));
   const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);
   const shouldShowSendAction = actionMode === 'SEND';
-  const canSend = hasSendableContent && !sending;
+  const canSend = hasSendableContent && !sending && !blocked;
   const canSendVoice = Boolean(voiceDraft) && !sending && !recording;
   const quickReplySlashQuery = whatsAppQuickReplySlashQuery(draft);
   const quickReplySlashMenuOpen =
@@ -8713,6 +8804,15 @@ function ConversationComposer({
           {error}
         </div>
       ) : null}
+      {blocked ? (
+        <div className="notice warning conversation-notice" role="status">
+          O envio internacional está indisponível. Seu rascunho será preservado.
+        </div>
+      ) : textOnly ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: somente texto manual simples está disponível.
+        </div>
+      ) : null}
       {voiceError ? (
         <div className="notice danger conversation-notice" role="alert">
           {voiceError}
@@ -8823,7 +8923,7 @@ function ConversationComposer({
           <IconButton
             icon={Plus}
             label="Anexar arquivo"
-            disabled={recording || sending}
+            disabled={blocked || textOnly || recording || sending}
             onClick={() => {
               setAttachmentMenuOpen((current) => !current);
             }}
@@ -9110,6 +9210,7 @@ function ConversationComposer({
           aria-activedescendant={quickReplySlashMenuOpen ? activeQuickReplyId : undefined}
           aria-controls={quickReplySlashMenuOpen ? 'conversation-quick-reply-list' : undefined}
           ref={composerRef}
+          disabled={blocked}
           placeholder="Digite uma mensagem..."
           rows={2}
           value={draft}
@@ -9189,7 +9290,7 @@ function ConversationComposer({
           className="conversation-primary-action"
           icon={Mic}
           label="Gravar áudio"
-          disabled={recording || sending || Boolean(voiceDraft)}
+          disabled={blocked || textOnly || recording || sending || Boolean(voiceDraft)}
           onClick={() => void startVoiceRecording()}
         />
       )}
@@ -9845,6 +9946,7 @@ function ConversationClientPanelContent({
         ) : null}
         {financialSummary ? <ConversationFinancialSummary summary={financialSummary} /> : null}
         <ConversationReferenceList
+          allowPixWhatsApp={!isInternationalWhatsAppConversation(conversation)}
           client={client}
           lifecycleBusyReferenceId={lifecycleBusyReferenceId}
           lifecyclePlansLoading={lifecyclePlansLoading}
@@ -10365,6 +10467,7 @@ function ConversationRecentActivity({
 }
 
 function ConversationReferenceList({
+  allowPixWhatsApp,
   client,
   lifecycleBusyReferenceId,
   lifecyclePlansLoading,
@@ -10381,6 +10484,7 @@ function ConversationReferenceList({
   onOpenClient,
   onViewReceivable,
 }: {
+  allowPixWhatsApp: boolean;
   client: Client;
   lifecycleBusyReferenceId: string | null;
   lifecyclePlansLoading: boolean;
@@ -10451,6 +10555,7 @@ function ConversationReferenceList({
                 const expanded = expandedReferenceId === reference.id;
                 return (
                   <ConversationReferenceCard
+                    allowPixWhatsApp={allowPixWhatsApp}
                     key={reference.id}
                     clientId={client.id}
                     expanded={expanded}
@@ -10510,6 +10615,7 @@ function ConversationReferenceList({
 }
 
 function ConversationReferenceCard({
+  allowPixWhatsApp,
   clientId,
   expanded,
   lifecycleBusyReferenceId,
@@ -10529,6 +10635,7 @@ function ConversationReferenceCard({
   onToggle,
   onViewReceivable,
 }: {
+  allowPixWhatsApp: boolean;
   clientId: string;
   expanded: boolean;
   lifecycleBusyReferenceId: string | null;
@@ -10558,7 +10665,8 @@ function ConversationReferenceCard({
   const visiblePix = generatedPix ?? activePix;
   const pixState = classifyContactPixState(visiblePix);
   const canActOnPix = contactReceivableAllowsPixAction(openReceivable);
-  const canSendPixWhatsApp = contactPixCanSendWhatsApp(openReceivable, visiblePix);
+  const canSendPixWhatsApp =
+    allowPixWhatsApp && contactPixCanSendWhatsApp(openReceivable, visiblePix);
   const pixWhatsAppSending = visiblePix ? pixWhatsAppBusyIntentIds.has(visiblePix.id) : false;
   const actions = contactReferenceActionMatrix(
     reference,
@@ -11466,6 +11574,14 @@ function conversationDisplayPhone(conversation: WhatsAppConversation) {
   }
 
   return normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
+}
+
+export function isInternationalWhatsAppConversation(
+  conversation: WhatsAppConversation | null | undefined,
+) {
+  if (!conversation) return false;
+  if (conversation.phoneCountry) return conversation.phoneCountry !== 'BR';
+  return Boolean(conversation.phoneE164 && !conversation.phoneE164.startsWith('+55'));
 }
 
 export function phoneDigitsCompatible(left: string, right: string) {

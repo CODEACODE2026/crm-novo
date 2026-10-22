@@ -15,6 +15,9 @@ describe.skipIf(!runDatabaseTests)('international WhatsApp identity persistence'
   });
 
   afterEach(async () => {
+    await prisma.whatsAppMessage.deleteMany({
+      where: { conversationId: { in: [...createdConversationIds] } },
+    });
     await prisma.whatsAppConversation.deleteMany({
       where: { id: { in: [...createdConversationIds] } },
     });
@@ -134,6 +137,48 @@ describe.skipIf(!runDatabaseTests)('international WhatsApp identity persistence'
     await expect(
       prisma.whatsAppConversation.findUniqueOrThrow({ where: { id: conversation.id } }),
     ).resolves.toMatchObject({ lastMessagePreview: 'Estado anterior', unreadCount: 2 });
+  });
+
+  it('persists one idempotent manual international PENDING without changing the recipient', async () => {
+    const connection = await createConnection();
+    const conversation = await createConversation(connection.id, {
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const requestId = unique('PHONE-OUTBOUND-TEXT1-REQUEST');
+    const data = {
+      conversationId: conversation.id,
+      whatsAppConnectionId: connection.id,
+      provider: 'KIRAGO' as const,
+      requestId,
+      direction: 'OUTBOUND' as const,
+      type: 'TEXT' as const,
+      text: 'Mensagem internacional simulada',
+      status: 'PENDING' as const,
+      isFromMe: true,
+      rawMetadata: { source: 'manual_outbound_send' },
+    };
+
+    const attempts = await Promise.allSettled([
+      prisma.whatsAppMessage.create({ data }),
+      prisma.whatsAppMessage.create({ data }),
+    ]);
+
+    expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(
+      await prisma.whatsAppMessage.count({
+        where: { whatsAppConnectionId: connection.id, requestId },
+      }),
+    ).toBe(1);
+    await expect(
+      prisma.whatsAppConversation.findUniqueOrThrow({ where: { id: conversation.id } }),
+    ).resolves.toMatchObject({
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
   });
 
   async function createConnection() {

@@ -898,6 +898,7 @@ export interface WhatsAppConversation {
   phone: string;
   phoneNormalized: string;
   phoneE164?: string | null;
+  phoneCountry?: string | null;
   status: WhatsAppConversationStatus;
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
@@ -2092,6 +2093,9 @@ export function getClient(id: string) {
 export interface ClientPhoneCapabilities {
   enabled: boolean;
   internationalWriteEnabled: boolean;
+  internationalClientWriteEnabled: boolean;
+  internationalWhatsAppSendEnabled: boolean;
+  internationalBillingSendEnabled: boolean;
   defaultCountry: 'BR';
   supportedCountries: Array<{ country: string; callingCode: string }>;
 }

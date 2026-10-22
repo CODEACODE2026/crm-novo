@@ -112,11 +112,15 @@ export class ClientsService {
   ) {}
 
   phoneCapabilities() {
-    const enabled = this.internationalPhoneEnabled();
+    const internationalClientWriteEnabled = this.internationalClientWriteEnabled();
+    const enabled = this.internationalPhoneEnabled() || internationalClientWriteEnabled;
 
     return {
       enabled,
-      internationalWriteEnabled: false,
+      internationalWriteEnabled: internationalClientWriteEnabled,
+      internationalClientWriteEnabled,
+      internationalWhatsAppSendEnabled: false,
+      internationalBillingSendEnabled: false,
       defaultCountry: 'BR' as const,
       supportedCountries: enabled ? listSupportedPhoneCountries() : [],
     };
@@ -1659,10 +1663,18 @@ export class ClientsService {
     return this.configService?.get<string>('PHONE_INTERNATIONAL_ENABLED') === 'true';
   }
 
+  private internationalClientWriteEnabled() {
+    return this.configService?.get<string>('PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') === 'true';
+  }
+
+  private internationalPhoneInputEnabled() {
+    return this.internationalPhoneEnabled() || this.internationalClientWriteEnabled();
+  }
+
   private prepareClientPhone(phone: string, phoneCountry?: string) {
     const trimmed = phone.trim();
 
-    if (!this.internationalPhoneEnabled()) {
+    if (!this.internationalPhoneInputEnabled()) {
       if (phoneCountry !== undefined) {
         throw new BadRequestException('O cadastro internacional de telefone esta desabilitado.');
       }
@@ -1693,20 +1705,21 @@ export class ClientsService {
       throw new BadRequestException('O DDI informado nao corresponde ao pais selecionado.');
     }
 
-    if (normalized.country !== 'BR') {
+    if (normalized.country !== 'BR' && !this.internationalClientWriteEnabled()) {
       throw new ConflictException(
-        'Telefone internacional validado, mas a gravacao aguarda a integracao segura com WhatsApp e Billing.',
+        'Telefone internacional validado, mas o cadastro internacional esta desabilitado.',
       );
     }
 
     return {
-      phoneNormalized: normalizeBrazilPhone(normalized.e164),
+      phoneNormalized:
+        normalized.country === 'BR' ? normalizeBrazilPhone(normalized.e164) : normalized.digits,
       phoneE164: normalized.e164,
     };
   }
 
   private tryNormalizeCanonicalPhone(value: string) {
-    if (!this.internationalPhoneEnabled()) return null;
+    if (!this.internationalPhoneInputEnabled()) return null;
     const normalized = normalizePhone(value);
     return normalized.status === 'valid' ? normalized.e164 : null;
   }
@@ -1726,7 +1739,7 @@ export class ClientsService {
   }
 
   private tryNormalizePhone(value: string) {
-    if (this.internationalPhoneEnabled() && value.trim().startsWith('+')) {
+    if (this.internationalPhoneInputEnabled() && value.trim().startsWith('+')) {
       const normalized = normalizePhone(value);
       if (normalized.status === 'valid' && normalized.country !== 'BR') return null;
     }

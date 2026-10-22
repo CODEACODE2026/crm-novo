@@ -18,6 +18,7 @@ export function validateEnv(config: EnvConfig) {
   const nodeEnv = config.NODE_ENV ?? 'development';
 
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED');
 
   if (nodeEnv === 'production') {
     requireValue(config, 'DATABASE_URL');

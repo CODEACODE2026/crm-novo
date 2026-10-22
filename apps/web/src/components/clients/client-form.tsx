@@ -30,6 +30,7 @@ interface ClientFormProps {
       | 'name'
       | 'notes'
       | 'phone'
+      | 'phoneCountry'
       | 'planId'
       | 'preferredPixProvider'
       | 'recurringValue'
@@ -71,7 +72,9 @@ export function ClientForm({
   const initialPhone = client?.phone ?? initialValues?.phone ?? '';
   const [phone, setPhone] = useState(initialPhone);
   const [phoneCapabilities, setPhoneCapabilities] = useState<ClientPhoneCapabilities | null>(null);
-  const [phoneCountry, setPhoneCountry] = useState(client?.phoneCountry ?? 'BR');
+  const [phoneCountry, setPhoneCountry] = useState(
+    client?.phoneCountry ?? initialValues?.phoneCountry ?? 'BR',
+  );
   const [email, setEmail] = useState(client?.email ?? initialValues?.email ?? '');
   const [reference, setReference] = useState(client?.reference ?? initialValues?.reference ?? '');
   const [planId, setPlanId] = useState(initialPlan?.id ?? '');
@@ -174,7 +177,7 @@ export function ClientForm({
   const internationalWriteBlocked =
     internationalPhoneEnabled &&
     phoneCountry !== 'BR' &&
-    phoneCapabilities.internationalWriteEnabled !== true &&
+    phoneCapabilities.internationalClientWriteEnabled !== true &&
     (!editing || phoneChanged);
   const supportedCountries = useMemo(() => {
     const displayNames = new Intl.DisplayNames(['pt-BR'], { type: 'region' });
@@ -315,8 +318,15 @@ export function ClientForm({
             </label>
             {internationalWriteBlocked ? (
               <div className="notice warning compact-notice form-grid-full" role="status">
-                O telefone foi reconhecido, mas o cadastro internacional será liberado somente após
-                a integração segura com WhatsApp e Billing.
+                O telefone foi reconhecido, mas o cadastro internacional está desabilitado.
+              </div>
+            ) : null}
+            {internationalPhoneEnabled &&
+            phoneCountry !== 'BR' &&
+            phoneCapabilities?.internationalClientWriteEnabled === true ? (
+              <div className="notice warning compact-notice form-grid-full" role="status">
+                O cliente pode ser cadastrado, mas WhatsApp, PIX e cobranças automáticas
+                internacionais continuam indisponíveis.
               </div>
             ) : null}
             <label className="field">

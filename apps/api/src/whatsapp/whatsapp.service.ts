@@ -3099,7 +3099,13 @@ export class WhatsAppService {
         }),
         tx.client.findUnique({
           where: { id: dto.clientId },
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            phoneNormalized: true,
+            phoneE164: true,
+          },
         }),
       ]);
 
@@ -3137,6 +3143,8 @@ export class WhatsAppService {
         });
       }
 
+      this.assertConversationClientPhoneCompatibility(conversation, client);
+
       await this.linkConversationClientInTransaction(tx, {
         conversationId: conversation.id,
         client,
@@ -3163,6 +3171,46 @@ export class WhatsAppService {
 
     this.emitConversationUpdated(id);
     return linked;
+  }
+
+  private assertConversationClientPhoneCompatibility(
+    conversation: { phoneE164?: string | null },
+    client: { phoneE164?: string | null },
+  ) {
+    const clientIdentity = client.phoneE164 ? normalizePhone(client.phoneE164) : null;
+
+    if (!conversation.phoneE164) {
+      if (clientIdentity?.status === 'valid' && clientIdentity.country !== 'BR') {
+        throw new ConflictException(
+          'A conversa nao possui identidade E.164 comprovada para vinculo internacional.',
+        );
+      }
+
+      return;
+    }
+
+    const conversationIdentity = normalizePhone(conversation.phoneE164);
+    if (conversationIdentity.status !== 'valid') {
+      throw new ConflictException('A identidade telefonica da conversa exige revisao.');
+    }
+
+    const requiresExactInternationalMatch =
+      conversationIdentity.country !== 'BR' ||
+      (clientIdentity?.status === 'valid' && clientIdentity.country !== 'BR');
+
+    if (!requiresExactInternationalMatch) return;
+
+    if (!client.phoneE164 || clientIdentity?.status !== 'valid') {
+      throw new ConflictException(
+        'Cliente sem identidade E.164 compativel com a conversa internacional.',
+      );
+    }
+
+    if (comparePhoneIdentities(conversationIdentity.e164, client.phoneE164).status !== 'match') {
+      throw new ConflictException(
+        'O telefone do cliente nao corresponde exatamente a conversa internacional.',
+      );
+    }
   }
 
   async markConversationAsRead(id: string) {
@@ -3470,24 +3518,35 @@ export class WhatsAppService {
       });
     }
 
-    const approvedPhoneE164 = this.requireBrazilianPendingContactPhone(pending);
+    const approvedPhone = this.resolvePendingContactPhone(pending);
 
     const dueDate = parseBusinessDate(dto.dueDate);
     await this.plansService.ensureActivePlan(dto.planId);
     const generateInitialReceivable = dto.generateInitialReceivable ?? true;
-    const sendPixWhatsAppNow = generateInitialReceivable && (dto.sendPixWhatsAppNow ?? true);
+    const sendPixWhatsAppNow =
+      approvedPhone.country === 'BR' &&
+      generateInitialReceivable &&
+      (dto.sendPixWhatsAppNow ?? true);
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.whatsAppPendingContact.updateMany({
+          where: { id, status: 'PENDENTE' },
+          data: { ignoreReason: null },
+        });
+
+        if (claimed.count !== 1) {
+          throw new ConflictException(
+            'O contato pendente ja foi processado por outra solicitacao.',
+          );
+        }
+
         const created = await tx.client.create({
           data: {
             name: dto.name.trim(),
             phone: pending.phone,
-            phoneNormalized: pending.phoneNormalized,
-            phoneE164:
-              this.config.get<string>('PHONE_INTERNATIONAL_ENABLED') === 'true'
-                ? approvedPhoneE164
-                : null,
+            phoneNormalized: approvedPhone.digits,
+            phoneE164: this.internationalPhoneInputEnabled() ? approvedPhone.e164 : null,
             email: this.optionalTrim(dto.email),
             reference: dto.reference.trim(),
             planId: dto.planId,
@@ -3583,41 +3642,76 @@ export class WhatsAppService {
         actorUserId,
       });
 
-      return this.presentApprovedClient(result.client, activation);
+      return this.presentApprovedClient(
+        result.client,
+        approvedPhone.country !== 'BR' && generateInitialReceivable
+          ? {
+              ...activation,
+              warning:
+                'Cobranca inicial criada sem PIX ou envio WhatsApp, indisponiveis para telefone internacional.',
+            }
+          : activation,
+      );
     } catch (error) {
       this.handleClientCreationError(error);
     }
   }
 
-  private requireBrazilianPendingContactPhone(pending: {
+  private resolvePendingContactPhone(pending: {
     phone: string;
     phoneNormalized: string;
     phoneE164?: string | null;
   }) {
     const legacyIdentity = normalizePhone(`+${pending.phoneNormalized}`);
 
-    if (legacyIdentity.status !== 'valid' || legacyIdentity.country !== 'BR') {
+    if (legacyIdentity.status !== 'valid') {
       throw new ConflictException(
-        'A aprovacao deste contato aguarda a integracao segura de telefones internacionais.',
+        'A identidade de telefone do contato e invalida e exige revisao.',
       );
     }
 
-    if (!pending.phoneE164) return legacyIdentity.e164;
+    if (!pending.phoneE164) {
+      if (legacyIdentity.country !== 'BR') {
+        throw new ConflictException(
+          'A identidade internacional do contato nao possui E.164 comprovado.',
+        );
+      }
+
+      return {
+        country: legacyIdentity.country,
+        digits: legacyIdentity.digits,
+        e164: legacyIdentity.e164,
+      };
+    }
 
     const canonicalIdentity = normalizePhone(pending.phoneE164);
     const comparison = comparePhoneIdentities(pending.phoneE164, legacyIdentity.e164);
 
-    if (
-      canonicalIdentity.status !== 'valid' ||
-      canonicalIdentity.country !== 'BR' ||
-      comparison.status !== 'match'
-    ) {
+    if (canonicalIdentity.status !== 'valid' || comparison.status !== 'match') {
       throw new ConflictException(
         'As identidades de telefone do contato estao divergentes e exigem revisao.',
       );
     }
 
-    return canonicalIdentity.e164;
+    if (
+      canonicalIdentity.country !== 'BR' &&
+      this.config.get<string>('PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') !== 'true'
+    ) {
+      throw new ConflictException('O cadastro internacional de clientes esta desabilitado.');
+    }
+
+    return {
+      country: canonicalIdentity.country,
+      digits: canonicalIdentity.digits,
+      e164: canonicalIdentity.e164,
+    };
+  }
+
+  private internationalPhoneInputEnabled() {
+    return (
+      this.config.get<string>('PHONE_INTERNATIONAL_ENABLED') === 'true' ||
+      this.config.get<string>('PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') === 'true'
+    );
   }
 
   private async processInitialActivationAfterApproval(input: {
@@ -7981,6 +8075,7 @@ export class WhatsAppService {
       phone: conversation.phone,
       phoneNormalized: conversation.phoneNormalized,
       phoneE164: conversation.phoneE164,
+      phoneCountry: this.phoneCountry(conversation.phoneE164),
       status: conversation.status,
       lastMessageAt: conversation.lastMessageAt,
       lastMessagePreview: conversation.lastMessagePreview,
@@ -8002,6 +8097,12 @@ export class WhatsAppService {
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
     };
+  }
+
+  private phoneCountry(phoneE164: string | null | undefined) {
+    if (!phoneE164) return null;
+    const identity = normalizePhone(phoneE164);
+    return identity.status === 'valid' ? (identity.country ?? null) : null;
   }
 
   private validConversationContactName(input: {

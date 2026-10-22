@@ -316,6 +316,7 @@ function pixCopyInFlight(): ConversationPixCopyInFlight {
 describe('WhatsAppInbox unread reconciliation helpers', () => {
   it('limits legacy 8/9 digit aliases to proven Brazilian identities', () => {
     expect(phoneDigitsCompatible('554499999999', '5544999999999')).toBe(true);
+    expect(phoneDigitsCompatible('14076390665', '14076390665')).toBe(true);
     expect(phoneDigitsCompatible('14076390665', '5514076390665')).toBe(false);
     expect(phoneDigitsCompatible('351912345678', '5512912345678')).toBe(false);
   });

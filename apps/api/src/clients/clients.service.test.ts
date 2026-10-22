@@ -961,12 +961,18 @@ describe('ClientsService manual client creation', () => {
     expect(disabled).toEqual({
       enabled: false,
       internationalWriteEnabled: false,
+      internationalClientWriteEnabled: false,
+      internationalWhatsAppSendEnabled: false,
+      internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
     });
     expect(enabled).toMatchObject({
       enabled: true,
       internationalWriteEnabled: false,
+      internationalClientWriteEnabled: false,
+      internationalWhatsAppSendEnabled: false,
+      internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
     });
     expect(enabled.supportedCountries).toEqual(
@@ -1152,18 +1158,49 @@ describe('ClientsService manual client creation', () => {
     ['GB', '+44 20 7946 0958'],
     ['AR', '+54 9 11 2345-6789'],
   ])(
-    'validates %s but blocks persistence until dependent consumers migrate',
+    'validates %s but blocks persistence while client writes are disabled',
     async (country, phone) => {
       const fake = createClientCreationService(true);
 
       await expect(
         fake.service.create(manualClientDto({ phone, phoneCountry: country }), 'user-id'),
-      ).rejects.toThrow('aguarda a integracao segura com WhatsApp e Billing');
+      ).rejects.toThrow('cadastro internacional esta desabilitado');
 
       expect(fake.clients).toHaveLength(0);
       expect(fake.prisma.$transaction).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ['US', '+1 (407) 639-0665', '14076390665'],
+    ['PT', '+351 912 345 678', '351912345678'],
+    ['GB', '+44 20 7946 0958', '442079460958'],
+  ])(
+    'persists a validated %s identity without fabricating DDI 55 when client writes are enabled',
+    async (country, phone, digits) => {
+      const fake = createClientCreationService(true, true);
+
+      await fake.service.create(manualClientDto({ phone, phoneCountry: country }), 'user-id');
+
+      expect(fake.clients[0]).toMatchObject({
+        phone,
+        phoneNormalized: digits,
+        phoneE164: `+${digits}`,
+      });
+      expect(fake.prisma.messageDispatch.create).not.toHaveBeenCalled();
+      expect(fake.prisma.paymentIntent.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('publishes independent safe capabilities when only client writes are enabled', () => {
+    expect(createClientCreationService(false, true).service.phoneCapabilities()).toMatchObject({
+      enabled: true,
+      internationalWriteEnabled: true,
+      internationalClientWriteEnabled: true,
+      internationalWhatsAppSendEnabled: false,
+      internationalBillingSendEnabled: false,
+    });
+  });
 
   it('rejects a country that conflicts with an explicit DDI', async () => {
     const fake = createClientCreationService(true);
@@ -1373,6 +1410,26 @@ describe('ClientsService legacy client updates', () => {
       phone: '(11) 99999-1234',
       phoneNormalized: '5511999991234',
       phoneE164: '+5511999991234',
+    });
+  });
+
+  it('updates an international phone without fabricating a Brazilian identity', async () => {
+    const fake = createClientUpdateService({
+      references: [clientReference()],
+      phoneInternationalEnabled: true,
+      internationalClientWriteEnabled: true,
+    });
+
+    await fake.service.update(
+      fake.client.id,
+      { phone: '+351 912 345 678', phoneCountry: 'PT' },
+      'user-id',
+    );
+
+    expect(fake.client).toMatchObject({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
     });
   });
 
@@ -1748,7 +1805,10 @@ describe('ClientsService destructive client removal', () => {
   });
 });
 
-function createClientCreationService(phoneInternationalEnabled = false) {
+function createClientCreationService(
+  phoneInternationalEnabled = false,
+  internationalClientWriteEnabled = false,
+) {
   const plan = {
     id: 'plan-id',
     name: 'Mensal',
@@ -1883,7 +1943,17 @@ function createClientCreationService(phoneInternationalEnabled = false) {
     {} as never,
     referralsService as never,
     receivableCycleService as never,
-    { get: vi.fn(() => (phoneInternationalEnabled ? 'true' : undefined)) } as never,
+    {
+      get: vi.fn((key: string) => {
+        if (key === 'PHONE_INTERNATIONAL_ENABLED') {
+          return phoneInternationalEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') {
+          return internationalClientWriteEnabled ? 'true' : undefined;
+        }
+        return undefined;
+      }),
+    } as never,
   );
 
   return {
@@ -1901,9 +1971,11 @@ function createClientCreationService(phoneInternationalEnabled = false) {
 function createClientUpdateService({
   references,
   phoneInternationalEnabled = false,
+  internationalClientWriteEnabled = false,
 }: {
   references: Array<ReturnType<typeof clientReference>>;
   phoneInternationalEnabled?: boolean;
+  internationalClientWriteEnabled?: boolean;
 }) {
   const plan = {
     id: 'plan-id',
@@ -2033,7 +2105,17 @@ function createClientUpdateService({
     recoveryService as never,
     { cancelPendingForClientBeforePayment: vi.fn() } as never,
     receivableCycleService as never,
-    { get: vi.fn(() => (phoneInternationalEnabled ? 'true' : undefined)) } as never,
+    {
+      get: vi.fn((key: string) => {
+        if (key === 'PHONE_INTERNATIONAL_ENABLED') {
+          return phoneInternationalEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') {
+          return internationalClientWriteEnabled ? 'true' : undefined;
+        }
+        return undefined;
+      }),
+    } as never,
   );
 
   return {

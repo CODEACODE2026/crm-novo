@@ -3482,14 +3482,10 @@ export function WhatsAppInbox({
     setGuestClientCreatedUnlinked(null);
 
     try {
-      const duplicate =
-        guestClientCreateConversation.phoneE164 &&
-        !guestClientCreateConversation.phoneE164.startsWith('+55')
-          ? null
-          : await findDuplicateClientByPhone(
-              payload.phone,
-              guestClientCreateConversation.phoneNormalized,
-            );
+      const duplicate = await findDuplicateClientByPhone(
+        payload.phone,
+        guestClientCreateConversation.phoneNormalized,
+      );
 
       if (duplicate) {
         setGuestClientDuplicate(duplicate);
@@ -11438,7 +11434,10 @@ function GuestConversationClientModal({
           {!unlinkedClient ? (
             plans.length ? (
               <ClientForm
-                initialValues={{ phone: conversationPhone }}
+                initialValues={{
+                  phone: conversationPhone,
+                  phoneCountry: conversation.phoneCountry ?? undefined,
+                }}
                 plans={plans}
                 submitLabel="Cadastrar e vincular"
                 onCancel={onClose}

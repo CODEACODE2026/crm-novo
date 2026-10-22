@@ -34,6 +34,21 @@ describe('validateEnv', () => {
       'PHONE_INTERNATIONAL_ENABLED deve ser true ou false.',
     );
   });
+
+  it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED=%s', (value) => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED: value })).toMatchObject({
+      PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED: value,
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED=%j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED: value })).toThrow(
+        'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED deve ser true ou false.',
+      );
+    },
+  );
   it('accepts a complete production env', () => {
     const env = productionEnv();
 

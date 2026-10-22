@@ -12,6 +12,9 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     users: new Set<string>(),
     plans: new Set<string>(),
     clients: new Set<string>(),
+    connections: new Set<string>(),
+    conversations: new Set<string>(),
+    pendingContacts: new Set<string>(),
   };
 
   beforeAll(async () => {
@@ -20,10 +23,24 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
 
   afterEach(async () => {
     const clientIds = [...created.clients];
+    await prisma.whatsAppConversation.deleteMany({
+      where: { id: { in: [...created.conversations] } },
+    });
+    await prisma.whatsAppPendingContact.deleteMany({
+      where: { id: { in: [...created.pendingContacts] } },
+    });
+    await prisma.messageDispatch.deleteMany({ where: { clientId: { in: clientIds } } });
+    await prisma.paymentIntent.deleteMany({
+      where: { receivable: { clientId: { in: clientIds } } },
+    });
+    await prisma.receivable.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.clientEvent.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.clientReference.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.client.deleteMany({ where: { id: { in: clientIds } } });
     await prisma.user.deleteMany({ where: { id: { in: [...created.users] } } });
+    await prisma.whatsAppConnection.deleteMany({
+      where: { id: { in: [...created.connections] } },
+    });
     await prisma.plan.deleteMany({ where: { id: { in: [...created.plans] } } });
     for (const ids of Object.values(created)) ids.clear();
   });
@@ -51,20 +68,46 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     });
   });
 
-  it('blocks a validated foreign phone without persisting any client', async () => {
+  it('keeps a validated foreign phone blocked when client writes are disabled', async () => {
     const fixture = await createFixture();
-    const service = createService();
+    const service = createService({ clientWriteEnabled: false });
 
     await expect(
       service.create(
         createDto(fixture.planId, { phone: '+1 (407) 639-0665', phoneCountry: 'US' }),
         fixture.userId,
       ),
-    ).rejects.toThrow('aguarda a integracao segura com WhatsApp e Billing');
+    ).rejects.toThrow('cadastro internacional esta desabilitado');
 
     await expect(
       prisma.client.count({ where: { reference: { startsWith: 'PHONE-CLIENTS1-' } } }),
     ).resolves.toBe(0);
+  });
+
+  it('atomically creates an international client and receivable without PIX or dispatch', async () => {
+    const fixture = await createFixture();
+    const service = createService();
+    const dto = createDto(fixture.planId, {
+      phone: '+1 (407) 639-0665',
+      phoneCountry: 'US',
+      generateInitialReceivable: true,
+    });
+
+    const result = await service.create(dto, fixture.userId);
+    created.clients.add(result.id);
+
+    await expect(
+      prisma.client.findUniqueOrThrow({ where: { id: result.id } }),
+    ).resolves.toMatchObject({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    await expect(prisma.receivable.count({ where: { clientId: result.id } })).resolves.toBe(1);
+    await expect(
+      prisma.paymentIntent.count({ where: { receivable: { clientId: result.id } } }),
+    ).resolves.toBe(0);
+    await expect(prisma.messageDispatch.count({ where: { clientId: result.id } })).resolves.toBe(0);
   });
 
   it('rolls back both phone identities when a later create step fails', async () => {
@@ -101,7 +144,119 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     ]).toContainEqual([persisted.phone, persisted.phoneNormalized, persisted.phoneE164]);
   });
 
-  function createService({ failReferral = false } = {}) {
+  it('allows only one concurrent approval to create a client for the same pending contact', async () => {
+    const fixture = await createFixture();
+    const connection = await createConnection();
+    const pending = await prisma.whatsAppPendingContact.create({
+      data: {
+        whatsAppConnectionId: connection.id,
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+        firstMessageType: 'TEXT',
+        lastMessageType: 'TEXT',
+        firstContactAt: new Date(),
+        lastContactAt: new Date(),
+      },
+    });
+    created.pendingContacts.add(pending.id);
+
+    const approve = (label: string) =>
+      prisma.$transaction(async (tx) => {
+        const claimed = await tx.whatsAppPendingContact.updateMany({
+          where: { id: pending.id, status: 'PENDENTE' },
+          data: { ignoreReason: null },
+        });
+        if (claimed.count !== 1) throw new Error('pending contact already claimed');
+
+        const approvedClient = await tx.client.create({
+          data: {
+            name: `PHONE CLIENTS2 ${label}`,
+            phone: '+14076390665',
+            phoneNormalized: '14076390665',
+            phoneE164: '+14076390665',
+            reference: `PHONE-CLIENTS2-${label}-${randomUUID()}`,
+            planId: fixture.planId,
+            recurringValue: new Prisma.Decimal(50),
+            dueDate: new Date('2026-10-22T00:00:00.000Z'),
+            billingAnchorDay: 22,
+            billingNoticeDays: 3,
+          },
+        });
+        await tx.whatsAppPendingContact.update({
+          where: { id: pending.id },
+          data: { status: 'APROVADO', clientId: approvedClient.id, approvedAt: new Date() },
+        });
+        return approvedClient.id;
+      });
+
+    const attempts = await Promise.allSettled([approve('A'), approve('B')]);
+    const winners = attempts.filter(
+      (result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled',
+    );
+    expect(winners).toHaveLength(1);
+    created.clients.add(winners[0]!.value);
+    await expect(
+      prisma.client.count({ where: { id: { in: winners.map((result) => result.value) } } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.whatsAppPendingContact.findUniqueOrThrow({ where: { id: pending.id } }),
+    ).resolves.toMatchObject({ status: 'APROVADO', clientId: winners[0]!.value });
+  });
+
+  it('allows only one concurrent client association to win for an international conversation', async () => {
+    const fixture = await createFixture();
+    const connection = await createConnection();
+    const clients = await Promise.all(
+      ['A', 'B'].map((label) =>
+        prisma.client.create({
+          data: {
+            name: `PHONE CLIENTS2 link ${label}`,
+            phone: '+14076390665',
+            phoneNormalized: '14076390665',
+            phoneE164: '+14076390665',
+            reference: `PHONE-CLIENTS2-LINK-${label}-${randomUUID()}`,
+            planId: fixture.planId,
+            recurringValue: new Prisma.Decimal(50),
+            dueDate: new Date('2026-10-22T00:00:00.000Z'),
+            billingAnchorDay: 22,
+            billingNoticeDays: 3,
+          },
+        }),
+      ),
+    );
+    clients.forEach((client) => created.clients.add(client.id));
+    const conversation = await prisma.whatsAppConversation.create({
+      data: {
+        whatsAppConnectionId: connection.id,
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+      },
+    });
+    created.conversations.add(conversation.id);
+
+    const link = (clientId: string) =>
+      prisma.$transaction(async (tx) => {
+        const updated = await tx.whatsAppConversation.updateMany({
+          where: { id: conversation.id, clientId: null },
+          data: { clientId },
+        });
+        if (updated.count !== 1) throw new Error('conversation already linked');
+        return clientId;
+      });
+
+    const attempts = await Promise.allSettled(clients.map((client) => link(client.id)));
+    const winners = attempts.filter(
+      (result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled',
+    );
+    expect(winners).toHaveLength(1);
+    await expect(
+      prisma.whatsAppConversation.findUniqueOrThrow({ where: { id: conversation.id } }),
+    ).resolves.toMatchObject({ clientId: winners[0]!.value, phoneE164: '+14076390665' });
+  });
+
+  function createService({ failReferral = false, clientWriteEnabled = true } = {}) {
     return new ClientsService(
       prisma as never,
       { ensureActivePlan: vi.fn().mockResolvedValue(undefined) } as never,
@@ -112,7 +267,15 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
           : vi.fn().mockResolvedValue(null),
       } as never,
       { ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }) } as never,
-      { get: vi.fn(() => 'true') } as never,
+      {
+        get: vi.fn((key: string) => {
+          if (key === 'PHONE_INTERNATIONAL_ENABLED') return 'true';
+          if (key === 'PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') {
+            return clientWriteEnabled ? 'true' : 'false';
+          }
+          return undefined;
+        }),
+      } as never,
     );
   }
 
@@ -135,6 +298,17 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     });
     created.plans.add(plan.id);
     return { userId: user.id, planId: plan.id };
+  }
+
+  async function createConnection() {
+    const connection = await prisma.whatsAppConnection.create({
+      data: {
+        name: `PHONE CLIENTS2 ${randomUUID()}`,
+        providerTokenEncrypted: `not-used-${randomUUID()}`,
+      },
+    });
+    created.connections.add(connection.id);
+    return connection;
   }
 
   function createDto(

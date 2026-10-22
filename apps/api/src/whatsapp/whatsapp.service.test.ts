@@ -524,6 +524,7 @@ function serviceFactory({
     whatsAppPendingContact: {
       upsert: vi.fn().mockResolvedValue(pendingContact()),
       update: vi.fn().mockResolvedValue(pendingContact()),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findUnique: vi.fn().mockResolvedValue(pendingContact()),
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
@@ -655,6 +656,8 @@ function serviceFactory({
         },
         whatsAppPendingContact: {
           update: prisma.whatsAppPendingContact.update,
+          updateMany:
+            prisma.whatsAppPendingContact.updateMany ?? vi.fn().mockResolvedValue({ count: 1 }),
           upsert: prisma.whatsAppPendingContact.upsert,
         },
         whatsAppConversation: prisma.whatsAppConversation,
@@ -12979,6 +12982,130 @@ describe('WhatsAppService', () => {
     });
   });
 
+  it('links an international conversation only to the exact E.164 client identity', async () => {
+    const internationalClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalConversation = conversation({
+      clientId: null,
+      client: null,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const linkedConversation = conversation({
+      ...internationalConversation,
+      clientId: internationalClient.id,
+      client: internationalClient,
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(internationalClient),
+          findMany: vi.fn().mockResolvedValue([internationalClient]),
+        },
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(internationalConversation)
+            .mockResolvedValueOnce(linkedConversation)
+            .mockResolvedValueOnce(linkedConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(linkedConversation),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      },
+    });
+
+    await expect(
+      service.linkConversationClient(
+        internationalConversation.id,
+        { clientId: internationalClient.id },
+        'actor-user-id',
+      ),
+    ).resolves.toMatchObject({ client: { id: internationalClient.id } });
+    expect(prisma.whatsAppConversation.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks linking an international conversation to a different E.164 identity', async () => {
+    const mismatchedClient = client({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    const internationalConversation = conversation({
+      clientId: null,
+      client: null,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(mismatchedClient),
+          findMany: vi.fn().mockResolvedValue([mismatchedClient]),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    await expect(
+      service.linkConversationClient(
+        internationalConversation.id,
+        { clientId: mismatchedClient.id },
+        'actor-user-id',
+      ),
+    ).rejects.toThrow('nao corresponde exatamente');
+    expect(prisma.whatsAppConversation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks linking an international client when the conversation has no proven E.164 identity', async () => {
+    const internationalClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const unprovenConversation = conversation({
+      clientId: null,
+      client: null,
+      phone: '14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: null,
+    });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        client: { findUnique: vi.fn().mockResolvedValue(internationalClient) },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(unprovenConversation),
+          updateMany: vi.fn(),
+        },
+      },
+    });
+
+    await expect(
+      service.linkConversationClient(
+        unprovenConversation.id,
+        { clientId: internationalClient.id },
+        'actor-user-id',
+      ),
+    ).rejects.toThrow('nao possui identidade E.164 comprovada');
+    expect(prisma.whatsAppConversation.updateMany).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when manually linking a missing conversation or missing client', async () => {
     const missingConversation = serviceFactory({
       prismaOverrides: {
@@ -14347,6 +14474,39 @@ describe('WhatsAppService', () => {
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 
+  it('does not duplicate a client when another approval already claimed the pending contact', async () => {
+    const { service, prisma, txClientCreate } = serviceFactory({
+      prismaOverrides: {
+        whatsAppPendingContact: {
+          findUnique: vi.fn().mockResolvedValue(pendingContact()),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(
+      service.approvePendingContact(
+        pendingContact().id,
+        {
+          name: 'Lucas',
+          reference: 'lucas001',
+          planId: '55555555-5555-4555-8555-555555555555',
+          recurringValue: 50,
+          dueDate: '2026-10-10',
+          billingNoticeDays: 0,
+          generateInitialReceivable: true,
+        },
+        'user-id',
+      ),
+    ).rejects.toThrow('ja foi processado por outra solicitacao');
+
+    expect(prisma.whatsAppPendingContact.updateMany).toHaveBeenCalledWith({
+      where: { id: pendingContact().id, status: 'PENDENTE' },
+      data: { ignoreReason: null },
+    });
+    expect(txClientCreate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['US', '+14076390665'],
     ['PT', '+351912345678'],
@@ -14366,6 +14526,8 @@ describe('WhatsAppService', () => {
           $transaction: transaction,
           whatsAppPendingContact: {
             findUnique: vi.fn().mockResolvedValue(pending),
+            update: vi.fn().mockResolvedValue(pending),
+            upsert: vi.fn().mockResolvedValue(pending),
           },
         },
       });
@@ -14384,11 +14546,67 @@ describe('WhatsAppService', () => {
           },
           'user-id',
         ),
-      ).rejects.toThrow('aguarda a integracao segura de telefones internacionais');
+      ).rejects.toThrow('cadastro internacional de clientes esta desabilitado');
 
       expect(plans.ensureActivePlan).not.toHaveBeenCalled();
       expect(transaction).not.toHaveBeenCalled();
       expect(txClientCreate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['US', '+14076390665'],
+    ['PT', '+351912345678'],
+    ['GB', '+442079460958'],
+    ['AR', '+5491123456789'],
+  ])(
+    'approves a proven %s contact without generating PIX or calling WhatsApp',
+    async (_country, phoneE164) => {
+      const pending = pendingContact({
+        phone: phoneE164,
+        phoneNormalized: phoneE164.slice(1),
+        phoneE164,
+      });
+      const { service, finance, provider, txClientCreate } = serviceFactory({
+        configOverrides: { PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED: 'true' },
+        prismaOverrides: {
+          whatsAppPendingContact: {
+            findUnique: vi.fn().mockResolvedValue(pending),
+            update: vi.fn().mockResolvedValue(pending),
+            upsert: vi.fn().mockResolvedValue(pending),
+          },
+        },
+      });
+
+      const result = await service.approvePendingContact(
+        pending.id,
+        {
+          name: 'Contato internacional',
+          reference: 'internacional001',
+          planId: '55555555-5555-4555-8555-555555555555',
+          recurringValue: 50,
+          dueDate: '2026-10-10',
+          billingNoticeDays: 0,
+          generateInitialReceivable: true,
+          sendPixWhatsAppNow: true,
+        },
+        'user-id',
+      );
+
+      expect(txClientCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phone: phoneE164,
+            phoneNormalized: phoneE164.slice(1),
+            phoneE164,
+          }),
+        }),
+      );
+      expect(finance.createReceivablePix).not.toHaveBeenCalled();
+      expect(provider.sendButtons).not.toHaveBeenCalled();
+      expect(result.initialActivation).toMatchObject({
+        warning: expect.stringContaining('sem PIX ou envio WhatsApp'),
+      });
     },
   );
 
@@ -14605,6 +14823,7 @@ describe('WhatsAppService', () => {
             },
             whatsAppPendingContact: {
               update: pendingUpdate,
+              updateMany: vi.fn().mockResolvedValue({ count: 1 }),
             },
             whatsAppInboundMessage: {
               updateMany: vi.fn(),

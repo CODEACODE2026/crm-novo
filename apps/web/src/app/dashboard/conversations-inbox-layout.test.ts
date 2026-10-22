@@ -881,7 +881,8 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('void loadContactInfo(linked)');
     expect(conversationsSource).toContain('Cadastrar cliente');
     expect(conversationsSource).toContain('GuestConversationClientModal');
-    expect(conversationsSource).toContain('initialValues={{ phone: conversationPhone }}');
+    expect(conversationsSource).toContain('phone: conversationPhone');
+    expect(conversationsSource).toContain('phoneCountry: conversation.phoneCountry ?? undefined');
     expect(conversationsSource).toContain('createClient(payload)');
     expect(conversationsSource).toContain(
       'linkConversationToClient(guestClientCreateConversation.id',

@@ -213,6 +213,104 @@ describe.skipIf(!runDatabaseTests)('international WhatsApp identity persistence'
     ]);
   });
 
+  it('persists an international PDF and following text in order without changing identity', async () => {
+    const connection = await createConnection();
+    const conversation = await createConversation(connection.id, {
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const documentProviderId = unique('PHONE-INTERNATIONAL-PDF');
+    const textProviderId = unique('PHONE-INTERNATIONAL-TEXT');
+    const documentSentAt = new Date('2026-10-22T17:00:00.000Z');
+    const textSentAt = new Date('2026-10-22T17:00:01.000Z');
+
+    await prisma.$transaction(async (tx) => {
+      await tx.whatsAppMessage.create({
+        data: {
+          conversationId: conversation.id,
+          whatsAppConnectionId: connection.id,
+          provider: 'KIRAGO',
+          providerMessageId: documentProviderId,
+          direction: 'INBOUND',
+          type: 'DOCUMENT',
+          text: null,
+          mediaMimeType: 'application/pdf',
+          mediaFileName: 'comprovante.pdf',
+          mediaSizeBytes: 789,
+          status: 'SENT',
+          sentAt: documentSentAt,
+          isFromMe: false,
+          rawMetadata: {
+            source: 'webhook',
+            originalType: 'document',
+            providerJids: { lids: ['123456789012345@lid'] },
+          },
+        },
+      });
+      await tx.whatsAppMessage.create({
+        data: {
+          conversationId: conversation.id,
+          whatsAppConnectionId: connection.id,
+          provider: 'KIRAGO',
+          providerMessageId: textProviderId,
+          direction: 'INBOUND',
+          type: 'TEXT',
+          text: 'Muito obrigado',
+          status: 'SENT',
+          sentAt: textSentAt,
+          isFromMe: false,
+          rawMetadata: { source: 'webhook', originalType: 'text' },
+        },
+      });
+      await tx.whatsAppConversation.update({
+        where: { id: conversation.id },
+        data: {
+          lastMessageAt: textSentAt,
+          lastMessagePreview: 'Muito obrigado',
+          unreadCount: { increment: 2 },
+        },
+      });
+    });
+
+    await expect(
+      prisma.whatsAppMessage.findMany({
+        where: { conversationId: conversation.id },
+        orderBy: [{ sentAt: 'asc' }, { createdAt: 'asc' }],
+        select: {
+          providerMessageId: true,
+          type: true,
+          text: true,
+          mediaMimeType: true,
+          mediaFileName: true,
+        },
+      }),
+    ).resolves.toEqual([
+      {
+        providerMessageId: documentProviderId,
+        type: 'DOCUMENT',
+        text: null,
+        mediaMimeType: 'application/pdf',
+        mediaFileName: 'comprovante.pdf',
+      },
+      {
+        providerMessageId: textProviderId,
+        type: 'TEXT',
+        text: 'Muito obrigado',
+        mediaMimeType: null,
+        mediaFileName: null,
+      },
+    ]);
+    await expect(
+      prisma.whatsAppConversation.findUniqueOrThrow({ where: { id: conversation.id } }),
+    ).resolves.toMatchObject({
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      lastMessagePreview: 'Muito obrigado',
+      unreadCount: 2,
+    });
+  });
+
   async function createConnection() {
     const connection = await prisma.whatsAppConnection.create({
       data: {

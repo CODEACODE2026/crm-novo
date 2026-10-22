@@ -122,6 +122,10 @@ const messageTypeMap: Record<string, NormalizedMessageType> = {
   conversation: 'text',
 };
 
+const structuredMessageKeys = Object.keys(messageTypeMap).filter(
+  (key) => key !== 'extendedTextMessage' && key !== 'conversation',
+);
+
 const maxContactCount = 50;
 const maxContactPhones = 10;
 const maxContactNameLength = 200;
@@ -150,7 +154,7 @@ export class KiragoWebhookNormalizer {
 
     const event = asRecord(body.event);
     const info = asRecord(event?.Info);
-    const message = asRecord(event?.Message);
+    const message = this.unwrapMessageContent(asRecord(event?.Message));
     const isGroup = this.isGroup(body, info);
     const direction = info?.IsFromMe === true ? 'OUTGOING' : 'INCOMING';
     const phoneIdentity = isGroup ? null : this.extractPhoneIdentity(body, info);
@@ -206,6 +210,43 @@ export class KiragoWebhookNormalizer {
         : [source];
 
     return entries.map((entry) => this.normalizeContact(asRecord(entry) ?? {}));
+  }
+
+  private unwrapMessageContent(message: RecordValue | null) {
+    let current = message;
+    const wrappers = [
+      'documentWithCaptionMessage',
+      'ephemeralMessage',
+      'viewOnceMessage',
+      'viewOnceMessageV2',
+      'viewOnceMessageV2Extension',
+    ] as const;
+
+    for (let depth = 0; current && depth < wrappers.length; depth += 1) {
+      if (structuredMessageKeys.some((key) => current?.[key] !== undefined)) {
+        return current;
+      }
+
+      let nested: RecordValue | null = null;
+
+      for (const wrapper of wrappers) {
+        const wrapperValue = asRecord(current[wrapper]);
+        const candidate = asRecord(wrapperValue?.message) ?? asRecord(wrapperValue?.Message);
+
+        if (candidate) {
+          nested = candidate;
+          break;
+        }
+      }
+
+      if (!nested) {
+        return current;
+      }
+
+      current = nested;
+    }
+
+    return current;
   }
 
   private normalizeContact(source: RecordValue): NormalizedWhatsAppContact {
@@ -518,11 +559,11 @@ export class KiragoWebhookNormalizer {
   private extractText(message: RecordValue | null, messageType: NormalizedMessageType) {
     const candidates =
       messageType === 'image'
-        ? [asRecord(message?.imageMessage)?.caption]
+        ? [firstOwnValue(asRecord(message?.imageMessage) ?? {}, ['caption', 'Caption'])]
         : messageType === 'video'
-          ? [asRecord(message?.videoMessage)?.caption]
+          ? [firstOwnValue(asRecord(message?.videoMessage) ?? {}, ['caption', 'Caption'])]
           : messageType === 'document'
-            ? [asRecord(message?.documentMessage)?.caption]
+            ? [firstOwnValue(asRecord(message?.documentMessage) ?? {}, ['caption', 'Caption'])]
             : messageType === 'audio' || messageType === 'sticker'
               ? []
               : [

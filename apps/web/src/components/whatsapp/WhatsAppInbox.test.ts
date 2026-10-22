@@ -34,6 +34,7 @@ import {
   conversationInitials,
   conversationMessageFooterLabel,
   conversationPixCopyButtonLabel,
+  conversationPixCardDisplayText,
   conversationVideoAccept,
   createConversationComposerMedia,
   disposeConversationComposerMedia,
@@ -442,6 +443,87 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it('keeps international PIX delivery and copy complete while rendering its proven card without duplicate code', async () => {
+    const pixCode = `000201${'9'.repeat(180)}6304ABCD`;
+    const groupedBody = [
+      'PIX',
+      'Segue um único PIX referente às suas cobranças.',
+      '',
+      '3 contas',
+      '💰 Total: R$ 75,00',
+      '',
+      'Clique no botão abaixo para copiar a chave PIX e realizar o pagamento.',
+      '',
+      'Caso a chave esteja expirada, solicite uma nova.',
+    ].join('\n');
+    const persistedText = `${groupedBody}\n\nPIX copia e cola:\n${pixCode}`;
+    const pixMessage = message({
+      direction: 'OUTBOUND',
+      text: persistedText,
+      pixContext: {
+        amount: '75.00',
+        buttonLabel: 'Copiar Chave PIX',
+        paymentIntentId: 'international-grouped-intent',
+      },
+    });
+
+    expect(pixMessage.text).toBe(persistedText);
+    expect(conversationPixCardDisplayText(pixMessage)).toBe(groupedBody);
+    expect(conversationMessageDisplayText(pixMessage)).toBe(groupedBody);
+    expect(conversationMessageDisplayText(pixMessage)).toContain('3 contas');
+    expect(conversationMessageDisplayText(pixMessage)).toContain('R$ 75,00');
+    expect(conversationMessageDisplayText(pixMessage)).not.toContain(pixCode);
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      resolveConversationPixCopyAction({
+        cache: pixCopyCache(),
+        fetchPixCopy: vi.fn().mockResolvedValue({
+          available: true,
+          expiresAt: null,
+          isExpired: false,
+          pixCopyPaste: pixCode,
+          status: 'WAITING_PAYMENT',
+        }),
+        inFlight: pixCopyInFlight(),
+        paymentIntentId: 'international-grouped-intent',
+        writeText,
+      }),
+    ).resolves.toEqual({ status: 'success' });
+    expect(writeText).toHaveBeenCalledWith(pixCode);
+  });
+
+  it('preserves Brazilian, incomplete, inbound and ordinary PIX-looking messages verbatim', () => {
+    const pixContext = {
+      amount: '25.00',
+      buttonLabel: 'Copiar Chave PIX',
+      paymentIntentId: 'intent-1',
+    };
+    const brazilianBody =
+      'PIX\n💰 Valor: R$ 25,00\n\nClique no botão abaixo para copiar a chave PIX.';
+    const missingCode = `${brazilianBody}\n\nPIX copia e cola:\n`;
+    const ordinaryMessage = `${brazilianBody}\n\nPIX copia e cola:\nCODIGO-COMUM`;
+
+    expect(
+      conversationPixCardDisplayText(
+        message({ direction: 'OUTBOUND', text: brazilianBody, pixContext }),
+      ),
+    ).toBe(brazilianBody);
+    expect(
+      conversationPixCardDisplayText(
+        message({ direction: 'OUTBOUND', text: missingCode, pixContext }),
+      ),
+    ).toBe(missingCode);
+    expect(
+      conversationPixCardDisplayText(
+        message({ direction: 'INBOUND', text: ordinaryMessage, pixContext }),
+      ),
+    ).toBe(ordinaryMessage);
+    expect(conversationPixCardDisplayText(message({ text: ordinaryMessage }))).toBe(
+      ordinaryMessage,
+    );
   });
 
   it('labels the PIX copy button without exposing the PIX payload', () => {

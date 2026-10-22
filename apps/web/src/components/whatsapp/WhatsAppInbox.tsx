@@ -12123,7 +12123,7 @@ export function isTechnicalVideoPlaceholder(text: string | null | undefined) {
 
 export function conversationMessageDisplayText(message: WhatsAppConversationMessage) {
   if (message.deleted) return 'Mensagem apagada';
-  if (message.type === 'TEXT') return message.text || '';
+  if (message.type === 'TEXT') return conversationPixCardDisplayText(message);
   if (
     message.type === 'IMAGE' ||
     message.type === 'STICKER' ||
@@ -12132,6 +12132,23 @@ export function conversationMessageDisplayText(message: WhatsAppConversationMess
   )
     return '';
   return conversationMessagePlaceholder(message.type);
+}
+
+export function conversationPixCardDisplayText(message: WhatsAppConversationMessage) {
+  const text = message.text || '';
+
+  if (message.direction !== 'OUTBOUND' || !isConversationPixCopyEligible(message)) {
+    return text;
+  }
+
+  const marker = '\n\nPIX copia e cola:\n';
+  const markerIndex = text.lastIndexOf(marker);
+
+  if (markerIndex < 0 || !text.slice(markerIndex + marker.length).trim()) {
+    return text;
+  }
+
+  return text.slice(0, markerIndex).trimEnd();
 }
 
 export function conversationMessageCaption(message: WhatsAppConversationMessage) {

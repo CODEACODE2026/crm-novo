@@ -570,6 +570,221 @@ describe('KiragoWebhookNormalizer', () => {
     },
   );
 
+  it('unwraps an international PDF document-with-caption envelope without using its LID as phone', () => {
+    const result = normalizer.normalize(
+      payload({
+        jid: {
+          contact: { pn: '14076390665', lid: '123456789012345@lid' },
+          chat: { raw: '123456789012345@lid', lid: '123456789012345@lid' },
+          sender: { raw: '123456789012345@lid', lid: '123456789012345@lid' },
+        },
+        event: {
+          Info: {
+            ...payload().event.Info,
+            ID: 'international-pdf-provider-id',
+            Type: 'documentWithCaptionMessage',
+            Sender: '123456789012345@lid',
+            SenderAlt: '14076390665@s.whatsapp.net',
+            Chat: '123456789012345@lid',
+          },
+          Message: {
+            documentWithCaptionMessage: {
+              message: {
+                documentMessage: {
+                  URL: 'https://mmg.whatsapp.net/international-document',
+                  directPath: '/v/international-document',
+                  mediaKey: 'international-document-media-key',
+                  mimetype: 'application/pdf',
+                  fileEncSHA256: 'international-document-file-enc',
+                  fileSHA256: 'international-document-file',
+                  fileLength: 789,
+                  fileName: 'comprovante.pdf',
+                },
+              },
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      phone: '14076390665',
+      phoneE164: '+14076390665',
+      phoneCountry: 'US',
+      messageId: 'international-pdf-provider-id',
+      messageType: 'document',
+      text: null,
+      mediaMetadata: {
+        kind: 'document',
+        mimetype: 'application/pdf',
+        fileName: 'comprovante.pdf',
+        size: 789,
+      },
+      mediaDownloadMetadata: {
+        Mimetype: 'application/pdf',
+        FileLength: 789,
+      },
+      providerJids: { lids: ['123456789012345@lid'] },
+    });
+    expect(result?.phone).not.toMatch(/^55/);
+  });
+
+  it('unwraps nested ephemeral PDF content for a Portuguese E.164 identity', () => {
+    const result = normalizer.normalize(
+      payload({
+        jid: {
+          contact: { pn: '351912345678' },
+          chat: { pn: '351912345678', raw: '351912345678@s.whatsapp.net' },
+          sender: { pn: '351912345678', raw: '351912345678@s.whatsapp.net' },
+        },
+        event: {
+          Info: {
+            ...payload().event.Info,
+            ID: 'portugal-ephemeral-pdf',
+            Type: 'ephemeralMessage',
+            SenderAlt: '351912345678@s.whatsapp.net',
+            Chat: '351912345678@s.whatsapp.net',
+            Sender: '351912345678@s.whatsapp.net',
+          },
+          Message: {
+            ephemeralMessage: {
+              message: {
+                documentWithCaptionMessage: {
+                  message: {
+                    documentMessage: {
+                      Url: 'https://mmg.whatsapp.net/portugal-document',
+                      MediaKey: 'portugal-document-media-key',
+                      Mimetype: 'application/pdf',
+                      FileSHA256: 'portugal-document-file',
+                      FileLength: '456',
+                      FileName: 'recibo.pdf',
+                      Caption: 'Comprovante',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      phone: '351912345678',
+      phoneE164: '+351912345678',
+      phoneCountry: 'PT',
+      messageType: 'document',
+      text: 'Comprovante',
+      mediaMetadata: { fileName: 'recibo.pdf', mimetype: 'application/pdf' },
+      mediaDownloadMetadata: { Mimetype: 'application/pdf', FileLength: 456 },
+    });
+  });
+
+  it.each(['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'] as const)(
+    'unwraps a PDF inside the %s protobuf envelope',
+    (wrapper) => {
+      const result = normalizer.normalize(
+        payload({
+          event: {
+            Info: { ...payload().event.Info, Type: wrapper },
+            Message: {
+              [wrapper]: {
+                message: {
+                  documentMessage: {
+                    URL: `https://mmg.whatsapp.net/${wrapper}`,
+                    mediaKey: `${wrapper}-media-key`,
+                    mimetype: 'application/pdf',
+                    fileSHA256: `${wrapper}-file`,
+                    fileLength: 321,
+                    fileName: `${wrapper}.pdf`,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        receivedAt,
+      );
+
+      expect(result).toMatchObject({
+        messageType: 'document',
+        text: null,
+        mediaMetadata: {
+          kind: 'document',
+          mimetype: 'application/pdf',
+          fileName: `${wrapper}.pdf`,
+          size: 321,
+        },
+        mediaDownloadMetadata: { Mimetype: 'application/pdf', FileLength: 321 },
+      });
+    },
+  );
+
+  it('bounds cyclic protobuf wrappers without recursing or fabricating media', () => {
+    const cyclicWrapper: Record<string, unknown> = {};
+    cyclicWrapper.message = { ephemeralMessage: cyclicWrapper };
+
+    expect(() =>
+      normalizer.normalize(
+        payload({
+          event: {
+            Info: { ...payload().event.Info, Type: 'ephemeralMessage' },
+            Message: { ephemeralMessage: cyclicWrapper },
+          },
+        }),
+        receivedAt,
+      ),
+    ).not.toThrow();
+
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, Type: 'ephemeralMessage' },
+          Message: { ephemeralMessage: cyclicWrapper },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'unknown',
+      text: null,
+      mediaMetadata: null,
+      mediaDownloadMetadata: null,
+    });
+  });
+
+  it('keeps direct structured media ahead of an auxiliary protobuf wrapper', () => {
+    const result = normalizer.normalize(
+      payload({
+        event: {
+          Info: { ...payload().event.Info, Type: 'documentMessage' },
+          Message: {
+            documentMessage: {
+              URL: 'https://mmg.whatsapp.net/direct-document',
+              mediaKey: 'direct-document-media-key',
+              mimetype: 'application/pdf',
+              fileSHA256: 'direct-document-file',
+              fileLength: 654,
+              fileName: 'direct.pdf',
+            },
+            ephemeralMessage: { message: { conversation: '[Documento]' } },
+          },
+        },
+      }),
+      receivedAt,
+    );
+
+    expect(result).toMatchObject({
+      messageType: 'document',
+      text: null,
+      mediaMetadata: { kind: 'document', fileName: 'direct.pdf', size: 654 },
+      mediaDownloadMetadata: { Mimetype: 'application/pdf', FileLength: 654 },
+    });
+  });
+
   it('prioritizes captionless IMAGE over extended text and conversation auxiliaries', () => {
     const result = normalizer.normalize(
       payload({

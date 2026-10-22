@@ -8417,6 +8417,125 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify(messageCreate.data)).not.toContain('AAA');
   });
 
+  it('persists an international PDF followed by text in the same canonical conversation', async () => {
+    const internationalClient = client({
+      phone: '+1 407 639 0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalConversation = conversation({
+      clientId: internationalClient.id,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    let createdMessageIndex = 0;
+    const { service, prisma, normalizer, realtime, autoReply } = serviceFactory({
+      prismaOverrides: {
+        client: {
+          findUnique: vi.fn().mockResolvedValue(internationalClient),
+          findMany: vi.fn().mockResolvedValue([internationalClient]),
+        },
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          findFirst: vi.fn().mockResolvedValue(internationalConversation),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn(),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          create: vi.fn((args: { data?: Record<string, unknown> }) => {
+            createdMessageIndex += 1;
+            return Promise.resolve(
+              conversationMessage({
+                id: `international-message-${createdMessageIndex}`,
+                conversationId: internationalConversation.id,
+                ...(args.data ?? {}),
+              }),
+            );
+          }),
+        },
+      },
+    });
+    normalizer.normalize
+      .mockReturnValueOnce(
+        normalizedInbound('', {
+          phone: '14076390665',
+          phoneE164: '+14076390665',
+          phoneCountry: 'US',
+          messageId: 'international-pdf-id',
+          messageType: 'document',
+          text: null,
+          mediaMetadata: {
+            kind: 'document',
+            mimetype: 'application/pdf',
+            fileName: 'comprovante.pdf',
+            size: 789,
+          },
+          mediaDownloadMetadata: {
+            Url: 'https://mmg.whatsapp.net/international-document',
+            MediaKey: 'international-document-media-key',
+            Mimetype: 'application/pdf',
+            FileSHA256: 'international-document-file',
+            FileLength: 789,
+          },
+          providerJids: { lids: ['123456789012345@lid'] },
+        }),
+      )
+      .mockReturnValueOnce(
+        normalizedInbound('Muito obrigado', {
+          phone: '14076390665',
+          phoneE164: '+14076390665',
+          phoneCountry: 'US',
+          messageId: 'international-text-id',
+        }),
+      );
+
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      conversation: { action: 'conversation_message_persisted' },
+    });
+    await expect(service.receiveWebhook({ type: 'Message' })).resolves.toMatchObject({
+      conversation: { action: 'conversation_message_persisted' },
+    });
+
+    const messageCreates = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls;
+    expect(messageCreates).toHaveLength(2);
+    expect(messageCreates[0]?.[0]).toMatchObject({
+      data: {
+        conversationId: internationalConversation.id,
+        type: 'DOCUMENT',
+        mediaMimeType: 'application/pdf',
+        mediaFileName: 'comprovante.pdf',
+      },
+    });
+    expect(messageCreates[1]?.[0]).toMatchObject({
+      data: {
+        conversationId: internationalConversation.id,
+        type: 'TEXT',
+        text: 'Muito obrigado',
+      },
+    });
+    expect(realtime.emitMessageCreated).toHaveBeenNthCalledWith(
+      1,
+      internationalConversation.id,
+      'international-message-1',
+      'INBOUND',
+    );
+    expect(realtime.emitMessageCreated).toHaveBeenNthCalledWith(
+      2,
+      internationalConversation.id,
+      'international-message-2',
+      'INBOUND',
+    );
+    expect(autoReply.tryReplyToInbound).not.toHaveBeenCalled();
+  });
+
   it('does not duplicate conversation message or unread count on provider replay', async () => {
     const { service, prisma, normalizer, autoReply } = serviceFactory({
       prismaOverrides: {

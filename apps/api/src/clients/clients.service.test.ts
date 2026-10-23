@@ -966,6 +966,7 @@ describe('ClientsService manual client creation', () => {
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: false,
       internationalManualPixEnabled: false,
+      internationalBillingOptInSupported: true,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
@@ -978,6 +979,7 @@ describe('ClientsService manual client creation', () => {
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: false,
       internationalManualPixEnabled: false,
+      internationalBillingOptInSupported: true,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
     });
@@ -1000,6 +1002,7 @@ describe('ClientsService manual client creation', () => {
       internationalManualTextSendEnabled: true,
       internationalMessageActionsEnabled: false,
       internationalManualPixEnabled: false,
+      internationalBillingOptInSupported: true,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
       supportedCountries: [],
@@ -1043,7 +1046,15 @@ describe('ClientsService manual client creation', () => {
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: false,
       internationalManualPixEnabled: false,
+      internationalBillingOptInSupported: true,
       internationalBillingSendEnabled: true,
+    });
+  });
+
+  it('publishes DTO support independently from international Billing activation', () => {
+    expect(createClientCreationService().service.phoneCapabilities()).toMatchObject({
+      internationalBillingOptInSupported: true,
+      internationalBillingSendEnabled: false,
     });
   });
 

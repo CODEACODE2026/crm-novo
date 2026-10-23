@@ -170,6 +170,7 @@ import {
   formatCurrency,
   formatDate,
   getClient,
+  getClientPhoneCapabilities,
   getClientEvents,
   getDashboardSummary,
   getReport,
@@ -215,6 +216,7 @@ import {
   reconcileReceivablePix,
   reopenWhatsAppPendingContact,
   sendWhatsAppMessage,
+  serializeClientReferencePayload,
   updateClient,
   updateClientReference,
   updateClientReferenceStatus,
@@ -15698,6 +15700,8 @@ function ClientReferenceForm({
   const [internationalBillingEnabled, setInternationalBillingEnabled] = useState(
     reference?.internationalBillingEnabled ?? false,
   );
+  const [internationalBillingOptInSupported, setInternationalBillingOptInSupported] =
+    useState(false);
   const [notes, setNotes] = useState(reference?.notes ?? '');
   const [contractOrigin, setContractOrigin] = useState<'NORMAL' | 'REFERRAL'>('NORMAL');
   const [referrerClientId, setReferrerClientId] = useState('');
@@ -15709,6 +15713,26 @@ function ClientReferenceForm({
   const savingRef = useRef(false);
   const [error, setError] = useState('');
   const creatingReference = !reference;
+
+  useEffect(() => {
+    let active = true;
+
+    void getClientPhoneCapabilities()
+      .then((capabilities) => {
+        if (active) {
+          setInternationalBillingOptInSupported(
+            capabilities.internationalBillingOptInSupported === true,
+          );
+        }
+      })
+      .catch(() => {
+        if (active) setInternationalBillingOptInSupported(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function handlePlanChange(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -15749,27 +15773,32 @@ function ClientReferenceForm({
     setSaving(true);
 
     try {
-      await onSubmit({
-        reference: referenceValue,
-        planId,
-        recurringValue: Number(recurringValue),
-        dueDate,
-        billingNoticeDays: Number(billingNoticeDays),
-        internationalBillingEnabled,
-        notes: notes || undefined,
-        ...(creatingReference && contractOrigin === 'REFERRAL'
-          ? {
-              referrerClientId,
-              referralRewardType,
-              ...(referralRewardType === 'CREDIT'
-                ? { referralRewardValue: Number(referralRewardValue) }
-                : {}),
-              ...(referralRewardType === 'CUSTOM'
-                ? { referralRewardDescription: referralRewardDescription.trim() }
-                : {}),
-            }
-          : {}),
-      });
+      await onSubmit(
+        serializeClientReferencePayload(
+          {
+            reference: referenceValue,
+            planId,
+            recurringValue: Number(recurringValue),
+            dueDate,
+            billingNoticeDays: Number(billingNoticeDays),
+            internationalBillingEnabled,
+            notes: notes || undefined,
+            ...(creatingReference && contractOrigin === 'REFERRAL'
+              ? {
+                  referrerClientId,
+                  referralRewardType,
+                  ...(referralRewardType === 'CREDIT'
+                    ? { referralRewardValue: Number(referralRewardValue) }
+                    : {}),
+                  ...(referralRewardType === 'CUSTOM'
+                    ? { referralRewardDescription: referralRewardDescription.trim() }
+                    : {}),
+                }
+              : {}),
+          },
+          internationalBillingOptInSupported,
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível salvar a referência.');
     } finally {
@@ -15962,18 +15991,20 @@ function ClientReferenceForm({
               criação do próximo ciclo.
             </small>
           </label>
-          <label className="field form-grid-full checkbox-field">
-            <input
-              checked={internationalBillingEnabled}
-              type="checkbox"
-              onChange={(event) => setInternationalBillingEnabled(event.target.checked)}
-            />
-            <span>Autorizar Billing automático internacional nesta referência</span>
-            <small>
-              A autorização só produz agendamentos quando a flag global, o país e uma conversa
-              vinculada estiverem habilitados. Recovery internacional permanece bloqueado.
-            </small>
-          </label>
+          {internationalBillingOptInSupported ? (
+            <label className="field form-grid-full checkbox-field">
+              <input
+                checked={internationalBillingEnabled}
+                type="checkbox"
+                onChange={(event) => setInternationalBillingEnabled(event.target.checked)}
+              />
+              <span>Autorizar Billing automático internacional nesta referência</span>
+              <small>
+                A autorização só produz agendamentos quando a flag global, o país e uma conversa
+                vinculada estiverem habilitados. Recovery internacional permanece bloqueado.
+              </small>
+            </label>
+          ) : null}
         </div>
       ) : null}
       <div className="form-actions">

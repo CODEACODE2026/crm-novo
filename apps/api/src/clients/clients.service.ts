@@ -126,6 +126,7 @@ export class ClientsService {
         this.configService?.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
       internationalManualPixEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
+      internationalBillingOptInSupported: true,
       internationalBillingSendEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true',
       defaultCountry: 'BR' as const,

@@ -49,10 +49,18 @@ describe('phase E3B client billing lazy loading source', () => {
     expect(clientBillingSource).not.toContain('setClientBillingDispatches([');
   });
 
-  it('keeps international Billing opt-in explicit, fail-closed and covered by save errors', () => {
+  it('keeps international Billing opt-in explicit, capability-gated and covered by save errors', () => {
     expect(referenceFormSource).toContain('reference?.internationalBillingEnabled ?? false');
+    expect(referenceFormSource).toContain('getClientPhoneCapabilities()');
+    expect(referenceFormSource).toContain(
+      'capabilities.internationalBillingOptInSupported === true',
+    );
+    expect(referenceFormSource).toContain('setInternationalBillingOptInSupported(false)');
+    expect(referenceFormSource).toContain('internationalBillingOptInSupported ? (');
     expect(referenceFormSource).toContain('checked={internationalBillingEnabled}');
     expect(referenceFormSource).toContain('internationalBillingEnabled,');
+    expect(referenceFormSource).toContain('serializeClientReferencePayload(');
+    expect(referenceFormSource).toContain('internationalBillingOptInSupported,');
     expect(referenceFormSource).toContain('setError(err instanceof Error');
     expect(referenceFormSource).toContain('disabled={saving}');
     expect(referenceFormSource).toContain('Recovery internacional permanece bloqueado.');

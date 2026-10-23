@@ -68,6 +68,7 @@ import {
   saveWhatsAppStickerMessage,
   savePaymentProviderCredential,
   searchWhatsAppConversationMessages,
+  serializeClientReferencePayload,
   sendWhatsAppConversationMedia,
   sendWhatsAppConversationMessage,
   sendWhatsAppConversationVoice,
@@ -1447,6 +1448,60 @@ describe('CRM UI formatters', () => {
         }),
       }),
     );
+  });
+
+  it.each([true, false, undefined, null])(
+    'omits an unsupported international Billing value %s from the request JSON',
+    async (unsupportedValue) => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const candidate = {
+        reference: 'Contrato legado',
+        planId: 'plan-id',
+        recurringValue: 25,
+        dueDate: '2026-11-22',
+        billingNoticeDays: 5,
+        internationalBillingEnabled: unsupportedValue,
+      } as unknown as {
+        reference: string;
+        planId: string;
+        recurringValue: number;
+        dueDate: string;
+        billingNoticeDays: number;
+        internationalBillingEnabled?: boolean;
+      };
+      const payload = serializeClientReferencePayload(candidate, false);
+
+      await createClientReference('client-id', payload);
+
+      expect(payload).not.toHaveProperty('internationalBillingEnabled');
+      expect(latestJsonBody(fetchMock)).not.toHaveProperty('internationalBillingEnabled');
+      expect(JSON.stringify(latestJsonBody(fetchMock))).not.toContain(
+        'internationalBillingEnabled',
+      );
+      expect(payload).toMatchObject({ reference: 'Contrato legado', recurringValue: 25 });
+    },
+  );
+
+  it.each([true, false])(
+    'serializes an explicit international Billing opt-in value %s only when supported',
+    (internationalBillingEnabled) => {
+      const payload = serializeClientReferencePayload(
+        {
+          reference: 'Contrato BILLING2',
+          internationalBillingEnabled,
+        },
+        true,
+      );
+
+      expect(payload).toHaveProperty('internationalBillingEnabled', internationalBillingEnabled);
+    },
+  );
+
+  it('does not invent an opt-in value when a legacy Web omits the field', () => {
+    const payload = serializeClientReferencePayload({ reference: 'Contrato legado' }, true);
+
+    expect(payload).not.toHaveProperty('internationalBillingEnabled');
   });
 
   it('persists edited message template name and content', async () => {

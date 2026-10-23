@@ -2102,6 +2102,7 @@ export interface ClientPhoneCapabilities {
   internationalManualTextSendEnabled?: boolean;
   internationalMessageActionsEnabled?: boolean;
   internationalManualPixEnabled?: boolean;
+  internationalBillingOptInSupported?: boolean;
   internationalBillingSendEnabled: boolean;
   defaultCountry: 'BR';
   supportedCountries: Array<{ country: string; callingCode: string }>;
@@ -2109,6 +2110,19 @@ export interface ClientPhoneCapabilities {
 
 export function getClientPhoneCapabilities() {
   return apiFetch<ClientPhoneCapabilities>('/clients/capabilities/phone');
+}
+
+export function serializeClientReferencePayload<T extends Record<string, unknown>>(
+  payload: T & { internationalBillingEnabled?: boolean | undefined },
+  internationalBillingOptInSupported: boolean,
+) {
+  const { internationalBillingEnabled, ...legacyPayload } = payload;
+
+  if (!internationalBillingOptInSupported || internationalBillingEnabled === undefined) {
+    return legacyPayload;
+  }
+
+  return { ...legacyPayload, internationalBillingEnabled };
 }
 
 export function getClientEvents(id: string, filters: { page?: number; pageSize?: number } = {}) {

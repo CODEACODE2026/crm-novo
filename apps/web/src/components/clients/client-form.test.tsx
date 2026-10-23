@@ -48,6 +48,7 @@ describe('ClientForm manual initial billing source', () => {
     expect(clientFormSource).toContain('generateInitialReceivable,');
     expect(clientFormSource).toContain('payload.referrerClientId = referrerClientId');
     expect(clientFormSource).toContain("payload.referralRewardType = 'FREE_MONTH'");
+    expect(clientFormSource).not.toContain('internationalBillingEnabled');
   });
 
   it('supports official create-flow prefills without turning them into edit mode', () => {

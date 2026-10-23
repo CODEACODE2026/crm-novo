@@ -10,6 +10,17 @@ import { formatCurrency, formatDate } from '../../lib/crm-api';
 
 type BillingDispatchLike = ClientMessageDispatch | MessageDispatch;
 
+const saoPauloDateTimeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
 export type ClientReferenceStatusSummaryItem =
   | {
       count: number;
@@ -231,6 +242,68 @@ export function dispatchTotalAmountLabel(
   }
 
   return '-';
+}
+
+export function formatBillingDateTime(value: string | null | undefined) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = saoPauloDateTimeFormatter.formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value;
+  const day = part('day');
+  const month = part('month');
+  const year = part('year');
+  const hour = part('hour');
+  const minute = part('minute');
+  const second = part('second');
+
+  if (!day || !month || !year || !hour || !minute || !second) return null;
+  return `${day}/${month}/${year} ${hour}:${minute}:${second}`;
+}
+
+export function billingDispatchPrimaryDate(
+  dispatch: Pick<BillingDispatchLike, 'status' | 'scheduledFor' | 'sentAt' | 'createdAt'>,
+) {
+  if (dispatch.status === 'SCHEDULED' && dispatch.scheduledFor) {
+    return { label: 'Envio programado', value: dispatch.scheduledFor };
+  }
+
+  if (dispatch.status === 'SENT' && dispatch.sentAt) {
+    return { label: 'Enviada em', value: dispatch.sentAt };
+  }
+
+  if (dispatch.scheduledFor) {
+    return { label: 'Envio programado', value: dispatch.scheduledFor };
+  }
+
+  if (dispatch.sentAt) {
+    return { label: 'Enviada em', value: dispatch.sentAt };
+  }
+
+  return { label: 'Criada em', value: dispatch.createdAt };
+}
+
+export function internationalBillingBlockedSummary(count: number) {
+  return count === 1
+    ? '1 referência sem agendamento internacional.'
+    : `${count} referências sem agendamento internacional.`;
+}
+
+export function internationalBillingBlockReasonLabel(code: string, fallback: string) {
+  const labels: Record<string, string> = {
+    INTERNATIONAL_BILLING_DISABLED: 'A cobrança automática internacional está desativada.',
+    INTERNATIONAL_BILLING_OPT_IN_REQUIRED:
+      'A referência ainda não autorizou a cobrança automática internacional.',
+    INTERNATIONAL_BILLING_COUNTRY_BLOCKED:
+      'O país do cliente ainda não está autorizado para cobrança automática.',
+    INTERNATIONAL_BILLING_CONVERSATION_REQUIRED:
+      'É necessária uma conversa internacional vinculada e operacional.',
+    PHONE_IDENTITY_MISMATCH: 'Os telefones vinculados ao cliente não correspondem entre si.',
+    INVALID_PHONE: 'O telefone internacional do cliente é inválido.',
+  };
+
+  return labels[code] ?? fallback.trim();
 }
 
 export function referenceStatusRequiresReason(status: Client['status']) {

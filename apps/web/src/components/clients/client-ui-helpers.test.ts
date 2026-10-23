@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { Client, ClientReference, Plan, Receivable } from '../../lib/crm-api';
+import type {
+  Client,
+  ClientMessageDispatch,
+  ClientReference,
+  Plan,
+  Receivable,
+} from '../../lib/crm-api';
 import {
   clientInitial,
   clientNextDueSummary,
@@ -11,8 +17,12 @@ import {
   clientReferenceStatusSummary,
   dispatchReferenceSummary,
   dispatchReferenceSummaryFromDispatch,
+  billingDispatchPrimaryDate,
   dispatchStatusTone,
   dispatchTotalAmountLabel,
+  formatBillingDateTime,
+  internationalBillingBlockedSummary,
+  internationalBillingBlockReasonLabel,
   isClientBillingDispatch,
   receivableStatusTone,
   receivableVisualStatus,
@@ -105,11 +115,7 @@ function receivable(overrides: Partial<Receivable> = {}): Receivable {
   };
 }
 
-function dispatch(
-  overrides: Partial<Parameters<typeof isClientBillingDispatch>[0]> & {
-    status?: 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED' | 'IGNORED';
-  } = {},
-) {
+function dispatch(overrides: Partial<ClientMessageDispatch> = {}) {
   return {
     attempts: 0,
     body: 'Mensagem',
@@ -289,6 +295,59 @@ describe('client UI helpers', () => {
     expect(dispatchStatusTone('SCHEDULED')).toBe('warning');
   });
 
+  it('prioritizes programmed and sent timestamps without hiding creation fallback', () => {
+    expect(
+      billingDispatchPrimaryDate(
+        dispatch({
+          createdAt: '2026-10-22T20:00:00.000Z',
+          scheduledFor: '2026-11-22T12:01:36.000Z',
+        }),
+      ),
+    ).toEqual({ label: 'Envio programado', value: '2026-11-22T12:01:36.000Z' });
+    expect(
+      billingDispatchPrimaryDate(
+        dispatch({
+          status: 'SENT',
+          sentAt: '2026-11-22T12:01:40.000Z',
+        }),
+      ),
+    ).toEqual({ label: 'Enviada em', value: '2026-11-22T12:01:40.000Z' });
+    expect(
+      billingDispatchPrimaryDate(
+        dispatch({ status: 'FAILED', scheduledFor: '2026-11-22T12:01:36.000Z' }),
+      ),
+    ).toEqual({ label: 'Envio programado', value: '2026-11-22T12:01:36.000Z' });
+    expect(billingDispatchPrimaryDate(dispatch({ origin: 'MANUAL' }))).toEqual({
+      label: 'Criada em',
+      value: '2026-09-01',
+    });
+  });
+
+  it('formats billing timestamps explicitly in America/Sao_Paulo', () => {
+    expect(formatBillingDateTime('2026-11-22T12:01:36.000Z')).toBe('22/11/2026 09:01:36');
+    expect(formatBillingDateTime('2026-11-22T03:00:00.000Z')).toBe('22/11/2026 00:00:00');
+    expect(formatBillingDateTime(null)).toBeNull();
+    expect(formatBillingDateTime('invalid')).toBeNull();
+  });
+
+  it('uses grammatical international billing alerts and friendly backend reasons', () => {
+    expect(internationalBillingBlockedSummary(1)).toBe(
+      '1 referência sem agendamento internacional.',
+    );
+    expect(internationalBillingBlockedSummary(3)).toBe(
+      '3 referências sem agendamento internacional.',
+    );
+    expect(
+      internationalBillingBlockReasonLabel(
+        'INTERNATIONAL_BILLING_DISABLED',
+        'Billing automatico internacional esta desabilitado.',
+      ),
+    ).toBe('A cobrança automática internacional está desativada.');
+    expect(internationalBillingBlockReasonLabel('CUSTOM', ' Motivo específico. ')).toBe(
+      'Motivo específico.',
+    );
+  });
+
   it('keeps recovery out of the client billing dispatch scope', () => {
     expect(isClientBillingDispatch(dispatch({ origin: 'BILLING' }))).toBe(true);
     expect(isClientBillingDispatch(dispatch({ origin: 'MANUAL' }))).toBe(true);
@@ -312,38 +371,38 @@ describe('client UI helpers', () => {
       itemCount: 3,
       items: [
         {
-          amount: '30.00',
+          amount: '25.00',
           clientReferenceId: 'reference-a',
-          dueDate: '2026-09-15',
+          dueDate: '2026-11-22',
           id: 'item-a',
           receivableId: 'receivable-a',
           reference: 'teste01',
           status: 'PENDENTE' as const,
         },
         {
-          amount: '30.00',
+          amount: '25.00',
           clientReferenceId: 'reference-b',
-          dueDate: '2026-09-15',
+          dueDate: '2026-11-22',
           id: 'item-b',
           receivableId: 'receivable-b',
           reference: 'teste02',
           status: 'PENDENTE' as const,
         },
         {
-          amount: '30.00',
+          amount: '25.00',
           clientReferenceId: 'reference-c',
-          dueDate: '2026-09-15',
+          dueDate: '2026-11-22',
           id: 'item-c',
           receivableId: 'receivable-c',
           reference: 'teste03',
           status: 'PENDENTE' as const,
         },
       ],
-      totalAmount: '90.00',
+      totalAmount: '75.00',
     };
 
     expect(dispatchReferenceSummaryFromDispatch(dispatch)).toBe('3 referências');
-    expect(dispatchTotalAmountLabel(dispatch)).toMatch(/^R\$\s?90,00$/u);
+    expect(dispatchTotalAmountLabel(dispatch)).toMatch(/^R\$\s?75,00$/u);
   });
 
   it('does not invent a billing total from unrelated client receivables', () => {

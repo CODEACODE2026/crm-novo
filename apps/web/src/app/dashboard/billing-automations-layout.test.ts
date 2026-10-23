@@ -94,7 +94,16 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(dashboardSource).toContain('function BillingDispatchDetailModal');
     expect(dashboardSource).toContain('Detalhes da cobrança');
     expect(dashboardSource).toContain('providerMessageId');
-    expect(dashboardSource).toContain('Itens consolidados');
+    expect(dashboardSource).toContain('Referências da cobrança');
+    expect(dashboardSource).toContain('billing-dispatch-highlights');
+    expect(dashboardSource).toContain('billing-dispatch-item-grid');
+    expect(dashboardSource).toContain('Envio programado');
+    expect(dashboardSource).toContain('Valor total');
+    expect(dashboardSource).toContain('<code>{item.receivableId}</code>');
+    expect(dashboardSource).toContain('dispatch.errorCode || dispatch.errorMessage');
+    expect(dashboardSource).toContain('aria-modal="true"');
+    expect(dashboardSource).toContain('aria-label="Fechar detalhes da cobrança"');
+    expect(dashboardSource).toContain("event.key === 'Escape'");
     expect(dashboardSource).toContain('if (!current) return null;');
     expect(dashboardSource).toContain('await sendBillingNow(dispatch.id);');
     expect(dashboardSource).toContain('Enviar agora');

@@ -119,9 +119,14 @@ import {
   clientPlanSummary,
   clientReferenceCountLabel,
   clientReferenceSummary,
+  billingDispatchPrimaryDate,
   dispatchTotalAmountLabel,
+  dispatchReferenceSummary,
   dispatchReferenceSummaryFromDispatch,
   dispatchStatusTone,
+  formatBillingDateTime,
+  internationalBillingBlockedSummary,
+  internationalBillingBlockReasonLabel,
   referenceStatusRequiresReason,
   receivableStatusTone,
   receivableVisualStatus,
@@ -11781,16 +11786,22 @@ function ClientsView({
                     />
                   </div>
                   {clientBillingSummary?.internationalBlocked ? (
-                    <div className="notice warning" role="status">
+                    <div className="notice warning billing-international-alert" role="status">
                       <strong>
-                        {clientBillingSummary.internationalBlocked} referência(s) sem agendamento
-                        internacional
+                        {internationalBillingBlockedSummary(
+                          clientBillingSummary.internationalBlocked,
+                        )}
                       </strong>
-                      {clientBillingSummary.internationalBlockedReasons.map((reason) => (
-                        <span key={reason.code}>
-                          {reason.message} ({reason.count})
-                        </span>
-                      ))}
+                      <div className="billing-international-alert-reasons">
+                        {clientBillingSummary.internationalBlockedReasons.map((reason) => (
+                          <span key={reason.code}>
+                            {internationalBillingBlockReasonLabel(reason.code, reason.message)}
+                            {clientBillingSummary.internationalBlockedReasons.length > 1
+                              ? ` (${dispatchReferenceSummary(reason.count)})`
+                              : ''}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                   <div className="toolbar finance-toolbar">
@@ -11843,7 +11854,7 @@ function ClientsView({
                     <table className="client-billing-table">
                       <thead>
                         <tr>
-                          <th>Data</th>
+                          <th>Data principal</th>
                           <th>Referências</th>
                           <th>Valor</th>
                           <th>Tipo</th>
@@ -11853,33 +11864,48 @@ function ClientsView({
                         </tr>
                       </thead>
                       <tbody>
-                        {clientBillingDispatches.map((dispatch) => (
-                          <tr key={dispatch.id}>
-                            <td>{formatDateTime(dispatch.createdAt)}</td>
-                            <td>{dispatchReferenceSummaryFromDispatch(dispatch)}</td>
-                            <td>{dispatchTotalAmountLabel(dispatch)}</td>
-                            <td>{messageOriginLabel(dispatch.origin)}</td>
-                            <td className="finance-status-column">
-                              <span
-                                className={`finance-status-pill tone-${dispatchStatusTone(
-                                  dispatch.status,
-                                )}`}
-                              >
-                                {billingStatusLabel(dispatch.status)}
-                              </span>
-                            </td>
-                            <td className="finance-attempts-column">{dispatch.attempts ?? 0}</td>
-                            <td className="finance-actions-column">
-                              <div className="table-actions">
-                                <IconButton
-                                  icon={Eye}
-                                  label="Abrir detalhe da cobrança"
-                                  onClick={() => setSelectedDispatch(dispatch)}
-                                />
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                        {clientBillingDispatches.map((dispatch) => {
+                          const primaryDate = billingDispatchPrimaryDate(dispatch);
+                          return (
+                            <tr key={dispatch.id}>
+                              <td className="client-billing-primary-date" data-label="Data">
+                                <strong>{formatBillingDateTime(primaryDate.value) ?? '-'}</strong>
+                                <span>{primaryDate.label}</span>
+                                {primaryDate.label !== 'Criada em' ? (
+                                  <small>
+                                    Criada em {formatBillingDateTime(dispatch.createdAt) ?? '-'}
+                                  </small>
+                                ) : null}
+                              </td>
+                              <td data-label="Referências">
+                                {dispatchReferenceSummaryFromDispatch(dispatch)}
+                              </td>
+                              <td data-label="Valor">{dispatchTotalAmountLabel(dispatch)}</td>
+                              <td data-label="Tipo">{messageOriginLabel(dispatch.origin)}</td>
+                              <td className="finance-status-column" data-label="Status">
+                                <span
+                                  className={`finance-status-pill tone-${dispatchStatusTone(
+                                    dispatch.status,
+                                  )}`}
+                                >
+                                  {billingStatusLabel(dispatch.status)}
+                                </span>
+                              </td>
+                              <td className="finance-attempts-column" data-label="Tentativas">
+                                {dispatch.attempts ?? 0}
+                              </td>
+                              <td className="finance-actions-column" data-label="Ações">
+                                <div className="table-actions">
+                                  <IconButton
+                                    icon={Eye}
+                                    label="Abrir detalhe da cobrança"
+                                    onClick={() => setSelectedDispatch(dispatch)}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                     {!clientBillingDispatches.length ? (
@@ -12698,11 +12724,29 @@ function BillingDispatchDetailModal({
   dispatch: MessageDispatch;
   onClose: () => void;
 }) {
+  const scheduledAt = formatBillingDateTime(dispatch.scheduledFor);
+  const sentAt = formatBillingDateTime(dispatch.sentAt);
+  const createdAt = formatBillingDateTime(dispatch.createdAt);
+  const referenceCount = dispatch.itemCount ?? dispatch.items?.length ?? 0;
+  const primaryDate = billingDispatchPrimaryDate(dispatch);
+  const primaryDateTime = formatBillingDateTime(primaryDate.value);
+
+  useEffect(() => {
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section
         className="modal dispatch-detail-modal billing-dispatch-modal"
         aria-labelledby="billing-dispatch-detail-title"
+        aria-modal="true"
+        role="dialog"
       >
         <header className="modal-header modal-header-with-icon">
           <span className="modal-icon info" aria-hidden="true">
@@ -12715,36 +12759,67 @@ function BillingDispatchDetailModal({
               {billingStatusLabel(dispatch.status)}
             </p>
           </div>
-          <button className="icon-button" type="button" onClick={onClose}>
+          <button
+            aria-label="Fechar detalhes da cobrança"
+            autoFocus
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+          >
             <X aria-hidden="true" size={17} />
           </button>
         </header>
 
-        <dl className="detail-list compact-detail-list">
+        <div className="billing-dispatch-highlights">
+          <article className={dispatch.status === 'SCHEDULED' ? 'is-primary' : ''}>
+            <span>{primaryDate.label}</span>
+            <strong>{primaryDateTime ?? 'Não informado'}</strong>
+          </article>
+          <article>
+            <span>Valor total</span>
+            <strong>{billingDispatchAmountLabel(dispatch)}</strong>
+          </article>
+          <article>
+            <span>Referências</span>
+            <strong>{dispatchReferenceSummary(referenceCount)}</strong>
+          </article>
+        </div>
+
+        <dl className="detail-list compact-detail-list billing-dispatch-detail-list">
           <div>
             <dt>Cliente</dt>
             <dd>{dispatch.client?.name ?? 'Cliente não vinculado'}</dd>
           </div>
           <div>
-            <dt>Referência(s)</dt>
+            <dt>Referências</dt>
             <dd>{billingDispatchReferenceLabel(dispatch)}</dd>
           </div>
           <div>
-            <dt>Valor</dt>
+            <dt>Valor total</dt>
             <dd>{billingDispatchAmountLabel(dispatch)}</dd>
           </div>
           <div>
             <dt>Vencimento</dt>
             <dd>{billingDispatchDueDateLabel(dispatch)}</dd>
           </div>
-          <div>
-            <dt>Agendado para</dt>
-            <dd>{dispatch.scheduledFor ? formatDateTime(dispatch.scheduledFor) : '-'}</dd>
-          </div>
-          <div>
-            <dt>Enviado em</dt>
-            <dd>{dispatch.sentAt ? formatDateTime(dispatch.sentAt) : '-'}</dd>
-          </div>
+          {createdAt ? (
+            <div>
+              <dt>Criada em</dt>
+              <dd>{createdAt}</dd>
+            </div>
+          ) : null}
+          {scheduledAt ? (
+            <div>
+              <dt>Envio programado</dt>
+              <dd>{scheduledAt}</dd>
+            </div>
+          ) : null}
+          {sentAt ? (
+            <div>
+              <dt>Enviada em</dt>
+              <dd>{sentAt}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>Status</dt>
             <dd>
@@ -12759,10 +12834,12 @@ function BillingDispatchDetailModal({
             <dt>Tentativas</dt>
             <dd>{dispatch.attempts ?? 0}/3</dd>
           </div>
-          <div>
-            <dt>Erro</dt>
-            <dd>{dispatch.errorCode ?? dispatch.errorMessage ?? '-'}</dd>
-          </div>
+          {dispatch.errorCode || dispatch.errorMessage ? (
+            <div className="billing-dispatch-error">
+              <dt>Erro</dt>
+              <dd>{dispatch.errorMessage ?? dispatch.errorCode}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>providerMessageId</dt>
             <dd>{dispatch.providerMessageId ?? '-'}</dd>
@@ -12771,14 +12848,33 @@ function BillingDispatchDetailModal({
 
         {dispatch.items?.length ? (
           <div className="billing-dispatch-items">
-            <span className="metric-label">Itens consolidados</span>
-            <div className="mini-list">
+            <div className="billing-dispatch-items-heading">
+              <span className="metric-label">Referências da cobrança</span>
+              <strong>{dispatchReferenceSummary(dispatch.items.length)}</strong>
+            </div>
+            <div className="billing-dispatch-item-grid">
               {dispatch.items.map((item) => (
                 <article key={item.id}>
-                  <strong>{item.reference}</strong>
-                  <span>
-                    {formatCurrency(item.amount)} | {formatDate(item.dueDate)} | {item.status}
-                  </span>
+                  <div>
+                    <strong>{item.reference}</strong>
+                    <span className="billing-dispatch-receivable-id">
+                      Conta <code>{item.receivableId}</code>
+                    </span>
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>Valor</dt>
+                      <dd>{formatCurrency(item.amount)}</dd>
+                    </div>
+                    <div>
+                      <dt>Vencimento</dt>
+                      <dd>{formatDate(item.dueDate)}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{item.status}</dd>
+                    </div>
+                  </dl>
                 </article>
               ))}
             </div>

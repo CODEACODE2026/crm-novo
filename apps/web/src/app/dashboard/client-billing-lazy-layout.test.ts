@@ -45,8 +45,18 @@ describe('phase E3B client billing lazy loading source', () => {
   it('shows backend-provided international Billing block reasons without fake dispatches', () => {
     expect(clientBillingSource).toContain('clientBillingSummary?.internationalBlocked');
     expect(clientBillingSource).toContain('internationalBlockedReasons.map((reason)');
-    expect(clientBillingSource).toContain('referência(s) sem agendamento');
+    expect(clientBillingSource).toContain('internationalBillingBlockedSummary(');
+    expect(clientBillingSource).toContain('internationalBillingBlockReasonLabel(');
+    expect(clientBillingSource).toContain('billing-international-alert-reasons');
     expect(clientBillingSource).not.toContain('setClientBillingDispatches([');
+  });
+
+  it('prioritizes the effective billing date and keeps creation timestamp visible', () => {
+    expect(clientBillingSource).toContain('<th>Data principal</th>');
+    expect(clientBillingSource).toContain('billingDispatchPrimaryDate(dispatch)');
+    expect(clientBillingSource).toContain('formatBillingDateTime(primaryDate.value)');
+    expect(clientBillingSource).toContain("primaryDate.label !== 'Criada em'");
+    expect(clientBillingSource).toContain('formatBillingDateTime(dispatch.createdAt)');
   });
 
   it('keeps international Billing opt-in explicit, capability-gated and covered by save errors', () => {

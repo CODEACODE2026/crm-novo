@@ -2824,14 +2824,24 @@ export class WhatsAppService {
     const caption = input.caption?.trim() || null;
     const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
-      include: { whatsAppConnection: true },
+      include: { client: true, whatsAppConnection: true },
     });
 
     if (!conversation) {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    this.assertInternationalWhatsAppOutboundBlocked(conversation);
+    const operation: WhatsAppOutboundOperation =
+      mediaType === 'STICKER' ? 'BR_OPERATIONAL' : 'MANUAL_CONVERSATION_MEDIA';
+    const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
+    this.assertInternationalConversationClientLinked(conversation, recipient.kind);
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
+    if (recipient.kind !== 'BR_OPERATIONAL' && input.forwardMetadata) {
+      throw new ConflictException({
+        code: 'WHATSAPP_INTERNATIONAL_OPERATION_UNSUPPORTED',
+        message: 'Encaminhamento internacional de midia ainda nao esta homologado.',
+      });
+    }
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -2854,31 +2864,56 @@ export class WhatsAppService {
       throw new BadRequestException('Resposta com anexo ainda nao esta disponivel.');
     }
 
-    const pending = await this.createPendingConversationMediaMessage(conversation, {
+    const pendingResult = await this.createPendingConversationMediaMessage(conversation, {
       media,
       caption,
       requestId,
       replyTarget: mediaType === 'STICKER' ? replyTarget : null,
       ...(input.forwardMetadata ? { forwardMetadata: input.forwardMetadata } : {}),
     });
+    if (!pendingResult.created) {
+      return this.presentConversationMessage(pendingResult.message);
+    }
+    const pending = pendingResult.message;
 
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let latest = { conversation, recipient };
+    if (recipient.kind !== 'BR_OPERATIONAL') {
+      try {
+        latest = await this.revalidateManualConversationOutbound({
+          conversationId: conversation.id,
+          expectedClientId: conversation.clientId,
+          expectedConnectionId: connection.id,
+          expectedDigits: recipient.digits,
+          operation,
+        });
+      } catch (error) {
+        await this.failPendingConversationMessage(
+          pending.id,
+          conversation.id,
+          'A identidade da conversa nao passou na revalidacao anterior ao envio de midia.',
+        );
+        throw error;
+      }
+    }
+
+    const latestConnection = latest.conversation.whatsAppConnection;
+    const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
     let result: { providerMessageId: string | null; sentAt?: Date | null };
 
     try {
       if (mediaType === 'IMAGE') {
-        result = await this.mapConnectionProviderError(connection, () =>
+        result = await this.mapConnectionProviderError(latestConnection, () =>
           this.provider.sendImage(instanceToken, {
-            phone: conversation.phoneNormalized,
+            phone: latest.recipient.digits,
             imageDataUrl: media.dataUrl,
             caption,
             requestId,
           }),
         );
       } else if (mediaType === 'AUDIO') {
-        result = await this.mapConnectionProviderError(connection, () =>
+        result = await this.mapConnectionProviderError(latestConnection, () =>
           this.provider.sendAudio(instanceToken, {
-            phone: conversation.phoneNormalized,
+            phone: latest.recipient.digits,
             audioDataUrl: media.dataUrl,
             mimeType: media.mimeType,
             seconds: media.durationSeconds,
@@ -2887,9 +2922,9 @@ export class WhatsAppService {
           }),
         );
       } else if (mediaType === 'VIDEO') {
-        result = await this.mapConnectionProviderError(connection, () =>
+        result = await this.mapConnectionProviderError(latestConnection, () =>
           this.provider.sendVideo(instanceToken, {
-            phone: conversation.phoneNormalized,
+            phone: latest.recipient.digits,
             videoDataUrl: media.dataUrl,
             caption,
             mimeType: media.mimeType,
@@ -2897,18 +2932,18 @@ export class WhatsAppService {
           }),
         );
       } else if (mediaType === 'STICKER') {
-        result = await this.mapConnectionProviderError(connection, () =>
+        result = await this.mapConnectionProviderError(latestConnection, () =>
           this.provider.sendSticker(instanceToken, {
-            phone: conversation.phoneNormalized,
+            phone: latest.recipient.digits,
             sticker: media.dataUrl,
             requestId,
             ...(replyTarget ? { reply: { stanzaId: replyTarget.message.providerMessageId! } } : {}),
           }),
         );
       } else {
-        result = await this.mapConnectionProviderError(connection, () =>
+        result = await this.mapConnectionProviderError(latestConnection, () =>
           this.provider.sendDocument(instanceToken, {
-            phone: conversation.phoneNormalized,
+            phone: latest.recipient.digits,
             documentDataUrl: media.dataUrl,
             fileName: media.fileName,
             requestId,
@@ -2916,6 +2951,14 @@ export class WhatsAppService {
         );
       }
     } catch (error) {
+      if (recipient.kind !== 'BR_OPERATIONAL' && error instanceof ServiceUnavailableException) {
+        return this.keepConversationMessagePendingAfterUncertainProviderResult({
+          conversationId: conversation.id,
+          error,
+          messageId: pending.id,
+          source: 'manual_outbound_media_send',
+        });
+      }
       const failed = await this.prisma.whatsAppMessage.update({
         where: { id: pending.id },
         data: {
@@ -2961,6 +3004,15 @@ export class WhatsAppService {
         localMediaResult.errorMessage,
       ),
     });
+
+    if (recipient.kind !== 'BR_OPERATIONAL' && !result.providerMessageId) {
+      return this.keepConversationMessagePendingAfterUncertainProviderResult({
+        conversationId: conversation.id,
+        error: new Error('Kirago confirmou a requisicao sem retornar providerMessageId.'),
+        messageId: pending.id,
+        source: 'manual_outbound_media_send',
+      });
+    }
 
     const sentAt = result.sentAt ?? new Date();
 
@@ -3036,14 +3088,17 @@ export class WhatsAppService {
 
     const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
-      include: { whatsAppConnection: true },
+      include: { client: true, whatsAppConnection: true },
     });
 
     if (!conversation) {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    this.assertInternationalWhatsAppOutboundBlocked(conversation);
+    const operation: WhatsAppOutboundOperation = 'MANUAL_CONVERSATION_VOICE';
+    const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
+    this.assertInternationalConversationClientLinked(conversation, recipient.kind);
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -3058,20 +3113,45 @@ export class WhatsAppService {
     }
 
     const media = await this.prepareConversationVoiceMedia(input.file, input.durationSeconds);
-    const pending = await this.createPendingConversationMediaMessage(conversation, {
+    const pendingResult = await this.createPendingConversationMediaMessage(conversation, {
       media,
       caption: null,
       requestId,
       source: 'manual_outbound_voice_send',
     });
+    if (!pendingResult.created) {
+      return this.presentConversationMessage(pendingResult.message);
+    }
+    const pending = pendingResult.message;
 
-    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    let latest = { conversation, recipient };
+    if (recipient.kind !== 'BR_OPERATIONAL') {
+      try {
+        latest = await this.revalidateManualConversationOutbound({
+          conversationId: conversation.id,
+          expectedClientId: conversation.clientId,
+          expectedConnectionId: connection.id,
+          expectedDigits: recipient.digits,
+          operation,
+        });
+      } catch (error) {
+        await this.failPendingConversationMessage(
+          pending.id,
+          conversation.id,
+          'A identidade da conversa nao passou na revalidacao anterior ao envio de voz.',
+        );
+        throw error;
+      }
+    }
+
+    const latestConnection = latest.conversation.whatsAppConnection;
+    const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
     let result: { providerMessageId: string | null };
 
     try {
-      result = await this.mapConnectionProviderError(connection, () =>
+      result = await this.mapConnectionProviderError(latestConnection, () =>
         this.provider.sendAudio(instanceToken, {
-          phone: conversation.phoneNormalized,
+          phone: latest.recipient.digits,
           audioDataUrl: media.dataUrl,
           mimeType: media.mimeType,
           seconds: media.durationSeconds,
@@ -3080,6 +3160,14 @@ export class WhatsAppService {
         }),
       );
     } catch (error) {
+      if (recipient.kind !== 'BR_OPERATIONAL' && error instanceof ServiceUnavailableException) {
+        return this.keepConversationMessagePendingAfterUncertainProviderResult({
+          conversationId: conversation.id,
+          error,
+          messageId: pending.id,
+          source: 'manual_outbound_voice_send',
+        });
+      }
       const failed = await this.prisma.whatsAppMessage.update({
         where: { id: pending.id },
         data: {
@@ -3114,6 +3202,15 @@ export class WhatsAppService {
         localMediaResult.errorMessage,
       ),
     });
+
+    if (recipient.kind !== 'BR_OPERATIONAL' && !result.providerMessageId) {
+      return this.keepConversationMessagePendingAfterUncertainProviderResult({
+        conversationId: conversation.id,
+        error: new Error('Kirago confirmou a requisicao sem retornar providerMessageId.'),
+        messageId: pending.id,
+        source: 'manual_outbound_voice_send',
+      });
+    }
 
     const sentAt = new Date();
 
@@ -6553,7 +6650,7 @@ export class WhatsAppService {
     const source = input.source ?? 'manual_outbound_media_send';
 
     try {
-      return await this.prisma.whatsAppMessage.create({
+      const message = await this.prisma.whatsAppMessage.create({
         data: buildWhatsAppMessageCreateDataForConversation(conversation, {
           provider: 'KIRAGO',
           providerMessageId: null,
@@ -6582,6 +6679,7 @@ export class WhatsAppService {
           mediaDurationSeconds: input.media.durationSeconds,
         }),
       });
+      return { message, created: true as const };
     } catch (error) {
       if (!this.isDuplicateConversationMessage(error)) {
         throw error;
@@ -6594,7 +6692,7 @@ export class WhatsAppService {
 
       if (existing) {
         this.assertMessageBelongsToConversation(existing, conversation.id);
-        return existing;
+        return { message: existing, created: false as const };
       }
 
       throw error;
@@ -6666,6 +6764,39 @@ export class WhatsAppService {
 
     this.emitMessageUpdated(input.conversationId, input.messageId);
     return this.presentConversationMessage(current);
+  }
+
+  private async keepConversationMessagePendingAfterUncertainProviderResult(input: {
+    conversationId: string;
+    error: unknown;
+    messageId: string;
+    source: 'manual_outbound_media_send' | 'manual_outbound_voice_send';
+  }) {
+    const errorMessage = this.sanitizeError(input.error);
+    this.logger.warn(
+      `WhatsApp international provider result is uncertain; keeping message PENDING and non-retryable message=${input.messageId} message=${errorMessage}`,
+    );
+
+    const current = await this.prisma.whatsAppMessage.findUnique({
+      where: { id: input.messageId },
+    });
+    if (!current) throw input.error;
+
+    const pending = await this.prisma.whatsAppMessage.update({
+      where: { id: input.messageId },
+      data: {
+        status: 'PENDING',
+        failedAt: null,
+        rawMetadata: {
+          ...this.rawMetadataWithError(current.rawMetadata, errorMessage, input.source),
+          remoteResult: 'uncertain',
+          retryPolicy: 'manual_reconciliation_only',
+        },
+      },
+    });
+
+    this.emitMessageUpdated(input.conversationId, pending.id);
+    return this.presentConversationMessage(pending);
   }
 
   private async deleteLocalMediaQuietly(storageKey: string) {
@@ -7253,12 +7384,24 @@ export class WhatsAppService {
       | undefined,
     operation: WhatsAppOutboundOperation,
   ) {
+    const identity = input?.phoneE164?.trim() ? normalizePhone(input.phoneE164) : null;
+    const country = identity?.status === 'valid' ? identity.country : null;
     const resolved = resolveWhatsAppOutboundPhone({
       operation,
       internationalManualTextEnabled:
         this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
       internationalMessageActionsEnabled:
         this.config.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
+      internationalManualMediaEnabled: this.internationalManualOperationEnabled(
+        country,
+        'PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED',
+        'PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES',
+      ),
+      internationalManualVoiceEnabled: this.internationalManualOperationEnabled(
+        country,
+        'PHONE_INTERNATIONAL_MANUAL_VOICE_ENABLED',
+        'PHONE_INTERNATIONAL_MANUAL_VOICE_COUNTRIES',
+      ),
       internationalManualPixEnabled:
         this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
       ...(input?.phone !== undefined ? { phone: input.phone } : {}),
@@ -7281,6 +7424,22 @@ export class WhatsAppService {
     });
   }
 
+  private internationalManualOperationEnabled(
+    country: string | null,
+    flagKey: string,
+    countriesKey: string,
+  ) {
+    if (this.config.get<string>(flagKey) !== 'true' || !country) return false;
+
+    const configured = this.config.get<string>(countriesKey) ?? '';
+    const countries = configured.split(',').map((value) => value.trim());
+    if (!countries.length || countries.some((value) => !/^[A-Z]{2}$/.test(value))) {
+      return false;
+    }
+
+    return new Set(countries).has(country);
+  }
+
   private assertLinkedClientIdentity(
     conversation: {
       client?: { phoneE164?: string | null } | null;
@@ -7290,6 +7449,8 @@ export class WhatsAppService {
       | 'BR_OPERATIONAL'
       | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
       | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
       | 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
   ) {
     if (kind === 'BR_OPERATIONAL' || !conversation.client) return;
@@ -7305,6 +7466,68 @@ export class WhatsAppService {
         message: 'A identidade do cliente diverge da conversa internacional.',
       });
     }
+  }
+
+  private assertInternationalConversationClientLinked(
+    conversation: { client?: { phoneE164?: string | null } | null },
+    kind:
+      | 'BR_OPERATIONAL'
+      | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
+      | 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
+  ) {
+    if (kind !== 'BR_OPERATIONAL' && !conversation.client) {
+      throw new ConflictException({
+        code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
+        message: 'A conversa internacional nao esta vinculada a um cliente confirmado.',
+      });
+    }
+  }
+
+  private async revalidateManualConversationOutbound(input: {
+    conversationId: string;
+    expectedClientId: string | null;
+    expectedConnectionId: string;
+    expectedDigits: string;
+    operation: WhatsAppOutboundOperation;
+  }) {
+    const conversation = await this.prisma.whatsAppConversation.findUnique({
+      where: { id: input.conversationId },
+      include: { client: true, whatsAppConnection: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversa WhatsApp nao encontrada.');
+    }
+
+    const recipient = this.resolveWhatsAppOutboundRecipient(conversation, input.operation);
+    this.assertInternationalConversationClientLinked(conversation, recipient.kind);
+    this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
+
+    if (
+      conversation.whatsAppConnection.status !== 'CONNECTED' ||
+      !conversation.whatsAppConnection.connected ||
+      !conversation.whatsAppConnection.loggedIn
+    ) {
+      throw new ConflictException('Conexao WhatsApp da conversa nao esta mais operacional.');
+    }
+
+    if (
+      conversation.clientId !== input.expectedClientId ||
+      conversation.client?.id !== conversation.clientId ||
+      conversation.whatsAppConnectionId !== input.expectedConnectionId ||
+      conversation.whatsAppConnection.id !== conversation.whatsAppConnectionId ||
+      recipient.digits !== input.expectedDigits
+    ) {
+      throw new ConflictException({
+        code: 'WHATSAPP_OUTBOUND_IDENTITY_CHANGED',
+        message: 'A identidade da conversa mudou antes do envio. Tente novamente.',
+      });
+    }
+
+    return { conversation, recipient };
   }
 
   private async revalidateConversationMessageActionTarget(

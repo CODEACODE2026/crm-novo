@@ -114,6 +114,18 @@ export class ClientsService {
   phoneCapabilities() {
     const internationalClientWriteEnabled = this.internationalClientWriteEnabled();
     const enabled = this.internationalPhoneEnabled() || internationalClientWriteEnabled;
+    const internationalManualMediaCountries = this.internationalCountryAllowlist(
+      'PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES',
+    );
+    const internationalManualVoiceCountries = this.internationalCountryAllowlist(
+      'PHONE_INTERNATIONAL_MANUAL_VOICE_COUNTRIES',
+    );
+    const internationalManualMediaEnabled =
+      this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED') === 'true' &&
+      internationalManualMediaCountries.length > 0;
+    const internationalManualVoiceEnabled =
+      this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_VOICE_ENABLED') === 'true' &&
+      internationalManualVoiceCountries.length > 0;
 
     return {
       enabled,
@@ -124,6 +136,14 @@ export class ClientsService {
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
       internationalMessageActionsEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
+      internationalManualMediaEnabled,
+      internationalManualMediaCountries: internationalManualMediaEnabled
+        ? internationalManualMediaCountries
+        : [],
+      internationalManualVoiceEnabled,
+      internationalManualVoiceCountries: internationalManualVoiceEnabled
+        ? internationalManualVoiceCountries
+        : [],
       internationalManualPixEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
       internationalBillingOptInSupported: true,
@@ -132,6 +152,16 @@ export class ClientsService {
       defaultCountry: 'BR' as const,
       supportedCountries: enabled ? listSupportedPhoneCountries() : [],
     };
+  }
+
+  private internationalCountryAllowlist(key: string) {
+    const configured = this.configService?.get<string>(key) ?? '';
+    const countries = configured
+      .split(',')
+      .map((country) => country.trim())
+      .filter((country) => /^[A-Z]{2}$/.test(country));
+
+    return [...new Set(countries)];
   }
 
   async list(query: ListClientsDto) {

@@ -2,7 +2,12 @@ import { resolveBrazilianOperationalPhone } from './brazilian-operational-phone'
 import { comparePhoneIdentities, normalizePhone } from './phone-normalizer';
 
 export type WhatsAppOutboundOperation =
-  'BR_OPERATIONAL' | 'MANUAL_CONVERSATION_TEXT' | 'MANUAL_CONVERSATION_ACTION' | 'MANUAL_PIX';
+  | 'BR_OPERATIONAL'
+  | 'MANUAL_CONVERSATION_TEXT'
+  | 'MANUAL_CONVERSATION_ACTION'
+  | 'MANUAL_CONVERSATION_MEDIA'
+  | 'MANUAL_CONVERSATION_VOICE'
+  | 'MANUAL_PIX';
 
 export type WhatsAppOutboundPhoneInput = {
   phone?: string | null;
@@ -11,6 +16,8 @@ export type WhatsAppOutboundPhoneInput = {
   operation: WhatsAppOutboundOperation;
   internationalManualTextEnabled?: boolean;
   internationalMessageActionsEnabled?: boolean;
+  internationalManualMediaEnabled?: boolean;
+  internationalManualVoiceEnabled?: boolean;
   internationalManualPixEnabled?: boolean;
 };
 
@@ -21,6 +28,8 @@ export type WhatsAppOutboundPhoneResult =
         | 'BR_OPERATIONAL'
         | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
         | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
+        | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
+        | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
         | 'INTERNATIONAL_MANUAL_PIX_ALLOWED';
       digits: string;
       e164: string;
@@ -82,7 +91,11 @@ export function resolveWhatsAppOutboundPhone(
         ? input.internationalManualTextEnabled
         : input.operation === 'MANUAL_CONVERSATION_ACTION'
           ? input.internationalMessageActionsEnabled
-          : input.internationalManualPixEnabled;
+          : input.operation === 'MANUAL_CONVERSATION_MEDIA'
+            ? input.internationalManualMediaEnabled
+            : input.operation === 'MANUAL_CONVERSATION_VOICE'
+              ? input.internationalManualVoiceEnabled
+              : input.internationalManualPixEnabled;
     if (!enabled) {
       return { status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' };
     }
@@ -94,7 +107,11 @@ export function resolveWhatsAppOutboundPhone(
           ? 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
           : input.operation === 'MANUAL_CONVERSATION_ACTION'
             ? 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
-            : 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
+            : input.operation === 'MANUAL_CONVERSATION_MEDIA'
+              ? 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
+              : input.operation === 'MANUAL_CONVERSATION_VOICE'
+                ? 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
+                : 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
       digits: canonical.digits,
       e164: canonical.e164,
     };

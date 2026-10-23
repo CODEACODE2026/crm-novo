@@ -281,6 +281,68 @@ describe('Kirago clients', () => {
     });
   });
 
+  it('preserves complete international E.164 digits across the existing media endpoints', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'provider-id' } });
+    const client = new KiragoInstanceClient({ request } as never);
+
+    await client.sendImage('instance-token', {
+      Phone: '14076390665',
+      Image: 'data:image/jpeg;base64,us-image',
+      Caption: 'US image',
+      Id: 'us-image-request',
+    });
+    await client.sendDocument('instance-token', {
+      Phone: '351912345678',
+      Document: 'data:application/octet-stream;base64,pt-pdf',
+      FileName: 'documento.pdf',
+      Id: 'pt-document-request',
+    });
+    await client.sendAudio('instance-token', {
+      Phone: '14076390665',
+      Audio: 'data:audio/ogg;base64,us-voice',
+      Id: 'us-voice-request',
+      PTT: true,
+      MimeType: 'audio/ogg; codecs=opus',
+      Seconds: 3,
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, '/chat/send/image', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '14076390665',
+        Image: 'data:image/jpeg;base64,us-image',
+        Caption: 'US image',
+        Id: 'us-image-request',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(2, '/chat/send/document', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '351912345678',
+        Document: 'data:application/octet-stream;base64,pt-pdf',
+        FileName: 'documento.pdf',
+        Id: 'pt-document-request',
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(3, '/chat/send/audio', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: {
+        Phone: '14076390665',
+        Audio: 'data:audio/ogg;base64,us-voice',
+        Id: 'us-voice-request',
+        PTT: true,
+        MimeType: 'audio/ogg; codecs=opus',
+        Seconds: 3,
+      },
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  });
+
   it('posts the official edit payload with the instance token', async () => {
     const request = vi.fn().mockResolvedValue({
       success: true,

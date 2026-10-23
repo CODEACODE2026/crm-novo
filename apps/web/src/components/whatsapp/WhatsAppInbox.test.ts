@@ -140,6 +140,8 @@ describe('international manual text capability', () => {
     expect(whatsAppInboxSource).toContain(
       'capabilities.internationalMessageActionsEnabled === true',
     );
+    expect(whatsAppInboxSource).toContain('capabilities.internationalManualMediaEnabled === true');
+    expect(whatsAppInboxSource).toContain('capabilities.internationalManualVoiceEnabled === true');
     expect(whatsAppInboxSource).toContain('capabilities.internationalManualPixEnabled === true');
     expect(whatsAppInboxSource).toContain(
       'selectedConversationIsInternational && !internationalMessageActionsEnabled',
@@ -148,7 +150,14 @@ describe('international manual text capability', () => {
       'restrictedOutboundActionsDisabled={selectedConversationIsInternational}',
     );
     expect(whatsAppInboxSource).toContain('textOnly={internationalTextOnly}');
-    expect(whatsAppInboxSource).toContain('disabled={blocked || textOnly');
+    expect(whatsAppInboxSource).toContain('textBlocked={composerTextBlocked}');
+    expect(whatsAppInboxSource).toContain('disabled={blocked || textBlocked}');
+    expect(whatsAppInboxSource).toContain(
+      'composerTextBlocked && composerMediaBlocked && composerVoiceBlocked',
+    );
+    expect(whatsAppInboxSource).toContain(
+      '(!textBlocked && hasText) || (!mediaBlocked && selectedMedia)',
+    );
     expect(whatsAppInboxSource).toContain(
       '!isInternationalWhatsAppConversation(conversation) || internationalManualPixEnabled',
     );

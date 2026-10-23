@@ -659,6 +659,14 @@ export function WhatsAppInbox({
     useState(false);
   const [internationalMessageActionsEnabled, setInternationalMessageActionsEnabled] =
     useState(false);
+  const [internationalManualMediaEnabled, setInternationalManualMediaEnabled] = useState(false);
+  const [internationalManualMediaCountries, setInternationalManualMediaCountries] = useState<
+    string[]
+  >([]);
+  const [internationalManualVoiceEnabled, setInternationalManualVoiceEnabled] = useState(false);
+  const [internationalManualVoiceCountries, setInternationalManualVoiceCountries] = useState<
+    string[]
+  >([]);
   const [internationalManualPixEnabled, setInternationalManualPixEnabled] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [pendingImageAnnotation, setPendingImageAnnotation] = useState<File | null>(null);
@@ -809,10 +817,30 @@ export function WhatsAppInbox({
   const selectedDraft = selectedConversation ? (drafts[selectedConversation.id] ?? '') : '';
   const selectedConversationIsInternational =
     isInternationalWhatsAppConversation(selectedConversation);
-  const internationalComposerBlocked =
-    selectedConversationIsInternational && !internationalManualTextSendEnabled;
+  const selectedConversationCountry = selectedConversation?.phoneCountry ?? null;
+  const internationalMediaAllowed = Boolean(
+    selectedConversationIsInternational &&
+    internationalManualMediaEnabled &&
+    selectedConversationCountry &&
+    internationalManualMediaCountries.includes(selectedConversationCountry),
+  );
+  const internationalVoiceAllowed = Boolean(
+    selectedConversationIsInternational &&
+    internationalManualVoiceEnabled &&
+    selectedConversationCountry &&
+    internationalManualVoiceCountries.includes(selectedConversationCountry),
+  );
   const internationalTextOnly =
-    selectedConversationIsInternational && internationalManualTextSendEnabled;
+    selectedConversationIsInternational &&
+    internationalManualTextSendEnabled &&
+    !internationalMediaAllowed &&
+    !internationalVoiceAllowed;
+  const composerMediaBlocked = selectedConversationIsInternational && !internationalMediaAllowed;
+  const composerVoiceBlocked = selectedConversationIsInternational && !internationalVoiceAllowed;
+  const composerTextBlocked =
+    selectedConversationIsInternational && !internationalManualTextSendEnabled;
+  const internationalComposerBlocked =
+    composerTextBlocked && composerMediaBlocked && composerVoiceBlocked;
 
   useEffect(() => {
     let canceled = false;
@@ -825,6 +853,18 @@ export function WhatsAppInbox({
           setInternationalMessageActionsEnabled(
             capabilities.internationalMessageActionsEnabled === true,
           );
+          setInternationalManualMediaEnabled(capabilities.internationalManualMediaEnabled === true);
+          setInternationalManualMediaCountries(
+            Array.isArray(capabilities.internationalManualMediaCountries)
+              ? capabilities.internationalManualMediaCountries
+              : [],
+          );
+          setInternationalManualVoiceEnabled(capabilities.internationalManualVoiceEnabled === true);
+          setInternationalManualVoiceCountries(
+            Array.isArray(capabilities.internationalManualVoiceCountries)
+              ? capabilities.internationalManualVoiceCountries
+              : [],
+          );
           setInternationalManualPixEnabled(capabilities.internationalManualPixEnabled === true);
         }
       })
@@ -832,6 +872,10 @@ export function WhatsAppInbox({
         if (!canceled) {
           setInternationalManualTextSendEnabled(false);
           setInternationalMessageActionsEnabled(false);
+          setInternationalManualMediaEnabled(false);
+          setInternationalManualMediaCountries([]);
+          setInternationalManualVoiceEnabled(false);
+          setInternationalManualVoiceCountries([]);
           setInternationalManualPixEnabled(false);
         }
       });
@@ -2835,12 +2879,16 @@ export function WhatsAppInbox({
         : (mediaOverride ?? selectedMedia);
     const replyToSend = ignoreReply ? null : bodyOverride ? replyToOverride : replyTarget;
     if (selectedConversationIsInternational) {
-      if (!internationalManualTextSendEnabled) {
+      if (!internationalManualTextSendEnabled && !mediaToSend) {
         setSendError('O envio internacional ainda não está habilitado para esta conversa.');
         return false;
       }
-      if (mediaToSend || bodyOverride !== undefined) {
+      if (mediaToSend && !internationalMediaAllowed) {
         setSendError('Conversas internacionais permitem somente texto manual simples nesta etapa.');
+        return false;
+      }
+      if (bodyOverride !== undefined && !mediaToSend) {
+        setSendError('Esta ação internacional ainda não está habilitada para esta conversa.');
         return false;
       }
       if (replyToSend && !internationalMessageActionsEnabled) {
@@ -2997,6 +3045,10 @@ export function WhatsAppInbox({
 
   async function sendCurrentVoiceMessage(voice: ConversationVoiceDraft) {
     if (!selectedConversation || sending || sendingRef.current) return;
+    if (selectedConversationIsInternational && !internationalVoiceAllowed) {
+      setSendError('Mensagens de voz internacionais ainda não estão habilitadas.');
+      throw new Error('International voice is disabled.');
+    }
     if (voice.conversationId !== selectedConversation.id) {
       setSendError('A gravação pertence a outra conversa. Grave novamente nesta conversa.');
       throw new Error('Voice conversation changed.');
@@ -4261,27 +4313,32 @@ export function WhatsAppInbox({
           className="conversation-chat-panel"
           aria-label="Chat da conversa"
           onDragEnter={
-            selectedConversation && !selectedConversationIsInternational
+            selectedConversation &&
+            (!selectedConversationIsInternational || internationalMediaAllowed)
               ? handleChatDragEnter
               : undefined
           }
           onDragLeave={
-            selectedConversation && !selectedConversationIsInternational
+            selectedConversation &&
+            (!selectedConversationIsInternational || internationalMediaAllowed)
               ? handleChatDragLeave
               : undefined
           }
           onDragOver={
-            selectedConversation && !selectedConversationIsInternational
+            selectedConversation &&
+            (!selectedConversationIsInternational || internationalMediaAllowed)
               ? handleChatDragOver
               : undefined
           }
           onDrop={
-            selectedConversation && !selectedConversationIsInternational
+            selectedConversation &&
+            (!selectedConversationIsInternational || internationalMediaAllowed)
               ? handleChatDrop
               : undefined
           }
           onPaste={
-            selectedConversation && !selectedConversationIsInternational
+            selectedConversation &&
+            (!selectedConversationIsInternational || internationalMediaAllowed)
               ? handleChatPaste
               : undefined
           }
@@ -4420,7 +4477,11 @@ export function WhatsAppInbox({
                 selectedMedia={selectedMedia}
                 sending={sending}
                 blocked={internationalComposerBlocked}
+                textBlocked={composerTextBlocked}
                 textOnly={internationalTextOnly}
+                mediaBlocked={composerMediaBlocked}
+                voiceBlocked={composerVoiceBlocked}
+                stickersBlocked={selectedConversationIsInternational}
                 onChange={(value) => {
                   setDrafts((current) => ({
                     ...current,
@@ -8095,6 +8156,7 @@ function ConversationAudioPlayer({
 
 function ConversationComposer({
   blocked,
+  textBlocked,
   composerRef,
   conversationId,
   draft,
@@ -8113,6 +8175,9 @@ function ConversationComposer({
   selectedMedia,
   sending,
   textOnly,
+  mediaBlocked,
+  voiceBlocked,
+  stickersBlocked,
   onChange,
   onBlur,
   onCancelReply,
@@ -8127,6 +8192,7 @@ function ConversationComposer({
   onVoiceRecordingChange,
 }: {
   blocked: boolean;
+  textBlocked: boolean;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   conversationId: string;
   draft: string;
@@ -8145,6 +8211,9 @@ function ConversationComposer({
   selectedMedia: ConversationComposerMedia | null;
   sending: boolean;
   textOnly: boolean;
+  mediaBlocked: boolean;
+  voiceBlocked: boolean;
+  stickersBlocked: boolean;
   onChange: (value: string) => void;
   onBlur: () => void;
   onCancelReply: () => void;
@@ -8204,7 +8273,7 @@ function ConversationComposer({
   const [quickReplyMenuViewportStyle, setQuickReplyMenuViewportStyle] =
     useState<React.CSSProperties>({});
   const hasText = Boolean(draft.trim());
-  const hasSendableContent = Boolean(hasText || (!textOnly && selectedMedia));
+  const hasSendableContent = Boolean((!textBlocked && hasText) || (!mediaBlocked && selectedMedia));
   const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);
   const shouldShowSendAction = actionMode === 'SEND';
   const canSend = hasSendableContent && !sending && !blocked;
@@ -8843,6 +8912,35 @@ function ConversationComposer({
         <div className="notice info conversation-notice" role="status">
           Conversa internacional: somente texto manual simples está disponível.
         </div>
+      ) : stickersBlocked && textBlocked && !mediaBlocked && !voiceBlocked ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: anexos e mensagem de voz estão disponíveis; texto permanece
+          desabilitado.
+        </div>
+      ) : stickersBlocked && textBlocked && !mediaBlocked ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: anexos estão disponíveis; texto e gravação de voz permanecem
+          desabilitados.
+        </div>
+      ) : stickersBlocked && textBlocked && !voiceBlocked ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: mensagem de voz está disponível; texto e anexos permanecem
+          desabilitados.
+        </div>
+      ) : stickersBlocked && mediaBlocked ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: texto e mensagem de voz estão disponíveis; anexos permanecem
+          desabilitados.
+        </div>
+      ) : stickersBlocked && voiceBlocked ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: texto e anexos estão disponíveis; gravação de voz permanece
+          desabilitada.
+        </div>
+      ) : stickersBlocked ? (
+        <div className="notice info conversation-notice" role="status">
+          Conversa internacional: texto, anexos e mensagem de voz estão disponíveis.
+        </div>
       ) : null}
       {voiceError ? (
         <div className="notice danger conversation-notice" role="alert">
@@ -8954,7 +9052,7 @@ function ConversationComposer({
           <IconButton
             icon={Plus}
             label="Anexar arquivo"
-            disabled={blocked || textOnly || recording || sending}
+            disabled={blocked || mediaBlocked || recording || sending}
             onClick={() => {
               setAttachmentMenuOpen((current) => !current);
             }}
@@ -8977,10 +9075,12 @@ function ConversationComposer({
                 <FileVideo aria-hidden="true" size={16} />
                 <span>Vídeo</span>
               </button>
-              <button type="button" onClick={openSavedStickerPicker}>
-                <MessagesSquare aria-hidden="true" size={16} />
-                <span>Figurinhas</span>
-              </button>
+              {!stickersBlocked ? (
+                <button type="button" onClick={openSavedStickerPicker}>
+                  <MessagesSquare aria-hidden="true" size={16} />
+                  <span>Figurinhas</span>
+                </button>
+              ) : null}
             </div>
           ) : null}
           <input
@@ -9241,7 +9341,7 @@ function ConversationComposer({
           aria-activedescendant={quickReplySlashMenuOpen ? activeQuickReplyId : undefined}
           aria-controls={quickReplySlashMenuOpen ? 'conversation-quick-reply-list' : undefined}
           ref={composerRef}
-          disabled={blocked}
+          disabled={blocked || textBlocked}
           placeholder="Digite uma mensagem..."
           rows={2}
           value={draft}
@@ -9321,7 +9421,7 @@ function ConversationComposer({
           className="conversation-primary-action"
           icon={Mic}
           label="Gravar áudio"
-          disabled={blocked || textOnly || recording || sending || Boolean(voiceDraft)}
+          disabled={blocked || voiceBlocked || recording || sending || Boolean(voiceDraft)}
           onClick={() => void startVoiceRecording()}
         />
       )}

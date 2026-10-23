@@ -964,6 +964,10 @@ describe('ClientsService manual client creation', () => {
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
+      internationalManualMediaEnabled: false,
+      internationalManualMediaCountries: [],
+      internationalManualVoiceEnabled: false,
+      internationalManualVoiceCountries: [],
       internationalMessageActionsEnabled: false,
       internationalManualPixEnabled: false,
       internationalBillingOptInSupported: true,
@@ -1000,6 +1004,10 @@ describe('ClientsService manual client creation', () => {
       internationalClientWriteEnabled: false,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: true,
+      internationalManualMediaEnabled: false,
+      internationalManualMediaCountries: [],
+      internationalManualVoiceEnabled: false,
+      internationalManualVoiceCountries: [],
       internationalMessageActionsEnabled: false,
       internationalManualPixEnabled: false,
       internationalBillingOptInSupported: true,
@@ -1017,6 +1025,49 @@ describe('ClientsService manual client creation', () => {
       internationalMessageActionsEnabled: true,
       internationalWhatsAppSendEnabled: false,
       internationalBillingSendEnabled: false,
+    });
+  });
+
+  it('publishes manual media and voice capabilities with independent non-empty allowlists', () => {
+    expect(
+      createClientCreationService(
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        'US,PT',
+        true,
+        'US',
+      ).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalManualTextSendEnabled: false,
+      internationalManualMediaEnabled: true,
+      internationalManualMediaCountries: ['US', 'PT'],
+      internationalManualVoiceEnabled: true,
+      internationalManualVoiceCountries: ['US'],
+    });
+
+    expect(
+      createClientCreationService(
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        '',
+        true,
+        '',
+      ).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalManualMediaEnabled: false,
+      internationalManualMediaCountries: [],
+      internationalManualVoiceEnabled: false,
+      internationalManualVoiceCountries: [],
     });
   });
 
@@ -1938,6 +1989,10 @@ function createClientCreationService(
   internationalMessageActionsEnabled = false,
   internationalManualPixEnabled = false,
   internationalBillingEnabled = false,
+  internationalManualMediaEnabled = false,
+  internationalManualMediaCountries = '',
+  internationalManualVoiceEnabled = false,
+  internationalManualVoiceCountries = '',
 ) {
   const plan = {
     id: 'plan-id',
@@ -2092,6 +2147,18 @@ function createClientCreationService(
         }
         if (key === 'PHONE_INTERNATIONAL_BILLING_ENABLED') {
           return internationalBillingEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED') {
+          return internationalManualMediaEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES') {
+          return internationalManualMediaCountries || undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MANUAL_VOICE_ENABLED') {
+          return internationalManualVoiceEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_MANUAL_VOICE_COUNTRIES') {
+          return internationalManualVoiceCountries || undefined;
         }
         return undefined;
       }),

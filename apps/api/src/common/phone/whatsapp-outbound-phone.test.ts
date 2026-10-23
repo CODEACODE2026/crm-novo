@@ -153,4 +153,45 @@ describe('resolveWhatsAppOutboundPhone', () => {
       }),
     ).toEqual({ status: 'allowed', kind: 'INTERNATIONAL_MANUAL_PIX_ALLOWED', digits, e164 });
   });
+
+  it.each([
+    [
+      'MANUAL_CONVERSATION_MEDIA',
+      'internationalManualMediaEnabled',
+      'INTERNATIONAL_MANUAL_MEDIA_ALLOWED',
+    ],
+    [
+      'MANUAL_CONVERSATION_VOICE',
+      'internationalManualVoiceEnabled',
+      'INTERNATIONAL_MANUAL_VOICE_ALLOWED',
+    ],
+  ] as const)(
+    'authorizes %s only with its independent flag and canonical E.164 identity',
+    (operation, flag, kind) => {
+      const identity = {
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+        operation,
+      };
+
+      expect(resolveWhatsAppOutboundPhone(identity)).toEqual({
+        status: 'blocked',
+        reason: 'BLOCKED_FLAG_DISABLED',
+      });
+      expect(resolveWhatsAppOutboundPhone({ ...identity, [flag]: true })).toEqual({
+        status: 'allowed',
+        kind,
+        digits: '14076390665',
+        e164: '+14076390665',
+      });
+      expect(
+        resolveWhatsAppOutboundPhone({
+          ...identity,
+          phoneNormalized: '5514076390665',
+          [flag]: true,
+        }),
+      ).toEqual({ status: 'blocked', reason: 'BLOCKED_MISMATCH' });
+    },
+  );
 });

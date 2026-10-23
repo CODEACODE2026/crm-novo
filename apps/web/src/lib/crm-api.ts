@@ -2101,6 +2101,10 @@ export interface ClientPhoneCapabilities {
   internationalWhatsAppSendEnabled: boolean;
   internationalManualTextSendEnabled?: boolean;
   internationalMessageActionsEnabled?: boolean;
+  internationalManualMediaEnabled?: boolean;
+  internationalManualMediaCountries?: string[];
+  internationalManualVoiceEnabled?: boolean;
+  internationalManualVoiceCountries?: string[];
   internationalManualPixEnabled?: boolean;
   internationalBillingOptInSupported?: boolean;
   internationalBillingSendEnabled: boolean;

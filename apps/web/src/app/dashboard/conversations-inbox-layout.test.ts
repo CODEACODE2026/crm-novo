@@ -414,7 +414,7 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
     expect(conversationsSource).toContain('loading={sending}');
     expect(conversationsSource).toContain('const hasText = Boolean(draft.trim());');
     expect(conversationsSource).toContain(
-      'const hasSendableContent = Boolean(hasText || (!textOnly && selectedMedia));',
+      '(!textBlocked && hasText) || (!mediaBlocked && selectedMedia)',
     );
     expect(conversationsSource).toContain(
       'const actionMode = conversationComposerActionMode(draft, selectedMedia, sending);',
@@ -655,7 +655,9 @@ describe('CHAT1 Phase 5 conversations inbox', () => {
       'function handleIncomingFileList(files: FileList | File[])',
     );
     expect(
-      conversationsSource.match(/selectedConversation && !selectedConversationIsInternational/g),
+      conversationsSource.match(
+        /!selectedConversationIsInternational \|\| internationalMediaAllowed/g,
+      ),
     ).toHaveLength(5);
     expect(conversationsSource).toContain('? handleChatDragEnter');
     expect(conversationsSource).toContain('? handleChatDragLeave');

@@ -47,6 +47,44 @@ describe('validateEnv', () => {
     });
   });
 
+  it.each(['MEDIA', 'VOICE'] as const)(
+    'defaults international manual %s and its country allowlist to disabled',
+    (operation) => {
+      const env = validateEnv({ NODE_ENV: 'test' });
+      expect(env[`PHONE_INTERNATIONAL_MANUAL_${operation}_ENABLED`]).toBeUndefined();
+      expect(env[`PHONE_INTERNATIONAL_MANUAL_${operation}_COUNTRIES`]).toBeUndefined();
+    },
+  );
+
+  it.each(['MEDIA', 'VOICE'] as const)(
+    'accepts the controlled international manual %s configuration',
+    (operation) => {
+      expect(
+        validateEnv({
+          [`PHONE_INTERNATIONAL_MANUAL_${operation}_ENABLED`]: 'true',
+          [`PHONE_INTERNATIONAL_MANUAL_${operation}_COUNTRIES`]: ' US,US, PT ',
+        }),
+      ).toMatchObject({
+        [`PHONE_INTERNATIONAL_MANUAL_${operation}_ENABLED`]: 'true',
+        [`PHONE_INTERNATIONAL_MANUAL_${operation}_COUNTRIES`]: ' US,US, PT ',
+      });
+    },
+  );
+
+  it.each(['MEDIA', 'VOICE'] as const)(
+    'rejects invalid international manual %s configuration',
+    (operation) => {
+      expect(() =>
+        validateEnv({ [`PHONE_INTERNATIONAL_MANUAL_${operation}_ENABLED`]: 'yes' }),
+      ).toThrow(`PHONE_INTERNATIONAL_MANUAL_${operation}_ENABLED deve ser true ou false.`);
+      expect(() =>
+        validateEnv({ [`PHONE_INTERNATIONAL_MANUAL_${operation}_COUNTRIES`]: 'US, pt' }),
+      ).toThrow(
+        `PHONE_INTERNATIONAL_MANUAL_${operation}_COUNTRIES deve conter codigos ISO alpha-2 maiusculos separados por virgula.`,
+      );
+    },
+  );
+
   it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED=%s', (value) => {
     expect(validateEnv({ PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: value })).toMatchObject({
       PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: value,

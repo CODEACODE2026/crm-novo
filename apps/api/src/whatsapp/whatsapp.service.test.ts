@@ -16741,6 +16741,664 @@ describe('WhatsApp conversation labels', () => {
     expect(provider.sendImage).not.toHaveBeenCalled();
   });
 
+  it('sends international image media with the canonical E.164 digits only when US is allowed', async () => {
+    const linkedClient = client({
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(internationalConversation.id, {
+      file: {
+        buffer: Buffer.from('international-jpeg'),
+        mimetype: 'image/jpeg',
+        originalname: 'foto-us.jpg',
+        size: 18,
+      },
+      caption: 'International caption',
+      requestId: 'international-media-us',
+    });
+
+    expect(provider.sendImage).toHaveBeenCalledOnce();
+    expect(provider.sendImage).toHaveBeenCalledWith('instance-token', {
+      phone: '14076390665',
+      imageDataUrl: `data:image/jpeg;base64,${Buffer.from('international-jpeg').toString('base64')}`,
+      caption: 'International caption',
+      requestId: 'international-media-us',
+    });
+  });
+
+  it('reuses the existing international document, video and attached-audio provider contracts', async () => {
+    const linkedClient = client({ phoneE164: '+14076390665' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+      },
+    });
+
+    await service.sendConversationMediaMessage(internationalConversation.id, {
+      file: {
+        buffer: Buffer.from('pdf-bytes'),
+        mimetype: 'application/pdf',
+        originalname: 'contrato.pdf',
+        size: 9,
+      },
+      requestId: 'international-document-us',
+    });
+    await service.sendConversationMediaMessage(internationalConversation.id, {
+      file: {
+        buffer: Buffer.from('mp4-bytes'),
+        mimetype: 'video/mp4',
+        originalname: 'video.mp4',
+        size: 9,
+      },
+      caption: 'US video',
+      requestId: 'international-video-us',
+    });
+    await service.sendConversationMediaMessage(internationalConversation.id, {
+      file: {
+        buffer: Buffer.from('mp3-bytes'),
+        mimetype: 'audio/mpeg',
+        originalname: 'audio.mp3',
+        size: 9,
+      },
+      requestId: 'international-audio-us',
+    });
+
+    expect(provider.sendDocument).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665', fileName: 'contrato.pdf' }),
+    );
+    expect(provider.sendVideo).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665', caption: 'US video' }),
+    );
+    expect(provider.sendAudio).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665', ptt: false }),
+    );
+  });
+
+  it('keeps Portugal media blocked when only US is in the independent allowlist', async () => {
+    const linkedClient = client({
+      phone: '+351912345678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+351912345678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      prismaOverrides: {
+        whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(internationalConversation) },
+      },
+    });
+
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, {
+        file: {
+          buffer: Buffer.from('pt-document'),
+          mimetype: 'application/pdf',
+          originalname: 'documento.pdf',
+          size: 11,
+        },
+        requestId: 'international-media-pt-blocked',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
+    expect(provider.sendDocument).not.toHaveBeenCalled();
+  });
+
+  it('blocks authorized-country media when the international conversation has no linked client', async () => {
+    const internationalConversation = conversation({
+      clientId: null,
+      client: null,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      prismaOverrides: {
+        whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(internationalConversation) },
+      },
+    });
+
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, {
+        file: {
+          buffer: Buffer.from('international-jpeg'),
+          mimetype: 'image/jpeg',
+          originalname: 'foto-us.jpg',
+          size: 18,
+        },
+        requestId: 'international-media-unlinked',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH' } });
+    expect(provider.sendImage).not.toHaveBeenCalled();
+  });
+
+  it('sends international browser voice as PTT and revalidates its independent authorization', async () => {
+    const configOverrides: Record<string, string | undefined> = {
+      PHONE_INTERNATIONAL_MANUAL_VOICE_ENABLED: 'true',
+      PHONE_INTERNATIONAL_MANUAL_VOICE_COUNTRIES: 'US',
+    };
+    const linkedClient = client({
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const oggBuffer = Buffer.from('international-ogg');
+    const { service, provider } = serviceFactory({
+      configOverrides,
+      voiceConversionOverrides: {
+        convertWebmToOgg: vi.fn().mockResolvedValue({
+          buffer: oggBuffer,
+          mimeType: 'audio/ogg; codecs=opus',
+          sizeBytes: oggBuffer.length,
+          durationSeconds: 2,
+        }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+      },
+    });
+
+    await service.sendConversationVoiceMessage(internationalConversation.id, {
+      file: {
+        buffer: Buffer.from('international-webm'),
+        mimetype: 'audio/webm; codecs=opus',
+        originalname: 'voice.webm',
+        size: 18,
+      },
+      requestId: 'international-voice-us',
+      durationSeconds: '2',
+    });
+
+    expect(provider.sendAudio).toHaveBeenCalledWith('instance-token', {
+      phone: '14076390665',
+      audioDataUrl: `data:audio/ogg;base64,${oggBuffer.toString('base64')}`,
+      mimeType: 'audio/ogg; codecs=opus',
+      seconds: 2,
+      ptt: true,
+      requestId: 'international-voice-us',
+    });
+  });
+
+  it('fails the pending international media message if its flag changes before provider send', async () => {
+    const configOverrides: Record<string, string | undefined> = {
+      PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+      PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+    };
+    const linkedClient = client({
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const findUnique = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        return Promise.resolve(internationalConversation);
+      })
+      .mockImplementationOnce(() => {
+        configOverrides.PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED = undefined;
+        return Promise.resolve(internationalConversation);
+      });
+    const { service, provider } = serviceFactory({
+      configOverrides,
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique,
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, {
+        file: {
+          buffer: Buffer.from('international-jpeg'),
+          mimetype: 'image/jpeg',
+          originalname: 'foto-us.jpg',
+          size: 18,
+        },
+        requestId: 'international-media-flag-changed',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
+    expect(provider.sendImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'phone',
+    'client_link',
+    'missing_link',
+    'connection',
+    'disconnected',
+    'allowlist',
+  ] as const)(
+    'blocks international media when %s changes between initial validation and provider send',
+    async (changedField) => {
+      const configOverrides: Record<string, string | undefined> = {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      };
+      const linkedClient = client({
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+      });
+      const activeConnection = connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+      });
+      const initialConversation = conversation({
+        clientId: linkedClient.id,
+        client: linkedClient,
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+        whatsAppConnectionId: activeConnection.id,
+        whatsAppConnection: activeConnection,
+      });
+      let revalidatedConversation = initialConversation;
+
+      if (changedField === 'phone') {
+        revalidatedConversation = conversation({
+          ...initialConversation,
+          phone: '+351912345678',
+          phoneNormalized: '351912345678',
+          phoneE164: '+351912345678',
+        });
+      } else if (changedField === 'client_link') {
+        const replacementClient = client({
+          id: '77777777-7777-4777-8777-777777777777',
+          phone: '+14076390665',
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+        });
+        revalidatedConversation = conversation({
+          ...initialConversation,
+          clientId: replacementClient.id,
+          client: replacementClient,
+        });
+      } else if (changedField === 'missing_link') {
+        revalidatedConversation = conversation({
+          ...initialConversation,
+          clientId: null,
+          client: null,
+        });
+      } else if (changedField === 'connection') {
+        const replacementConnection = connection({
+          id: '33333333-3333-4333-8333-333333333333',
+          status: 'CONNECTED',
+          connected: true,
+          loggedIn: true,
+        });
+        revalidatedConversation = conversation({
+          ...initialConversation,
+          whatsAppConnectionId: replacementConnection.id,
+          whatsAppConnection: replacementConnection,
+        });
+      } else if (changedField === 'disconnected') {
+        revalidatedConversation = conversation({
+          ...initialConversation,
+          whatsAppConnection: connection({
+            ...activeConnection,
+            status: 'DISCONNECTED',
+            connected: false,
+            loggedIn: false,
+          }),
+        });
+      }
+
+      const findUnique = vi
+        .fn()
+        .mockResolvedValueOnce(initialConversation)
+        .mockImplementationOnce(() => {
+          if (changedField === 'allowlist') {
+            configOverrides.PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES = 'PT';
+          }
+          return Promise.resolve(revalidatedConversation);
+        });
+      const { service, provider } = serviceFactory({
+        configOverrides,
+        prismaOverrides: {
+          whatsAppConversation: {
+            findUnique,
+            update: vi.fn().mockResolvedValue(initialConversation),
+          },
+        },
+      });
+
+      await expect(
+        service.sendConversationMediaMessage(initialConversation.id, {
+          file: {
+            buffer: Buffer.from('international-jpeg'),
+            mimetype: 'image/jpeg',
+            originalname: 'foto-us.jpg',
+            size: 18,
+          },
+          requestId: `international-media-changed-${changedField}`,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(provider.sendImage).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not call the provider after losing an international media requestId race', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['whatsAppConnectionId', 'requestId'] },
+    });
+    const linkedClient = client({ phoneE164: '+14076390665' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const existingPending = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      requestId: 'international-media-race',
+      status: 'PENDING',
+      providerMessageId: null,
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      prismaOverrides: {
+        whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(internationalConversation) },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(existingPending),
+          create: vi.fn().mockRejectedValue(duplicateError),
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, {
+        file: {
+          buffer: Buffer.from('international-jpeg'),
+          mimetype: 'image/jpeg',
+          originalname: 'foto-us.jpg',
+          size: 18,
+        },
+        requestId: 'international-media-race',
+      }),
+    ).resolves.toMatchObject({ id: existingPending.id, status: 'PENDING' });
+    expect(provider.sendImage).not.toHaveBeenCalled();
+  });
+
+  it('calls the provider exactly once for two simultaneous international media requests', async () => {
+    const duplicateError = new Prisma.PrismaClientKnownRequestError('Unique violation', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['whatsAppConnectionId', 'requestId'] },
+    });
+    const linkedClient = client({ phoneE164: '+14076390665' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const pending = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      requestId: 'international-media-simultaneous',
+      status: 'PENDING',
+      providerMessageId: null,
+    });
+    let releaseFirstCreate: (() => void) | undefined;
+    const secondCreateReached = new Promise<void>((resolve) => {
+      releaseFirstCreate = resolve;
+    });
+    let createCount = 0;
+    const messageCreate = vi.fn(async () => {
+      createCount += 1;
+      if (createCount === 1) {
+        await secondCreateReached;
+        return pending;
+      }
+      releaseFirstCreate?.();
+      throw duplicateError;
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findFirst: vi
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValue(pending),
+          findUnique: vi.fn().mockResolvedValue(pending),
+          create: messageCreate,
+          update: vi.fn((args: { data?: Record<string, unknown> }) =>
+            Promise.resolve(conversationMessage({ ...pending, ...(args.data ?? {}) })),
+          ),
+        },
+      },
+    });
+    const request = {
+      file: {
+        buffer: Buffer.from('international-jpeg'),
+        mimetype: 'image/jpeg',
+        originalname: 'foto-us.jpg',
+        size: 18,
+      },
+      requestId: 'international-media-simultaneous',
+    };
+
+    const results = await Promise.all([
+      service.sendConversationMediaMessage(internationalConversation.id, request),
+      service.sendConversationMediaMessage(internationalConversation.id, request),
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(messageCreate).toHaveBeenCalledTimes(2);
+    expect(provider.sendImage).toHaveBeenCalledOnce();
+  });
+
+  it('keeps international media PENDING when Kirago does not confirm a provider message id', async () => {
+    const linkedClient = client({ phoneE164: '+14076390665' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const pending = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      requestId: 'international-media-no-id',
+      status: 'PENDING',
+      providerMessageId: null,
+    });
+    const messageUpdate = vi.fn().mockResolvedValue(pending);
+    const { service, provider, attendance } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      providerOverrides: {
+        sendImage: vi.fn().mockResolvedValue({ providerMessageId: null }),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findUnique: vi.fn().mockResolvedValue(pending),
+          create: vi.fn().mockResolvedValue(pending),
+          update: messageUpdate,
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, {
+        file: {
+          buffer: Buffer.from('international-jpeg'),
+          mimetype: 'image/jpeg',
+          originalname: 'foto-us.jpg',
+          size: 18,
+        },
+        requestId: 'international-media-no-id',
+      }),
+    ).resolves.toMatchObject({ status: 'PENDING', providerMessageId: null });
+    expect(provider.sendImage).toHaveBeenCalledOnce();
+    expect(attendance.recordManualOutboundMessage).not.toHaveBeenCalled();
+    expect(messageUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+    );
+  });
+
+  it('keeps a timed-out international media attempt non-retryable by requestId', async () => {
+    const linkedClient = client({ phoneE164: '+14076390665' });
+    const internationalConversation = conversation({
+      clientId: linkedClient.id,
+      client: linkedClient,
+      phone: '+14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const pending = conversationMessage({
+      conversationId: internationalConversation.id,
+      whatsAppConnectionId: internationalConversation.whatsAppConnectionId,
+      requestId: 'international-media-timeout',
+      status: 'PENDING',
+      providerMessageId: null,
+    });
+    const { service, provider } = serviceFactory({
+      configOverrides: {
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
+        PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
+      },
+      providerOverrides: {
+        sendImage: vi
+          .fn()
+          .mockRejectedValue(new KiragoProviderError('KIRAGO_TIMEOUT', 'Kirago timeout.')),
+      },
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(internationalConversation),
+          update: vi.fn().mockResolvedValue(internationalConversation),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(pending),
+          findUnique: vi.fn().mockResolvedValue(pending),
+          create: vi.fn().mockResolvedValue(pending),
+          update: vi.fn().mockResolvedValue(pending),
+        },
+      },
+    });
+    const request = {
+      file: {
+        buffer: Buffer.from('international-jpeg'),
+        mimetype: 'image/jpeg',
+        originalname: 'foto-us.jpg',
+        size: 18,
+      },
+      requestId: 'international-media-timeout',
+    };
+
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, request),
+    ).resolves.toMatchObject({ status: 'PENDING' });
+    await expect(
+      service.sendConversationMediaMessage(internationalConversation.id, request),
+    ).resolves.toMatchObject({ status: 'PENDING' });
+    expect(provider.sendImage).toHaveBeenCalledOnce();
+  });
+
   it('keeps an international message pending when Kirago omits providerMessageId', async () => {
     const internationalConversation = conversation({
       phone: '+14076390665',

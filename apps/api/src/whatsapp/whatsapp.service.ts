@@ -319,6 +319,8 @@ type PixWhatsAppTemplateSnapshot = {
   };
 };
 
+type PixWhatsAppDeliveryMode = 'TEXT' | 'BUTTONS';
+
 type PixWhatsAppContext =
   | {
       kind: 'INDIVIDUAL';
@@ -326,7 +328,8 @@ type PixWhatsAppContext =
       clientEventClientId: string;
       receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
       phone: string;
-      internationalTextOnly: boolean;
+      isInternational: boolean;
+      deliveryMode: PixWhatsAppDeliveryMode;
       dispatchItems: [];
       description: string;
       metadata: Record<string, unknown>;
@@ -338,7 +341,8 @@ type PixWhatsAppContext =
       clientEventClientId: string | null;
       receivable: NonNullable<PixPaymentIntentForWhatsApp['receivable']>;
       phone: string;
-      internationalTextOnly: boolean;
+      isInternational: boolean;
+      deliveryMode: PixWhatsAppDeliveryMode;
       dispatchItems: [];
       description: string;
       metadata: Record<string, unknown>;
@@ -350,7 +354,8 @@ type PixWhatsAppContext =
       clientEventClientId: string;
       paymentGroup: NonNullable<PixPaymentIntentForWhatsApp['paymentGroup']>;
       phone: string;
-      internationalTextOnly: boolean;
+      isInternational: boolean;
+      deliveryMode: PixWhatsAppDeliveryMode;
       dispatchItems: PixWhatsAppDispatchItem[];
       description: string;
       metadata: Record<string, unknown>;
@@ -885,7 +890,7 @@ export class WhatsAppService {
         : {}),
     });
 
-    if (!created && context.internationalTextOnly && dispatch.status !== 'SENT') {
+    if (!created && context.isInternational && dispatch.status !== 'SENT') {
       return this.presentPixSendResult(dispatch, false, true);
     }
 
@@ -924,7 +929,8 @@ export class WhatsAppService {
 
       if (
         latestContext.phone !== dispatch.phone ||
-        latestContext.internationalTextOnly !== context.internationalTextOnly ||
+        latestContext.isInternational !== context.isInternational ||
+        latestContext.deliveryMode !== context.deliveryMode ||
         latestTemplate.body !== template.body ||
         latestIntent.pixCopyPaste !== intent.pixCopyPaste ||
         latestIntent.providerTransactionId !== intent.providerTransactionId ||
@@ -937,7 +943,7 @@ export class WhatsAppService {
 
       const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
       const result = await this.mapProviderError(() =>
-        latestContext.internationalTextOnly
+        latestContext.deliveryMode === 'TEXT'
           ? this.provider.sendText(instanceToken, {
               phone: latestContext.phone,
               body: latestTemplate.body,
@@ -1060,7 +1066,7 @@ export class WhatsAppService {
         : {}),
     });
 
-    return context.internationalTextOnly
+    return context.deliveryMode === 'TEXT'
       ? {
           ...template,
           body: `${template.body}\n\nPIX copia e cola:\n${intent.pixCopyPaste ?? ''}`,
@@ -7644,7 +7650,7 @@ export class WhatsAppService {
       context: PixWhatsAppContext;
     },
   ) {
-    if (input.context.internationalTextOnly) {
+    if (input.context.isInternational) {
       const existing = await tx.whatsAppConversation.findUnique({
         where: {
           whatsAppConnectionId_phoneNormalized: {
@@ -7804,7 +7810,7 @@ export class WhatsAppService {
   }) {
     return {
       source: 'pix_whatsapp_send',
-      originalType: input.context.internationalTextOnly ? 'text' : 'buttons',
+      originalType: input.context.deliveryMode.toLowerCase(),
       isFromMe: true,
       paymentIntentId: input.intent.id,
       messageDispatchId: input.dispatch.id,
@@ -7866,7 +7872,8 @@ export class WhatsAppService {
           clientEventClientId: receivable.clientId ?? null,
           receivable,
           phone: recipient.digits,
-          internationalTextOnly: recipient.international,
+          isInternational: recipient.international,
+          deliveryMode: recipient.deliveryMode,
           dispatchItems: [],
           description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
           metadata: {
@@ -7885,7 +7892,8 @@ export class WhatsAppService {
         clientEventClientId: client.id,
         receivable,
         phone: recipient.digits,
-        internationalTextOnly: recipient.international,
+        isInternational: recipient.international,
+        deliveryMode: recipient.deliveryMode,
         dispatchItems: [],
         description: `${this.formatCurrency(intent.amount)} referente a ${receivable.description}.`,
         metadata: {
@@ -7930,7 +7938,8 @@ export class WhatsAppService {
       clientEventClientId: paymentGroup.client.id,
       paymentGroup,
       phone: recipient.digits,
-      internationalTextOnly: recipient.international,
+      isInternational: recipient.international,
+      deliveryMode: recipient.deliveryMode,
       dispatchItems,
       description: `${paymentGroup.items.length} contas. Total: ${this.formatCurrency(intent.amount)}.`,
       metadata: {
@@ -7952,17 +7961,38 @@ export class WhatsAppService {
     phoneE164?: string | null;
   }) {
     const resolved = this.resolveWhatsAppOutboundRecipient(input, 'MANUAL_PIX');
+    const identity = normalizePhone(resolved.e164);
+    const international = resolved.kind === 'INTERNATIONAL_MANUAL_PIX_ALLOWED';
+    const country = identity.status === 'valid' ? identity.country : null;
     return {
       digits: resolved.digits,
-      international: resolved.kind === 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
+      international,
+      deliveryMode:
+        international && !this.internationalPixButtonsEnabledForCountry(country)
+          ? ('TEXT' as const)
+          : ('BUTTONS' as const),
     };
+  }
+
+  private internationalPixButtonsEnabledForCountry(country: string | null) {
+    if (this.config.get<string>('PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED') !== 'true' || !country) {
+      return false;
+    }
+
+    const configured = this.config.get<string>('PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES') ?? '';
+    const countries = configured.split(',').map((value) => value.trim());
+    if (!countries.length || countries.some((value) => !/^[A-Z]{2}$/.test(value))) {
+      return false;
+    }
+
+    return new Set(countries).has(country);
   }
 
   private async assertExistingInternationalPixConversation(
     connection: WhatsAppConnection,
     context: PixWhatsAppContext,
   ) {
-    if (!context.internationalTextOnly) return;
+    if (!context.isInternational) return;
     if (!context.client?.id) {
       throw new ConflictException(
         'PIX internacional exige cliente cadastrado e conversa existente.',

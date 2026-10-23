@@ -59,6 +59,44 @@ describe('validateEnv', () => {
     });
   });
 
+  it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED=%s', (value) => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED: value })).toMatchObject({
+      PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED: value,
+    });
+  });
+
+  it('defaults international PIX buttons and their country allowlist to disabled', () => {
+    const env = validateEnv({ NODE_ENV: 'test' });
+    expect(env.PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED).toBeUndefined();
+    expect(env.PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES).toBeUndefined();
+  });
+
+  it('accepts a controlled international PIX buttons country allowlist', () => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES: ' US,US, PT ' })).toMatchObject(
+      {
+        PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES: ' US,US, PT ',
+      },
+    );
+  });
+
+  it.each(['us', 'USA', 'US, pt', 'US,,PT'])(
+    'rejects invalid international PIX buttons country allowlist %j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES: value })).toThrow(
+        'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES deve conter codigos ISO alpha-2 maiusculos separados por virgula.',
+      );
+    },
+  );
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED=%j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED: value })).toThrow(
+        'PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED deve ser true ou false.',
+      );
+    },
+  );
+
   it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_BILLING_ENABLED=%s', (value) => {
     expect(validateEnv({ PHONE_INTERNATIONAL_BILLING_ENABLED: value })).toMatchObject({
       PHONE_INTERNATIONAL_BILLING_ENABLED: value,

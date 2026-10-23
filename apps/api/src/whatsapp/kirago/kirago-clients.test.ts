@@ -426,6 +426,52 @@ describe('Kirago clients', () => {
     });
   });
 
+  it.each([
+    ['EUA', '14076390665'],
+    ['Portugal', '351912345678'],
+  ])(
+    'passes the complete international %s E.164 digits to PIX buttons',
+    async (_country, phone) => {
+      const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
+      const client = new KiragoInstanceClient({ request } as never);
+
+      await client.sendButtons('instance-token', {
+        phone,
+        title: 'PIX',
+        body: 'Mensagem',
+        buttons: [
+          {
+            name: 'cta_copy',
+            buttonParamsJson: {
+              display_text: 'Copiar Chave PIX',
+              copy_code: 'PIX-CODE',
+            },
+          },
+        ],
+      });
+
+      expect(request).toHaveBeenCalledWith('/chat/send/buttons', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer instance-token' },
+        body: {
+          phone,
+          title: 'PIX',
+          body: 'Mensagem',
+          buttons: [
+            {
+              name: 'cta_copy',
+              buttonParamsJson: {
+                display_text: 'Copiar Chave PIX',
+                copy_code: 'PIX-CODE',
+              },
+            },
+          ],
+        },
+        authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+      });
+    },
+  );
+
   it('marks messages as read with the confirmed Kirago payload and bearer auth', async () => {
     const request = vi.fn().mockResolvedValue({
       code: 200,

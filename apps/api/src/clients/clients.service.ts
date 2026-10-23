@@ -126,7 +126,8 @@ export class ClientsService {
         this.configService?.get<string>('PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED') === 'true',
       internationalManualPixEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
-      internationalBillingSendEnabled: false,
+      internationalBillingSendEnabled:
+        this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true',
       defaultCountry: 'BR' as const,
       supportedCountries: enabled ? listSupportedPhoneCountries() : [],
     };
@@ -317,6 +318,7 @@ export class ClientsService {
             dueDate,
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
+            internationalBillingEnabled: dto.internationalBillingEnabled ?? false,
             status: generateInitialReceivable ? 'PENDENTE_PAGAMENTO' : 'ATIVO',
           },
         });
@@ -472,6 +474,7 @@ export class ClientsService {
             dueDate,
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
+            internationalBillingEnabled: dto.internationalBillingEnabled ?? false,
             notes: this.optionalTrim(dto.notes),
             status: 'PENDENTE_PAGAMENTO',
           },
@@ -548,10 +551,15 @@ export class ClientsService {
       data.billingAnchorDay = getBusinessDateDay(dueDate);
     }
     if (dto.billingNoticeDays !== undefined) data.billingNoticeDays = dto.billingNoticeDays;
+    if (dto.internationalBillingEnabled !== undefined) {
+      data.internationalBillingEnabled = dto.internationalBillingEnabled;
+    }
     if (dto.notes !== undefined) data.notes = this.optionalTrim(dto.notes);
 
     const cycleChanged =
       dto.dueDate !== undefined || dto.recurringValue !== undefined || dto.planId !== undefined;
+    const internationalBillingDisabled =
+      current.internationalBillingEnabled && dto.internationalBillingEnabled === false;
 
     try {
       const reference = await this.prisma.$transaction(async (tx) => {
@@ -582,6 +590,15 @@ export class ClientsService {
             id,
             'CLIENT_REFERENCE_CYCLE_CHANGED',
             'Cobranca futura cancelada porque o ciclo da referencia foi alterado.',
+          );
+        }
+
+        if (internationalBillingDisabled) {
+          await this.cancelFutureReferenceBillingDispatches(
+            tx,
+            id,
+            'INTERNATIONAL_BILLING_OPT_IN_REVOKED',
+            'Cobranca futura cancelada porque a autorizacao internacional foi revogada.',
           );
         }
 
@@ -1129,6 +1146,7 @@ export class ClientsService {
       dueDate: formatBusinessDate(reference.dueDate),
       billingAnchorDay: reference.billingAnchorDay,
       billingNoticeDays: reference.billingNoticeDays,
+      internationalBillingEnabled: reference.internationalBillingEnabled,
       status: reference.status,
       notes: reference.notes,
       inactivatedAt: reference.inactivatedAt?.toISOString() ?? null,

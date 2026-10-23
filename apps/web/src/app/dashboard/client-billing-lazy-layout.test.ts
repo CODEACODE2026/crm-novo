@@ -13,6 +13,10 @@ const clientBillingSource = clientsSource.slice(
   clientsSource.indexOf("{detailTab === 'messages' ? ("),
   clientsSource.indexOf('{selectedDispatch ? ('),
 );
+const referenceFormSource = dashboardSource.slice(
+  dashboardSource.indexOf('function ClientReferenceForm'),
+  dashboardSource.indexOf('function RenewalReversalModal'),
+);
 
 describe('phase E3B client billing lazy loading source', () => {
   it('loads client billing only when the Cobranças/PIX tab is opened', () => {
@@ -36,6 +40,22 @@ describe('phase E3B client billing lazy loading source', () => {
     expect(clientBillingSource).toContain('clientBillingSummary?.scheduled');
     expect(clientBillingSource).not.toContain('selectedClient?.messageDispatches');
     expect(clientBillingSource).not.toContain('summarizeClientBillingDispatches');
+  });
+
+  it('shows backend-provided international Billing block reasons without fake dispatches', () => {
+    expect(clientBillingSource).toContain('clientBillingSummary?.internationalBlocked');
+    expect(clientBillingSource).toContain('internationalBlockedReasons.map((reason)');
+    expect(clientBillingSource).toContain('referência(s) sem agendamento');
+    expect(clientBillingSource).not.toContain('setClientBillingDispatches([');
+  });
+
+  it('keeps international Billing opt-in explicit, fail-closed and covered by save errors', () => {
+    expect(referenceFormSource).toContain('reference?.internationalBillingEnabled ?? false');
+    expect(referenceFormSource).toContain('checked={internationalBillingEnabled}');
+    expect(referenceFormSource).toContain('internationalBillingEnabled,');
+    expect(referenceFormSource).toContain('setError(err instanceof Error');
+    expect(referenceFormSource).toContain('disabled={saving}');
+    expect(referenceFormSource).toContain('Recovery internacional permanece bloqueado.');
   });
 
   it('uses server-side client billing filters and page size ten', () => {

@@ -53,6 +53,10 @@ export class CreateClientDto {
   billingNoticeDays!: number;
 
   @IsOptional()
+  @IsBoolean()
+  internationalBillingEnabled?: boolean;
+
+  @IsOptional()
   @IsString()
   notes?: string;
 

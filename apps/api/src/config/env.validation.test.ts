@@ -59,6 +59,42 @@ describe('validateEnv', () => {
     });
   });
 
+  it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_BILLING_ENABLED=%s', (value) => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_BILLING_ENABLED: value })).toMatchObject({
+      PHONE_INTERNATIONAL_BILLING_ENABLED: value,
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid PHONE_INTERNATIONAL_BILLING_ENABLED=%j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_BILLING_ENABLED: value })).toThrow(
+        'PHONE_INTERNATIONAL_BILLING_ENABLED deve ser true ou false.',
+      );
+    },
+  );
+
+  it('accepts a controlled international Billing country allowlist', () => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US,PT' })).toMatchObject({
+      PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US,PT',
+    });
+  });
+
+  it('accepts spaces and duplicate valid countries without broadening the allowlist', () => {
+    expect(validateEnv({ PHONE_INTERNATIONAL_BILLING_COUNTRIES: ' US,US, PT ' })).toMatchObject({
+      PHONE_INTERNATIONAL_BILLING_COUNTRIES: ' US,US, PT ',
+    });
+  });
+
+  it.each(['us', 'USA', 'US, pt', 'US,,PT'])(
+    'rejects invalid international Billing country allowlist %j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_INTERNATIONAL_BILLING_COUNTRIES: value })).toThrow(
+        'PHONE_INTERNATIONAL_BILLING_COUNTRIES deve conter codigos ISO alpha-2 maiusculos separados por virgula.',
+      );
+    },
+  );
+
   it.each(['TRUE', '1', 'yes', ''])(
     'rejects invalid PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED=%j',
     (value) => {

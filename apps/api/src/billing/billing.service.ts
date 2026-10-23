@@ -21,6 +21,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
+import { comparePhoneIdentities, normalizePhone } from '../common/phone/phone-normalizer';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
@@ -34,6 +35,11 @@ import { BillingTemplateRenderer } from './billing-template-renderer';
 const pageSizeLimit = 100;
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
+const nonRetryableProviderErrorCodes = [
+  'PROVIDER_CONFIRMATION_MISSING',
+  'PROVIDER_PERSISTENCE_UNCERTAIN',
+  'PROVIDER_RESULT_UNCERTAIN',
+] as const;
 const defaultBillingSendTime = '09:00';
 const defaultBillingTimezone = 'America/Sao_Paulo';
 const defaultBillingSendIntervalSeconds = 8;
@@ -74,6 +80,10 @@ type BillingReconcileGroup = {
   scheduledFor: Date;
   businessSendDate: string;
 };
+
+type BillingPhoneResolution =
+  | { status: 'allowed'; kind: 'BR' | 'INTERNATIONAL'; digits: string; e164: string }
+  | { status: 'blocked'; code: string; message: string };
 
 @Injectable()
 export class BillingService {
@@ -130,7 +140,12 @@ export class BillingService {
 
     for (const client of clients) {
       for (const reference of this.billingReferencesForClient(client)) {
-        if (!this.isClientReferenceEligibleForScheduling(client, reference)) {
+        if (!this.isClientReferenceEligibleForScheduling(reference)) {
+          skipped += 1;
+          continue;
+        }
+
+        if (this.resolveBillingPhone(client, [reference]).status !== 'allowed') {
           skipped += 1;
           continue;
         }
@@ -147,7 +162,7 @@ export class BillingService {
           continue;
         }
 
-        if (this.isCreateIneligible(client, reference, receivable, template, connection)) {
+        if (this.isCreateIneligible(reference, receivable, template, connection)) {
           skipped += 1;
           continue;
         }
@@ -177,11 +192,28 @@ export class BillingService {
 
     for (const group of scheduledGroups) {
       const selectedTemplate = group.items.length > 1 ? groupedTemplate : template;
-      const operationalPhone = resolveBrazilianOperationalPhone(group.client);
+      const operationalPhone = this.resolveBillingPhone(
+        group.client,
+        group.items.map((item) => item.reference),
+      );
 
-      if (operationalPhone.status !== 'valid') {
+      if (operationalPhone.status !== 'allowed') {
         skipped += group.items.length;
         continue;
+      }
+
+      let selectedConnection = connection;
+      if (operationalPhone.kind === 'INTERNATIONAL') {
+        const conversation = await this.findInternationalBillingConversation(
+          group.client.id,
+          operationalPhone.digits,
+          operationalPhone.e164,
+        );
+        if (!conversation) {
+          skipped += group.items.length;
+          continue;
+        }
+        selectedConnection = conversation.whatsAppConnection;
       }
 
       if (!selectedTemplate.active) {
@@ -211,6 +243,8 @@ export class BillingService {
           group,
           selectedTemplate,
           renderedContent,
+          selectedConnection,
+          operationalPhone.digits,
           now,
         );
 
@@ -225,7 +259,7 @@ export class BillingService {
             clientReferenceId: firstItem.reference.id,
             receivableId: firstItem.receivable.id,
             templateId: selectedTemplate.id,
-            whatsAppConnectionId: connection.id,
+            whatsAppConnectionId: selectedConnection.id,
             phone: operationalPhone.digits,
             body: renderedContent,
             renderedContent,
@@ -279,6 +313,14 @@ export class BillingService {
           lte: now,
           ...(automaticWindow ? { gte: automaticWindow.start } : {}),
         },
+        AND: [
+          {
+            OR: [
+              { errorCode: null },
+              { errorCode: { notIn: [...nonRetryableProviderErrorCodes] } },
+            ],
+          },
+        ],
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
       orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -508,11 +550,17 @@ export class BillingService {
       }),
     ]);
 
+    const internationalBlocks = query.clientId
+      ? await this.internationalBillingBlocks(query.clientId, query.clientReferenceId)
+      : { blocked: 0, reasons: [] };
+
     return {
       scheduled,
       sent,
       failed,
       ignoredOrCanceled,
+      internationalBlocked: internationalBlocks.blocked,
+      internationalBlockedReasons: internationalBlocks.reasons,
     };
   }
 
@@ -858,8 +906,48 @@ export class BillingService {
 
     dispatch = latestDispatch;
 
+    const latestPhone = this.resolveBillingPhone(
+      dispatch.client!,
+      this.dispatchItems(dispatch).map((item) => item.clientReference),
+    );
+    if (latestPhone.status === 'allowed' && latestPhone.kind === 'INTERNATIONAL') {
+      const conversation = await this.findInternationalBillingConversation(
+        dispatch.client!.id,
+        latestPhone.digits,
+        latestPhone.e164,
+        connection.id,
+      );
+      if (!conversation) {
+        const updated = await this.prisma.messageDispatch.update({
+          where: { id },
+          data: {
+            status: 'IGNORED',
+            errorCode: 'INTERNATIONAL_BILLING_CONVERSATION_REQUIRED',
+            errorMessage:
+              'Conversa internacional vinculada e operacional nao foi encontrada antes do envio.',
+          },
+          include: {
+            client: true,
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+            items: {
+              include: {
+                clientReference: { include: { plan: true } },
+                receivable: { include: { clientReference: { include: { plan: true } } } },
+              },
+              orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+            },
+            template: true,
+            whatsAppConnection: true,
+          },
+        });
+        return this.presentDispatch(updated);
+      }
+    }
+
     const body = dispatch.renderedContent ?? dispatch.body;
     const requestId = dispatch.idempotencyKey ?? dispatch.requestId;
+    let confirmedProviderMessageId: string | null = null;
 
     try {
       const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
@@ -868,6 +956,15 @@ export class BillingService {
         body,
         requestId,
       });
+
+      if (!result.providerMessageId) {
+        return this.markProviderOutcomeUncertain(
+          dispatch,
+          'PROVIDER_CONFIRMATION_MISSING',
+          'Provider nao confirmou o identificador remoto; retry automatico bloqueado.',
+        );
+      }
+      confirmedProviderMessageId = result.providerMessageId;
 
       const updated = await this.prisma.$transaction(async (tx) => {
         const sent = await tx.messageDispatch.update({
@@ -940,6 +1037,23 @@ export class BillingService {
 
       return this.presentDispatch(updated);
     } catch (error) {
+      if (confirmedProviderMessageId) {
+        return this.markProviderOutcomeUncertain(
+          dispatch,
+          'PROVIDER_PERSISTENCE_UNCERTAIN',
+          'Provider confirmou o envio, mas a persistencia local falhou; retry automatico bloqueado.',
+          confirmedProviderMessageId,
+        );
+      }
+
+      if (this.isAmbiguousProviderFailure(error)) {
+        return this.markProviderOutcomeUncertain(
+          dispatch,
+          'PROVIDER_RESULT_UNCERTAIN',
+          'Resultado remoto incerto; retry automatico bloqueado para evitar duplicidade.',
+        );
+      }
+
       return this.markRetry(dispatch, 'PROVIDER_ERROR', this.sanitizeError(error), now);
     }
   }
@@ -963,12 +1077,20 @@ export class BillingService {
     const currentById = new Map(
       currentReceivables.map((receivable) => [receivable.id, receivable]),
     );
+    const internationalIdentity = resolveBrazilianOperationalPhone(dispatch.client);
+    const requiresInternationalOptIn =
+      internationalIdentity.status === 'blocked' &&
+      internationalIdentity.reason === 'INTERNATIONAL_PHONE' &&
+      this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true';
     const activeItems = originalItems
       .map((item) => {
         const receivable = currentById.get(item.receivable.id);
         if (!receivable || receivable.status !== 'PENDENTE') return null;
         if (!receivable.clientReference) return null;
         if (receivable.clientReference.status !== 'ATIVO') return null;
+        if (requiresInternationalOptIn && !receivable.clientReference.internationalBillingEnabled) {
+          return null;
+        }
 
         return {
           ...item,
@@ -979,6 +1101,21 @@ export class BillingService {
       .filter(Boolean) as BillingDispatchItem[];
 
     if (!activeItems.length) {
+      const blockedByInternationalOptOut =
+        requiresInternationalOptIn &&
+        currentReceivables.some(
+          (receivable) =>
+            receivable.status === 'PENDENTE' &&
+            receivable.clientReference?.status === 'ATIVO' &&
+            !receivable.clientReference.internationalBillingEnabled,
+        );
+      if (blockedByInternationalOptOut) {
+        return {
+          code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+          message: 'Nenhum item manteve autorizacao para Billing automatico internacional.',
+        };
+      }
+
       const allCanceled = currentReceivables.length
         ? currentReceivables.every(
             (receivable) =>
@@ -1094,9 +1231,12 @@ export class BillingService {
       return { code: 'CLIENT_MISSING', message: 'Cliente da cobranca nao encontrado.' };
     }
 
-    const operationalPhone = resolveBrazilianOperationalPhone(dispatch.client);
-    if (operationalPhone.status !== 'valid') {
-      return this.billingPhoneBlockReason(operationalPhone.reason);
+    const operationalPhone = this.resolveBillingPhone(
+      dispatch.client,
+      this.dispatchItems(dispatch).map((item) => item.clientReference),
+    );
+    if (operationalPhone.status !== 'allowed') {
+      return { code: operationalPhone.code, message: operationalPhone.message };
     }
 
     if (dispatch.phone !== operationalPhone.digits) {
@@ -1178,16 +1318,11 @@ export class BillingService {
   }
 
   private isCreateIneligible(
-    client: Client,
     reference: ClientReference,
     receivable: Receivable,
     template: MessageTemplate,
     connection: WhatsAppConnection | null,
   ) {
-    if (resolveBrazilianOperationalPhone(client).status !== 'valid') {
-      return true;
-    }
-
     return (
       reference.status !== 'ATIVO' ||
       receivable.purpose !== 'RENEWAL' ||
@@ -1296,6 +1431,45 @@ export class BillingService {
     return this.presentDispatch(updated);
   }
 
+  private async markProviderOutcomeUncertain(
+    dispatch: Pick<MessageDispatch, 'id'>,
+    errorCode: string,
+    errorMessage: string,
+    providerMessageId?: string,
+  ) {
+    const updated = await this.prisma.messageDispatch.update({
+      where: { id: dispatch.id },
+      data: {
+        status: 'FAILED',
+        errorCode,
+        errorMessage,
+        ...(providerMessageId ? { providerMessageId } : {}),
+        nextAttemptAt: null,
+      },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+          orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+        },
+        template: true,
+        whatsAppConnection: true,
+      },
+    });
+
+    return this.presentDispatch(updated);
+  }
+
+  private isAmbiguousProviderFailure(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    return 'code' in error && error.code === 'KIRAGO_TIMEOUT';
+  }
+
   private findReceivableForReferenceDueDate(
     reference: ClientReference & { receivables: Receivable[] },
   ) {
@@ -1309,20 +1483,16 @@ export class BillingService {
     );
   }
 
-  private isClientReferenceEligibleForScheduling(client: Client, reference: ClientReference) {
+  private isClientReferenceEligibleForScheduling(reference: ClientReference) {
     if (reference.status !== 'ATIVO') {
       return false;
     }
 
-    if (
-      !client.phoneNormalized ||
-      reference.billingNoticeDays < 0 ||
-      Number(reference.recurringValue) <= 0
-    ) {
+    if (reference.billingNoticeDays < 0 || Number(reference.recurringValue) <= 0) {
       return false;
     }
 
-    return resolveBrazilianOperationalPhone(client).status === 'valid';
+    return true;
   }
 
   private billingPhoneBlockReason(
@@ -1343,6 +1513,172 @@ export class BillingService {
     }
 
     return { code: 'INVALID_PHONE', message: 'Telefone da cobranca invalido.' };
+  }
+
+  private resolveBillingPhone(
+    client: Client,
+    references: Array<Pick<ClientReference, 'internationalBillingEnabled'>>,
+  ): BillingPhoneResolution {
+    const brazilian = resolveBrazilianOperationalPhone(client);
+    if (brazilian.status === 'valid') {
+      return { status: 'allowed', kind: 'BR', digits: brazilian.digits, e164: brazilian.e164 };
+    }
+
+    if (brazilian.reason !== 'INTERNATIONAL_PHONE') {
+      return { status: 'blocked', ...this.billingPhoneBlockReason(brazilian.reason) };
+    }
+
+    if (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') !== 'true') {
+      return {
+        status: 'blocked',
+        code: 'INTERNATIONAL_BILLING_DISABLED',
+        message: 'Billing automatico internacional esta desabilitado.',
+      };
+    }
+
+    if (
+      !references.length ||
+      references.some((reference) => !reference.internationalBillingEnabled)
+    ) {
+      return {
+        status: 'blocked',
+        code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+        message: 'A referencia nao autorizou Billing automatico internacional.',
+      };
+    }
+
+    const canonical = client.phoneE164 ? normalizePhone(client.phoneE164) : null;
+    if (
+      !canonical ||
+      canonical.status !== 'valid' ||
+      !canonical.country ||
+      canonical.country === 'BR'
+    ) {
+      return {
+        status: 'blocked',
+        code: 'INVALID_PHONE',
+        message: 'Telefone internacional canonico invalido para Billing.',
+      };
+    }
+
+    const allowedCountries = new Set(
+      (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_COUNTRIES') ?? '')
+        .split(',')
+        .map((country) => country.trim())
+        .filter(Boolean),
+    );
+    if (!allowedCountries.has(canonical.country)) {
+      return {
+        status: 'blocked',
+        code: 'INTERNATIONAL_BILLING_COUNTRY_BLOCKED',
+        message: `Billing automatico internacional nao homologado para ${canonical.country}.`,
+      };
+    }
+
+    const normalizedDigits = client.phoneNormalized.trim();
+    const original = normalizePhone(client.phone.trim());
+    if (
+      normalizedDigits !== canonical.digits ||
+      original.status !== 'valid' ||
+      comparePhoneIdentities(original.e164, canonical.e164).status !== 'match'
+    ) {
+      return {
+        status: 'blocked',
+        code: 'PHONE_IDENTITY_MISMATCH',
+        message: 'Identidades telefonicas do cliente estao divergentes.',
+      };
+    }
+
+    return {
+      status: 'allowed',
+      kind: 'INTERNATIONAL',
+      digits: canonical.digits,
+      e164: canonical.e164,
+    };
+  }
+
+  private async findInternationalBillingConversation(
+    clientId: string,
+    digits: string,
+    e164: string,
+    connectionId?: string,
+  ) {
+    return this.prisma.whatsAppConversation.findFirst({
+      where: {
+        clientId,
+        phoneNormalized: digits,
+        phoneE164: e164,
+        ...(connectionId ? { whatsAppConnectionId: connectionId } : {}),
+        whatsAppConnection: {
+          is: { status: 'CONNECTED', connected: true, loggedIn: true },
+        },
+      },
+      include: { whatsAppConnection: true },
+      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  private async internationalBillingBlocks(clientId: string, clientReferenceId?: string) {
+    const references = await this.prisma.clientReference.findMany({
+      where: {
+        clientId,
+        ...(clientReferenceId ? { id: clientReferenceId } : {}),
+        status: 'ATIVO',
+        billingNoticeDays: { gte: 0 },
+        recurringValue: { gt: 0 },
+      },
+      include: {
+        client: true,
+        receivables: {
+          where: { purpose: 'RENEWAL', status: 'PENDENTE' },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+    const reasons = new Map<string, { code: string; message: string; count: number }>();
+
+    for (const reference of references) {
+      if (
+        !reference.receivables.some(
+          (receivable) =>
+            formatBusinessDate(receivable.dueDate) === formatBusinessDate(reference.dueDate),
+        ) ||
+        resolveBrazilianOperationalPhone(reference.client).status === 'valid'
+      ) {
+        continue;
+      }
+
+      const resolved = this.resolveBillingPhone(reference.client, [reference]);
+      let block =
+        resolved.status === 'blocked' ? { code: resolved.code, message: resolved.message } : null;
+
+      if (!block && resolved.status === 'allowed' && resolved.kind === 'INTERNATIONAL') {
+        const conversation = await this.findInternationalBillingConversation(
+          reference.client.id,
+          resolved.digits,
+          resolved.e164,
+        );
+        if (!conversation) {
+          block = {
+            code: 'INTERNATIONAL_BILLING_CONVERSATION_REQUIRED',
+            message: 'Conversa internacional vinculada e operacional obrigatoria.',
+          };
+        }
+      }
+
+      if (block) {
+        const current = reasons.get(block.code);
+        reasons.set(block.code, {
+          ...block,
+          count: (current?.count ?? 0) + 1,
+        });
+      }
+    }
+
+    return {
+      blocked: [...reasons.values()].reduce((total, reason) => total + reason.count, 0),
+      reasons: [...reasons.values()],
+    };
   }
 
   private async cancelObsoleteFutureDispatches(
@@ -1373,6 +1709,8 @@ export class BillingService {
     group: BillingReconcileGroup,
     template: MessageTemplate,
     renderedContent: string,
+    connection: Pick<WhatsAppConnection, 'id'>,
+    phone: string,
     now: Date,
   ) {
     const existing = await this.prisma.messageDispatch.findFirst({
@@ -1383,11 +1721,20 @@ export class BillingService {
           { status: 'SCHEDULED', scheduledFor: { gt: now } },
           {
             status: 'CANCELED',
-            errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
+            errorCode: {
+              in: [
+                'CLIENT_REFERENCE_CYCLE_CHANGED',
+                'INTERNATIONAL_BILLING_OPT_IN_REVOKED',
+                'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+                'INTERNATIONAL_BILLING_DISABLED',
+                'INTERNATIONAL_BILLING_COUNTRY_BLOCKED',
+                'PHONE_IDENTITY_MISMATCH',
+              ],
+            },
           },
         ],
       },
-      select: { id: true, status: true },
+      select: { id: true, status: true, errorCode: true },
     });
 
     if (!existing) return false;
@@ -1402,6 +1749,8 @@ export class BillingService {
           clientReferenceId: firstItem.reference.id,
           receivableId: firstItem.receivable.id,
           templateId: template.id,
+          whatsAppConnectionId: connection.id,
+          phone,
           body: renderedContent,
           renderedContent,
           status: 'SCHEDULED',
@@ -1422,6 +1771,21 @@ export class BillingService {
           },
         },
       });
+
+      if (reactivatingCanceled) {
+        await tx.clientEvent.create({
+          data: {
+            clientId: group.client.id,
+            type: 'CLIENT_UPDATED',
+            title: 'Agendamento de cobranca reconstruido.',
+            metadata: {
+              messageDispatchId: existing.id,
+              previousStatus: 'CANCELED',
+              previousErrorCode: existing.errorCode,
+            },
+          },
+        });
+      }
     });
 
     return true;
@@ -1444,8 +1808,45 @@ export class BillingService {
         errorMessage: 'Cobranca futura cancelada por perda de elegibilidade.',
       },
     });
+    let canceled = result.count;
+    const scheduled = await this.prisma.messageDispatch.findMany({
+      where: { origin: 'BILLING', status: 'SCHEDULED' },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+        },
+        template: true,
+        whatsAppConnection: true,
+      },
+    });
 
-    return result.count;
+    for (const dispatch of scheduled) {
+      if (!dispatch.client) continue;
+      const resolved = this.resolveBillingPhone(
+        dispatch.client,
+        this.dispatchItems(dispatch).map((item) => item.clientReference),
+      );
+      if (resolved.status === 'allowed') continue;
+
+      const updated = await this.prisma.messageDispatch.updateMany({
+        where: { id: dispatch.id, origin: 'BILLING', status: 'SCHEDULED' },
+        data: {
+          status: 'CANCELED',
+          errorCode: resolved.code,
+          errorMessage: resolved.message,
+          nextAttemptAt: null,
+        },
+      });
+      canceled += updated.count;
+    }
+
+    return canceled;
   }
 
   private buildDispatchWhere(

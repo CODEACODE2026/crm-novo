@@ -77,6 +77,7 @@ export interface ClientReference {
   dueDate: string;
   billingAnchorDay: number;
   billingNoticeDays: number;
+  internationalBillingEnabled?: boolean;
   status: ClientStatus;
   notes: string | null;
   inactivatedAt: string | null;
@@ -1109,6 +1110,8 @@ export interface BillingDispatchSummary {
   sent: number;
   failed: number;
   ignoredOrCanceled: number;
+  internationalBlocked: number;
+  internationalBlockedReasons: Array<{ code: string; message: string; count: number }>;
 }
 
 export type ReceivableCycleCode =
@@ -1702,6 +1705,7 @@ export interface ClientPayload {
   recurringValue: number;
   dueDate: string;
   billingNoticeDays: number;
+  internationalBillingEnabled?: boolean | undefined;
   preferredPixProvider?: PaymentProviderCode | null | undefined;
   notes?: string | undefined;
   referrerClientId?: string | undefined;

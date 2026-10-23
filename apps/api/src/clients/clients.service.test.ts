@@ -1029,6 +1029,24 @@ describe('ClientsService manual client creation', () => {
     });
   });
 
+  it('publishes international Billing independently from manual PIX and Recovery', () => {
+    expect(
+      createClientCreationService(
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+      ).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalManualTextSendEnabled: false,
+      internationalMessageActionsEnabled: false,
+      internationalManualPixEnabled: false,
+      internationalBillingSendEnabled: true,
+    });
+  });
+
   it('accepts an uppercase ISO-shaped phone country at the DTO boundary', async () => {
     await expect(
       validatePhoneDto(UpdateClientDto, {
@@ -1056,6 +1074,7 @@ describe('ClientsService manual client creation', () => {
 
     expect(fake.clients[0]).toMatchObject({ status: 'ATIVO' });
     expect(fake.references[0]).toMatchObject({ status: 'ATIVO' });
+    expect(fake.references[0]).toMatchObject({ internationalBillingEnabled: false });
     expect(fake.receivableCycleService.ensureCurrentCycleReceivable).toHaveBeenCalledWith(
       fake.references[0]!.id,
       fake.prisma,
@@ -1236,6 +1255,23 @@ describe('ClientsService manual client creation', () => {
     },
   );
 
+  it('persists international Billing opt-in only on the client reference', async () => {
+    const fake = createClientCreationService(true, true, false, false, false, true);
+
+    await fake.service.create(
+      manualClientDto({
+        phone: '+1 (407) 639-0665',
+        phoneCountry: 'US',
+        internationalBillingEnabled: true,
+      }),
+      'user-id',
+    );
+
+    expect(fake.references[0]).toMatchObject({ internationalBillingEnabled: true });
+    expect(fake.clients[0]).not.toHaveProperty('internationalBillingEnabled');
+    expect(fake.prisma.messageDispatch.create).not.toHaveBeenCalled();
+  });
+
   it('publishes independent safe capabilities when only client writes are enabled', () => {
     expect(createClientCreationService(false, true).service.phoneCapabilities()).toMatchObject({
       enabled: true,
@@ -1305,6 +1341,7 @@ describe('ClientsService manual reference creation', () => {
         recurringValue: 30,
         dueDate: '2026-10-01',
         billingNoticeDays: 0,
+        internationalBillingEnabled: true,
         notes: 'Primeira cobranca manual',
       },
       'user-id',
@@ -1316,6 +1353,7 @@ describe('ClientsService manual reference creation', () => {
       status: 'PENDENTE_PAGAMENTO',
       dueDate: '2026-10-01',
       billingNoticeDays: 0,
+      internationalBillingEnabled: true,
       notes: 'Primeira cobranca manual',
     });
     expect(fake.receivableCycleService.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
@@ -1602,6 +1640,39 @@ describe('ClientsService legacy client updates', () => {
     });
   });
 
+  it('cancels only dispatches linked to the reference whose international opt-in is revoked', async () => {
+    const fake = createClientUpdateService({
+      references: [
+        clientReference({ id: 'ref-1', internationalBillingEnabled: true }),
+        clientReference({ id: 'ref-2', internationalBillingEnabled: true }),
+      ],
+    });
+
+    await fake.service.updateReference('ref-1', { internationalBillingEnabled: false }, 'user-id');
+
+    expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalledWith({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        OR: [{ clientReferenceId: 'ref-1' }, { items: { some: { clientReferenceId: 'ref-1' } } }],
+      },
+      data: {
+        status: 'CANCELED',
+        errorCode: 'INTERNATIONAL_BILLING_OPT_IN_REVOKED',
+        errorMessage: 'Cobranca futura cancelada porque a autorizacao internacional foi revogada.',
+        nextAttemptAt: null,
+      },
+    });
+    const updateCalls = fake.prisma.messageDispatch.updateMany.mock.calls as unknown as Array<
+      [{ where?: { OR?: Array<{ clientReferenceId?: string }> } }]
+    >;
+    expect(
+      updateCalls.some(([input]) =>
+        input.where?.OR?.some((condition) => condition.clientReferenceId === 'ref-2'),
+      ),
+    ).toBe(false);
+  });
+
   it('edits the same reference value with a safe due date change', async () => {
     const fake = createClientUpdateService({
       references: [
@@ -1855,6 +1926,7 @@ function createClientCreationService(
   internationalManualTextSendEnabled = false,
   internationalMessageActionsEnabled = false,
   internationalManualPixEnabled = false,
+  internationalBillingEnabled = false,
 ) {
   const plan = {
     id: 'plan-id',
@@ -2006,6 +2078,9 @@ function createClientCreationService(
         }
         if (key === 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') {
           return internationalManualPixEnabled ? 'true' : undefined;
+        }
+        if (key === 'PHONE_INTERNATIONAL_BILLING_ENABLED') {
+          return internationalBillingEnabled ? 'true' : undefined;
         }
         return undefined;
       }),
@@ -2199,6 +2274,7 @@ function baseClientReference() {
     dueDate: parseBusinessDate('2026-10-10'),
     billingAnchorDay: 10,
     billingNoticeDays: 3,
+    internationalBillingEnabled: false,
     status: 'ATIVO' as const,
     notes: null,
     createdAt: new Date('2026-09-01T00:00:00.000Z'),

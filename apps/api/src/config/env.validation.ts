@@ -22,6 +22,8 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');
+  validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_BILLING_COUNTRIES');
 
   if (nodeEnv === 'production') {
     requireValue(config, 'DATABASE_URL');
@@ -40,6 +42,16 @@ export function validateEnv(config: EnvConfig) {
   }
 
   return config;
+}
+
+function validateOptionalCountryAllowlist(config: EnvConfig, key: string) {
+  const value = config[key];
+  if (value === undefined || value === '') return;
+
+  const countries = value.split(',').map((country) => country.trim());
+  if (countries.some((country) => !/^[A-Z]{2}$/.test(country))) {
+    throw new Error(`${key} deve conter codigos ISO alpha-2 maiusculos separados por virgula.`);
+  }
 }
 
 function validateOptionalBooleanFlag(config: EnvConfig, key: string) {

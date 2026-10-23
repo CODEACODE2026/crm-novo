@@ -11778,6 +11778,19 @@ function ClientsView({
                       }
                     />
                   </div>
+                  {clientBillingSummary?.internationalBlocked ? (
+                    <div className="notice warning" role="status">
+                      <strong>
+                        {clientBillingSummary.internationalBlocked} referência(s) sem agendamento
+                        internacional
+                      </strong>
+                      {clientBillingSummary.internationalBlockedReasons.map((reason) => (
+                        <span key={reason.code}>
+                          {reason.message} ({reason.count})
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="toolbar finance-toolbar">
                     <select
                       value={clientBillingReferenceId}
@@ -15682,6 +15695,9 @@ function ClientReferenceForm({
   const [billingNoticeDays, setBillingNoticeDays] = useState(
     String(reference?.billingNoticeDays ?? 5),
   );
+  const [internationalBillingEnabled, setInternationalBillingEnabled] = useState(
+    reference?.internationalBillingEnabled ?? false,
+  );
   const [notes, setNotes] = useState(reference?.notes ?? '');
   const [contractOrigin, setContractOrigin] = useState<'NORMAL' | 'REFERRAL'>('NORMAL');
   const [referrerClientId, setReferrerClientId] = useState('');
@@ -15739,6 +15755,7 @@ function ClientReferenceForm({
         recurringValue: Number(recurringValue),
         dueDate,
         billingNoticeDays: Number(billingNoticeDays),
+        internationalBillingEnabled,
         notes: notes || undefined,
         ...(creatingReference && contractOrigin === 'REFERRAL'
           ? {
@@ -15943,6 +15960,18 @@ function ClientReferenceForm({
             <small>
               A cobrança automática passa a usar este aviso somente depois do pagamento inicial e da
               criação do próximo ciclo.
+            </small>
+          </label>
+          <label className="field form-grid-full checkbox-field">
+            <input
+              checked={internationalBillingEnabled}
+              type="checkbox"
+              onChange={(event) => setInternationalBillingEnabled(event.target.checked)}
+            />
+            <span>Autorizar Billing automático internacional nesta referência</span>
+            <small>
+              A autorização só produz agendamentos quando a flag global, o país e uma conversa
+              vinculada estiverem habilitados. Recovery internacional permanece bloqueado.
             </small>
           </label>
         </div>

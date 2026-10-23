@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import { ReferralRewardType } from '@prisma/client';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -31,6 +32,10 @@ export class CreateClientReferenceDto {
   @IsInt()
   @Min(0)
   billingNoticeDays!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  internationalBillingEnabled?: boolean;
 
   @IsOptional()
   @IsString()

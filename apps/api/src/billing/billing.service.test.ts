@@ -65,6 +65,7 @@ function clientReference(overrides: Record<string, unknown> = {}) {
     dueDate,
     billingAnchorDay: 15,
     billingNoticeDays: 0,
+    internationalBillingEnabled: false,
     status: 'ATIVO',
     notes: null,
     createdAt: now,
@@ -255,6 +256,10 @@ function serviceFactory({
   existingClientEvent = null,
   currentReceivables,
   existingFutureDispatch = null,
+  conversationRecord = null,
+  configOverrides = {},
+  clientReferencesForSummary = [],
+  failSentUpdate = false,
 }: {
   clients?: Array<ReturnType<typeof client>>;
   dispatchForProcessing?: ReturnType<typeof dispatch>;
@@ -267,6 +272,10 @@ function serviceFactory({
   existingClientEvent?: Record<string, unknown> | null;
   existingFutureDispatch?: ReturnType<typeof dispatch> | null;
   currentReceivables?: ReceivableWithReference[];
+  conversationRecord?: Record<string, unknown> | null;
+  configOverrides?: Record<string, string | undefined>;
+  clientReferencesForSummary?: Array<Record<string, unknown>>;
+  failSentUpdate?: boolean;
 } = {}) {
   let storedDispatch = dispatchForProcessing;
   const clientEventCreate = vi.fn().mockResolvedValue({});
@@ -274,6 +283,11 @@ function serviceFactory({
   const billingResponseCreate = vi.fn();
   const billingResponseUpsert = vi.fn();
   const updateDispatch = vi.fn().mockImplementation(({ data }) => {
+    if (failSentUpdate && data.status === 'SENT') {
+      failSentUpdate = false;
+      return Promise.reject(new Error('database unavailable after provider confirmation'));
+    }
+
     const updatedReceivable = currentReceivables?.find((item) => item.id === data.receivableId);
     const updatedReference = updatedReceivable?.clientReference;
     const dispatchWithOptionalItems = dispatchForProcessing as typeof dispatchForProcessing & {
@@ -367,19 +381,30 @@ function serviceFactory({
         where.status === existingFutureDispatch.status &&
         (!where.scheduledFor?.gt || existingFutureDispatch.scheduledFor > where.scheduledFor.gt);
       const matchesOrStatus = Array.isArray(where?.OR)
-        ? where.OR.some(
-            (condition: Record<string, unknown>) =>
+        ? where.OR.some((condition: Record<string, unknown>) => {
+            const errorCodeFilter = condition.errorCode as string | { in?: string[] } | undefined;
+            const matchesErrorCode =
+              errorCodeFilter === undefined ||
+              errorCodeFilter === existingFutureDispatch.errorCode ||
+              (typeof errorCodeFilter === 'object' &&
+                errorCodeFilter.in?.includes(existingFutureDispatch.errorCode ?? ''));
+
+            return (
               condition.status === existingFutureDispatch.status &&
-              (condition.errorCode === undefined ||
-                condition.errorCode === existingFutureDispatch.errorCode) &&
+              matchesErrorCode &&
               (!condition.scheduledFor ||
-                existingFutureDispatch.scheduledFor > (condition.scheduledFor as { gt: Date }).gt),
-          )
+                existingFutureDispatch.scheduledFor > (condition.scheduledFor as { gt: Date }).gt)
+            );
+          })
         : false;
 
       return Promise.resolve(
         matchesSimpleStatus || matchesOrStatus
-          ? { id: existingFutureDispatch.id, status: existingFutureDispatch.status }
+          ? {
+              id: existingFutureDispatch.id,
+              status: existingFutureDispatch.status,
+              errorCode: existingFutureDispatch.errorCode,
+            }
           : null,
       );
     },
@@ -406,8 +431,14 @@ function serviceFactory({
     client: {
       findMany: vi.fn().mockResolvedValue(clients),
     },
+    clientReference: {
+      findMany: vi.fn().mockResolvedValue(clientReferencesForSummary),
+    },
     whatsAppConnection: {
       findFirst: vi.fn().mockResolvedValue(connectionRecord),
+    },
+    whatsAppConversation: {
+      findFirst: vi.fn().mockResolvedValue(conversationRecord),
     },
     billingAutomationSettings: {
       upsert: vi.fn().mockResolvedValue(settingsRecord),
@@ -451,7 +482,7 @@ function serviceFactory({
   const provider = { sendText: providerSendText };
   const encryption = { decrypt: vi.fn().mockReturnValue('instance-token') };
   const config = {
-    get: vi.fn((key: string) => (key === 'BILLING_SEND_HOUR' ? '9' : undefined)),
+    get: vi.fn((key: string) => (key === 'BILLING_SEND_HOUR' ? '9' : configOverrides[key])),
   };
   const service = new BillingService(
     prisma as never,
@@ -529,6 +560,147 @@ describe('BillingService', () => {
     expect(provider.sendText).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['US', '+1 (407) 639-0665', '14076390665', '+14076390665'],
+    ['PT', '+351 912 345 678', '351912345678', '+351912345678'],
+  ])(
+    'schedules an opted-in international %s reference through its existing conversation',
+    async (_country, phone, phoneNormalized, phoneE164) => {
+      const internationalReceivable = receivable();
+      const internationalReference = clientReference({
+        internationalBillingEnabled: true,
+        receivables: [internationalReceivable],
+      });
+      const internationalClient = client({
+        phone,
+        phoneNormalized,
+        phoneE164,
+        receivables: [internationalReceivable],
+        references: [internationalReference],
+      });
+      const internationalConnection = connection({ id: 'international-connection-id' });
+      const createDispatch = vi.fn().mockResolvedValue(dispatch());
+      const { service, prisma } = serviceFactory({
+        clients: [internationalClient],
+        createDispatch,
+        configOverrides: {
+          PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+          PHONE_INTERNATIONAL_BILLING_COUNTRIES: ' US,US, PT ',
+        },
+        conversationRecord: {
+          id: 'conversation-id',
+          clientId: internationalClient.id,
+          phoneNormalized,
+          phoneE164,
+          whatsAppConnection: internationalConnection,
+        },
+      });
+
+      await expect(service.reconcile(now)).resolves.toMatchObject({ created: 1, skipped: 0 });
+      expect(createDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phone: phoneNormalized,
+            whatsAppConnectionId: internationalConnection.id,
+            origin: 'BILLING',
+            status: 'SCHEDULED',
+          }),
+        }),
+      );
+      expect(prisma.whatsAppConversation.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            clientId: internationalClient.id,
+            phoneNormalized,
+            phoneE164,
+          }),
+        }),
+      );
+    },
+  );
+
+  it('does not schedule international Billing without per-reference opt-in', async () => {
+    const foreign = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const createDispatch = vi.fn();
+    const { service, prisma } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not schedule opted-in international Billing without an existing conversation', async () => {
+    const internationalReceivable = receivable();
+    const internationalReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [internationalReceivable],
+    });
+    const foreign = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      receivables: [internationalReceivable],
+      references: [internationalReference],
+    });
+    const createDispatch = vi.fn();
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an empty allowlist', ''],
+    ['a country outside the allowlist', 'PT'],
+  ])('does not schedule US Billing with %s', async (_label, countries) => {
+    const internationalReceivable = receivable();
+    const internationalReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [internationalReceivable],
+    });
+    const foreign = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      receivables: [internationalReceivable],
+      references: [internationalReference],
+    });
+    const createDispatch = vi.fn();
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: countries,
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
   it('ignores a preexisting international dispatch before calling the provider', async () => {
     const foreignClient = client({
       phone: '+351 912 345 678',
@@ -554,7 +726,103 @@ describe('BillingService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           status: 'IGNORED',
-          errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+          errorCode: 'INTERNATIONAL_BILLING_DISABLED',
+        }),
+      }),
+    );
+  });
+
+  it('revalidates an opted-in international conversation immediately before provider send', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const foreignReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [],
+    });
+    const foreignReceivable = receivable();
+    foreignReference.receivables = [foreignReceivable];
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const foreignDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      phone: '14076390665',
+      client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
+    });
+    const { service, prisma } = serviceFactory({
+      dispatchForProcessing: foreignDispatch,
+      providerSendText,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreignClient.id,
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(prisma.whatsAppConversation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          clientId: foreignClient.id,
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+          whatsAppConnectionId: connection().id,
+        }),
+      }),
+    );
+    expect(providerSendText).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665' }),
+    );
+  });
+
+  it('does not call provider when the international conversation disappears before send', async () => {
+    const foreignClient = client({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    const foreignReference = clientReference({ internationalBillingEnabled: true });
+    const foreignReceivable = receivable();
+    const providerSendText = vi.fn();
+    const { service, updateDispatch } = serviceFactory({
+      dispatchForProcessing: dispatch({
+        status: 'PROCESSING',
+        attempts: 1,
+        phone: '351912345678',
+        client: foreignClient,
+        clientReference: foreignReference,
+        receivable: foreignReceivable,
+      }),
+      providerSendText,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'PT',
+      },
+      conversationRecord: null,
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_BILLING_CONVERSATION_REQUIRED',
         }),
       }),
     );
@@ -586,7 +854,7 @@ describe('BillingService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           status: 'IGNORED',
-          errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+          errorCode: 'INTERNATIONAL_BILLING_DISABLED',
         }),
       }),
     );
@@ -793,6 +1061,110 @@ describe('BillingService', () => {
     ]);
     expect(dispatches.map((data) => data.scheduledFor.toISOString())).toEqual([
       '2026-09-15T12:00:00.000Z',
+    ]);
+  });
+
+  it('groups three opted-in international receivables into one scheduled dispatch', async () => {
+    const receivables = ['a', 'b', 'c'].map((suffix, index) =>
+      receivable({
+        id: `receivable-${suffix}`,
+        clientReferenceId: `reference-${suffix}`,
+        createdAt: new Date(now.getTime() + index * 1000),
+      }),
+    );
+    const references = receivables.map((item, index) =>
+      clientReference({
+        id: item.clientReferenceId,
+        reference: `REF-${index + 1}`,
+        internationalBillingEnabled: true,
+        receivables: [item],
+        createdAt: new Date(now.getTime() + index * 1000),
+      }),
+    );
+    const foreign = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      receivables,
+      references,
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        whatsAppConnection: connection({ id: 'international-connection-id' }),
+      },
+    });
+
+    await service.reconcile(now);
+
+    expect(createDispatch).toHaveBeenCalledTimes(1);
+    expect(createDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phone: '14076390665',
+          items: {
+            create: expect.any(Array),
+          },
+        }),
+      }),
+    );
+    const createdItems = (createDispatch.mock.calls[0]![0] as DispatchCreateArgs).data.items
+      ?.create;
+    expect(createdItems).toHaveLength(3);
+    expect(createdItems?.map((item) => item.receivableId)).toEqual(
+      receivables.map((item) => item.id),
+    );
+  });
+
+  it('does not let an unapproved reference suppress an approved international reference', async () => {
+    const approvedReceivable = receivable({
+      id: 'receivable-approved',
+      clientReferenceId: 'reference-approved',
+    });
+    const blockedReceivable = receivable({
+      id: 'receivable-blocked',
+      clientReferenceId: 'reference-blocked',
+    });
+    const approvedReference = clientReference({
+      id: 'reference-approved',
+      internationalBillingEnabled: true,
+      receivables: [approvedReceivable],
+    });
+    const blockedReference = clientReference({
+      id: 'reference-blocked',
+      internationalBillingEnabled: false,
+      receivables: [blockedReceivable],
+    });
+    const foreign = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      receivables: [approvedReceivable, blockedReceivable],
+      references: [approvedReference, blockedReference],
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 1, skipped: 1 });
+    const createdItems = (createDispatch.mock.calls[0]![0] as DispatchCreateArgs).data.items
+      ?.create;
+    expect(createdItems).toEqual([
+      expect.objectContaining({ receivableId: approvedReceivable.id }),
     ]);
   });
 
@@ -1038,93 +1410,155 @@ describe('BillingService', () => {
     expect(result.kept).toBe(1);
   });
 
-  it('reactivates a cycle-changed canceled dispatch when recurring value changes but send date is unchanged', async () => {
-    const nextDueDate = new Date('2026-10-25T00:00:00.000Z');
-    const updatedReceivable = receivable({
-      amount: 30,
-      dueDate: nextDueDate,
+  it.each(['CLIENT_REFERENCE_CYCLE_CHANGED', 'INTERNATIONAL_BILLING_OPT_IN_REVOKED'])(
+    'reactivates an eligible canceled dispatch (%s) when the send date is unchanged',
+    async (cancellationCode) => {
+      const nextDueDate = new Date('2026-10-25T00:00:00.000Z');
+      const updatedReceivable = receivable({
+        amount: 30,
+        dueDate: nextDueDate,
+      });
+      const updatedReference = clientReference({
+        recurringValue: 30,
+        dueDate: nextDueDate,
+        receivables: [updatedReceivable],
+      });
+      const canceledDispatch = dispatch({
+        status: 'CANCELED',
+        errorCode: cancellationCode,
+        errorMessage: 'Cobranca futura cancelada porque o ciclo da referencia foi alterado.',
+        idempotencyKey: 'billing-group:client-id:2026-10-25',
+        requestId: 'billing-group:client-id:2026-10-25',
+        scheduledFor: new Date('2026-10-25T12:00:00.000Z'),
+        nextAttemptAt: null,
+        receivable: { ...updatedReceivable, amount: 5 },
+        clientReference: updatedReference,
+        items: [
+          {
+            id: 'old-item',
+            messageDispatchId: 'dispatch-id',
+            receivableId: updatedReceivable.id,
+            clientReferenceId: updatedReference.id,
+            amount: 5,
+            dueDate: nextDueDate,
+            referenceSnapshot: updatedReference.reference,
+            statusSnapshot: 'PENDENTE',
+            createdAt: now,
+            updatedAt: now,
+            receivable: { ...updatedReceivable, amount: 5 },
+            clientReference: updatedReference,
+          },
+        ],
+      });
+      const createDispatch = vi.fn().mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: '6.19.3',
+        }),
+      );
+      const { service, updateDispatch, clientEventCreate } = serviceFactory({
+        clients: [
+          client({
+            dueDate: nextDueDate,
+            recurringValue: 30,
+            references: [updatedReference],
+            receivables: [updatedReceivable],
+          }),
+        ],
+        createDispatch,
+        currentReceivables: [{ ...updatedReceivable, clientReference: updatedReference }],
+        dispatchForProcessing: canceledDispatch,
+        existingFutureDispatch: canceledDispatch,
+      });
+
+      const result = await service.reconcile(now);
+
+      expect(result).toMatchObject({ created: 0, kept: 1 });
+      expect(createDispatch).not.toHaveBeenCalled();
+      expect(updateDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'dispatch-id' },
+          data: expect.objectContaining({
+            status: 'SCHEDULED',
+            attempts: 0,
+            sentAt: null,
+            errorCode: null,
+            errorMessage: null,
+            scheduledFor: new Date('2026-10-25T12:00:00.000Z'),
+            nextAttemptAt: new Date('2026-10-25T12:00:00.000Z'),
+            body: expect.stringContaining('R$'),
+            renderedContent: expect.stringContaining('25/10/2026'),
+            items: expect.objectContaining({
+              deleteMany: {},
+              create: [
+                expect.objectContaining({
+                  receivableId: updatedReceivable.id,
+                  clientReferenceId: updatedReference.id,
+                  amount: 30,
+                  dueDate: nextDueDate,
+                }),
+              ],
+            }),
+          }),
+        }),
+      );
+      expect(clientEventCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          clientId: 'client-id',
+          type: 'CLIENT_UPDATED',
+          metadata: {
+            messageDispatchId: 'dispatch-id',
+            previousStatus: 'CANCELED',
+            previousErrorCode: cancellationCode,
+          },
+        }),
+      });
+    },
+  );
+
+  it('refreshes the destination and connection when reactivating an international dispatch', async () => {
+    const internationalReceivable = receivable();
+    const internationalReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [internationalReceivable],
     });
-    const updatedReference = clientReference({
-      recurringValue: 30,
-      dueDate: nextDueDate,
-      receivables: [updatedReceivable],
+    const internationalClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+      references: [internationalReference],
+      receivables: [internationalReceivable],
     });
     const canceledDispatch = dispatch({
       status: 'CANCELED',
-      errorCode: 'CLIENT_REFERENCE_CYCLE_CHANGED',
-      errorMessage: 'Cobranca futura cancelada porque o ciclo da referencia foi alterado.',
-      idempotencyKey: 'billing-group:client-id:2026-10-25',
-      requestId: 'billing-group:client-id:2026-10-25',
-      scheduledFor: new Date('2026-10-25T12:00:00.000Z'),
-      nextAttemptAt: null,
-      receivable: { ...updatedReceivable, amount: 5 },
-      clientReference: updatedReference,
-      items: [
-        {
-          id: 'old-item',
-          messageDispatchId: 'dispatch-id',
-          receivableId: updatedReceivable.id,
-          clientReferenceId: updatedReference.id,
-          amount: 5,
-          dueDate: nextDueDate,
-          referenceSnapshot: updatedReference.reference,
-          statusSnapshot: 'PENDENTE',
-          createdAt: now,
-          updatedAt: now,
-          receivable: { ...updatedReceivable, amount: 5 },
-          clientReference: updatedReference,
-        },
-      ],
+      errorCode: 'PHONE_IDENTITY_MISMATCH',
+      phone: '351912345678',
+      whatsAppConnectionId: 'old-connection-id',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
     });
-    const createDispatch = vi.fn().mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
-        code: 'P2002',
-        clientVersion: '6.19.3',
-      }),
-    );
     const { service, updateDispatch } = serviceFactory({
-      clients: [
-        client({
-          dueDate: nextDueDate,
-          recurringValue: 30,
-          references: [updatedReference],
-          receivables: [updatedReceivable],
-        }),
-      ],
-      createDispatch,
-      currentReceivables: [{ ...updatedReceivable, clientReference: updatedReference }],
-      dispatchForProcessing: canceledDispatch,
+      clients: [internationalClient],
       existingFutureDispatch: canceledDispatch,
+      dispatchForProcessing: canceledDispatch,
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        whatsAppConnection: connection({ id: 'new-connection-id' }),
+      },
     });
 
-    const result = await service.reconcile(now);
+    await expect(service.reconcile(now)).resolves.toMatchObject({ kept: 1 });
 
-    expect(result).toMatchObject({ created: 0, kept: 1 });
-    expect(createDispatch).not.toHaveBeenCalled();
     expect(updateDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'dispatch-id' },
         data: expect.objectContaining({
           status: 'SCHEDULED',
-          attempts: 0,
-          sentAt: null,
-          errorCode: null,
-          errorMessage: null,
-          scheduledFor: new Date('2026-10-25T12:00:00.000Z'),
-          nextAttemptAt: new Date('2026-10-25T12:00:00.000Z'),
-          body: expect.stringContaining('R$'),
-          renderedContent: expect.stringContaining('25/10/2026'),
-          items: expect.objectContaining({
-            deleteMany: {},
-            create: [
-              expect.objectContaining({
-                receivableId: updatedReceivable.id,
-                clientReferenceId: updatedReference.id,
-                amount: 30,
-                dueDate: nextDueDate,
-              }),
-            ],
-          }),
+          phone: '14076390665',
+          whatsAppConnectionId: 'new-connection-id',
         }),
       }),
     );
@@ -1933,6 +2367,86 @@ describe('BillingService', () => {
     );
   });
 
+  it('does not mark or retry a provider response without a remote message id', async () => {
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: null });
+    const { service, updateDispatch } = serviceFactory({ providerSendText });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          errorCode: 'PROVIDER_CONFIRMATION_MISSING',
+          nextAttemptAt: null,
+        }),
+      }),
+    );
+    expect(updateDispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+    );
+  });
+
+  it('blocks automatic retry after an ambiguous provider timeout', async () => {
+    const timeout = Object.assign(new Error('provider timeout'), { code: 'KIRAGO_TIMEOUT' });
+    const providerSendText = vi.fn().mockRejectedValue(timeout);
+    const { prisma, service, updateDispatch } = serviceFactory({ providerSendText });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          errorCode: 'PROVIDER_RESULT_UNCERTAIN',
+          nextAttemptAt: null,
+        }),
+      }),
+    );
+    expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: [
+            {
+              OR: [
+                { errorCode: null },
+                {
+                  errorCode: {
+                    notIn: [
+                      'PROVIDER_CONFIRMATION_MISSING',
+                      'PROVIDER_PERSISTENCE_UNCERTAIN',
+                      'PROVIDER_RESULT_UNCERTAIN',
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it('preserves provider confirmation and blocks retry when final persistence fails', async () => {
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const { service, updateDispatch } = serviceFactory({ providerSendText, failSentUpdate: true });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          errorCode: 'PROVIDER_PERSISTENCE_UNCERTAIN',
+          providerMessageId: 'provider-id',
+          nextAttemptAt: null,
+        }),
+      }),
+    );
+  });
+
   it('uses conditional acquisition so concurrent workers do not duplicate sends', async () => {
     const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
     const { service } = serviceFactory({ providerSendText, acquireCount: 1 });
@@ -2042,6 +2556,99 @@ describe('BillingService', () => {
           },
         }),
       }),
+    );
+  });
+
+  it('removes an opted-out international item before sending the remaining grouped charge', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const refA = clientReference({
+      id: 'reference-a',
+      reference: 'A',
+      internationalBillingEnabled: false,
+    });
+    const refB = clientReference({
+      id: 'reference-b',
+      reference: 'B',
+      internationalBillingEnabled: true,
+    });
+    const receivableA = receivable({ id: 'receivable-a', clientReferenceId: refA.id, amount: 25 });
+    const receivableB = receivable({ id: 'receivable-b', clientReferenceId: refB.id, amount: 25 });
+    const groupedDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      phone: '14076390665',
+      client: foreignClient,
+      clientReference: refA,
+      receivable: receivableA,
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+      items: [
+        {
+          id: 'item-a',
+          messageDispatchId: 'dispatch-id',
+          receivableId: receivableA.id,
+          clientReferenceId: refA.id,
+          amount: 25,
+          dueDate,
+          referenceSnapshot: 'A',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: receivableA,
+          clientReference: refA,
+        },
+        {
+          id: 'item-b',
+          messageDispatchId: 'dispatch-id',
+          receivableId: receivableB.id,
+          clientReferenceId: refB.id,
+          amount: 25,
+          dueDate,
+          referenceSnapshot: 'B',
+          statusSnapshot: 'PENDENTE',
+          createdAt: now,
+          updatedAt: now,
+          receivable: receivableB,
+          clientReference: refB,
+        },
+      ],
+    });
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const { service, updateDispatch } = serviceFactory({
+      dispatchForProcessing: groupedDispatch,
+      providerSendText,
+      currentReceivables: [
+        { ...receivableA, clientReference: refA },
+        { ...receivableB, clientReference: refB },
+      ],
+      configOverrides: {
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          items: {
+            create: [expect.objectContaining({ receivableId: receivableB.id, amount: 25 })],
+          },
+        }),
+      }),
+    );
+    expect(providerSendText).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665', body: expect.not.stringContaining('A') }),
     );
   });
 
@@ -2459,6 +3066,8 @@ describe('BillingService', () => {
       sent: 4,
       failed: 3,
       ignoredOrCanceled: 2,
+      internationalBlocked: 0,
+      internationalBlockedReasons: [],
     });
 
     expect(prisma.messageDispatch.count).toHaveBeenCalledWith(
@@ -2496,5 +3105,34 @@ describe('BillingService', () => {
     expect(prisma.messageDispatch.count).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ origin: 'RECOVERY' }) }),
     );
+  });
+
+  it('reports the international Billing block reason without creating an artificial dispatch', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const pending = receivable();
+    const reference = clientReference({
+      client: foreignClient,
+      receivables: [pending],
+      internationalBillingEnabled: false,
+    });
+    const { service, prisma } = serviceFactory({
+      clientReferencesForSummary: [{ ...reference, client: foreignClient }],
+    });
+
+    await expect(service.dispatchesSummary({ clientId: foreignClient.id })).resolves.toMatchObject({
+      internationalBlocked: 1,
+      internationalBlockedReasons: [
+        {
+          code: 'INTERNATIONAL_BILLING_DISABLED',
+          message: 'Billing automatico internacional esta desabilitado.',
+          count: 1,
+        },
+      ],
+    });
+    expect(prisma.messageDispatch.create).not.toHaveBeenCalled();
   });
 });

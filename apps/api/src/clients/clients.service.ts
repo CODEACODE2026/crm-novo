@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ClientStatus, PaymentProviderCode, Prisma } from '@prisma/client';
 import type { CountryCode } from 'libphonenumber-js';
+import { resolveCanonicalPhoneIdentity } from '../common/phone/canonical-phone-identity';
 import { listSupportedPhoneCountries, normalizePhone } from '../common/phone/phone-normalizer';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
@@ -112,8 +113,6 @@ export class ClientsService {
   ) {}
 
   phoneCapabilities() {
-    const internationalClientWriteEnabled = this.internationalClientWriteEnabled();
-    const enabled = this.internationalPhoneEnabled() || internationalClientWriteEnabled;
     const internationalManualMediaCountries = this.internationalCountryAllowlist(
       'PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES',
     );
@@ -128,9 +127,10 @@ export class ClientsService {
       internationalManualVoiceCountries.length > 0;
 
     return {
-      enabled,
-      internationalWriteEnabled: internationalClientWriteEnabled,
-      internationalClientWriteEnabled,
+      capabilityModel: 'OPERATION_V1' as const,
+      enabled: true,
+      internationalWriteEnabled: true,
+      internationalClientWriteEnabled: true,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
@@ -149,8 +149,20 @@ export class ClientsService {
       internationalBillingOptInSupported: true,
       internationalBillingSendEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true',
+      operationCapabilities: {
+        clientPhoneWrite: { enabled: true },
+        manualText: { enabled: false },
+        messageAction: { enabled: false },
+        manualMedia: { enabled: false },
+        manualVoice: { enabled: false },
+        manualPix: { enabled: false, requiresFinancialAuthorization: true },
+        pixButton: { enabled: false, requiresFinancialAuthorization: true },
+        autoReply: { enabled: false },
+        billing: { enabled: false, requiresFinancialAuthorization: true },
+        recovery: { enabled: false, requiresFinancialAuthorization: true },
+      },
       defaultCountry: 'BR' as const,
-      supportedCountries: enabled ? listSupportedPhoneCountries() : [],
+      supportedCountries: listSupportedPhoneCountries(),
     };
   }
 
@@ -234,6 +246,7 @@ export class ClientsService {
         email: true,
         id: true,
         name: true,
+        phoneE164: true,
         phoneNormalized: true,
         preferredPixProvider: true,
         references: { select: { reference: true }, orderBy: { createdAt: 'asc' } },
@@ -248,6 +261,12 @@ export class ClientsService {
       name: client.name,
       reference: this.referenceSummary(client.references),
       phoneNormalized: client.phoneNormalized,
+      ...(client.phoneE164
+        ? {
+            phoneE164: client.phoneE164,
+            phoneCountry: this.phoneCountry(client.phoneE164),
+          }
+        : {}),
       preferredPixProvider: client.preferredPixProvider,
     }));
   }
@@ -949,18 +968,7 @@ export class ClientsService {
       return [];
     }
 
-    const terms = new Set([digits]);
-
-    if (digits.startsWith('55')) {
-      const withoutCountryCode = digits.slice(2);
-      if (withoutCountryCode.length >= 4) {
-        terms.add(withoutCountryCode);
-      }
-    } else {
-      terms.add(`55${digits}`);
-    }
-
-    return [...terms];
+    return [digits];
   }
 
   private buildOrderBy(query: ListClientsDto): Prisma.ClientOrderByWithRelationInput {
@@ -1714,67 +1722,37 @@ export class ClientsService {
     return trimmed ? trimmed : null;
   }
 
-  private internationalPhoneEnabled() {
-    return this.configService?.get<string>('PHONE_INTERNATIONAL_ENABLED') === 'true';
-  }
-
-  private internationalClientWriteEnabled() {
-    return this.configService?.get<string>('PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED') === 'true';
-  }
-
-  private internationalPhoneInputEnabled() {
-    return this.internationalPhoneEnabled() || this.internationalClientWriteEnabled();
-  }
-
   private prepareClientPhone(phone: string, phoneCountry?: string) {
     const trimmed = phone.trim();
+    if (!trimmed.startsWith('+') && !phoneCountry) {
+      throw new BadRequestException('Selecione o pais do telefone.');
+    }
+    const defaultCountry = phoneCountry
+      ? (phoneCountry as CountryCode)
+      : trimmed.startsWith('+')
+        ? undefined
+        : ('BR' as const);
+    const identity = resolveCanonicalPhoneIdentity({
+      phone: trimmed,
+      ...(defaultCountry ? { defaultCountry } : {}),
+    });
 
-    if (!this.internationalPhoneInputEnabled()) {
-      if (phoneCountry !== undefined) {
-        throw new BadRequestException('O cadastro internacional de telefone esta desabilitado.');
-      }
-
-      if (trimmed.startsWith('+')) {
-        const explicit = normalizePhone(trimmed);
-        if (explicit.status === 'valid' && explicit.country !== 'BR') {
-          throw new BadRequestException('O cadastro internacional de telefone esta desabilitado.');
-        }
-      }
-
-      return { phoneNormalized: normalizeBrazilPhone(phone), phoneE164: null };
+    if (identity.status !== 'valid') {
+      throw new BadRequestException('Telefone invalido para o pais selecionado.');
     }
 
-    const normalized = normalizePhone(
-      phone,
-      phoneCountry ? { defaultCountry: phoneCountry as CountryCode } : {},
-    );
-    if (normalized.status !== 'valid') {
-      const message =
-        normalized.status === 'ambiguous'
-          ? 'Selecione o pais do telefone.'
-          : 'Telefone invalido para o pais selecionado.';
-      throw new BadRequestException(message);
-    }
-
-    if (phoneCountry && normalized.country !== phoneCountry) {
+    if (phoneCountry && identity.country !== phoneCountry) {
       throw new BadRequestException('O DDI informado nao corresponde ao pais selecionado.');
     }
 
-    if (normalized.country !== 'BR' && !this.internationalClientWriteEnabled()) {
-      throw new ConflictException(
-        'Telefone internacional validado, mas o cadastro internacional esta desabilitado.',
-      );
-    }
-
     return {
-      phoneNormalized:
-        normalized.country === 'BR' ? normalizeBrazilPhone(normalized.e164) : normalized.digits,
-      phoneE164: normalized.e164,
+      phoneNormalized: identity.digits,
+      phoneE164: identity.e164,
     };
   }
 
   private tryNormalizeCanonicalPhone(value: string) {
-    if (!this.internationalPhoneInputEnabled()) return null;
+    if (!value.trim().startsWith('+')) return null;
     const normalized = normalizePhone(value);
     return normalized.status === 'valid' ? normalized.e164 : null;
   }
@@ -1794,9 +1772,10 @@ export class ClientsService {
   }
 
   private tryNormalizePhone(value: string) {
-    if (this.internationalPhoneInputEnabled() && value.trim().startsWith('+')) {
+    if (value.trim().startsWith('+')) {
       const normalized = normalizePhone(value);
-      if (normalized.status === 'valid' && normalized.country !== 'BR') return null;
+      if (normalized.status !== 'valid' || normalized.country !== 'BR') return null;
+      return normalized.digits;
     }
 
     try {
@@ -1804,6 +1783,11 @@ export class ClientsService {
     } catch {
       return null;
     }
+  }
+
+  private phoneCountry(phoneE164: string) {
+    const identity = normalizePhone(phoneE164);
+    return identity.status === 'valid' ? identity.country : null;
   }
 
   private referenceSummary(references: Array<{ reference: string }>) {

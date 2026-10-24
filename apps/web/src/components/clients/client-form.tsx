@@ -173,11 +173,14 @@ export function ClientForm({
   }, []);
 
   const internationalPhoneEnabled = phoneCapabilities?.enabled === true;
+  const globalClientWriteEnabled =
+    phoneCapabilities?.operationCapabilities?.clientPhoneWrite?.enabled ??
+    phoneCapabilities?.internationalClientWriteEnabled === true;
   const phoneChanged = phone !== initialPhone;
   const internationalWriteBlocked =
     internationalPhoneEnabled &&
     phoneCountry !== 'BR' &&
-    phoneCapabilities.internationalClientWriteEnabled !== true &&
+    !globalClientWriteEnabled &&
     (!editing || phoneChanged);
   const supportedCountries = useMemo(() => {
     const displayNames = new Intl.DisplayNames(['pt-BR'], { type: 'region' });
@@ -321,12 +324,10 @@ export function ClientForm({
                 O telefone foi reconhecido, mas o cadastro internacional está desabilitado.
               </div>
             ) : null}
-            {internationalPhoneEnabled &&
-            phoneCountry !== 'BR' &&
-            phoneCapabilities?.internationalClientWriteEnabled === true ? (
+            {internationalPhoneEnabled && phoneCountry !== 'BR' && globalClientWriteEnabled ? (
               <div className="notice warning compact-notice form-grid-full" role="status">
-                O cliente pode ser cadastrado, mas WhatsApp, PIX e cobranças automáticas
-                internacionais continuam indisponíveis.
+                A identidade telefônica pode ser cadastrada. WhatsApp, PIX e automações seguem
+                permissões independentes por operação.
               </div>
             ) : null}
             <label className="field">

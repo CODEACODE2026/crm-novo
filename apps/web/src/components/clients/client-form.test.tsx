@@ -97,7 +97,7 @@ describe('ClientForm manual initial billing source', () => {
   it('separates international client writes from WhatsApp and Billing availability', () => {
     expect(clientFormSource).toContain('internationalWriteBlocked');
     expect(clientFormSource).toContain('internationalClientWriteEnabled');
-    expect(clientFormSource).toContain('WhatsApp, PIX e cobranças automáticas');
+    expect(clientFormSource).toContain('permissões independentes por operação');
     expect(clientFormSource).toContain('disabled={loading || internationalWriteBlocked}');
   });
 });

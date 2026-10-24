@@ -141,6 +141,7 @@ function manualClientDto(overrides: Partial<Parameters<ClientsService['create']>
   return {
     name: 'Maria Inicial',
     phone: '(44) 99999-3030',
+    phoneCountry: 'BR',
     reference: 'MARIA-001',
     planId: 'plan-id',
     recurringValue: 30,
@@ -954,14 +955,15 @@ describe('ClientsService client detail payload', () => {
 });
 
 describe('ClientsService manual client creation', () => {
-  it('keeps phone capabilities disabled by default and publishes countries only when enabled', () => {
+  it('publishes global identity capabilities while keeping every outbound operation gated', () => {
     const disabled = createClientCreationService().service.phoneCapabilities();
     const enabled = createClientCreationService(true).service.phoneCapabilities();
 
-    expect(disabled).toEqual({
-      enabled: false,
-      internationalWriteEnabled: false,
-      internationalClientWriteEnabled: false,
+    expect(disabled).toMatchObject({
+      capabilityModel: 'OPERATION_V1',
+      enabled: true,
+      internationalWriteEnabled: true,
+      internationalClientWriteEnabled: true,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
       internationalManualMediaEnabled: false,
@@ -972,13 +974,24 @@ describe('ClientsService manual client creation', () => {
       internationalManualPixEnabled: false,
       internationalBillingOptInSupported: true,
       internationalBillingSendEnabled: false,
+      operationCapabilities: {
+        clientPhoneWrite: { enabled: true },
+        manualText: { enabled: false },
+        messageAction: { enabled: false },
+        manualMedia: { enabled: false },
+        manualVoice: { enabled: false },
+        manualPix: { enabled: false, requiresFinancialAuthorization: true },
+        pixButton: { enabled: false, requiresFinancialAuthorization: true },
+        autoReply: { enabled: false },
+        billing: { enabled: false, requiresFinancialAuthorization: true },
+        recovery: { enabled: false, requiresFinancialAuthorization: true },
+      },
       defaultCountry: 'BR',
-      supportedCountries: [],
     });
     expect(enabled).toMatchObject({
       enabled: true,
-      internationalWriteEnabled: false,
-      internationalClientWriteEnabled: false,
+      internationalWriteEnabled: true,
+      internationalClientWriteEnabled: true,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: false,
       internationalMessageActionsEnabled: false,
@@ -987,7 +1000,7 @@ describe('ClientsService manual client creation', () => {
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
     });
-    expect(enabled.supportedCountries).toEqual(
+    expect(disabled.supportedCountries).toEqual(
       expect.arrayContaining([
         { country: 'BR', callingCode: '55' },
         { country: 'US', callingCode: '1' },
@@ -998,10 +1011,12 @@ describe('ClientsService manual client creation', () => {
   });
 
   it('publishes manual international text independently without broad outbound capabilities', () => {
-    expect(createClientCreationService(false, false, true).service.phoneCapabilities()).toEqual({
-      enabled: false,
-      internationalWriteEnabled: false,
-      internationalClientWriteEnabled: false,
+    expect(
+      createClientCreationService(false, false, true).service.phoneCapabilities(),
+    ).toMatchObject({
+      enabled: true,
+      internationalWriteEnabled: true,
+      internationalClientWriteEnabled: true,
       internationalWhatsAppSendEnabled: false,
       internationalManualTextSendEnabled: true,
       internationalManualMediaEnabled: false,
@@ -1013,7 +1028,6 @@ describe('ClientsService manual client creation', () => {
       internationalBillingOptInSupported: true,
       internationalBillingSendEnabled: false,
       defaultCountry: 'BR',
-      supportedCountries: [],
     });
   });
 
@@ -1228,36 +1242,40 @@ describe('ClientsService manual client creation', () => {
     });
   });
 
-  it('rejects an explicit foreign phone while the feature flag is disabled', async () => {
+  it('persists an explicit foreign phone independently from legacy feature flags', async () => {
     const fake = createClientCreationService();
 
-    await expect(
-      fake.service.create(manualClientDto({ phone: '+1 (407) 639-0665' }), 'user-id'),
-    ).rejects.toThrow('cadastro internacional de telefone esta desabilitado');
+    await fake.service.create(
+      manualClientDto({ phone: '+1 (407) 639-0665', phoneCountry: 'US' }),
+      'user-id',
+    );
 
-    expect(fake.clients).toHaveLength(0);
-    expect(fake.prisma.$transaction).not.toHaveBeenCalled();
+    expect(fake.clients[0]).toMatchObject({
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    expect(fake.prisma.messageDispatch.create).not.toHaveBeenCalled();
   });
 
-  it('rejects a country field through direct API semantics while the flag is disabled', async () => {
+  it('accepts an explicit country independently from legacy feature flags', async () => {
     const fake = createClientCreationService();
 
-    await expect(
-      fake.service.create(
-        manualClientDto({ phone: '(11) 99999-1234', phoneCountry: 'BR' }),
-        'user-id',
-      ),
-    ).rejects.toThrow('cadastro internacional de telefone esta desabilitado');
+    await fake.service.create(
+      manualClientDto({ phone: '(11) 99999-1234', phoneCountry: 'BR' }),
+      'user-id',
+    );
 
-    expect(fake.clients).toHaveLength(0);
+    expect(fake.clients[0]).toMatchObject({ phoneE164: '+5511999991234' });
   });
 
-  it('rejects an ambiguous national number without selected country when enabled', async () => {
+  it('rejects an ambiguous foreign national number instead of fabricating DDI 55', async () => {
     const fake = createClientCreationService(true);
+    const legacyDto = manualClientDto({ phone: '407 639-0665' });
+    Reflect.deleteProperty(legacyDto, 'phoneCountry');
 
-    await expect(
-      fake.service.create(manualClientDto({ phone: '407 639-0665' }), 'user-id'),
-    ).rejects.toThrow('Selecione o pais do telefone');
+    await expect(fake.service.create(legacyDto, 'user-id')).rejects.toThrow(
+      'Selecione o pais do telefone',
+    );
 
     expect(fake.clients).toHaveLength(0);
   });
@@ -1283,16 +1301,15 @@ describe('ClientsService manual client creation', () => {
     ['GB', '+44 20 7946 0958'],
     ['AR', '+54 9 11 2345-6789'],
   ])(
-    'validates %s but blocks persistence while client writes are disabled',
+    'persists validated %s identities without requiring a geographic write flag',
     async (country, phone) => {
       const fake = createClientCreationService(true);
 
-      await expect(
-        fake.service.create(manualClientDto({ phone, phoneCountry: country }), 'user-id'),
-      ).rejects.toThrow('cadastro internacional esta desabilitado');
+      await fake.service.create(manualClientDto({ phone, phoneCountry: country }), 'user-id');
 
-      expect(fake.clients).toHaveLength(0);
-      expect(fake.prisma.$transaction).not.toHaveBeenCalled();
+      expect(fake.clients[0]?.phone).toBe(phone);
+      expect(String(fake.clients[0]?.phoneE164)).toMatch(/^\+/);
+      expect(fake.prisma.messageDispatch.create).not.toHaveBeenCalled();
     },
   );
 
@@ -1557,11 +1574,9 @@ describe('ClientsService legacy client updates', () => {
     });
   });
 
-  it('updates an international phone without fabricating a Brazilian identity', async () => {
+  it('updates an international phone globally without fabricating a Brazilian identity', async () => {
     const fake = createClientUpdateService({
       references: [clientReference()],
-      phoneInternationalEnabled: true,
-      internationalClientWriteEnabled: true,
     });
 
     await fake.service.update(

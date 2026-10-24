@@ -1686,6 +1686,8 @@ export interface ClientOption {
   id: string;
   name: string;
   reference: string;
+  phoneCountry?: string | null;
+  phoneE164?: string | null;
   phoneNormalized: string;
   preferredPixProvider: PaymentProviderCode | null;
 }
@@ -2095,6 +2097,7 @@ export function getClient(id: string) {
 }
 
 export interface ClientPhoneCapabilities {
+  capabilityModel?: 'OPERATION_V1';
   enabled: boolean;
   internationalWriteEnabled: boolean;
   internationalClientWriteEnabled: boolean;
@@ -2108,6 +2111,18 @@ export interface ClientPhoneCapabilities {
   internationalManualPixEnabled?: boolean;
   internationalBillingOptInSupported?: boolean;
   internationalBillingSendEnabled: boolean;
+  operationCapabilities?: {
+    clientPhoneWrite?: { enabled: boolean };
+    manualText?: { enabled: boolean };
+    messageAction?: { enabled: boolean };
+    manualMedia?: { enabled: boolean };
+    manualVoice?: { enabled: boolean };
+    manualPix?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
+    pixButton?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
+    autoReply?: { enabled: boolean };
+    billing?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
+    recovery?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
+  };
   defaultCountry: 'BR';
   supportedCountries: Array<{ country: string; callingCode: string }>;
 }

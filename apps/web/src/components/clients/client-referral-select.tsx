@@ -139,7 +139,8 @@ export function ClientReferralSelect({
                   >
                     <strong>{option.name}</strong>
                     <span>
-                      {option.reference} · {formatNormalizedBrazilPhone(option.phoneNormalized)}
+                      {option.reference} ·{' '}
+                      {formatPhoneForDisplay(option.phoneNormalized, option.phoneE164)}
                     </span>
                   </button>
                 ))
@@ -153,7 +154,8 @@ export function ClientReferralSelect({
           <>
             <strong>{selected.name}</strong>
             <span>
-              {selected.reference} · {formatNormalizedBrazilPhone(selected.phoneNormalized)}
+              {selected.reference} ·{' '}
+              {formatPhoneForDisplay(selected.phoneNormalized, selected.phoneE164)}
             </span>
           </>
         ) : (
@@ -209,9 +211,15 @@ export function scheduleClientReferralSearch(
   return () => globalThis.clearTimeout(timeout);
 }
 
-export function formatNormalizedBrazilPhone(phoneNormalized: string) {
+export function formatPhoneForDisplay(phoneNormalized: string, phoneE164?: string | null) {
+  if (phoneE164?.startsWith('+')) {
+    return phoneE164;
+  }
+
   const digits = phoneNormalized.replace(/\D/g, '');
-  const local = digits.startsWith('55') ? digits.slice(2) : digits;
+  if (!digits.startsWith('55')) return phoneNormalized;
+
+  const local = digits.slice(2);
 
   if (local.length === 11) {
     return `(${local.slice(0, 2)}) ${local.slice(2, 7)}-${local.slice(7)}`;
@@ -223,3 +231,5 @@ export function formatNormalizedBrazilPhone(phoneNormalized: string) {
 
   return phoneNormalized;
 }
+
+export const formatNormalizedBrazilPhone = formatPhoneForDisplay;

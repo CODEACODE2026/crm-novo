@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CLIENT_REFERRAL_SEARCH_DEBOUNCE_MS,
   ensureSelectedOption,
+  formatPhoneForDisplay,
   formatNormalizedBrazilPhone,
   resolveReferralSelection,
   scheduleClientReferralSearch,
@@ -20,6 +21,8 @@ const bruno: ClientOption = {
 describe('ClientReferralSelect helpers', () => {
   it('formats selected client phone for display', () => {
     expect(formatNormalizedBrazilPhone(bruno.phoneNormalized)).toBe('(44) 99821-2815');
+    expect(formatPhoneForDisplay('14076390665', '+14076390665')).toBe('+14076390665');
+    expect(formatPhoneForDisplay('351912345678')).toBe('351912345678');
   });
 
   it('keeps the selected client visible across option refreshes', () => {

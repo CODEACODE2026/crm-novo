@@ -2,14 +2,13 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Search, X } from 'lucide-react';
-import {
-  formatNormalizedBrazilPhone,
-  scheduleClientReferralSearch,
-} from './client-referral-select';
+import { formatPhoneForDisplay, scheduleClientReferralSearch } from './client-referral-select';
 import { listClientOptions, type ClientOption } from '../../lib/crm-api';
 
 function financeClientOptionDetails(option: ClientOption) {
-  const phone = option.phoneNormalized ? formatNormalizedBrazilPhone(option.phoneNormalized) : '';
+  const phone = option.phoneNormalized
+    ? formatPhoneForDisplay(option.phoneNormalized, option.phoneE164)
+    : '';
   return [phone, option.email].filter(Boolean).join(' • ');
 }
 

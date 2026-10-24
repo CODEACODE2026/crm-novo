@@ -893,7 +893,7 @@ export interface WhatsAppConversation {
   instanceName: string | null;
   provider: 'KIRAGO';
   externalInstanceId: string | null;
-  client: Pick<Client, 'id' | 'name' | 'phone' | 'phoneNormalized'> | null;
+  client: Pick<Client, 'id' | 'name' | 'phone' | 'phoneNormalized' | 'phoneE164'> | null;
   displayName: string;
   contactName: string | null;
   phone: string;

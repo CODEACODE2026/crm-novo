@@ -113,6 +113,14 @@ export class ClientsService {
   ) {}
 
   phoneCapabilities() {
+    const globalManualTextEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_MANUAL_TEXT_ENABLED') === 'true';
+    const globalMessageActionsEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_MESSAGE_ACTIONS_ENABLED') === 'true';
+    const globalManualMediaEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_MANUAL_MEDIA_ENABLED') === 'true';
+    const globalManualVoiceEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_MANUAL_VOICE_ENABLED') === 'true';
     const internationalManualMediaCountries = this.internationalCountryAllowlist(
       'PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES',
     );
@@ -151,10 +159,10 @@ export class ClientsService {
         this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true',
       operationCapabilities: {
         clientPhoneWrite: { enabled: true },
-        manualText: { enabled: false },
-        messageAction: { enabled: false },
-        manualMedia: { enabled: false },
-        manualVoice: { enabled: false },
+        manualText: { enabled: globalManualTextEnabled },
+        messageAction: { enabled: globalMessageActionsEnabled },
+        manualMedia: { enabled: globalManualMediaEnabled },
+        manualVoice: { enabled: globalManualVoiceEnabled },
         manualPix: { enabled: false, requiresFinancialAuthorization: true },
         pixButton: { enabled: false, requiresFinancialAuthorization: true },
         autoReply: { enabled: false },

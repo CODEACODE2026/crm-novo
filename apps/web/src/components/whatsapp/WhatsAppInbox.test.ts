@@ -28,6 +28,7 @@ import {
   findExactSharedContactClient,
   findExactSharedContactConversation,
   hasAmbiguousSharedContactConversation,
+  hasLinkedCanonicalGlobalIdentity,
   contactRelevantReceivable,
   contactReceivablesForReference,
   conversationComposerActionMode,
@@ -57,6 +58,7 @@ import {
   nextConversationPresenceState,
   nextConversationListRequestGeneration,
   resolveRealtimeCreatedMessage,
+  resolveManualOperationAvailability,
   phoneDigitsCompatible,
   savedStickerPreviewKind,
   sharedContactBrazilPhoneCandidates,
@@ -144,7 +146,25 @@ describe('international manual text capability', () => {
     expect(whatsAppInboxSource).toContain('capabilities.internationalManualVoiceEnabled === true');
     expect(whatsAppInboxSource).toContain('capabilities.internationalManualPixEnabled === true');
     expect(whatsAppInboxSource).toContain(
-      'selectedConversationIsInternational && !internationalMessageActionsEnabled',
+      'capabilities.operationCapabilities?.manualText?.enabled === true',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'capabilities.operationCapabilities?.messageAction?.enabled === true',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'capabilities.operationCapabilities?.manualMedia?.enabled === true',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'capabilities.operationCapabilities?.manualVoice?.enabled === true',
+    );
+    expect(whatsAppInboxSource).toContain('globalEnabled: globalManualMediaEnabled');
+    expect(whatsAppInboxSource).toContain('globalEnabled: globalManualVoiceEnabled');
+    expect(whatsAppInboxSource).toContain('hasLinkedCanonicalGlobalIdentity(');
+    expect(whatsAppInboxSource).toContain(
+      'outboundReplyDisabled={selectedConversationIsInternational && !repliesAllowed}',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'selectedConversationIsInternational && !messageActionsAllowed',
     );
     expect(whatsAppInboxSource).toContain(
       'restrictedOutboundActionsDisabled={selectedConversationIsInternational}',
@@ -161,6 +181,148 @@ describe('international manual text capability', () => {
     expect(whatsAppInboxSource).toContain(
       '!isInternationalWhatsAppConversation(conversation) || internationalManualPixEnabled',
     );
+  });
+
+  it.each([
+    [false, false, false],
+    [false, true, true],
+    [true, false, true],
+    [true, true, true],
+  ] as const)(
+    'applies global=%s legacy=%s precedence with a valid global identity',
+    (globalEnabled, legacyEnabled, expected) => {
+      expect(
+        resolveManualOperationAvailability({
+          globalEnabled,
+          legacyEnabled,
+          globalIdentityReady: true,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it('does not fall back to legacy when an enabled global operation lacks linked E.164 identity', () => {
+    expect(
+      resolveManualOperationAvailability({
+        globalEnabled: true,
+        legacyEnabled: true,
+        globalIdentityReady: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('requires one exact canonical identity across E.164, conversation and linked client', () => {
+    const linkedClient = {
+      id: 'client-jp',
+      name: 'Cliente JP',
+      phone: '+81 90-1234-5678',
+      phoneNormalized: '819012345678',
+      phoneE164: '+819012345678',
+    } satisfies NonNullable<WhatsAppConversation['client']>;
+    const canonical = conversation('global-linked', {
+      phone: '+81 90-1234-5678',
+      phoneNormalized: '819012345678',
+      phoneE164: '+819012345678',
+      phoneCountry: 'JP',
+      client: linkedClient,
+    });
+
+    expect(hasLinkedCanonicalGlobalIdentity(canonical)).toBe(true);
+    expect(hasLinkedCanonicalGlobalIdentity({ ...canonical, phoneE164: '+abc819012345678' })).toBe(
+      false,
+    );
+    expect(hasLinkedCanonicalGlobalIdentity({ ...canonical, phoneE164: ' +819012345678' })).toBe(
+      false,
+    );
+    expect(
+      hasLinkedCanonicalGlobalIdentity({
+        ...canonical,
+        client: { ...linkedClient, phoneE164: '+819012345678 ' },
+      }),
+    ).toBe(false);
+    expect(
+      hasLinkedCanonicalGlobalIdentity({
+        ...canonical,
+        client: {
+          ...linkedClient,
+          phoneNormalized: '351912345678',
+          phoneE164: '+351912345678',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasLinkedCanonicalGlobalIdentity({
+        ...canonical,
+        client: { ...linkedClient, phoneE164: null },
+      }),
+    ).toBe(false);
+    expect(hasLinkedCanonicalGlobalIdentity({ ...canonical, client: null })).toBe(false);
+  });
+
+  it.each([
+    ['Brasil', '+5511999991234'],
+    ['Estados Unidos', '+14076390665'],
+    ['Portugal', '+351912345678'],
+  ])('accepts matching canonical linked identity from %s', (_country, phoneE164) => {
+    const phoneNormalized = phoneE164.slice(1);
+    const canonical = conversation(`canonical-${phoneNormalized}`, {
+      phone: phoneE164,
+      phoneNormalized,
+      phoneE164,
+      client: {
+        id: `client-${phoneNormalized}`,
+        name: 'Cliente canônico',
+        phone: phoneE164,
+        phoneNormalized,
+        phoneE164,
+      },
+    });
+
+    expect(hasLinkedCanonicalGlobalIdentity(canonical)).toBe(true);
+  });
+
+  it('keeps old API and legacy client payloads without client E.164 fail-closed', () => {
+    const legacyClient: NonNullable<WhatsAppConversation['client']> = {
+      id: 'client-legacy',
+      name: 'Cliente legado',
+      phone: '+55 11 99999-1234',
+      phoneNormalized: '5511999991234',
+    };
+    const oldApiConversation = conversation('old-api', {
+      phone: '+55 11 99999-1234',
+      phoneNormalized: '5511999991234',
+      phoneE164: '+5511999991234',
+      client: legacyClient,
+    });
+
+    expect(hasLinkedCanonicalGlobalIdentity(oldApiConversation)).toBe(false);
+    expect(
+      resolveManualOperationAvailability({
+        globalEnabled: true,
+        legacyEnabled: true,
+        globalIdentityReady: hasLinkedCanonicalGlobalIdentity(oldApiConversation),
+      }),
+    ).toBe(false);
+    expect(
+      resolveManualOperationAvailability({
+        globalEnabled: false,
+        legacyEnabled: true,
+        globalIdentityReady: hasLinkedCanonicalGlobalIdentity(oldApiConversation),
+      }),
+    ).toBe(true);
+  });
+
+  it('uses canonical E.164 before country metadata when classifying a conversation', () => {
+    expect(
+      isInternationalWhatsAppConversation(
+        conversation('canonical-us', { phoneE164: '+14076390665', phoneCountry: 'BR' }),
+      ),
+    ).toBe(true);
+    expect(
+      isInternationalWhatsAppConversation(
+        conversation('canonical-br', { phoneE164: '+5511999991234', phoneCountry: 'US' }),
+      ),
+    ).toBe(false);
   });
 });
 

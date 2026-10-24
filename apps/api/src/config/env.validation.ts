@@ -26,6 +26,10 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MANUAL_VOICE_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_MANUAL_VOICE_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_MANUAL_TEXT_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_MESSAGE_ACTIONS_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_MANUAL_MEDIA_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_MANUAL_VOICE_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');

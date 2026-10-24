@@ -1031,6 +1031,32 @@ describe('ClientsService manual client creation', () => {
     });
   });
 
+  it('publishes independent global manual capabilities without enabling financial operations', () => {
+    expect(
+      createClientCreationService(false, false, false, false, false, false, false, '', false, '', {
+        text: true,
+        actions: true,
+        media: true,
+        voice: true,
+      }).service.phoneCapabilities(),
+    ).toMatchObject({
+      capabilityModel: 'OPERATION_V1',
+      operationCapabilities: {
+        manualText: { enabled: true },
+        messageAction: { enabled: true },
+        manualMedia: { enabled: true },
+        manualVoice: { enabled: true },
+        manualPix: { enabled: false, requiresFinancialAuthorization: true },
+        billing: { enabled: false, requiresFinancialAuthorization: true },
+        recovery: { enabled: false, requiresFinancialAuthorization: true },
+      },
+      internationalManualMediaEnabled: false,
+      internationalManualMediaCountries: [],
+      internationalManualVoiceEnabled: false,
+      internationalManualVoiceCountries: [],
+    });
+  });
+
   it('publishes international message actions independently and fail-closed by default', () => {
     expect(
       createClientCreationService(false, false, false, true).service.phoneCapabilities(),
@@ -2008,6 +2034,12 @@ function createClientCreationService(
   internationalManualMediaCountries = '',
   internationalManualVoiceEnabled = false,
   internationalManualVoiceCountries = '',
+  globalManualOperations: {
+    text?: boolean;
+    actions?: boolean;
+    media?: boolean;
+    voice?: boolean;
+  } = {},
 ) {
   const plan = {
     id: 'plan-id',
@@ -2174,6 +2206,18 @@ function createClientCreationService(
         }
         if (key === 'PHONE_INTERNATIONAL_MANUAL_VOICE_COUNTRIES') {
           return internationalManualVoiceCountries || undefined;
+        }
+        if (key === 'PHONE_GLOBAL_MANUAL_TEXT_ENABLED') {
+          return globalManualOperations.text ? 'true' : undefined;
+        }
+        if (key === 'PHONE_GLOBAL_MESSAGE_ACTIONS_ENABLED') {
+          return globalManualOperations.actions ? 'true' : undefined;
+        }
+        if (key === 'PHONE_GLOBAL_MANUAL_MEDIA_ENABLED') {
+          return globalManualOperations.media ? 'true' : undefined;
+        }
+        if (key === 'PHONE_GLOBAL_MANUAL_VOICE_ENABLED') {
+          return globalManualOperations.voice ? 'true' : undefined;
         }
         return undefined;
       }),

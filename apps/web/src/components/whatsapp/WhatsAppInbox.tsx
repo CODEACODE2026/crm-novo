@@ -668,6 +668,10 @@ export function WhatsAppInbox({
     string[]
   >([]);
   const [internationalManualPixEnabled, setInternationalManualPixEnabled] = useState(false);
+  const [globalManualTextEnabled, setGlobalManualTextEnabled] = useState(false);
+  const [globalMessageActionsEnabled, setGlobalMessageActionsEnabled] = useState(false);
+  const [globalManualMediaEnabled, setGlobalManualMediaEnabled] = useState(false);
+  const [globalManualVoiceEnabled, setGlobalManualVoiceEnabled] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<ConversationComposerMedia | null>(null);
   const [pendingImageAnnotation, setPendingImageAnnotation] = useState<File | null>(null);
   const [dropOverlayVisible, setDropOverlayVisible] = useState(false);
@@ -818,27 +822,51 @@ export function WhatsAppInbox({
   const selectedConversationIsInternational =
     isInternationalWhatsAppConversation(selectedConversation);
   const selectedConversationCountry = selectedConversation?.phoneCountry ?? null;
+  const selectedConversationHasGlobalIdentity =
+    hasLinkedCanonicalGlobalIdentity(selectedConversation);
+  const manualTextAllowed = resolveManualOperationAvailability({
+    globalEnabled: globalManualTextEnabled,
+    legacyEnabled: internationalManualTextSendEnabled,
+    globalIdentityReady: selectedConversationHasGlobalIdentity,
+  });
+  const messageActionsAllowed = resolveManualOperationAvailability({
+    globalEnabled: globalMessageActionsEnabled,
+    legacyEnabled: internationalMessageActionsEnabled,
+    globalIdentityReady: selectedConversationHasGlobalIdentity,
+  });
+  const repliesAllowed = manualTextAllowed && messageActionsAllowed;
   const internationalMediaAllowed = Boolean(
     selectedConversationIsInternational &&
-    internationalManualMediaEnabled &&
-    selectedConversationCountry &&
-    internationalManualMediaCountries.includes(selectedConversationCountry),
+    resolveManualOperationAvailability({
+      globalEnabled: globalManualMediaEnabled,
+      globalIdentityReady: selectedConversationHasGlobalIdentity,
+      legacyEnabled: Boolean(
+        internationalManualMediaEnabled &&
+        selectedConversationCountry &&
+        internationalManualMediaCountries.includes(selectedConversationCountry),
+      ),
+    }),
   );
   const internationalVoiceAllowed = Boolean(
     selectedConversationIsInternational &&
-    internationalManualVoiceEnabled &&
-    selectedConversationCountry &&
-    internationalManualVoiceCountries.includes(selectedConversationCountry),
+    resolveManualOperationAvailability({
+      globalEnabled: globalManualVoiceEnabled,
+      globalIdentityReady: selectedConversationHasGlobalIdentity,
+      legacyEnabled: Boolean(
+        internationalManualVoiceEnabled &&
+        selectedConversationCountry &&
+        internationalManualVoiceCountries.includes(selectedConversationCountry),
+      ),
+    }),
   );
   const internationalTextOnly =
     selectedConversationIsInternational &&
-    internationalManualTextSendEnabled &&
+    manualTextAllowed &&
     !internationalMediaAllowed &&
     !internationalVoiceAllowed;
   const composerMediaBlocked = selectedConversationIsInternational && !internationalMediaAllowed;
   const composerVoiceBlocked = selectedConversationIsInternational && !internationalVoiceAllowed;
-  const composerTextBlocked =
-    selectedConversationIsInternational && !internationalManualTextSendEnabled;
+  const composerTextBlocked = selectedConversationIsInternational && !manualTextAllowed;
   const internationalComposerBlocked =
     composerTextBlocked && composerMediaBlocked && composerVoiceBlocked;
 
@@ -847,6 +875,18 @@ export function WhatsAppInbox({
     void getClientPhoneCapabilities()
       .then((capabilities) => {
         if (!canceled) {
+          setGlobalManualTextEnabled(
+            capabilities.operationCapabilities?.manualText?.enabled === true,
+          );
+          setGlobalMessageActionsEnabled(
+            capabilities.operationCapabilities?.messageAction?.enabled === true,
+          );
+          setGlobalManualMediaEnabled(
+            capabilities.operationCapabilities?.manualMedia?.enabled === true,
+          );
+          setGlobalManualVoiceEnabled(
+            capabilities.operationCapabilities?.manualVoice?.enabled === true,
+          );
           setInternationalManualTextSendEnabled(
             capabilities.internationalManualTextSendEnabled === true,
           );
@@ -877,6 +917,10 @@ export function WhatsAppInbox({
           setInternationalManualVoiceEnabled(false);
           setInternationalManualVoiceCountries([]);
           setInternationalManualPixEnabled(false);
+          setGlobalManualTextEnabled(false);
+          setGlobalMessageActionsEnabled(false);
+          setGlobalManualMediaEnabled(false);
+          setGlobalManualVoiceEnabled(false);
         }
       });
     return () => {
@@ -2746,7 +2790,7 @@ export function WhatsAppInbox({
   }
 
   function selectReplyTarget(message: WhatsAppConversationMessage) {
-    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) {
+    if (selectedConversationIsInternational && !repliesAllowed) {
       setSendError('Respostas internacionais ainda não estão habilitadas para esta conversa.');
       return;
     }
@@ -2879,7 +2923,7 @@ export function WhatsAppInbox({
         : (mediaOverride ?? selectedMedia);
     const replyToSend = ignoreReply ? null : bodyOverride ? replyToOverride : replyTarget;
     if (selectedConversationIsInternational) {
-      if (!internationalManualTextSendEnabled && !mediaToSend) {
+      if (!manualTextAllowed && !mediaToSend) {
         setSendError('O envio internacional ainda não está habilitado para esta conversa.');
         return false;
       }
@@ -2891,7 +2935,7 @@ export function WhatsAppInbox({
         setSendError('Esta ação internacional ainda não está habilitada para esta conversa.');
         return false;
       }
-      if (replyToSend && !internationalMessageActionsEnabled) {
+      if (replyToSend && !repliesAllowed) {
         setSendError('Respostas internacionais ainda não estão habilitadas para esta conversa.');
         return false;
       }
@@ -3644,7 +3688,7 @@ export function WhatsAppInbox({
 
   async function updateConversationReaction(message: WhatsAppConversationMessage, emoji: string) {
     if (!selectedConversation) return;
-    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) return;
+    if (selectedConversationIsInternational && !messageActionsAllowed) return;
     if (message.deleted) return;
     if (reactingMessagesRef.current.has(message.id)) return;
 
@@ -3679,7 +3723,7 @@ export function WhatsAppInbox({
 
   async function deleteConversationMessage(message: WhatsAppConversationMessage) {
     if (!selectedConversation) return;
-    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) return;
+    if (selectedConversationIsInternational && !messageActionsAllowed) return;
     if (!isDeleteEligibleConversationMessage(message)) return;
     if (deletingMessagesRef.current.has(message.id)) return;
 
@@ -3714,7 +3758,7 @@ export function WhatsAppInbox({
   }
 
   function startEditingConversationMessage(message: WhatsAppConversationMessage) {
-    if (selectedConversationIsInternational && !internationalMessageActionsEnabled) return;
+    if (selectedConversationIsInternational && !messageActionsAllowed) return;
     if (!isEditEligibleConversationMessage(message) || savingEditMessageId) return;
     editingMessageRef.current = message.id;
     setEditingMessageId(message.id);
@@ -4407,8 +4451,9 @@ export function WhatsAppInbox({
               <ConversationMessages
                 conversationId={selectedConversation.id}
                 outboundActionsDisabled={
-                  selectedConversationIsInternational && !internationalMessageActionsEnabled
+                  selectedConversationIsInternational && !messageActionsAllowed
                 }
+                outboundReplyDisabled={selectedConversationIsInternational && !repliesAllowed}
                 restrictedOutboundActionsDisabled={selectedConversationIsInternational}
                 messages={messages}
                 hasOlder={hasOlderMessages}
@@ -6013,6 +6058,7 @@ function ConversationHeader({
 function ConversationMessages({
   conversationId,
   outboundActionsDisabled,
+  outboundReplyDisabled,
   restrictedOutboundActionsDisabled,
   hasOlder,
   hasNewer,
@@ -6060,6 +6106,7 @@ function ConversationMessages({
 }: {
   conversationId: string;
   outboundActionsDisabled: boolean;
+  outboundReplyDisabled: boolean;
   restrictedOutboundActionsDisabled: boolean;
   hasOlder: boolean;
   hasNewer: boolean;
@@ -6218,6 +6265,7 @@ function ConversationMessages({
                   <ConversationBubble
                     conversationId={conversationId}
                     outboundActionsDisabled={outboundActionsDisabled}
+                    outboundReplyDisabled={outboundReplyDisabled}
                     restrictedOutboundActionsDisabled={restrictedOutboundActionsDisabled}
                     highlighted={targetMessageId === message.id}
                     message={message}
@@ -6463,6 +6511,7 @@ function isAllowedConversationDocument(mimeType: string, extension: string) {
 function ConversationBubble({
   conversationId,
   outboundActionsDisabled,
+  outboundReplyDisabled,
   restrictedOutboundActionsDisabled,
   deleteConfirmOpen,
   deleteError,
@@ -6501,6 +6550,7 @@ function ConversationBubble({
 }: {
   conversationId: string;
   outboundActionsDisabled: boolean;
+  outboundReplyDisabled: boolean;
   restrictedOutboundActionsDisabled: boolean;
   deleteConfirmOpen: boolean;
   deleteError: string;
@@ -6561,7 +6611,7 @@ function ConversationBubble({
     {
       label: 'Responder',
       icon: Reply,
-      disabled: outboundActionsDisabled,
+      disabled: outboundReplyDisabled,
       onSelect: () => onReply(message),
     },
     ...(canSaveSticker
@@ -6628,7 +6678,7 @@ function ConversationBubble({
         type="button"
         title="Responder"
         aria-label="Responder mensagem"
-        disabled={outboundActionsDisabled}
+        disabled={outboundReplyDisabled}
         onClick={() => onReply(message)}
       >
         <Reply aria-hidden="true" size={14} />
@@ -11714,12 +11764,35 @@ function conversationDisplayPhone(conversation: WhatsAppConversation) {
   return normalizeWhatsAppDisplayPhone(conversation.phoneNormalized) ?? conversation.phone;
 }
 
+export function resolveManualOperationAvailability(input: {
+  globalEnabled: boolean;
+  legacyEnabled: boolean;
+  globalIdentityReady: boolean;
+}) {
+  return input.globalEnabled ? input.globalIdentityReady : input.legacyEnabled;
+}
+
+export function hasLinkedCanonicalGlobalIdentity(
+  conversation: WhatsAppConversation | null | undefined,
+) {
+  const e164 = conversation?.phoneE164 ?? '';
+  if (!/^\+[1-9]\d{7,14}$/.test(e164) || !conversation?.client) return false;
+
+  const canonicalDigits = e164.slice(1);
+  const linkedClientE164 = conversation.client.phoneE164;
+  return (
+    linkedClientE164 === e164 &&
+    conversation.phoneNormalized === canonicalDigits &&
+    conversation.client.phoneNormalized === canonicalDigits
+  );
+}
+
 export function isInternationalWhatsAppConversation(
   conversation: WhatsAppConversation | null | undefined,
 ) {
   if (!conversation) return false;
-  if (conversation.phoneCountry) return conversation.phoneCountry !== 'BR';
-  return Boolean(conversation.phoneE164 && !conversation.phoneE164.startsWith('+55'));
+  if (conversation.phoneE164) return !conversation.phoneE164.startsWith('+55');
+  return Boolean(conversation.phoneCountry && conversation.phoneCountry !== 'BR');
 }
 
 export function phoneDigitsCompatible(left: string, right: string) {

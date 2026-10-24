@@ -80,6 +80,50 @@ describe('resolveWhatsAppOutboundPhone', () => {
     ).toEqual({ status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' });
   });
 
+  it.each([
+    ['MANUAL_CONVERSATION_TEXT', 'globalManualTextEnabled', '+14076390665', '14076390665'],
+    ['MANUAL_CONVERSATION_ACTION', 'globalMessageActionsEnabled', '+351912345678', '351912345678'],
+    ['MANUAL_CONVERSATION_MEDIA', 'globalManualMediaEnabled', '+819012345678', '819012345678'],
+    ['MANUAL_CONVERSATION_VOICE', 'globalManualVoiceEnabled', '+61412345678', '61412345678'],
+  ] as const)(
+    'authorizes %s globally without receiving a country allowlist',
+    (operation, flag, e164, digits) => {
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: e164,
+          phoneNormalized: digits,
+          phoneE164: e164,
+          operation,
+          [flag]: true,
+        }),
+      ).toMatchObject({ status: 'allowed', digits, e164, globalOperation: true });
+    },
+  );
+
+  it.each([
+    [false, false, 'blocked', false],
+    [false, true, 'allowed', false],
+    [true, false, 'allowed', true],
+    [true, true, 'allowed', true],
+  ] as const)(
+    'applies global=%s legacy=%s precedence without country authorization',
+    (globalEnabled, legacyEnabled, status, globalOperation) => {
+      const result = resolveWhatsAppOutboundPhone({
+        phone: '+819012345678',
+        phoneNormalized: '819012345678',
+        phoneE164: '+819012345678',
+        operation: 'MANUAL_CONVERSATION_TEXT',
+        globalManualTextEnabled: globalEnabled,
+        internationalManualTextEnabled: legacyEnabled,
+      });
+
+      expect(result.status).toBe(status);
+      if (result.status === 'allowed') {
+        expect(result.globalOperation === true).toBe(globalOperation);
+      }
+    },
+  );
+
   it('never authorizes international identities for BR-only operations', () => {
     expect(
       resolveWhatsAppOutboundPhone({

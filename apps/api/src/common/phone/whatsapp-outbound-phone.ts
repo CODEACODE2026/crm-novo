@@ -1,5 +1,6 @@
 import { resolveBrazilianOperationalPhone } from './brazilian-operational-phone';
 import { comparePhoneIdentities, normalizePhone } from './phone-normalizer';
+import { resolvePhoneOperationCapability } from './phone-operation-capability';
 
 export type WhatsAppOutboundOperation =
   | 'BR_OPERATIONAL'
@@ -19,6 +20,10 @@ export type WhatsAppOutboundPhoneInput = {
   internationalManualMediaEnabled?: boolean;
   internationalManualVoiceEnabled?: boolean;
   internationalManualPixEnabled?: boolean;
+  globalManualTextEnabled?: boolean;
+  globalMessageActionsEnabled?: boolean;
+  globalManualMediaEnabled?: boolean;
+  globalManualVoiceEnabled?: boolean;
 };
 
 export type WhatsAppOutboundPhoneResult =
@@ -33,6 +38,7 @@ export type WhatsAppOutboundPhoneResult =
         | 'INTERNATIONAL_MANUAL_PIX_ALLOWED';
       digits: string;
       e164: string;
+      globalOperation?: true;
     }
   | {
       status: 'blocked';
@@ -86,7 +92,7 @@ export function resolveWhatsAppOutboundPhone(
     if (input.operation === 'BR_OPERATIONAL') {
       return { status: 'blocked', reason: 'BLOCKED_UNSUPPORTED_OPERATION' };
     }
-    const enabled =
+    const legacyEnabled =
       input.operation === 'MANUAL_CONVERSATION_TEXT'
         ? input.internationalManualTextEnabled
         : input.operation === 'MANUAL_CONVERSATION_ACTION'
@@ -96,7 +102,35 @@ export function resolveWhatsAppOutboundPhone(
             : input.operation === 'MANUAL_CONVERSATION_VOICE'
               ? input.internationalManualVoiceEnabled
               : input.internationalManualPixEnabled;
-    if (!enabled) {
+    const globalEnabled =
+      input.operation === 'MANUAL_CONVERSATION_TEXT'
+        ? input.globalManualTextEnabled
+        : input.operation === 'MANUAL_CONVERSATION_ACTION'
+          ? input.globalMessageActionsEnabled
+          : input.operation === 'MANUAL_CONVERSATION_MEDIA'
+            ? input.globalManualMediaEnabled
+            : input.operation === 'MANUAL_CONVERSATION_VOICE'
+              ? input.globalManualVoiceEnabled
+              : false;
+    const operation =
+      input.operation === 'MANUAL_CONVERSATION_TEXT'
+        ? 'MANUAL_TEXT'
+        : input.operation === 'MANUAL_CONVERSATION_ACTION'
+          ? 'MESSAGE_ACTION'
+          : input.operation === 'MANUAL_CONVERSATION_MEDIA'
+            ? 'MANUAL_MEDIA'
+            : input.operation === 'MANUAL_CONVERSATION_VOICE'
+              ? 'MANUAL_VOICE'
+              : 'MANUAL_PIX';
+    const capability = resolvePhoneOperationCapability({
+      operation,
+      identityValid: true,
+      operationEnabled: globalEnabled === true || legacyEnabled === true,
+      administrativePermission: true,
+      providerSupported: true,
+      ...(operation === 'MANUAL_PIX' ? { financialAuthorization: true } : {}),
+    });
+    if (capability.status !== 'allowed') {
       return { status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' };
     }
 
@@ -114,6 +148,7 @@ export function resolveWhatsAppOutboundPhone(
                 : 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
       digits: canonical.digits,
       e164: canonical.e164,
+      ...(globalEnabled === true ? { globalOperation: true as const } : {}),
     };
   }
 

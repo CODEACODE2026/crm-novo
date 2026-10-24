@@ -377,6 +377,7 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
         name: true;
         phone: true;
         phoneNormalized: true;
+        phoneE164: true;
       };
     };
     whatsAppConnection: {
@@ -1103,7 +1104,9 @@ export class WhatsAppService {
     }
 
     const conversationInclude = {
-      client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+      client: {
+        select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+      },
       whatsAppConnection: {
         select: { name: true, providerInstanceName: true, providerUserId: true },
       },
@@ -1306,7 +1309,9 @@ export class WhatsAppService {
       return tx.whatsAppConversation.findUniqueOrThrow({
         where: { id: conversationId },
         include: {
-          client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          client: {
+            select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+          },
           whatsAppConnection: {
             select: { name: true, providerInstanceName: true, providerUserId: true },
           },
@@ -1460,7 +1465,15 @@ export class WhatsAppService {
           ...whatsappMessageReplyInclude,
           conversation: {
             include: {
-              client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+              client: {
+                select: {
+                  id: true,
+                  name: true,
+                  phone: true,
+                  phoneNormalized: true,
+                  phoneE164: true,
+                },
+              },
               whatsAppConnection: {
                 select: { name: true, providerInstanceName: true, providerUserId: true },
               },
@@ -1901,15 +1914,22 @@ export class WhatsAppService {
 
     const directPhone = client ? null : dto.phone?.trim();
     const directIdentity = directPhone?.startsWith('+') ? normalizePhone(directPhone) : null;
-    const phone = this.resolveWhatsAppOutboundRecipient(
+    const phoneRecipient = this.resolveWhatsAppOutboundRecipient(
       client ?? {
         phone: directPhone ?? null,
         phoneNormalized:
           directIdentity?.status === 'valid' ? directIdentity.digits : (directPhone ?? null),
         phoneE164: directIdentity?.status === 'valid' ? directIdentity.e164 : null,
       },
-      'BR_OPERATIONAL',
-    ).digits;
+      'MANUAL_CONVERSATION_TEXT',
+    );
+    if (phoneRecipient.kind !== 'BR_OPERATIONAL' && !client) {
+      throw new ConflictException({
+        code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
+        message: 'O inicio de conversa global exige um cliente vinculado.',
+      });
+    }
+    const phone = phoneRecipient.digits;
     const requestId = dto.requestId.trim();
     const existingMessage = await this.findConversationMessageByRequestId(connection.id, requestId);
 
@@ -1928,6 +1948,11 @@ export class WhatsAppService {
       ) {
         throw new ConflictException('requestId ja foi usado em outro destino desta conexao.');
       }
+      if (dto.clientId && existingConversation.clientId !== dto.clientId) {
+        throw new ConflictException(
+          'requestId ja foi usado para uma conversa vinculada a outro cliente.',
+        );
+      }
 
       return {
         conversation: this.presentConversation(existingConversation),
@@ -1941,6 +1966,7 @@ export class WhatsAppService {
       connection,
       client,
       phone,
+      phoneE164: phoneRecipient.e164,
       actorUserId,
     });
     const message = await this.sendConversationTextMessage(prepared.conversation.id, {
@@ -1983,9 +2009,15 @@ export class WhatsAppService {
       ? 'MANUAL_CONVERSATION_ACTION'
       : 'MANUAL_CONVERSATION_TEXT';
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
+    this.assertInternationalConversationClientLinked(
+      conversation,
+      recipient.kind,
+      recipient.globalOperation === true,
+    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     if (
       recipient.kind === 'INTERNATIONAL_MANUAL_ACTION_ALLOWED' &&
+      this.config.get<string>('PHONE_GLOBAL_MANUAL_TEXT_ENABLED') !== 'true' &&
       this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') !== 'true'
     ) {
       throw new ConflictException({
@@ -2039,6 +2071,11 @@ export class WhatsAppService {
         throw new NotFoundException('Conversa WhatsApp nao encontrada.');
       }
       latestRecipient = this.resolveWhatsAppOutboundRecipient(latestConversation, operation);
+      this.assertInternationalConversationClientLinked(
+        latestConversation,
+        latestRecipient.kind,
+        latestRecipient.globalOperation === true,
+      );
       this.assertLinkedClientIdentity(
         latestConversation,
         latestRecipient.e164,
@@ -2061,6 +2098,9 @@ export class WhatsAppService {
     }
     if (
       latestRecipient.digits !== recipient.digits ||
+      (latestRecipient.globalOperation === true &&
+        (latestConversation.clientId !== conversation.clientId ||
+          latestConversation.client?.id !== latestConversation.clientId)) ||
       latestConversation.whatsAppConnectionId !== connection.id
     ) {
       await this.failPendingConversationMessage(
@@ -2118,6 +2158,17 @@ export class WhatsAppService {
         }),
       );
     } catch (error) {
+      if (
+        latestRecipient.kind !== 'BR_OPERATIONAL' &&
+        error instanceof ServiceUnavailableException
+      ) {
+        return this.keepConversationMessagePendingAfterUncertainProviderResult({
+          conversationId: conversation.id,
+          error,
+          messageId: pending.id,
+          source: 'manual_outbound_send',
+        });
+      }
       const failed = await this.prisma.whatsAppMessage.update({
         where: { id: pending.id },
         data: {
@@ -2470,6 +2521,11 @@ export class WhatsAppService {
       conversation,
       'MANUAL_CONVERSATION_ACTION',
     );
+    this.assertInternationalConversationClientLinked(
+      conversation,
+      recipient.kind,
+      recipient.globalOperation === true,
+    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
@@ -2497,6 +2553,7 @@ export class WhatsAppService {
       conversationId,
       messageId,
       target.providerMessageId,
+      recipient.globalOperation === true ? conversation.clientId : undefined,
     );
     if (latest.target.deletedAt || latest.target.deletedForEveryone) {
       throw new ConflictException('Mensagem apagada nao pode receber reacao.');
@@ -2581,6 +2638,11 @@ export class WhatsAppService {
       conversation,
       'MANUAL_CONVERSATION_ACTION',
     );
+    this.assertInternationalConversationClientLinked(
+      conversation,
+      recipient.kind,
+      recipient.globalOperation === true,
+    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
@@ -2612,6 +2674,7 @@ export class WhatsAppService {
       conversationId,
       messageId,
       target.providerMessageId,
+      recipient.globalOperation === true ? conversation.clientId : undefined,
     );
     if (latest.target.deletedAt || latest.target.deletedForEveryone) {
       return this.presentConversationMessage(latest.target);
@@ -2670,6 +2733,11 @@ export class WhatsAppService {
         conversation,
         'MANUAL_CONVERSATION_ACTION',
       );
+      this.assertInternationalConversationClientLinked(
+        conversation,
+        recipient.kind,
+        recipient.globalOperation === true,
+      );
       this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
       const connection = conversation.whatsAppConnection;
 
@@ -2709,6 +2777,7 @@ export class WhatsAppService {
         conversationId,
         messageId,
         target.providerMessageId,
+        recipient.globalOperation === true ? conversation.clientId : undefined,
       );
       if (latest.target.direction !== 'OUTBOUND') {
         throw new ConflictException('Somente mensagens enviadas pelo CRM podem ser editadas.');
@@ -3445,7 +3514,9 @@ export class WhatsAppService {
         const current = await tx.whatsAppConversation.findUnique({
           where: { id },
           include: {
-            client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+            client: {
+              select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+            },
             whatsAppConnection: {
               select: { name: true, providerInstanceName: true, providerUserId: true },
             },
@@ -3479,7 +3550,9 @@ export class WhatsAppService {
       const linked = await tx.whatsAppConversation.findUnique({
         where: { id },
         include: {
-          client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          client: {
+            select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+          },
           whatsAppConnection: {
             select: { name: true, providerInstanceName: true, providerUserId: true },
           },
@@ -3552,7 +3625,9 @@ export class WhatsAppService {
     const conversation = await this.prisma.whatsAppConversation.findUnique({
       where: { id },
       include: {
-        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        client: {
+          select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+        },
         whatsAppConnection: true,
         labelAssignments: {
           select: { label: { select: { id: true, name: true, color: true } } },
@@ -3650,7 +3725,9 @@ export class WhatsAppService {
       where: { id },
       data: { unreadCount: { decrement: confirmedReadCount } },
       include: {
-        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        client: {
+          select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+        },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
@@ -3682,7 +3759,9 @@ export class WhatsAppService {
       where: { id },
       data: { status: 'RESOLVED' },
       include: {
-        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        client: {
+          select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+        },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
@@ -6180,7 +6259,9 @@ export class WhatsAppService {
     return this.prisma.whatsAppConversation.findUnique({
       where: { id },
       include: {
-        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        client: {
+          select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+        },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
@@ -6270,7 +6351,9 @@ export class WhatsAppService {
     return tx.whatsAppConversation.findUnique({
       where: { id },
       include: {
-        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        client: {
+          select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+        },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
@@ -6284,15 +6367,22 @@ export class WhatsAppService {
 
   private async findOrCreateConversationForStart(input: {
     connection: WhatsAppConnection;
-    client: { id: string; name: string; phone: string; phoneNormalized: string } | null;
+    client: {
+      id: string;
+      name: string;
+      phone: string;
+      phoneNormalized: string;
+      phoneE164?: string | null;
+    } | null;
     phone: string;
+    phoneE164: string;
     actorUserId: string;
   }): Promise<{
     conversation: WhatsAppConversationForPresenter;
     reusedConversation: boolean;
     clientLinked: boolean;
   }> {
-    const { connection, client, phone } = input;
+    const { connection, client, phone, phoneE164 } = input;
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.whatsAppConversation.findUnique({
@@ -6303,7 +6393,9 @@ export class WhatsAppService {
           },
         },
         include: {
-          client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+          client: {
+            select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+          },
           whatsAppConnection: {
             select: { name: true, providerInstanceName: true, providerUserId: true },
           },
@@ -6363,11 +6455,14 @@ export class WhatsAppService {
             contactName: null,
             phone,
             phoneNormalized: phone,
+            phoneE164,
             status: 'OPEN',
             unreadCount: 0,
           },
           include: {
-            client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+            client: {
+              select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+            },
             whatsAppConnection: {
               select: { name: true, providerInstanceName: true, providerUserId: true },
             },
@@ -6419,7 +6514,9 @@ export class WhatsAppService {
         },
       },
       include: {
-        client: { select: { id: true, name: true, phone: true, phoneNormalized: true } },
+        client: {
+          select: { id: true, name: true, phone: true, phoneNormalized: true, phoneE164: true },
+        },
         whatsAppConnection: {
           select: { name: true, providerInstanceName: true, providerUserId: true },
         },
@@ -6770,7 +6867,7 @@ export class WhatsAppService {
     conversationId: string;
     error: unknown;
     messageId: string;
-    source: 'manual_outbound_media_send' | 'manual_outbound_voice_send';
+    source: 'manual_outbound_send' | 'manual_outbound_media_send' | 'manual_outbound_voice_send';
   }) {
     const errorMessage = this.sanitizeError(input.error);
     this.logger.warn(
@@ -7388,6 +7485,14 @@ export class WhatsAppService {
     const country = identity?.status === 'valid' ? identity.country : null;
     const resolved = resolveWhatsAppOutboundPhone({
       operation,
+      globalManualTextEnabled:
+        this.config.get<string>('PHONE_GLOBAL_MANUAL_TEXT_ENABLED') === 'true',
+      globalMessageActionsEnabled:
+        this.config.get<string>('PHONE_GLOBAL_MESSAGE_ACTIONS_ENABLED') === 'true',
+      globalManualMediaEnabled:
+        this.config.get<string>('PHONE_GLOBAL_MANUAL_MEDIA_ENABLED') === 'true',
+      globalManualVoiceEnabled:
+        this.config.get<string>('PHONE_GLOBAL_MANUAL_VOICE_ENABLED') === 'true',
       internationalManualTextEnabled:
         this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') === 'true',
       internationalMessageActionsEnabled:
@@ -7477,8 +7582,9 @@ export class WhatsAppService {
       | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
       | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
       | 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
+    required = true,
   ) {
-    if (kind !== 'BR_OPERATIONAL' && !conversation.client) {
+    if (required && kind !== 'BR_OPERATIONAL' && !conversation.client) {
       throw new ConflictException({
         code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
         message: 'A conversa internacional nao esta vinculada a um cliente confirmado.',
@@ -7534,6 +7640,7 @@ export class WhatsAppService {
     conversationId: string,
     messageId: string,
     expectedProviderMessageId: string,
+    expectedClientId?: string | null,
   ) {
     const target = await this.prisma.whatsAppMessage.findFirst({
       where: { id: messageId, conversationId },
@@ -7551,10 +7658,18 @@ export class WhatsAppService {
       conversation,
       'MANUAL_CONVERSATION_ACTION',
     );
+    this.assertInternationalConversationClientLinked(
+      conversation,
+      recipient.kind,
+      recipient.globalOperation === true,
+    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
     if (
       target.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
+      (expectedClientId !== undefined &&
+        (conversation.clientId !== expectedClientId ||
+          conversation.client?.id !== conversation.clientId)) ||
       target.provider !== conversation.provider ||
       connection.id !== conversation.whatsAppConnectionId ||
       connection.provider !== conversation.provider ||
@@ -8718,6 +8833,7 @@ export class WhatsAppService {
           name: conversation.client.name,
           phone: conversation.client.phone,
           phoneNormalized: conversation.client.phoneNormalized,
+          phoneE164: conversation.client.phoneE164,
         }
       : null;
 

@@ -47,6 +47,23 @@ describe('validateEnv', () => {
     });
   });
 
+  it.each(['TEXT', 'MEDIA', 'VOICE'] as const)(
+    'keeps global manual %s disabled when absent and validates its kill switch',
+    (operation) => {
+      const key = `PHONE_GLOBAL_MANUAL_${operation}_ENABLED`;
+      expect(validateEnv({ NODE_ENV: 'test' })[key]).toBeUndefined();
+      expect(validateEnv({ [key]: 'true' })).toMatchObject({ [key]: 'true' });
+      expect(() => validateEnv({ [key]: 'yes' })).toThrow(`${key} deve ser true ou false.`);
+    },
+  );
+
+  it('keeps global message actions disabled when absent and validates its kill switch', () => {
+    const key = 'PHONE_GLOBAL_MESSAGE_ACTIONS_ENABLED';
+    expect(validateEnv({ NODE_ENV: 'test' })[key]).toBeUndefined();
+    expect(validateEnv({ [key]: 'false' })).toMatchObject({ [key]: 'false' });
+    expect(() => validateEnv({ [key]: '1' })).toThrow(`${key} deve ser true ou false.`);
+  });
+
   it.each(['MEDIA', 'VOICE'] as const)(
     'defaults international manual %s and its country allowlist to disabled',
     (operation) => {

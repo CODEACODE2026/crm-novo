@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WhatsAppConversation } from './crm-api';
 import {
   ApiError,
   activateLegacyCutover,
@@ -99,6 +100,31 @@ describe('CRM UI formatters', () => {
     resetUnauthorizedRedirectForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('types linked conversation client E.164 as optional and nullable', () => {
+    const canonical: WhatsAppConversation['client'] = {
+      id: 'client-canonical',
+      name: 'Cliente canônico',
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    };
+    const legacyMissing: WhatsAppConversation['client'] = {
+      id: 'client-legacy-missing',
+      name: 'Cliente legado sem campo',
+      phone: '(11) 99999-1234',
+      phoneNormalized: '5511999991234',
+    };
+    const legacyNull: WhatsAppConversation['client'] = {
+      ...legacyMissing,
+      id: 'client-legacy-null',
+      phoneE164: null,
+    };
+
+    expect(canonical?.phoneE164).toBe('+351912345678');
+    expect(legacyMissing?.phoneE164).toBeUndefined();
+    expect(legacyNull?.phoneE164).toBeNull();
   });
 
   it('formats business dates without timezone conversion', () => {

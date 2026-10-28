@@ -11,17 +11,10 @@ import {
   FastDepixApiClient,
   type FastDepixWebhookRegistrationResponse,
 } from './fastdepix-api.client';
+import { fastDepixSupportedWebhookEvents } from './fastdepix-webhook-contract';
 
 const configurableProviders = ['FASTFLOW', 'FASTPIX', 'FASTPAY'] satisfies PaymentProviderCode[];
 const defaultPixProviders = ['FASTFLOW', 'FASTPAY'] satisfies PaymentProviderCode[];
-const supportedWebhookEvents = [
-  'transaction.created',
-  'transaction.approved',
-  'transaction.paid',
-  'transaction.expired',
-  'transaction.refunded',
-] as const;
-
 @Injectable()
 export class PaymentProviderCredentialsService {
   constructor(
@@ -152,7 +145,7 @@ export class PaymentProviderCredentialsService {
 
     const registered = await this.apiClient.registerWebhook(token, {
       url: publicUrl,
-      events: [...supportedWebhookEvents],
+      events: [...fastDepixSupportedWebhookEvents],
     });
     const secret = await this.resolveRegisteredWebhookSecret(token, publicUrl, registered);
 

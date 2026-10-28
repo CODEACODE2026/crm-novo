@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { BillingActorAttestationService } from '../billing/billing-actor-attestation.service';
+import { BillingPixWebhookQuarantineService } from '../billing/billing-pix-webhook-quarantine.service';
 import { ReceivableCycleModule } from '../receivable-cycle/receivable-cycle.module';
 import { RecoveryModule } from '../recovery/recovery.module';
 import { ReferralsModule } from '../referrals/referrals.module';
@@ -23,6 +25,8 @@ import { PAYMENT_PROVIDER } from './payments/payment-provider';
   controllers: [FinanceController, PaymentWebhookController],
   providers: [
     FinanceService,
+    BillingActorAttestationService,
+    BillingPixWebhookQuarantineService,
     FastDepixApiClient,
     FastFlowPaymentProvider,
     FastPixPaymentProvider,

@@ -8,9 +8,13 @@ export const billingActorOperations = {
   pixPrepareCreate: 'billing.pix.prepare-create',
   pixRecordCreateResult: 'billing.pix.record-create-result',
   pixReconcileCreateResult: 'billing.pix.reconcile-create-result',
+  pixQuarantineOrphanWebhook: 'billing.pix.quarantine-orphan-webhook',
   executionTransition: 'billing.execution.transition',
   receivableAmend: 'billing.receivable.amend',
 } as const;
+
+export const billingPixOrphanWebhookEvidenceVersion = 'billing-pix-orphan-webhook:v1';
+const billingPixOrphanWebhookIdentityVersion = 'billing-pix-orphan-webhook-id:v1';
 
 export type BillingActorOperation =
   (typeof billingActorOperations)[keyof typeof billingActorOperations];
@@ -324,6 +328,154 @@ export function billingPixReconcileCreateResultAttestationContext(input: {
   });
 }
 
+export function billingPixOrphanWebhookEventId(input: {
+  provider: string;
+  providerTransactionId: string;
+  eventKey: string;
+  rawBodyDigest: string;
+}): string {
+  const digest = createHash('sha256')
+    .update(
+      canonicalEncode([
+        ['V', billingPixOrphanWebhookIdentityVersion],
+        ['E', canonicalRequiredText(input.provider, 'Webhook provider')],
+        ['S', canonicalPrincipal(input.providerTransactionId, 'Webhook provider transaction id')],
+        ['S', canonicalPrincipal(input.eventKey, 'Webhook event key')],
+        ['H', canonicalDigest(input.rawBodyDigest, 'Webhook raw body digest')],
+      ]),
+      'utf8',
+    )
+    .digest('hex');
+  const uuidHex = `${digest.slice(0, 12)}5${digest.slice(13, 16)}8${digest.slice(17, 32)}`;
+  return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20)}`;
+}
+
+export function validateBillingPixOrphanWebhookMetadataText(value: string, label: string): string {
+  const canonical = canonicalExactText(validateWellFormedUtf16Text(value, label), label);
+  if (hasUnicodeWhiteSpaceAtEitherEdge(canonical)) {
+    throw new Error(`${label} must not contain outer Unicode White_Space.`);
+  }
+  if (!canonical) throw new Error(`${label} is required.`);
+  if (Array.from(canonical).length > 255) {
+    throw new Error(`${label} must contain at most 255 characters.`);
+  }
+  return canonical;
+}
+
+/**
+ * Rejects unpaired or out-of-order UTF-16 surrogate code units without
+ * normalizing, replacing or otherwise rewriting the original value.
+ */
+export function validateWellFormedUtf16Text(value: string, label: string): string {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) {
+        throw new Error(`${label} must contain well-formed UTF-16.`);
+      }
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) {
+        throw new Error(`${label} must contain well-formed UTF-16.`);
+      }
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new Error(`${label} must contain well-formed UTF-16.`);
+    }
+  }
+  return value;
+}
+
+/**
+ * Unicode White_Space binary property (25 code points): U+0009..U+000D,
+ * U+0020, U+0085, U+00A0, U+1680, U+2000..U+200A, U+2028, U+2029,
+ * U+202F, U+205F and U+3000. Only identity edges are forbidden; values are
+ * rejected exactly as received and are never trimmed or rewritten.
+ */
+function hasUnicodeWhiteSpaceAtEitherEdge(value: string): boolean {
+  const characters = Array.from(value);
+  if (characters.length === 0) return false;
+  return (
+    isUnicodeWhiteSpace(characters[0]!) || isUnicodeWhiteSpace(characters[characters.length - 1]!)
+  );
+}
+
+function isUnicodeWhiteSpace(character: string): boolean {
+  const codePoint = character.codePointAt(0)!;
+  return (
+    (codePoint >= 0x0009 && codePoint <= 0x000d) ||
+    codePoint === 0x0020 ||
+    codePoint === 0x0085 ||
+    codePoint === 0x00a0 ||
+    codePoint === 0x1680 ||
+    (codePoint >= 0x2000 && codePoint <= 0x200a) ||
+    codePoint === 0x2028 ||
+    codePoint === 0x2029 ||
+    codePoint === 0x202f ||
+    codePoint === 0x205f ||
+    codePoint === 0x3000
+  );
+}
+
+export function validateBillingPixOrphanWebhookMetadata(input: {
+  provider: string;
+  providerTransactionId: string;
+  eventKey: string;
+  externalStatus: string;
+}) {
+  return {
+    provider: validateBillingPixOrphanWebhookMetadataText(input.provider, 'Webhook provider'),
+    providerTransactionId: validateBillingPixOrphanWebhookMetadataText(
+      input.providerTransactionId,
+      'Webhook provider transaction id',
+    ),
+    eventKey: validateBillingPixOrphanWebhookMetadataText(input.eventKey, 'Webhook event key'),
+    externalStatus: validateBillingPixOrphanWebhookMetadataText(
+      input.externalStatus,
+      'Webhook external status',
+    ),
+  };
+}
+
+export function billingPixQuarantineOrphanWebhookAttestationContext(input: {
+  eventId: string;
+  provider: string;
+  providerTransactionId: string;
+  eventKey: string;
+  externalStatus: string;
+  rawBodyDigest: string;
+  rawBodyBytes: number;
+  receivedAt: string;
+}): BillingActorAttestationContext {
+  const eventId = canonicalUuid(input.eventId, 'Orphan webhook event id');
+  if (
+    !Number.isSafeInteger(input.rawBodyBytes) ||
+    input.rawBodyBytes < 1 ||
+    input.rawBodyBytes > 1_048_576
+  ) {
+    throw new Error('Webhook raw body size must be between 1 and 1048576 bytes.');
+  }
+  const receivedAt = canonicalInstant(input.receivedAt, 'Webhook received-at');
+  return canonicalContext({
+    operation: billingActorOperations.pixQuarantineOrphanWebhook,
+    billingExecutionId: eventId,
+    messageDispatchId: eventId,
+    receivableId: null,
+    financialSetDigest: canonicalDigest(input.rawBodyDigest, 'Webhook raw body digest'),
+    expectedVersion: 0,
+    argumentsDigest: operationArgumentsDigest([
+      ['E', canonicalRequiredText(input.provider, 'Webhook provider')],
+      ['S', canonicalPrincipal(input.providerTransactionId, 'Webhook provider transaction id')],
+      ['S', canonicalPrincipal(input.eventKey, 'Webhook event key')],
+      ['S', canonicalPrincipal(input.externalStatus, 'Webhook external status')],
+      ['H', canonicalDigest(input.rawBodyDigest, 'Webhook raw body digest')],
+      ['I', String(input.rawBodyBytes)],
+      ['S', receivedAt],
+    ]),
+  });
+}
+
 export function billingExecutionTransitionAttestationContext(input: {
   billingExecutionId: string;
   messageDispatchId: string;
@@ -526,4 +678,16 @@ function canonicalDate(value: string): string {
     throw new Error('Billing due date is not a real calendar date.');
   }
   return value;
+}
+
+function canonicalInstant(value: string, label: string): string {
+  const canonical = canonicalExactText(value, label);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(canonical)) {
+    throw new Error(`${label} must be an ISO-8601 UTC instant with millisecond precision.`);
+  }
+  const parsed = new Date(canonical);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== canonical) {
+    throw new Error(`${label} must be a valid canonical instant.`);
+  }
+  return canonical;
 }

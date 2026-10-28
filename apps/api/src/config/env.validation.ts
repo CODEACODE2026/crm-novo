@@ -37,6 +37,7 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_PIX_ENABLED');
   validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_SEND_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED');
   validateOptionalIsoInstant(config, 'PHONE_GLOBAL_BILLING_EFFECTIVE_FROM');
   validateGlobalBillingRollout(config);
 

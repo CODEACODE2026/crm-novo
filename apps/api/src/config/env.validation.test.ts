@@ -231,6 +231,23 @@ describe('validateEnv', () => {
     });
   });
 
+  it('keeps orphan webhook quarantine disabled unless its dedicated flag is exactly true', () => {
+    expect(
+      validateEnv({ NODE_ENV: 'test' }).PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED,
+    ).toBeUndefined();
+    expect(validateEnv({ PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED: 'false' })).toMatchObject({
+      PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED: 'false',
+    });
+    expect(validateEnv({ PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED: 'true' })).toMatchObject({
+      PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED: 'true',
+    });
+    for (const value of ['TRUE', '1', 'yes', '']) {
+      expect(() => validateEnv({ PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED: value })).toThrow(
+        'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED deve ser true ou false.',
+      );
+    }
+  });
+
   it.each(['TRUE', '1', 'yes', ''])(
     'rejects invalid global Billing operation flags %j',
     (value) => {

@@ -8954,6 +8954,454 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(1);
   });
 
+  it.each([undefined, 'false', 'invalid'])(
+    'preserves the legacy not-found contract for an authenticated orphan when flag=%s',
+    async (flag) => {
+      const fake = createFinancePrisma();
+      fake.config.get.mockImplementation((key: string) =>
+        key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? flag : undefined,
+      );
+      const quarantine = { persistAuthenticatedOrphan: vi.fn() };
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        fake.credentials as never,
+        fake.config as never,
+        undefined,
+        undefined,
+        undefined,
+        quarantine as never,
+      );
+      const rawPayload = JSON.stringify({
+        transaction_id: 'orphan-disabled',
+        status: 'pending',
+        payment_provider: 'fastflow',
+      });
+
+      await expect(
+        service.processPaymentWebhook(
+          'FASTFLOW',
+          createWebhookSignature(rawPayload),
+          Buffer.from(rawPayload),
+          JSON.parse(rawPayload),
+        ),
+      ).rejects.toThrow('Intencao de pagamento nao encontrada para webhook.');
+      expect(quarantine.persistAuthenticatedOrphan).not.toHaveBeenCalled();
+    },
+  );
+
+  it('quarantines an authenticated orphan only after lookup and derives a canonical event key', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = {
+      persistAuthenticatedOrphan: vi.fn().mockResolvedValue({
+        eventId: '11111111-1111-5111-8111-111111111111',
+        inserted: true,
+        rawBodyDigest: 'a'.repeat(64),
+      }),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const rawPayload = JSON.stringify({
+      transaction_id: 'orphan-enabled',
+      status: 'approved',
+      payment_provider: 'fastflow',
+    });
+    const rawBody = Buffer.from(rawPayload);
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        rawBody,
+        JSON.parse(rawPayload),
+      ),
+    ).resolves.toEqual({ quarantined: true, duplicate: false, processed: false });
+    expect(quarantine.persistAuthenticatedOrphan).toHaveBeenCalledOnce();
+    expect(quarantine.persistAuthenticatedOrphan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'FASTFLOW',
+        providerTransactionId: 'orphan-enabled',
+        eventKey: 'transaction.approved',
+        externalStatus: 'approved',
+        rawBody,
+      }),
+    );
+    expect(quarantine.persistAuthenticatedOrphan.mock.calls[0]?.[0]).toHaveProperty('receivedAt');
+    expect(fake.webhookEvents).toHaveLength(0);
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    'pending',
+    'approved',
+    'under_review',
+    'paid',
+    'expired',
+    'canceled',
+    'cancelled',
+    'refunded',
+    'failed',
+    'error',
+  ])(
+    'accepts homologated FastDepix fallback status %s for authenticated orphan quarantine',
+    async (status) => {
+      const fake = createFinancePrisma();
+      fake.config.get.mockImplementation((key: string) =>
+        key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+      );
+      const quarantine = {
+        persistAuthenticatedOrphan: vi.fn().mockResolvedValue({
+          eventId: '11111111-1111-5111-8111-111111111111',
+          inserted: true,
+          rawBodyDigest: 'a'.repeat(64),
+        }),
+      };
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        fake.credentials as never,
+        fake.config as never,
+        undefined,
+        undefined,
+        undefined,
+        quarantine as never,
+      );
+      const rawPayload = JSON.stringify({ transaction_id: `orphan-${status}`, status });
+
+      await expect(
+        service.processPaymentWebhook(
+          'FASTFLOW',
+          createWebhookSignature(rawPayload),
+          Buffer.from(rawPayload),
+          JSON.parse(rawPayload),
+        ),
+      ).resolves.toEqual({ quarantined: true, duplicate: false, processed: false });
+      expect(quarantine.persistAuthenticatedOrphan).toHaveBeenCalledWith(
+        expect.objectContaining({ eventKey: `transaction.${status}`, externalStatus: status }),
+      );
+    },
+  );
+
+  it('rejects an authenticated orphan with an unhomologated fallback status before persistence', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = { persistAuthenticatedOrphan: vi.fn() };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const rawPayload = JSON.stringify({
+      transaction_id: 'orphan-future',
+      status: 'provider_future_status',
+    });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(quarantine.persistAuthenticatedOrphan).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    ['transaction id above limit', { transaction_id: 'x'.repeat(256), status: 'paid' }],
+    ['transaction id with leading space', { transaction_id: ' tx-space', status: 'paid' }],
+    ['transaction id with control character', { transaction_id: 'tx\ncontrol', status: 'paid' }],
+    ['transaction id outside NFC', { transaction_id: 'cobranc\u0327a', status: 'paid' }],
+    ['external status above limit', { transaction_id: 'tx-status-limit', status: 'p'.repeat(256) }],
+    [
+      'payload provider with outer spaces',
+      { transaction_id: 'tx-provider-space', status: 'paid', payment_provider: ' fastflow ' },
+    ],
+  ])(
+    'rejects authenticated orphan %s as HTTP 400 before privileged persistence',
+    async (_label, payload) => {
+      const fake = createFinancePrisma();
+      fake.config.get.mockImplementation((key: string) =>
+        key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+      );
+      const quarantine = { persistAuthenticatedOrphan: vi.fn() };
+      const service = new FinanceService(
+        fake.prisma as never,
+        fake.provider,
+        fake.credentials as never,
+        fake.config as never,
+        undefined,
+        undefined,
+        undefined,
+        quarantine as never,
+      );
+      const rawPayload = JSON.stringify(payload);
+
+      await expect(
+        service.processPaymentWebhook(
+          'FASTFLOW',
+          createWebhookSignature(rawPayload),
+          Buffer.from(rawPayload),
+          JSON.parse(rawPayload),
+        ),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(quarantine.persistAuthenticatedOrphan).not.toHaveBeenCalled();
+      expect(fake.paymentIntents).toHaveLength(0);
+      expect(fake.transactions).toHaveLength(0);
+    },
+  );
+
+  it('accepts a 255-character transaction id at the canonical orphan boundary', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = {
+      persistAuthenticatedOrphan: vi.fn().mockResolvedValue({
+        eventId: '11111111-1111-5111-8111-111111111111',
+        inserted: true,
+        rawBodyDigest: 'a'.repeat(64),
+      }),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const transactionId = 'x'.repeat(255);
+    const rawPayload = JSON.stringify({ transaction_id: transactionId, status: 'paid' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).resolves.toMatchObject({ quarantined: true, processed: false });
+    expect(quarantine.persistAuthenticatedOrphan).toHaveBeenCalledWith(
+      expect.objectContaining({ providerTransactionId: transactionId }),
+    );
+  });
+
+  it('preserves the known webhook legacy path for a future status even when quarantine is enabled', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = { persistAuthenticatedOrphan: vi.fn() };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents.at(0)!, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 'known-future-status',
+    });
+    const rawPayload = JSON.stringify({
+      transaction_id: 'known-future-status',
+      status: 'provider_future_status',
+    });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).resolves.toMatchObject({ id: intent.id, externalStatus: 'provider_future_status' });
+    expect(quarantine.persistAuthenticatedOrphan).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges an idempotent orphan redelivery without claiming financial processing', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = {
+      persistAuthenticatedOrphan: vi.fn().mockResolvedValue({
+        eventId: '11111111-1111-5111-8111-111111111111',
+        inserted: false,
+        rawBodyDigest: 'a'.repeat(64),
+      }),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const rawPayload = JSON.stringify({
+      event: 'transaction.created',
+      transaction_id: 'orphan-redelivery',
+      status: 'pending',
+      payment_provider: 'fastflow',
+    });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).resolves.toEqual({ quarantined: true, duplicate: true, processed: false });
+    expect(quarantine.persistAuthenticatedOrphan).toHaveBeenCalledWith(
+      expect.objectContaining({ eventKey: 'transaction.created' }),
+    );
+  });
+
+  it('never invokes quarantine when provider authentication fails or persistence is unavailable', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = {
+      persistAuthenticatedOrphan: vi.fn().mockRejectedValue(new Error('database unavailable')),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const rawPayload = JSON.stringify({ transaction_id: 'orphan-failure', status: 'pending' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        'sha256=invalid',
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Assinatura do webhook de pagamento invalida.');
+    expect(quarantine.persistAuthenticatedOrphan).not.toHaveBeenCalled();
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('database unavailable');
+    expect(quarantine.persistAuthenticatedOrphan).toHaveBeenCalledOnce();
+  });
+
+  it('returns a controlled conflict when authenticated quarantine evidence conflicts', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = {
+      persistAuthenticatedOrphan: vi.fn().mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('identity conflict', {
+          code: 'P2010',
+          clientVersion: 'test',
+          meta: { code: '23505' },
+        }),
+      ),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const rawPayload = JSON.stringify({ transaction_id: 'orphan-conflict', status: 'pending' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).rejects.toThrow('Conflito na identidade do webhook em quarentena.');
+    expect(fake.webhookEvents).toHaveLength(0);
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('does not intercept a recognized PaymentIntent when orphan quarantine is enabled', async () => {
+    const fake = createFinancePrisma();
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED' ? 'true' : undefined,
+    );
+    const quarantine = { persistAuthenticatedOrphan: vi.fn() };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      undefined,
+      undefined,
+      quarantine as never,
+    );
+    const intent = await service.createReceivablePix(fake.receivable.id, actorUserId);
+    Object.assign(fake.paymentIntents.at(0)!, {
+      provider: 'FASTFLOW',
+      providerTransactionId: 'known-enabled',
+    });
+    const rawPayload = JSON.stringify({ transaction_id: 'known-enabled', status: 'paid' });
+
+    await expect(
+      service.processPaymentWebhook(
+        'FASTFLOW',
+        createWebhookSignature(rawPayload),
+        Buffer.from(rawPayload),
+        JSON.parse(rawPayload),
+      ),
+    ).resolves.toMatchObject({ id: intent.id, status: 'PAID' });
+    expect(quarantine.persistAuthenticatedOrphan).not.toHaveBeenCalled();
+  });
+
   it('processes a valid paid webhook once with HMAC over raw body', async () => {
     const fake = createFinancePrisma();
     const service = new FinanceService(

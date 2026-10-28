@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -67,6 +68,19 @@ import {
 import { paymentProviderDisplayName } from './payments/client-pix-provider-preference';
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 import { acquireFinancialSetLocks } from './financial-set-lock';
+import {
+  BillingPixWebhookQuarantineService,
+  type QuarantineOrphanWebhookInput,
+} from '../billing/billing-pix-webhook-quarantine.service';
+import {
+  validateBillingPixOrphanWebhookMetadata,
+  validateBillingPixOrphanWebhookMetadataText,
+  validateWellFormedUtf16Text,
+} from '../billing/billing-actor-attestation.service';
+import {
+  fastDepixSupportedTransactionStatusSet,
+  fastDepixSupportedWebhookEventSet,
+} from './payments/fastdepix-webhook-contract';
 
 const pageSizeLimit = 100;
 const activePixStatuses: PaymentIntentStatus[] = ['CREATED', 'WAITING_PAYMENT'];
@@ -75,13 +89,6 @@ const receivedTransactionOrigins: FinancialTransactionOrigin[] = [
   'LEGACY_IMPORT',
 ];
 const pixExpirationMinutes = 30;
-const supportedTransactionWebhookEvents = new Set([
-  'transaction.created',
-  'transaction.approved',
-  'transaction.paid',
-  'transaction.expired',
-  'transaction.refunded',
-]);
 const ignoredPaymentWebhookEvents = [
   'commission.calculated',
   'withdrawal.created',
@@ -132,6 +139,11 @@ type ReceivableListItem =
 
 type PaymentWebhookStatus = PaymentProviderStatus & {
   eventKey: string;
+  orphanSource: {
+    externalStatus: string;
+    paymentProvider: string | null;
+    providerTransactionId: string;
+  };
 };
 
 type IgnoredPaymentWebhook = {
@@ -198,6 +210,9 @@ export class FinanceService {
     @Optional()
     @Inject(RecoveryService)
     private readonly recoveryService?: RecoveryService,
+    @Optional()
+    @Inject(BillingPixWebhookQuarantineService)
+    private readonly billingPixWebhookQuarantine?: BillingPixWebhookQuarantineService,
   ) {}
 
   async listCategories() {
@@ -1678,6 +1693,17 @@ export class FinanceService {
       return normalized;
     }
 
+    try {
+      validateWellFormedUtf16Text(
+        normalized.providerTransactionId,
+        'Webhook provider transaction id',
+      );
+    } catch {
+      throw new BadRequestException(
+        'Identificador do webhook de pagamento contem Unicode invalido.',
+      );
+    }
+
     const intent = await this.prisma.paymentIntent.findFirst({
       where: {
         provider,
@@ -1686,6 +1712,32 @@ export class FinanceService {
     });
 
     if (!intent) {
+      if (this.config.get<string>('PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED') === 'true') {
+        if (!this.billingPixWebhookQuarantine) {
+          throw new ServiceUnavailableException('Quarentena de webhook indisponivel.');
+        }
+        const orphan = this.validateOrphanWebhookMetadata(provider, normalized);
+        let evidence: Awaited<
+          ReturnType<BillingPixWebhookQuarantineService['persistAuthenticatedOrphan']>
+        >;
+        try {
+          evidence = await this.billingPixWebhookQuarantine.persistAuthenticatedOrphan({
+            ...orphan,
+            rawBody,
+            receivedAt: new Date(),
+          });
+        } catch (error) {
+          if (this.isRawUniqueConstraint(error)) {
+            throw new ConflictException('Conflito na identidade do webhook em quarentena.');
+          }
+          throw error;
+        }
+        return {
+          quarantined: true,
+          duplicate: !evidence.inserted,
+          processed: false,
+        };
+      }
       throw new NotFoundException('Intencao de pagamento nao encontrada para webhook.');
     }
 
@@ -4105,7 +4157,15 @@ export class FinanceService {
     payload: unknown,
   ): PaymentWebhookStatus | IgnoredPaymentWebhook {
     const body = this.asRecord(payload) ?? {};
-    const eventName = this.stringFrom(body.event)?.trim().toLowerCase() ?? null;
+    const rawEventName = this.stringFrom(body.event);
+    if (rawEventName !== null) {
+      try {
+        validateBillingPixOrphanWebhookMetadataText(rawEventName, 'Webhook event key');
+      } catch {
+        throw new BadRequestException('Evento de webhook de pagamento invalido.');
+      }
+    }
+    const eventName = rawEventName?.toLowerCase() ?? null;
 
     if (eventName && !eventName.startsWith('transaction.')) {
       if (
@@ -4119,7 +4179,7 @@ export class FinanceService {
       throw new BadRequestException('Evento de webhook de pagamento nao suportado.');
     }
 
-    if (eventName && !supportedTransactionWebhookEvents.has(eventName)) {
+    if (eventName && !fastDepixSupportedWebhookEventSet.has(eventName)) {
       return { ignored: true, reason: 'unsupported_transaction_event' };
     }
 
@@ -4140,7 +4200,7 @@ export class FinanceService {
     }
 
     const eventKey =
-      eventName && supportedTransactionWebhookEvents.has(eventName)
+      eventName && fastDepixSupportedWebhookEventSet.has(eventName)
         ? eventName
         : `transaction.${externalStatus}`;
 
@@ -4155,7 +4215,54 @@ export class FinanceService {
       failureCode: null,
       failureMessage: null,
       eventKey,
+      orphanSource: {
+        providerTransactionId: transactionId,
+        externalStatus: this.stringFrom(data.status)!,
+        paymentProvider: this.stringFrom(data.payment_provider),
+      },
     };
+  }
+
+  private validateOrphanWebhookMetadata(
+    provider: PaymentProviderCode,
+    normalized: PaymentWebhookStatus,
+  ): Pick<
+    QuarantineOrphanWebhookInput,
+    'provider' | 'providerTransactionId' | 'eventKey' | 'externalStatus'
+  > {
+    try {
+      const rawStatus = validateBillingPixOrphanWebhookMetadataText(
+        normalized.orphanSource.externalStatus,
+        'Webhook external status',
+      );
+      const externalStatus = rawStatus.toLowerCase();
+      if (!fastDepixSupportedTransactionStatusSet.has(externalStatus)) {
+        throw new Error('Webhook external status is not supported.');
+      }
+
+      const rawPaymentProvider = normalized.orphanSource.paymentProvider;
+      if (rawPaymentProvider !== null) {
+        const paymentProvider = validateBillingPixOrphanWebhookMetadataText(
+          rawPaymentProvider,
+          'Webhook payload provider',
+        ).toLowerCase();
+        if (paymentProvider !== provider.toLowerCase()) {
+          throw new Error('Webhook payload provider does not match route provider.');
+        }
+      }
+
+      return validateBillingPixOrphanWebhookMetadata({
+        provider,
+        providerTransactionId: normalized.orphanSource.providerTransactionId,
+        eventKey: normalized.eventKey,
+        externalStatus,
+      }) as Pick<
+        QuarantineOrphanWebhookInput,
+        'provider' | 'providerTransactionId' | 'eventKey' | 'externalStatus'
+      >;
+    } catch {
+      throw new BadRequestException('Payload de webhook invalido para quarentena.');
+    }
   }
 
   private async getConfiguredWebhookSecret(provider: PaymentProviderCode) {
@@ -4717,5 +4824,12 @@ export class FinanceService {
 
   private isUniqueConstraint(error: unknown) {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+  }
+
+  private isRawUniqueConstraint(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2010') {
+      return false;
+    }
+    return (error.meta as { code?: unknown } | undefined)?.code === '23505';
   }
 }

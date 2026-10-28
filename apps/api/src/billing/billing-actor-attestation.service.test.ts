@@ -7,12 +7,18 @@ import {
   billingActorOperations,
   billingExecutionTransitionAttestationContext,
   billingPixPrepareCreateAttestationContext,
+  billingPixOrphanWebhookEventId,
+  billingPixQuarantineOrphanWebhookAttestationContext,
   billingPixReconcileCreateResultAttestationContext,
   billingPixRecordCreateResultAttestationContext,
   billingPixReserveAttestationContext,
   billingReceivableAmendAttestationContext,
   canonicalBillingActorValue,
+  validateBillingPixOrphanWebhookMetadata,
+  validateBillingPixOrphanWebhookMetadataText,
+  validateWellFormedUtf16Text,
 } from './billing-actor-attestation.service';
+import { BillingPixWebhookQuarantineService } from './billing-pix-webhook-quarantine.service';
 
 const secrets = {
   BILLING_ACTOR_USER_KEY_ID: 'user-v1',
@@ -32,9 +38,282 @@ const ids = {
   attempt: '77777777-7777-4777-8777-777777777777',
 };
 const financialSetDigest = 'a'.repeat(64);
+const unicodeWhiteSpaceVectors = [
+  ['U+0020 SPACE', '\u0020'],
+  ['U+0009 TAB', '\u0009'],
+  ['U+000A LINE FEED', '\u000a'],
+  ['U+000B VERTICAL TAB', '\u000b'],
+  ['U+000C FORM FEED', '\u000c'],
+  ['U+000D CARRIAGE RETURN', '\u000d'],
+  ['U+0085 NEXT LINE', '\u0085'],
+  ['U+00A0 NO-BREAK SPACE', '\u00a0'],
+  ['U+1680 OGHAM SPACE MARK', '\u1680'],
+  ['U+2000 EN QUAD', '\u2000'],
+  ['U+2001 EM QUAD', '\u2001'],
+  ['U+2002 EN SPACE', '\u2002'],
+  ['U+2003 EM SPACE', '\u2003'],
+  ['U+2004 THREE-PER-EM SPACE', '\u2004'],
+  ['U+2005 FOUR-PER-EM SPACE', '\u2005'],
+  ['U+2006 SIX-PER-EM SPACE', '\u2006'],
+  ['U+2007 FIGURE SPACE', '\u2007'],
+  ['U+2008 PUNCTUATION SPACE', '\u2008'],
+  ['U+2009 THIN SPACE', '\u2009'],
+  ['U+200A HAIR SPACE', '\u200a'],
+  ['U+2028 LINE SEPARATOR', '\u2028'],
+  ['U+2029 PARAGRAPH SEPARATOR', '\u2029'],
+  ['U+202F NARROW NO-BREAK SPACE', '\u202f'],
+  ['U+205F MEDIUM MATHEMATICAL SPACE', '\u205f'],
+  ['U+3000 IDEOGRAPHIC SPACE', '\u3000'],
+] as const;
+const malformedUtf16Vectors = [
+  ['lone U+D800', '\ud800'],
+  ['lone U+DC00', '\udc00'],
+  ['lone U+DBFF', '\udbff'],
+  ['lone U+DFFF', '\udfff'],
+  ['high surrogate followed by ASCII', '\ud800A'],
+  ['ASCII followed by low surrogate', 'A\udc00'],
+  ['low surrogate before high surrogate', '\udc00\ud800'],
+  ['two high surrogates', '\ud800\udbff'],
+  ['two low surrogates', '\udc00\udfff'],
+  ['high surrogate at the beginning', '\ud800transaction-id'],
+  ['low surrogate at the end', 'transaction-id\udc00'],
+  ['high surrogate between valid characters', 'trans\ud800action-id'],
+  ['NBSP followed by a lone high surrogate', '\u00a0\ud800transaction-id'],
+] as const;
 
 describe('BillingActorAttestationService', () => {
   beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(1_798_761_600_000));
+
+  it('builds deterministic orphan webhook identities and operation-bound attestations', () => {
+    const input = {
+      provider: 'DEPIX',
+      providerTransactionId: 'tx-30',
+      eventKey: 'event-30',
+      rawBodyDigest: 'b'.repeat(64),
+    };
+    const eventId = billingPixOrphanWebhookEventId(input);
+    expect(eventId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/u);
+    expect(billingPixOrphanWebhookEventId(input)).toBe(eventId);
+    expect(billingPixOrphanWebhookEventId({ ...input, providerTransactionId: 'tx-31' })).not.toBe(
+      eventId,
+    );
+
+    const context = billingPixQuarantineOrphanWebhookAttestationContext({
+      ...input,
+      eventId,
+      externalStatus: 'WAITING_PAYMENT',
+      rawBodyBytes: 30,
+      receivedAt: '2026-10-27T14:10:00.123Z',
+    });
+    expect(context).toMatchObject({
+      operation: billingActorOperations.pixQuarantineOrphanWebhook,
+      billingExecutionId: eventId,
+      messageDispatchId: eventId,
+      receivableId: null,
+      financialSetDigest: input.rawBodyDigest,
+      expectedVersion: 0,
+    });
+    expect(service().forWebhook('DEPIX', input.eventKey, context)).toMatchObject({
+      actorType: 'WEBHOOK',
+      actorPrincipal: 'DEPIX:event-30',
+    });
+  });
+
+  it('rejects non-canonical orphan webhook evidence before signing', () => {
+    const valid = {
+      provider: 'DEPIX',
+      providerTransactionId: 'tx-30',
+      eventKey: 'event-30',
+      rawBodyDigest: 'b'.repeat(64),
+    };
+    const eventId = billingPixOrphanWebhookEventId(valid);
+    const context = {
+      ...valid,
+      eventId,
+      externalStatus: 'WAITING_PAYMENT',
+      rawBodyBytes: 30,
+      receivedAt: '2026-10-27T14:10:00.123Z',
+    };
+    expect(() =>
+      billingPixQuarantineOrphanWebhookAttestationContext({ ...context, rawBodyBytes: 0 }),
+    ).toThrow(/raw body size/);
+    expect(() =>
+      billingPixQuarantineOrphanWebhookAttestationContext({
+        ...context,
+        receivedAt: '2026-10-27T14:10:00Z',
+      }),
+    ).toThrow(/millisecond precision/);
+    expect(() => billingPixOrphanWebhookEventId({ ...valid, eventKey: ' event-30' })).not.toThrow();
+    expect(billingPixOrphanWebhookEventId({ ...valid, eventKey: ' event-30' })).toBe(eventId);
+  });
+
+  it('validates the exact metadata contract before orphan identity or persistence', () => {
+    expect(
+      validateBillingPixOrphanWebhookMetadata({
+        provider: 'FASTFLOW',
+        providerTransactionId: 'x'.repeat(255),
+        eventKey: 'transaction.paid',
+        externalStatus: 'paid',
+      }),
+    ).toEqual({
+      provider: 'FASTFLOW',
+      providerTransactionId: 'x'.repeat(255),
+      eventKey: 'transaction.paid',
+      externalStatus: 'paid',
+    });
+    expect(() =>
+      validateBillingPixOrphanWebhookMetadataText('x'.repeat(256), 'Webhook field'),
+    ).toThrow(/at most 255/);
+    for (const value of [' spaced', 'spaced ', 'line\nbreak', 'cobranc\u0327a', '']) {
+      expect(() => validateBillingPixOrphanWebhookMetadataText(value, 'Webhook field')).toThrow();
+    }
+    expect(validateBillingPixOrphanWebhookMetadataText('cobrança-東京', 'Webhook field')).toBe(
+      'cobrança-東京',
+    );
+    expect(validateBillingPixOrphanWebhookMetadataText('cobrança\u00a0pix', 'Webhook field')).toBe(
+      'cobrança\u00a0pix',
+    );
+  });
+
+  it.each(malformedUtf16Vectors)('rejects malformed UTF-16: %s', (_label, value) => {
+    expect(() => validateWellFormedUtf16Text(value, 'Webhook field')).toThrow(/well-formed UTF-16/);
+    expect(() => validateBillingPixOrphanWebhookMetadataText(value, 'Webhook field')).toThrow(
+      /well-formed UTF-16/,
+    );
+  });
+
+  it.each([
+    ['rocket surrogate pair', '\ud83d\ude80'],
+    ['supplementary CJK character', '\ud840\udc00'],
+    ['literal replacement character', '\ufffd'],
+    ['legitimate NFC Unicode', 'cobrança-東京'],
+  ])('preserves well-formed Unicode exactly: %s', (_label, value) => {
+    expect(validateWellFormedUtf16Text(value, 'Webhook field')).toBe(value);
+    expect(validateBillingPixOrphanWebhookMetadataText(value, 'Webhook field')).toBe(value);
+  });
+
+  it('counts valid astral characters as codepoints without truncation', () => {
+    const valid = '\ud83d\ude80'.repeat(255);
+    expect(validateBillingPixOrphanWebhookMetadataText(valid, 'Webhook field')).toBe(valid);
+    expect(() =>
+      validateBillingPixOrphanWebhookMetadataText(`${valid}\ud83d\ude80`, 'Webhook field'),
+    ).toThrow(/at most 255/);
+  });
+
+  it.each(unicodeWhiteSpaceVectors)(
+    'rejects %s at either metadata edge and as the entire identity',
+    (_label, whitespace) => {
+      for (const value of [
+        `${whitespace}transaction-id`,
+        `transaction-id${whitespace}`,
+        `${whitespace}transaction-id${whitespace}`,
+        whitespace,
+        whitespace.repeat(2),
+      ]) {
+        expect(() => validateBillingPixOrphanWebhookMetadataText(value, 'Webhook field')).toThrow();
+      }
+    },
+  );
+
+  it.each(['provider', 'providerTransactionId', 'eventKey', 'externalStatus'] as const)(
+    'applies the same Unicode edge policy to %s',
+    (field) => {
+      const metadata = {
+        provider: 'FASTFLOW',
+        providerTransactionId: 'transaction-id',
+        eventKey: 'transaction.paid',
+        externalStatus: 'paid',
+      };
+      metadata[field] = `\u00a0${metadata[field]}`;
+      expect(() => validateBillingPixOrphanWebhookMetadata(metadata)).toThrow(
+        /Unicode White_Space/,
+      );
+    },
+  );
+
+  it.each(['provider', 'providerTransactionId', 'eventKey', 'externalStatus'] as const)(
+    'applies well-formed UTF-16 validation to %s',
+    (field) => {
+      const metadata = {
+        provider: 'FASTFLOW',
+        providerTransactionId: 'transaction-id',
+        eventKey: 'transaction.paid',
+        externalStatus: 'paid',
+      };
+      metadata[field] = `${metadata[field]}\ud800`;
+      expect(() => validateBillingPixOrphanWebhookMetadata(metadata)).toThrow(/well-formed UTF-16/);
+    },
+  );
+
+  it.each([
+    ['leading NBSP', '\u00a0transaction-id'],
+    ['NBSP only', '\u00a0\u00a0'],
+    ['trailing OGHAM SPACE MARK', 'transaction-id\u1680'],
+    ['mixed Unicode White_Space only', '\u00a0\u2009\u3000'],
+  ])('rejects direct 7A quarantine metadata with %s before signing or SQL', async (_label, id) => {
+    const prisma = { $queryRaw: vi.fn() };
+    const actors = { forWebhook: vi.fn() };
+    const quarantine = new BillingPixWebhookQuarantineService(prisma as never, actors as never);
+
+    await expect(
+      quarantine.persistAuthenticatedOrphan({
+        provider: 'FASTFLOW',
+        providerTransactionId: id,
+        eventKey: 'transaction.paid',
+        externalStatus: 'paid',
+        rawBody: Buffer.from('{"status":"paid"}', 'utf8'),
+        receivedAt: new Date('2026-10-27T16:00:00.000Z'),
+      }),
+    ).rejects.toThrow(/Unicode White_Space/);
+    expect(actors.forWebhook).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it.each(malformedUtf16Vectors)(
+    'rejects direct 7A malformed UTF-16 with %s before signing or SQL',
+    async (_label, id) => {
+      const prisma = { $queryRaw: vi.fn() };
+      const actors = { forWebhook: vi.fn() };
+      const quarantine = new BillingPixWebhookQuarantineService(prisma as never, actors as never);
+
+      await expect(
+        quarantine.persistAuthenticatedOrphan({
+          provider: 'FASTFLOW',
+          providerTransactionId: id,
+          eventKey: 'transaction.paid',
+          externalStatus: 'paid',
+          rawBody: Buffer.from('{"status":"paid"}', 'utf8'),
+          receivedAt: new Date('2026-10-27T16:00:00.000Z'),
+        }),
+      ).rejects.toThrow(/well-formed UTF-16/);
+      expect(actors.forWebhook).not.toHaveBeenCalled();
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['provider', 'providerTransactionId', 'eventKey', 'externalStatus'] as const)(
+    'rejects malformed UTF-16 in direct 7A %s before signing or SQL',
+    async (field) => {
+      const prisma = { $queryRaw: vi.fn() };
+      const actors = { forWebhook: vi.fn() };
+      const quarantine = new BillingPixWebhookQuarantineService(prisma as never, actors as never);
+      const input = {
+        provider: 'FASTFLOW',
+        providerTransactionId: 'transaction-id',
+        eventKey: 'transaction.paid',
+        externalStatus: 'paid',
+        rawBody: Buffer.from('{"status":"paid"}', 'utf8'),
+        receivedAt: new Date('2026-10-27T16:00:00.000Z'),
+      };
+      input[field] = `${input[field]}\ud800`;
+
+      await expect(quarantine.persistAuthenticatedOrphan(input as never)).rejects.toThrow(
+        /well-formed UTF-16/,
+      );
+      expect(actors.forWebhook).not.toHaveBeenCalled();
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['USER', () => service().forUser(ids.user, amendContext()), ids.user],

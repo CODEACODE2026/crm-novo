@@ -806,6 +806,30 @@ model BillingActorAssertion {
   @@ignore
 }
 
+// Immutable, digest-only evidence for an authenticated provider webhook that
+// cannot yet be associated with a trusted local PaymentIntent. Ingestion and
+// correlation are deliberately separate follow-up operations.
+model BillingPixOrphanWebhookEvent {
+  id                    String              @id @db.Uuid
+  evidenceVersion       String
+  provider              PaymentProviderCode
+  providerTransactionId String
+  eventKey              String
+  externalStatus        String
+  rawBodyDigest         String
+  rawBodyBytes          Int
+  receivedAt            DateTime            @db.Timestamptz(3)
+  actorPrincipal        String
+  actorKeyId            String
+  actorNonce            String              @unique @db.Uuid
+  createdAt             DateTime            @default(now())
+
+  @@unique([provider, providerTransactionId, eventKey, rawBodyDigest])
+  @@index([provider, providerTransactionId])
+  @@index([receivedAt])
+  @@map("billing_pix_orphan_webhook_events")
+}
+
 model MessageTemplate {
   id                String                 @id @default(uuid()) @db.Uuid
   name              String

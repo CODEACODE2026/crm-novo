@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 import {
   Prisma,
@@ -12,6 +12,8 @@ import {
   type BillingActorAttestationContext,
   billingActorAttestationPayload,
   billingExecutionTransitionAttestationContext,
+  billingPixOrphanWebhookEventId,
+  billingPixQuarantineOrphanWebhookAttestationContext,
   billingPixReserveAttestationContext,
   billingReceivableAmendAttestationContext,
   canonicalBillingActorValue,
@@ -20,7 +22,9 @@ import { buildBillingExecutionIdentity } from './billing-execution-identity';
 import { buildBillingPixCreationKey } from './billing-pix-creation-key';
 import { BillingPixClaimService } from './billing-pix-claim.service';
 import { BillingPixDryRunService } from './billing-pix-dry-run.service';
+import { BillingPixWebhookQuarantineService } from './billing-pix-webhook-quarantine.service';
 import { acquireFinancialSetLocks } from '../finance/financial-set-lock';
+import { FinanceService } from '../finance/finance.service';
 
 const runDatabaseTests = process.env.RUN_DATABASE_TESTS === '1';
 const runtimeRole = process.env.DATABASE_RUNTIME_TEST_ROLE?.trim();
@@ -30,6 +34,48 @@ const actorSecrets = {
   SYSTEM: 'data1-system-attestation-secret-0000000000001',
   WEBHOOK: 'data1-webhook-attestation-secret-000000000001',
 } as const;
+const orphanUnicodeWhiteSpaceCharacters = [
+  '\u0020',
+  '\u0009',
+  '\u000a',
+  '\u000b',
+  '\u000c',
+  '\u000d',
+  '\u0085',
+  '\u00a0',
+  '\u1680',
+  '\u2000',
+  '\u2001',
+  '\u2002',
+  '\u2003',
+  '\u2004',
+  '\u2005',
+  '\u2006',
+  '\u2007',
+  '\u2008',
+  '\u2009',
+  '\u200a',
+  '\u2028',
+  '\u2029',
+  '\u202f',
+  '\u205f',
+  '\u3000',
+] as const;
+const orphanMalformedUtf16TransactionIds = [
+  '\ud800',
+  '\udc00',
+  '\udbff',
+  '\udfff',
+  '\ud800A',
+  'A\udc00',
+  '\udc00\ud800',
+  '\ud800\udbff',
+  '\udc00\udfff',
+  '\ud800transaction-id',
+  'transaction-id\udc00',
+  'trans\ud800action-id',
+  '\u00a0\ud800transaction-id',
+] as const;
 
 describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', () => {
   const prisma = new PrismaClient();
@@ -53,7 +99,7 @@ describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', ()
 
   afterEach(async () => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE public.billing_actor_assertions, public.billing_execution_events, public.billing_pix_attempts, public.billing_execution_receivables, public.billing_executions',
+      'TRUNCATE TABLE public.billing_pix_orphan_webhook_events, public.billing_actor_assertions, public.billing_execution_events, public.billing_pix_attempts, public.billing_execution_receivables, public.billing_executions',
     );
     await prisma.messageDispatch.deleteMany({ where: { requestId: { startsWith: prefix } } });
     await prisma.whatsAppConversation.deleteMany({
@@ -3949,6 +3995,352 @@ describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', ()
   );
 
   it.runIf(Boolean(runtimeRole))(
+    'ingests an authenticated orphan through the existing webhook flow without financial effects',
+    async () => {
+      if (!runtimeRole || !/^[a-z_][a-z0-9_]*$/i.test(runtimeRole)) {
+        throw new Error('DATABASE_RUNTIME_TEST_ROLE must be a simple PostgreSQL identifier.');
+      }
+      const providerSecret = 'provider-webhook-secret-for-7b';
+      const rawPayload = JSON.stringify({
+        event: 'transaction.approved',
+        transaction_id: `${prefix}7B-ORPHAN`,
+        status: 'approved',
+        payment_provider: 'fastflow',
+      });
+      const rawBody = Buffer.from(rawPayload, 'utf8');
+      const signature = `sha256=${createHmac('sha256', providerSecret).update(rawBody).digest('hex')}`;
+      const configValues = {
+        PHONE_GLOBAL_BILLING_ORPHAN_WEBHOOK_ENABLED: 'true',
+        BILLING_ACTOR_WEBHOOK_KEY_ID: 'webhook-test-v1',
+        BILLING_ACTOR_WEBHOOK_SIGNING_SECRET: actorSecrets.WEBHOOK,
+      };
+      const execute = (client: PrismaClient) =>
+        asRuntimeRole(client, runtimeRole, async (tx) => {
+          const config = { get: (key: keyof typeof configValues) => configValues[key] };
+          const quarantine = new BillingPixWebhookQuarantineService(
+            tx as never,
+            new BillingActorAttestationService(config as never),
+          );
+          const finance = new FinanceService(
+            tx as never,
+            {} as never,
+            { getWebhookSecret: () => Promise.resolve(providerSecret) } as never,
+            config as never,
+            undefined,
+            undefined,
+            undefined,
+            quarantine,
+          );
+          return finance.processPaymentWebhook(
+            'FASTFLOW',
+            signature,
+            rawBody,
+            JSON.parse(rawPayload),
+          );
+        });
+
+      const results = (await Promise.all([execute(prisma), execute(peer)])) as Array<{
+        quarantined: true;
+        duplicate: boolean;
+        processed: false;
+      }>;
+      expect(results.map((result) => result.duplicate).sort()).toEqual([false, true]);
+      expect(results.every((result) => result.quarantined && !result.processed)).toBe(true);
+      await expect(
+        prisma.billingPixOrphanWebhookEvent.findMany({
+          where: { providerTransactionId: `${prefix}7B-ORPHAN` },
+        }),
+      ).resolves.toHaveLength(1);
+      await expect(
+        Promise.all([
+          prisma.paymentIntent.count(),
+          prisma.billingPixAttempt.count(),
+          prisma.billingExecution.count(),
+          prisma.receivable.count({ where: { description: { startsWith: prefix } } }),
+        ]),
+      ).resolves.toEqual([0, 0, 0, 0]);
+
+      await expect(
+        asRuntimeRole(prisma, runtimeRole, async (tx) => {
+          const config = { get: (key: keyof typeof configValues) => configValues[key] };
+          const quarantine = new BillingPixWebhookQuarantineService(
+            tx as never,
+            new BillingActorAttestationService(config as never),
+          );
+          const finance = new FinanceService(
+            tx as never,
+            {} as never,
+            { getWebhookSecret: () => Promise.resolve(providerSecret) } as never,
+            config as never,
+            undefined,
+            undefined,
+            undefined,
+            quarantine,
+          );
+          return finance.processPaymentWebhook(
+            'FASTFLOW',
+            'sha256=invalid',
+            rawBody,
+            JSON.parse(rawPayload),
+          );
+        }),
+      ).rejects.toThrow(/Assinatura do webhook de pagamento invalida/);
+      await expect(
+        prisma.billingPixOrphanWebhookEvent.count({
+          where: { providerTransactionId: `${prefix}7B-ORPHAN` },
+        }),
+      ).resolves.toBe(1);
+
+      const evidenceCountBeforeInvalid = await prisma.billingPixOrphanWebhookEvent.count();
+      const invalidWhitespaceTransactionIds = orphanUnicodeWhiteSpaceCharacters.flatMap(
+        (whitespace) => [
+          `${whitespace}${prefix}7B-WHITESPACE`,
+          `${prefix}7B-WHITESPACE${whitespace}`,
+          whitespace.repeat(2),
+        ],
+      );
+
+      for (const invalidPayload of [
+        {
+          transaction_id: `${prefix}7B-FUTURE-STATUS`,
+          status: 'provider_future_status',
+        },
+        { transaction_id: 'x'.repeat(256), status: 'paid' },
+        ...orphanMalformedUtf16TransactionIds.map((transactionId) => ({
+          transaction_id: transactionId,
+          status: 'paid',
+        })),
+        ...invalidWhitespaceTransactionIds.map((transactionId) => ({
+          transaction_id: transactionId,
+          status: 'paid',
+        })),
+        { transaction_id: '\u00a0\u2009\u3000', status: 'paid' },
+        { transaction_id: `\u0020\u00a0${prefix}7B-MIXED`, status: 'paid' },
+        { transaction_id: `${prefix}7B-MIXED\u202f\u205f\u3000`, status: 'paid' },
+      ]) {
+        const invalidRawBody = Buffer.from(JSON.stringify(invalidPayload), 'utf8');
+        const invalidSignature = `sha256=${createHmac('sha256', providerSecret)
+          .update(invalidRawBody)
+          .digest('hex')}`;
+        await expect(
+          asRuntimeRole(prisma, runtimeRole, async (tx) => {
+            const config = { get: (key: keyof typeof configValues) => configValues[key] };
+            const quarantine = new BillingPixWebhookQuarantineService(
+              tx as never,
+              new BillingActorAttestationService(config as never),
+            );
+            const finance = new FinanceService(
+              tx as never,
+              {} as never,
+              { getWebhookSecret: () => Promise.resolve(providerSecret) } as never,
+              config as never,
+              undefined,
+              undefined,
+              undefined,
+              quarantine,
+            );
+            return finance.processPaymentWebhook(
+              'FASTFLOW',
+              invalidSignature,
+              invalidRawBody,
+              invalidPayload,
+            );
+          }),
+        ).rejects.toMatchObject({ status: 400 });
+      }
+      await expect(prisma.billingPixOrphanWebhookEvent.count()).resolves.toBe(
+        evidenceCountBeforeInvalid,
+      );
+
+      const astralPayload = {
+        transaction_id: `${prefix}7B-ASTRAL-\ud83d\ude80`,
+        status: 'paid',
+      };
+      const astralRawBody = Buffer.from(JSON.stringify(astralPayload), 'utf8');
+      const astralSignature = `sha256=${createHmac('sha256', providerSecret)
+        .update(astralRawBody)
+        .digest('hex')}`;
+      await expect(
+        asRuntimeRole(prisma, runtimeRole, async (tx) => {
+          const config = { get: (key: keyof typeof configValues) => configValues[key] };
+          const quarantine = new BillingPixWebhookQuarantineService(
+            tx as never,
+            new BillingActorAttestationService(config as never),
+          );
+          const finance = new FinanceService(
+            tx as never,
+            {} as never,
+            { getWebhookSecret: () => Promise.resolve(providerSecret) } as never,
+            config as never,
+            undefined,
+            undefined,
+            undefined,
+            quarantine,
+          );
+          return finance.processPaymentWebhook(
+            'FASTFLOW',
+            astralSignature,
+            astralRawBody,
+            astralPayload,
+          );
+        }),
+      ).resolves.toMatchObject({ quarantined: true, duplicate: false, processed: false });
+      await expect(
+        prisma.billingPixOrphanWebhookEvent.count({
+          where: { providerTransactionId: astralPayload.transaction_id },
+        }),
+      ).resolves.toBe(1);
+      await expect(
+        Promise.all([
+          prisma.paymentIntent.count(),
+          prisma.billingPixAttempt.count(),
+          prisma.billingExecution.count(),
+          prisma.receivable.count({ where: { description: { startsWith: prefix } } }),
+        ]),
+      ).resolves.toEqual([0, 0, 0, 0]);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
+    'persists authenticated orphan webhook evidence idempotently without raw payload or runtime DML',
+    async () => {
+      if (!runtimeRole || !/^[a-z_][a-z0-9_]*$/i.test(runtimeRole)) {
+        throw new Error('DATABASE_RUNTIME_TEST_ROLE must be a simple PostgreSQL identifier.');
+      }
+      const rawBody = Buffer.from('{"event":"waiting","value":"30.00"}', 'utf8');
+      const rawBodyDigest = createHash('sha256').update(rawBody).digest('hex');
+      const input = {
+        eventId: billingPixOrphanWebhookEventId({
+          provider: 'DEPIX',
+          providerTransactionId: `${prefix}ORPHAN-TX`,
+          eventKey: `${prefix}ORPHAN-EVENT`,
+          rawBodyDigest,
+        }),
+        provider: 'DEPIX' as const,
+        providerTransactionId: `${prefix}ORPHAN-TX`,
+        eventKey: `${prefix}ORPHAN-EVENT`,
+        externalStatus: 'WAITING_PAYMENT',
+        rawBodyDigest,
+        rawBodyBytes: rawBody.byteLength,
+        receivedAt: '2026-10-27T14:10:00.123Z',
+      };
+      const config = {
+        get: (key: string) =>
+          ({
+            BILLING_ACTOR_WEBHOOK_KEY_ID: 'webhook-test-v1',
+            BILLING_ACTOR_WEBHOOK_SIGNING_SECRET: actorSecrets.WEBHOOK,
+          })[key],
+      };
+      const signer = new BillingActorAttestationService(config as never);
+      const sign = () =>
+        signer.forWebhook(
+          input.provider,
+          input.eventKey,
+          billingPixQuarantineOrphanWebhookAttestationContext(input),
+        );
+
+      const firstActor = sign();
+      const concurrent = await Promise.all([
+        asRuntimeRole(prisma, runtimeRole, (tx) => quarantineOrphanWebhook(tx, input, firstActor)),
+        asRuntimeRole(peer, runtimeRole, (tx) => quarantineOrphanWebhook(tx, input, sign())),
+      ]);
+      expect(
+        concurrent
+          .flat()
+          .map((result) => result.inserted)
+          .sort(),
+      ).toEqual([false, true]);
+      await expect(
+        asRuntimeRole(prisma, runtimeRole, (tx) => quarantineOrphanWebhook(tx, input, firstActor)),
+      ).rejects.toThrow(/already consumed/);
+      const laterDelivery = { ...input, receivedAt: '2026-10-27T14:11:00.123Z' };
+      await expect(
+        asRuntimeRole(prisma, runtimeRole, (tx) =>
+          quarantineOrphanWebhook(
+            tx,
+            laterDelivery,
+            signer.forWebhook(
+              laterDelivery.provider,
+              laterDelivery.eventKey,
+              billingPixQuarantineOrphanWebhookAttestationContext(laterDelivery),
+            ),
+          ),
+        ),
+      ).resolves.toEqual([{ eventId: input.eventId, inserted: false }]);
+
+      const [stored] = await prisma.$queryRaw<
+        Array<{
+          count: number;
+          rawBodyDigest: string;
+          columns: string[];
+        }>
+      >`
+        SELECT count(*)::integer AS count, min("rawBodyDigest") AS "rawBodyDigest",
+          ARRAY(
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'billing_pix_orphan_webhook_events'
+            ORDER BY ordinal_position
+          )::text[] AS columns
+        FROM public.billing_pix_orphan_webhook_events
+      `;
+      expect(stored).toMatchObject({ count: 1, rawBodyDigest });
+      expect(stored?.columns).not.toContain('rawBody');
+
+      await expect(
+        asRuntimeRole(
+          prisma,
+          runtimeRole,
+          (tx) =>
+            tx.$executeRaw`INSERT INTO public.billing_pix_orphan_webhook_events (
+            "id", "evidenceVersion", "provider", "providerTransactionId", "eventKey",
+            "externalStatus", "rawBodyDigest", "rawBodyBytes", "receivedAt",
+            "actorPrincipal", "actorKeyId", "actorNonce"
+          ) VALUES (
+            ${randomUUID()}::uuid, 'billing-pix-orphan-webhook:v1', 'DEPIX', 'forged',
+            'forged', 'WAITING_PAYMENT', ${'a'.repeat(64)}, 1, CURRENT_TIMESTAMP,
+            'DEPIX:forged', 'webhook-test-v1', ${randomUUID()}::uuid
+          )`,
+        ),
+      ).rejects.toThrow(/permission denied/);
+      await expect(
+        prisma.billingPixOrphanWebhookEvent.update({
+          where: { id: input.eventId },
+          data: { externalStatus: 'PAID' },
+        }),
+      ).rejects.toThrow(/immutable/);
+
+      const substituted = { ...input, externalStatus: 'PAID' };
+      await expect(
+        asRuntimeRole(prisma, runtimeRole, (tx) =>
+          quarantineOrphanWebhook(tx, substituted, sign()),
+        ),
+      ).rejects.toThrow(/arguments digest mismatch|Invalid Billing actor signature/);
+
+      const identityConflict = { ...input, externalStatus: 'PAID' };
+      await expect(
+        asRuntimeRole(prisma, runtimeRole, (tx) =>
+          quarantineOrphanWebhook(
+            tx,
+            identityConflict,
+            signer.forWebhook(
+              identityConflict.provider,
+              identityConflict.eventKey,
+              billingPixQuarantineOrphanWebhookAttestationContext(identityConflict),
+            ),
+          ),
+        ),
+      ).rejects.toMatchObject({
+        code: 'P2010',
+        meta: { code: '23505' },
+      });
+      await expect(
+        prisma.billingPixOrphanWebhookEvent.count({ where: { id: input.eventId } }),
+      ).resolves.toBe(1);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
     'keeps SECURITY DEFINER ownership, search paths and grants least-privileged',
     async () => {
       if (!runtimeRole || !/^[a-z_][a-z0-9_]*$/i.test(runtimeRole)) {
@@ -3973,7 +4365,7 @@ describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', ()
         WHERE n.nspname = 'public' AND p.prosecdef
         ORDER BY p.proname
       `;
-      expect(functions).toHaveLength(10);
+      expect(functions).toHaveLength(11);
       expect(functions.every((item) => item.publicExecute === false)).toBe(true);
       expect(
         functions.every((item) =>
@@ -5071,5 +5463,32 @@ describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', ()
       ${actor.keyId},
       ${actor.signature}
     )::text AS result`;
+  }
+
+  function quarantineOrphanWebhook(
+    db: PrismaClient | Prisma.TransactionClient,
+    input: {
+      eventId: string;
+      provider: PaymentProviderCode;
+      providerTransactionId: string;
+      eventKey: string;
+      externalStatus: string;
+      rawBodyDigest: string;
+      rawBodyBytes: number;
+      receivedAt: string;
+    },
+    actor: ReturnType<BillingActorAttestationService['forWebhook']>,
+  ) {
+    return db.$queryRaw<Array<{ eventId: string; inserted: boolean }>>(Prisma.sql`
+      SELECT "eventId", inserted
+      FROM public.billing_pix_quarantine_orphan_webhook(
+        ${input.eventId}::uuid, ${input.provider}::public."PaymentProviderCode",
+        ${input.providerTransactionId}, ${input.eventKey}, ${input.externalStatus},
+        ${input.rawBodyDigest}, ${input.rawBodyBytes}::integer, ${input.receivedAt}::timestamptz,
+        ${actor.actorType}::public."BillingActorType", ${actor.actorUserId}::uuid,
+        ${actor.actorPrincipal}, ${actor.actorIssuedAt}::bigint, ${actor.actorNonce}::uuid,
+        ${actor.actorKeyId}, ${actor.actorSignature}, ${actor.argumentsDigest}
+      )
+    `);
   }
 });

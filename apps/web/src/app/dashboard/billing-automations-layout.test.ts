@@ -19,17 +19,20 @@ describe('billing and automations UI 2.0 presentation source', () => {
     );
     expect(dashboardSource).toContain('const billingKpis = [');
     expect(dashboardSource).toContain("label: 'Ignoradas/Canceladas'");
+    expect(dashboardSource).toContain("label: 'Revisão necessária'");
     expect(dashboardSource).toContain('className="toolbar billing-toolbar"');
     expect(dashboardSource).toContain('placeholder="Buscar cliente/referência"');
     expect(dashboardSource).toContain('await reconcileBilling();');
     expect(stylesSource).toContain('.billing-toolbar');
   });
 
-  it('keeps all four billing KPIs present and compact as a mobile 2x2 grid', () => {
+  it('keeps billing KPIs present and compact in the responsive grid', () => {
     expect(billingViewSource).toContain("label: 'Agendadas'");
     expect(billingViewSource).toContain("label: 'Enviadas'");
     expect(billingViewSource).toContain("label: 'Falhas'");
     expect(billingViewSource).toContain("label: 'Ignoradas/Canceladas'");
+    expect(billingViewSource).toContain("label: 'Revisão necessária'");
+    expect(billingViewSource).toContain('summary?.reviewRequired ?? 0');
     expect(stylesSource).toContain(".app-shell[data-active-view='billing'] .billing-kpis");
     expect(stylesSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
     expect(stylesSource).toContain('.billing-kpis .metric-card');
@@ -81,6 +84,7 @@ describe('billing and automations UI 2.0 presentation source', () => {
     expect(billingViewSource).toContain('dispatch.connection ?');
     expect(billingViewSource).toContain('label="Ver detalhes"');
     expect(billingViewSource).toContain('void runSendNow(dispatch);');
+    expect(billingViewSource).toContain('dispatch.requiresReview ||');
     expect(billingViewSource).toContain('PaginationControls');
     expect(stylesSource).toContain('.billing-table-wrap');
     expect(stylesSource).toContain('.billing-table thead');

@@ -68,20 +68,23 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     });
   });
 
-  it('keeps a validated foreign phone blocked when client writes are disabled', async () => {
+  it('keeps canonical international client writes independent from the legacy flag', async () => {
     const fixture = await createFixture();
     const service = createService({ clientWriteEnabled: false });
 
-    await expect(
-      service.create(
-        createDto(fixture.planId, { phone: '+1 (407) 639-0665', phoneCountry: 'US' }),
-        fixture.userId,
-      ),
-    ).rejects.toThrow('cadastro internacional esta desabilitado');
+    const result = await service.create(
+      createDto(fixture.planId, { phone: '+1 (407) 639-0665', phoneCountry: 'US' }),
+      fixture.userId,
+    );
+    created.clients.add(result.id);
 
     await expect(
-      prisma.client.count({ where: { reference: { startsWith: 'PHONE-CLIENTS1-' } } }),
-    ).resolves.toBe(0);
+      prisma.client.findUniqueOrThrow({ where: { id: result.id } }),
+    ).resolves.toMatchObject({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
   });
 
   it('atomically creates an international client and receivable without PIX or dispatch', async () => {

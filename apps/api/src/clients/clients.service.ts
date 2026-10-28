@@ -133,6 +133,14 @@ export class ClientsService {
     const internationalManualVoiceEnabled =
       this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_VOICE_ENABLED') === 'true' &&
       internationalManualVoiceCountries.length > 0;
+    const globalBillingEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_BILLING_ENABLED') === 'true';
+    const globalBillingPixEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_BILLING_PIX_ENABLED') === 'true';
+    const globalBillingSendEnabled =
+      this.configService?.get<string>('PHONE_GLOBAL_BILLING_SEND_ENABLED') === 'true';
+    const legacyInternationalBillingEnabled =
+      this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true';
 
     return {
       capabilityModel: 'OPERATION_V1' as const,
@@ -155,8 +163,7 @@ export class ClientsService {
       internationalManualPixEnabled:
         this.configService?.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
       internationalBillingOptInSupported: true,
-      internationalBillingSendEnabled:
-        this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true',
+      internationalBillingSendEnabled: legacyInternationalBillingEnabled,
       operationCapabilities: {
         clientPhoneWrite: { enabled: true },
         manualText: { enabled: globalManualTextEnabled },
@@ -166,7 +173,13 @@ export class ClientsService {
         manualPix: { enabled: false, requiresFinancialAuthorization: true },
         pixButton: { enabled: false, requiresFinancialAuthorization: true },
         autoReply: { enabled: false },
-        billing: { enabled: false, requiresFinancialAuthorization: true },
+        billing: {
+          enabled: globalBillingEnabled,
+          pixEnabled: globalBillingPixEnabled,
+          sendEnabled: globalBillingSendEnabled,
+          automaticDeliveryReady: false,
+          requiresFinancialAuthorization: true,
+        },
         recovery: { enabled: false, requiresFinancialAuthorization: true },
       },
       defaultCountry: 'BR' as const,

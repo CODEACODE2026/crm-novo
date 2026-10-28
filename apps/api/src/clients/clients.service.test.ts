@@ -1142,6 +1142,50 @@ describe('ClientsService manual client creation', () => {
     });
   });
 
+  it('publishes global Billing independently with financial authorization still required', () => {
+    expect(
+      createClientCreationService(false, false, false, false, false, false, false, '', false, '', {
+        billing: true,
+      }).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalBillingOptInSupported: true,
+      internationalBillingSendEnabled: false,
+      internationalManualPixEnabled: false,
+      operationCapabilities: {
+        billing: {
+          enabled: true,
+          pixEnabled: false,
+          sendEnabled: false,
+          automaticDeliveryReady: false,
+          requiresFinancialAuthorization: true,
+        },
+        recovery: { enabled: false, requiresFinancialAuthorization: true },
+        manualText: { enabled: false },
+      },
+    });
+  });
+
+  it('publishes staged global Billing controls without claiming automatic delivery readiness', () => {
+    expect(
+      createClientCreationService(false, false, false, false, false, false, false, '', false, '', {
+        billing: true,
+        billingPix: true,
+        billingSend: true,
+      }).service.phoneCapabilities(),
+    ).toMatchObject({
+      internationalBillingSendEnabled: false,
+      operationCapabilities: {
+        billing: {
+          enabled: true,
+          pixEnabled: true,
+          sendEnabled: true,
+          automaticDeliveryReady: false,
+          requiresFinancialAuthorization: true,
+        },
+      },
+    });
+  });
+
   it('publishes DTO support independently from international Billing activation', () => {
     expect(createClientCreationService().service.phoneCapabilities()).toMatchObject({
       internationalBillingOptInSupported: true,
@@ -2039,6 +2083,9 @@ function createClientCreationService(
     actions?: boolean;
     media?: boolean;
     voice?: boolean;
+    billing?: boolean;
+    billingPix?: boolean;
+    billingSend?: boolean;
   } = {},
 ) {
   const plan = {
@@ -2218,6 +2265,15 @@ function createClientCreationService(
         }
         if (key === 'PHONE_GLOBAL_MANUAL_VOICE_ENABLED') {
           return globalManualOperations.voice ? 'true' : undefined;
+        }
+        if (key === 'PHONE_GLOBAL_BILLING_ENABLED') {
+          return globalManualOperations.billing ? 'true' : undefined;
+        }
+        if (key === 'PHONE_GLOBAL_BILLING_PIX_ENABLED') {
+          return globalManualOperations.billingPix ? 'true' : undefined;
+        }
+        if (key === 'PHONE_GLOBAL_BILLING_SEND_ENABLED') {
+          return globalManualOperations.billingSend ? 'true' : undefined;
         }
         return undefined;
       }),

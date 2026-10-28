@@ -28,6 +28,7 @@ import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/w
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
+import { ReviewGlobalBillingDispatchDto } from './dto/review-global-billing-dispatch.dto';
 import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
 import { UpdateMessageTemplateDto } from './dto/update-message-template.dto';
 import { BillingTemplateRenderer } from './billing-template-renderer';
@@ -35,10 +36,18 @@ import { BillingTemplateRenderer } from './billing-template-renderer';
 const pageSizeLimit = 100;
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
+const globalBillingReviewErrorCodes = [
+  'GLOBAL_BILLING_PIX_DISABLED',
+  'GLOBAL_BILLING_SEND_DISABLED',
+  'GLOBAL_BILLING_PIX_NOT_READY',
+  'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW',
+  'GLOBAL_BILLING_BEFORE_CUTOFF',
+] as const;
 const nonRetryableProviderErrorCodes = [
   'PROVIDER_CONFIRMATION_MISSING',
   'PROVIDER_PERSISTENCE_UNCERTAIN',
   'PROVIDER_RESULT_UNCERTAIN',
+  ...globalBillingReviewErrorCodes,
 ] as const;
 const defaultBillingSendTime = '09:00';
 const defaultBillingTimezone = 'America/Sao_Paulo';
@@ -55,6 +64,8 @@ type BillingDispatch = MessageDispatch & {
   template: MessageTemplate | null;
   whatsAppConnection: WhatsAppConnection | null;
 };
+
+type BillingDbClient = PrismaService | Prisma.TransactionClient;
 
 type BillingDispatchItem = MessageDispatchItem & {
   clientReference: ClientReference & { plan?: Plan | null };
@@ -82,7 +93,13 @@ type BillingReconcileGroup = {
 };
 
 type BillingPhoneResolution =
-  | { status: 'allowed'; kind: 'BR' | 'INTERNATIONAL'; digits: string; e164: string }
+  | {
+      status: 'allowed';
+      kind: 'BR' | 'INTERNATIONAL';
+      authorization: 'BR' | 'LEGACY_INTERNATIONAL' | 'GLOBAL_INTERNATIONAL';
+      digits: string;
+      e164: string;
+    }
   | { status: 'blocked'; code: string; message: string };
 
 @Injectable()
@@ -145,7 +162,8 @@ export class BillingService {
           continue;
         }
 
-        if (this.resolveBillingPhone(client, [reference]).status !== 'allowed') {
+        const billingPhone = this.resolveBillingPhone(client, [reference]);
+        if (billingPhone.status !== 'allowed') {
           skipped += 1;
           continue;
         }
@@ -173,6 +191,10 @@ export class BillingService {
           settings,
         );
         const businessSendDate = formatBusinessDate(baseScheduledFor);
+        if (this.globalScheduleBlockReason(billingPhone, baseScheduledFor, now)) {
+          skipped += 1;
+          continue;
+        }
 
         candidates.push({
           client,
@@ -282,7 +304,12 @@ export class BillingService {
         }
       } catch (error) {
         if (this.isUniqueConstraint(error)) {
-          kept += 1;
+          const conflict = await this.inspectIdempotencyConflict(group, operationalPhone.digits);
+          if (conflict === 'review') {
+            skipped += 1;
+          } else {
+            kept += 1;
+          }
           continue;
         }
 
@@ -303,7 +330,11 @@ export class BillingService {
     const automaticWindow = options.automatic
       ? this.businessDayWindow(now, settings.timezone)
       : null;
+    const expiredForReview = automaticWindow
+      ? await this.classifyExpiredGlobalDispatches(automaticWindow.start, now)
+      : [];
     const effectiveLimit = Math.min(Math.max(limit, 1), 1);
+    const scanLimit = Math.min(Math.max(limit, effectiveLimit), pageSizeLimit);
     const candidates = await this.prisma.messageDispatch.findMany({
       where: {
         origin: 'BILLING',
@@ -324,12 +355,33 @@ export class BillingService {
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
       orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
-      take: effectiveLimit,
+      take: scanLimit,
     });
 
     const results = [];
+    const blocked = [...expiredForReview];
 
     for (const candidate of candidates) {
+      const current = await this.findDispatchForExecution(candidate.id);
+      const executionBlock = current ? this.globalExecutionBlockReason(current) : null;
+      if (executionBlock) {
+        await this.prisma.messageDispatch.updateMany({
+          where: {
+            id: candidate.id,
+            origin: 'BILLING',
+            status: { in: ['SCHEDULED', 'FAILED'] },
+          },
+          data: {
+            status: 'FAILED',
+            errorCode: executionBlock.code,
+            errorMessage: executionBlock.message,
+            nextAttemptAt: null,
+          },
+        });
+        blocked.push({ id: candidate.id, ...executionBlock });
+        continue;
+      }
+
       const acquired = await this.acquireDispatch(candidate.id, now);
 
       if (!acquired) {
@@ -337,14 +389,15 @@ export class BillingService {
       }
 
       results.push(await this.processAcquired(candidate.id, now));
+      if (results.length >= effectiveLimit) break;
     }
 
-    return { processed: results.length, results };
+    return { processed: results.length, results, blocked };
   }
 
   async sendNow(id: string) {
     const now = new Date();
-    const dispatch = await this.prisma.messageDispatch.findUnique({ where: { id } });
+    const dispatch = await this.findDispatchForExecution(id);
 
     if (!dispatch || dispatch.origin !== 'BILLING') {
       throw new NotFoundException('Cobranca nao encontrada.');
@@ -352,6 +405,11 @@ export class BillingService {
 
     if (!['SCHEDULED', 'FAILED'].includes(dispatch.status)) {
       throw new ConflictException('Apenas cobrancas agendadas ou com falha podem ser enviadas.');
+    }
+
+    const executionBlock = this.globalExecutionBlockReason(dispatch);
+    if (executionBlock) {
+      throw new ConflictException(executionBlock.message);
     }
 
     await this.prisma.messageDispatch.update({
@@ -368,6 +426,184 @@ export class BillingService {
     return { processed: 1, results: [await this.processAcquired(id, now)] };
   }
 
+  async reviewGlobalDispatch(
+    id: string,
+    dto: ReviewGlobalBillingDispatchDto,
+    actorUserId: string,
+    now = new Date(),
+  ) {
+    const scheduledFor = new Date(dto.scheduledFor);
+    const reason = dto.reason.trim();
+    if (scheduledFor <= now) {
+      throw new BadRequestException('A retomada exige um novo horario futuro.');
+    }
+    if (reason.length < 10) {
+      throw new BadRequestException('O motivo normalizado deve conter ao menos 10 caracteres.');
+    }
+
+    if (
+      !this.isGlobalBillingEnabled() ||
+      this.config.get<string>('PHONE_GLOBAL_BILLING_PIX_ENABLED') !== 'true' ||
+      this.config.get<string>('PHONE_GLOBAL_BILLING_SEND_ENABLED') !== 'true'
+    ) {
+      throw new ConflictException('A retomada exige os tres gates globais explicitamente ativos.');
+    }
+
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          await this.lockGlobalReviewDispatch(tx, id);
+          let dispatch = await this.findDispatchForExecution(id, tx);
+          if (!dispatch || dispatch.origin !== 'BILLING') {
+            throw new NotFoundException('Cobranca nao encontrada.');
+          }
+          if (
+            dispatch.status !== 'FAILED' ||
+            !dispatch.errorCode ||
+            !this.isGlobalBillingReviewCode(dispatch.errorCode)
+          ) {
+            throw new ConflictException('Cobranca nao pertence a fila global de revisao.');
+          }
+          if (dispatch.sentAt || dispatch.providerMessageId) {
+            throw new ConflictException('Cobranca ja possui evidencia de envio remoto.');
+          }
+
+          await this.lockGlobalReviewIdentity(tx, dispatch);
+          dispatch = await this.findDispatchForExecution(id, tx);
+          if (!dispatch || dispatch.status !== 'FAILED') {
+            throw new ConflictException('Cobranca foi alterada durante a revisao.');
+          }
+
+          const refreshed = await this.refreshDispatchItemsBeforeSend(dispatch, false, tx);
+          if ('code' in refreshed) {
+            throw new ConflictException(refreshed.message);
+          }
+
+          const ineligible = this.findIneligibleReason({ ...refreshed, status: 'PROCESSING' });
+          if (ineligible) {
+            throw new ConflictException(ineligible.message);
+          }
+
+          const items = this.dispatchItems(refreshed);
+          const phone = this.resolveBillingPhone(
+            refreshed.client!,
+            items.map((item) => item.clientReference),
+          );
+          if (
+            phone.status !== 'allowed' ||
+            phone.authorization !== 'GLOBAL_INTERNATIONAL' ||
+            refreshed.phone !== phone.digits
+          ) {
+            throw new ConflictException('Identidade global da cobranca nao foi revalidada.');
+          }
+
+          const cutoffBlock = this.globalScheduleBlockReason(phone, scheduledFor, now);
+          if (cutoffBlock) {
+            throw new ConflictException(cutoffBlock.message);
+          }
+
+          let conversation = await this.findInternationalBillingConversation(
+            refreshed.client!.id,
+            phone.digits,
+            phone.e164,
+            refreshed.whatsAppConnectionId ?? undefined,
+            tx,
+          );
+          if (!conversation) {
+            throw new ConflictException('Conversa e conexao globais nao foram revalidadas.');
+          }
+          await this.lockGlobalReviewConversation(
+            tx,
+            conversation.id,
+            conversation.whatsAppConnection.id,
+          );
+          conversation = await this.findInternationalBillingConversation(
+            refreshed.client!.id,
+            phone.digits,
+            phone.e164,
+            refreshed.whatsAppConnectionId ?? undefined,
+            tx,
+          );
+          if (!conversation) {
+            throw new ConflictException(
+              'Conversa e conexao globais foram alteradas durante a revisao.',
+            );
+          }
+
+          const receivableIds = items.map((item) => item.receivable.id);
+          const paidIntent = await tx.paymentIntent.findFirst({
+            where: {
+              status: 'PAID',
+              OR: [
+                { receivableId: { in: receivableIds } },
+                {
+                  paymentGroup: {
+                    items: { some: { receivableId: { in: receivableIds } } },
+                  },
+                },
+              ],
+            },
+            select: { id: true },
+          });
+          if (paidIntent) {
+            throw new ConflictException(
+              'Existe PIX pago incompatível com a retomada desta cobranca.',
+            );
+          }
+
+          const previousErrorCode = refreshed.errorCode;
+          const claimed = await tx.messageDispatch.updateMany({
+            where: {
+              id,
+              origin: 'BILLING',
+              status: 'FAILED',
+              errorCode: { in: [...globalBillingReviewErrorCodes] },
+              sentAt: null,
+              providerMessageId: null,
+            },
+            data: {
+              status: 'SCHEDULED',
+              scheduledFor,
+              nextAttemptAt: scheduledFor,
+              attempts: 0,
+              errorCode: null,
+              errorMessage: null,
+            },
+          });
+          if (claimed.count !== 1) {
+            throw new ConflictException('Cobranca foi alterada durante a revisao.');
+          }
+
+          await tx.clientEvent.create({
+            data: {
+              clientId: refreshed.client!.id,
+              type: 'CLIENT_UPDATED',
+              title: 'Cobranca global retomada apos revisao administrativa.',
+              description: reason,
+              metadata: {
+                messageDispatchId: id,
+                actorUserId,
+                previousErrorCode,
+                scheduledFor: scheduledFor.toISOString(),
+                origin: 'BILLING_GLOBAL_REVIEW',
+              },
+            },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new ConflictException(
+          'Conflito concorrente durante a revisao; nenhum reagendamento foi confirmado.',
+        );
+      }
+      throw error;
+    }
+
+    return this.getDispatch(id);
+  }
+
   async summary() {
     const settings = await this.getAutomationSettings();
     const today = this.businessDayWindow(new Date(), settings.timezone);
@@ -376,6 +612,11 @@ export class BillingService {
       sent,
       failed,
       ignoredOrCanceled,
+      awaitingPix,
+      sendDisabled,
+      pixNotReady,
+      expiredReview,
+      beforeCutoff,
       scheduledToday,
       sentToday,
       failedToday,
@@ -383,9 +624,38 @@ export class BillingService {
     ] = await this.prisma.$transaction([
       this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'SCHEDULED' } }),
       this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'SENT' } }),
-      this.prisma.messageDispatch.count({ where: { origin: 'BILLING', status: 'FAILED' } }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'FAILED',
+          OR: [{ errorCode: null }, { errorCode: { notIn: [...globalBillingReviewErrorCodes] } }],
+        },
+      }),
       this.prisma.messageDispatch.count({
         where: { origin: 'BILLING', status: { in: ['IGNORED', 'CANCELED'] } },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { origin: 'BILLING', status: 'FAILED', errorCode: 'GLOBAL_BILLING_PIX_DISABLED' },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { origin: 'BILLING', status: 'FAILED', errorCode: 'GLOBAL_BILLING_SEND_DISABLED' },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { origin: 'BILLING', status: 'FAILED', errorCode: 'GLOBAL_BILLING_PIX_NOT_READY' },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'FAILED',
+          errorCode: 'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW',
+        },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          origin: 'BILLING',
+          status: 'FAILED',
+          errorCode: 'GLOBAL_BILLING_BEFORE_CUTOFF',
+        },
       }),
       this.prisma.messageDispatch.count({
         where: {
@@ -405,6 +675,7 @@ export class BillingService {
         where: {
           origin: 'BILLING',
           status: 'FAILED',
+          OR: [{ errorCode: null }, { errorCode: { notIn: [...globalBillingReviewErrorCodes] } }],
           updatedAt: { gte: today.start, lte: today.end },
         },
       }),
@@ -413,6 +684,14 @@ export class BillingService {
           origin: 'BILLING',
           status: { in: ['SCHEDULED', 'FAILED'] },
           scheduledFor: { gte: today.start },
+          AND: [
+            {
+              OR: [
+                { errorCode: null },
+                { errorCode: { notIn: [...globalBillingReviewErrorCodes] } },
+              ],
+            },
+          ],
         },
         include: {
           client: true,
@@ -442,6 +721,14 @@ export class BillingService {
       sent,
       failed,
       ignoredOrCanceled,
+      reviewRequired: awaitingPix + sendDisabled + pixNotReady + expiredReview + beforeCutoff,
+      reviewReasons: {
+        awaitingPix,
+        sendDisabled,
+        pixNotReady,
+        expired: expiredReview,
+        beforeCutoff,
+      },
       scheduledToday,
       sentToday,
       failedToday,
@@ -539,14 +826,53 @@ export class BillingService {
   async dispatchesSummary(query: ListBillingDispatchesDto) {
     const where = this.buildDispatchWhere(query, { includeStatus: false });
 
-    const [scheduled, sent, failed, ignoredOrCanceled] = await this.prisma.$transaction([
+    const [
+      scheduled,
+      sent,
+      failed,
+      ignoredOrCanceled,
+      awaitingPix,
+      sendDisabled,
+      pixNotReady,
+      expiredReview,
+      beforeCutoff,
+    ] = await this.prisma.$transaction([
       this.prisma.messageDispatch.count({
         where: { ...where, status: { in: ['PENDING', 'SCHEDULED', 'PROCESSING'] } },
       }),
       this.prisma.messageDispatch.count({ where: { ...where, status: 'SENT' } }),
-      this.prisma.messageDispatch.count({ where: { ...where, status: 'FAILED' } }),
+      this.prisma.messageDispatch.count({
+        where: {
+          ...where,
+          status: 'FAILED',
+          OR: [{ errorCode: null }, { errorCode: { notIn: [...globalBillingReviewErrorCodes] } }],
+        },
+      }),
       this.prisma.messageDispatch.count({
         where: { ...where, status: { in: ['IGNORED', 'CANCELED'] } },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { ...where, status: 'FAILED', errorCode: 'GLOBAL_BILLING_PIX_DISABLED' },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { ...where, status: 'FAILED', errorCode: 'GLOBAL_BILLING_SEND_DISABLED' },
+      }),
+      this.prisma.messageDispatch.count({
+        where: { ...where, status: 'FAILED', errorCode: 'GLOBAL_BILLING_PIX_NOT_READY' },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          ...where,
+          status: 'FAILED',
+          errorCode: 'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW',
+        },
+      }),
+      this.prisma.messageDispatch.count({
+        where: {
+          ...where,
+          status: 'FAILED',
+          errorCode: 'GLOBAL_BILLING_BEFORE_CUTOFF',
+        },
       }),
     ]);
 
@@ -559,6 +885,14 @@ export class BillingService {
       sent,
       failed,
       ignoredOrCanceled,
+      reviewRequired: awaitingPix + sendDisabled + pixNotReady + expiredReview + beforeCutoff,
+      reviewReasons: {
+        awaitingPix,
+        sendDisabled,
+        pixNotReady,
+        expired: expiredReview,
+        beforeCutoff,
+      },
       internationalBlocked: internationalBlocks.blocked,
       internationalBlockedReasons: internationalBlocks.reasons,
     };
@@ -765,7 +1099,7 @@ export class BillingService {
   }
 
   private async processAcquired(id: string, now: Date) {
-    let dispatch = await this.prisma.messageDispatch.findUnique({
+    let dispatch: BillingDispatch | null = await this.prisma.messageDispatch.findUnique({
       where: { id },
       include: {
         client: true,
@@ -910,6 +1244,35 @@ export class BillingService {
       dispatch.client!,
       this.dispatchItems(dispatch).map((item) => item.clientReference),
     );
+    if (latestPhone.status === 'allowed' && latestPhone.authorization === 'GLOBAL_INTERNATIONAL') {
+      const executionBlock = this.globalExecutionBlockReason(dispatch);
+      if (executionBlock) {
+        const updated = await this.prisma.messageDispatch.update({
+          where: { id },
+          data: {
+            status: 'FAILED',
+            errorCode: executionBlock.code,
+            errorMessage: executionBlock.message,
+            nextAttemptAt: null,
+          },
+          include: {
+            client: true,
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+            items: {
+              include: {
+                clientReference: { include: { plan: true } },
+                receivable: { include: { clientReference: { include: { plan: true } } } },
+              },
+              orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+            },
+            template: true,
+            whatsAppConnection: true,
+          },
+        });
+        return this.presentDispatch(updated);
+      }
+    }
     if (latestPhone.status === 'allowed' && latestPhone.kind === 'INTERNATIONAL') {
       const conversation = await this.findInternationalBillingConversation(
         dispatch.client!.id,
@@ -1058,7 +1421,11 @@ export class BillingService {
     }
   }
 
-  private async refreshDispatchItemsBeforeSend(dispatch: BillingDispatch) {
+  private async refreshDispatchItemsBeforeSend(
+    dispatch: BillingDispatch,
+    persist = true,
+    db: BillingDbClient = this.prisma,
+  ): Promise<BillingDispatch | { code: string; message: string }> {
     const originalItems = this.dispatchItems(dispatch);
 
     if (!dispatch.client) {
@@ -1069,7 +1436,7 @@ export class BillingService {
       return { code: 'RECEIVABLE_MISSING', message: 'Conta a receber nao encontrada.' };
     }
 
-    const currentReceivables = await this.prisma.receivable.findMany({
+    const currentReceivables = await db.receivable.findMany({
       where: { id: { in: originalItems.map((item) => item.receivable.id) } },
       include: { clientReference: { include: { plan: true } } },
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
@@ -1081,7 +1448,7 @@ export class BillingService {
     const requiresInternationalOptIn =
       internationalIdentity.status === 'blocked' &&
       internationalIdentity.reason === 'INTERNATIONAL_PHONE' &&
-      this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true';
+      this.isInternationalBillingEnabled();
     const activeItems = originalItems
       .map((item) => {
         const receivable = currentById.get(item.receivable.id);
@@ -1156,12 +1523,20 @@ export class BillingService {
       }
     }
 
-    const template =
-      activeItems.length > 1
+    const template = persist
+      ? activeItems.length > 1
         ? await this.ensureGroupedTemplate()
-        : await this.ensureDefaultTemplate();
+        : await this.ensureDefaultTemplate()
+      : await db.messageTemplate.findUnique({
+          where: {
+            type_name:
+              activeItems.length > 1
+                ? { type: 'BILLING_DUE_GROUPED', name: 'Cobranca agrupada' }
+                : { type: 'BILLING_DUE', name: 'Cobranca padrao' },
+          },
+        });
 
-    if (!template.active) {
+    if (!template || !template.active) {
       return { code: 'TEMPLATE_INACTIVE', message: 'Template de cobranca indisponivel.' };
     }
 
@@ -1171,6 +1546,21 @@ export class BillingService {
       activeItems,
     );
     const firstItem = activeItems[0]!;
+
+    if (!persist) {
+      return {
+        ...dispatch,
+        clientReferenceId: firstItem.clientReference.id,
+        receivableId: firstItem.receivable.id,
+        templateId: template.id,
+        clientReference: firstItem.clientReference,
+        receivable: firstItem.receivable,
+        template,
+        body: renderedContent,
+        renderedContent,
+        items: activeItems,
+      } satisfies BillingDispatch;
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.messageDispatchItem.deleteMany({ where: { messageDispatchId: dispatch.id } });
@@ -1521,14 +1911,22 @@ export class BillingService {
   ): BillingPhoneResolution {
     const brazilian = resolveBrazilianOperationalPhone(client);
     if (brazilian.status === 'valid') {
-      return { status: 'allowed', kind: 'BR', digits: brazilian.digits, e164: brazilian.e164 };
+      return {
+        status: 'allowed',
+        kind: 'BR',
+        authorization: 'BR',
+        digits: brazilian.digits,
+        e164: brazilian.e164,
+      };
     }
 
     if (brazilian.reason !== 'INTERNATIONAL_PHONE') {
       return { status: 'blocked', ...this.billingPhoneBlockReason(brazilian.reason) };
     }
 
-    if (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') !== 'true') {
+    const globalBillingEnabled = this.isGlobalBillingEnabled();
+    const legacyBillingEnabled = this.isLegacyInternationalBillingEnabled();
+    if (!this.isInternationalBillingEnabled()) {
       return {
         status: 'blocked',
         code: 'INTERNATIONAL_BILLING_DISABLED',
@@ -1561,13 +1959,9 @@ export class BillingService {
       };
     }
 
-    const allowedCountries = new Set(
-      (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_COUNTRIES') ?? '')
-        .split(',')
-        .map((country) => country.trim())
-        .filter(Boolean),
-    );
-    if (!allowedCountries.has(canonical.country)) {
+    const legacyCountryAllowed =
+      legacyBillingEnabled && this.internationalBillingCountries().has(canonical.country);
+    if (!legacyCountryAllowed && !globalBillingEnabled) {
       return {
         status: 'blocked',
         code: 'INTERNATIONAL_BILLING_COUNTRY_BLOCKED',
@@ -1575,7 +1969,25 @@ export class BillingService {
       };
     }
 
-    const normalizedDigits = client.phoneNormalized.trim();
+    if (!legacyCountryAllowed && !this.globalBillingEffectiveFrom()) {
+      return {
+        status: 'blocked',
+        code: 'GLOBAL_BILLING_CUTOFF_REQUIRED',
+        message: 'Data de corte obrigatoria antes de habilitar Billing global.',
+      };
+    }
+
+    if (!legacyCountryAllowed && client.phoneE164 !== canonical.e164) {
+      return {
+        status: 'blocked',
+        code: 'INVALID_PHONE',
+        message: 'Telefone internacional canonico invalido para Billing.',
+      };
+    }
+
+    const normalizedDigits = legacyCountryAllowed
+      ? client.phoneNormalized.trim()
+      : client.phoneNormalized;
     const original = normalizePhone(client.phone.trim());
     if (
       normalizedDigits !== canonical.digits ||
@@ -1592,9 +2004,303 @@ export class BillingService {
     return {
       status: 'allowed',
       kind: 'INTERNATIONAL',
+      authorization: legacyCountryAllowed ? 'LEGACY_INTERNATIONAL' : 'GLOBAL_INTERNATIONAL',
       digits: canonical.digits,
       e164: canonical.e164,
     };
+  }
+
+  private isGlobalBillingEnabled() {
+    return this.config.get<string>('PHONE_GLOBAL_BILLING_ENABLED') === 'true';
+  }
+
+  private isInternationalBillingEnabled() {
+    return this.isGlobalBillingEnabled() || this.isLegacyInternationalBillingEnabled();
+  }
+
+  private isLegacyInternationalBillingEnabled() {
+    return this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true';
+  }
+
+  private internationalBillingCountries() {
+    return new Set(
+      (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_COUNTRIES') ?? '')
+        .split(',')
+        .map((country) => country.trim())
+        .filter(Boolean),
+    );
+  }
+
+  private globalBillingEffectiveFrom() {
+    const value = this.config.get<string>('PHONE_GLOBAL_BILLING_EFFECTIVE_FROM')?.trim();
+    if (!value) return null;
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? null : new Date(timestamp);
+  }
+
+  private globalScheduleBlockReason(phone: BillingPhoneResolution, scheduledFor: Date, now: Date) {
+    if (phone.status !== 'allowed' || phone.authorization !== 'GLOBAL_INTERNATIONAL') return null;
+
+    const effectiveFrom = this.globalBillingEffectiveFrom();
+    if (!effectiveFrom) {
+      return {
+        code: 'GLOBAL_BILLING_CUTOFF_REQUIRED',
+        message: 'Data de corte obrigatoria antes de agendar Billing global.',
+      };
+    }
+    if (scheduledFor < effectiveFrom) {
+      return {
+        code: 'GLOBAL_BILLING_BEFORE_CUTOFF',
+        message: 'Cobranca global pertence a periodo anterior a data de corte.',
+      };
+    }
+    if (scheduledFor <= now) {
+      return {
+        code: 'GLOBAL_BILLING_SCHEDULE_ALREADY_DUE',
+        message: 'Cobranca global ja estava vencida no momento da reconciliacao.',
+      };
+    }
+    return null;
+  }
+
+  private globalExecutionBlockReason(dispatch: BillingDispatch) {
+    if (!dispatch.client) return null;
+    const items = this.dispatchItems(dispatch);
+    if (!items.length || items.some((item) => item.receivable.status !== 'PENDENTE')) return null;
+    const phone = this.resolveBillingPhone(
+      dispatch.client,
+      items.map((item) => item.clientReference),
+    );
+    if (phone.status !== 'allowed' || phone.authorization !== 'GLOBAL_INTERNATIONAL') return null;
+
+    const effectiveFrom = this.globalBillingEffectiveFrom();
+    if (!effectiveFrom || !dispatch.scheduledFor || dispatch.scheduledFor < effectiveFrom) {
+      return {
+        code: 'GLOBAL_BILLING_BEFORE_CUTOFF',
+        message: 'Cobranca global bloqueada por ser anterior a data de corte.',
+      };
+    }
+    if (this.config.get<string>('PHONE_GLOBAL_BILLING_PIX_ENABLED') !== 'true') {
+      return {
+        code: 'GLOBAL_BILLING_PIX_DISABLED',
+        message: 'Criacao automatica de PIX global permanece desabilitada.',
+      };
+    }
+    if (this.config.get<string>('PHONE_GLOBAL_BILLING_SEND_ENABLED') !== 'true') {
+      return {
+        code: 'GLOBAL_BILLING_SEND_DISABLED',
+        message: 'Envio automatico de Billing global permanece desabilitado.',
+      };
+    }
+    return {
+      code: 'GLOBAL_BILLING_PIX_NOT_READY',
+      message: 'Envio global exige um PIX persistido e validado; automacao ainda nao implementada.',
+    };
+  }
+
+  private isGlobalBillingReviewCode(code: string) {
+    return (globalBillingReviewErrorCodes as readonly string[]).includes(code);
+  }
+
+  private async classifyExpiredGlobalDispatches(businessDayStart: Date, now: Date) {
+    if (!this.isGlobalBillingEnabled()) return [];
+
+    const stale = await this.prisma.messageDispatch.findMany({
+      where: {
+        origin: 'BILLING',
+        status: { in: ['SCHEDULED', 'FAILED'] },
+        scheduledFor: { lt: businessDayStart },
+        AND: [
+          {
+            OR: [{ errorCode: null }, { errorCode: { notIn: [...globalBillingReviewErrorCodes] } }],
+          },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    });
+    const classified: Array<{ id: string; code: string; message: string }> = [];
+
+    for (const candidate of stale) {
+      const dispatch = await this.findDispatchForExecution(candidate.id);
+      if (
+        !dispatch ||
+        !dispatch.scheduledFor ||
+        dispatch.scheduledFor >= businessDayStart ||
+        dispatch.scheduledFor > now ||
+        dispatch.sentAt ||
+        dispatch.providerMessageId ||
+        !dispatch.client
+      ) {
+        continue;
+      }
+
+      const items = this.dispatchItems(dispatch);
+      if (!items.length || items.some((item) => item.receivable.status !== 'PENDENTE')) {
+        continue;
+      }
+      const phone = this.resolveBillingPhone(
+        dispatch.client,
+        items.map((item) => item.clientReference),
+      );
+      if (phone.status !== 'allowed' || phone.authorization !== 'GLOBAL_INTERNATIONAL') {
+        continue;
+      }
+
+      const code = 'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW';
+      const message =
+        'Horario global venceu em dia anterior; revisao administrativa e novo horario sao obrigatorios.';
+      const updated = await this.prisma.messageDispatch.updateMany({
+        where: {
+          id: dispatch.id,
+          origin: 'BILLING',
+          status: { in: ['SCHEDULED', 'FAILED'] },
+          scheduledFor: { lt: businessDayStart },
+          sentAt: null,
+          providerMessageId: null,
+        },
+        data: { status: 'FAILED', errorCode: code, errorMessage: message, nextAttemptAt: null },
+      });
+      if (updated.count === 1) {
+        classified.push({ id: dispatch.id, code, message });
+      }
+    }
+
+    return classified;
+  }
+
+  private async inspectIdempotencyConflict(group: BillingReconcileGroup, phone: string) {
+    const existing = await this.prisma.messageDispatch.findUnique({
+      where: { idempotencyKey: group.idempotencyKey },
+      select: {
+        id: true,
+        clientId: true,
+        clientReferenceId: true,
+        receivableId: true,
+        phone: true,
+        status: true,
+        errorCode: true,
+        idempotencyKey: true,
+        items: { select: { receivableId: true, clientReferenceId: true } },
+      },
+    });
+    if (!existing) {
+      throw new ConflictException('Conflito de idempotencia sem registro correspondente.');
+    }
+
+    const expectedReceivableIds = new Set(group.items.map((item) => item.receivable.id));
+    const expectedReferenceIds = new Set(group.items.map((item) => item.reference.id));
+    const existingItems = existing.items ?? [];
+    const existingReceivableIds = new Set(
+      existingItems.length
+        ? existingItems.map((item) => item.receivableId)
+        : existing.receivableId
+          ? [existing.receivableId]
+          : [],
+    );
+    const existingReferenceIds = new Set(
+      existingItems.length
+        ? existingItems.map((item) => item.clientReferenceId)
+        : existing.clientReferenceId
+          ? [existing.clientReferenceId]
+          : [],
+    );
+    const sameSet = (left: Set<string>, right: Set<string>) =>
+      left.size === right.size && [...left].every((value) => right.has(value));
+
+    if (
+      existing.clientId !== group.client.id ||
+      existing.idempotencyKey !== group.idempotencyKey ||
+      existing.phone !== phone ||
+      !sameSet(existingReceivableIds, expectedReceivableIds) ||
+      !sameSet(existingReferenceIds, expectedReferenceIds)
+    ) {
+      throw new ConflictException('Conflito de idempotencia com identidade financeira divergente.');
+    }
+
+    return existing.status === 'FAILED' && existing.errorCode
+      ? this.isGlobalBillingReviewCode(existing.errorCode)
+        ? 'review'
+        : 'kept'
+      : 'kept';
+  }
+
+  private async lockGlobalReviewDispatch(tx: Prisma.TransactionClient, dispatchId: string) {
+    await tx.$executeRawUnsafe(
+      'SELECT id FROM message_dispatches WHERE id = $1::uuid FOR UPDATE',
+      dispatchId,
+    );
+  }
+
+  private async lockGlobalReviewIdentity(tx: Prisma.TransactionClient, dispatch: BillingDispatch) {
+    if (dispatch.clientId) {
+      await tx.$executeRawUnsafe(
+        'SELECT id FROM clients WHERE id = $1::uuid FOR UPDATE',
+        dispatch.clientId,
+      );
+    }
+
+    const referenceIds = [
+      ...new Set(this.dispatchItems(dispatch).map((item) => item.clientReferenceId)),
+    ].sort();
+    for (const referenceId of referenceIds) {
+      await tx.$executeRawUnsafe(
+        'SELECT id FROM client_references WHERE id = $1::uuid FOR UPDATE',
+        referenceId,
+      );
+    }
+
+    const receivableIds = [
+      ...new Set(this.dispatchItems(dispatch).map((item) => item.receivableId)),
+    ].sort();
+    for (const receivableId of receivableIds) {
+      await tx.$executeRawUnsafe(
+        'SELECT id FROM receivables WHERE id = $1::uuid FOR UPDATE',
+        receivableId,
+      );
+    }
+
+    if (dispatch.whatsAppConnectionId) {
+      await tx.$executeRawUnsafe(
+        'SELECT id FROM whatsapp_connections WHERE id = $1::uuid FOR UPDATE',
+        dispatch.whatsAppConnectionId,
+      );
+    }
+  }
+
+  private async lockGlobalReviewConversation(
+    tx: Prisma.TransactionClient,
+    conversationId: string,
+    connectionId: string,
+  ) {
+    await tx.$executeRawUnsafe(
+      'SELECT id FROM whatsapp_conversations WHERE id = $1::uuid FOR UPDATE',
+      conversationId,
+    );
+    await tx.$executeRawUnsafe(
+      'SELECT id FROM whatsapp_connections WHERE id = $1::uuid FOR UPDATE',
+      connectionId,
+    );
+  }
+
+  private findDispatchForExecution(id: string, db: BillingDbClient = this.prisma) {
+    return db.messageDispatch.findUnique({
+      where: { id },
+      include: {
+        client: true,
+        clientReference: { include: { plan: true } },
+        receivable: { include: { clientReference: { include: { plan: true } } } },
+        items: {
+          include: {
+            clientReference: { include: { plan: true } },
+            receivable: { include: { clientReference: { include: { plan: true } } } },
+          },
+          orderBy: [{ dueDate: 'asc' as const }, { createdAt: 'asc' as const }],
+        },
+        template: true,
+        whatsAppConnection: true,
+      },
+    });
   }
 
   private async findInternationalBillingConversation(
@@ -1602,8 +2308,9 @@ export class BillingService {
     digits: string,
     e164: string,
     connectionId?: string,
+    db: BillingDbClient = this.prisma,
   ) {
-    return this.prisma.whatsAppConversation.findFirst({
+    return db.whatsAppConversation.findFirst({
       where: {
         clientId,
         phoneNormalized: digits,
@@ -1619,6 +2326,8 @@ export class BillingService {
   }
 
   private async internationalBillingBlocks(clientId: string, clientReferenceId?: string) {
+    const settings = await this.getAutomationSettings();
+    const now = new Date();
     const references = await this.prisma.clientReference.findMany({
       where: {
         clientId,
@@ -1651,6 +2360,19 @@ export class BillingService {
       const resolved = this.resolveBillingPhone(reference.client, [reference]);
       let block =
         resolved.status === 'blocked' ? { code: resolved.code, message: resolved.message } : null;
+
+      if (
+        !block &&
+        resolved.status === 'allowed' &&
+        resolved.authorization === 'GLOBAL_INTERNATIONAL'
+      ) {
+        const scheduledFor = this.calculateScheduledFor(
+          reference.dueDate,
+          reference.billingNoticeDays,
+          settings,
+        );
+        block = this.globalScheduleBlockReason(resolved, scheduledFor, now);
+      }
 
       if (!block && resolved.status === 'allowed' && resolved.kind === 'INTERNATIONAL') {
         const conversation = await this.findInternationalBillingConversation(
@@ -2259,6 +2981,15 @@ export class BillingService {
       providerMessageId: dispatch.providerMessageId,
       errorCode: dispatch.errorCode,
       errorMessage: dispatch.errorMessage,
+      requiresReview:
+        dispatch.status === 'FAILED' &&
+        Boolean(dispatch.errorCode && this.isGlobalBillingReviewCode(dispatch.errorCode)),
+      reviewReason:
+        dispatch.status === 'FAILED' &&
+        dispatch.errorCode &&
+        this.isGlobalBillingReviewCode(dispatch.errorCode)
+          ? dispatch.errorCode
+          : null,
       sentAt: dispatch.sentAt?.toISOString() ?? null,
       createdAt: dispatch.createdAt.toISOString(),
       updatedAt: dispatch.updatedAt.toISOString(),

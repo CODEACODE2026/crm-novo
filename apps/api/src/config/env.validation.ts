@@ -34,6 +34,11 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_BILLING_COUNTRIES');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_PIX_ENABLED');
+  validateOptionalBooleanFlag(config, 'PHONE_GLOBAL_BILLING_SEND_ENABLED');
+  validateOptionalIsoInstant(config, 'PHONE_GLOBAL_BILLING_EFFECTIVE_FROM');
+  validateGlobalBillingRollout(config);
 
   if (nodeEnv === 'production') {
     requireValue(config, 'DATABASE_URL');
@@ -68,6 +73,38 @@ function validateOptionalBooleanFlag(config: EnvConfig, key: string) {
   const value = config[key];
   if (value !== undefined && value !== 'true' && value !== 'false') {
     throw new Error(`${key} deve ser true ou false.`);
+  }
+}
+
+function validateOptionalIsoInstant(config: EnvConfig, key: string) {
+  const value = config[key]?.trim();
+  if (!value) return;
+
+  const hasExplicitTimezone = /(Z|[+-]\d{2}:\d{2})$/i.test(value);
+  if (!hasExplicitTimezone || Number.isNaN(Date.parse(value))) {
+    throw new Error(`${key} deve ser um instante ISO-8601 com timezone explicito.`);
+  }
+}
+
+function validateGlobalBillingRollout(config: EnvConfig) {
+  const eligibilityEnabled = config.PHONE_GLOBAL_BILLING_ENABLED === 'true';
+  const pixEnabled = config.PHONE_GLOBAL_BILLING_PIX_ENABLED === 'true';
+  const sendEnabled = config.PHONE_GLOBAL_BILLING_SEND_ENABLED === 'true';
+
+  if (eligibilityEnabled && !config.PHONE_GLOBAL_BILLING_EFFECTIVE_FROM?.trim()) {
+    throw new Error(
+      'PHONE_GLOBAL_BILLING_EFFECTIVE_FROM e obrigatoria quando PHONE_GLOBAL_BILLING_ENABLED=true.',
+    );
+  }
+
+  if (pixEnabled && !eligibilityEnabled) {
+    throw new Error('PHONE_GLOBAL_BILLING_PIX_ENABLED exige PHONE_GLOBAL_BILLING_ENABLED=true.');
+  }
+
+  if (sendEnabled && !pixEnabled) {
+    throw new Error(
+      'PHONE_GLOBAL_BILLING_SEND_ENABLED exige PHONE_GLOBAL_BILLING_PIX_ENABLED=true.',
+    );
   }
 }
 

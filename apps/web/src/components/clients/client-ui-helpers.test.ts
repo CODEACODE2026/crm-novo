@@ -343,6 +343,24 @@ describe('client UI helpers', () => {
         'Billing automatico internacional esta desabilitado.',
       ),
     ).toBe('A cobrança automática internacional está desativada.');
+    expect(
+      internationalBillingBlockReasonLabel('GLOBAL_BILLING_SCHEDULE_ALREADY_DUE', 'fallback'),
+    ).toBe('O horário desse ciclo já havia passado quando a automação global foi reconciliada.');
+    expect(internationalBillingBlockReasonLabel('GLOBAL_BILLING_PIX_DISABLED', 'fallback')).toBe(
+      'A cobrança aguarda habilitação da automação de PIX.',
+    );
+    expect(internationalBillingBlockReasonLabel('GLOBAL_BILLING_SEND_DISABLED', 'fallback')).toBe(
+      'A cobrança aguarda habilitação do envio automático.',
+    );
+    expect(internationalBillingBlockReasonLabel('GLOBAL_BILLING_PIX_NOT_READY', 'fallback')).toBe(
+      'O PIX automático ainda não está disponível.',
+    );
+    expect(
+      internationalBillingBlockReasonLabel('GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW', 'fallback'),
+    ).toBe('O horário venceu e a cobrança exige revisão e novo agendamento futuro.');
+    expect(internationalBillingBlockReasonLabel('GLOBAL_BILLING_BEFORE_CUTOFF', 'fallback')).toBe(
+      'O ciclo pertence a um período anterior à data de corte global.',
+    );
     expect(internationalBillingBlockReasonLabel('CUSTOM', ' Motivo específico. ')).toBe(
       'Motivo específico.',
     );

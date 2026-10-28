@@ -7,15 +7,21 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
+import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { BillingService } from './billing.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
+import { ReviewGlobalBillingDispatchDto } from './dto/review-global-billing-dispatch.dto';
 import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
 import { UpdateMessageTemplateDto } from './dto/update-message-template.dto';
+
+type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('billing')
@@ -55,6 +61,15 @@ export class BillingController {
   @Post('dispatches/:id/send-now')
   sendNow(@Param('id') id: string) {
     return this.billingService.sendNow(id);
+  }
+
+  @Post('dispatches/:id/review-global')
+  reviewGlobalDispatch(
+    @Param('id') id: string,
+    @Body() dto: ReviewGlobalBillingDispatchDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.billingService.reviewGlobalDispatch(id, dto, request.user.id);
   }
 
   @Post('reconcile')

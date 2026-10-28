@@ -720,6 +720,14 @@ export interface MessageDispatch {
   providerMessageId: string | null;
   errorCode?: string | null;
   errorMessage: string | null;
+  requiresReview?: boolean;
+  reviewReason?:
+    | 'GLOBAL_BILLING_PIX_DISABLED'
+    | 'GLOBAL_BILLING_SEND_DISABLED'
+    | 'GLOBAL_BILLING_PIX_NOT_READY'
+    | 'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW'
+    | 'GLOBAL_BILLING_BEFORE_CUTOFF'
+    | null;
   sentAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1097,6 +1105,8 @@ export interface BillingSummary {
   sent: number;
   failed: number;
   ignoredOrCanceled: number;
+  reviewRequired: number;
+  reviewReasons: BillingReviewReasonCounts;
   scheduledToday?: number;
   sentToday?: number;
   failedToday?: number;
@@ -1110,8 +1120,18 @@ export interface BillingDispatchSummary {
   sent: number;
   failed: number;
   ignoredOrCanceled: number;
+  reviewRequired: number;
+  reviewReasons: BillingReviewReasonCounts;
   internationalBlocked: number;
   internationalBlockedReasons: Array<{ code: string; message: string; count: number }>;
+}
+
+export interface BillingReviewReasonCounts {
+  awaitingPix: number;
+  sendDisabled: number;
+  pixNotReady: number;
+  expired: number;
+  beforeCutoff: number;
 }
 
 export type ReceivableCycleCode =
@@ -2120,7 +2140,13 @@ export interface ClientPhoneCapabilities {
     manualPix?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
     pixButton?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
     autoReply?: { enabled: boolean };
-    billing?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
+    billing?: {
+      enabled: boolean;
+      pixEnabled?: boolean;
+      sendEnabled?: boolean;
+      automaticDeliveryReady?: boolean;
+      requiresFinancialAuthorization?: boolean;
+    };
     recovery?: { enabled: boolean; requiresFinancialAuthorization?: boolean };
   };
   defaultCountry: 'BR';
@@ -3527,6 +3553,16 @@ export function sendBillingNow(id: string) {
     `/billing/dispatches/${id}/send-now`,
     { method: 'POST' },
   );
+}
+
+export function reviewGlobalBillingDispatch(
+  id: string,
+  payload: { scheduledFor: string; reason: string },
+) {
+  return apiFetch<MessageDispatch>(`/billing/dispatches/${id}/review-global`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listMessageTemplates() {

@@ -163,6 +163,7 @@ function dispatch(overrides: Record<string, unknown> = {}) {
   return {
     id: 'dispatch-id',
     clientId: client().id,
+    clientReferenceId: clientReference().id,
     receivableId: receivable().id,
     templateId: template().id,
     whatsAppConnectionId: connection().id,
@@ -256,6 +257,7 @@ function serviceFactory({
   existingClientEvent = null,
   currentReceivables,
   existingFutureDispatch = null,
+  idempotencyConflictDispatch = null,
   conversationRecord = null,
   configOverrides = {},
   clientReferencesForSummary = [],
@@ -271,6 +273,7 @@ function serviceFactory({
   settingsRecord?: ReturnType<typeof automationSettings>;
   existingClientEvent?: Record<string, unknown> | null;
   existingFutureDispatch?: ReturnType<typeof dispatch> | null;
+  idempotencyConflictDispatch?: ReturnType<typeof dispatch> | null;
   currentReceivables?: ReceivableWithReference[];
   conversationRecord?: Record<string, unknown> | null;
   configOverrides?: Record<string, string | undefined>;
@@ -354,6 +357,11 @@ function serviceFactory({
       const count = acquireCount > 0 ? 1 : 0;
       acquireCount -= 1;
       return Promise.resolve({ count });
+    }
+
+    if (data?.status === 'FAILED' || data?.status === 'SCHEDULED') {
+      storedDispatch = dispatch({ ...storedDispatch, ...data });
+      return Promise.resolve({ count: 1 });
     }
 
     return Promise.resolve({ count: 0 });
@@ -449,9 +457,28 @@ function serviceFactory({
       updateMany,
       findMany: vi.fn().mockResolvedValue([dispatch()]),
       findFirst: findExistingFutureDispatch,
-      findUnique: vi.fn().mockImplementation(() => Promise.resolve(storedDispatch)),
+      findUnique: vi
+        .fn()
+        .mockImplementation(({ where }) =>
+          Promise.resolve(
+            where?.idempotencyKey
+              ? (idempotencyConflictDispatch ?? existingFutureDispatch)
+              : storedDispatch,
+          ),
+        ),
       update: updateDispatch,
       count: vi.fn().mockResolvedValue(0),
+    },
+    messageDispatchItem: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    clientEvent: {
+      create: clientEventCreate,
+      findFirst: clientEventFindFirst,
+    },
+    billingResponse: {
+      create: billingResponseCreate,
+      upsert: billingResponseUpsert,
     },
     receivable: {
       findMany: vi.fn().mockResolvedValue(
@@ -465,24 +492,27 @@ function serviceFactory({
         ],
       ),
     },
+    paymentIntent: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    $executeRawUnsafe: vi.fn().mockResolvedValue(1),
     $transaction: vi.fn(async (input: unknown) => {
       if (Array.isArray(input)) {
         return Promise.all(input);
       }
 
       const callback = input as (tx: unknown) => Promise<unknown>;
-      return callback({
-        messageDispatch: { update: updateDispatch },
-        messageDispatchItem: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
-        clientEvent: { create: clientEventCreate, findFirst: clientEventFindFirst },
-        billingResponse: { create: billingResponseCreate, upsert: billingResponseUpsert },
-      });
+      return callback(prisma);
     }),
   };
   const provider = { sendText: providerSendText };
   const encryption = { decrypt: vi.fn().mockReturnValue('instance-token') };
+  const effectiveConfig: Record<string, string | undefined> = {
+    PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-09-01T00:00:00.000Z',
+    ...configOverrides,
+  };
   const config = {
-    get: vi.fn((key: string) => (key === 'BILLING_SEND_HOUR' ? '9' : configOverrides[key])),
+    get: vi.fn((key: string) => (key === 'BILLING_SEND_HOUR' ? '9' : effectiveConfig[key])),
   };
   const service = new BillingService(
     prisma as never,
@@ -509,6 +539,8 @@ function serviceFactory({
 type DispatchCreateArgs = {
   data: {
     scheduledFor: Date;
+    status?: string;
+    phone?: string;
     clientReferenceId?: string | null;
     receivableId?: string | null;
     idempotencyKey?: string;
@@ -618,6 +650,570 @@ describe('BillingService', () => {
       );
     },
   );
+
+  it('keeps a blocked global dispatch reviewable across restart and only resumes it explicitly', async () => {
+    const foreignClient = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+    });
+    const foreignReceivable = receivable();
+    const foreignReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [foreignReceivable],
+    });
+    const globalDispatch = dispatch({
+      status: 'SCHEDULED',
+      phone: '971529846014',
+      client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
+      scheduledFor: new Date('2026-09-15T12:00:00.000Z'),
+      nextAttemptAt: new Date('2026-09-15T12:00:00.000Z'),
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+    });
+    const providerSendText = vi.fn();
+    const { service, prisma, updateMany, clientEventCreate } = serviceFactory({
+      dispatchForProcessing: globalDispatch,
+      providerSendText,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreignClient.id,
+        phoneNormalized: '971529846014',
+        phoneE164: '+971529846014',
+        whatsAppConnection: connection(),
+      },
+    });
+    prisma.messageDispatch.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([globalDispatch]);
+
+    await expect(
+      service.processDue(new Date('2026-09-15T12:00:00.000Z'), 20, { automatic: true }),
+    ).resolves.toMatchObject({
+      processed: 0,
+      blocked: [expect.objectContaining({ code: 'GLOBAL_BILLING_PIX_NOT_READY' })],
+    });
+    expect(providerSendText).not.toHaveBeenCalled();
+
+    prisma.messageDispatch.findMany.mockReset();
+    prisma.messageDispatch.findMany.mockResolvedValue([]);
+    await expect(
+      service.processDue(new Date('2026-09-15T12:01:00.000Z'), 20, { automatic: true }),
+    ).resolves.toMatchObject({ processed: 0, blocked: [] });
+    expect(providerSendText).not.toHaveBeenCalled();
+
+    await expect(
+      service.reviewGlobalDispatch(
+        globalDispatch.id,
+        {
+          scheduledFor: '2026-09-16T12:00:00.000Z',
+          reason: '   Retomada autorizada após revisão financeira completa.   ',
+        },
+        'admin-user-id',
+        new Date('2026-09-15T13:00:00.000Z'),
+      ),
+    ).resolves.toMatchObject({ status: 'SCHEDULED', errorCode: null });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'FAILED' }),
+        data: expect.objectContaining({
+          status: 'SCHEDULED',
+          scheduledFor: new Date('2026-09-16T12:00:00.000Z'),
+        }),
+      }),
+    );
+    expect(clientEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          title: 'Cobranca global retomada apos revisao administrativa.',
+          description: 'Retomada autorizada após revisão financeira completa.',
+          metadata: expect.objectContaining({ actorUserId: 'admin-user-id' }),
+        }),
+      }),
+    );
+    expect(prisma.$transaction).toHaveBeenLastCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+    expect(prisma.messageTemplate.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not allow explicit global review while PIX and send gates are disabled', async () => {
+    const { service } = serviceFactory({
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'false',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'false',
+      },
+    });
+
+    await expect(
+      service.reviewGlobalDispatch(
+        'dispatch-id',
+        { scheduledFor: '2026-09-16T12:00:00.000Z', reason: 'Revisão administrativa válida.' },
+        'admin-user-id',
+        new Date('2026-09-15T13:00:00.000Z'),
+      ),
+    ).rejects.toThrow('A retomada exige os tres gates globais explicitamente ativos.');
+  });
+
+  it.each([
+    ['paid receivable', 'PAGO', true, 'Nenhum item elegivel restou para envio.'],
+    [
+      'revoked opt-in',
+      'PENDENTE',
+      false,
+      'Nenhum item manteve autorizacao para Billing automatico internacional.',
+    ],
+  ])(
+    'rejects explicit global review after %s',
+    async (_label, receivableStatus, internationalBillingEnabled, expectedMessage) => {
+      const foreignClient = client({
+        phone: '+971 52 984 6014',
+        phoneNormalized: '971529846014',
+        phoneE164: '+971529846014',
+      });
+      const foreignReceivable = receivable({ status: receivableStatus });
+      const foreignReference = clientReference({
+        internationalBillingEnabled,
+        receivables: [foreignReceivable],
+      });
+      const blocked = dispatch({
+        status: 'FAILED',
+        errorCode: 'GLOBAL_BILLING_PIX_NOT_READY',
+        phone: '971529846014',
+        client: foreignClient,
+        clientReference: foreignReference,
+        receivable: foreignReceivable,
+        idempotencyKey: 'billing-group:client-id:2026-09-15',
+        requestId: 'billing-group:client-id:2026-09-15',
+      });
+      const { service } = serviceFactory({
+        dispatchForProcessing: blocked,
+        currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+        configOverrides: {
+          PHONE_GLOBAL_BILLING_ENABLED: 'true',
+          PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+          PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+        },
+      });
+
+      await expect(
+        service.reviewGlobalDispatch(
+          blocked.id,
+          { scheduledFor: '2026-09-16T12:00:00.000Z', reason: 'Revisão financeira completa.' },
+          'admin-user-id',
+          new Date('2026-09-15T13:00:00.000Z'),
+        ),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
+
+  it('rejects explicit global review when the original conversation or connection changed', async () => {
+    const foreignClient = client({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    const foreignReceivable = receivable();
+    const foreignReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [foreignReceivable],
+    });
+    const blocked = dispatch({
+      status: 'FAILED',
+      errorCode: 'GLOBAL_BILLING_PIX_NOT_READY',
+      phone: '351912345678',
+      client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+    });
+    const { service, prisma, updateMany, clientEventCreate } = serviceFactory({
+      dispatchForProcessing: blocked,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+      conversationRecord: null,
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+      },
+    });
+
+    await expect(
+      service.reviewGlobalDispatch(
+        blocked.id,
+        { scheduledFor: '2026-09-16T12:00:00.000Z', reason: 'Revisão financeira completa.' },
+        'admin-user-id',
+        new Date('2026-09-15T13:00:00.000Z'),
+      ),
+    ).rejects.toThrow('Conversa e conexao globais nao foram revalidadas.');
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(clientEventCreate).not.toHaveBeenCalled();
+    expect(prisma.messageTemplate.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a serialization conflict without confirming a review', async () => {
+    const { service, prisma, updateMany, clientEventCreate } = serviceFactory({
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+      },
+    });
+    prisma.$transaction.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('serialization conflict', {
+        code: 'P2034',
+        clientVersion: 'test',
+      }),
+    );
+
+    await expect(
+      service.reviewGlobalDispatch(
+        'dispatch-id',
+        { scheduledFor: '2026-09-16T12:00:00.000Z', reason: 'Revisão concorrente válida.' },
+        'admin-user-id',
+        new Date('2026-09-15T13:00:00.000Z'),
+      ),
+    ).rejects.toThrow('Conflito concorrente durante a revisao');
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(clientEventCreate).not.toHaveBeenCalled();
+  });
+
+  it('classifies a previous-day global schedule for review without touching the provider', async () => {
+    const foreignClient = client({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    const foreignReceivable = receivable();
+    const foreignReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [foreignReceivable],
+    });
+    const staleDispatch = dispatch({
+      status: 'SCHEDULED',
+      phone: '351912345678',
+      client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
+      scheduledFor: new Date('2026-09-14T12:00:00.000Z'),
+      nextAttemptAt: new Date('2026-09-14T12:00:00.000Z'),
+    });
+    const providerSendText = vi.fn();
+    const { service, prisma, updateMany } = serviceFactory({
+      dispatchForProcessing: staleDispatch,
+      providerSendText,
+      configOverrides: { PHONE_GLOBAL_BILLING_ENABLED: 'true' },
+    });
+    prisma.messageDispatch.findMany
+      .mockResolvedValueOnce([staleDispatch])
+      .mockResolvedValueOnce([]);
+
+    await expect(
+      service.processDue(new Date('2026-09-15T12:00:00.000Z'), 20, { automatic: true }),
+    ).resolves.toMatchObject({
+      processed: 0,
+      blocked: [expect.objectContaining({ code: 'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW' })],
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          errorCode: 'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW',
+        }),
+      }),
+    );
+    expect(providerSendText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['US', '+1 (407) 639-0665', '14076390665', '+14076390665'],
+    ['AE', '+971 52 984 6014', '971529846014', '+971529846014'],
+    ['PT', '+351 912 345 678', '351912345678', '+351912345678'],
+    ['JP', '+81 90 1234 5678', '819012345678', '+819012345678'],
+  ])(
+    'schedules opted-in global Billing for %s without the legacy country allowlist',
+    async (_country, phone, phoneNormalized, phoneE164) => {
+      const pending = receivable();
+      const reference = clientReference({
+        internationalBillingEnabled: true,
+        receivables: [pending],
+      });
+      const foreign = client({
+        phone,
+        phoneNormalized,
+        phoneE164,
+        receivables: [pending],
+        references: [reference],
+      });
+      const createDispatch = vi.fn().mockResolvedValue(dispatch());
+      const { service } = serviceFactory({
+        clients: [foreign],
+        createDispatch,
+        configOverrides: {
+          PHONE_GLOBAL_BILLING_ENABLED: 'true',
+          PHONE_INTERNATIONAL_BILLING_ENABLED: 'false',
+          PHONE_INTERNATIONAL_BILLING_COUNTRIES: '',
+        },
+        conversationRecord: {
+          id: 'conversation-id',
+          clientId: foreign.id,
+          phoneNormalized,
+          phoneE164,
+          whatsAppConnection: connection(),
+        },
+      });
+
+      await expect(service.reconcile(now)).resolves.toMatchObject({ created: 1, skipped: 0 });
+      expect(createDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ phone: phoneNormalized, status: 'SCHEDULED' }),
+        }),
+      );
+    },
+  );
+
+  it('fails closed when global Billing is enabled without an explicit cutoff', async () => {
+    const pending = receivable();
+    const reference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [pending],
+    });
+    const foreign = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+      receivables: [pending],
+      references: [reference],
+    });
+    const createDispatch = vi.fn();
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: undefined,
+      },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['before the configured cutoff', '2026-09-16T00:00:00.000Z', '2026-09-11T12:00:00.000Z'],
+    ['already due on the first tick', '2026-09-01T00:00:00.000Z', '2026-09-15T12:00:00.000Z'],
+    ['overdue before the first tick', '2026-09-01T00:00:00.000Z', '2026-09-16T12:00:00.000Z'],
+  ])('does not create a global schedule %s', async (_label, effectiveFrom, reconcileAt) => {
+    const pending = receivable();
+    const reference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [pending],
+    });
+    const foreign = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+      receivables: [pending],
+      references: [reference],
+    });
+    const createDispatch = vi.fn();
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: effectiveFrom,
+      },
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await expect(service.reconcile(new Date(reconcileAt))).resolves.toMatchObject({
+      created: 0,
+      skipped: 1,
+    });
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
+  it('allows a same-day global schedule only while its send time is still future', async () => {
+    const pending = receivable();
+    const reference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [pending],
+    });
+    const foreign = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+      receivables: [pending],
+      references: [reference],
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: { PHONE_GLOBAL_BILLING_ENABLED: 'true' },
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await expect(service.reconcile(new Date('2026-09-15T11:59:59.000Z'))).resolves.toMatchObject({
+      created: 1,
+      skipped: 0,
+    });
+  });
+
+  it.each([
+    ['global and legacy disabled', 'false', 'false', 'US'],
+    ['legacy enabled outside allowlist', 'false', 'true', 'PT'],
+  ])(
+    'keeps UAE Billing blocked with %s',
+    async (_label, globalEnabled, legacyEnabled, countries) => {
+      const pending = receivable();
+      const reference = clientReference({
+        internationalBillingEnabled: true,
+        receivables: [pending],
+      });
+      const foreign = client({
+        phone: '+971 52 984 6014',
+        phoneNormalized: '971529846014',
+        phoneE164: '+971529846014',
+        receivables: [pending],
+        references: [reference],
+      });
+      const createDispatch = vi.fn();
+      const { service } = serviceFactory({
+        clients: [foreign],
+        createDispatch,
+        configOverrides: {
+          PHONE_GLOBAL_BILLING_ENABLED: globalEnabled,
+          PHONE_INTERNATIONAL_BILLING_ENABLED: legacyEnabled,
+          PHONE_INTERNATIONAL_BILLING_COUNTRIES: countries,
+        },
+        conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+      });
+
+      await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+      expect(createDispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps global Billing blocked without per-reference financial authorization', async () => {
+    const foreign = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+    });
+    const createDispatch = vi.fn();
+    const { service } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: { PHONE_GLOBAL_BILLING_ENABLED: 'true' },
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['phoneE164', '+971529846014 ', '971529846014'],
+    ['phoneNormalized', '+971529846014', '971529846014 '],
+  ])(
+    'fails closed when global Billing has non-canonical %s',
+    async (_field, phoneE164, phoneNormalized) => {
+      const pending = receivable();
+      const reference = clientReference({
+        internationalBillingEnabled: true,
+        receivables: [pending],
+      });
+      const foreign = client({
+        phone: '+971 52 984 6014',
+        phoneNormalized,
+        phoneE164,
+        receivables: [pending],
+        references: [reference],
+      });
+      const createDispatch = vi.fn();
+      const { service } = serviceFactory({
+        clients: [foreign],
+        createDispatch,
+        configOverrides: { PHONE_GLOBAL_BILLING_ENABLED: 'true' },
+        conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+      });
+
+      await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+      expect(createDispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('schedules only the pending November cycle for luiz6706 and leaves paid October closed', async () => {
+    const octoberPaid = receivable({
+      id: 'receivable-october',
+      amount: 30,
+      dueDate: new Date('2026-10-23T00:00:00.000Z'),
+      status: 'PAGO',
+      paidAt: new Date('2026-10-23T12:00:00.000Z'),
+    });
+    const novemberPending = receivable({
+      id: 'receivable-november',
+      amount: 30,
+      dueDate: new Date('2026-11-23T00:00:00.000Z'),
+    });
+    const reference = clientReference({
+      reference: 'luiz6706',
+      recurringValue: 30,
+      dueDate: new Date('2026-11-23T00:00:00.000Z'),
+      internationalBillingEnabled: true,
+      receivables: [octoberPaid, novemberPending],
+    });
+    const foreign = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+      dueDate: new Date('2026-11-23T00:00:00.000Z'),
+      recurringValue: 30,
+      receivables: [octoberPaid, novemberPending],
+      references: [reference],
+    });
+    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const { service, provider } = serviceFactory({
+      clients: [foreign],
+      createDispatch,
+      configOverrides: { PHONE_GLOBAL_BILLING_ENABLED: 'true' },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreign.id,
+        phoneNormalized: foreign.phoneNormalized,
+        phoneE164: '+971529846014',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    await expect(service.reconcile(new Date('2026-10-24T12:00:00.000Z'))).resolves.toMatchObject({
+      created: 1,
+      skipped: 0,
+    });
+    const created = createdDispatchData(createDispatch);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      receivableId: 'receivable-november',
+      status: 'SCHEDULED',
+      phone: '971529846014',
+    });
+    expect(created[0]?.items?.create).toEqual([
+      expect.objectContaining({ receivableId: 'receivable-november' }),
+    ]);
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
 
   it('does not schedule international Billing without per-reference opt-in', async () => {
     const foreign = client({
@@ -788,6 +1384,142 @@ describe('BillingService', () => {
     );
   });
 
+  it('keeps a due global Billing dispatch blocked until PIX and send stages exist', async () => {
+    const foreignClient = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+    });
+    const foreignReference = clientReference({ internationalBillingEnabled: true });
+    const foreignReceivable = receivable();
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const { service, prisma } = serviceFactory({
+      dispatchForProcessing: dispatch({
+        status: 'PROCESSING',
+        attempts: 1,
+        phone: '971529846014',
+        client: foreignClient,
+        clientReference: foreignReference,
+        receivable: foreignReceivable,
+      }),
+      providerSendText,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreignClient.id,
+        phoneNormalized: '971529846014',
+        phoneE164: '+971529846014',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(prisma.whatsAppConversation.findFirst).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['PIX disabled', 'false', 'false', 'GLOBAL_BILLING_PIX_DISABLED'],
+    ['send disabled', 'true', 'false', 'GLOBAL_BILLING_SEND_DISABLED'],
+    ['PIX automation absent', 'true', 'true', 'GLOBAL_BILLING_PIX_NOT_READY'],
+  ])(
+    'does not acquire a global dispatch while %s',
+    async (_label, pixEnabled, sendEnabled, expectedCode) => {
+      const foreignClient = client({
+        phone: '+971 52 984 6014',
+        phoneNormalized: '971529846014',
+        phoneE164: '+971529846014',
+      });
+      const foreignReference = clientReference({ internationalBillingEnabled: true });
+      const foreignReceivable = receivable();
+      const globalDispatch = dispatch({
+        status: 'SCHEDULED',
+        phone: '971529846014',
+        client: foreignClient,
+        clientReference: foreignReference,
+        receivable: foreignReceivable,
+        template: template({ content: 'PIX: {{pix}}' }),
+      });
+      const providerSendText = vi.fn();
+      const { service, prisma, updateMany } = serviceFactory({
+        dispatchForProcessing: globalDispatch,
+        providerSendText,
+        currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+        configOverrides: {
+          PHONE_GLOBAL_BILLING_ENABLED: 'true',
+          PHONE_GLOBAL_BILLING_PIX_ENABLED: pixEnabled,
+          PHONE_GLOBAL_BILLING_SEND_ENABLED: sendEnabled,
+        },
+      });
+      prisma.messageDispatch.findMany.mockResolvedValue([globalDispatch]);
+
+      await expect(
+        service.processDue(new Date('2026-09-15T12:00:00.000Z'), 20, { automatic: true }),
+      ).resolves.toMatchObject({
+        processed: 0,
+        blocked: [expect.objectContaining({ code: expectedCode })],
+      });
+      expect(updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'PROCESSING' }) }),
+      );
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: globalDispatch.id }),
+          data: expect.objectContaining({ status: 'FAILED', errorCode: expectedCode }),
+        }),
+      );
+      expect(providerSendText).not.toHaveBeenCalled();
+    },
+  );
+
+  it('preserves an already-authorized legacy country when the global gate is also enabled', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const foreignReference = clientReference({ internationalBillingEnabled: true });
+    const foreignReceivable = receivable();
+    const legacyDispatch = dispatch({
+      status: 'PROCESSING',
+      phone: '14076390665',
+      client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
+    });
+    const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
+    const { service, prisma } = serviceFactory({
+      dispatchForProcessing: legacyDispatch,
+      providerSendText,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'false',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'false',
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreignClient.id,
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+        whatsAppConnection: connection(),
+      },
+    });
+    prisma.messageDispatch.findMany.mockResolvedValue([legacyDispatch]);
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
   it('does not call provider when the international conversation disappears before send', async () => {
     const foreignClient = client({
       phone: '+351 912 345 678',
@@ -894,7 +1626,13 @@ describe('BillingService', () => {
 
   it('creates one billing dispatch for an active client with a pending receivable', async () => {
     const createDispatch = vi.fn().mockResolvedValue(dispatch());
-    const { service } = serviceFactory({ createDispatch });
+    const { service } = serviceFactory({
+      createDispatch,
+      idempotencyConflictDispatch: dispatch({
+        idempotencyKey: 'billing-group:client-id:2026-09-15',
+        requestId: 'billing-group:client-id:2026-09-15',
+      }),
+    });
 
     const result = await service.reconcile(now);
 
@@ -1403,11 +2141,71 @@ describe('BillingService', () => {
         clientVersion: '6.19.3',
       }),
     );
-    const { service } = serviceFactory({ createDispatch });
+    const { service } = serviceFactory({
+      createDispatch,
+      idempotencyConflictDispatch: dispatch({
+        idempotencyKey: 'billing-group:client-id:2026-09-15',
+        requestId: 'billing-group:client-id:2026-09-15',
+      }),
+    });
 
     const result = await service.reconcile(now);
 
     expect(result.kept).toBe(1);
+  });
+
+  it('classifies P2002 for a global review record without silently keeping or duplicating it', async () => {
+    const foreignReceivable = receivable();
+    const foreignReference = clientReference({
+      internationalBillingEnabled: true,
+      receivables: [foreignReceivable],
+    });
+    const foreignClient = client({
+      phone: '+81 90 1234 5678',
+      phoneNormalized: '819012345678',
+      phoneE164: '+819012345678',
+      receivables: [foreignReceivable],
+      references: [foreignReference],
+    });
+    const blocked = dispatch({
+      clientId: foreignClient.id,
+      clientReferenceId: foreignReference.id,
+      receivableId: foreignReceivable.id,
+      client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
+      phone: '819012345678',
+      status: 'FAILED',
+      errorCode: 'GLOBAL_BILLING_PIX_DISABLED',
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+    });
+    const createDispatch = vi.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+    const { service } = serviceFactory({
+      clients: [foreignClient],
+      createDispatch,
+      idempotencyConflictDispatch: blocked,
+      configOverrides: { PHONE_GLOBAL_BILLING_ENABLED: 'true' },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreignClient.id,
+        phoneNormalized: '819012345678',
+        phoneE164: '+819012345678',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    await expect(service.reconcile(now)).resolves.toMatchObject({
+      created: 0,
+      kept: 0,
+      skipped: 1,
+    });
+    expect(createDispatch).toHaveBeenCalledTimes(1);
   });
 
   it.each(['CLIENT_REFERENCE_CYCLE_CHANGED', 'INTERNATIONAL_BILLING_OPT_IN_REVOKED'])(
@@ -2239,7 +3037,7 @@ describe('BillingService', () => {
     });
 
     expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 1 }),
+      expect.objectContaining({ take: 20 }),
     );
     expect(providerSendText).toHaveBeenCalledTimes(1);
   });
@@ -2258,7 +3056,7 @@ describe('BillingService', () => {
     expect(prisma.messageDispatch.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ status: { in: ['SCHEDULED', 'FAILED'] } }),
-        take: 1,
+        take: 20,
       }),
     );
     expect(providerSendText).toHaveBeenCalledTimes(1);
@@ -2417,6 +3215,11 @@ describe('BillingService', () => {
                       'PROVIDER_CONFIRMATION_MISSING',
                       'PROVIDER_PERSISTENCE_UNCERTAIN',
                       'PROVIDER_RESULT_UNCERTAIN',
+                      'GLOBAL_BILLING_PIX_DISABLED',
+                      'GLOBAL_BILLING_SEND_DISABLED',
+                      'GLOBAL_BILLING_PIX_NOT_READY',
+                      'GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW',
+                      'GLOBAL_BILLING_BEFORE_CUTOFF',
                     ],
                   },
                 },
@@ -2485,6 +3288,39 @@ describe('BillingService', () => {
       expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
     );
     expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendNow cannot bypass the missing global PIX execution stage', async () => {
+    const foreignClient = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+    });
+    const foreignReference = clientReference({ internationalBillingEnabled: true });
+    const foreignReceivable = receivable();
+    const providerSendText = vi.fn();
+    const { service, prisma } = serviceFactory({
+      providerSendText,
+      dispatchForProcessing: dispatch({
+        status: 'SCHEDULED',
+        phone: '971529846014',
+        client: foreignClient,
+        clientReference: foreignReference,
+        receivable: foreignReceivable,
+        template: template({ content: 'PIX: {{pix}}' }),
+      }),
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+      },
+    });
+
+    await expect(service.sendNow('dispatch-id')).rejects.toThrow(
+      'Envio global exige um PIX persistido e validado',
+    );
+    expect(prisma.messageDispatch.update).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
   });
 
   it('revalidates grouped dispatch items before sending and removes paid receivables', async () => {
@@ -3066,6 +3902,14 @@ describe('BillingService', () => {
       sent: 4,
       failed: 3,
       ignoredOrCanceled: 2,
+      reviewRequired: 0,
+      reviewReasons: {
+        awaitingPix: 0,
+        sendDisabled: 0,
+        pixNotReady: 0,
+        expired: 0,
+        beforeCutoff: 0,
+      },
       internationalBlocked: 0,
       internationalBlockedReasons: [],
     });
@@ -3084,7 +3928,7 @@ describe('BillingService', () => {
         }),
       }),
     );
-    expect(prisma.messageDispatch.count).toHaveBeenCalledTimes(4);
+    expect(prisma.messageDispatch.count).toHaveBeenCalledTimes(9);
   });
 
   it('excludes recovery dispatches from filtered billing summaries', async () => {
@@ -3134,5 +3978,48 @@ describe('BillingService', () => {
       ],
     });
     expect(prisma.messageDispatch.create).not.toHaveBeenCalled();
+  });
+
+  it('removes the country block from the client summary only when global Billing and opt-in are valid', async () => {
+    const foreignClient = client({
+      phone: '+971 52 984 6014',
+      phoneNormalized: '971529846014',
+      phoneE164: '+971529846014',
+    });
+    const pending = receivable();
+    const reference = clientReference({
+      client: foreignClient,
+      receivables: [pending],
+      internationalBillingEnabled: true,
+    });
+    const { service, prisma } = serviceFactory({
+      clientReferencesForSummary: [{ ...reference, client: foreignClient }],
+      configOverrides: {
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_INTERNATIONAL_BILLING_ENABLED: 'false',
+        PHONE_INTERNATIONAL_BILLING_COUNTRIES: '',
+      },
+      conversationRecord: {
+        id: 'conversation-id',
+        clientId: foreignClient.id,
+        phoneNormalized: '971529846014',
+        phoneE164: '+971529846014',
+        whatsAppConnection: connection(),
+      },
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-11T12:00:00.000Z'));
+    try {
+      await expect(
+        service.dispatchesSummary({ clientId: foreignClient.id }),
+      ).resolves.toMatchObject({
+        internationalBlocked: 0,
+        internationalBlockedReasons: [],
+      });
+      expect(prisma.messageDispatch.create).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

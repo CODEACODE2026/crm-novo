@@ -12540,6 +12540,12 @@ function BillingView() {
       tone: 'info' as const,
       value: summary?.ignoredOrCanceled ?? 0,
     },
+    {
+      icon: XCircle,
+      label: 'Revisão necessária',
+      tone: 'warning' as const,
+      value: summary?.reviewRequired ?? 0,
+    },
   ];
 
   return (
@@ -12657,7 +12663,9 @@ function BillingView() {
                         dispatch.status,
                       )}`}
                     >
-                      {billingStatusLabel(dispatch.status)}
+                      {dispatch.requiresReview
+                        ? 'Revisão necessária'
+                        : billingStatusLabel(dispatch.status)}
                     </span>
                     <span className="billing-mobile-origin">
                       {messageDispatchOriginLabel(dispatch.origin)}
@@ -12681,6 +12689,7 @@ function BillingView() {
                       className="secondary-button"
                       disabled={
                         working === dispatch.id ||
+                        dispatch.requiresReview ||
                         !['SCHEDULED', 'FAILED'].includes(dispatch.status)
                       }
                       type="button"
@@ -12756,7 +12765,7 @@ function BillingDispatchDetailModal({
             <h2 id="billing-dispatch-detail-title">Detalhes da cobrança</h2>
             <p>
               {dispatch.client?.name ?? 'Cliente não vinculado'} |{' '}
-              {billingStatusLabel(dispatch.status)}
+              {dispatch.requiresReview ? 'Revisão necessária' : billingStatusLabel(dispatch.status)}
             </p>
           </div>
           <button
@@ -12826,7 +12835,9 @@ function BillingDispatchDetailModal({
               <span
                 className={`finance-status-pill tone-${billingDispatchStatusTone(dispatch.status)}`}
               >
-                {billingStatusLabel(dispatch.status)}
+                {dispatch.requiresReview
+                  ? 'Revisão necessária'
+                  : billingStatusLabel(dispatch.status)}
               </span>
             </dd>
           </div>

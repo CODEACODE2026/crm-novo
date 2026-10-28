@@ -299,6 +299,16 @@ export function internationalBillingBlockReasonLabel(code: string, fallback: str
       'O país do cliente ainda não está autorizado para cobrança automática.',
     INTERNATIONAL_BILLING_CONVERSATION_REQUIRED:
       'É necessária uma conversa internacional vinculada e operacional.',
+    GLOBAL_BILLING_CUTOFF_REQUIRED:
+      'Defina a data de corte antes de habilitar novos agendamentos globais.',
+    GLOBAL_BILLING_BEFORE_CUTOFF: 'O ciclo pertence a um período anterior à data de corte global.',
+    GLOBAL_BILLING_SCHEDULE_ALREADY_DUE:
+      'O horário desse ciclo já havia passado quando a automação global foi reconciliada.',
+    GLOBAL_BILLING_PIX_DISABLED: 'A cobrança aguarda habilitação da automação de PIX.',
+    GLOBAL_BILLING_SEND_DISABLED: 'A cobrança aguarda habilitação do envio automático.',
+    GLOBAL_BILLING_PIX_NOT_READY: 'O PIX automático ainda não está disponível.',
+    GLOBAL_BILLING_SCHEDULE_EXPIRED_REVIEW:
+      'O horário venceu e a cobrança exige revisão e novo agendamento futuro.',
     PHONE_IDENTITY_MISMATCH: 'Os telefones vinculados ao cliente não correspondem entre si.',
     INVALID_PHONE: 'O telefone internacional do cliente é inválido.',
   };

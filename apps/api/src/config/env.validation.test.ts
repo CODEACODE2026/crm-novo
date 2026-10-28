@@ -167,6 +167,76 @@ describe('validateEnv', () => {
     },
   );
 
+  it('keeps global Billing disabled when absent and validates its independent kill switch', () => {
+    expect(validateEnv({ NODE_ENV: 'test' }).PHONE_GLOBAL_BILLING_ENABLED).toBeUndefined();
+    expect(
+      validateEnv({
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-11-01T00:00:00-03:00',
+      }),
+    ).toMatchObject({
+      PHONE_GLOBAL_BILLING_ENABLED: 'true',
+      PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-11-01T00:00:00-03:00',
+    });
+    expect(validateEnv({ PHONE_GLOBAL_BILLING_ENABLED: 'false' })).toMatchObject({
+      PHONE_GLOBAL_BILLING_ENABLED: 'false',
+    });
+    expect(() => validateEnv({ PHONE_GLOBAL_BILLING_ENABLED: 'yes' })).toThrow(
+      'PHONE_GLOBAL_BILLING_ENABLED deve ser true ou false.',
+    );
+  });
+
+  it('requires an explicit temporal cutoff before enabling global Billing', () => {
+    expect(() => validateEnv({ PHONE_GLOBAL_BILLING_ENABLED: 'true' })).toThrow(
+      'PHONE_GLOBAL_BILLING_EFFECTIVE_FROM e obrigatoria',
+    );
+    expect(() =>
+      validateEnv({
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-11-01',
+      }),
+    ).toThrow('PHONE_GLOBAL_BILLING_EFFECTIVE_FROM deve ser um instante ISO-8601');
+  });
+
+  it('keeps global PIX and send controls independent and fail-closed', () => {
+    const defaults = validateEnv({ NODE_ENV: 'test' });
+    expect(defaults.PHONE_GLOBAL_BILLING_PIX_ENABLED).toBeUndefined();
+    expect(defaults.PHONE_GLOBAL_BILLING_SEND_ENABLED).toBeUndefined();
+    expect(() => validateEnv({ PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true' })).toThrow(
+      'PHONE_GLOBAL_BILLING_PIX_ENABLED exige PHONE_GLOBAL_BILLING_ENABLED=true.',
+    );
+    expect(() =>
+      validateEnv({
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-11-01T03:00:00Z',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'true',
+      }),
+    ).toThrow('PHONE_GLOBAL_BILLING_SEND_ENABLED exige PHONE_GLOBAL_BILLING_PIX_ENABLED=true.');
+    expect(
+      validateEnv({
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-11-01T03:00:00Z',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'false',
+      }),
+    ).toMatchObject({
+      PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+      PHONE_GLOBAL_BILLING_SEND_ENABLED: 'false',
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid global Billing operation flags %j',
+    (value) => {
+      expect(() => validateEnv({ PHONE_GLOBAL_BILLING_PIX_ENABLED: value })).toThrow(
+        'PHONE_GLOBAL_BILLING_PIX_ENABLED deve ser true ou false.',
+      );
+      expect(() => validateEnv({ PHONE_GLOBAL_BILLING_SEND_ENABLED: value })).toThrow(
+        'PHONE_GLOBAL_BILLING_SEND_ENABLED deve ser true ou false.',
+      );
+    },
+  );
+
   it('accepts a controlled international Billing country allowlist', () => {
     expect(validateEnv({ PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US,PT' })).toMatchObject({
       PHONE_INTERNATIONAL_BILLING_COUNTRIES: 'US,PT',

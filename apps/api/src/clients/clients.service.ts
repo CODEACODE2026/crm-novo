@@ -16,6 +16,7 @@ import {
   isClientPreferredPixProvider,
   paymentProviderDisplayName,
 } from '../finance/payments/client-pix-provider-preference';
+import { acquireFinancialSetLocks } from '../finance/financial-set-lock';
 import { PlansService } from '../plans/plans.service';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
 import { RecoveryService } from '../recovery/recovery.service';
@@ -650,6 +651,7 @@ export class ClientsService {
               planName: updated.plan.name,
             },
             tx,
+            actorUserId,
           );
 
           if (!moved) {
@@ -1475,6 +1477,7 @@ export class ClientsService {
     const renewalIds = await this.findRenewalIdsByReference(clientReferenceId);
 
     await this.prisma.$transaction(async (tx) => {
+      await acquireFinancialSetLocks(tx, receivableIds);
       await tx.paymentWebhookEvent.deleteMany({
         where: { paymentIntentId: { in: paymentIntentIds } },
       });
@@ -1525,6 +1528,7 @@ export class ClientsService {
     const renewalIds = await this.findRenewalIdsByClient(clientId);
 
     await this.prisma.$transaction(async (tx) => {
+      await acquireFinancialSetLocks(tx, receivableIds);
       await tx.paymentWebhookEvent.deleteMany({
         where: { paymentIntentId: { in: paymentIntentIds } },
       });

@@ -425,7 +425,14 @@ describe.skipIf(!runDatabaseTests)('Referral management PostgreSQL concurrency',
   });
 
   function createService() {
-    return new ReferralsService(prisma as never, new ReceivableCycleService(prisma as never));
+    const billingActors = {
+      forUser: (userId: string) => ({ actorType: 'USER', actorUserId: userId }),
+      forSystem: () => ({ actorType: 'SYSTEM', actorUserId: null }),
+    };
+    return new ReferralsService(
+      prisma as never,
+      new ReceivableCycleService(prisma as never, billingActors as never),
+    );
   }
 
   async function createReferredReference(

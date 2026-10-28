@@ -49,6 +49,7 @@ export function validateEnv(config: EnvConfig) {
     requireTokenEncryptionKey(config);
     requireValue(config, 'KIRAGO_WEBHOOK_TOKEN');
     requireStrongSecret(config.KIRAGO_WEBHOOK_TOKEN, 'KIRAGO_WEBHOOK_TOKEN');
+    validateBillingActorAttestationSecrets(config);
     assertProductionSchedulerFlag('BILLING_SCHEDULER_ENABLED', config.BILLING_SCHEDULER_ENABLED);
     assertProductionSchedulerFlag('RECOVERY_SCHEDULER_ENABLED', config.RECOVERY_SCHEDULER_ENABLED);
     validatePublicUrl(config.CRM_API_PUBLIC_URL, 'CRM_API_PUBLIC_URL');
@@ -57,6 +58,20 @@ export function validateEnv(config: EnvConfig) {
   }
 
   return config;
+}
+
+function validateBillingActorAttestationSecrets(config: EnvConfig) {
+  const secrets = ['USER', 'SYSTEM', 'WEBHOOK'] as const;
+  for (const actorType of secrets) {
+    const keyId = `BILLING_ACTOR_${actorType}_KEY_ID`;
+    const secret = `BILLING_ACTOR_${actorType}_SIGNING_SECRET`;
+    requireValue(config, keyId);
+    requireStrongSecret(config[secret], secret);
+  }
+  const values = secrets.map((actorType) => config[`BILLING_ACTOR_${actorType}_SIGNING_SECRET`]);
+  if (new Set(values).size !== values.length) {
+    throw new Error('Billing actor signing secrets must be distinct per trusted principal.');
+  }
 }
 
 function validateOptionalCountryAllowlist(config: EnvConfig, key: string) {

@@ -6,6 +6,10 @@ import {
   parseSaoPauloBusinessDate,
 } from '../clients/utils/business-date';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  BillingActorAttestationService,
+  billingReceivableAmendAttestationContext,
+} from '../billing/billing-actor-attestation.service';
 
 export type CycleIssueCode =
   | 'OK'
@@ -48,7 +52,10 @@ export type EnsureCurrentCycleReceivableResult = {
 
 @Injectable()
 export class ReceivableCycleService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    private readonly billingActors: BillingActorAttestationService,
+  ) {}
 
   async ensureCurrentCycleReceivable(
     clientReferenceId: string,
@@ -217,6 +224,7 @@ export class ReceivableCycleService {
     previousDueDate: Date,
     next: { dueDate: Date; amount: Prisma.Decimal | number | string; planName: string },
     db: DbClient = this.prisma,
+    actorUserId?: string,
   ) {
     const currentCycle = await db.receivable.findMany({
       where: {
@@ -251,12 +259,69 @@ export class ReceivableCycleService {
       );
     }
 
+    const description = this.buildRenewalReceivableDescription(next.planName);
+    const linkedExecution = await db.billingExecution.findFirst({
+      where: {
+        isCurrent: true,
+        receivables: { some: { receivableId: receivable.id } },
+      },
+      select: {
+        id: true,
+        messageDispatchId: true,
+        receivableSetHash: true,
+        version: true,
+      },
+    });
+
+    if (linkedExecution) {
+      const reason = 'Ajuste administrativo do ciclo financeiro pendente.';
+      // This value originated as a typed database DATE, so its original input spelling no longer
+      // exists. Re-establish the strict lexical contract before signing and calling PostgreSQL.
+      const canonicalDueDate = formatBusinessDate(next.dueDate);
+      const context = billingReceivableAmendAttestationContext({
+        billingExecutionId: linkedExecution.id,
+        messageDispatchId: linkedExecution.messageDispatchId,
+        receivableId: receivable.id,
+        financialSetDigest: linkedExecution.receivableSetHash,
+        expectedVersion: linkedExecution.version,
+        amount: next.amount,
+        dueDate: canonicalDueDate,
+        description,
+        reason,
+      });
+      // The context validation above rejects excess scale/overflow before this representation is
+      // converted for the SQL lexical boundary, so no invalid input is silently rounded here.
+      const canonicalAmount = new Prisma.Decimal(next.amount).toFixed(2);
+      const actor = actorUserId
+        ? this.billingActors.forUser(actorUserId, context)
+        : this.billingActors.forSystem('receivable-cycle', context);
+      await db.$queryRaw`
+        SELECT public.billing_execution_amend_pending_receivable(
+          ${receivable.id}::uuid,
+          ${linkedExecution.id}::uuid,
+          ${linkedExecution.version}::integer,
+          ${canonicalAmount},
+          ${canonicalDueDate},
+          ${description},
+          ${actor.actorType}::public."BillingActorType",
+          ${actor.actorUserId}::uuid,
+          ${actor.actorPrincipal},
+          ${actor.actorIssuedAt}::bigint,
+          ${actor.actorNonce}::uuid,
+          ${actor.actorKeyId},
+          ${actor.actorSignature},
+          ${reason}
+        )
+      `;
+      return db.receivable.findUniqueOrThrow({ where: { id: receivable.id } });
+    }
+
     return db.receivable.update({
       where: { id: receivable.id },
       data: {
         dueDate: next.dueDate,
         amount: next.amount,
-        description: this.buildRenewalReceivableDescription(next.planName),
+        description,
       },
     });
   }

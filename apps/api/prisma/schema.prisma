@@ -142,6 +142,11 @@ enum PaymentIntentStatus {
   REFUNDED
 }
 
+enum PaymentIntentOrigin {
+  MANUAL
+  BILLING
+}
+
 enum PaymentGroupStatus {
   CREATED
   WAITING_PAYMENT
@@ -196,6 +201,67 @@ enum BillingResponseDecision {
   ACCEPTED
   DECLINED
   UNRESOLVED
+}
+
+enum BillingExecutionStatus {
+  SCHEDULED
+  PROCESSING
+  WAITING_PIX
+  READY_TO_SEND
+  COMPLETED
+  BLOCKED
+  REVIEW_REQUIRED
+  CANCELED
+}
+
+enum BillingPixStatus {
+  NOT_STARTED
+  RESERVED
+  CREATING
+  CONFIRMED
+  AMBIGUOUS
+  FAILED
+  EXPIRED
+  PAID
+  CANCELED
+  SUPERSEDED
+}
+
+enum BillingDeliveryStatus {
+  NOT_READY
+  READY
+  SENDING
+  SENT
+  AMBIGUOUS
+  FAILED
+  CANCELED
+}
+
+enum BillingAuthorizationMode {
+  LEGACY_BRAZIL
+  LEGACY_INTERNATIONAL
+  GLOBAL_INTERNATIONAL
+}
+
+enum BillingActorType {
+  USER
+  SYSTEM
+  WEBHOOK
+}
+
+enum BillingAuditOrigin {
+  BILLING
+}
+
+enum BillingExecutionEventType {
+  EXECUTION_CREATED
+  EXECUTION_STATUS_CHANGED
+  PIX_ATTEMPT_RESERVED
+  PIX_STATUS_CHANGED
+  DELIVERY_STATUS_CHANGED
+  REVIEW_REQUIRED
+  RECONCILED
+  CANCELED
 }
 
 enum RecoveryCampaignStatus {
@@ -316,28 +382,30 @@ enum LegacyImportRecordStatus {
 }
 
 model User {
-  id                      String                        @id @default(uuid()) @db.Uuid
-  name                    String
-  email                   String                        @unique
-  passwordHash            String
-  role                    UserRole                      @default(ADMIN)
-  active                  Boolean                       @default(true)
-  createdAt               DateTime                      @default(now())
-  updatedAt               DateTime                      @updatedAt
-  createdClientEvents     ClientEvent[]                 @relation("ClientEventCreatedBy")
-  changedClientStatuses   ClientStatusHistory[]         @relation("ClientStatusChangedBy")
-  inactivatedReferences   ClientReference[]             @relation("ClientReferenceInactivatedBy")
-  canceledReferences      ClientReference[]             @relation("ClientReferenceCanceledBy")
-  createdRenewals         Renewal[]                     @relation("RenewalCreatedBy")
-  createdRenewalReversals RenewalReversal[]             @relation("RenewalReversalCreatedBy")
-  createdReactivations    ClientReferenceReactivation[] @relation("ClientReferenceReactivationCreatedBy")
-  createdTransactions     FinancialTransaction[]        @relation("FinancialTransactionCreatedBy")
-  createdReferrals        Referral[]                    @relation("ReferralCreatedBy")
-  canceledReferrals       Referral[]                    @relation("ReferralCanceledBy")
-  referralHistoryEntries  ReferralHistory[]             @relation("ReferralHistoryActor")
-  createdPaymentGroups    PaymentGroup[]                @relation("PaymentGroupCreatedBy")
-  receivableAuditEvents   ReceivableAuditEvent[]        @relation("ReceivableAuditEventActor")
-  resolvedAttendances     WhatsAppAttendance[]          @relation("WhatsAppAttendanceResolvedBy")
+  id                        String                        @id @default(uuid()) @db.Uuid
+  name                      String
+  email                     String                        @unique
+  passwordHash              String
+  role                      UserRole                      @default(ADMIN)
+  active                    Boolean                       @default(true)
+  createdAt                 DateTime                      @default(now())
+  updatedAt                 DateTime                      @updatedAt
+  createdClientEvents       ClientEvent[]                 @relation("ClientEventCreatedBy")
+  changedClientStatuses     ClientStatusHistory[]         @relation("ClientStatusChangedBy")
+  inactivatedReferences     ClientReference[]             @relation("ClientReferenceInactivatedBy")
+  canceledReferences        ClientReference[]             @relation("ClientReferenceCanceledBy")
+  createdRenewals           Renewal[]                     @relation("RenewalCreatedBy")
+  createdRenewalReversals   RenewalReversal[]             @relation("RenewalReversalCreatedBy")
+  createdReactivations      ClientReferenceReactivation[] @relation("ClientReferenceReactivationCreatedBy")
+  createdTransactions       FinancialTransaction[]        @relation("FinancialTransactionCreatedBy")
+  createdReferrals          Referral[]                    @relation("ReferralCreatedBy")
+  canceledReferrals         Referral[]                    @relation("ReferralCanceledBy")
+  referralHistoryEntries    ReferralHistory[]             @relation("ReferralHistoryActor")
+  createdPaymentGroups      PaymentGroup[]                @relation("PaymentGroupCreatedBy")
+  receivableAuditEvents     ReceivableAuditEvent[]        @relation("ReceivableAuditEventActor")
+  billingExecutionEvents    BillingExecutionEvent[]       @relation("BillingExecutionEventActor")
+  billingExecutionMutations BillingExecution[]            @relation("BillingExecutionLastActor")
+  resolvedAttendances       WhatsAppAttendance[]          @relation("WhatsAppAttendanceResolvedBy")
 
   @@map("users")
 }
@@ -388,6 +456,7 @@ model Client {
   paymentGroups           PaymentGroup[]
   messageDispatches       MessageDispatch[]
   billingResponses        BillingResponse[]
+  billingExecutions       BillingExecution[]
   recoveryCampaigns       RecoveryCampaign[]
   whatsappPendingContacts WhatsAppPendingContact[]
   whatsappInboundMessages WhatsAppInboundMessage[]
@@ -436,6 +505,7 @@ model ClientReference {
   messageDispatches           MessageDispatch[]
   messageDispatchItems        MessageDispatchItem[]
   billingResponses            BillingResponse[]
+  billingExecutionReceivables BillingExecutionReceivable[]
   financialTransactions       FinancialTransaction[]
   statusHistory               ClientStatusHistory[]
   rewardedReferrals           Referral[]                    @relation("ReferralRewardClientReference")
@@ -509,6 +579,7 @@ model MessageDispatch {
   templateId            String?                @db.Uuid
   whatsAppConnectionId  String?                @db.Uuid
   recoveryCampaignId    String?                @db.Uuid
+  paymentIntentId       String?                @unique @db.Uuid
   phone                 String
   body                  String
   renderedContent       String?
@@ -531,6 +602,8 @@ model MessageDispatch {
   template              MessageTemplate?       @relation(fields: [templateId], references: [id], onDelete: SetNull)
   whatsAppConnection    WhatsAppConnection?    @relation(fields: [whatsAppConnectionId], references: [id], onDelete: SetNull)
   recoveryCampaign      RecoveryCampaign?      @relation(fields: [recoveryCampaignId], references: [id], onDelete: SetNull)
+  paymentIntent         PaymentIntent?         @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+  billingExecutions     BillingExecution[]
   recoveryStep          RecoveryCampaignStep?
   billingResponse       BillingResponse?
   items                 MessageDispatchItem[]
@@ -543,6 +616,7 @@ model MessageDispatch {
   @@index([templateId])
   @@index([whatsAppConnectionId])
   @@index([recoveryCampaignId])
+  @@index([paymentIntentId])
   @@index([status])
   @@index([origin])
   @@index([scheduledFor])
@@ -571,6 +645,165 @@ model MessageDispatchItem {
   @@index([clientReferenceId])
   @@index([dueDate])
   @@map("message_dispatch_items")
+}
+
+model BillingExecution {
+  id                    String                       @id @default(uuid()) @db.Uuid
+  messageDispatchId     String                       @db.Uuid
+  clientId              String                       @db.Uuid
+  paymentIntentId       String?                      @unique @db.Uuid
+  executionKey          String                       @unique
+  cycleKey              String
+  receivableSetHash     String                       @db.VarChar(64)
+  authorizationMode     BillingAuthorizationMode
+  status                BillingExecutionStatus       @default(SCHEDULED)
+  pixStatus             BillingPixStatus             @default(NOT_STARTED)
+  deliveryStatus        BillingDeliveryStatus        @default(NOT_READY)
+  leaseOwner            String?
+  leaseToken            String?                      @unique
+  leaseExpiresAt        DateTime?
+  nextAttemptAt         DateTime?
+  blockedCode           String?
+  blockedReason         String?
+  reviewRequired        Boolean                      @default(false)
+  isCurrent             Boolean                      @default(true)
+  supersededAt          DateTime?
+  supersedesExecutionId String?                      @db.Uuid
+  lastActorType         BillingActorType             @default(SYSTEM)
+  lastActorUserId       String?                      @db.Uuid
+  lastMutationReason    String?
+  version               Int                          @default(0)
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  messageDispatch       MessageDispatch              @relation(fields: [messageDispatchId], references: [id], onDelete: Restrict)
+  client                Client                       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  paymentIntent         PaymentIntent?               @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+  supersedesExecution   BillingExecution?            @relation("BillingExecutionSupersession", fields: [supersedesExecutionId], references: [id], onDelete: Restrict)
+  supersededBy          BillingExecution[]           @relation("BillingExecutionSupersession")
+  lastActorUser         User?                        @relation("BillingExecutionLastActor", fields: [lastActorUserId], references: [id], onDelete: Restrict)
+  receivables           BillingExecutionReceivable[]
+  pixAttempts           BillingPixAttempt[]
+  events                BillingExecutionEvent[]
+
+  @@index([messageDispatchId, isCurrent])
+  @@index([clientId, cycleKey, isCurrent])
+  @@index([supersedesExecutionId])
+  @@index([lastActorUserId])
+  @@index([status, nextAttemptAt])
+  @@index([pixStatus])
+  @@index([deliveryStatus])
+  @@index([reviewRequired])
+  @@index([leaseExpiresAt])
+  @@index([createdAt])
+  @@map("billing_executions")
+}
+
+model BillingExecutionReceivable {
+  id                 String           @id @default(uuid()) @db.Uuid
+  billingExecutionId String           @db.Uuid
+  receivableId       String           @db.Uuid
+  clientReferenceId  String           @db.Uuid
+  amountSnapshot     Decimal          @db.Decimal(12, 2)
+  dueDateSnapshot    DateTime         @db.Date
+  statusSnapshot     ReceivableStatus
+  referenceSnapshot  String
+  createdAt          DateTime         @default(now())
+  billingExecution   BillingExecution @relation(fields: [billingExecutionId], references: [id], onDelete: Restrict)
+  receivable         Receivable       @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  clientReference    ClientReference  @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+
+  @@unique([billingExecutionId, receivableId])
+  @@index([billingExecutionId])
+  @@index([receivableId])
+  @@index([clientReferenceId])
+  @@index([dueDateSnapshot])
+  @@map("billing_execution_receivables")
+}
+
+model BillingPixAttempt {
+  id                     String               @id @default(uuid()) @db.Uuid
+  billingExecutionId     String               @db.Uuid
+  paymentIntentId        String?              @unique @db.Uuid
+  creationKey            String               @unique
+  isCurrent              Boolean              @default(true)
+  status                 BillingPixStatus     @default(RESERVED)
+  provider               PaymentProviderCode?
+  providerCorrelationId  String?
+  providerTransactionId  String?
+  failureCode            String?
+  failureMessage         String?
+  reviewRequired         Boolean              @default(false)
+  reconciledAt           DateTime?
+  reconciliationEvidence String?
+  startedAt              DateTime?
+  confirmedAt            DateTime?
+  finishedAt             DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  billingExecution       BillingExecution     @relation(fields: [billingExecutionId], references: [id], onDelete: Restrict)
+  paymentIntent          PaymentIntent?       @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerTransactionId])
+  @@index([billingExecutionId, status])
+  @@index([billingExecutionId, isCurrent])
+  @@index([reviewRequired])
+  @@index([createdAt])
+  @@map("billing_pix_attempts")
+}
+
+model BillingExecutionEvent {
+  id                 String                    @id @default(uuid()) @db.Uuid
+  billingExecutionId String                    @db.Uuid
+  eventType          BillingExecutionEventType
+  actorType          BillingActorType
+  actorUserId        String?                   @db.Uuid
+  origin             BillingAuditOrigin        @default(BILLING)
+  reason             String?
+  metadata           Json?
+  createdAt          DateTime                  @default(now())
+  billingExecution   BillingExecution          @relation(fields: [billingExecutionId], references: [id], onDelete: Restrict)
+  actorUser          User?                     @relation("BillingExecutionEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([billingExecutionId, createdAt])
+  @@index([eventType])
+  @@index([actorType])
+  @@index([actorUserId])
+  @@map("billing_execution_events")
+}
+
+// Owner-provisioned HMAC material. Ignored by Prisma so application code cannot
+// accidentally expose or query signing secrets through the generated client.
+model BillingActorKey {
+  actorType BillingActorType
+  keyId     String
+  secret    Bytes
+  enabled   Boolean          @default(true)
+  createdAt DateTime         @default(now())
+
+  @@id([actorType, keyId])
+  @@map("billing_actor_keys")
+  @@ignore
+}
+
+// One-shot nonce ledger for signed financial actor assertions.
+model BillingActorAssertion {
+  nonce              String           @id @db.Uuid
+  actorType          BillingActorType
+  actorUserId        String?          @db.Uuid
+  principal          String
+  keyId              String
+  operation          String
+  billingExecutionId String           @db.Uuid
+  messageDispatchId  String           @db.Uuid
+  receivableId       String?          @db.Uuid
+  financialSetDigest String
+  expectedVersion    Int
+  argumentsDigest    String
+  issuedAtEpoch      BigInt
+  consumedAt         DateTime         @default(now())
+
+  @@map("billing_actor_assertions")
+  @@ignore
 }
 
 model MessageTemplate {
@@ -1096,39 +1329,40 @@ model RenewalReversal {
 }
 
 model Receivable {
-  id                         String                       @id @default(uuid()) @db.Uuid
-  clientId                   String?                      @db.Uuid
-  clientReferenceId          String?                      @db.Uuid
-  renewalId                  String?                      @unique @db.Uuid
-  purpose                    ReceivablePurpose            @default(RENEWAL)
-  description                String
-  amount                     Decimal                      @db.Decimal(12, 2)
-  dueDate                    DateTime                     @db.Date
-  status                     ReceivableStatus             @default(PENDENTE)
-  paidAt                     DateTime?                    @db.Date
-  canceledAt                 DateTime?
-  cancelReason               String?
-  payerName                  String?
-  payerPhone                 String?
-  payerPhoneNormalized       String?
-  financialCategoryId        String?                      @db.Uuid
-  manualChargeIdempotencyKey String?
-  createdAt                  DateTime                     @default(now())
-  updatedAt                  DateTime                     @updatedAt
-  client                     Client?                      @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  clientReference            ClientReference?             @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
-  renewal                    Renewal?                     @relation(fields: [renewalId], references: [id], onDelete: Restrict)
-  financialCategory          FinancialCategory?           @relation(fields: [financialCategoryId], references: [id], onDelete: Restrict)
-  paymentTransaction         FinancialTransaction?
-  reactivation               ClientReferenceReactivation?
-  paymentGroupItems          PaymentGroupItem[]
-  recoveryCampaigns          RecoveryCampaign[]
-  messageDispatches          MessageDispatch[]
-  messageDispatchItems       MessageDispatchItem[]
-  paymentIntents             PaymentIntent[]
-  billingResponses           BillingResponse[]
-  auditEvents                ReceivableAuditEvent[]
-  qualifiedReferral          Referral?                    @relation("ReferralQualificationReceivable")
+  id                          String                       @id @default(uuid()) @db.Uuid
+  clientId                    String?                      @db.Uuid
+  clientReferenceId           String?                      @db.Uuid
+  renewalId                   String?                      @unique @db.Uuid
+  purpose                     ReceivablePurpose            @default(RENEWAL)
+  description                 String
+  amount                      Decimal                      @db.Decimal(12, 2)
+  dueDate                     DateTime                     @db.Date
+  status                      ReceivableStatus             @default(PENDENTE)
+  paidAt                      DateTime?                    @db.Date
+  canceledAt                  DateTime?
+  cancelReason                String?
+  payerName                   String?
+  payerPhone                  String?
+  payerPhoneNormalized        String?
+  financialCategoryId         String?                      @db.Uuid
+  manualChargeIdempotencyKey  String?
+  createdAt                   DateTime                     @default(now())
+  updatedAt                   DateTime                     @updatedAt
+  client                      Client?                      @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientReference             ClientReference?             @relation(fields: [clientReferenceId], references: [id], onDelete: Restrict)
+  renewal                     Renewal?                     @relation(fields: [renewalId], references: [id], onDelete: Restrict)
+  financialCategory           FinancialCategory?           @relation(fields: [financialCategoryId], references: [id], onDelete: Restrict)
+  paymentTransaction          FinancialTransaction?
+  reactivation                ClientReferenceReactivation?
+  paymentGroupItems           PaymentGroupItem[]
+  recoveryCampaigns           RecoveryCampaign[]
+  messageDispatches           MessageDispatch[]
+  messageDispatchItems        MessageDispatchItem[]
+  paymentIntents              PaymentIntent[]
+  billingResponses            BillingResponse[]
+  auditEvents                 ReceivableAuditEvent[]
+  billingExecutionReceivables BillingExecutionReceivable[]
+  qualifiedReferral           Referral?                    @relation("ReferralQualificationReceivable")
 
   @@index([clientId])
   @@index([clientReferenceId])
@@ -1188,6 +1422,8 @@ model PaymentIntent {
   externalDepixId       String?
   blockchainTxId        String?
   status                PaymentIntentStatus    @default(CREATED)
+  origin                PaymentIntentOrigin    @default(MANUAL)
+  creationKey           String?                @unique
   amount                Decimal                @db.Decimal(12, 2)
   pixCopyPaste          String?
   qrCodeData            String?
@@ -1202,12 +1438,16 @@ model PaymentIntent {
   paymentGroup          PaymentGroup?          @relation(fields: [paymentGroupId], references: [id], onDelete: Restrict)
   webhookEvents         PaymentWebhookEvent[]
   receivableAuditEvents ReceivableAuditEvent[]
+  billingExecution      BillingExecution?
+  billingPixAttempt     BillingPixAttempt?
+  messageDispatch       MessageDispatch?
 
   @@unique([provider, providerTransactionId])
   @@index([receivableId])
   @@index([paymentGroupId])
   @@index([provider])
   @@index([status])
+  @@index([origin])
   @@index([expiresAt])
   @@map("payment_intents")
 }

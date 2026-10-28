@@ -209,4 +209,168 @@ describe('FastDepixApiClient', () => {
       status: 503,
     });
   });
+
+  it('classifies a confirmed creation only when a remote transaction id exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: 75148, status: 'pending' } }),
+      }),
+    );
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await expect(
+      client.createTransactionClassified('secret-token', {
+        amount: 30,
+        user: { name: 'Luiz' },
+        payer_phone: '971529846014',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'CONFIRMED',
+      requestDispatched: true,
+      remoteEffect: 'CONFIRMED',
+      automaticRetryEligible: false,
+      providerTransactionId: '75148',
+    });
+  });
+
+  it('keeps a successful response without transaction id ambiguous and non-retryable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ data: {} }) }),
+    );
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await expect(
+      client.createTransactionClassified('secret-token', {
+        amount: 30,
+        user: { name: 'Luiz' },
+        payer_phone: '971529846014',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'REMOTE_RESULT_UNCERTAIN',
+      requestDispatched: true,
+      remoteEffect: 'UNKNOWN',
+      automaticRetryEligible: false,
+      providerTransactionId: null,
+      code: 'FASTDEPIX_SUCCESS_WITHOUT_TRANSACTION_ID',
+    });
+  });
+
+  it.each([
+    [400, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_400'],
+    [401, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_401'],
+    [403, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_403'],
+    [404, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_404'],
+    [405, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_405'],
+    [415, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_415'],
+    [422, 'HTTP_REJECTION_OBSERVED', 'FASTDEPIX_REJECTED_422'],
+    [409, 'REMOTE_RESULT_UNCERTAIN', 'FASTDEPIX_HTTP_409_UNCERTAIN'],
+    [429, 'REMOTE_RESULT_UNCERTAIN', 'FASTDEPIX_HTTP_429_UNCERTAIN'],
+    [500, 'REMOTE_RESULT_UNCERTAIN', 'FASTDEPIX_HTTP_500_UNCERTAIN'],
+    [502, 'REMOTE_RESULT_UNCERTAIN', 'FASTDEPIX_HTTP_502_UNCERTAIN'],
+    [503, 'REMOTE_RESULT_UNCERTAIN', 'FASTDEPIX_HTTP_503_UNCERTAIN'],
+  ])('classifies provider HTTP %s conservatively', async (status, kind, code) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status,
+      json: () => Promise.resolve({ message: 'provider response' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await expect(
+      client.createTransactionClassified('secret-token', {
+        amount: 30,
+        user: { name: 'Luiz' },
+        payer_phone: '971529846014',
+      }),
+    ).resolves.toMatchObject({
+      kind,
+      code,
+      requestDispatched: true,
+      remoteEffect: 'UNKNOWN',
+      automaticRetryEligible: false,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('marks local validation failure as proven pre-call and does not invoke fetch', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new FastDepixApiClient({ get: () => 'not-a-url' } as never);
+
+    await expect(
+      client.createTransactionClassified('secret-token', {
+        amount: 30,
+        user: { name: 'Luiz' },
+        payer_phone: '971529846014',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'PRE_CALL_FAILURE',
+      requestDispatched: false,
+      remoteEffect: 'ABSENT_PROVEN',
+      automaticRetryEligible: true,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('treats transport timeout after dispatch as ambiguous', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+    );
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await expect(
+      client.createTransactionClassified('secret-token', {
+        amount: 30,
+        user: { name: 'Luiz' },
+        payer_phone: '971529846014',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'REMOTE_RESULT_UNCERTAIN',
+      requestDispatched: true,
+      remoteEffect: 'UNKNOWN',
+      automaticRetryEligible: false,
+      code: 'FASTDEPIX_TRANSPORT_UNCERTAIN',
+    });
+  });
+
+  it('treats a generic transport failure after dispatch as ambiguous and non-retryable', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('network reset'));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await expect(
+      client.createTransactionClassified('secret-token', {
+        amount: 30,
+        user: { name: 'Luiz' },
+        payer_phone: '971529846014',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'REMOTE_RESULT_UNCERTAIN',
+      requestDispatched: true,
+      remoteEffect: 'UNKNOWN',
+      automaticRetryEligible: false,
+      code: 'FASTDEPIX_TRANSPORT_UNCERTAIN',
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });

@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { BillingService } from './billing.service';
+import { BillingPixDryRunService } from './billing-pix-dry-run.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
 import { ReviewGlobalBillingDispatchDto } from './dto/review-global-billing-dispatch.dto';
@@ -26,7 +27,18 @@ type AuthenticatedRequest = Request & { user: AuthenticatedUser };
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('billing')
 export class BillingController {
-  constructor(@Inject(BillingService) private readonly billingService: BillingService) {}
+  constructor(
+    @Inject(BillingService) private readonly billingService: BillingService,
+    @Inject(BillingPixDryRunService) private readonly billingPixDryRun: BillingPixDryRunService,
+  ) {}
+
+  @Get('pix/dry-run')
+  previewPixAutomation(@Query('cursor') cursor?: string, @Query('limit') limit?: string) {
+    return this.billingPixDryRun.preview({
+      ...(cursor === undefined ? {} : { cursor }),
+      ...(limit === undefined ? {} : { limit }),
+    });
+  }
 
   @Get('summary')
   summary() {

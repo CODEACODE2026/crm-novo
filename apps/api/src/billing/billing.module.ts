@@ -9,8 +9,11 @@ import { KiragoWhatsAppProvider } from '../whatsapp/kirago/kirago-whatsapp.provi
 import { WHATSAPP_PROVIDER } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
 import { BillingController } from './billing.controller';
+import { BillingActorAttestationService } from './billing-actor-attestation.service';
 import { BillingScheduler } from './billing.scheduler';
 import { BillingService } from './billing.service';
+import { BillingPixDryRunService } from './billing-pix-dry-run.service';
+import { BillingPixClaimService } from './billing-pix-claim.service';
 import { BillingTemplateRenderer } from './billing-template-renderer';
 
 @Module({
@@ -18,6 +21,9 @@ import { BillingTemplateRenderer } from './billing-template-renderer';
   controllers: [BillingController],
   providers: [
     BillingService,
+    BillingActorAttestationService,
+    BillingPixClaimService,
+    BillingPixDryRunService,
     BillingScheduler,
     BillingTemplateRenderer,
     KiragoAdminClient,

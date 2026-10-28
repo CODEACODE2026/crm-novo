@@ -66,6 +66,7 @@ import {
 } from './payments/payment-provider';
 import { paymentProviderDisplayName } from './payments/client-pix-provider-preference';
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
+import { acquireFinancialSetLocks } from './financial-set-lock';
 
 const pageSizeLimit = 100;
 const activePixStatuses: PaymentIntentStatus[] = ['CREATED', 'WAITING_PAYMENT'];
@@ -1305,6 +1306,7 @@ export class FinanceService {
     const paymentDate = parseBusinessDate(dto.paymentDate);
 
     const result = await this.prisma.$transaction(async (tx) => {
+      await this.acquirePixCreationLocks(tx, receivableIds);
       const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
       const totalAmount = this.sumReceivables(receivables);
 
@@ -1715,6 +1717,7 @@ export class FinanceService {
 
     try {
       const transaction = await this.prisma.$transaction(async (tx) => {
+        await this.acquirePixCreationLocks(tx, [id]);
         const receivable = await tx.receivable.findUnique({
           where: { id },
           include: {
@@ -1846,6 +1849,7 @@ export class FinanceService {
     }
 
     const receivable = await this.prisma.$transaction(async (tx) => {
+      await this.acquirePixCreationLocks(tx, [id]);
       const existing = await tx.receivable.findUnique({
         where: { id },
         include: {
@@ -1945,6 +1949,23 @@ export class FinanceService {
     actorUserId: string | null,
   ) {
     const synced = await this.prisma.$transaction(async (tx) => {
+      const mapped = await tx.paymentIntent.findUnique({
+        where: { id },
+        select: {
+          receivableId: true,
+          paymentGroup: { select: { items: { select: { receivableId: true } } } },
+        },
+      });
+
+      if (!mapped) {
+        throw new NotFoundException('Intencao de pagamento nao encontrada.');
+      }
+
+      await this.acquirePixCreationLocks(tx, [
+        ...(mapped.receivableId ? [mapped.receivableId] : []),
+        ...(mapped.paymentGroup?.items.map((item) => item.receivableId) ?? []),
+      ]);
+
       const current = await tx.paymentIntent.findUnique({ where: { id } });
 
       if (!current) {
@@ -4273,11 +4294,10 @@ export class FinanceService {
       return;
     }
 
-    for (const receivableId of [...new Set(receivableIds)].sort()) {
-      await executable.$executeRawUnsafe(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        `pix:receivable:${receivableId}`,
-      );
+    const orderedIds = [...new Set(receivableIds)].sort();
+    await acquireFinancialSetLocks(executable, orderedIds);
+
+    for (const receivableId of orderedIds) {
       await executable.$executeRawUnsafe(
         'SELECT c.id FROM clients c JOIN receivables r ON r."clientId" = c.id WHERE r.id = $1::uuid FOR UPDATE OF c',
         receivableId,

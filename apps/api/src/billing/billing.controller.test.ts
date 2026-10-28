@@ -4,7 +4,10 @@ import { BillingController } from './billing.controller';
 describe('BillingController global review contract', () => {
   it('forwards the authenticated admin identity and explicit future schedule', async () => {
     const reviewGlobalDispatch = vi.fn().mockResolvedValue({ id: 'dispatch-id' });
-    const controller = new BillingController({ reviewGlobalDispatch } as never);
+    const controller = new BillingController(
+      { reviewGlobalDispatch } as never,
+      { preview: vi.fn() } as never,
+    );
     const dto = {
       scheduledFor: '2026-11-20T12:00:00.000Z',
       reason: 'Retomada aprovada após revisão financeira completa.',
@@ -16,5 +19,15 @@ describe('BillingController global review contract', () => {
       } as never),
     ).resolves.toEqual({ id: 'dispatch-id' });
     expect(reviewGlobalDispatch).toHaveBeenCalledWith('dispatch-id', dto, 'admin-id');
+  });
+
+  it('delegates PIX dry-run to the read-only preview service', async () => {
+    const preview = vi.fn().mockResolvedValue({ mode: 'DRY_RUN' });
+    const controller = new BillingController({} as never, { preview } as never);
+
+    await expect(controller.previewPixAutomation('cursor-value', '25')).resolves.toEqual({
+      mode: 'DRY_RUN',
+    });
+    expect(preview).toHaveBeenCalledWith({ cursor: 'cursor-value', limit: '25' });
   });
 });

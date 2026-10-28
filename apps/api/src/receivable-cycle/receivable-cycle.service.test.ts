@@ -86,9 +86,13 @@ function fakeService(initialReference = reference()) {
       findUnique: ReturnType<typeof vi.fn>;
       findMany: ReturnType<typeof vi.fn>;
     };
+    billingExecution: {
+      findFirst: ReturnType<typeof vi.fn>;
+    };
     receivable: {
       create: ReturnType<typeof vi.fn>;
       findMany: ReturnType<typeof vi.fn>;
+      findUniqueOrThrow: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
     };
   } = {
@@ -98,6 +102,7 @@ function fakeService(initialReference = reference()) {
         callback({
           $queryRaw: prisma.$queryRaw,
           clientReference: prisma.clientReference,
+          billingExecution: prisma.billingExecution,
           receivable: prisma.receivable,
         }),
       ),
@@ -105,6 +110,9 @@ function fakeService(initialReference = reference()) {
     clientReference: {
       findUnique: vi.fn(() => Promise.resolve(state.reference)),
       findMany: vi.fn(() => Promise.resolve([state.reference])),
+    },
+    billingExecution: {
+      findFirst: vi.fn(() => Promise.resolve(null)),
     },
     receivable: {
       create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
@@ -123,6 +131,13 @@ function fakeService(initialReference = reference()) {
           ),
         ),
       ),
+      findUniqueOrThrow: vi.fn(({ where }: { where: { id: string } }) => {
+        const item = state.reference.receivables.find(
+          (candidate: TestReceivable) => candidate.id === where.id,
+        );
+        if (!item) throw new Error('not found');
+        return Promise.resolve(item);
+      }),
       update: vi.fn(({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
         const item = state.reference.receivables.find(
           (candidate: TestReceivable) => candidate.id === where.id,
@@ -136,7 +151,32 @@ function fakeService(initialReference = reference()) {
     },
   };
 
-  return { service: new ReceivableCycleService(prisma as never), prisma, state, created };
+  const billingActors = {
+    forUser: vi.fn((userId: string) => ({
+      actorType: 'USER',
+      actorUserId: userId,
+      actorPrincipal: userId,
+      actorIssuedAt: 1,
+      actorNonce: '11111111-1111-4111-8111-111111111111',
+      actorKeyId: 'user-v1',
+      actorSignature: 'a'.repeat(64),
+    })),
+    forSystem: vi.fn((component: string) => ({
+      actorType: 'SYSTEM',
+      actorUserId: null,
+      actorPrincipal: component,
+      actorIssuedAt: 1,
+      actorNonce: '22222222-2222-4222-8222-222222222222',
+      actorKeyId: 'system-v1',
+      actorSignature: 'b'.repeat(64),
+    })),
+  };
+  return {
+    service: new ReceivableCycleService(prisma as never, billingActors as never),
+    prisma,
+    state,
+    created,
+  };
 }
 
 function p2002() {

@@ -1771,6 +1771,7 @@ describe('ClientsService legacy client updates', () => {
         planName: 'Mensal',
       }),
       fake.prisma,
+      'user-id',
     );
     expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalledWith({
       where: {
@@ -1848,6 +1849,7 @@ describe('ClientsService legacy client updates', () => {
       parseBusinessDate('2026-10-10'),
       expect.objectContaining({ dueDate: parseBusinessDate('2026-10-20') }),
       fake.prisma,
+      'user-id',
     );
   });
 
@@ -1888,6 +1890,7 @@ describe('ClientsService legacy client updates', () => {
         planName: 'Mensal',
       }),
       fake.prisma,
+      'user-id',
     );
     expect(fake.prisma.messageDispatch.updateMany).toHaveBeenCalled();
   });

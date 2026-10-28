@@ -3894,9 +3894,11 @@ describe('FinanceService', () => {
 
     await service.createReceivablesPix({ receivableIds: shuffled }, actorUserId);
 
-    expect(fake.prisma.$executeRawUnsafe.mock.calls.map((call) => call[1])).toEqual(
-      [...shuffled].sort().flatMap((id) => [`pix:receivable:${id}`, id]),
-    );
+    const ordered = [...shuffled].sort();
+    expect(fake.prisma.$executeRawUnsafe.mock.calls.map((call) => call[1])).toEqual([
+      ...ordered.map((id) => `pix:receivable:${id}`),
+      ...ordered,
+    ]);
   });
 
   it('serializes individual and grouped PIX creation for the same receivable', async () => {

@@ -11,6 +11,12 @@ function productionEnv(overrides: Record<string, string | undefined> = {}) {
     CORS_ORIGIN: 'https://crm.example.com',
     WHATSAPP_TOKEN_ENCRYPTION_KEY: strongSecret,
     KIRAGO_WEBHOOK_TOKEN: `${strongSecret}-webhook`,
+    BILLING_ACTOR_USER_KEY_ID: 'user-v1',
+    BILLING_ACTOR_USER_SIGNING_SECRET: `${strongSecret}-user`,
+    BILLING_ACTOR_SYSTEM_KEY_ID: 'system-v1',
+    BILLING_ACTOR_SYSTEM_SIGNING_SECRET: `${strongSecret}-system`,
+    BILLING_ACTOR_WEBHOOK_KEY_ID: 'webhook-v1',
+    BILLING_ACTOR_WEBHOOK_SIGNING_SECRET: `${strongSecret}-billing-webhook`,
     BILLING_SCHEDULER_ENABLED: 'false',
     RECOVERY_SCHEDULER_ENABLED: 'false',
     CRM_API_PUBLIC_URL: 'https://api.example.com',
@@ -339,6 +345,12 @@ describe('validateEnv', () => {
     ['invalid billing scheduler flag', { BILLING_SCHEDULER_ENABLED: 'yes' }],
     ['invalid recovery scheduler flag', { RECOVERY_SCHEDULER_ENABLED: 'enabled' }],
     ['missing Kirago webhook token', { KIRAGO_WEBHOOK_TOKEN: undefined }],
+    ['missing Billing USER key id', { BILLING_ACTOR_USER_KEY_ID: undefined }],
+    ['weak Billing SYSTEM secret', { BILLING_ACTOR_SYSTEM_SIGNING_SECRET: 'weak' }],
+    [
+      'reused Billing signing secret',
+      { BILLING_ACTOR_WEBHOOK_SIGNING_SECRET: `${strongSecret}-system` },
+    ],
     ['invalid provider encryption key', { WHATSAPP_TOKEN_ENCRYPTION_KEY: 'short' }],
   ])('rejects production env with %s', (_label, overrides) => {
     expect(() => validateEnv(productionEnv(overrides))).toThrow();

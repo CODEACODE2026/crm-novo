@@ -10,6 +10,12 @@ import {
   Inject,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  fastDepixObservedCreateRejectionStatuses,
+  normalizeFastDepixProviderTransactionId,
+  type FastDepixCreateOutcome,
+  type FastDepixCreateRequest,
+} from './fastdepix-create-contract';
 
 export type FastDepixAuthMe = {
   api_provider?: string;
@@ -60,19 +66,90 @@ export class FastDepixApiClient {
     return this.request<FastDepixAuthMe>('/auth/me', token);
   }
 
-  createTransaction(
-    token: string,
-    payload: {
-      amount: number;
-      user: { name: string };
-      payer_phone: string;
-      notification_url?: string;
-    },
-  ) {
+  createTransaction(token: string, payload: FastDepixCreateRequest) {
     return this.request<FastDepixTransactionResponse>('/transactions', token, {
       method: 'POST',
       body: payload,
     });
+  }
+
+  /**
+   * Future automatic-billing boundary. Manual PIX keeps using createTransaction.
+   * Once fetch is invoked, transport failures are deliberately ambiguous because
+   * this provider contract exposes neither an idempotency key nor lookup by an
+   * external creation reference.
+   */
+  async createTransactionClassified(
+    token: string,
+    payload: FastDepixCreateRequest,
+  ): Promise<FastDepixCreateOutcome> {
+    try {
+      this.assertCreateRequestCanBeDispatched(token, payload);
+    } catch (error) {
+      return {
+        kind: 'PRE_CALL_FAILURE',
+        requestDispatched: false,
+        remoteEffect: 'ABSENT_PROVEN',
+        automaticRetryEligible: true,
+        code: 'FASTDEPIX_PRE_CALL_VALIDATION_FAILED',
+        message: this.contractErrorMessage(error),
+      };
+    }
+
+    try {
+      const response = await this.createTransaction(token, payload);
+      const providerTransactionId = normalizeFastDepixProviderTransactionId(response.id);
+
+      if (!providerTransactionId) {
+        return {
+          kind: 'REMOTE_RESULT_UNCERTAIN',
+          requestDispatched: true,
+          remoteEffect: 'UNKNOWN',
+          automaticRetryEligible: false,
+          providerTransactionId: null,
+          code: 'FASTDEPIX_SUCCESS_WITHOUT_TRANSACTION_ID',
+          message: 'FastDepix respondeu sem identificador remoto; retry automatico bloqueado.',
+          httpStatus: 200,
+        };
+      }
+
+      return {
+        kind: 'CONFIRMED',
+        requestDispatched: true,
+        remoteEffect: 'CONFIRMED',
+        automaticRetryEligible: false,
+        providerTransactionId,
+        response,
+      };
+    } catch (error) {
+      const providerStatus = this.providerHttpStatus(error);
+      const status = error instanceof HttpException ? error.getStatus() : null;
+      if (providerStatus !== null && fastDepixObservedCreateRejectionStatuses.has(providerStatus)) {
+        return {
+          kind: 'HTTP_REJECTION_OBSERVED',
+          requestDispatched: true,
+          remoteEffect: 'UNKNOWN',
+          automaticRetryEligible: false,
+          httpStatus: providerStatus,
+          code: `FASTDEPIX_REJECTED_${providerStatus}`,
+          message: this.contractErrorMessage(error),
+        };
+      }
+
+      return {
+        kind: 'REMOTE_RESULT_UNCERTAIN',
+        requestDispatched: true,
+        remoteEffect: 'UNKNOWN',
+        automaticRetryEligible: false,
+        providerTransactionId: null,
+        code:
+          providerStatus === null
+            ? 'FASTDEPIX_TRANSPORT_UNCERTAIN'
+            : `FASTDEPIX_HTTP_${providerStatus}_UNCERTAIN`,
+        message: 'Resultado remoto da criacao PIX incerto; retry automatico bloqueado.',
+        httpStatus: providerStatus ?? status,
+      };
+    }
   }
 
   getTransaction(token: string, id: string) {
@@ -170,33 +247,76 @@ export class FastDepixApiClient {
     return url.toString().endsWith('/') ? url.toString() : `${url.toString()}/`;
   }
 
+  private assertCreateRequestCanBeDispatched(token: string, payload: FastDepixCreateRequest) {
+    if (!token.trim()) throw new Error('Credencial FastDepix ausente.');
+    this.baseUrl();
+    JSON.stringify(payload);
+  }
+
+  private contractErrorMessage(error: unknown) {
+    if (error instanceof HttpException) {
+      const response = error.getResponse();
+      if (typeof response === 'string') return response;
+      if (response && typeof response === 'object' && 'message' in response) {
+        const message = response.message;
+        if (typeof message === 'string') return message;
+      }
+    }
+    return error instanceof Error ? error.message : 'Falha FastDepix sem detalhes seguros.';
+  }
+
+  private providerHttpStatus(error: unknown) {
+    if (!error || typeof error !== 'object' || !('providerHttpStatus' in error)) return null;
+    const value = error.providerHttpStatus;
+    return typeof value === 'number' ? value : null;
+  }
+
   private toHttpError(status: number, payload: unknown) {
     const message = this.safeErrorMessage(status, payload);
 
     if (status === 401 || status === 403) {
-      return new BadGatewayException('Credencial do provider invalida ou nao autorizada.');
+      return this.withProviderStatus(
+        new BadGatewayException('Credencial do provider invalida ou nao autorizada.'),
+        status,
+      );
     }
 
     if (status === 404) {
-      return new NotFoundException('Transacao de pagamento nao encontrada no provider.');
+      return this.withProviderStatus(
+        new NotFoundException('Transacao de pagamento nao encontrada no provider.'),
+        status,
+      );
     }
 
     if (status === 409) {
-      return new ConflictException('Provider de pagamentos recusou a operacao no status atual.');
+      return this.withProviderStatus(
+        new ConflictException('Provider de pagamentos recusou a operacao no status atual.'),
+        status,
+      );
     }
 
     if (status === 429) {
-      return new HttpException(
-        'Limite da API de pagamentos atingido. Tente novamente em instantes.',
-        HttpStatus.TOO_MANY_REQUESTS,
+      return this.withProviderStatus(
+        new HttpException(
+          'Limite da API de pagamentos atingido. Tente novamente em instantes.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        ),
+        status,
       );
     }
 
     if (status >= 500) {
-      return new BadGatewayException('Provider de pagamentos retornou erro temporario.');
+      return this.withProviderStatus(
+        new BadGatewayException('Provider de pagamentos retornou erro temporario.'),
+        status,
+      );
     }
 
-    return new BadRequestException(message);
+    return this.withProviderStatus(new BadRequestException(message), status);
+  }
+
+  private withProviderStatus<T extends HttpException>(error: T, providerHttpStatus: number) {
+    return Object.assign(error, { providerHttpStatus });
   }
 
   private safeErrorMessage(status: number, payload: unknown) {

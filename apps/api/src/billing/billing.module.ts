@@ -14,6 +14,7 @@ import { BillingScheduler } from './billing.scheduler';
 import { BillingService } from './billing.service';
 import { BillingPixDryRunService } from './billing-pix-dry-run.service';
 import { BillingPixClaimService } from './billing-pix-claim.service';
+import { BillingPixOrphanWebhookCorrelationService } from './billing-pix-orphan-webhook-correlation.service';
 import { BillingTemplateRenderer } from './billing-template-renderer';
 
 @Module({
@@ -23,6 +24,7 @@ import { BillingTemplateRenderer } from './billing-template-renderer';
     BillingService,
     BillingActorAttestationService,
     BillingPixClaimService,
+    BillingPixOrphanWebhookCorrelationService,
     BillingPixDryRunService,
     BillingScheduler,
     BillingTemplateRenderer,

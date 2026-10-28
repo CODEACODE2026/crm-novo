@@ -8,6 +8,7 @@ fi
 database_tests=(
   src/billing/billing-global-review-postgres.test.ts
   src/billing/billing-pix-data-postgres.test.ts
+  src/billing/billing-pix-orphan-webhook-correlation-postgres.test.ts
   src/billing/phone-billing-international-postgres.test.ts
   src/clients/client-phone-international-postgres.test.ts
   src/common/phone/phone-international-data-postgres.test.ts

@@ -6,6 +6,8 @@ import {
   billingActorAttestationPayload,
   billingActorOperations,
   billingExecutionTransitionAttestationContext,
+  billingPixAnalyzeOrphanWebhookAttestationContext,
+  billingPixCorrelateOrphanWebhookAttestationContext,
   billingPixPrepareCreateAttestationContext,
   billingPixOrphanWebhookEventId,
   billingPixQuarantineOrphanWebhookAttestationContext,
@@ -117,6 +119,45 @@ describe('BillingActorAttestationService', () => {
       actorType: 'WEBHOOK',
       actorPrincipal: 'DEPIX:event-30',
     });
+  });
+
+  it('binds 7C analysis and correlation to distinct operation targets', () => {
+    const eventId = '88888888-8888-4888-8888-888888888888';
+    const analysis = billingPixAnalyzeOrphanWebhookAttestationContext({
+      eventId,
+      rawBodyDigest: 'b'.repeat(64),
+      reasonCode: 'NO_DURABLE_ATTEMPT',
+    });
+    expect(analysis).toMatchObject({
+      operation: billingActorOperations.pixAnalyzeOrphanWebhook,
+      billingExecutionId: eventId,
+      messageDispatchId: eventId,
+      financialSetDigest: 'b'.repeat(64),
+      expectedVersion: 0,
+    });
+
+    const correlation = billingPixCorrelateOrphanWebhookAttestationContext({
+      billingExecutionId: ids.execution,
+      messageDispatchId: ids.dispatch,
+      financialSetDigest,
+      expectedVersion: 8,
+      owner: 'correlation-worker',
+      token: 'lease-token',
+      eventId,
+      attemptId: ids.attempt,
+      creationKey: 'bpx1:creation-key',
+      provider: 'DEPIX',
+      providerTransactionId: 'tx-7c',
+      paymentIntentId: ids.paymentIntent,
+    });
+    expect(correlation).toMatchObject({
+      operation: billingActorOperations.pixCorrelateOrphanWebhook,
+      billingExecutionId: ids.execution,
+      messageDispatchId: ids.dispatch,
+      financialSetDigest,
+      expectedVersion: 8,
+    });
+    expect(correlation.argumentsDigest).not.toBe(analysis.argumentsDigest);
   });
 
   it('rejects non-canonical orphan webhook evidence before signing', () => {

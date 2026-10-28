@@ -249,6 +249,12 @@ enum BillingActorType {
   WEBHOOK
 }
 
+enum BillingPixOrphanCorrelationDecision {
+  REVIEW_REQUIRED
+  CORRELATED
+  CONFLICT_DETECTED
+}
+
 enum BillingAuditOrigin {
   BILLING
 }
@@ -684,6 +690,8 @@ model BillingExecution {
   receivables           BillingExecutionReceivable[]
   pixAttempts           BillingPixAttempt[]
   events                BillingExecutionEvent[]
+  orphanCorrelationEvents BillingPixOrphanWebhookCorrelationEvent[]
+  orphanCorrelationClaims BillingPixOrphanWebhookCorrelationClaim[]
 
   @@index([messageDispatchId, isCurrent])
   @@index([clientId, cycleKey, isCurrent])
@@ -742,6 +750,8 @@ model BillingPixAttempt {
   updatedAt              DateTime             @updatedAt
   billingExecution       BillingExecution     @relation(fields: [billingExecutionId], references: [id], onDelete: Restrict)
   paymentIntent          PaymentIntent?       @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+  orphanCorrelationEvents BillingPixOrphanWebhookCorrelationEvent[]
+  orphanCorrelationClaims BillingPixOrphanWebhookCorrelationClaim[]
 
   @@unique([provider, providerTransactionId])
   @@index([billingExecutionId, status])
@@ -823,11 +833,71 @@ model BillingPixOrphanWebhookEvent {
   actorKeyId            String
   actorNonce            String              @unique @db.Uuid
   createdAt             DateTime            @default(now())
+  correlationEvents     BillingPixOrphanWebhookCorrelationEvent[]
+  correlationClaim      BillingPixOrphanWebhookCorrelationClaim?
 
   @@unique([provider, providerTransactionId, eventKey, rawBodyDigest])
   @@index([provider, providerTransactionId])
   @@index([receivedAt])
   @@map("billing_pix_orphan_webhook_events")
+}
+
+model BillingPixOrphanWebhookCorrelationEvent {
+  id                    String                              @id @db.Uuid
+  correlationVersion    String
+  orphanWebhookEventId  String                              @db.Uuid
+  decision              BillingPixOrphanCorrelationDecision
+  reasonCode            String
+  decisionDigest        String                              @unique
+  provider              PaymentProviderCode
+  providerTransactionId String
+  billingPixAttemptId   String?                             @db.Uuid
+  billingExecutionId    String?                             @db.Uuid
+  paymentIntentId       String?                             @db.Uuid
+  creationKey           String?
+  financialSetDigest    String
+  expectedVersion       Int
+  actorType             BillingActorType
+  actorPrincipal        String
+  actorKeyId            String
+  actorNonce            String                              @unique @db.Uuid
+  argumentsDigest       String
+  createdAt             DateTime                            @default(now())
+  orphanWebhookEvent    BillingPixOrphanWebhookEvent        @relation(fields: [orphanWebhookEventId], references: [id], onDelete: Restrict)
+  billingPixAttempt     BillingPixAttempt?                  @relation(fields: [billingPixAttemptId], references: [id], onDelete: Restrict)
+  billingExecution      BillingExecution?                   @relation(fields: [billingExecutionId], references: [id], onDelete: Restrict)
+  paymentIntent         PaymentIntent?                      @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+  correlationClaim      BillingPixOrphanWebhookCorrelationClaim?
+
+  @@index([orphanWebhookEventId, createdAt])
+  @@index([provider, providerTransactionId])
+  @@index([billingPixAttemptId])
+  @@index([billingExecutionId])
+  @@index([decision, createdAt])
+  @@map("billing_pix_orphan_webhook_correlation_events")
+}
+
+model BillingPixOrphanWebhookCorrelationClaim {
+  orphanWebhookEventId  String                                @id @db.Uuid
+  decisionEventId       String                                @unique @db.Uuid
+  billingPixAttemptId   String                                @db.Uuid
+  billingExecutionId    String                                @db.Uuid
+  paymentIntentId       String?                               @db.Uuid
+  provider              PaymentProviderCode
+  providerTransactionId String
+  creationKey           String
+  financialSetDigest    String
+  createdAt             DateTime                              @default(now())
+  orphanWebhookEvent    BillingPixOrphanWebhookEvent          @relation(fields: [orphanWebhookEventId], references: [id], onDelete: Restrict)
+  decisionEvent         BillingPixOrphanWebhookCorrelationEvent @relation(fields: [decisionEventId], references: [id], onDelete: Restrict)
+  billingPixAttempt     BillingPixAttempt                     @relation(fields: [billingPixAttemptId], references: [id], onDelete: Restrict)
+  billingExecution      BillingExecution                      @relation(fields: [billingExecutionId], references: [id], onDelete: Restrict)
+  paymentIntent         PaymentIntent?                        @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+
+  @@index([billingPixAttemptId])
+  @@index([billingExecutionId])
+  @@index([provider, providerTransactionId])
+  @@map("billing_pix_orphan_webhook_correlation_claims")
 }
 
 model MessageTemplate {
@@ -1464,6 +1534,8 @@ model PaymentIntent {
   receivableAuditEvents ReceivableAuditEvent[]
   billingExecution      BillingExecution?
   billingPixAttempt     BillingPixAttempt?
+  orphanCorrelationEvents BillingPixOrphanWebhookCorrelationEvent[]
+  orphanCorrelationClaims BillingPixOrphanWebhookCorrelationClaim[]
   messageDispatch       MessageDispatch?
 
   @@unique([provider, providerTransactionId])

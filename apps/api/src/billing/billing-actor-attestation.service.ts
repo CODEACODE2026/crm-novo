@@ -9,6 +9,8 @@ export const billingActorOperations = {
   pixRecordCreateResult: 'billing.pix.record-create-result',
   pixReconcileCreateResult: 'billing.pix.reconcile-create-result',
   pixQuarantineOrphanWebhook: 'billing.pix.quarantine-orphan-webhook',
+  pixAnalyzeOrphanWebhook: 'billing.pix.analyze-orphan-webhook',
+  pixCorrelateOrphanWebhook: 'billing.pix.correlate-orphan-webhook',
   executionTransition: 'billing.execution.transition',
   receivableAmend: 'billing.receivable.amend',
 } as const;
@@ -472,6 +474,66 @@ export function billingPixQuarantineOrphanWebhookAttestationContext(input: {
       ['H', canonicalDigest(input.rawBodyDigest, 'Webhook raw body digest')],
       ['I', String(input.rawBodyBytes)],
       ['S', receivedAt],
+    ]),
+  });
+}
+
+export function billingPixAnalyzeOrphanWebhookAttestationContext(input: {
+  eventId: string;
+  rawBodyDigest: string;
+  reasonCode: string;
+}): BillingActorAttestationContext {
+  const eventId = canonicalUuid(input.eventId, 'Orphan webhook event id');
+  return canonicalContext({
+    operation: billingActorOperations.pixAnalyzeOrphanWebhook,
+    billingExecutionId: eventId,
+    messageDispatchId: eventId,
+    receivableId: null,
+    financialSetDigest: canonicalDigest(input.rawBodyDigest, 'Webhook raw body digest'),
+    expectedVersion: 0,
+    argumentsDigest: operationArgumentsDigest([
+      ['U', eventId],
+      ['E', 'REVIEW_REQUIRED'],
+      ['E', canonicalRequiredText(input.reasonCode, 'Orphan correlation reason code')],
+    ]),
+  });
+}
+
+export function billingPixCorrelateOrphanWebhookAttestationContext(input: {
+  billingExecutionId: string;
+  messageDispatchId: string;
+  financialSetDigest: string;
+  expectedVersion: number;
+  owner: string;
+  token: string;
+  eventId: string;
+  attemptId: string;
+  creationKey: string;
+  provider: string;
+  providerTransactionId: string;
+  paymentIntentId: string | null;
+}): BillingActorAttestationContext {
+  return canonicalContext({
+    operation: billingActorOperations.pixCorrelateOrphanWebhook,
+    billingExecutionId: input.billingExecutionId,
+    messageDispatchId: input.messageDispatchId,
+    receivableId: null,
+    financialSetDigest: input.financialSetDigest,
+    expectedVersion: input.expectedVersion,
+    argumentsDigest: operationArgumentsDigest([
+      ['S', canonicalRequiredText(input.owner, 'Billing lease owner')],
+      ['S', canonicalRequiredText(input.token, 'Billing lease token')],
+      ['U', canonicalUuid(input.eventId, 'Orphan webhook event id')],
+      ['U', canonicalUuid(input.attemptId, 'Billing PIX attempt id')],
+      ['S', canonicalRequiredText(input.creationKey, 'Billing PIX creation key')],
+      ['E', canonicalRequiredText(input.provider, 'Billing PIX provider')],
+      ['S', canonicalPrincipal(input.providerTransactionId, 'Webhook provider transaction id')],
+      [
+        'U',
+        input.paymentIntentId
+          ? canonicalUuid(input.paymentIntentId, 'Billing PaymentIntent id')
+          : null,
+      ],
     ]),
   });
 }

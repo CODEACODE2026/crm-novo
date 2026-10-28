@@ -1991,6 +1991,231 @@ describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', ()
     },
   );
 
+  it.runIf(Boolean(runtimeRole))(
+    'serializes a grouped intent inserted after the protected intent read',
+    async () => {
+      if (!runtimeRole) throw new Error('Runtime role required.');
+      const prepared = await createClaimFixture();
+      await createDirectClaimIntent(prepared);
+      const service = claimService(prisma, runtimeRole);
+      let releaseConversationBarrier!: () => void;
+      const conversationBarrier = new Promise<void>((resolve) => {
+        releaseConversationBarrier = resolve;
+      });
+      let conversationLocked!: () => void;
+      const conversationLockReady = new Promise<void>((resolve) => {
+        conversationLocked = resolve;
+      });
+      const blocker = peer.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          'LOCK TABLE public.whatsapp_conversations IN ACCESS EXCLUSIVE MODE',
+        );
+        conversationLocked();
+        await conversationBarrier;
+      });
+      await conversationLockReady;
+
+      const claim = service.claimAndRevalidate({
+        executionId: prepared.execution.id,
+        expectedVersion: prepared.execution.version,
+        owner: 'impl2-fix2-claim',
+        token: `${prefix}FIX2-CLAIM-${prepared.fixture.suffix}`,
+        now: new Date('2026-11-20T13:01:00.000Z'),
+      });
+
+      let claimOwnsFinancialLock = false;
+      for (let attempt = 0; attempt < 100 && !claimOwnsFinancialLock; attempt += 1) {
+        const [probe] = await prisma.$queryRaw<Array<{ held: boolean }>>(Prisma.sql`
+          SELECT NOT pg_try_advisory_xact_lock(
+            hashtextextended(${`pix:receivable:${prepared.fixture.receivable.id}`}, 0)
+          ) AS held
+        `);
+        claimOwnsFinancialLock = probe?.held === true;
+        if (!claimOwnsFinancialLock) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (!claimOwnsFinancialLock) {
+        releaseConversationBarrier();
+        await blocker;
+        await claim;
+      }
+      expect(claimOwnsFinancialLock).toBe(true);
+
+      let writerAcquiredFinancialLock = false;
+      const writer = prisma.$transaction(async (tx) => {
+        await acquireFinancialSetLocks(tx, [prepared.fixture.receivable.id]);
+        writerAcquiredFinancialLock = true;
+        const group = await tx.paymentGroup.create({
+          data: {
+            clientId: prepared.fixture.client.id,
+            totalAmount: new Prisma.Decimal('31.00'),
+            items: {
+              create: {
+                receivableId: prepared.fixture.receivable.id,
+                amount: prepared.fixture.receivable.amount,
+              },
+            },
+          },
+        });
+        return tx.paymentIntent.create({
+          data: {
+            paymentGroupId: group.id,
+            provider: 'DEPIX',
+            providerTransactionId: `${prefix}FIX2-RACE-${prepared.fixture.suffix}`,
+            status: 'WAITING_PAYMENT',
+            origin: 'BILLING',
+            creationKey: `${prefix}FIX2-RACE-KEY-${prepared.fixture.suffix}`,
+            amount: new Prisma.Decimal('31.00'),
+            pixCopyPaste: `${prefix}FIX2-RACE-PIX-${prepared.fixture.suffix}`,
+            expiresAt: new Date('2026-11-23T23:59:59.000Z'),
+          },
+        });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const writerWasBlocked = !writerAcquiredFinancialLock;
+      releaseConversationBarrier();
+      await blocker;
+      expect(writerWasBlocked).toBe(true);
+
+      const first = await claim;
+      expect(first).toMatchObject({ decision: 'ELIGIBLE', lease: { retained: true } });
+      await writer;
+      expect(writerAcquiredFinancialLock).toBe(true);
+      expect(await prisma.paymentIntent.count()).toBe(2);
+      await expect(
+        service.releaseLease({
+          executionId: prepared.execution.id,
+          expectedVersion: first.version!,
+          owner: first.lease.owner,
+          token: first.lease.token!,
+        }),
+      ).resolves.toBe(true);
+
+      const current = await prisma.billingExecution.findUniqueOrThrow({
+        where: { id: prepared.execution.id },
+      });
+      await expect(
+        service.claimAndRevalidate({
+          executionId: prepared.execution.id,
+          expectedVersion: current.version,
+          owner: 'impl2-fix2-revalidate',
+          token: `${prefix}FIX2-REVALIDATE-${prepared.fixture.suffix}`,
+          now: new Date('2026-11-20T13:01:00.000Z'),
+        }),
+      ).resolves.toMatchObject({
+        decision: 'REVIEW_REQUIRED',
+        lease: { retained: false },
+        reasons: [{ code: 'ACTIVE_PIX_INCOMPATIBLE' }],
+      });
+      await expect(
+        prisma.billingPixAttempt.count({ where: { billingExecutionId: prepared.execution.id } }),
+      ).resolves.toBe(0);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
+    'serializes an individual intent inserted after the protected intent read',
+    async () => {
+      if (!runtimeRole) throw new Error('Runtime role required.');
+      const prepared = await createClaimFixture();
+      const service = claimService(prisma, runtimeRole);
+      let releaseConversationBarrier!: () => void;
+      const conversationBarrier = new Promise<void>((resolve) => {
+        releaseConversationBarrier = resolve;
+      });
+      let conversationLocked!: () => void;
+      const conversationLockReady = new Promise<void>((resolve) => {
+        conversationLocked = resolve;
+      });
+      const blocker = peer.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          'LOCK TABLE public.whatsapp_conversations IN ACCESS EXCLUSIVE MODE',
+        );
+        conversationLocked();
+        await conversationBarrier;
+      });
+      await conversationLockReady;
+
+      const claim = service.claimAndRevalidate({
+        executionId: prepared.execution.id,
+        expectedVersion: prepared.execution.version,
+        owner: 'impl2-fix2-direct-claim',
+        token: `${prefix}FIX2-DIRECT-CLAIM-${prepared.fixture.suffix}`,
+        now: new Date('2026-11-20T13:01:00.000Z'),
+      });
+
+      let claimOwnsFinancialLock = false;
+      for (let attempt = 0; attempt < 100 && !claimOwnsFinancialLock; attempt += 1) {
+        const [probe] = await prisma.$queryRaw<Array<{ held: boolean }>>(Prisma.sql`
+          SELECT NOT pg_try_advisory_xact_lock(
+            hashtextextended(${`pix:receivable:${prepared.fixture.receivable.id}`}, 0)
+          ) AS held
+        `);
+        claimOwnsFinancialLock = probe?.held === true;
+        if (!claimOwnsFinancialLock) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (!claimOwnsFinancialLock) {
+        releaseConversationBarrier();
+        await blocker;
+        await claim;
+      }
+      expect(claimOwnsFinancialLock).toBe(true);
+
+      let writerAcquiredFinancialLock = false;
+      const writer = prisma.$transaction(async (tx) => {
+        await acquireFinancialSetLocks(tx, [prepared.fixture.receivable.id]);
+        writerAcquiredFinancialLock = true;
+        return tx.paymentIntent.create({
+          data: {
+            receivableId: prepared.fixture.receivable.id,
+            provider: 'DEPIX',
+            providerTransactionId: `${prefix}FIX2-DIRECT-RACE-${prepared.fixture.suffix}`,
+            status: 'WAITING_PAYMENT',
+            origin: 'BILLING',
+            creationKey: `${prefix}FIX2-DIRECT-RACE-KEY-${prepared.fixture.suffix}`,
+            amount: new Prisma.Decimal('31.00'),
+            pixCopyPaste: `${prefix}FIX2-DIRECT-RACE-PIX-${prepared.fixture.suffix}`,
+            expiresAt: new Date('2026-11-23T23:59:59.000Z'),
+          },
+        });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const writerWasBlocked = !writerAcquiredFinancialLock;
+      releaseConversationBarrier();
+      await blocker;
+      expect(writerWasBlocked).toBe(true);
+
+      const first = await claim;
+      expect(first).toMatchObject({ decision: 'ELIGIBLE', lease: { retained: true } });
+      await writer;
+      await expect(
+        service.releaseLease({
+          executionId: prepared.execution.id,
+          expectedVersion: first.version!,
+          owner: first.lease.owner,
+          token: first.lease.token!,
+        }),
+      ).resolves.toBe(true);
+      const current = await prisma.billingExecution.findUniqueOrThrow({
+        where: { id: prepared.execution.id },
+      });
+      await expect(
+        service.claimAndRevalidate({
+          executionId: prepared.execution.id,
+          expectedVersion: current.version,
+          owner: 'impl2-fix2-direct-revalidate',
+          token: `${prefix}FIX2-DIRECT-REVALIDATE-${prepared.fixture.suffix}`,
+          now: new Date('2026-11-20T13:01:00.000Z'),
+        }),
+      ).resolves.toMatchObject({
+        decision: 'REVIEW_REQUIRED',
+        lease: { retained: false },
+        reasons: [{ code: 'ACTIVE_PIX_INCOMPATIBLE' }],
+      });
+    },
+  );
+
   it('orders overlapping financial sets without blocking an unrelated receivable', async () => {
     const [first, second] = await Promise.all([createFixture(), createFixture()]);
     let releaseFirst!: () => void;

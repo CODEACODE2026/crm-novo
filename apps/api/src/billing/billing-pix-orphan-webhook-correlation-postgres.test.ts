@@ -6,6 +6,7 @@ import {
   billingPixAnalyzeOrphanWebhookAttestationContext,
 } from './billing-actor-attestation.service';
 import { buildBillingExecutionIdentity } from './billing-execution-identity';
+import { BillingPixClaimService } from './billing-pix-claim.service';
 import { buildBillingPixCreationKey } from './billing-pix-creation-key';
 import { BillingPixOrphanWebhookCorrelationService } from './billing-pix-orphan-webhook-correlation.service';
 import { BillingPixWebhookQuarantineService } from './billing-pix-webhook-quarantine.service';
@@ -26,6 +27,10 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
         BILLING_ACTOR_SYSTEM_SIGNING_SECRET: systemSecret,
         BILLING_ACTOR_WEBHOOK_KEY_ID: 'webhook-7c-test-v1',
         BILLING_ACTOR_WEBHOOK_SIGNING_SECRET: webhookSecret,
+        PHONE_GLOBAL_BILLING_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_PIX_ENABLED: 'true',
+        PHONE_GLOBAL_BILLING_SEND_ENABLED: 'false',
+        PHONE_GLOBAL_BILLING_EFFECTIVE_FROM: '2026-11-01T03:00:00.000Z',
       })[key],
   };
   const actors = new BillingActorAttestationService(actorConfig as never);
@@ -122,6 +127,259 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
       expect(after.attempt).toEqual(before.attempt);
       expect(after.receivable).toEqual(before.receivable);
       expect(after.paymentIntentCount).toBe(0);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole)).each([
+    { kind: 'individual', grouped: false },
+    { kind: 'grouped', grouped: true },
+  ])(
+    'reconciles a claimed AMBIGUOUS attempt into one exact $kind intent by GET only',
+    async ({ grouped }) => {
+      const fixture = await createBoundFixture({ grouped });
+      const correlated = await correlationService(prisma).analyzeEvidence(fixture.eventId, {
+        owner: `7c-impl5-${grouped ? 'grouped' : 'individual'}`,
+        token: `${prefix}7C-IMPL5-${fixture.suffix}`,
+      });
+      expect(correlated).toMatchObject({
+        decision: 'CORRELATED',
+        reconciliationEligible: true,
+      });
+      const historicalClaim =
+        await prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+          where: { orphanWebhookEventId: fixture.eventId },
+        });
+      expect(historicalClaim.paymentIntentId).toBeNull();
+      const receivablesBefore = await prisma.receivable.findMany({
+        where: {
+          billingExecutionReceivables: { some: { billingExecutionId: fixture.executionId } },
+        },
+        orderBy: { id: 'asc' },
+      });
+      const execution = await prisma.billingExecution.findUniqueOrThrow({
+        where: { id: fixture.executionId },
+      });
+      let getCalls = 0;
+      const service = claimService(prisma);
+      const input = {
+        executionId: fixture.executionId,
+        expectedVersion: execution.version,
+        owner: `7c-impl5-reconciler-${grouped ? 'grouped' : 'individual'}`,
+        token: `${prefix}7C-IMPL5-RECONCILE-${fixture.suffix}`,
+        attemptId: fixture.attemptId,
+        creationKey: fixture.creationKey,
+        provider: 'DEPIX' as const,
+        providerTransactionId: fixture.transactionId,
+      };
+      const adapter = {
+        lookup: async (providerTransactionId: string) => {
+          await Promise.resolve();
+          getCalls += 1;
+          return {
+            kind: 'FOUND' as const,
+            transaction: {
+              providerTransactionId,
+              state: 'WAITING_PAYMENT' as const,
+              externalStatus: 'WAITING_PAYMENT',
+              amount: fixture.totalAmount,
+              pixCopyPaste: `${prefix}7C-IMPL5-PIX-${fixture.suffix}`,
+              qrCodeData: null,
+              expiresAt: new Date('2026-11-23T23:59:59.000Z'),
+              paidAt: null,
+            },
+          };
+        },
+      };
+      const result = await service.reconcilePix(input, adapter);
+      expect(result).toMatchObject({ decision: 'CONFIRMED', getCalls: 1, creationPostCalls: 0 });
+      expect(getCalls).toBe(1);
+      const [attempt, currentExecution, claim, intents, receivablesAfter] = await Promise.all([
+        prisma.billingPixAttempt.findUniqueOrThrow({ where: { id: fixture.attemptId } }),
+        prisma.billingExecution.findUniqueOrThrow({ where: { id: fixture.executionId } }),
+        prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+          where: { orphanWebhookEventId: fixture.eventId },
+        }),
+        prisma.paymentIntent.findMany({ where: { creationKey: fixture.creationKey } }),
+        prisma.receivable.findMany({
+          where: {
+            billingExecutionReceivables: { some: { billingExecutionId: fixture.executionId } },
+          },
+          orderBy: { id: 'asc' },
+        }),
+      ]);
+      expect(intents).toHaveLength(1);
+      expect(attempt.paymentIntentId).toBe(intents[0]!.id);
+      expect(currentExecution.paymentIntentId).toBe(intents[0]!.id);
+      expect(claim).toEqual(historicalClaim);
+      expect(receivablesAfter).toEqual(receivablesBefore);
+      expect(await prisma.financialTransaction.count()).toBe(0);
+      const repeated = await service.reconcilePix(
+        { ...input, expectedVersion: currentExecution.version },
+        adapter,
+      );
+      expect(repeated).toMatchObject({
+        decision: 'REUSED_PAYMENT_INTENT',
+        paymentIntentId: intents[0]!.id,
+        getCalls: 0,
+        creationPostCalls: 0,
+      });
+      expect(getCalls).toBe(1);
+      await expect(
+        prisma.paymentIntent.count({ where: { creationKey: fixture.creationKey } }),
+      ).resolves.toBe(1);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
+    'rejects forged or incomplete post-claim intent enrichment in PostgreSQL',
+    async () => {
+      const fixture = await createBoundFixture();
+      await correlationService(prisma).analyzeEvidence(fixture.eventId);
+      const wrongSet = await createBoundFixture();
+      const cases = [
+        { origin: 'MANUAL' as const },
+        { provider: 'MOCK' as const },
+        { providerTransactionId: `${prefix}WRONG-TX-${randomUUID()}` },
+        { creationKey: `${prefix}WRONG-KEY-${randomUUID()}` },
+        { amount: new Prisma.Decimal('31.00') },
+        { receivableId: wrongSet.receivableId },
+      ];
+      for (const invalid of cases) {
+        const intent = await prisma.paymentIntent.create({
+          data: {
+            receivableId: invalid.receivableId ?? fixture.receivableId,
+            provider: invalid.provider ?? 'DEPIX',
+            providerTransactionId: invalid.providerTransactionId ?? fixture.transactionId,
+            status: 'WAITING_PAYMENT',
+            origin: invalid.origin ?? 'BILLING',
+            creationKey: invalid.creationKey ?? fixture.creationKey,
+            amount: invalid.amount ?? new Prisma.Decimal(fixture.totalAmount),
+          },
+        });
+        await expect(
+          prisma.billingPixAttempt.update({
+            where: { id: fixture.attemptId },
+            data: { paymentIntentId: intent.id },
+          }),
+        ).rejects.toThrow(/intent enrichment|financial identity|receivable/u);
+        await prisma.paymentIntent.delete({ where: { id: intent.id } });
+      }
+
+      const exactIntent = await prisma.paymentIntent.create({
+        data: {
+          receivableId: fixture.receivableId,
+          provider: 'DEPIX',
+          providerTransactionId: fixture.transactionId,
+          status: 'WAITING_PAYMENT',
+          origin: 'BILLING',
+          creationKey: fixture.creationKey,
+          amount: new Prisma.Decimal(fixture.totalAmount),
+        },
+      });
+      await expect(
+        prisma.billingPixAttempt.update({
+          where: { id: fixture.attemptId },
+          data: { paymentIntentId: exactIntent.id },
+        }),
+      ).rejects.toThrow(/link is incomplete|must identify one intent/u);
+      await expect(
+        prisma.billingPixAttempt.findUniqueOrThrow({ where: { id: fixture.attemptId } }),
+      ).resolves.toMatchObject({ paymentIntentId: null });
+      await prisma.paymentIntent.delete({ where: { id: exactIntent.id } });
+
+      const sealed = await createBoundFixture({ intent: 'individual' });
+      await correlationService(prisma).analyzeEvidence(sealed.eventId);
+      await expect(
+        prisma.billingPixAttempt.update({
+          where: { id: sealed.attemptId },
+          data: { paymentIntentId: null },
+        }),
+      ).rejects.toThrow(/identity is immutable|enrichment is immutable/u);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
+    'rejects a partial grouped intent and an overlapping active intent after claim',
+    async () => {
+      const grouped = await createBoundFixture({ grouped: true });
+      await correlationService(prisma).analyzeEvidence(grouped.eventId);
+      const group = await prisma.paymentGroup.create({
+        data: {
+          clientId: (
+            await prisma.billingExecution.findUniqueOrThrow({ where: { id: grouped.executionId } })
+          ).clientId,
+          status: 'WAITING_PAYMENT',
+          totalAmount: new Prisma.Decimal(grouped.totalAmount),
+          items: {
+            create: { receivableId: grouped.receivableId, amount: new Prisma.Decimal('30.00') },
+          },
+        },
+      });
+      const partial = await prisma.paymentIntent.create({
+        data: {
+          paymentGroupId: group.id,
+          provider: 'DEPIX',
+          providerTransactionId: grouped.transactionId,
+          status: 'WAITING_PAYMENT',
+          origin: 'BILLING',
+          creationKey: grouped.creationKey,
+          amount: new Prisma.Decimal(grouped.totalAmount),
+        },
+      });
+      await expect(
+        prisma.billingPixAttempt.update({
+          where: { id: grouped.attemptId },
+          data: { paymentIntentId: partial.id },
+        }),
+      ).rejects.toThrow(/exact claimed receivable set/u);
+
+      const individual = await createBoundFixture();
+      await correlationService(prisma).analyzeEvidence(individual.eventId);
+      const overlapExecution = await prisma.billingExecution.findUniqueOrThrow({
+        where: { id: individual.executionId },
+      });
+      const overlapGroup = await prisma.paymentGroup.create({
+        data: {
+          clientId: overlapExecution.clientId,
+          status: 'WAITING_PAYMENT',
+          totalAmount: new Prisma.Decimal(individual.totalAmount),
+          items: {
+            create: {
+              receivableId: individual.receivableId,
+              amount: new Prisma.Decimal(individual.totalAmount),
+            },
+          },
+        },
+      });
+      const overlapping = await prisma.paymentIntent.create({
+        data: {
+          paymentGroupId: overlapGroup.id,
+          provider: 'DEPIX',
+          providerTransactionId: `${prefix}OVERLAP-${randomUUID()}`,
+          status: 'WAITING_PAYMENT',
+          origin: 'BILLING',
+          creationKey: `${prefix}OVERLAP-${randomUUID()}`,
+          amount: new Prisma.Decimal(individual.totalAmount),
+        },
+      });
+      const candidate = await prisma.paymentIntent.create({
+        data: {
+          receivableId: individual.receivableId,
+          provider: 'DEPIX',
+          providerTransactionId: individual.transactionId,
+          status: 'WAITING_PAYMENT',
+          origin: 'BILLING',
+          creationKey: individual.creationKey,
+          amount: new Prisma.Decimal(individual.totalAmount),
+        },
+      });
+      await expect(
+        prisma.billingPixAttempt.update({
+          where: { id: individual.attemptId },
+          data: { paymentIntentId: candidate.id },
+        }),
+      ).rejects.toThrow(/overlaps another active financial intent/u);
+      expect(overlapping.id).not.toBe(candidate.id);
     },
   );
 
@@ -534,7 +792,9 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
     });
   }
 
-  async function createBoundFixture(options: { intent?: 'individual' | 'grouped' } = {}) {
+  async function createBoundFixture(
+    options: { intent?: 'individual' | 'grouped'; grouped?: boolean } = {},
+  ) {
     const suffix = randomUUID();
     const transactionId = `${prefix}BOUND-${suffix}`;
     const plan = await prisma.plan.create({
@@ -580,7 +840,7 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
       },
     });
     const secondReceivable =
-      options.intent === 'grouped'
+      options.intent === 'grouped' || options.grouped
         ? await prisma.receivable.create({
             data: {
               clientId: client.id,
@@ -765,6 +1025,8 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
       receivableId: receivable.id,
       paymentIntentId,
       paymentGroupId,
+      creationKey,
+      totalAmount,
     };
   }
 
@@ -783,6 +1045,24 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
         }, options),
     };
     return new BillingPixOrphanWebhookCorrelationService(runtimePrisma as never, actors);
+  }
+
+  function claimService(db: PrismaClient) {
+    if (!runtimeRole || !/^[a-z_][a-z0-9_]*$/iu.test(runtimeRole)) {
+      throw new Error('DATABASE_RUNTIME_TEST_ROLE must be a simple identifier.');
+    }
+    const runtimePrisma = {
+      billingExecution: db.billingExecution,
+      $transaction: <T>(
+        callback: (tx: Prisma.TransactionClient) => Promise<T>,
+        options?: { isolationLevel?: Prisma.TransactionIsolationLevel },
+      ) =>
+        db.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL ROLE ${runtimeRole}`);
+          return callback(tx);
+        }, options),
+    };
+    return new BillingPixClaimService(runtimePrisma as never, actorConfig as never, actors);
   }
 
   function asRuntime<T>(db: PrismaClient, callback: (tx: Prisma.TransactionClient) => Promise<T>) {

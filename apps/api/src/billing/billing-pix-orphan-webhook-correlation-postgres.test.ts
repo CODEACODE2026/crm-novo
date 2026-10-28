@@ -334,6 +334,188 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
     },
   );
 
+  it.runIf(Boolean(runtimeRole))(
+    'rejects the original owner-direct attack using REVIEW_REQUIRED or CONFLICT_DETECTED events',
+    async () => {
+      const bound = await createBoundFixture();
+      await correlationService(prisma).analyzeEvidence(bound.eventId);
+      const legitimate = await prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+        where: { orphanWebhookEventId: bound.eventId },
+      });
+      await prisma.$executeRawUnsafe(
+        'TRUNCATE TABLE public.billing_pix_orphan_webhook_correlation_claims',
+      );
+
+      const unbound = await createEvidence(`${prefix}FIX1-REVIEW-${randomUUID()}`);
+      await correlationService(prisma).analyzeEvidence(unbound.eventId);
+      const review = await prisma.billingPixOrphanWebhookCorrelationEvent.findFirstOrThrow({
+        where: { orphanWebhookEventId: unbound.eventId, decision: 'REVIEW_REQUIRED' },
+      });
+      await expect(
+        insertClaim(prisma, {
+          ...legitimate,
+          orphanWebhookEventId: unbound.eventId,
+          decisionEventId: review.id,
+        }),
+      ).rejects.toMatchObject({ code: 'P2010', meta: { code: '23514' } });
+
+      const conflictId = randomUUID();
+      const conflictNonce = randomUUID();
+      await prisma.$executeRaw`
+        INSERT INTO public.billing_actor_assertions (
+          "nonce", "actorType", "actorUserId", "principal", "keyId", "operation",
+          "billingExecutionId", "messageDispatchId", "receivableId", "financialSetDigest",
+          "expectedVersion", "argumentsDigest", "issuedAtEpoch"
+        )
+        SELECT ${conflictNonce}::uuid, "actorType", "actorUserId", "principal", "keyId",
+          "operation", "billingExecutionId", "messageDispatchId", "receivableId",
+          "financialSetDigest", "expectedVersion", "argumentsDigest", "issuedAtEpoch"
+        FROM public.billing_actor_assertions WHERE "nonce" = ${review.actorNonce}::uuid
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO public.billing_pix_orphan_webhook_correlation_events (
+          "id", "correlationVersion", "orphanWebhookEventId", "decision", "reasonCode",
+          "decisionDigest", "provider", "providerTransactionId", "billingPixAttemptId",
+          "billingExecutionId", "paymentIntentId", "creationKey", "financialSetDigest",
+          "expectedVersion", "actorType", "actorPrincipal", "actorKeyId", "actorNonce",
+          "argumentsDigest"
+        ) VALUES (
+          ${conflictId}::uuid, ${review.correlationVersion}, ${bound.eventId}::uuid,
+          'CONFLICT_DETECTED'::public."BillingPixOrphanCorrelationDecision", 'IDENTITY_CONFLICT',
+          ${randomUUID().replaceAll('-', '').padEnd(64, '0')},
+          ${legitimate.provider}::public."PaymentProviderCode", ${legitimate.providerTransactionId},
+          ${legitimate.billingPixAttemptId}::uuid, ${legitimate.billingExecutionId}::uuid,
+          ${legitimate.paymentIntentId}::uuid, ${legitimate.creationKey},
+          ${legitimate.financialSetDigest}, 0, 'SYSTEM'::public."BillingActorType",
+          ${review.actorPrincipal}, ${review.actorKeyId}, ${conflictNonce}::uuid,
+          ${'1'.repeat(64)}
+        )
+      `;
+      await expect(
+        insertClaim(prisma, { ...legitimate, decisionEventId: conflictId }),
+      ).rejects.toMatchObject({ code: 'P2010', meta: { code: '23514' } });
+      await expect(prisma.billingPixOrphanWebhookCorrelationClaim.count()).resolves.toBe(0);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
+    'accepts only exact null-safe event, evidence, attempt and execution identities',
+    async () => {
+      const fixture = await createBoundFixture({ intent: 'individual' });
+      await correlationService(prisma).analyzeEvidence(fixture.eventId);
+      const claim = await prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+        where: { orphanWebhookEventId: fixture.eventId },
+      });
+      const other = await createBoundFixture();
+      await prisma.$executeRawUnsafe(
+        'TRUNCATE TABLE public.billing_pix_orphan_webhook_correlation_claims',
+      );
+      await expect(insertClaim(prisma, claim)).resolves.toBe(1);
+      await prisma.$executeRawUnsafe(
+        'TRUNCATE TABLE public.billing_pix_orphan_webhook_correlation_claims',
+      );
+
+      const invalidClaims = [
+        { ...claim, orphanWebhookEventId: other.eventId },
+        { ...claim, billingPixAttemptId: other.attemptId },
+        { ...claim, billingExecutionId: other.executionId },
+        { ...claim, paymentIntentId: null },
+        { ...claim, provider: 'MOCK' as const },
+        { ...claim, providerTransactionId: `${claim.providerTransactionId}-forged` },
+        { ...claim, creationKey: `${claim.creationKey}-forged` },
+        { ...claim, financialSetDigest: 'f'.repeat(64) },
+      ];
+      for (const invalid of invalidClaims) {
+        await expect(insertClaim(prisma, invalid)).rejects.toThrow(/does not match/u);
+      }
+      await expect(prisma.billingPixOrphanWebhookCorrelationClaim.count()).resolves.toBe(0);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))(
+    'denies runtime direct INSERT and seals attempt identity after a valid claim',
+    async () => {
+      const fixture = await createBoundFixture();
+      await correlationService(prisma).analyzeEvidence(fixture.eventId);
+      const claim = await prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+        where: { orphanWebhookEventId: fixture.eventId },
+      });
+      await prisma.$executeRawUnsafe(
+        'TRUNCATE TABLE public.billing_pix_orphan_webhook_correlation_claims',
+      );
+      await expect(asRuntime(prisma, (tx) => insertClaim(tx, claim))).rejects.toThrow(
+        /permission denied/u,
+      );
+      await insertClaim(prisma, claim);
+      await expect(
+        prisma.billingPixAttempt.update({
+          where: { id: fixture.attemptId },
+          data: { providerTransactionId: `${fixture.transactionId}-rewritten` },
+        }),
+      ).rejects.toThrow(/identity (?:is sealed|is immutable)/u);
+    },
+  );
+
+  it.runIf(Boolean(runtimeRole))('rolls back a valid direct claim atomically', async () => {
+    const fixture = await createBoundFixture();
+    await correlationService(prisma).analyzeEvidence(fixture.eventId);
+    const claim = await prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+      where: { orphanWebhookEventId: fixture.eventId },
+    });
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE public.billing_pix_orphan_webhook_correlation_claims',
+    );
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await insertClaim(tx, claim);
+        throw new Error('forced FIX1 rollback');
+      }),
+    ).rejects.toThrow('forced FIX1 rollback');
+    await expect(prisma.billingPixOrphanWebhookCorrelationClaim.count()).resolves.toBe(0);
+  });
+
+  it.runIf(Boolean(runtimeRole))(
+    'holds attempt and execution row locks until a direct claim commits',
+    async () => {
+      const fixture = await createBoundFixture();
+      await correlationService(prisma).analyzeEvidence(fixture.eventId);
+      const claim = await prisma.billingPixOrphanWebhookCorrelationClaim.findUniqueOrThrow({
+        where: { orphanWebhookEventId: fixture.eventId },
+      });
+      await prisma.$executeRawUnsafe(
+        'TRUNCATE TABLE public.billing_pix_orphan_webhook_correlation_claims',
+      );
+
+      let markInserted!: () => void;
+      let releaseClaim!: () => void;
+      const inserted = new Promise<void>((resolve) => (markInserted = resolve));
+      const release = new Promise<void>((resolve) => (releaseClaim = resolve));
+      const claimTransaction = prisma.$transaction(async (tx) => {
+        await insertClaim(tx, claim);
+        markInserted();
+        await release;
+      });
+      await inserted;
+
+      await expect(
+        peer.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '100ms'");
+          await tx.$executeRaw`
+            UPDATE public.billing_pix_attempts SET "updatedAt" = "updatedAt"
+            WHERE "id" = ${fixture.attemptId}::uuid
+          `;
+        }),
+      ).rejects.toThrow(/lock timeout/u);
+      releaseClaim();
+      await claimTransaction;
+      await expect(
+        prisma.billingPixOrphanWebhookCorrelationClaim.count({
+          where: { orphanWebhookEventId: fixture.eventId },
+        }),
+      ).resolves.toBe(1);
+    },
+  );
+
   async function createEvidence(transactionId: string) {
     const rawBody = Buffer.from(
       JSON.stringify({ transaction_id: transactionId, status: 'paid' }),
@@ -622,6 +804,34 @@ describe.skipIf(!runDatabaseTests)('Billing PIX orphan correlation PostgreSQL in
     actor: ReturnType<BillingActorAttestationService['forSystem']>,
   ) {
     return asRuntime(db, (tx) => analyzeSql(tx, eventId, actor));
+  }
+
+  function insertClaim(
+    db: PrismaClient | Prisma.TransactionClient,
+    claim: {
+      orphanWebhookEventId: string;
+      decisionEventId: string;
+      billingPixAttemptId: string;
+      billingExecutionId: string;
+      paymentIntentId: string | null;
+      provider: string;
+      providerTransactionId: string;
+      creationKey: string;
+      financialSetDigest: string;
+    },
+  ) {
+    return db.$executeRaw`
+      INSERT INTO public.billing_pix_orphan_webhook_correlation_claims (
+        "orphanWebhookEventId", "decisionEventId", "billingPixAttemptId",
+        "billingExecutionId", "paymentIntentId", "provider", "providerTransactionId",
+        "creationKey", "financialSetDigest"
+      ) VALUES (
+        ${claim.orphanWebhookEventId}::uuid, ${claim.decisionEventId}::uuid,
+        ${claim.billingPixAttemptId}::uuid, ${claim.billingExecutionId}::uuid,
+        ${claim.paymentIntentId}::uuid, ${claim.provider}::public."PaymentProviderCode",
+        ${claim.providerTransactionId}, ${claim.creationKey}, ${claim.financialSetDigest}
+      )
+    `;
   }
 
   function analyzeSql(

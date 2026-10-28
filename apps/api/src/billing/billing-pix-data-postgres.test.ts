@@ -4140,30 +4140,31 @@ describe.skipIf(!runDatabaseTests)('Billing PIX DATA1 PostgreSQL invariants', ()
         WHERE n.nspname = 'public' AND p.prosecdef
         ORDER BY p.proname
       `;
-      expect(functions).toHaveLength(15);
+      expect(functions).toHaveLength(17);
       expect(functions.every((item) => item.publicExecute === false)).toBe(true);
       expect(
         functions.every((item) =>
           item.searchPath.includes('search_path=pg_catalog, public, pg_temp'),
         ),
       ).toBe(true);
-      expect(
-        functions.filter((item) =>
-          [
-            'billing_execution_verify_actor',
-            'billing_pix_orphan_correlation_verify_actor',
-          ].includes(item.name),
-        ),
-      ).toEqual([
-        expect.objectContaining({ runtimeExecute: false }),
-        expect.objectContaining({ runtimeExecute: false }),
-      ]);
+      const privateFunctions = functions.filter((item) =>
+        [
+          'billing_execution_verify_actor',
+          'billing_pix_orphan_claim_preserve_attempt_identity',
+          'billing_pix_orphan_claim_validate_insert',
+          'billing_pix_orphan_correlation_verify_actor',
+        ].includes(item.name),
+      );
+      expect(privateFunctions).toHaveLength(4);
+      expect(privateFunctions.every((item) => item.runtimeExecute === false)).toBe(true);
       expect(
         functions
           .filter(
             (item) =>
               ![
                 'billing_execution_verify_actor',
+                'billing_pix_orphan_claim_preserve_attempt_identity',
+                'billing_pix_orphan_claim_validate_insert',
                 'billing_pix_orphan_correlation_verify_actor',
               ].includes(item.name),
           )

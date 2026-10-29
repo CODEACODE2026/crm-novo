@@ -219,6 +219,83 @@ describe.skipIf(!runDatabaseTests)('global manual PIX parity', () => {
     ).resolves.toMatchObject({ status: 'PENDENTE' });
   });
 
+  it.each([
+    ['BR', '+55 11 99999-1234', '5511999991234', '+5511999991234'],
+    ['US', '+1 (407) 639-0665', '14076390665', '+14076390665'],
+    ['PT', '+351 912 345 678', '351912345678', '+351912345678'],
+    ['AE', '+971 50 123 4567', '971501234567', '+971501234567'],
+  ] as const)(
+    'creates and reuses one %s PIX through the country-neutral automated Billing boundary',
+    async (_country, phone, phoneNormalized, phoneE164) => {
+      const fixture = await createFixture({ phone, phoneNormalized, phoneE164 });
+      const provider = createProvider();
+      const service = createService(provider);
+
+      const first = await service.createReceivablePixForAutomatedBilling(fixture.firstReceivableId);
+      const second = await createService(provider).createReceivablePixForAutomatedBilling(
+        fixture.firstReceivableId,
+      );
+
+      expect(first).toMatchObject({ status: 'WAITING_PAYMENT' });
+      expect(second.id).toBe(first.id);
+      expect(provider.createPix).toHaveBeenCalledTimes(1);
+      expect(provider.createPix).toHaveBeenCalledWith(
+        expect.objectContaining({ payerPhone: phoneNormalized }),
+      );
+      await expect(
+        prisma.paymentIntent.count({ where: { receivableId: fixture.firstReceivableId } }),
+      ).resolves.toBe(1);
+    },
+  );
+
+  it('blocks automated Billing PIX when the plan is inactive without changing the receivable', async () => {
+    const fixture = await createFixture({
+      phone: '+351 912 345 678',
+      phoneNormalized: '351912345678',
+      phoneE164: '+351912345678',
+    });
+    await prisma.plan.updateMany({
+      where: { clients: { some: { id: fixture.clientId } } },
+      data: { active: false },
+    });
+    const provider = createProvider();
+
+    await expect(
+      createService(provider).createReceivablePixForAutomatedBilling(fixture.firstReceivableId),
+    ).rejects.toThrow('Plano inativo');
+    expect(provider.createPix).not.toHaveBeenCalled();
+    await expect(
+      prisma.paymentIntent.count({ where: { receivableId: fixture.firstReceivableId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.receivable.findUniqueOrThrow({ where: { id: fixture.firstReceivableId } }),
+    ).resolves.toMatchObject({ status: 'PENDENTE' });
+  });
+
+  it('reuses the exact active grouped PIX for automated Billing', async () => {
+    const fixture = await createFixture(
+      {
+        phone: '+971 50 123 4567',
+        phoneNormalized: '971501234567',
+        phoneE164: '+971501234567',
+      },
+      2,
+    );
+    const provider = createProvider();
+    const first = await createService(provider).createReceivablesPixForAutomatedBilling(
+      fixture.receivableIds,
+    );
+    const second = await createService(provider).createReceivablesPixForAutomatedBilling(
+      [...fixture.receivableIds].reverse(),
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(provider.createPix).toHaveBeenCalledTimes(1);
+    await expect(
+      prisma.paymentIntent.count({ where: { paymentGroup: { clientId: fixture.clientId } } }),
+    ).resolves.toBe(1);
+  });
+
   it('persists an unknown grouped reservation and blocks a second grouped POST', async () => {
     const fixture = await createFixture(
       {

@@ -20,9 +20,10 @@ import {
   type WhatsAppConnection,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { resolveCanonicalPhoneIdentity } from '../common/phone/canonical-phone-identity';
 import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
-import { comparePhoneIdentities, normalizePhone } from '../common/phone/phone-normalizer';
 import { ReceivableCycleService } from '../receivable-cycle/receivable-cycle.service';
+import { FinanceService } from '../finance/finance.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
@@ -96,6 +97,9 @@ export class BillingService {
     @Optional()
     @Inject(ReceivableCycleService)
     private readonly receivableCycleService?: ReceivableCycleService,
+    @Optional()
+    @Inject(FinanceService)
+    private readonly finance?: FinanceService,
   ) {}
 
   async reconcile(now = new Date()) {
@@ -945,6 +949,37 @@ export class BillingService {
       }
     }
 
+    const pixCopyPaste = await this.resolveScheduledPix(dispatch, now);
+    if ('errorCode' in pixCopyPaste) {
+      return pixCopyPaste.result;
+    }
+    if (pixCopyPaste.value) {
+      const renderedContent = this.renderForDispatchItems(
+        dispatch.template!.content,
+        dispatch.client!,
+        this.dispatchItems(dispatch),
+        pixCopyPaste.value,
+      );
+      dispatch = await this.prisma.messageDispatch.update({
+        where: { id },
+        data: { body: renderedContent, renderedContent },
+        include: {
+          client: true,
+          clientReference: { include: { plan: true } },
+          receivable: { include: { clientReference: { include: { plan: true } } } },
+          items: {
+            include: {
+              clientReference: { include: { plan: true } },
+              receivable: { include: { clientReference: { include: { plan: true } } } },
+            },
+            orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+          },
+          template: true,
+          whatsAppConnection: true,
+        },
+      });
+    }
+
     const body = dispatch.renderedContent ?? dispatch.body;
     const requestId = dispatch.idempotencyKey ?? dispatch.requestId;
     let confirmedProviderMessageId: string | null = null;
@@ -1077,20 +1112,13 @@ export class BillingService {
     const currentById = new Map(
       currentReceivables.map((receivable) => [receivable.id, receivable]),
     );
-    const internationalIdentity = resolveBrazilianOperationalPhone(dispatch.client);
-    const requiresInternationalOptIn =
-      internationalIdentity.status === 'blocked' &&
-      internationalIdentity.reason === 'INTERNATIONAL_PHONE' &&
-      this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true';
     const activeItems = originalItems
       .map((item) => {
         const receivable = currentById.get(item.receivable.id);
         if (!receivable || receivable.status !== 'PENDENTE') return null;
         if (!receivable.clientReference) return null;
         if (receivable.clientReference.status !== 'ATIVO') return null;
-        if (requiresInternationalOptIn && !receivable.clientReference.internationalBillingEnabled) {
-          return null;
-        }
+        if (!receivable.clientReference.plan?.active) return null;
 
         return {
           ...item,
@@ -1101,21 +1129,6 @@ export class BillingService {
       .filter(Boolean) as BillingDispatchItem[];
 
     if (!activeItems.length) {
-      const blockedByInternationalOptOut =
-        requiresInternationalOptIn &&
-        currentReceivables.some(
-          (receivable) =>
-            receivable.status === 'PENDENTE' &&
-            receivable.clientReference?.status === 'ATIVO' &&
-            !receivable.clientReference.internationalBillingEnabled,
-        );
-      if (blockedByInternationalOptOut) {
-        return {
-          code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
-          message: 'Nenhum item manteve autorizacao para Billing automatico internacional.',
-        };
-      }
-
       const allCanceled = currentReceivables.length
         ? currentReceivables.every(
             (receivable) =>
@@ -1318,13 +1331,14 @@ export class BillingService {
   }
 
   private isCreateIneligible(
-    reference: ClientReference,
+    reference: ClientReference & { plan: Plan },
     receivable: Receivable,
     template: MessageTemplate,
     connection: WhatsAppConnection | null,
   ) {
     return (
       reference.status !== 'ATIVO' ||
+      !reference.plan.active ||
       receivable.purpose !== 'RENEWAL' ||
       receivable.status !== 'PENDENTE' ||
       formatBusinessDate(receivable.dueDate) !== formatBusinessDate(reference.dueDate) ||
@@ -1519,6 +1533,13 @@ export class BillingService {
     client: Client,
     references: Array<Pick<ClientReference, 'internationalBillingEnabled'>>,
   ): BillingPhoneResolution {
+    if (!references.length) {
+      return {
+        status: 'blocked',
+        code: 'CLIENT_REFERENCE_MISSING',
+        message: 'Referencia financeira da cobranca nao encontrada.',
+      };
+    }
     const brazilian = resolveBrazilianOperationalPhone(client);
     if (brazilian.status === 'valid') {
       return { status: 'allowed', kind: 'BR', digits: brazilian.digits, e164: brazilian.e164 };
@@ -1528,64 +1549,12 @@ export class BillingService {
       return { status: 'blocked', ...this.billingPhoneBlockReason(brazilian.reason) };
     }
 
-    if (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') !== 'true') {
-      return {
-        status: 'blocked',
-        code: 'INTERNATIONAL_BILLING_DISABLED',
-        message: 'Billing automatico internacional esta desabilitado.',
-      };
-    }
-
-    if (
-      !references.length ||
-      references.some((reference) => !reference.internationalBillingEnabled)
-    ) {
-      return {
-        status: 'blocked',
-        code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
-        message: 'A referencia nao autorizou Billing automatico internacional.',
-      };
-    }
-
-    const canonical = client.phoneE164 ? normalizePhone(client.phoneE164) : null;
-    if (
-      !canonical ||
-      canonical.status !== 'valid' ||
-      !canonical.country ||
-      canonical.country === 'BR'
-    ) {
+    const canonical = resolveCanonicalPhoneIdentity(client);
+    if (canonical.status !== 'valid' || canonical.country === 'BR') {
       return {
         status: 'blocked',
         code: 'INVALID_PHONE',
         message: 'Telefone internacional canonico invalido para Billing.',
-      };
-    }
-
-    const allowedCountries = new Set(
-      (this.config.get<string>('PHONE_INTERNATIONAL_BILLING_COUNTRIES') ?? '')
-        .split(',')
-        .map((country) => country.trim())
-        .filter(Boolean),
-    );
-    if (!allowedCountries.has(canonical.country)) {
-      return {
-        status: 'blocked',
-        code: 'INTERNATIONAL_BILLING_COUNTRY_BLOCKED',
-        message: `Billing automatico internacional nao homologado para ${canonical.country}.`,
-      };
-    }
-
-    const normalizedDigits = client.phoneNormalized.trim();
-    const original = normalizePhone(client.phone.trim());
-    if (
-      normalizedDigits !== canonical.digits ||
-      original.status !== 'valid' ||
-      comparePhoneIdentities(original.e164, canonical.e164).status !== 'match'
-    ) {
-      return {
-        status: 'blocked',
-        code: 'PHONE_IDENTITY_MISMATCH',
-        message: 'Identidades telefonicas do cliente estao divergentes.',
       };
     }
 
@@ -1975,6 +1944,7 @@ export class BillingService {
     client: Client,
     reference: ClientReference & { plan: Plan },
     receivable: Receivable,
+    pix = '',
   ) {
     return this.renderer.render(template, {
       nome: client.name,
@@ -1984,7 +1954,7 @@ export class BillingService {
       plano: reference.plan.name,
       referencia: reference.reference,
       diasAtraso: '',
-      pix: '',
+      pix,
       quantidade: '',
       itens: '',
       valorTotal: '',
@@ -2020,7 +1990,12 @@ export class BillingService {
     });
   }
 
-  private renderForDispatchItems(template: string, client: Client, items: BillingDispatchItem[]) {
+  private renderForDispatchItems(
+    template: string,
+    client: Client,
+    items: BillingDispatchItem[],
+    pix = '',
+  ) {
     const firstItem = items[0]!;
 
     if (items.length === 1) {
@@ -2029,6 +2004,7 @@ export class BillingService {
         client,
         firstItem.clientReference as ClientReference & { plan: Plan },
         firstItem.receivable,
+        pix,
       );
     }
 
@@ -2040,7 +2016,7 @@ export class BillingService {
       plano: '',
       referencia: '',
       diasAtraso: '',
-      pix: '',
+      pix,
       quantidade: String(items.length),
       itens: items
         .map(
@@ -2052,6 +2028,54 @@ export class BillingService {
         .join('\n'),
       valorTotal: this.formatCurrency(this.sumDispatchReceivables(items)),
     });
+  }
+
+  private async resolveScheduledPix(dispatch: BillingDispatch, now: Date) {
+    if (!/\{\{\s*pix\s*\}\}/.test(dispatch.template?.content ?? '')) {
+      return { value: '' } as const;
+    }
+
+    try {
+      if (!this.finance) {
+        throw new ConflictException('Servico financeiro indisponivel para Billing automatico.');
+      }
+      const receivableIds = this.dispatchItems(dispatch).map((item) => item.receivable.id);
+      const intent =
+        receivableIds.length === 1
+          ? await this.finance.createReceivablePixForAutomatedBilling(receivableIds[0]!)
+          : await this.finance.createReceivablesPixForAutomatedBilling(receivableIds);
+
+      if (intent.status !== 'WAITING_PAYMENT' || !intent.pixCopyPaste) {
+        return {
+          errorCode: 'PIX_NOT_AVAILABLE',
+          result: await this.markRetry(
+            dispatch,
+            'PIX_NOT_AVAILABLE',
+            'PIX nao esta confirmado para envio da cobranca.',
+            now,
+          ),
+        } as const;
+      }
+
+      return { value: intent.pixCopyPaste } as const;
+    } catch (error) {
+      const message = this.sanitizeError(error);
+      if (message.includes('resultado remoto desconhecido')) {
+        return {
+          errorCode: 'PIX_RESULT_UNCERTAIN',
+          result: await this.markProviderOutcomeUncertain(
+            dispatch,
+            'PIX_RESULT_UNCERTAIN',
+            'Existe uma tentativa PIX com resultado remoto desconhecido; cobranca nao enviada.',
+          ),
+        } as const;
+      }
+
+      return {
+        errorCode: 'PIX_PREPARATION_FAILED',
+        result: await this.markRetry(dispatch, 'PIX_PREPARATION_FAILED', message, now),
+      } as const;
+    }
   }
 
   private buildGroupedIdempotencyKey(clientId: string, businessSendDate: string) {

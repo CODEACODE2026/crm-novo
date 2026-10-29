@@ -60,6 +60,7 @@ describe('BillingTemplateRenderer', () => {
       'vencimento',
       'plano',
       'referencia',
+      'pix',
     ]);
     expect(renderer.effectiveVariablesForType('BILLING_DUE_GROUPED')).toEqual([
       'nome',
@@ -67,6 +68,7 @@ describe('BillingTemplateRenderer', () => {
       'quantidade',
       'itens',
       'valorTotal',
+      'pix',
     ]);
     for (const type of [
       'RECOVERY_DAY_3',

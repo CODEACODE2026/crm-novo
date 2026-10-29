@@ -601,9 +601,9 @@ export class FinanceService {
 
   async createReceivablePix(
     id: string,
-    actorUserId: string,
+    actorUserId: string | null,
     dto: { provider?: PaymentProviderCode } = {},
-    authorization: { allowInternationalManual?: boolean } = {},
+    authorization: { allowInternationalManual?: boolean; automatedBilling?: boolean } = {},
   ) {
     try {
       const reservation = await this.prisma.$transaction(async (tx) => {
@@ -632,6 +632,10 @@ export class FinanceService {
           throw new ConflictException('Apenas contas pendentes podem gerar PIX.');
         }
 
+        if (authorization.automatedBilling) {
+          this.assertAutomatedBillingContext(receivable);
+        }
+
         const activeIntent = await this.findActivePixForReceivables(tx, [receivable.id]);
 
         if (activeIntent) {
@@ -641,7 +645,8 @@ export class FinanceService {
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
         const pixPayer = this.resolveReceivablePixPayer(
           receivable,
-          authorization.allowInternationalManual === true,
+          authorization.allowInternationalManual === true ||
+            authorization.automatedBilling === true,
         );
         const provider = await this.resolvePixProvider({
           explicitProvider: dto.provider,
@@ -1086,8 +1091,8 @@ export class FinanceService {
 
   async createReceivablesPix(
     dto: CreateReceivablesPixDto,
-    actorUserId: string,
-    authorization: { allowInternationalManual?: boolean } = {},
+    actorUserId: string | null,
+    authorization: { allowInternationalManual?: boolean; automatedBilling?: boolean } = {},
   ) {
     const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
 
@@ -1096,6 +1101,9 @@ export class FinanceService {
         await this.acquirePixCreationLocks(tx, receivableIds);
 
         const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
+        if (authorization.automatedBilling) {
+          receivables.forEach((receivable) => this.assertAutomatedBillingContext(receivable));
+        }
         await this.ensureNoActivePixForReceivables(tx, receivableIds);
 
         const client = receivables[0]!.client;
@@ -1104,7 +1112,8 @@ export class FinanceService {
         }
         const operationalPayerPhone = this.requireFinancialPhone(
           client,
-          authorization.allowInternationalManual === true,
+          authorization.allowInternationalManual === true ||
+            authorization.automatedBilling === true,
         );
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
@@ -1216,6 +1225,44 @@ export class FinanceService {
 
       throw error;
     }
+  }
+
+  async createReceivablePixForAutomatedBilling(id: string) {
+    return this.createReceivablePix(id, null, {}, { automatedBilling: true });
+  }
+
+  async createReceivablesPixForAutomatedBilling(receivableIds: string[]) {
+    const uniqueIds = this.uniqueReceivableIds(receivableIds);
+    const activeIntent = await this.prisma.$transaction(async (tx) => {
+      await this.acquirePixCreationLocks(tx, uniqueIds);
+      return this.findActivePixForReceivables(tx, uniqueIds);
+    });
+
+    if (activeIntent) {
+      const groupedIds = activeIntent.paymentGroup?.items.map((item) => item.receivableId) ?? [];
+      const sortedUniqueIds = [...uniqueIds].sort();
+      const exactGroup =
+        !activeIntent.receivableId &&
+        groupedIds.length === sortedUniqueIds.length &&
+        [...groupedIds].sort().every((id, index) => id === sortedUniqueIds[index]);
+      if (!exactGroup) {
+        throw new ConflictException(
+          'Existe PIX ativo incompativel com o agrupamento da cobranca automatica.',
+        );
+      }
+      if (activeIntent.status === 'CREATED') {
+        const resolved = await this.waitForPixReservation(activeIntent.id);
+        if (resolved) return this.presentPaymentIntent(resolved);
+        throw new ConflictException(
+          'Existe uma tentativa PIX com resultado remoto desconhecido. Reconcilie antes de tentar novamente.',
+        );
+      }
+      return this.presentPaymentIntent(activeIntent);
+    }
+
+    return this.createReceivablesPix({ receivableIds: uniqueIds }, null, {
+      automatedBilling: true,
+    });
   }
 
   async replaceReceivablesPix(
@@ -2919,6 +2966,20 @@ export class FinanceService {
       name: receivable.client.name,
       phoneNormalized: this.requireFinancialPhone(receivable.client, allowInternationalManual),
     };
+  }
+
+  private assertAutomatedBillingContext(
+    receivable: Prisma.ReceivableGetPayload<{
+      include: { clientReference: { include: { plan: true } } };
+    }>,
+  ) {
+    const reference = receivable.clientReference;
+    if (!reference || reference.status !== 'ATIVO') {
+      throw new ConflictException('Referencia financeira nao esta ativa para cobranca automatica.');
+    }
+    if (!reference.plan.active) {
+      throw new ConflictException('Plano inativo nao permite nova cobranca automatica.');
+    }
   }
 
   private requireFinancialPhone(

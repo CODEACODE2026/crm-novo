@@ -113,14 +113,6 @@ export class ClientsService {
   ) {}
 
   phoneCapabilities() {
-    const globalManualTextEnabled =
-      this.configService?.get<string>('PHONE_GLOBAL_MANUAL_TEXT_ENABLED') === 'true';
-    const globalMessageActionsEnabled =
-      this.configService?.get<string>('PHONE_GLOBAL_MESSAGE_ACTIONS_ENABLED') === 'true';
-    const globalManualMediaEnabled =
-      this.configService?.get<string>('PHONE_GLOBAL_MANUAL_MEDIA_ENABLED') === 'true';
-    const globalManualVoiceEnabled =
-      this.configService?.get<string>('PHONE_GLOBAL_MANUAL_VOICE_ENABLED') === 'true';
     const internationalManualMediaCountries = this.internationalCountryAllowlist(
       'PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES',
     );
@@ -159,13 +151,13 @@ export class ClientsService {
         this.configService?.get<string>('PHONE_INTERNATIONAL_BILLING_ENABLED') === 'true',
       operationCapabilities: {
         clientPhoneWrite: { enabled: true },
-        manualText: { enabled: globalManualTextEnabled },
-        messageAction: { enabled: globalMessageActionsEnabled },
-        manualMedia: { enabled: globalManualMediaEnabled },
-        manualVoice: { enabled: globalManualVoiceEnabled },
+        manualText: { enabled: true },
+        messageAction: { enabled: true },
+        manualMedia: { enabled: true },
+        manualVoice: { enabled: true },
         manualPix: { enabled: false, requiresFinancialAuthorization: true },
         pixButton: { enabled: false, requiresFinancialAuthorization: true },
-        autoReply: { enabled: false },
+        autoReply: { enabled: true },
         billing: { enabled: false, requiresFinancialAuthorization: true },
         recovery: { enabled: false, requiresFinancialAuthorization: true },
       },
@@ -343,6 +335,9 @@ export class ClientsService {
     const dueDate = parseBusinessDate(dto.dueDate);
     const phoneIdentity = this.prepareClientPhone(dto.phone, dto.phoneCountry);
     const generateInitialReceivable = dto.generateInitialReceivable ?? false;
+    const internationalBillingEnabled = dto.internationalBillingEnabled ?? false;
+    const shouldMaterializeReceivable =
+      phoneIdentity.country === 'BR' || internationalBillingEnabled;
 
     await this.plansService.ensureActivePlan(dto.planId);
 
@@ -376,12 +371,15 @@ export class ClientsService {
             dueDate,
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
-            internationalBillingEnabled: dto.internationalBillingEnabled ?? false,
-            status: generateInitialReceivable ? 'PENDENTE_PAGAMENTO' : 'ATIVO',
+            internationalBillingEnabled,
+            status:
+              shouldMaterializeReceivable && generateInitialReceivable
+                ? 'PENDENTE_PAGAMENTO'
+                : 'ATIVO',
           },
         });
 
-        if (generateInitialReceivable) {
+        if (shouldMaterializeReceivable && generateInitialReceivable) {
           await tx.receivable.create({
             data: {
               clientId: created.id,
@@ -393,7 +391,7 @@ export class ClientsService {
               status: 'PENDENTE',
             },
           });
-        } else {
+        } else if (shouldMaterializeReceivable) {
           await this.currentCycle().ensureCurrentCycleReceivable(clientReference.id, tx);
         }
 
@@ -523,7 +521,7 @@ export class ClientsService {
 
     try {
       const reference = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.clientReference.create({
+        let created = await tx.clientReference.create({
           data: {
             clientId,
             reference: dto.reference.trim(),
@@ -534,33 +532,50 @@ export class ClientsService {
             billingNoticeDays: dto.billingNoticeDays,
             internationalBillingEnabled: dto.internationalBillingEnabled ?? false,
             notes: this.optionalTrim(dto.notes),
-            status: 'PENDENTE_PAGAMENTO',
+            status: 'ATIVO',
           },
           include: { plan: true },
         });
 
-        await tx.receivable.create({
-          data: {
-            clientId,
-            clientReferenceId: created.id,
-            purpose: 'INITIAL_ACTIVATION',
-            description: `Cobranca inicial de ativacao - ${created.plan.name}`,
-            amount: dto.recurringValue,
-            dueDate,
-            status: 'PENDENTE',
-          },
-        });
+        const shouldMaterializeReceivable = await this.currentCycle().canMaterializeReceivable(
+          created.id,
+          tx,
+        );
+
+        if (shouldMaterializeReceivable) {
+          created = await tx.clientReference.update({
+            where: { id: created.id },
+            data: { status: 'PENDENTE_PAGAMENTO' },
+            include: { plan: true },
+          });
+
+          await tx.receivable.create({
+            data: {
+              clientId,
+              clientReferenceId: created.id,
+              purpose: 'INITIAL_ACTIVATION',
+              description: `Cobranca inicial de ativacao - ${created.plan.name}`,
+              amount: dto.recurringValue,
+              dueDate,
+              status: 'PENDENTE',
+            },
+          });
+        }
 
         await tx.clientEvent.create({
           data: {
             clientId,
             type: 'CLIENT_UPDATED',
-            title: `Referencia ${created.reference} adicionada aguardando pagamento.`,
+            title: shouldMaterializeReceivable
+              ? `Referencia ${created.reference} adicionada aguardando pagamento.`
+              : `Referencia ${created.reference} adicionada sem materializacao financeira.`,
             metadata: {
               clientReferenceId: created.id,
               reference: created.reference,
               referenceStatus: created.status,
-              initialReceivablePurpose: 'INITIAL_ACTIVATION',
+              ...(shouldMaterializeReceivable
+                ? { initialReceivablePurpose: 'INITIAL_ACTIVATION' }
+                : {}),
             },
             createdByUserId: actorUserId,
           },
@@ -639,7 +654,7 @@ export class ClientsService {
             tx,
           );
 
-          if (!moved) {
+          if (!moved && (await this.currentCycle().canMaterializeReceivable(id, tx))) {
             await this.currentCycle().ensureCurrentCycleReceivable(id, tx);
           }
 
@@ -779,7 +794,9 @@ export class ClientsService {
       }
 
       if (reference.status === 'INATIVO' && dto.status === 'ATIVO') {
-        await this.currentCycle().ensureCurrentCycleReceivable(id, tx);
+        if (await this.currentCycle().canMaterializeReceivable(id, tx)) {
+          await this.currentCycle().ensureCurrentCycleReceivable(id, tx);
+        }
       }
 
       if (reference.status === 'PENDENTE_PAGAMENTO' && dto.status === 'CANCELADO') {
@@ -1754,6 +1771,7 @@ export class ClientsService {
     }
 
     return {
+      country: identity.country,
       phoneNormalized: identity.digits,
       phoneE164: identity.e164,
     };
@@ -1782,7 +1800,7 @@ export class ClientsService {
   private tryNormalizePhone(value: string) {
     if (value.trim().startsWith('+')) {
       const normalized = normalizePhone(value);
-      if (normalized.status !== 'valid' || normalized.country !== 'BR') return null;
+      if (normalized.status !== 'valid') return null;
       return normalized.digits;
     }
 

@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LegacyImportService } from './legacy-import.service';
 
 const baseClient: Record<string, unknown> = {
@@ -61,6 +61,8 @@ const defaultPlanMapping = {
   SEMESTRAL: 'plan-6',
   TRIMESTRAL: 'plan-3',
 };
+
+afterEach(() => vi.useRealTimers());
 type CreateArgs = { data: Record<string, unknown> };
 
 function envelope(
@@ -661,6 +663,8 @@ describe('LegacyImportService', () => {
   it.each([0, 0.0, '0', '0.00', '0,00'])(
     'accepts parser zero format %s only for historical canceled clients',
     async (value) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
       const { service } = createService();
 
       const historical = await service.previewClients(
@@ -1791,6 +1795,8 @@ describe('LegacyImportService', () => {
   });
 
   it('keeps the real JOAO name-only case ready to create with an informational warning', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
     const { service } = createService({
       clients: [
         {
@@ -3879,6 +3885,8 @@ describe('LegacyImportService', () => {
     ['billing zero', { billingSchedulerEnabled: '0', recoverySchedulerEnabled: 'false' }],
     ['empty billing', { billingSchedulerEnabled: '', recoverySchedulerEnabled: 'false' }],
   ])('allows cutover activation when scheduler is fail-closed disabled: %s', async (_, config) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-28T12:00:00.000Z'));
     const { service } = createCutoverService(config);
 
     const result = await service.activateCutover({ clientReferenceIds: ['reference-edilson'] });

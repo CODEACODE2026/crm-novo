@@ -499,7 +499,9 @@ export function sharedContactBrazilPhoneCandidates(value: string) {
   const digits = trimmed.replace(/\D/g, '');
 
   if (!digits || trimmed.startsWith('00')) return [];
-  if (trimmed.startsWith('+') && !digits.startsWith('55')) return [];
+  if (trimmed.startsWith('+') && !digits.startsWith('55')) {
+    return /^\+[1-9]\d{7,14}$/.test(trimmed.replace(/[\s().-]/g, '')) ? [digits] : [];
+  }
 
   const withCountryCode = digits.startsWith('55') ? digits : `55${digits}`;
   if (!/^55\d{10,11}$/.test(withCountryCode)) return [];
@@ -11776,13 +11778,14 @@ export function hasLinkedCanonicalGlobalIdentity(
   conversation: WhatsAppConversation | null | undefined,
 ) {
   const e164 = conversation?.phoneE164 ?? '';
-  if (!/^\+[1-9]\d{7,14}$/.test(e164) || !conversation?.client) return false;
+  if (!/^\+[1-9]\d{7,14}$/.test(e164) || !conversation) return false;
 
   const canonicalDigits = e164.slice(1);
-  const linkedClientE164 = conversation.client.phoneE164;
+  if (conversation.phoneNormalized !== canonicalDigits) return false;
+  if (!conversation.client) return true;
+
   return (
-    linkedClientE164 === e164 &&
-    conversation.phoneNormalized === canonicalDigits &&
+    conversation.client.phoneE164 === e164 &&
     conversation.client.phoneNormalized === canonicalDigits
   );
 }

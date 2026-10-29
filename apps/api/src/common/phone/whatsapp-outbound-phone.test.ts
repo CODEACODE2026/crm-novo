@@ -8,17 +8,24 @@ describe('resolveWhatsAppOutboundPhone', () => {
     ['PT', '+351912345678', '351912345678'],
     ['GB', '+447911123456', '447911123456'],
     ['AR', '+5491123456789', '5491123456789'],
-  ])('allows proven %s identity only for manual text with the flag', (_country, e164, digits) => {
-    expect(
-      resolveWhatsAppOutboundPhone({
-        phone: e164,
-        phoneNormalized: digits,
-        phoneE164: e164,
-        operation: 'MANUAL_CONVERSATION_TEXT',
-        internationalManualTextEnabled: true,
-      }),
-    ).toEqual({ status: 'allowed', kind: 'INTERNATIONAL_MANUAL_TEXT_ALLOWED', digits, e164 });
-  });
+  ])(
+    'allows proven %s identity for operational WhatsApp without a country flag',
+    (_country, e164, digits) => {
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: e164,
+          phoneNormalized: digits,
+          phoneE164: e164,
+          operation: 'MANUAL_CONVERSATION_TEXT',
+        }),
+      ).toMatchObject({
+        status: 'allowed',
+        kind: 'INTERNATIONAL_MANUAL_TEXT_ALLOWED',
+        digits,
+        e164,
+      });
+    },
+  );
 
   it('keeps valid legacy Brazilian identities operational without phoneE164', () => {
     expect(
@@ -69,7 +76,7 @@ describe('resolveWhatsAppOutboundPhone', () => {
     ).toEqual({ status: 'blocked', reason });
   });
 
-  it('does not allow an international identity when the flag is disabled', () => {
+  it('allows an international operational identity when legacy flags are disabled', () => {
     expect(
       resolveWhatsAppOutboundPhone({
         phone: '+14076390665',
@@ -77,7 +84,11 @@ describe('resolveWhatsAppOutboundPhone', () => {
         phoneE164: '+14076390665',
         operation: 'MANUAL_CONVERSATION_TEXT',
       }),
-    ).toEqual({ status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' });
+    ).toMatchObject({
+      status: 'allowed',
+      kind: 'INTERNATIONAL_MANUAL_TEXT_ALLOWED',
+      globalOperation: true,
+    });
   });
 
   it.each([
@@ -101,12 +112,12 @@ describe('resolveWhatsAppOutboundPhone', () => {
   );
 
   it.each([
-    [false, false, 'blocked', false],
-    [false, true, 'allowed', false],
+    [false, false, 'allowed', true],
+    [false, true, 'allowed', true],
     [true, false, 'allowed', true],
     [true, true, 'allowed', true],
   ] as const)(
-    'applies global=%s legacy=%s precedence without country authorization',
+    'keeps global=%s legacy=%s compatible without geographic authorization',
     (globalEnabled, legacyEnabled, status, globalOperation) => {
       const result = resolveWhatsAppOutboundPhone({
         phone: '+819012345678',
@@ -143,7 +154,7 @@ describe('resolveWhatsAppOutboundPhone', () => {
     ['GB', '+447911123456', '447911123456'],
     ['AR', '+5491123456789', '5491123456789'],
   ])(
-    'allows proven %s identity for a manual message action only with its own flag',
+    'allows proven %s identity for a manual message action without a country flag',
     (_, e164, digits) => {
       expect(
         resolveWhatsAppOutboundPhone({
@@ -153,7 +164,12 @@ describe('resolveWhatsAppOutboundPhone', () => {
           operation: 'MANUAL_CONVERSATION_ACTION',
           internationalManualTextEnabled: true,
         }),
-      ).toEqual({ status: 'blocked', reason: 'BLOCKED_FLAG_DISABLED' });
+      ).toMatchObject({
+        status: 'allowed',
+        kind: 'INTERNATIONAL_MANUAL_ACTION_ALLOWED',
+        digits,
+        e164,
+      });
       expect(
         resolveWhatsAppOutboundPhone({
           phone: e164,
@@ -162,7 +178,7 @@ describe('resolveWhatsAppOutboundPhone', () => {
           operation: 'MANUAL_CONVERSATION_ACTION',
           internationalMessageActionsEnabled: true,
         }),
-      ).toEqual({
+      ).toMatchObject({
         status: 'allowed',
         kind: 'INTERNATIONAL_MANUAL_ACTION_ALLOWED',
         digits,
@@ -210,7 +226,7 @@ describe('resolveWhatsAppOutboundPhone', () => {
       'INTERNATIONAL_MANUAL_VOICE_ALLOWED',
     ],
   ] as const)(
-    'authorizes %s only with its independent flag and canonical E.164 identity',
+    'authorizes %s with canonical E.164 identity independently of legacy flags',
     (operation, flag, kind) => {
       const identity = {
         phone: '+14076390665',
@@ -219,11 +235,13 @@ describe('resolveWhatsAppOutboundPhone', () => {
         operation,
       };
 
-      expect(resolveWhatsAppOutboundPhone(identity)).toEqual({
-        status: 'blocked',
-        reason: 'BLOCKED_FLAG_DISABLED',
+      expect(resolveWhatsAppOutboundPhone(identity)).toMatchObject({
+        status: 'allowed',
+        kind,
+        digits: '14076390665',
+        e164: '+14076390665',
       });
-      expect(resolveWhatsAppOutboundPhone({ ...identity, [flag]: true })).toEqual({
+      expect(resolveWhatsAppOutboundPhone({ ...identity, [flag]: true })).toMatchObject({
         status: 'allowed',
         kind,
         digits: '14076390665',
@@ -238,4 +256,28 @@ describe('resolveWhatsAppOutboundPhone', () => {
       ).toEqual({ status: 'blocked', reason: 'BLOCKED_MISMATCH' });
     },
   );
+
+  it.each([
+    ['Brasil', '+5511999991234', '5511999991234'],
+    ['Estados Unidos', '+14155550100', '14155550100'],
+    ['Portugal', '+351912345678', '351912345678'],
+    ['Emirados Arabes', '+971501234567', '971501234567'],
+  ])('applies the same operational policy to %s', (_country, e164, digits) => {
+    for (const operation of [
+      'MANUAL_CONVERSATION_TEXT',
+      'MANUAL_CONVERSATION_ACTION',
+      'MANUAL_CONVERSATION_MEDIA',
+      'MANUAL_CONVERSATION_VOICE',
+      'AUTO_REPLY',
+    ] as const) {
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: e164,
+          phoneNormalized: digits,
+          phoneE164: e164,
+          operation,
+        }).status,
+      ).toBe('allowed');
+    }
+  });
 });

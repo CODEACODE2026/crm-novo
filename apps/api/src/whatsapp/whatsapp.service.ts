@@ -1923,12 +1923,6 @@ export class WhatsAppService {
       },
       'MANUAL_CONVERSATION_TEXT',
     );
-    if (phoneRecipient.kind !== 'BR_OPERATIONAL' && !client) {
-      throw new ConflictException({
-        code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
-        message: 'O inicio de conversa global exige um cliente vinculado.',
-      });
-    }
     const phone = phoneRecipient.digits;
     const requestId = dto.requestId.trim();
     const existingMessage = await this.findConversationMessageByRequestId(connection.id, requestId);
@@ -2009,28 +2003,7 @@ export class WhatsAppService {
       ? 'MANUAL_CONVERSATION_ACTION'
       : 'MANUAL_CONVERSATION_TEXT';
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
-    this.assertInternationalConversationClientLinked(
-      conversation,
-      recipient.kind,
-      recipient.globalOperation === true,
-    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
-    if (
-      recipient.kind === 'INTERNATIONAL_MANUAL_ACTION_ALLOWED' &&
-      this.config.get<string>('PHONE_GLOBAL_MANUAL_TEXT_ENABLED') !== 'true' &&
-      this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED') !== 'true'
-    ) {
-      throw new ConflictException({
-        code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED',
-        message: 'O envio manual internacional esta desabilitado.',
-      });
-    }
-    if (recipient.kind !== 'BR_OPERATIONAL' && forwardMetadata) {
-      throw new ConflictException({
-        code: 'WHATSAPP_INTERNATIONAL_OPERATION_UNSUPPORTED',
-        message: 'Encaminhamento internacional ainda nao esta homologado.',
-      });
-    }
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -2071,11 +2044,6 @@ export class WhatsAppService {
         throw new NotFoundException('Conversa WhatsApp nao encontrada.');
       }
       latestRecipient = this.resolveWhatsAppOutboundRecipient(latestConversation, operation);
-      this.assertInternationalConversationClientLinked(
-        latestConversation,
-        latestRecipient.kind,
-        latestRecipient.globalOperation === true,
-      );
       this.assertLinkedClientIdentity(
         latestConversation,
         latestRecipient.e164,
@@ -2098,9 +2066,9 @@ export class WhatsAppService {
     }
     if (
       latestRecipient.digits !== recipient.digits ||
-      (latestRecipient.globalOperation === true &&
-        (latestConversation.clientId !== conversation.clientId ||
-          latestConversation.client?.id !== latestConversation.clientId)) ||
+      latestConversation.clientId !== conversation.clientId ||
+      (latestConversation.clientId !== null &&
+        latestConversation.client?.id !== latestConversation.clientId) ||
       latestConversation.whatsAppConnectionId !== connection.id
     ) {
       await this.failPendingConversationMessage(
@@ -2521,11 +2489,6 @@ export class WhatsAppService {
       conversation,
       'MANUAL_CONVERSATION_ACTION',
     );
-    this.assertInternationalConversationClientLinked(
-      conversation,
-      recipient.kind,
-      recipient.globalOperation === true,
-    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
@@ -2553,7 +2516,7 @@ export class WhatsAppService {
       conversationId,
       messageId,
       target.providerMessageId,
-      recipient.globalOperation === true ? conversation.clientId : undefined,
+      conversation.clientId,
     );
     if (latest.target.deletedAt || latest.target.deletedForEveryone) {
       throw new ConflictException('Mensagem apagada nao pode receber reacao.');
@@ -2638,11 +2601,6 @@ export class WhatsAppService {
       conversation,
       'MANUAL_CONVERSATION_ACTION',
     );
-    this.assertInternationalConversationClientLinked(
-      conversation,
-      recipient.kind,
-      recipient.globalOperation === true,
-    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
@@ -2674,7 +2632,7 @@ export class WhatsAppService {
       conversationId,
       messageId,
       target.providerMessageId,
-      recipient.globalOperation === true ? conversation.clientId : undefined,
+      conversation.clientId,
     );
     if (latest.target.deletedAt || latest.target.deletedForEveryone) {
       return this.presentConversationMessage(latest.target);
@@ -2733,11 +2691,6 @@ export class WhatsAppService {
         conversation,
         'MANUAL_CONVERSATION_ACTION',
       );
-      this.assertInternationalConversationClientLinked(
-        conversation,
-        recipient.kind,
-        recipient.globalOperation === true,
-      );
       this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
       const connection = conversation.whatsAppConnection;
 
@@ -2777,7 +2730,7 @@ export class WhatsAppService {
         conversationId,
         messageId,
         target.providerMessageId,
-        recipient.globalOperation === true ? conversation.clientId : undefined,
+        conversation.clientId,
       );
       if (latest.target.direction !== 'OUTBOUND') {
         throw new ConflictException('Somente mensagens enviadas pelo CRM podem ser editadas.');
@@ -2900,17 +2853,9 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    const operation: WhatsAppOutboundOperation =
-      mediaType === 'STICKER' ? 'BR_OPERATIONAL' : 'MANUAL_CONVERSATION_MEDIA';
+    const operation: WhatsAppOutboundOperation = 'MANUAL_CONVERSATION_MEDIA';
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
-    this.assertInternationalConversationClientLinked(conversation, recipient.kind);
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
-    if (recipient.kind !== 'BR_OPERATIONAL' && input.forwardMetadata) {
-      throw new ConflictException({
-        code: 'WHATSAPP_INTERNATIONAL_OPERATION_UNSUPPORTED',
-        message: 'Encaminhamento internacional de midia ainda nao esta homologado.',
-      });
-    }
     const connection = conversation.whatsAppConnection;
 
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
@@ -3166,7 +3111,6 @@ export class WhatsAppService {
 
     const operation: WhatsAppOutboundOperation = 'MANUAL_CONVERSATION_VOICE';
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
-    this.assertInternationalConversationClientLinked(conversation, recipient.kind);
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
 
@@ -7556,6 +7500,7 @@ export class WhatsAppService {
       | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
       | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
       | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
+      | 'INTERNATIONAL_AUTO_REPLY_ALLOWED'
       | 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
   ) {
     if (kind === 'BR_OPERATIONAL' || !conversation.client) return;
@@ -7569,25 +7514,6 @@ export class WhatsAppService {
       throw new ConflictException({
         code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
         message: 'A identidade do cliente diverge da conversa internacional.',
-      });
-    }
-  }
-
-  private assertInternationalConversationClientLinked(
-    conversation: { client?: { phoneE164?: string | null } | null },
-    kind:
-      | 'BR_OPERATIONAL'
-      | 'INTERNATIONAL_MANUAL_TEXT_ALLOWED'
-      | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
-      | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
-      | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
-      | 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
-    required = true,
-  ) {
-    if (required && kind !== 'BR_OPERATIONAL' && !conversation.client) {
-      throw new ConflictException({
-        code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH',
-        message: 'A conversa internacional nao esta vinculada a um cliente confirmado.',
       });
     }
   }
@@ -7609,7 +7535,6 @@ export class WhatsAppService {
     }
 
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, input.operation);
-    this.assertInternationalConversationClientLinked(conversation, recipient.kind);
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
 
     if (
@@ -7622,7 +7547,7 @@ export class WhatsAppService {
 
     if (
       conversation.clientId !== input.expectedClientId ||
-      conversation.client?.id !== conversation.clientId ||
+      (conversation.clientId !== null && conversation.client?.id !== conversation.clientId) ||
       conversation.whatsAppConnectionId !== input.expectedConnectionId ||
       conversation.whatsAppConnection.id !== conversation.whatsAppConnectionId ||
       recipient.digits !== input.expectedDigits
@@ -7658,18 +7583,13 @@ export class WhatsAppService {
       conversation,
       'MANUAL_CONVERSATION_ACTION',
     );
-    this.assertInternationalConversationClientLinked(
-      conversation,
-      recipient.kind,
-      recipient.globalOperation === true,
-    );
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
     const connection = conversation.whatsAppConnection;
     if (
       target.whatsAppConnectionId !== conversation.whatsAppConnectionId ||
       (expectedClientId !== undefined &&
         (conversation.clientId !== expectedClientId ||
-          conversation.client?.id !== conversation.clientId)) ||
+          (conversation.clientId !== null && conversation.client?.id !== conversation.clientId))) ||
       target.provider !== conversation.provider ||
       connection.id !== conversation.whatsAppConnectionId ||
       connection.provider !== conversation.provider ||

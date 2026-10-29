@@ -190,44 +190,29 @@ describe('ReceivableCycleService', () => {
     });
   });
 
-  it('blocks a missing international receivable without explicit financial opt-in', async () => {
-    const fake = fakeService(
-      reference({
-        client: {
-          ...reference().client,
-          phone: '+1 (407) 639-0665',
-          phoneNormalized: '14076390665',
-          phoneE164: '+14076390665',
-        },
-      }),
-    );
+  it.each([false, true])(
+    'allows a canonical international receivable independently from the legacy Billing flag=%s',
+    async (internationalBillingEnabled) => {
+      const fake = fakeService(
+        reference({
+          internationalBillingEnabled,
+          client: {
+            ...reference().client,
+            phone: '+351 912 345 678',
+            phoneNormalized: '351912345678',
+            phoneE164: '+351912345678',
+          },
+        }),
+      );
 
-    await expectConflictCode(
-      fake.service.ensureCurrentCycleReceivable('reference-id'),
-      'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
-    );
-    expect(fake.created).toHaveLength(0);
-    await expect(fake.service.canMaterializeReceivable('reference-id')).resolves.toBe(false);
-  });
-
-  it('allows an international receivable with explicit financial opt-in', async () => {
-    const fake = fakeService(
-      reference({
-        internationalBillingEnabled: true,
-        client: {
-          ...reference().client,
-          phone: '+351 912 345 678',
-          phoneNormalized: '351912345678',
-          phoneE164: '+351912345678',
-        },
-      }),
-    );
-
-    await expect(fake.service.canMaterializeReceivable('reference-id')).resolves.toBe(true);
-    await expect(fake.service.ensureCurrentCycleReceivable('reference-id')).resolves.toMatchObject({
-      action: 'created',
-    });
-  });
+      await expect(fake.service.canMaterializeReceivable('reference-id')).resolves.toBe(true);
+      await expect(
+        fake.service.ensureCurrentCycleReceivable('reference-id'),
+      ).resolves.toMatchObject({
+        action: 'created',
+      });
+    },
+  );
 
   it('is idempotent when the current cycle already has a pending receivable', async () => {
     const existing = receivable();
@@ -240,7 +225,7 @@ describe('ReceivableCycleService', () => {
     expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
   });
 
-  it('keeps an existing international receivable after opt-in is revoked without rewriting it', async () => {
+  it('keeps an existing international receivable when the legacy Billing flag is false', async () => {
     const existing = receivable();
     const fake = fakeService(
       reference({

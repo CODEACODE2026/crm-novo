@@ -336,8 +336,6 @@ export class ClientsService {
     const phoneIdentity = this.prepareClientPhone(dto.phone, dto.phoneCountry);
     const generateInitialReceivable = dto.generateInitialReceivable ?? false;
     const internationalBillingEnabled = dto.internationalBillingEnabled ?? false;
-    const shouldMaterializeReceivable =
-      phoneIdentity.country === 'BR' || internationalBillingEnabled;
 
     await this.plansService.ensureActivePlan(dto.planId);
 
@@ -372,14 +370,11 @@ export class ClientsService {
             billingAnchorDay: getBusinessDateDay(dueDate),
             billingNoticeDays: dto.billingNoticeDays,
             internationalBillingEnabled,
-            status:
-              shouldMaterializeReceivable && generateInitialReceivable
-                ? 'PENDENTE_PAGAMENTO'
-                : 'ATIVO',
+            status: generateInitialReceivable ? 'PENDENTE_PAGAMENTO' : 'ATIVO',
           },
         });
 
-        if (shouldMaterializeReceivable && generateInitialReceivable) {
+        if (generateInitialReceivable) {
           await tx.receivable.create({
             data: {
               clientId: created.id,
@@ -391,7 +386,7 @@ export class ClientsService {
               status: 'PENDENTE',
             },
           });
-        } else if (shouldMaterializeReceivable) {
+        } else {
           await this.currentCycle().ensureCurrentCycleReceivable(clientReference.id, tx);
         }
 

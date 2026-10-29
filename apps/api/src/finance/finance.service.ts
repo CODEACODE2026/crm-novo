@@ -30,7 +30,7 @@ import {
   getBusinessDateDay,
 } from '../clients/utils/business-date';
 import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
-import { resolveWhatsAppOutboundPhone } from '../common/phone/whatsapp-outbound-phone';
+import { resolveCanonicalPhoneIdentity } from '../common/phone/canonical-phone-identity';
 import { getReceivableDisplayStatus } from '../renewals/receivable-presenter';
 import { CancelReceivableDto } from './dto/cancel-receivable.dto';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
@@ -606,7 +606,7 @@ export class FinanceService {
     authorization: { allowInternationalManual?: boolean } = {},
   ) {
     try {
-      const intent = await this.prisma.$transaction(async (tx) => {
+      const reservation = await this.prisma.$transaction(async (tx) => {
         await this.acquirePixCreationLocks(tx, [id]);
 
         const receivable = await tx.receivable.findUnique({
@@ -635,7 +635,7 @@ export class FinanceService {
         const activeIntent = await this.findActivePixForReceivables(tx, [receivable.id]);
 
         if (activeIntent) {
-          return activeIntent;
+          return { created: false as const, intent: activeIntent };
         }
 
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
@@ -647,20 +647,54 @@ export class FinanceService {
           explicitProvider: dto.provider,
           client: receivable.client,
         });
-        const providerPix = await this.paymentProvider.createPix({
-          ...(provider ? { provider } : {}),
-          receivableId: receivable.id,
-          amount: receivable.amount,
-          description: receivable.description,
-          expiresAt,
-          clientName: pixPayer.name,
-          payerPhone: pixPayer.phoneNormalized,
-          notificationUrl: this.getPaymentNotificationUrl(),
-        });
-
         const created = await tx.paymentIntent.create({
           data: {
             receivableId: receivable.id,
+            provider: provider ?? 'MOCK',
+            status: 'CREATED',
+            amount: receivable.amount,
+            expiresAt,
+          },
+        });
+
+        return {
+          created: true as const,
+          intent: created,
+          provider,
+          receivable,
+          pixPayer,
+          expiresAt,
+        };
+      });
+
+      if (!reservation.created) {
+        if (reservation.intent.status === 'CREATED') {
+          const resolved = await this.waitForPixReservation(reservation.intent.id);
+          if (resolved) {
+            return this.presentPaymentIntent(resolved);
+          }
+          throw new ConflictException(
+            'Existe uma tentativa PIX com resultado remoto desconhecido. Reconcilie antes de tentar novamente.',
+          );
+        }
+        return this.presentPaymentIntent(reservation.intent);
+      }
+
+      const providerPix = await this.paymentProvider.createPix({
+        ...(reservation.provider ? { provider: reservation.provider } : {}),
+        receivableId: reservation.receivable.id,
+        amount: reservation.receivable.amount,
+        description: reservation.receivable.description,
+        expiresAt: reservation.expiresAt,
+        clientName: reservation.pixPayer.name,
+        payerPhone: reservation.pixPayer.phoneNormalized,
+        notificationUrl: this.getPaymentNotificationUrl(),
+      });
+
+      const intent = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.paymentIntent.update({
+          where: { id: reservation.intent.id },
+          data: {
             provider: providerPix.provider,
             providerTransactionId: this.normalizeCreatedProviderTransactionId(
               providerPix.providerTransactionId,
@@ -678,39 +712,40 @@ export class FinanceService {
         });
 
         await this.createReceivableAuditEvent(tx, {
-          receivableId: receivable.id,
+          receivableId: reservation.receivable.id,
           paymentIntentId: created.id,
           eventType: 'PIX_CREATED',
           actorUserId,
           provider: created.provider,
           providerTransactionId: created.providerTransactionId,
-          payerNameSnapshot: receivable.payerName ?? receivable.client?.name ?? null,
+          payerNameSnapshot:
+            reservation.receivable.payerName ?? reservation.receivable.client?.name ?? null,
           payerPhoneMasked: this.maskPhone(
-            receivable.payerPhoneNormalized ?? pixPayer.phoneNormalized,
+            reservation.receivable.payerPhoneNormalized ?? reservation.pixPayer.phoneNormalized,
           ),
           metadata: {
             paymentIntentId: created.id,
-            amount: receivable.amount.toString(),
-            purpose: receivable.purpose,
+            amount: reservation.receivable.amount.toString(),
+            purpose: reservation.receivable.purpose,
           },
         });
 
-        if (receivable.clientId) {
+        if (reservation.receivable.clientId) {
           await tx.clientEvent.create({
             data: {
-              clientId: receivable.clientId,
+              clientId: reservation.receivable.clientId,
               type: 'PIX_PAYMENT_INTENT_CREATED',
               title:
-                receivable.purpose === 'MANUAL_CHARGE'
+                reservation.receivable.purpose === 'MANUAL_CHARGE'
                   ? 'PIX de cobranca avulsa gerado.'
                   : 'PIX gerado.',
-              description: `${this.formatCurrency(receivable.amount)} referente a ${receivable.description}.`,
+              description: `${this.formatCurrency(reservation.receivable.amount)} referente a ${reservation.receivable.description}.`,
               metadata: {
-                receivableId: receivable.id,
+                receivableId: reservation.receivable.id,
                 paymentIntentId: created.id,
                 provider: created.provider,
                 providerTransactionId: created.providerTransactionId,
-                purpose: receivable.purpose,
+                purpose: reservation.receivable.purpose,
               },
               createdByUserId: actorUserId,
             },
@@ -729,6 +764,15 @@ export class FinanceService {
         });
 
         if (activeIntent) {
+          if (activeIntent.status === 'CREATED') {
+            const resolved = await this.waitForPixReservation(activeIntent.id);
+            if (resolved) {
+              return this.presentPaymentIntent(resolved);
+            }
+            throw new ConflictException(
+              'Existe uma tentativa PIX com resultado remoto desconhecido. Reconcilie antes de tentar novamente.',
+            );
+          }
           return this.presentPaymentIntent(activeIntent);
         }
 
@@ -1048,7 +1092,7 @@ export class FinanceService {
     const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
 
     try {
-      const intent = await this.prisma.$transaction(async (tx) => {
+      const reservation = await this.prisma.$transaction(async (tx) => {
         await this.acquirePixCreationLocks(tx, receivableIds);
 
         const receivables = await this.findGroupedPaymentReceivables(tx, receivableIds);
@@ -1073,7 +1117,7 @@ export class FinanceService {
         const paymentGroup = await tx.paymentGroup.create({
           data: {
             clientId: client.id,
-            status: 'WAITING_PAYMENT',
+            status: 'CREATED',
             totalAmount,
             createdByUserId: actorUserId,
             items: {
@@ -1085,20 +1129,43 @@ export class FinanceService {
           },
         });
 
-        const providerPix = await this.paymentProvider.createPix({
-          ...(provider ? { provider } : {}),
-          receivableId: paymentGroup.id,
-          amount: totalAmount,
-          description,
-          expiresAt,
-          clientName: client.name,
-          payerPhone: operationalPayerPhone,
-          notificationUrl: this.getPaymentNotificationUrl(),
-        });
-
         const created = await tx.paymentIntent.create({
           data: {
             paymentGroupId: paymentGroup.id,
+            provider: provider ?? 'MOCK',
+            status: 'CREATED',
+            amount: totalAmount,
+            expiresAt,
+          },
+        });
+
+        return {
+          intent: created,
+          paymentGroup,
+          provider,
+          totalAmount,
+          description,
+          expiresAt,
+          client,
+          operationalPayerPhone,
+        };
+      });
+
+      const providerPix = await this.paymentProvider.createPix({
+        ...(reservation.provider ? { provider: reservation.provider } : {}),
+        receivableId: reservation.paymentGroup.id,
+        amount: reservation.totalAmount,
+        description: reservation.description,
+        expiresAt: reservation.expiresAt,
+        clientName: reservation.client.name,
+        payerPhone: reservation.operationalPayerPhone,
+        notificationUrl: this.getPaymentNotificationUrl(),
+      });
+
+      const intent = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.paymentIntent.update({
+          where: { id: reservation.intent.id },
+          data: {
             provider: providerPix.provider,
             providerTransactionId: this.normalizeCreatedProviderTransactionId(
               providerPix.providerTransactionId,
@@ -1115,17 +1182,22 @@ export class FinanceService {
           },
         });
 
+        await tx.paymentGroup.update({
+          where: { id: reservation.paymentGroup.id },
+          data: { status: this.paymentGroupStatusFromIntent(providerPix.status) },
+        });
+
         await tx.clientEvent.create({
           data: {
-            clientId: client.id,
+            clientId: reservation.client.id,
             type: 'PIX_PAYMENT_INTENT_CREATED',
             title: 'PIX agrupado gerado.',
-            description: `${this.formatCurrency(totalAmount)} referente a ${receivables.length} contas a receber.`,
+            description: `${this.formatCurrency(reservation.totalAmount)} referente a ${receivableIds.length} contas a receber.`,
             metadata: {
-              paymentGroupId: paymentGroup.id,
+              paymentGroupId: reservation.paymentGroup.id,
               paymentIntentId: created.id,
               receivableIds,
-              amount: totalAmount.toString(),
+              amount: reservation.totalAmount.toString(),
               provider: created.provider,
               providerTransactionId: created.providerTransactionId,
             },
@@ -1514,26 +1586,30 @@ export class FinanceService {
       );
       this.throwPixReconciliationBlockers(blockers);
 
-      const created = await tx.paymentIntent.create({
-        data: {
-          receivableId,
-          provider: dto.provider,
-          providerTransactionId,
-          externalStatus: providerTransaction.externalStatus,
-          externalDepixId: providerTransaction.externalDepixId,
-          blockchainTxId: providerTransaction.blockchainTxId,
-          status:
-            providerTransaction.status === 'PAID' ? 'WAITING_PAYMENT' : providerTransaction.status,
-          amount: local.receivable.amount,
-          pixCopyPaste: providerTransaction.pixCopyPaste,
-          qrCodeData: providerTransaction.qrCodeData,
-          expiresAt: providerTransaction.expiresAt,
-          lastSyncAt: new Date(),
-          paidAt: null,
-          failureCode: providerTransaction.failureCode,
-          failureMessage: providerTransaction.failureMessage,
-        },
-      });
+      const intentData = {
+        receivableId,
+        provider: dto.provider,
+        providerTransactionId,
+        externalStatus: providerTransaction.externalStatus,
+        externalDepixId: providerTransaction.externalDepixId,
+        blockchainTxId: providerTransaction.blockchainTxId,
+        status:
+          providerTransaction.status === 'PAID' ? 'WAITING_PAYMENT' : providerTransaction.status,
+        amount: local.receivable.amount,
+        pixCopyPaste: providerTransaction.pixCopyPaste,
+        qrCodeData: providerTransaction.qrCodeData,
+        expiresAt: providerTransaction.expiresAt,
+        lastSyncAt: new Date(),
+        paidAt: null,
+        failureCode: providerTransaction.failureCode,
+        failureMessage: providerTransaction.failureMessage,
+      } satisfies Prisma.PaymentIntentUncheckedCreateInput;
+      const created = local.unknownReservation
+        ? await tx.paymentIntent.update({
+            where: { id: local.unknownReservation.id },
+            data: intentData,
+          })
+        : await tx.paymentIntent.create({ data: intentData });
 
       await tx.clientEvent.create({
         data: {
@@ -2769,7 +2845,7 @@ export class FinanceService {
         clientId: client.id,
         payerName: client.name,
         payerPhone: client.phone,
-        payerPhoneNormalized: this.requireBrazilianFinancialPhone(client),
+        payerPhoneNormalized: this.requireFinancialPhone(client, true),
       };
     }
 
@@ -2788,23 +2864,13 @@ export class FinanceService {
       throw new BadRequestException('Telefone do pagador obrigatorio.');
     }
 
-    const payerIdentity = resolveBrazilianOperationalPhone({
-      phone: payerPhone,
-      phoneNormalized: payerPhone,
-    });
-    if (payerIdentity.status !== 'valid') {
-      throw new BadRequestException(
-        payerIdentity.reason === 'INTERNATIONAL_PHONE'
-          ? 'Telefone internacional do pagador ainda nao esta habilitado.'
-          : 'Telefone do pagador invalido.',
-      );
-    }
+    const payerPhoneNormalized = this.requireExplicitFinancialPhone(payerPhone);
 
     return {
       clientId: null,
       payerName,
       payerPhone,
-      payerPhoneNormalized: payerIdentity.digits,
+      payerPhoneNormalized,
     };
   }
 
@@ -2867,24 +2933,33 @@ export class FinanceService {
       return this.requireBrazilianFinancialPhone(input);
     }
 
-    const resolved = resolveWhatsAppOutboundPhone({
-      ...input,
-      operation: 'MANUAL_PIX',
-      internationalManualPixEnabled:
-        this.config.get<string>('PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED') === 'true',
-    });
+    const identity = resolveCanonicalPhoneIdentity(input);
 
-    if (resolved.status === 'allowed') return resolved.digits;
-    if (resolved.reason === 'BLOCKED_FLAG_DISABLED') {
-      throw new ConflictException('PIX manual internacional esta desabilitado.');
-    }
-    if (resolved.reason === 'BLOCKED_UNSUPPORTED_OPERATION') {
-      throw new ConflictException('Operacao financeira internacional ainda nao esta habilitada.');
-    }
-    if (resolved.reason === 'BLOCKED_MISMATCH') {
+    if (identity.status === 'valid') return identity.digits;
+    if (identity.reason === 'IDENTITY_MISMATCH') {
       throw new ConflictException('Identidades telefonicas do pagador estao divergentes.');
     }
+
+    const brazilian = resolveBrazilianOperationalPhone(input);
+    if (brazilian.status === 'valid') return brazilian.digits;
+    if (brazilian.reason === 'PHONE_IDENTITY_MISMATCH') {
+      throw new ConflictException('Identidades telefonicas do pagador estao divergentes.');
+    }
+
     throw new ConflictException('Telefone do pagador invalido.');
+  }
+
+  private requireExplicitFinancialPhone(phone: string) {
+    const identity = resolveCanonicalPhoneIdentity({ phone });
+    if (identity.status === 'valid') return identity.digits;
+
+    const brazilian = resolveBrazilianOperationalPhone({
+      phone,
+      phoneNormalized: phone,
+    });
+    if (brazilian.status === 'valid') return brazilian.digits;
+
+    throw new BadRequestException('Telefone do pagador invalido.');
   }
 
   private requireBrazilianFinancialPhone(input: {
@@ -3612,14 +3687,19 @@ export class FinanceService {
 
     const activeIntent = await this.findActivePixForReceivables(tx, [receivableId]);
 
-    if (activeIntent) {
+    const unknownReservation =
+      activeIntent?.status === 'CREATED' && !activeIntent.providerTransactionId
+        ? activeIntent
+        : null;
+
+    if (activeIntent && !unknownReservation) {
       blockers.push({
         code: 'ACTIVE_INTENT_EXISTS',
         message: 'Ja existe PIX ativo para esta conta a receber.',
       });
     }
 
-    return { receivable, blockers };
+    return { receivable, blockers, unknownReservation };
   }
 
   private async inspectReceivableForPixReplacement(
@@ -4283,6 +4363,16 @@ export class FinanceService {
         receivableId,
       );
     }
+  }
+
+  private async waitForPixReservation(id: string) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const intent = await this.prisma.paymentIntent.findUnique({ where: { id } });
+      if (!intent || intent.status !== 'CREATED') return intent;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    return null;
   }
 
   private async acquireClientPhoneLock(tx: Prisma.TransactionClient, clientId: string) {

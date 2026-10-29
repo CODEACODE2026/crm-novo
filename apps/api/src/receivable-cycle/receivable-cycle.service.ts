@@ -463,15 +463,7 @@ export class ReceivableCycleService {
     });
 
     if (identity.status === 'valid') {
-      if (identity.country === 'BR' || reference.internationalBillingEnabled) {
-        return { allowed: true };
-      }
-
-      return {
-        allowed: false,
-        code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
-        message: 'A referencia nao autorizou materializacao financeira internacional.',
-      };
+      return { allowed: true };
     }
 
     const brazilian = resolveBrazilianOperationalPhone(reference.client);

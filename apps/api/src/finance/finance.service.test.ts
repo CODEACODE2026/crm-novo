@@ -1987,14 +1987,12 @@ describe('FinanceService', () => {
   it.each([
     ['EUA', '+1 (407) 639-0665', '14076390665', '+14076390665'],
     ['Portugal', '+351 912 345 678', '351912345678', '+351912345678'],
+    ['Emirados Arabes', '+971 50 123 4567', '971501234567', '+971501234567'],
   ])(
-    'creates a gated manual PIX for a proven %s identity without fabricating DDI 55',
+    'creates an authenticated manual PIX for a proven %s identity without fabricating DDI 55',
     async (_country, phone, phoneNormalized, phoneE164) => {
       const fake = createFinancePrisma();
       Object.assign(fake.client, { phone, phoneNormalized, phoneE164 });
-      fake.config.get.mockImplementation((key: string) =>
-        key === 'PHONE_INTERNATIONAL_MANUAL_PIX_ENABLED' ? 'true' : undefined,
-      );
       const service = createFinanceService(fake);
 
       const intent = await service.createReceivablePix(
@@ -5552,7 +5550,7 @@ describe('FinanceService', () => {
     });
   });
 
-  it('rolls back local writes when PaymentIntent.create fails after provider success', async () => {
+  it('keeps the durable reservation when final persistence fails after provider success', async () => {
     const fake = createFinancePrisma();
     fake.provider.createPix.mockResolvedValueOnce({
       provider: 'FASTFLOW',
@@ -5566,13 +5564,13 @@ describe('FinanceService', () => {
       qrCodeData: 'qr-code-data',
       expiresAt: new Date('2026-10-10T00:30:00.000Z'),
     } as never);
-    fake.tx.paymentIntent.create = vi.fn(() => {
+    fake.tx.paymentIntent.update = vi.fn(() => {
       throw new Prisma.PrismaClientValidationError(
         'Argument providerTransactionId: Expected String or Null, provided Int.',
         { clientVersion: 'test' },
       );
     });
-    fake.prisma.paymentIntent.create = fake.tx.paymentIntent.create;
+    fake.prisma.paymentIntent.update = fake.tx.paymentIntent.update;
     const service = new FinanceService(
       fake.prisma as never,
       fake.provider,
@@ -5585,7 +5583,8 @@ describe('FinanceService', () => {
     );
 
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
-    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]).toMatchObject({ status: 'CREATED' });
     expect(fake.transactions).toHaveLength(0);
     expect(fake.events).toHaveLength(0);
     expect(fake.receivable.status).toBe('PENDENTE');
@@ -5607,7 +5606,8 @@ describe('FinanceService', () => {
       BadGatewayException,
     );
 
-    expect(fake.paymentIntents).toHaveLength(0);
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.paymentIntents[0]).toMatchObject({ status: 'CREATED' });
     expect(fake.receivable.status).toBe('PENDENTE');
     expect(fake.transactions).toHaveLength(0);
   });
@@ -8079,6 +8079,65 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(0);
   });
 
+  it('reconciles a durable unknown reservation in place with a proven provider transaction', async () => {
+    const fake = createFinancePrisma();
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.paymentIntents.push({
+      id: 'intent-unknown-reservation',
+      receivableId: fake.receivable.id,
+      paymentGroupId: null,
+      provider: 'FASTFLOW',
+      providerTransactionId: null,
+      externalStatus: null,
+      externalDepixId: null,
+      blockchainTxId: null,
+      status: 'CREATED',
+      amount: new Prisma.Decimal('30.00'),
+      pixCopyPaste: null,
+      qrCodeData: null,
+      expiresAt: null,
+      paidAt: null,
+      lastSyncAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: new Date('2026-09-24T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-24T00:00:00.000Z'),
+    });
+    fake.provider.getPixTransaction.mockResolvedValue(reconciliationTransaction());
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      {} as never,
+      fake.config as never,
+    );
+
+    const intent = await service.reconcileReceivablePix(
+      fake.receivable.id,
+      {
+        provider: 'FASTFLOW',
+        providerTransactionId: '75148',
+        reason: 'Provider confirmou a transacao da tentativa de resultado desconhecido.',
+      },
+      actorUserId,
+    );
+
+    expect(intent).toMatchObject({
+      id: 'intent-unknown-reservation',
+      providerTransactionId: '75148',
+      status: 'WAITING_PAYMENT',
+    });
+    expect(fake.paymentIntents).toHaveLength(1);
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    const reconciliationEvent = fake.events.find(
+      (event) => event.type === 'PIX_PAYMENT_INTENT_CREATED',
+    );
+    expect(reconciliationEvent).toBeDefined();
+    expect(reconciliationEvent?.metadata).toMatchObject({
+      paymentIntentId: 'intent-unknown-reservation',
+      reconciliation: true,
+    });
+  });
+
   it.each([
     ['EXPIRED' as const, 'expired'],
     ['CANCELED' as const, 'canceled'],
@@ -9671,27 +9730,29 @@ describe('FinanceService', () => {
     expect(fake.transactions).toHaveLength(0);
   });
 
-  it('rejects an international guest manual charge without creating a financial snapshot', async () => {
+  it('creates an international guest manual charge with a canonical E.164 snapshot', async () => {
     const fake = createFinancePrisma();
     const service = createFinanceService(fake);
 
-    await expect(
-      service.createManualCharge(
-        {
-          description: 'Cobranca internacional bloqueada',
-          categoryId: fake.entryCategory.id,
-          amount: 88.75,
-          dueDate: '2026-10-21',
-          payerType: ManualChargePayerType.GUEST,
-          payerName: 'Cliente Internacional',
-          payerPhone: '+351 912 345 678',
-          idempotencyKey: 'manual-key-international-blocked',
-        },
-        actorUserId,
-      ),
-    ).rejects.toThrow('internacional');
+    const receivable = await service.createManualCharge(
+      {
+        description: 'Cobranca internacional',
+        categoryId: fake.entryCategory.id,
+        amount: 88.75,
+        dueDate: '2026-10-21',
+        payerType: ManualChargePayerType.GUEST,
+        payerName: 'Cliente Internacional',
+        payerPhone: '+351 912 345 678',
+        idempotencyKey: 'manual-key-international',
+      },
+      actorUserId,
+    );
 
-    expect(fake.auditEvents).toHaveLength(0);
+    expect(receivable).toMatchObject({
+      payerPhone: '+351 912 345 678',
+      payerPhoneNormalized: '351912345678',
+    });
+    expect(fake.auditEvents).toHaveLength(1);
     expect(fake.provider.createPix).not.toHaveBeenCalled();
   });
 

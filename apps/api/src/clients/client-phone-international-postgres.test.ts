@@ -80,11 +80,11 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
 
   it.each([
     ['BR', '+55 11 99999-1234', '+5511999991234', 1],
-    ['US', '+1 (407) 639-0665', '+14076390665', 0],
-    ['PT', '+351 912 345 678', '+351912345678', 0],
-    ['AE', '+971 50 123 4567', '+971501234567', 0],
+    ['US', '+1 (407) 639-0665', '+14076390665', 1],
+    ['PT', '+351 912 345 678', '+351912345678', 1],
+    ['AE', '+971 50 123 4567', '+971501234567', 1],
   ] as const)(
-    'keeps valid %s E.164 client writes country-neutral without crossing the financial boundary',
+    'materializes the same current-cycle receivable for valid %s E.164 clients',
     async (phoneCountry, phone, phoneE164, expectedReceivables) => {
       const fixture = await createFixture();
       const service = createService({ clientWriteEnabled: false });
@@ -115,7 +115,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     },
   );
 
-  it('does not create an international receivable without opt-in even when requested', async () => {
+  it('creates an international initial-activation receivable when explicitly requested', async () => {
     const fixture = await createFixture();
     const service = createService();
     const dto = createDto(fixture.planId, {
@@ -130,9 +130,9 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     await expect(
       prisma.clientReference.findMany({ where: { clientId: result.id } }),
     ).resolves.toEqual([
-      expect.objectContaining({ internationalBillingEnabled: false, status: 'ATIVO' }),
+      expect.objectContaining({ internationalBillingEnabled: false, status: 'PENDENTE_PAGAMENTO' }),
     ]);
-    await expect(prisma.receivable.count({ where: { clientId: result.id } })).resolves.toBe(0);
+    await expect(prisma.receivable.count({ where: { clientId: result.id } })).resolves.toBe(1);
     await expect(
       prisma.paymentIntent.count({ where: { receivable: { clientId: result.id } } }),
     ).resolves.toBe(0);
@@ -179,7 +179,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     ['PT', '+351 912 345 678'],
     ['AE', '+971 50 123 4567'],
   ] as const)(
-    'keeps %s cycle edits, reactivation and direct generation free of financial effects without opt-in',
+    'keeps one idempotent %s cycle across edits, reactivation and direct generation',
     async (phoneCountry, phone) => {
       const fixture = await createFixture();
       const service = createService();
@@ -193,7 +193,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
       });
 
       await service.updateReference(reference.id, { dueDate: '2026-11-23' }, fixture.userId);
-      await expectNoFinancialEffects(client.id);
+      await expectFinancialState(client.id, 1);
 
       await service.updateReferenceStatus(
         reference.id,
@@ -201,17 +201,17 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
         fixture.userId,
       );
       await service.updateReferenceStatus(reference.id, { status: 'ATIVO' }, fixture.userId);
-      await expectNoFinancialEffects(client.id);
+      await expectFinancialState(client.id, 1);
 
       const cycle = new ReceivableCycleService(prisma as never);
-      await expect(cycle.ensureCurrentCycleReceivable(reference.id)).rejects.toThrow(
-        'A referencia nao autorizou materializacao financeira internacional.',
-      );
-      await expectNoFinancialEffects(client.id);
+      await expect(cycle.ensureCurrentCycleReceivable(reference.id)).resolves.toMatchObject({
+        action: 'kept',
+      });
+      await expectFinancialState(client.id, 1);
     },
   );
 
-  it('creates an international operational reference without materializing finance when opt-in is false', async () => {
+  it('creates an international reference with the same initial financial materialization', async () => {
     const fixture = await createFixture();
     const service = createService();
     const client = await service.create(
@@ -233,11 +233,14 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
       fixture.userId,
     );
 
-    expect(reference).toMatchObject({ status: 'ATIVO', internationalBillingEnabled: false });
-    await expectNoFinancialEffects(client.id);
+    expect(reference).toMatchObject({
+      status: 'PENDENTE_PAGAMENTO',
+      internationalBillingEnabled: false,
+    });
+    await expectFinancialState(client.id, 2);
   });
 
-  it('blocks the administrative Billing generation path without international opt-in', async () => {
+  it('allows the administrative cycle generation path independently from country', async () => {
     const fixture = await createFixture();
     const service = createService();
     const client = await service.create(
@@ -248,6 +251,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     const reference = await prisma.clientReference.findFirstOrThrow({
       where: { clientId: client.id },
     });
+    await prisma.receivable.deleteMany({ where: { clientId: client.id } });
     const billing = new BillingService(
       prisma as never,
       {} as never,
@@ -257,10 +261,10 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
       new ReceivableCycleService(prisma as never),
     );
 
-    await expect(billing.generateCurrentCycleReceivable(reference.id)).rejects.toThrow(
-      'A referencia nao autorizou materializacao financeira internacional.',
-    );
-    await expectNoFinancialEffects(client.id);
+    await expect(billing.generateCurrentCycleReceivable(reference.id)).resolves.toMatchObject({
+      action: 'created',
+    });
+    await expectFinancialState(client.id, 1);
   });
 
   it('preserves Brazilian creation, cycle edits, reactivation and manual generation', async () => {
@@ -301,7 +305,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     await expect(prisma.messageDispatch.count({ where: { clientId: client.id } })).resolves.toBe(0);
   });
 
-  it('allows one authorized international cycle under concurrent generators', async () => {
+  it('allows one international cycle under concurrent generators without a country flag', async () => {
     const fixture = await createFixture();
     const service = createService();
     const client = await service.create(
@@ -312,11 +316,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     const reference = await prisma.clientReference.findFirstOrThrow({
       where: { clientId: client.id },
     });
-    await service.updateReference(
-      reference.id,
-      { internationalBillingEnabled: true },
-      fixture.userId,
-    );
+    await prisma.receivable.deleteMany({ where: { clientId: client.id } });
     const cycle = new ReceivableCycleService(prisma as never);
 
     const results = await Promise.all([
@@ -332,7 +332,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     await expect(prisma.messageDispatch.count({ where: { clientId: client.id } })).resolves.toBe(0);
   });
 
-  it('revalidates opt-out under lock when it races with cycle generation', async () => {
+  it('keeps cycle generation country-neutral while a legacy Billing flag is disabled', async () => {
     const fixture = await createFixture();
     const service = createService();
     const client = await service.create(
@@ -372,13 +372,11 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     releaseOptOut();
     await optOut;
 
-    await expect(generation).rejects.toThrow(
-      'A referencia nao autorizou materializacao financeira internacional.',
-    );
-    await expectNoFinancialEffects(client.id);
+    await expect(generation).resolves.toMatchObject({ action: 'created' });
+    await expectFinancialState(client.id, 1);
   });
 
-  it('revalidates opt-in under lock when it races with cycle generation', async () => {
+  it('keeps cycle generation country-neutral while a legacy Billing flag is enabled', async () => {
     const fixture = await createFixture();
     const service = createService();
     const client = await service.create(
@@ -393,6 +391,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     const reference = await prisma.clientReference.findFirstOrThrow({
       where: { clientId: client.id },
     });
+    await prisma.receivable.deleteMany({ where: { clientId: client.id } });
 
     let releaseOptIn!: () => void;
     let reportLocked!: () => void;
@@ -732,12 +731,16 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
     );
   }
 
-  async function expectNoFinancialEffects(clientId: string) {
-    await expect(prisma.receivable.count({ where: { clientId } })).resolves.toBe(0);
+  async function expectFinancialState(clientId: string, receivables: number) {
+    await expect(prisma.receivable.count({ where: { clientId } })).resolves.toBe(receivables);
     await expect(prisma.paymentIntent.count({ where: { receivable: { clientId } } })).resolves.toBe(
       0,
     );
     await expect(prisma.messageDispatch.count({ where: { clientId } })).resolves.toBe(0);
+  }
+
+  async function expectNoFinancialEffects(clientId: string) {
+    await expectFinancialState(clientId, 0);
   }
 
   async function expectConflictCode(promise: Promise<unknown>, code: string) {

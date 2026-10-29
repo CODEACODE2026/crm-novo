@@ -87,6 +87,33 @@ describe('FastDepixApiClient', () => {
     expect(String(init.body)).not.toContain('secret-token');
   });
 
+  it('serializes an international transaction without a payer_phone property', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 1, status: 'pending' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new FastDepixApiClient({
+      get: (key: string) =>
+        key === 'FASTDEPIX_BASE_URL' ? 'https://fastdepix.space/api/v1/' : undefined,
+    } as never);
+
+    await client.createTransaction('secret-token', {
+      amount: 50,
+      user: { name: 'Cliente Internacional' },
+      notification_url: 'https://crm.example.com/payment-webhooks/fastdepix',
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const serialized = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(serialized).toMatchObject({
+      amount: 50,
+      user: { name: 'Cliente Internacional' },
+      notification_url: 'https://crm.example.com/payment-webhooks/fastdepix',
+    });
+    expect(serialized).not.toHaveProperty('payer_phone');
+  });
+
   it('registers payment webhooks with the documented transaction events', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

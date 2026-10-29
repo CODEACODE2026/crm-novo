@@ -391,6 +391,21 @@ describe('Payment provider DI pipeline', () => {
     });
   });
 
+  it('omits payer_phone from the FastDepix payload when the payer phone is absent', async () => {
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastFlowPaymentProvider);
+    const input = pixInput();
+    Reflect.deleteProperty(input, 'payerPhone');
+
+    await provider.createPix(input);
+
+    const [, payload] = apiClient.createTransaction.mock.calls[0]!;
+    expect(payload.user).toEqual({ name: 'Cliente Teste' });
+    expect(payload).not.toHaveProperty('payer_phone');
+  });
+
   it('rejects an explicit provider that is not configured for PIX creation', async () => {
     credentialActive = false;
     app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {

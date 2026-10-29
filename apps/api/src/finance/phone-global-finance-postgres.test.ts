@@ -76,13 +76,17 @@ describe.skipIf(!runDatabaseTests)('global manual PIX parity', () => {
 
       expect(second.id).toBe(first.id);
       expect(provider.createPix).toHaveBeenCalledTimes(1);
-      expect(provider.createPix).toHaveBeenCalledWith(
-        expect.objectContaining({
-          amount: new Prisma.Decimal('30.00'),
-          payerPhone: phoneNormalized,
-          provider: 'FASTFLOW',
-        }),
-      );
+      const providerInput = provider.createPix.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(providerInput).toMatchObject({
+        amount: new Prisma.Decimal('30.00'),
+        provider: 'FASTFLOW',
+      });
+      expect(providerInput.clientName).toBe('Cliente PHONE GLOBAL FINANCE');
+      if (_country === 'BR') {
+        expect(providerInput.payerPhone).toBe(phoneNormalized);
+      } else {
+        expect(providerInput).not.toHaveProperty('payerPhone');
+      }
       await expect(
         prisma.paymentIntent.count({ where: { receivableId: fixture.firstReceivableId } }),
       ).resolves.toBe(1);
@@ -126,9 +130,10 @@ describe.skipIf(!runDatabaseTests)('global manual PIX parity', () => {
     );
 
     expect(intent).toMatchObject({ amount: '60.00', provider: 'FASTFLOW' });
-    expect(provider.createPix).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: new Prisma.Decimal('60.00'), payerPhone: '351912345678' }),
-    );
+    const providerInput = provider.createPix.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(providerInput).toMatchObject({ amount: new Prisma.Decimal('60.00') });
+    expect(providerInput.clientName).toBe('Cliente PHONE GLOBAL FINANCE');
+    expect(providerInput).not.toHaveProperty('payerPhone');
     await expect(
       prisma.paymentGroupItem.count({
         where: { paymentGroup: { clientId: fixture.clientId } },
@@ -239,9 +244,13 @@ describe.skipIf(!runDatabaseTests)('global manual PIX parity', () => {
       expect(first).toMatchObject({ status: 'WAITING_PAYMENT' });
       expect(second.id).toBe(first.id);
       expect(provider.createPix).toHaveBeenCalledTimes(1);
-      expect(provider.createPix).toHaveBeenCalledWith(
-        expect.objectContaining({ payerPhone: phoneNormalized }),
-      );
+      const providerInput = provider.createPix.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(providerInput.clientName).toBe('Cliente PHONE GLOBAL FINANCE');
+      if (_country === 'BR') {
+        expect(providerInput.payerPhone).toBe(phoneNormalized);
+      } else {
+        expect(providerInput).not.toHaveProperty('payerPhone');
+      }
       await expect(
         prisma.paymentIntent.count({ where: { receivableId: fixture.firstReceivableId } }),
       ).resolves.toBe(1);

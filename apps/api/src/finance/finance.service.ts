@@ -692,7 +692,9 @@ export class FinanceService {
         description: reservation.receivable.description,
         expiresAt: reservation.expiresAt,
         clientName: reservation.pixPayer.name,
-        payerPhone: reservation.pixPayer.phoneNormalized,
+        ...(reservation.pixPayer.providerPhone
+          ? { payerPhone: reservation.pixPayer.providerPhone }
+          : {}),
         notificationUrl: this.getPaymentNotificationUrl(),
       });
 
@@ -849,7 +851,7 @@ export class FinanceService {
           description: receivable.description,
           expiresAt,
           clientName: pixPayer.name,
-          payerPhone: pixPayer.phoneNormalized,
+          ...(pixPayer.providerPhone ? { payerPhone: pixPayer.providerPhone } : {}),
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -1115,6 +1117,7 @@ export class FinanceService {
           authorization.allowInternationalManual === true ||
             authorization.automatedBilling === true,
         );
+        const providerPayerPhone = this.providerPayerPhone(client, operationalPayerPhone);
         const totalAmount = this.sumReceivables(receivables);
         const description = this.buildPaymentGroupDescription(receivables);
         const expiresAt = new Date(Date.now() + pixExpirationMinutes * 60 * 1000);
@@ -1157,6 +1160,7 @@ export class FinanceService {
           expiresAt,
           client,
           operationalPayerPhone,
+          providerPayerPhone,
         };
       });
 
@@ -1167,7 +1171,7 @@ export class FinanceService {
         description: reservation.description,
         expiresAt: reservation.expiresAt,
         clientName: reservation.client.name,
-        payerPhone: reservation.operationalPayerPhone,
+        ...(reservation.providerPayerPhone ? { payerPhone: reservation.providerPayerPhone } : {}),
         notificationUrl: this.getPaymentNotificationUrl(),
       });
 
@@ -1345,6 +1349,7 @@ export class FinanceService {
           client,
           authorization.allowInternationalManual === true,
         );
+        const providerPayerPhone = this.providerPayerPhone(client, operationalPayerPhone);
         const providerPix = await this.paymentProvider.createPix({
           provider: dto.provider,
           receivableId: currentIntent.paymentGroupId,
@@ -1352,7 +1357,7 @@ export class FinanceService {
           description,
           expiresAt,
           clientName: client.name,
-          payerPhone: operationalPayerPhone,
+          ...(providerPayerPhone ? { payerPhone: providerPayerPhone } : {}),
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -2940,21 +2945,22 @@ export class FinanceService {
         throw new ConflictException('Cobranca avulsa sem snapshot de pagador.');
       }
 
+      const input = receivable.client
+        ? {
+            phone: receivable.payerPhone,
+            phoneNormalized: receivable.payerPhoneNormalized,
+            phoneE164: receivable.client.phoneE164,
+          }
+        : {
+            phone: receivable.payerPhone,
+            phoneNormalized: receivable.payerPhoneNormalized,
+          };
+      const phoneNormalized = this.requireFinancialPhone(input, allowInternationalManual);
+
       return {
         name: receivable.payerName,
-        phoneNormalized: this.requireFinancialPhone(
-          receivable.client
-            ? {
-                phone: receivable.payerPhone,
-                phoneNormalized: receivable.payerPhoneNormalized,
-                phoneE164: receivable.client.phoneE164,
-              }
-            : {
-                phone: receivable.payerPhone,
-                phoneNormalized: receivable.payerPhoneNormalized,
-              },
-          allowInternationalManual,
-        ),
+        phoneNormalized,
+        providerPhone: this.providerPayerPhone(input, phoneNormalized),
       };
     }
 
@@ -2962,10 +2968,21 @@ export class FinanceService {
       throw new ConflictException('Conta a receber sem cliente valido para gerar PIX.');
     }
 
+    const phoneNormalized = this.requireFinancialPhone(receivable.client, allowInternationalManual);
+
     return {
       name: receivable.client.name,
-      phoneNormalized: this.requireFinancialPhone(receivable.client, allowInternationalManual),
+      phoneNormalized,
+      providerPhone: this.providerPayerPhone(receivable.client, phoneNormalized),
     };
+  }
+
+  private providerPayerPhone(
+    input: { phone?: string | null; phoneNormalized: string; phoneE164?: string | null },
+    validatedPhone: string,
+  ) {
+    const identity = resolveCanonicalPhoneIdentity(input);
+    return identity.status === 'valid' && identity.country !== 'BR' ? undefined : validatedPhone;
   }
 
   private assertAutomatedBillingContext(

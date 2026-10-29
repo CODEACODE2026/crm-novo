@@ -41,7 +41,7 @@ export type CreatePixInput = {
   description: string;
   expiresAt: Date;
   clientName: string;
-  payerPhone: string;
+  payerPhone?: string;
   notificationUrl: string | null;
 };
 

@@ -28,7 +28,7 @@ abstract class BaseFastDepixPaymentProvider implements PaymentProvider {
     const response = await this.apiClient.createTransaction(token, {
       amount: Number(input.amount.toFixed(2)),
       user: { name: input.clientName },
-      payer_phone: input.payerPhone,
+      ...(input.payerPhone ? { payer_phone: input.payerPhone } : {}),
       ...(input.notificationUrl ? { notification_url: input.notificationUrl } : {}),
     });
     const providerTransactionId = this.normalizeProviderTransactionId(response.id);

@@ -1988,6 +1988,7 @@ describe('FinanceService', () => {
     ['EUA', '+1 (407) 639-0665', '14076390665', '+14076390665'],
     ['Portugal', '+351 912 345 678', '351912345678', '+351912345678'],
     ['Emirados Arabes', '+971 50 123 4567', '971501234567', '+971501234567'],
+    ['Reino Unido', '+44 7911 123456', '447911123456', '+447911123456'],
   ])(
     'creates an authenticated manual PIX for a proven %s identity without fabricating DDI 55',
     async (_country, phone, phoneNormalized, phoneE164) => {
@@ -2003,9 +2004,9 @@ describe('FinanceService', () => {
       );
 
       expect(intent).toMatchObject({ receivableId: fake.receivable.id });
-      expect(fake.provider.createPix).toHaveBeenCalledWith(
-        expect.objectContaining({ payerPhone: phoneNormalized }),
-      );
+      const providerInput = fake.provider.createPix.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(providerInput).not.toHaveProperty('payerPhone');
+      expect(providerInput.clientName).toBe(fake.client.name);
       expect(fake.paymentIntents).toHaveLength(1);
       expect(fake.receivable.status).toBe('PENDENTE');
       expect(fake.transactions).toHaveLength(0);
@@ -3873,9 +3874,9 @@ describe('FinanceService', () => {
     });
 
     expect(fake.provider.createPix).toHaveBeenCalledTimes(1);
-    expect(fake.provider.createPix).toHaveBeenCalledWith(
-      expect.objectContaining({ payerPhone: '351912345678' }),
-    );
+    const providerInput = fake.provider.createPix.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(providerInput).not.toHaveProperty('payerPhone');
+    expect(providerInput.clientName).toBe(fake.client.name);
     expect(fake.paymentGroups).toHaveLength(1);
     expect(fake.paymentIntents).toHaveLength(1);
   });
@@ -5776,9 +5777,7 @@ describe('FinanceService', () => {
     );
 
     expect(next.id).not.toBe(previous.id);
-    expect(fake.provider.createPix).toHaveBeenCalledWith(
-      expect.objectContaining({ payerPhone: '14076390665' }),
-    );
+    expect(fake.provider.createPix.mock.calls[0]?.[0]).not.toHaveProperty('payerPhone');
     expect(fake.paymentIntents.map((intent) => intent.status)).toEqual([
       'SUPERSEDED',
       'WAITING_PAYMENT',

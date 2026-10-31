@@ -171,6 +171,14 @@ describe.skipIf(!runDatabaseTests)('international billing persistence safety', (
     });
 
     expect(fixture.reference.internationalBillingEnabled).toBe(false);
+    await expect(
+      prisma.clientReference.count({
+        where: {
+          id: fixture.reference.id,
+          internationalBillingEnabled: true,
+        },
+      }),
+    ).resolves.toBe(0);
 
     const optedIn = await prisma.clientReference.update({
       where: { id: fixture.reference.id },
@@ -178,6 +186,14 @@ describe.skipIf(!runDatabaseTests)('international billing persistence safety', (
     });
 
     expect(optedIn.internationalBillingEnabled).toBe(true);
+    await expect(
+      prisma.clientReference.count({
+        where: {
+          id: fixture.reference.id,
+          internationalBillingEnabled: true,
+        },
+      }),
+    ).resolves.toBe(1);
     await expect(
       prisma.messageDispatch.count({ where: { clientReferenceId: fixture.reference.id } }),
     ).resolves.toBe(0);

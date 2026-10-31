@@ -1112,6 +1112,9 @@ export class BillingService {
     const currentById = new Map(
       currentReceivables.map((receivable) => [receivable.id, receivable]),
     );
+    const operationalPhone = resolveBrazilianOperationalPhone(dispatch.client);
+    const requiresInternationalOptIn =
+      operationalPhone.status === 'blocked' && operationalPhone.reason === 'INTERNATIONAL_PHONE';
     const activeItems = originalItems
       .map((item) => {
         const receivable = currentById.get(item.receivable.id);
@@ -1119,6 +1122,9 @@ export class BillingService {
         if (!receivable.clientReference) return null;
         if (receivable.clientReference.status !== 'ATIVO') return null;
         if (!receivable.clientReference.plan?.active) return null;
+        if (requiresInternationalOptIn && !receivable.clientReference.internationalBillingEnabled) {
+          return null;
+        }
 
         return {
           ...item,
@@ -1129,6 +1135,22 @@ export class BillingService {
       .filter(Boolean) as BillingDispatchItem[];
 
     if (!activeItems.length) {
+      const blockedByInternationalOptOut =
+        requiresInternationalOptIn &&
+        currentReceivables.some(
+          (receivable) =>
+            receivable.status === 'PENDENTE' &&
+            receivable.clientReference?.status === 'ATIVO' &&
+            receivable.clientReference.plan?.active &&
+            !receivable.clientReference.internationalBillingEnabled,
+        );
+      if (blockedByInternationalOptOut) {
+        return {
+          code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+          message: 'Nenhum item manteve autorizacao para Billing automatico internacional.',
+        };
+      }
+
       const allCanceled = currentReceivables.length
         ? currentReceivables.every(
             (receivable) =>
@@ -1547,6 +1569,14 @@ export class BillingService {
 
     if (brazilian.reason !== 'INTERNATIONAL_PHONE') {
       return { status: 'blocked', ...this.billingPhoneBlockReason(brazilian.reason) };
+    }
+
+    if (references.some((reference) => !reference.internationalBillingEnabled)) {
+      return {
+        status: 'blocked',
+        code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+        message: 'A referencia nao autorizou Billing automatico internacional.',
+      };
     }
 
     const canonical = resolveCanonicalPhoneIdentity(client);

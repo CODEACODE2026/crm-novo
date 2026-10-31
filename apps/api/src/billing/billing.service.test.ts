@@ -628,13 +628,13 @@ describe('BillingService', () => {
     },
   );
 
-  it('schedules international Billing without a country-specific reference opt-in', async () => {
+  it('does not schedule international Billing without per-reference financial opt-in', async () => {
     const foreign = client({
       phone: '+1 (407) 639-0665',
       phoneNormalized: '14076390665',
       phoneE164: '+14076390665',
     });
-    const createDispatch = vi.fn().mockResolvedValue(dispatch());
+    const createDispatch = vi.fn();
     const { service, prisma } = serviceFactory({
       clients: [foreign],
       createDispatch,
@@ -645,9 +645,9 @@ describe('BillingService', () => {
       conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
     });
 
-    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 1, skipped: 0 });
-    expect(createDispatch).toHaveBeenCalledTimes(1);
-    expect(prisma.whatsAppConversation.findFirst).toHaveBeenCalled();
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 0, skipped: 1 });
+    expect(createDispatch).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.findFirst).not.toHaveBeenCalled();
   });
 
   it('does not schedule opted-in international Billing without an existing conversation', async () => {
@@ -717,15 +717,20 @@ describe('BillingService', () => {
       phoneNormalized: '351912345678',
       phoneE164: '+351912345678',
     });
+    const foreignReference = clientReference({ internationalBillingEnabled: true });
+    const foreignReceivable = receivable();
     const providerSendText = vi.fn();
     const foreignDispatch = dispatch({
       status: 'PROCESSING',
       attempts: 1,
       phone: '351912345678',
       client: foreignClient,
+      clientReference: foreignReference,
+      receivable: foreignReceivable,
     });
     const { service, updateDispatch } = serviceFactory({
       dispatchForProcessing: foreignDispatch,
+      currentReceivables: [{ ...foreignReceivable, clientReference: foreignReference }],
       providerSendText,
     });
 
@@ -840,10 +845,12 @@ describe('BillingService', () => {
 
   it('revalidates the client after resolving the connection and blocks a concurrent phone change', async () => {
     const mutableClient = client();
+    const optedInReference = clientReference({ internationalBillingEnabled: true });
     const currentDispatch = dispatch({
       status: 'PROCESSING',
       attempts: 1,
       client: mutableClient,
+      clientReference: optedInReference,
     });
     const { prisma, provider, service, updateDispatch } = serviceFactory({
       dispatchForProcessing: currentDispatch,
@@ -1133,7 +1140,7 @@ describe('BillingService', () => {
     );
   });
 
-  it('does not let the legacy geographic flag split otherwise eligible references', async () => {
+  it('keeps only financially authorized references when reconciling an international group', async () => {
     const approvedReceivable = receivable({
       id: 'receivable-approved',
       clientReferenceId: 'reference-approved',
@@ -1170,15 +1177,12 @@ describe('BillingService', () => {
       conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
     });
 
-    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 1, skipped: 0 });
+    await expect(service.reconcile(now)).resolves.toMatchObject({ created: 1, skipped: 1 });
     const createdItems = (createDispatch.mock.calls[0]![0] as DispatchCreateArgs).data.items
       ?.create;
-    expect(createdItems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ receivableId: approvedReceivable.id }),
-        expect.objectContaining({ receivableId: blockedReceivable.id }),
-      ]),
-    );
+    expect(createdItems).toEqual([
+      expect.objectContaining({ receivableId: approvedReceivable.id }),
+    ]);
   });
 
   it('consolidates three same-client receivables on the same send date with total and item links', async () => {
@@ -2227,6 +2231,47 @@ describe('BillingService', () => {
     );
   });
 
+  it('does not generate PIX or send a preexisting international dispatch without opt-in', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const optedOutReference = clientReference({ internationalBillingEnabled: false });
+    const pendingReceivable = receivable();
+    const pixTemplate = template({ content: 'PIX: {{pix}}' });
+    const providerSendText = vi.fn();
+    const { service, finance, updateDispatch } = serviceFactory({
+      dispatchForProcessing: dispatch({
+        status: 'PROCESSING',
+        attempts: 1,
+        phone: '14076390665',
+        client: foreignClient,
+        clientReference: optedOutReference,
+        receivable: pendingReceivable,
+        template: pixTemplate,
+      }),
+      currentReceivables: [{ ...pendingReceivable, clientReference: optedOutReference }],
+      providerSendText,
+      templateRecord: pixTemplate,
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(finance.createReceivablePixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(finance.createReceivablesPixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+        }),
+      }),
+    );
+  });
+
   it('does not send a template that requires PIX while the provider result is uncertain', async () => {
     const pixTemplate = template({ content: 'PIX: {{pix}}' });
     const providerSendText = vi.fn();
@@ -2549,6 +2594,52 @@ describe('BillingService', () => {
     expect(providerSendText).toHaveBeenCalledTimes(1);
   });
 
+  it('revalidates international opt-in for sendNow before PIX or provider calls', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const optedOutReference = clientReference({ internationalBillingEnabled: false });
+    const pendingReceivable = receivable();
+    const pixTemplate = template({ content: 'PIX: {{pix}}' });
+    const scheduled = dispatch({
+      status: 'SCHEDULED',
+      attempts: 0,
+      phone: '14076390665',
+      client: foreignClient,
+      clientReference: optedOutReference,
+      receivable: pendingReceivable,
+      template: pixTemplate,
+    });
+    const processing = dispatch({ ...scheduled, status: 'PROCESSING', attempts: 1 });
+    const providerSendText = vi.fn();
+    const { service, prisma, finance, updateDispatch } = serviceFactory({
+      dispatchForProcessing: processing,
+      currentReceivables: [{ ...pendingReceivable, clientReference: optedOutReference }],
+      providerSendText,
+      templateRecord: pixTemplate,
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+    prisma.messageDispatch.findUnique
+      .mockResolvedValueOnce(scheduled)
+      .mockResolvedValue(processing);
+
+    await service.sendNow('dispatch-id');
+
+    expect(finance.createReceivablePixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(finance.createReceivablesPixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+        }),
+      }),
+    );
+  });
+
   it('revalidates grouped dispatch items before sending and removes paid receivables', async () => {
     const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
     const refA = clientReference({ id: 'reference-a', reference: 'A' });
@@ -2621,7 +2712,7 @@ describe('BillingService', () => {
     );
   });
 
-  it('keeps all eligible grouped items regardless of the legacy geographic flag', async () => {
+  it('removes an opted-out international item before sending the authorized grouped charge', async () => {
     const foreignClient = client({
       phone: '+1 (407) 639-0665',
       phoneNormalized: '14076390665',
@@ -2680,7 +2771,7 @@ describe('BillingService', () => {
       ],
     });
     const providerSendText = vi.fn().mockResolvedValue({ providerMessageId: 'provider-id' });
-    const { service, updateDispatch } = serviceFactory({
+    const { service, finance, updateDispatch } = serviceFactory({
       dispatchForProcessing: groupedDispatch,
       providerSendText,
       currentReceivables: [
@@ -2703,17 +2794,123 @@ describe('BillingService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           items: {
-            create: expect.arrayContaining([
-              expect.objectContaining({ receivableId: receivableA.id, amount: 25 }),
-              expect.objectContaining({ receivableId: receivableB.id, amount: 25 }),
-            ]),
+            create: [expect.objectContaining({ receivableId: receivableB.id, amount: 25 })],
           },
         }),
       }),
     );
+    expect(finance.createReceivablePixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(finance.createReceivablesPixForAutomatedBilling).not.toHaveBeenCalled();
     expect(providerSendText).toHaveBeenCalledWith(
       'instance-token',
-      expect.objectContaining({ phone: '14076390665', body: expect.stringContaining('A') }),
+      expect.objectContaining({ phone: '14076390665', body: expect.not.stringContaining('A') }),
+    );
+  });
+
+  it('does not generate grouped PIX or send when every international item is opted out', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const refA = clientReference({
+      id: 'reference-a',
+      reference: 'A',
+      internationalBillingEnabled: false,
+    });
+    const refB = clientReference({
+      id: 'reference-b',
+      reference: 'B',
+      internationalBillingEnabled: false,
+    });
+    const receivableA = receivable({ id: 'receivable-a', clientReferenceId: refA.id, amount: 25 });
+    const receivableB = receivable({ id: 'receivable-b', clientReferenceId: refB.id, amount: 25 });
+    const pixTemplate = template({ content: 'PIX: {{pix}}' });
+    const groupedDispatch = dispatch({
+      status: 'PROCESSING',
+      attempts: 1,
+      phone: '14076390665',
+      client: foreignClient,
+      clientReference: refA,
+      receivable: receivableA,
+      template: pixTemplate,
+      idempotencyKey: 'billing-group:client-id:2026-09-15',
+      requestId: 'billing-group:client-id:2026-09-15',
+      items: [
+        dispatchItem({
+          id: 'item-a',
+          receivable: receivableA,
+          clientReference: refA,
+        }),
+        dispatchItem({
+          id: 'item-b',
+          receivable: receivableB,
+          clientReference: refB,
+        }),
+      ],
+    });
+    const providerSendText = vi.fn();
+    const { service, finance, updateDispatch } = serviceFactory({
+      dispatchForProcessing: groupedDispatch,
+      currentReceivables: [
+        { ...receivableA, clientReference: refA },
+        { ...receivableB, clientReference: refB },
+      ],
+      providerSendText,
+      templateRecord: pixTemplate,
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await service.processDue(new Date('2026-09-15T12:00:00.000Z'));
+
+    expect(finance.createReceivablePixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(finance.createReceivablesPixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+        }),
+      }),
+    );
+  });
+
+  it('blocks a failed international retry after opt-in is revoked', async () => {
+    const foreignClient = client({
+      phone: '+1 (407) 639-0665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const revokedReference = clientReference({ internationalBillingEnabled: false });
+    const pendingReceivable = receivable();
+    const providerSendText = vi.fn();
+    const { service, finance, updateDispatch } = serviceFactory({
+      dispatchForProcessing: dispatch({
+        status: 'PROCESSING',
+        attempts: 2,
+        phone: '14076390665',
+        client: foreignClient,
+        clientReference: revokedReference,
+        receivable: pendingReceivable,
+      }),
+      currentReceivables: [{ ...pendingReceivable, clientReference: revokedReference }],
+      providerSendText,
+      conversationRecord: { id: 'conversation-id', whatsAppConnection: connection() },
+    });
+
+    await service.processDue(new Date('2026-09-15T12:15:00.000Z'));
+
+    expect(finance.createReceivablePixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(finance.createReceivablesPixForAutomatedBilling).not.toHaveBeenCalled();
+    expect(providerSendText).not.toHaveBeenCalled();
+    expect(updateDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'IGNORED',
+          errorCode: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+        }),
+      }),
     );
   });
 
@@ -3192,8 +3389,8 @@ describe('BillingService', () => {
       internationalBlocked: 1,
       internationalBlockedReasons: [
         {
-          code: 'INTERNATIONAL_BILLING_CONVERSATION_REQUIRED',
-          message: 'Conversa internacional vinculada e operacional obrigatoria.',
+          code: 'INTERNATIONAL_BILLING_OPT_IN_REQUIRED',
+          message: 'A referencia nao autorizou Billing automatico internacional.',
           count: 1,
         },
       ],

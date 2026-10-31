@@ -29,6 +29,7 @@ import {
   getPaymentIntentPixCopy,
   getPaymentIntentsSummary,
   getReferralSummary,
+  getReportsIntelligenceOverview,
   getReceivable,
   getReceivablesSummary,
   getWhatsAppAttendanceAnalytics,
@@ -125,6 +126,30 @@ describe('CRM UI formatters', () => {
     expect(canonical?.phoneE164).toBe('+351912345678');
     expect(legacyMissing?.phoneE164).toBeUndefined();
     expect(legacyNull?.phoneE164).toBeNull();
+  });
+
+  it('requests the reports overview with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await getReportsIntelligenceOverview(
+      {
+        preset: 'custom',
+        startDate: '2026-10-01',
+        endDate: '2026-10-31',
+      },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/reports/intelligence/overview?preset=custom&startDate=2026-10-01&endDate=2026-10-31',
+      ),
+      expect.objectContaining({ credentials: 'include', signal: controller.signal }),
+    );
   });
 
   it('formats business dates without timezone conversion', () => {

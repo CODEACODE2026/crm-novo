@@ -1549,6 +1549,69 @@ export interface ReportFilters {
   referrerClientId?: string;
 }
 
+export type ReportsIntelligencePreset =
+  | 'today'
+  | 'last_7_days'
+  | 'this_month'
+  | 'previous_month'
+  | 'last_3_months'
+  | 'last_6_months'
+  | 'last_12_months'
+  | 'this_year'
+  | 'previous_year'
+  | 'custom';
+
+export interface ReportsIntelligenceMetric<Value extends number | string> {
+  value: Value;
+  previousValue: Value;
+  changePercent: string | null;
+  comparison: 'percentage' | 'new';
+}
+
+export interface ReportsIntelligenceOverview {
+  meta: {
+    preset: ReportsIntelligencePreset;
+    timezone: 'America/Sao_Paulo';
+    period: { startDate: string; endDate: string };
+    comparisonPeriod: { startDate: string; endDate: string };
+    granularity: 'day' | 'month' | 'year';
+    generatedAt: string;
+    dataQuality: Array<{ code: string; message: string }>;
+  };
+  kpis: {
+    received: ReportsIntelligenceMetric<string>;
+    receivedOperational: ReportsIntelligenceMetric<string>;
+    receivedLegacy: ReportsIntelligenceMetric<string>;
+    manualEntries: ReportsIntelligenceMetric<string>;
+    payments: ReportsIntelligenceMetric<number>;
+    averageTicket: ReportsIntelligenceMetric<string>;
+    newClients: ReportsIntelligenceMetric<number>;
+    activeClients: ReportsIntelligenceMetric<number>;
+    paidActivations: ReportsIntelligenceMetric<number>;
+    paidRenewals: ReportsIntelligenceMetric<number>;
+    paidReactivations: ReportsIntelligenceMetric<number>;
+    canceledReferences: ReportsIntelligenceMetric<number>;
+    pendingReceivables: ReportsIntelligenceMetric<string>;
+    overdueReceivables: ReportsIntelligenceMetric<string>;
+  };
+  charts: {
+    financialEvolution: Array<{
+      bucket: string;
+      received: string;
+      operational: string;
+      legacy: string;
+      payments: number;
+    }>;
+    newClients: Array<{ bucket: string; total: number }>;
+    paidLifecycle: Array<{
+      bucket: string;
+      activations: number;
+      renewals: number;
+      reactivations: number;
+    }>;
+  };
+}
+
 export interface PaginatedBillingDispatches {
   items: MessageDispatch[];
   pagination: PaginatedClients['pagination'];
@@ -2371,6 +2434,26 @@ function reportParams(filters: ReportFilters = {}) {
 export function getReport(type: ReportType, filters: ReportFilters = {}) {
   const query = reportParams(filters);
   return apiFetch<OperationalReport>(`/reports/${type}${query ? `?${query}` : ''}`);
+}
+
+export function getReportsIntelligenceOverview(
+  filters: {
+    preset: ReportsIntelligencePreset;
+    startDate?: string;
+    endDate?: string;
+  },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+
+  return apiFetch<ReportsIntelligenceOverview>(
+    `/reports/intelligence/overview?${params}`,
+    signal ? { signal } : undefined,
+  );
 }
 
 export function listReferrals(

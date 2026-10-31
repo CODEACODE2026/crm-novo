@@ -595,7 +595,7 @@ describe('ClientsService options', () => {
 });
 
 describe('ClientsService list search', () => {
-  it('uses only canonical identity for an explicit foreign phone when enabled', () => {
+  it('searches an explicit foreign phone by canonical E.164 and normalized digits', () => {
     const service = new ClientsService(
       {} as never,
       {} as never,
@@ -614,7 +614,7 @@ describe('ClientsService list search', () => {
       (where.OR ?? []).some(
         (condition) => typeof condition === 'object' && 'phoneNormalized' in condition,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('finds clients by name', async () => {
@@ -955,7 +955,7 @@ describe('ClientsService client detail payload', () => {
 });
 
 describe('ClientsService manual client creation', () => {
-  it('publishes global identity capabilities while keeping every outbound operation gated', () => {
+  it('publishes country-neutral operational capabilities while keeping finance gated', () => {
     const disabled = createClientCreationService().service.phoneCapabilities();
     const enabled = createClientCreationService(true).service.phoneCapabilities();
 
@@ -976,13 +976,13 @@ describe('ClientsService manual client creation', () => {
       internationalBillingSendEnabled: false,
       operationCapabilities: {
         clientPhoneWrite: { enabled: true },
-        manualText: { enabled: false },
-        messageAction: { enabled: false },
-        manualMedia: { enabled: false },
-        manualVoice: { enabled: false },
+        manualText: { enabled: true },
+        messageAction: { enabled: true },
+        manualMedia: { enabled: true },
+        manualVoice: { enabled: true },
         manualPix: { enabled: false, requiresFinancialAuthorization: true },
         pixButton: { enabled: false, requiresFinancialAuthorization: true },
-        autoReply: { enabled: false },
+        autoReply: { enabled: true },
         billing: { enabled: false, requiresFinancialAuthorization: true },
         recovery: { enabled: false, requiresFinancialAuthorization: true },
       },
@@ -1324,6 +1324,7 @@ describe('ClientsService manual client creation', () => {
   it.each([
     ['US', '+1 (407) 639-0665'],
     ['PT', '+351 912 345 678'],
+    ['AE', '+971 50 123 4567'],
     ['GB', '+44 20 7946 0958'],
     ['AR', '+54 9 11 2345-6789'],
   ])(
@@ -1342,6 +1343,7 @@ describe('ClientsService manual client creation', () => {
   it.each([
     ['US', '+1 (407) 639-0665', '14076390665'],
     ['PT', '+351 912 345 678', '351912345678'],
+    ['AE', '+971 50 123 4567', '971501234567'],
     ['GB', '+44 20 7946 0958', '442079460958'],
   ])(
     'persists a validated %s identity without fabricating DDI 55 when client writes are enabled',
@@ -1520,6 +1522,33 @@ describe('ClientsService manual reference creation', () => {
       clientReferenceId: fake.references[0]!.id,
       purpose: 'INITIAL_ACTIVATION',
     });
+  });
+
+  it('creates an operational reference without a receivable when financial authorization is absent', async () => {
+    const fake = createClientCreationService();
+    fake.receivableCycleService.canMaterializeReceivable.mockResolvedValueOnce(false);
+
+    const result = await fake.service.createReference(
+      'existing-client-id',
+      {
+        reference: 'GLOBAL-NO-OPT-IN',
+        planId: 'plan-id',
+        recurringValue: 30,
+        dueDate: '2026-10-01',
+        billingNoticeDays: 3,
+        internationalBillingEnabled: false,
+      },
+      'user-id',
+    );
+
+    expect(result).toMatchObject({
+      reference: 'GLOBAL-NO-OPT-IN',
+      status: 'ATIVO',
+      internationalBillingEnabled: false,
+    });
+    expect(fake.receivables).toHaveLength(0);
+    expect(fake.prisma.paymentIntent.create).not.toHaveBeenCalled();
+    expect(fake.prisma.messageDispatch.create).not.toHaveBeenCalled();
   });
 
   it('rejects referral reward data without a referrer before opening a transaction', async () => {
@@ -2118,6 +2147,22 @@ function createClientCreationService(
           return Promise.resolve(include?.plan ? { ...reference, plan } : reference);
         },
       ),
+      update: vi.fn(
+        ({
+          where,
+          data,
+          include,
+        }: {
+          where: { id: string };
+          data: Record<string, unknown>;
+          include?: { plan?: boolean };
+        }) => {
+          const reference = references.find((item) => item.id === where.id);
+          if (!reference) throw new Error('Reference not found');
+          Object.assign(reference, data);
+          return Promise.resolve(include?.plan ? { ...reference, plan } : reference);
+        },
+      ),
     },
     receivable: {
       create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
@@ -2167,6 +2212,7 @@ function createClientCreationService(
     }),
   };
   const receivableCycleService = {
+    canMaterializeReceivable: vi.fn().mockResolvedValue(true),
     ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
   };
   const service = new ClientsService(
@@ -2363,6 +2409,7 @@ function createClientUpdateService({
     handleClientReferenceStatusChange: vi.fn(),
   };
   const receivableCycleService = {
+    canMaterializeReceivable: vi.fn().mockResolvedValue(true),
     updatePendingCurrentCycleReceivable: vi.fn().mockResolvedValue({ id: 'receivable-id' }),
     ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'kept' }),
   };

@@ -22,6 +22,7 @@ import {
 import { BillingTemplateRenderer } from '../billing/billing-template-renderer';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
+import { resolveCanonicalPhoneIdentity } from '../common/phone/canonical-phone-identity';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
@@ -30,6 +31,16 @@ import { UpdateRecoveryAutomationSettingsDto } from './dto/update-recovery-autom
 
 const maxAttempts = 3;
 const retryDelayMinutes = 15;
+const nonRetryableProviderErrorCodes = [
+  'PROVIDER_CONFIRMATION_MISSING',
+  'PROVIDER_PERSISTENCE_UNCERTAIN',
+  'PROVIDER_RESULT_UNCERTAIN',
+] as const;
+const definitelyRejectedProviderCodes = new Set([
+  'KIRAGO_ADMIN_AUTH_FAILED',
+  'KIRAGO_INSTANCE_AUTH_FAILED',
+  'KIRAGO_RESOURCE_NOT_FOUND',
+]);
 const pageSizeLimit = 100;
 const defaultRecoverySendTime = '09:00';
 const defaultRecoveryTimezone = 'America/Sao_Paulo';
@@ -95,6 +106,9 @@ type RecoveryDispatch = MessageDispatch & {
     | null;
   recoveryStep: RecoveryCampaignStep | null;
 };
+type RecoveryPhoneResolution =
+  | { status: 'allowed'; kind: 'BR' | 'INTERNATIONAL'; digits: string; e164: string }
+  | { status: 'blocked'; code: string; message: string };
 
 @Injectable()
 export class RecoveryService {
@@ -280,6 +294,14 @@ export class RecoveryService {
         status: { in: ['SCHEDULED', 'FAILED'] },
         attempts: { lt: maxAttempts },
         scheduledFor: { lte: now },
+        AND: [
+          {
+            OR: [
+              { errorCode: null },
+              { errorCode: { notIn: [...nonRetryableProviderErrorCodes] } },
+            ],
+          },
+        ],
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
       orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
@@ -448,8 +470,8 @@ export class RecoveryService {
       return null;
     }
 
-    const operationalPhone = resolveBrazilianOperationalPhone(client);
-    if (operationalPhone.status !== 'valid') {
+    const operationalPhone = this.resolveRecoveryPhone(client);
+    if (operationalPhone.status !== 'allowed') {
       return null;
     }
 
@@ -472,7 +494,16 @@ export class RecoveryService {
     }
 
     const templates = await this.ensureRecoveryTemplates(tx);
-    const connection = await this.findOperationalConnection(tx, null);
+    const connection =
+      operationalPhone.kind === 'INTERNATIONAL'
+        ? await this.findInternationalRecoveryConversation(
+            tx,
+            client.id,
+            operationalPhone.digits,
+            operationalPhone.e164,
+          ).then((conversation) => conversation?.whatsAppConnection ?? null)
+        : await this.findOperationalConnection(tx, null);
+    if (!connection) return null;
     const campaign = await tx.recoveryCampaign.create({
       data: {
         clientId: client.id,
@@ -609,14 +640,28 @@ export class RecoveryService {
     const expectedStepNumbers = new Set(stepsConfig.map((step) => step.stepNumber));
     const templates = await this.ensureRecoveryTemplates(this.prisma);
     const connection = await this.findOperationalConnection(this.prisma, null);
-    const operationalPhone = resolveBrazilianOperationalPhone(campaign.client);
+    const operationalPhone = this.resolveRecoveryPhone(campaign.client);
 
-    if (operationalPhone.status !== 'valid') {
-      const blocker = this.recoveryPhoneBlockReason(operationalPhone.reason);
+    if (operationalPhone.status !== 'allowed') {
+      const blocker = operationalPhone;
       await this.prisma.$transaction((tx) =>
         this.cancelCampaignById(tx, campaign.id, blocker.message, blocker.code, undefined),
       );
       return { kept, created, canceled: canceled + 1 };
+    }
+
+    const effectiveConnection =
+      operationalPhone.kind === 'INTERNATIONAL'
+        ? await this.findInternationalRecoveryConversation(
+            this.prisma,
+            campaign.client.id,
+            operationalPhone.digits,
+            operationalPhone.e164,
+          ).then((conversation) => conversation?.whatsAppConnection ?? null)
+        : connection;
+
+    if (!effectiveConnection) {
+      return { kept, created, canceled };
     }
 
     for (const expected of stepsConfig) {
@@ -657,6 +702,13 @@ export class RecoveryService {
 
       if (step?.dispatch) {
         if (
+          nonRetryableProviderErrorCodes.some((errorCode) => errorCode === step.dispatch!.errorCode)
+        ) {
+          kept += 1;
+          continue;
+        }
+
+        if (
           ['SCHEDULED', 'FAILED'].includes(step.status) &&
           ['SCHEDULED', 'FAILED'].includes(step.dispatch.status)
         ) {
@@ -689,7 +741,7 @@ export class RecoveryService {
                   status: 'SCHEDULED',
                   errorCode: null,
                   errorMessage: null,
-                  whatsAppConnectionId: connection?.id ?? step.dispatch!.whatsAppConnectionId,
+                  whatsAppConnectionId: effectiveConnection.id,
                 },
               });
             });
@@ -739,7 +791,7 @@ export class RecoveryService {
               clientReferenceId: campaign.clientReferenceId,
               recoveryCampaignId: campaign.id,
               templateId: template.id,
-              whatsAppConnectionId: connection?.id ?? null,
+              whatsAppConnectionId: effectiveConnection.id,
               phone: operationalPhone.digits,
               body: renderedContent,
               renderedContent,
@@ -787,6 +839,14 @@ export class RecoveryService {
         origin: 'RECOVERY',
         status: { in: ['SCHEDULED', 'FAILED'] },
         attempts: { lt: maxAttempts },
+        AND: [
+          {
+            OR: [
+              { errorCode: null },
+              { errorCode: { notIn: [...nonRetryableProviderErrorCodes] } },
+            ],
+          },
+        ],
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
       data: {
@@ -869,14 +929,35 @@ export class RecoveryService {
 
     const body = latestDispatch.renderedContent ?? latestDispatch.body;
     const requestId = latestDispatch.idempotencyKey ?? latestDispatch.requestId;
+    let confirmedProviderMessageId: string | null = null;
+    let instanceToken: string;
 
     try {
-      const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+      instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    } catch (error) {
+      return this.markRetry(
+        latestDispatch,
+        'PROVIDER_PRE_SEND_ERROR',
+        this.sanitizeError(error),
+        now,
+      );
+    }
+
+    try {
       const result = await this.provider.sendText(instanceToken, {
         phone: latestDispatch.phone,
         body,
         requestId,
       });
+
+      if (!result.providerMessageId) {
+        return this.markProviderOutcomeUncertain(
+          latestDispatch,
+          'PROVIDER_CONFIRMATION_MISSING',
+          'Provider nao confirmou o identificador remoto; retry automatico bloqueado.',
+        );
+      }
+      confirmedProviderMessageId = result.providerMessageId;
 
       const updated = await this.prisma.$transaction(async (tx) => {
         const sent = await tx.messageDispatch.update({
@@ -927,7 +1008,24 @@ export class RecoveryService {
 
       return this.presentDispatch(updated);
     } catch (error) {
-      return this.markRetry(latestDispatch, 'PROVIDER_ERROR', this.sanitizeError(error), now);
+      if (confirmedProviderMessageId) {
+        return this.markProviderOutcomeUncertain(
+          latestDispatch,
+          'PROVIDER_PERSISTENCE_UNCERTAIN',
+          'Provider confirmou o envio, mas a persistencia local falhou; retry automatico bloqueado.',
+          confirmedProviderMessageId,
+        );
+      }
+
+      if (this.isDefinitelyRejectedProviderFailure(error)) {
+        return this.markRetry(latestDispatch, 'PROVIDER_ERROR', this.sanitizeError(error), now);
+      }
+
+      return this.markProviderOutcomeUncertain(
+        latestDispatch,
+        'PROVIDER_RESULT_UNCERTAIN',
+        'Resultado remoto incerto; retry automatico bloqueado para evitar duplicidade.',
+      );
     }
   }
 
@@ -1045,9 +1143,9 @@ export class RecoveryService {
       };
     }
 
-    const operationalPhone = resolveBrazilianOperationalPhone(dispatch.client);
-    if (operationalPhone.status !== 'valid') {
-      return this.recoveryPhoneBlockReason(operationalPhone.reason);
+    const operationalPhone = this.resolveRecoveryPhone(dispatch.client);
+    if (operationalPhone.status !== 'allowed') {
+      return operationalPhone;
     }
 
     if (dispatch.phone !== operationalPhone.digits) {
@@ -1055,6 +1153,22 @@ export class RecoveryService {
         code: 'PHONE_IDENTITY_MISMATCH',
         message: 'Destinatario da recuperacao diverge da identidade atual do cliente.',
       };
+    }
+
+    if (operationalPhone.kind === 'INTERNATIONAL') {
+      const conversation = await this.findInternationalRecoveryConversation(
+        this.prisma,
+        dispatch.client.id,
+        operationalPhone.digits,
+        operationalPhone.e164,
+        dispatch.whatsAppConnectionId ?? undefined,
+      );
+      if (!conversation) {
+        return {
+          code: 'INTERNATIONAL_RECOVERY_CONVERSATION_REQUIRED',
+          message: 'Conversa internacional vinculada e operacional nao foi encontrada.',
+        };
+      }
     }
 
     return null;
@@ -1078,6 +1192,49 @@ export class RecoveryService {
     }
 
     return { code: 'INVALID_PHONE', message: 'Telefone da recuperacao invalido.' };
+  }
+
+  private resolveRecoveryPhone(client: Client): RecoveryPhoneResolution {
+    const brazilian = resolveBrazilianOperationalPhone(client);
+    if (brazilian.status === 'valid') {
+      return { status: 'allowed', kind: 'BR', digits: brazilian.digits, e164: brazilian.e164 };
+    }
+    if (brazilian.reason !== 'INTERNATIONAL_PHONE') {
+      return { status: 'blocked', ...this.recoveryPhoneBlockReason(brazilian.reason) };
+    }
+
+    const canonical = resolveCanonicalPhoneIdentity(client);
+    if (canonical.status !== 'valid' || canonical.country === 'BR') {
+      return { status: 'blocked', code: 'INVALID_PHONE', message: 'Telefone invalido.' };
+    }
+    return {
+      status: 'allowed',
+      kind: 'INTERNATIONAL',
+      digits: canonical.digits,
+      e164: canonical.e164,
+    };
+  }
+
+  private async findInternationalRecoveryConversation(
+    db: Transaction | PrismaService,
+    clientId: string,
+    digits: string,
+    e164: string,
+    connectionId?: string,
+  ) {
+    return db.whatsAppConversation.findFirst({
+      where: {
+        clientId,
+        phoneNormalized: digits,
+        phoneE164: e164,
+        ...(connectionId ? { whatsAppConnectionId: connectionId } : {}),
+        whatsAppConnection: {
+          is: { status: 'CONNECTED', connected: true, loggedIn: true },
+        },
+      },
+      include: { whatsAppConnection: true },
+      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+    });
   }
 
   private async markIneligible(
@@ -1157,6 +1314,44 @@ export class RecoveryService {
     }
 
     return this.presentDispatch(updated);
+  }
+
+  private async markProviderOutcomeUncertain(
+    dispatch: Pick<MessageDispatch, 'id'>,
+    errorCode: string,
+    errorMessage: string,
+    providerMessageId?: string,
+  ) {
+    const updated = await this.prisma.messageDispatch.update({
+      where: { id: dispatch.id },
+      data: {
+        status: 'FAILED',
+        errorCode,
+        errorMessage,
+        ...(providerMessageId ? { providerMessageId } : {}),
+        nextAttemptAt: null,
+      },
+      include: {
+        client: { include: { plan: true } },
+        clientReference: { include: { client: true, plan: true } },
+        receivable: true,
+        template: true,
+        whatsAppConnection: true,
+        recoveryCampaign: { include: { steps: true } },
+        recoveryStep: true,
+      },
+    });
+
+    return this.presentDispatch(updated);
+  }
+
+  private isDefinitelyRejectedProviderFailure(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    return (
+      'code' in error &&
+      typeof error.code === 'string' &&
+      definitelyRejectedProviderCodes.has(error.code)
+    );
   }
 
   private async cancelActiveCampaignsAfterReactivation(

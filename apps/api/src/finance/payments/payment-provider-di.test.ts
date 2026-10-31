@@ -66,7 +66,9 @@ const prisma = {
   },
   paymentIntent: {
     findFirst: vi.fn(),
+    findUnique: vi.fn(),
     create: vi.fn(),
+    update: vi.fn(),
   },
   clientEvent: {
     create: vi.fn(),
@@ -215,6 +217,19 @@ function mockCreatedIntent() {
       failureMessage: null,
       createdAt: fixedNow,
       updatedAt: fixedNow,
+    }),
+  );
+  prisma.paymentIntent.update.mockImplementation(({ data }) =>
+    Promise.resolve({
+      id: 'payment-intent-1',
+      receivableId: 'receivable-1',
+      paymentGroupId: null,
+      paidAt: null,
+      failureCode: null,
+      failureMessage: null,
+      createdAt: fixedNow,
+      updatedAt: fixedNow,
+      ...data,
     }),
   );
 }
@@ -376,6 +391,21 @@ describe('Payment provider DI pipeline', () => {
     });
   });
 
+  it('omits payer_phone from the FastDepix payload when the payer phone is absent', async () => {
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const provider = app.get(FastFlowPaymentProvider);
+    const input = pixInput();
+    Reflect.deleteProperty(input, 'payerPhone');
+
+    await provider.createPix(input);
+
+    const [, payload] = apiClient.createTransaction.mock.calls[0]!;
+    expect(payload.user).toEqual({ name: 'Cliente Teste' });
+    expect(payload).not.toHaveProperty('payer_phone');
+  });
+
   it('rejects an explicit provider that is not configured for PIX creation', async () => {
     credentialActive = false;
     app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
@@ -402,7 +432,7 @@ describe('Payment provider DI pipeline', () => {
   });
 
   it.each([undefined, null, '', ' '])(
-    'rejects missing FastFlow transaction ID %s without creating a local intent',
+    'keeps the durable reservation when FastFlow omits transaction ID %s',
     async (id) => {
       apiClient.createTransaction.mockResolvedValueOnce({
         id,
@@ -422,7 +452,9 @@ describe('Payment provider DI pipeline', () => {
       await expect(service.createReceivablePix('receivable-1', 'user-1')).rejects.toThrow(
         'Resposta da API de pagamentos sem transacao obrigatoria.',
       );
-      expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
+      expect(prisma.paymentIntent.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'CREATED' }) }),
+      );
     },
   );
 
@@ -540,7 +572,7 @@ describe('Payment provider DI pipeline', () => {
     });
 
     expect(apiClient.createTransaction).toHaveBeenCalledTimes(1);
-    expect(prisma.paymentIntent.create).toHaveBeenCalledWith(
+    expect(prisma.paymentIntent.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           provider: 'FASTFLOW',
@@ -575,7 +607,7 @@ describe('Payment provider DI pipeline', () => {
       status: 'WAITING_PAYMENT',
       amount: '30.00',
     });
-    expect(prisma.paymentIntent.create).toHaveBeenCalledWith(
+    expect(prisma.paymentIntent.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           providerTransactionId: '75148',
@@ -677,7 +709,9 @@ describe('Payment provider DI pipeline', () => {
     );
 
     expect(apiClient.createTransaction).toHaveBeenCalledTimes(1);
-    expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
+    expect(prisma.paymentIntent.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'CREATED' }) }),
+    );
     expect(prisma.clientEvent.create).not.toHaveBeenCalled();
   });
 });

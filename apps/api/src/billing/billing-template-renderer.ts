@@ -38,6 +38,7 @@ const billingIndividualVariables = [
   'vencimento',
   'plano',
   'referencia',
+  'pix',
 ] as const satisfies readonly BillingTemplateVariable[];
 
 const billingGroupedVariables = [
@@ -46,6 +47,7 @@ const billingGroupedVariables = [
   'quantidade',
   'itens',
   'valorTotal',
+  'pix',
 ] as const satisfies readonly BillingTemplateVariable[];
 
 const recoveryVariables = [

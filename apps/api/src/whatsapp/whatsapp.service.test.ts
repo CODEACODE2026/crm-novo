@@ -12,6 +12,7 @@ import { createHash } from 'crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { resolveWhatsAppOutboundPhone } from '../common/phone/whatsapp-outbound-phone';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
 import { KiragoWebhookNormalizer } from './kirago/kirago-webhook-normalizer';
 import { WhatsAppConversationAttendanceFilter } from './dto/list-whatsapp-conversations.dto';
@@ -15232,31 +15233,58 @@ describe('WhatsAppService', () => {
     expect(provider.sendText).not.toHaveBeenCalled();
   });
 
-  it('blocks an explicit international destination before creating a conversation', async () => {
+  it('starts an explicit international destination with canonical E.164 identity', async () => {
     const activeConnection = connection({
       status: 'CONNECTED',
       connected: true,
       loggedIn: true,
     });
-    const { service, prisma, provider } = serviceFactory({ currentConnection: activeConnection });
-
-    await expect(
-      service.startConversation(
-        {
-          whatsAppConnectionId: activeConnection.id,
-          phone: '+1 (407) 639-0665',
-          body: 'Nao enviar',
-          requestId: '6bc15154-2415-4ef7-8a8d-2b1dd024f980',
+    const createdConversation = conversation({
+      whatsAppConnectionId: activeConnection.id,
+      whatsAppConnection: activeConnection,
+      clientId: null,
+      client: null,
+      phone: '14076390665',
+      phoneNormalized: '14076390665',
+      phoneE164: '+14076390665',
+    });
+    const { service, prisma, provider } = serviceFactory({
+      currentConnection: activeConnection,
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(createdConversation)
+            .mockResolvedValue(createdConversation),
+          create: vi.fn().mockResolvedValue(createdConversation),
+          update: vi.fn().mockResolvedValue(createdConversation),
         },
-        'actor-user-id',
-      ),
-    ).rejects.toMatchObject({
-      response: expect.objectContaining({ code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' }),
+      },
     });
 
-    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
-    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-    expect(provider.sendText).not.toHaveBeenCalled();
+    await service.startConversation(
+      {
+        whatsAppConnectionId: activeConnection.id,
+        phone: '+1 (407) 639-0665',
+        body: 'Hello',
+        requestId: '6bc15154-2415-4ef7-8a8d-2b1dd024f980',
+      },
+      'actor-user-id',
+    );
+
+    expect(prisma.whatsAppConversation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+        }),
+      }),
+    );
+    expect(provider.sendText).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665', body: 'Hello' }),
+    );
   });
 
   it('blocks an ambiguous international-shaped destination before Brazil normalization', async () => {
@@ -16636,60 +16664,22 @@ describe('WhatsApp conversation labels', () => {
     },
   );
 
-  it('blocks international text, media and retry before local pending writes or provider calls', async () => {
-    const internationalConversation = conversation({
-      phone: '14076390665',
-      phoneNormalized: '14076390665',
-      phoneE164: '+14076390665',
-      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
-    });
-    const messageCreate = vi.fn();
-    const messageUpdateMany = vi.fn();
-    const { service, provider } = serviceFactory({
-      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
-      prismaOverrides: {
-        whatsAppConversation: {
-          findUnique: vi.fn().mockResolvedValue(internationalConversation),
-        },
-        whatsAppMessage: {
-          findUnique: vi.fn().mockResolvedValue(
-            conversationMessage({
-              status: 'FAILED',
-              conversation: internationalConversation,
-              whatsAppConnection: internationalConversation.whatsAppConnection,
-            }),
-          ),
-          create: messageCreate,
-          updateMany: messageUpdateMany,
-        },
-      },
-    });
-
-    await expect(
-      service.sendConversationTextMessage(internationalConversation.id, {
-        body: 'Unsafe outbound',
-        requestId: 'international-text',
-      }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
-    await expect(
-      service.sendConversationMediaMessage(internationalConversation.id, {
-        file: {
-          buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
-          mimetype: 'image/jpeg',
-          originalname: 'image.jpg',
-          size: 4,
-        },
-        requestId: 'international-media',
-      }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
-    await expect(service.retryConversationMessage(conversationMessage().id)).rejects.toMatchObject({
-      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
-    });
-
-    expect(messageCreate).not.toHaveBeenCalled();
-    expect(messageUpdateMany).not.toHaveBeenCalled();
-    expect(provider.sendText).not.toHaveBeenCalled();
-    expect(provider.sendImage).not.toHaveBeenCalled();
+  it('authorizes international text, actions, media and voice with canonical identity', () => {
+    for (const operation of [
+      'MANUAL_CONVERSATION_TEXT',
+      'MANUAL_CONVERSATION_ACTION',
+      'MANUAL_CONVERSATION_MEDIA',
+      'MANUAL_CONVERSATION_VOICE',
+    ] as const) {
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: '+14076390665',
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+          operation,
+        }).status,
+      ).toBe('allowed');
+    }
   });
 
   it('sends only manual plain text to a proven international conversation when enabled', async () => {
@@ -16769,7 +16759,7 @@ describe('WhatsApp conversation labels', () => {
     });
   });
 
-  it('blocks global manual text before the provider when the conversation has no linked client', async () => {
+  it('sends global manual text for a canonical guest conversation', async () => {
     const globalConversation = conversation({
       clientId: null,
       client: null,
@@ -16787,12 +16777,15 @@ describe('WhatsApp conversation labels', () => {
 
     await expect(
       service.sendConversationTextMessage(globalConversation.id, {
-        body: 'Do not send',
+        body: 'Guest hello',
         requestId: 'global-manual-text-unlinked',
       }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH' } });
-    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-    expect(provider.sendText).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: 'SENT' });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
+    expect(provider.sendText).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '819012345678', body: 'Guest hello' }),
+    );
   });
 
   it('revalidates the current connection immediately before international provider send', async () => {
@@ -16891,48 +16884,17 @@ describe('WhatsApp conversation labels', () => {
     expect(provider.sendText).not.toHaveBeenCalled();
   });
 
-  it('keeps reply and media blocked for international conversations even when manual text is enabled', async () => {
-    const internationalConversation = conversation({
-      phone: '+14076390665',
-      phoneNormalized: '14076390665',
-      phoneE164: '+14076390665',
-      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
-    });
-    const messageCreate = vi.fn();
-    const { service, provider } = serviceFactory({
-      configOverrides: { PHONE_INTERNATIONAL_MANUAL_SEND_ENABLED: 'true' },
-      prismaOverrides: {
-        whatsAppConversation: {
-          findUnique: vi.fn().mockResolvedValue(internationalConversation),
-          update: vi.fn().mockResolvedValue(internationalConversation),
-        },
-        whatsAppMessage: { create: messageCreate },
-      },
-    });
-
-    await expect(
-      service.sendConversationTextMessage(internationalConversation.id, {
-        body: 'Reply',
-        requestId: 'international-reply',
-        replyToMessageId: conversationMessage().id,
-      }),
-    ).rejects.toMatchObject({
-      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
-    });
-    await expect(
-      service.sendConversationMediaMessage(internationalConversation.id, {
-        file: {
-          buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
-          mimetype: 'image/jpeg',
-          originalname: 'image.jpg',
-          size: 4,
-        },
-        requestId: 'international-media-enabled',
-      }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
-    expect(messageCreate).not.toHaveBeenCalled();
-    expect(provider.sendText).not.toHaveBeenCalled();
-    expect(provider.sendImage).not.toHaveBeenCalled();
+  it('applies the same country-neutral authorization to replies and media', () => {
+    for (const operation of ['MANUAL_CONVERSATION_ACTION', 'MANUAL_CONVERSATION_MEDIA'] as const) {
+      expect(
+        resolveWhatsAppOutboundPhone({
+          phone: '+14076390665',
+          phoneNormalized: '14076390665',
+          phoneE164: '+14076390665',
+          operation,
+        }).status,
+      ).toBe('allowed');
+    }
   });
 
   it('sends international image media with the canonical E.164 digits only when US is allowed', async () => {
@@ -17048,7 +17010,7 @@ describe('WhatsApp conversation labels', () => {
     );
   });
 
-  it('keeps Portugal media blocked when only US is in the independent allowlist', async () => {
+  it('allows Portugal media independently of the legacy country allowlist', async () => {
     const linkedClient = client({
       phone: '+351912345678',
       phoneNormalized: '351912345678',
@@ -17080,10 +17042,13 @@ describe('WhatsApp conversation labels', () => {
           originalname: 'documento.pdf',
           size: 11,
         },
-        requestId: 'international-media-pt-blocked',
+        requestId: 'international-media-pt-parity',
       }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
-    expect(provider.sendDocument).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: 'SENT' });
+    expect(provider.sendDocument).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '351912345678', fileName: 'documento.pdf' }),
+    );
   });
 
   it('uses the global media capability for Portugal without consulting the legacy allowlist', async () => {
@@ -17130,7 +17095,7 @@ describe('WhatsApp conversation labels', () => {
     );
   });
 
-  it('blocks authorized-country media when the international conversation has no linked client', async () => {
+  it('allows media for a canonical international guest conversation', async () => {
     const internationalConversation = conversation({
       clientId: null,
       client: null,
@@ -17159,8 +17124,11 @@ describe('WhatsApp conversation labels', () => {
         },
         requestId: 'international-media-unlinked',
       }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_OUTBOUND_IDENTITY_MISMATCH' } });
-    expect(provider.sendImage).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: 'SENT' });
+    expect(provider.sendImage).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665' }),
+    );
   });
 
   it('sends international browser voice as PTT and revalidates its independent authorization', async () => {
@@ -17220,7 +17188,7 @@ describe('WhatsApp conversation labels', () => {
     });
   });
 
-  it('fails the pending international media message if its flag changes before provider send', async () => {
+  it('does not revoke operational media when a legacy country flag changes', async () => {
     const configOverrides: Record<string, string | undefined> = {
       PHONE_INTERNATIONAL_MANUAL_MEDIA_ENABLED: 'true',
       PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES: 'US',
@@ -17267,18 +17235,11 @@ describe('WhatsApp conversation labels', () => {
         },
         requestId: 'international-media-flag-changed',
       }),
-    ).rejects.toMatchObject({ response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' } });
-    expect(provider.sendImage).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: 'SENT' });
+    expect(provider.sendImage).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    'phone',
-    'client_link',
-    'missing_link',
-    'connection',
-    'disconnected',
-    'allowlist',
-  ] as const)(
+  it.each(['phone', 'client_link', 'missing_link', 'connection', 'disconnected'] as const)(
     'blocks international media when %s changes between initial validation and provider send',
     async (changedField) => {
       const configOverrides: Record<string, string | undefined> = {
@@ -17358,12 +17319,7 @@ describe('WhatsApp conversation labels', () => {
       const findUnique = vi
         .fn()
         .mockResolvedValueOnce(initialConversation)
-        .mockImplementationOnce(() => {
-          if (changedField === 'allowlist') {
-            configOverrides.PHONE_INTERNATIONAL_MANUAL_MEDIA_COUNTRIES = 'PT';
-          }
-          return Promise.resolve(revalidatedConversation);
-        });
+        .mockResolvedValueOnce(revalidatedConversation);
       const { service, provider } = serviceFactory({
         configOverrides,
         prismaOverrides: {
@@ -17742,31 +17698,17 @@ describe('WhatsApp conversation labels', () => {
     });
   });
 
-  it('keeps international reply blocked unless text and action flags are both enabled', async () => {
-    const internationalConversation = conversation({
-      phone: '+14076390665',
-      phoneNormalized: '14076390665',
-      phoneE164: '+14076390665',
-      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
-    });
-    const target = conversationMessage({ providerMessageId: 'provider-inbound-us' });
-    const { service, provider } = serviceFactory({
-      configOverrides: { PHONE_INTERNATIONAL_MESSAGE_ACTIONS_ENABLED: 'true' },
-      prismaOverrides: {
-        whatsAppConversation: { findUnique: vi.fn().mockResolvedValue(internationalConversation) },
-        whatsAppMessage: { findUnique: vi.fn().mockResolvedValue(target) },
-      },
-    });
-
-    await expect(
-      service.sendConversationTextMessage(internationalConversation.id, {
-        body: 'Blocked reply',
-        replyToMessageId: target.id,
-      }),
-    ).rejects.toMatchObject({
-      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
-    });
-    expect(provider.sendText).not.toHaveBeenCalled();
+  it('keeps international reply authorization independent of legacy flags', () => {
+    expect(
+      resolveWhatsAppOutboundPhone({
+        phone: '+14076390665',
+        phoneNormalized: '14076390665',
+        phoneE164: '+14076390665',
+        operation: 'MANUAL_CONVERSATION_ACTION',
+        internationalMessageActionsEnabled: false,
+        internationalManualTextEnabled: false,
+      }).status,
+    ).toBe('allowed');
   });
 
   it('fails the pending reply when the quoted message changes before the provider call', async () => {
@@ -17966,29 +17908,16 @@ describe('WhatsApp conversation labels', () => {
     expect(provider.deleteMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks international actions before the provider when the action flag is disabled', async () => {
-    const internationalConversation = conversation({
-      phone: '+5491123456789',
-      phoneNormalized: '5491123456789',
-      phoneE164: '+5491123456789',
-      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
-    });
-    const target = conversationMessage({
-      providerMessageId: 'provider-ar',
-      conversation: internationalConversation,
-    });
-    const { service, provider } = serviceFactory({
-      prismaOverrides: { whatsAppMessage: { findFirst: vi.fn().mockResolvedValue(target) } },
-    });
-
-    await expect(
-      service.updateConversationMessageReaction(internationalConversation.id, target.id, {
-        emoji: '👍',
-      }),
-    ).rejects.toMatchObject({
-      response: { code: 'WHATSAPP_INTERNATIONAL_OUTBOUND_DISABLED' },
-    });
-    expect(provider.sendReaction).not.toHaveBeenCalled();
+  it('authorizes international actions when the legacy action flag is disabled', () => {
+    expect(
+      resolveWhatsAppOutboundPhone({
+        phone: '+5491123456789',
+        phoneNormalized: '5491123456789',
+        phoneE164: '+5491123456789',
+        operation: 'MANUAL_CONVERSATION_ACTION',
+        internationalMessageActionsEnabled: false,
+      }).status,
+    ).toBe('allowed');
   });
 
   it('revalidates the current international connection before a message action provider call', async () => {

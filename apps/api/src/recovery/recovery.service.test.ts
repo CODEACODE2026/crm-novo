@@ -6,8 +6,10 @@
 /* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/no-base-to-string */
 /* eslint-disable @typescript-eslint/no-unnecessary-type-assertion */
-import { Prisma } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+
+import { Prisma, PrismaClient } from '@prisma/client';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { BillingTemplateRenderer } from '../billing/billing-template-renderer';
 import { RecoveryService } from './recovery.service';
 
@@ -274,6 +276,9 @@ function createService(
     whatsAppConnection: {
       findFirst: vi.fn(async () => connection),
     },
+    whatsAppConversation: {
+      findFirst: vi.fn(async () => ({ id: 'conversation-1', whatsAppConnection: connection })),
+    },
     recoveryCampaign: {
       findFirst: vi.fn(
         async ({ where }) =>
@@ -400,6 +405,9 @@ function createService(
             if (where.OR && nextAttemptAt && nextAttemptAt > where.OR[1].nextAttemptAt.lte) {
               return false;
             }
+            const blockedErrorCodes = where.AND?.[0]?.OR?.[1]?.errorCode?.notIn as
+              string[] | undefined;
+            if (blockedErrorCodes?.includes(String(dispatch.errorCode))) return false;
             return true;
           })
           .sort((a, b) => Number(a.scheduledFor) - Number(b.scheduledFor))
@@ -418,7 +426,10 @@ function createService(
             (!where.recoveryCampaignId ||
               dispatch.recoveryCampaignId === where.recoveryCampaignId) &&
             dispatch.origin === where.origin &&
-            where.status.in.includes(status)
+            where.status.in.includes(status) &&
+            !(where.AND?.[0]?.OR?.[1]?.errorCode?.notIn as string[] | undefined)?.includes(
+              String(dispatch.errorCode),
+            )
           ) {
             const { attempts, ...rest } = data;
             Object.assign(dispatch, rest);
@@ -503,12 +514,14 @@ describe('RecoveryService', () => {
     [
       'canonical international identity',
       { phone: '+44 7911 123456', phoneNormalized: '447911123456', phoneE164: '+447911123456' },
+      true,
     ],
     [
       'legacy-corrupted international identity',
       { phone: '+1 (407) 639-0665', phoneNormalized: '5514076390665', phoneE164: null },
+      false,
     ],
-  ])('does not create a recovery campaign or dispatch for a %s', async (_label, phoneOverrides) => {
+  ])('applies global identity validation to a %s', async (_label, phoneOverrides, allowed) => {
     const foreignClient = { ...baseClient, ...phoneOverrides };
     const foreignReference = reference({ client: foreignClient });
     const foreignReceivable = receivable({
@@ -521,14 +534,14 @@ describe('RecoveryService', () => {
 
     await service.reconcile();
 
-    expect(campaigns).toHaveLength(0);
-    expect(steps).toHaveLength(0);
-    expect(dispatches).toHaveLength(0);
-    expect(events).toHaveLength(0);
+    expect(campaigns).toHaveLength(allowed ? 1 : 0);
+    expect(steps).toHaveLength(allowed ? 4 : 0);
+    expect(dispatches).toHaveLength(allowed ? 4 : 0);
+    expect(events).toHaveLength(allowed ? 1 : 0);
     expect(provider.sendText).not.toHaveBeenCalled();
   });
 
-  it('ignores an already scheduled recovery after the client becomes international', async () => {
+  it('blocks an already scheduled recovery when the recipient identity changes', async () => {
     const testClient = { ...baseClient };
     const testReference = reference({ client: testClient });
     const testReceivable = receivable({ client: testClient, clientReference: testReference });
@@ -546,7 +559,7 @@ describe('RecoveryService', () => {
     expect(provider.sendText).not.toHaveBeenCalled();
     expect(dispatches[0]).toMatchObject({
       status: 'IGNORED',
-      errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+      errorCode: 'PHONE_IDENTITY_MISMATCH',
     });
   });
 
@@ -579,11 +592,11 @@ describe('RecoveryService', () => {
     expect(provider.sendText).not.toHaveBeenCalled();
     expect(dispatches[0]).toMatchObject({
       status: 'IGNORED',
-      errorCode: 'INTERNATIONAL_PHONE_BLOCKED',
+      errorCode: 'PHONE_IDENTITY_MISMATCH',
     });
   });
 
-  it('cancels an active campaign that becomes international without changing its receivable', async () => {
+  it('preserves an active campaign that becomes international without changing its receivable', async () => {
     const testClient = { ...baseClient };
     const testReference = reference({ client: testClient });
     const testReceivable = receivable({ client: testClient, clientReference: testReference });
@@ -600,12 +613,14 @@ describe('RecoveryService', () => {
     await service.reconcile();
 
     expect(campaigns[0]).toMatchObject({
-      status: 'CANCELADA',
-      cancelReason: 'Envio de recuperacao internacional ainda nao esta habilitado.',
+      status: 'ATIVA',
+      cancelReason: null,
     });
-    expect(dispatches.every((dispatch) => dispatch.status === 'CANCELED')).toBe(true);
+    expect(dispatches.every((dispatch) => dispatch.status === 'SCHEDULED')).toBe(true);
     expect(testReceivable).toMatchObject({ status: 'PENDENTE', amount: new Prisma.Decimal(50) });
-    expect(events).toContainEqual(expect.objectContaining({ type: 'RECOVERY_CAMPAIGN_CANCELED' }));
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: 'RECOVERY_CAMPAIGN_CANCELED' }),
+    );
     expect(provider.sendText).not.toHaveBeenCalled();
   });
 
@@ -923,6 +938,240 @@ describe('RecoveryService', () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    ['timeout after remote acceptance', 'KIRAGO_TIMEOUT'],
+    ['socket reset after remote acceptance', 'KIRAGO_UNAVAILABLE'],
+    ['HTTP 500 after remote acceptance', 'WHATSAPP_PROVIDER_ERROR'],
+    ['unknown transport outcome after remote acceptance', 'UNCLASSIFIED_PROVIDER_FAILURE'],
+  ])('blocks every resend after %s', async (message, code) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    let remotePosts = 0;
+    const provider = {
+      sendText: vi.fn(async () => {
+        remotePosts += 1;
+        throw Object.assign(new Error(message), {
+          code,
+        });
+      }),
+    };
+    const { dispatches, service, tx } = createService({ provider, settings: { enabled: true } });
+    await service.reconcile();
+    for (const dispatch of dispatches.slice(1)) {
+      dispatch.scheduledFor = new Date('2026-12-20T12:00:00.000Z');
+      dispatch.nextAttemptAt = dispatch.scheduledFor;
+    }
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
+    const uncertain = dispatches.find(
+      (dispatch) => dispatch.errorCode === 'PROVIDER_RESULT_UNCERTAIN',
+    );
+
+    expect(remotePosts).toBe(1);
+    expect(uncertain).toMatchObject({ status: 'FAILED', nextAttemptAt: null });
+
+    const restartedService = new RecoveryService(
+      tx as never,
+      provider as never,
+      { decrypt: vi.fn(() => 'instance-token') } as never,
+      { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
+      new BillingTemplateRenderer(),
+    );
+    await Promise.all([
+      restartedService.processDue(new Date('2026-09-21T12:00:00.000Z'), 20, {
+        automatic: true,
+      }),
+      restartedService.processDue(new Date('2026-09-21T12:00:00.000Z'), 20, {
+        automatic: true,
+      }),
+    ]);
+    await restartedService.processDue(new Date('2026-09-22T12:00:00.000Z'));
+
+    expect(remotePosts).toBe(1);
+    expect(provider.sendText).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('keeps retry for a provider rejection that proves the message was not accepted', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    let acceptedRemotePosts = 0;
+    const provider = {
+      sendText: vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error('instance authentication rejected before acceptance'), {
+            code: 'KIRAGO_INSTANCE_AUTH_FAILED',
+          }),
+        )
+        .mockImplementationOnce(async () => {
+          acceptedRemotePosts += 1;
+          return { providerMessageId: 'remote-after-safe-retry' };
+        }),
+    };
+    const { dispatches, service } = createService({ provider, settings: { enabled: true } });
+    await service.reconcile();
+    for (const dispatch of dispatches.slice(1)) {
+      dispatch.scheduledFor = new Date('2026-12-20T12:00:00.000Z');
+      dispatch.nextAttemptAt = dispatch.scheduledFor;
+    }
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
+    const retryable = dispatches.find((dispatch) => dispatch.errorCode === 'PROVIDER_ERROR');
+    expect(retryable).toMatchObject({
+      status: 'FAILED',
+      nextAttemptAt: new Date('2026-09-20T12:15:00.000Z'),
+    });
+
+    await service.processDue(new Date('2026-09-20T12:16:00.000Z'), 20, { automatic: true });
+
+    expect(provider.sendText).toHaveBeenCalledTimes(2);
+    expect(acceptedRemotePosts).toBe(1);
+    expect(retryable).toMatchObject({
+      status: 'SENT',
+      providerMessageId: 'remote-after-safe-retry',
+    });
+    vi.useRealTimers();
+  });
+
+  it('blocks retry when KiraGo returns without a provider message id', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const provider = { sendText: vi.fn().mockResolvedValue({ providerMessageId: '' }) };
+    const { dispatches, service } = createService({ provider, settings: { enabled: true } });
+    await service.reconcile();
+    for (const dispatch of dispatches.slice(1)) {
+      dispatch.scheduledFor = new Date('2026-12-20T12:00:00.000Z');
+      dispatch.nextAttemptAt = dispatch.scheduledFor;
+    }
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
+    await service.processDue(new Date('2026-09-21T12:00:00.000Z'), 20, { automatic: true });
+
+    expect(provider.sendText).toHaveBeenCalledTimes(1);
+    expect(dispatches).toContainEqual(
+      expect.objectContaining({
+        status: 'FAILED',
+        errorCode: 'PROVIDER_CONFIRMATION_MISSING',
+        nextAttemptAt: null,
+      }),
+    );
+    vi.useRealTimers();
+  });
+
+  it('preserves a confirmed provider id and blocks retry after local persistence fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const provider = {
+      sendText: vi.fn().mockResolvedValue({ providerMessageId: 'remote-confirmed-1' }),
+    };
+    const { dispatches, service, tx } = createService({ provider, settings: { enabled: true } });
+    await service.reconcile();
+    for (const dispatch of dispatches.slice(1)) {
+      dispatch.scheduledFor = new Date('2026-12-20T12:00:00.000Z');
+      dispatch.nextAttemptAt = dispatch.scheduledFor;
+    }
+    const originalUpdate = tx.messageDispatch.update.getMockImplementation()!;
+    tx.messageDispatch.update.mockImplementation(async (input: { data: { status?: string } }) => {
+      if (input.data.status === 'SENT') throw new Error('database unavailable after send');
+      return originalUpdate(input);
+    });
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
+    await service.processDue(new Date('2026-09-21T12:00:00.000Z'), 20, { automatic: true });
+
+    expect(provider.sendText).toHaveBeenCalledTimes(1);
+    expect(dispatches).toContainEqual(
+      expect.objectContaining({
+        status: 'FAILED',
+        providerMessageId: 'remote-confirmed-1',
+        errorCode: 'PROVIDER_PERSISTENCE_UNCERTAIN',
+        nextAttemptAt: null,
+      }),
+    );
+    vi.useRealTimers();
+  });
+
+  it.each([
+    'PROVIDER_RESULT_UNCERTAIN',
+    'PROVIDER_CONFIRMATION_MISSING',
+    'PROVIDER_PERSISTENCE_UNCERTAIN',
+  ])('does not reactivate %s while reconciling a changed schedule', async (errorCode) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const provider = {
+      sendText: vi.fn().mockResolvedValue({ providerMessageId: 'must-not-be-sent' }),
+    };
+    const { dispatches, service, steps, tx } = createService({
+      provider,
+      settings: { enabled: true },
+    });
+    await service.reconcile();
+
+    const uncertain = dispatches[0]!;
+    const original = {
+      id: uncertain.id,
+      scheduledFor: uncertain.scheduledFor,
+      requestId: uncertain.requestId,
+      idempotencyKey: uncertain.idempotencyKey,
+      providerMessageId: 'remote-message-preserved',
+    };
+    Object.assign(uncertain, {
+      status: 'FAILED',
+      errorCode,
+      errorMessage: 'Resultado remoto permanece incerto.',
+      nextAttemptAt: null,
+      providerMessageId: original.providerMessageId,
+    });
+    for (let index = 1; index < dispatches.length; index += 1) {
+      dispatches[index]!.status = 'CANCELED';
+      steps[index]!.status = 'CANCELED';
+    }
+
+    await service.updateSettings({
+      sendTime: '10:30',
+      day3OffsetDays: 4,
+      day10OffsetDays: 11,
+      day15OffsetDays: 16,
+      day30OffsetDays: 31,
+    });
+
+    expect(dispatches).toHaveLength(4);
+    expect(uncertain).toMatchObject({
+      ...original,
+      status: 'FAILED',
+      errorCode,
+      errorMessage: 'Resultado remoto permanece incerto.',
+      nextAttemptAt: null,
+    });
+
+    const restartedService = new RecoveryService(
+      tx as never,
+      provider as never,
+      { decrypt: vi.fn(() => 'instance-token') } as never,
+      { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
+      new BillingTemplateRenderer(),
+    );
+    await Promise.all([
+      restartedService.processDue(new Date('2027-01-20T12:00:00.000Z'), 20, {
+        automatic: true,
+      }),
+      restartedService.processDue(new Date('2027-01-20T12:00:00.000Z'), 20, {
+        automatic: true,
+      }),
+    ]);
+    await restartedService.processDue(new Date('2027-01-21T12:00:00.000Z'));
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(uncertain).toMatchObject({
+      ...original,
+      status: 'FAILED',
+      errorCode,
+      nextAttemptAt: null,
+    });
+    vi.useRealTimers();
+  });
+
   it('keeps automatic recovery processing blocked when settings are disabled', async () => {
     vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
     const { dispatches, provider, service } = createService({ settings: { enabled: false } });
@@ -975,3 +1224,238 @@ describe('RecoveryService', () => {
     vi.useRealTimers();
   });
 });
+
+describe.skipIf(process.env.RUN_DATABASE_TESTS !== '1')(
+  'Recovery uncertain dispatch reconciliation on PostgreSQL',
+  () => {
+    const prisma = new PrismaClient();
+    const createdClientIds = new Set<string>();
+    const createdPlanIds = new Set<string>();
+    const createdConnectionIds = new Set<string>();
+    const createdTemplateIds = new Set<string>();
+
+    beforeAll(async () => {
+      await prisma.$connect();
+    });
+
+    afterEach(async () => {
+      const clientIds = [...createdClientIds];
+      await prisma.messageDispatch.deleteMany({ where: { clientId: { in: clientIds } } });
+      await prisma.recoveryCampaign.deleteMany({ where: { clientId: { in: clientIds } } });
+      await prisma.clientEvent.deleteMany({ where: { clientId: { in: clientIds } } });
+      await prisma.receivable.deleteMany({ where: { clientId: { in: clientIds } } });
+      await prisma.clientReference.deleteMany({ where: { clientId: { in: clientIds } } });
+      await prisma.client.deleteMany({ where: { id: { in: clientIds } } });
+      await prisma.messageTemplate.deleteMany({ where: { id: { in: [...createdTemplateIds] } } });
+      await prisma.whatsAppConnection.deleteMany({
+        where: { id: { in: [...createdConnectionIds] } },
+      });
+      await prisma.plan.deleteMany({ where: { id: { in: [...createdPlanIds] } } });
+      await prisma.recoveryAutomationSettings.deleteMany({ where: { scope: 'global' } });
+      createdClientIds.clear();
+      createdPlanIds.clear();
+      createdConnectionIds.clear();
+      createdTemplateIds.clear();
+    });
+
+    afterAll(async () => {
+      await prisma.$disconnect();
+    });
+
+    it.each([
+      'PROVIDER_RESULT_UNCERTAIN',
+      'PROVIDER_CONFIRMATION_MISSING',
+      'PROVIDER_PERSISTENCE_UNCERTAIN',
+    ])('preserves %s after schedule changes, restart and two workers', async (errorCode) => {
+      const suffix = randomUUID();
+      const plan = await prisma.plan.create({
+        data: {
+          name: `RECOVERY FIX3 ${suffix}`,
+          durationMonths: 1,
+          defaultValue: new Prisma.Decimal(50),
+        },
+      });
+      createdPlanIds.add(plan.id);
+      const client = await prisma.client.create({
+        data: {
+          name: 'Recovery FIX3 client',
+          phone: '+55 (11) 99999-1234',
+          phoneNormalized: '5511999991234',
+          phoneE164: '+5511999991234',
+          reference: `RECOVERY-FIX3-${suffix}`,
+          planId: plan.id,
+          recurringValue: new Prisma.Decimal(50),
+          dueDate: new Date('2026-09-10T00:00:00.000Z'),
+          billingAnchorDay: 10,
+          billingNoticeDays: 3,
+        },
+      });
+      createdClientIds.add(client.id);
+      const reference = await prisma.clientReference.create({
+        data: {
+          clientId: client.id,
+          reference: `RECOVERY-FIX3-REF-${suffix}`,
+          planId: plan.id,
+          recurringValue: new Prisma.Decimal(50),
+          dueDate: new Date('2026-09-10T00:00:00.000Z'),
+          billingAnchorDay: 10,
+          billingNoticeDays: 3,
+        },
+      });
+      const receivable = await prisma.receivable.create({
+        data: {
+          clientId: client.id,
+          clientReferenceId: reference.id,
+          purpose: 'RENEWAL',
+          description: 'Recovery FIX3 receivable',
+          amount: new Prisma.Decimal(50),
+          dueDate: new Date('2026-09-10T00:00:00.000Z'),
+          payerName: client.name,
+          payerPhone: client.phone,
+          payerPhoneNormalized: client.phoneNormalized,
+        },
+      });
+      const connection = await prisma.whatsAppConnection.create({
+        data: {
+          name: `RECOVERY FIX3 connection ${suffix}`,
+          providerTokenEncrypted: 'encrypted-local-token',
+          status: 'CONNECTED',
+          connected: true,
+          loggedIn: true,
+        },
+      });
+      createdConnectionIds.add(connection.id);
+      const templateTypes = [
+        'RECOVERY_DAY_3',
+        'RECOVERY_DAY_7',
+        'RECOVERY_DAY_15',
+        'RECOVERY_DAY_30',
+      ] as const;
+      const templates = await Promise.all(
+        templateTypes.map((type) =>
+          prisma.messageTemplate.create({
+            data: {
+              name: `RECOVERY FIX3 ${type} ${suffix}`,
+              type,
+              content: 'Ola {{primeiroNome}}.',
+            },
+          }),
+        ),
+      );
+      for (const template of templates) createdTemplateIds.add(template.id);
+      await prisma.recoveryAutomationSettings.create({
+        data: { scope: 'global', enabled: false, sendTime: '09:00' },
+      });
+      const campaign = await prisma.recoveryCampaign.create({
+        data: {
+          clientId: client.id,
+          clientReferenceId: reference.id,
+          receivableId: receivable.id,
+          startedAt: new Date('2026-09-10T00:00:00.000Z'),
+        },
+      });
+
+      let uncertainDispatchId = '';
+      for (const [index, template] of templates.entries()) {
+        const isUncertain = index === 0;
+        const requestId = `recovery:${client.id}:${receivable.id}:${campaign.id}:${index + 1}`;
+        const dispatch = await prisma.messageDispatch.create({
+          data: {
+            clientId: client.id,
+            clientReferenceId: reference.id,
+            receivableId: receivable.id,
+            recoveryCampaignId: campaign.id,
+            templateId: template.id,
+            whatsAppConnectionId: connection.id,
+            phone: client.phoneNormalized,
+            body: 'Recovery FIX3 body',
+            renderedContent: 'Recovery FIX3 body',
+            origin: 'RECOVERY',
+            status: isUncertain ? 'FAILED' : 'CANCELED',
+            requestId,
+            idempotencyKey: requestId,
+            scheduledFor: new Date(Date.UTC(2026, 8, 13 + index * 7, 12)),
+            nextAttemptAt: null,
+            errorCode: isUncertain ? errorCode : 'FIXTURE_CANCELED',
+            errorMessage: isUncertain ? 'Resultado remoto incerto.' : 'Fixture cancelada.',
+            providerMessageId: isUncertain ? 'remote-message-preserved' : null,
+          },
+        });
+        if (isUncertain) uncertainDispatchId = dispatch.id;
+        await prisma.recoveryCampaignStep.create({
+          data: {
+            campaignId: campaign.id,
+            stepNumber: index + 1,
+            delayDays: [3, 7, 15, 30][index]!,
+            templateId: template.id,
+            dispatchId: dispatch.id,
+            scheduledFor: dispatch.scheduledFor!,
+            status: isUncertain ? 'SCHEDULED' : 'CANCELED',
+          },
+        });
+      }
+
+      const provider = { sendText: vi.fn() };
+      const createService = () =>
+        new RecoveryService(
+          prisma as never,
+          provider as never,
+          { decrypt: vi.fn(() => 'instance-token') } as never,
+          { get: vi.fn(() => undefined) } as never,
+          new BillingTemplateRenderer(),
+        );
+
+      await prisma.recoveryAutomationSettings.update({
+        where: { scope: 'global' },
+        data: {
+          sendTime: '10:30',
+          day3OffsetDays: 4,
+          day10OffsetDays: 11,
+          day15OffsetDays: 16,
+          day30OffsetDays: 31,
+        },
+      });
+      const loadCampaign = () =>
+        prisma.recoveryCampaign.findUniqueOrThrow({
+          where: { id: campaign.id },
+          include: {
+            client: { include: { plan: true } },
+            clientReference: { include: { client: true, plan: true } },
+            receivable: true,
+            steps: {
+              include: { template: true, dispatch: true },
+              orderBy: { stepNumber: 'asc' },
+            },
+          },
+        });
+      type ReconcileCampaign = {
+        reconcileCampaign: (input: Awaited<ReturnType<typeof loadCampaign>>) => Promise<unknown>;
+      };
+      await (createService() as unknown as ReconcileCampaign).reconcileCampaign(
+        await loadCampaign(),
+      );
+      await (createService() as unknown as ReconcileCampaign).reconcileCampaign(
+        await loadCampaign(),
+      );
+
+      const preserved = await prisma.messageDispatch.findUniqueOrThrow({
+        where: { id: uncertainDispatchId },
+      });
+      expect(preserved).toMatchObject({
+        id: uncertainDispatchId,
+        status: 'FAILED',
+        errorCode,
+        errorMessage: 'Resultado remoto incerto.',
+        nextAttemptAt: null,
+        providerMessageId: 'remote-message-preserved',
+      });
+      expect(preserved.requestId).toBe(preserved.idempotencyKey);
+      expect(provider.sendText).not.toHaveBeenCalled();
+      await expect(
+        prisma.messageDispatch.count({
+          where: { recoveryCampaignId: campaign.id, requestId: preserved.requestId },
+        }),
+      ).resolves.toBe(1);
+    });
+  },
+);

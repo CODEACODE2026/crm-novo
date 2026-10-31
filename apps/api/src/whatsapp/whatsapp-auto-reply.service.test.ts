@@ -150,7 +150,7 @@ describe('WhatsAppAutoReplyService', () => {
         conversationId,
         triggerMessageId,
       }),
-    ).resolves.toEqual({ sent: false, reason: 'international_outbound_disabled' });
+    ).resolves.toEqual({ sent: false, reason: 'unsafe_recipient_identity' });
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
     expect(provider.sendText).not.toHaveBeenCalled();
   });
@@ -516,7 +516,7 @@ describe('WhatsAppAutoReplyService', () => {
     ).resolves.toMatchObject({ sent: true });
   });
 
-  it('blocks international auto-reply before reserving a message or calling the provider', async () => {
+  it('sends international auto-reply through the same guarded pipeline', async () => {
     const { service, prisma, provider } = factory({
       context: context({ phoneNormalized: '14076390665', phoneE164: '+14076390665' }),
     });
@@ -527,9 +527,12 @@ describe('WhatsAppAutoReplyService', () => {
         conversationId,
         triggerMessageId,
       }),
-    ).resolves.toEqual({ sent: false, reason: 'international_outbound_disabled' });
+    ).resolves.toMatchObject({ sent: true });
 
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(provider.sendText).toHaveBeenCalledWith(
+      'instance-token',
+      expect.objectContaining({ phone: '14076390665' }),
+    );
   });
 });

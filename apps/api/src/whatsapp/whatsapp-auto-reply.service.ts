@@ -114,10 +114,10 @@ export class WhatsAppAutoReplyService {
       phone: context.phone,
       phoneNormalized: context.phoneNormalized,
       phoneE164: context.phoneE164,
-      operation: 'BR_OPERATIONAL',
+      operation: 'AUTO_REPLY',
     });
     if (recipient.status !== 'allowed') {
-      return { sent: false, reason: 'international_outbound_disabled' as const };
+      return { sent: false, reason: 'unsafe_recipient_identity' as const };
     }
 
     const config = await this.prisma.whatsAppAutoReplyConfig.findUnique({

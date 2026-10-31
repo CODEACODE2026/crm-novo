@@ -24,6 +24,7 @@ function reference(overrides: Record<string, unknown> = {}) {
     dueDate: parseBusinessDate('2026-10-10'),
     billingAnchorDay: 10,
     billingNoticeDays: 3,
+    internationalBillingEnabled: false,
     status: 'ATIVO' as const,
     notes: null,
     createdAt: new Date(),
@@ -33,6 +34,7 @@ function reference(overrides: Record<string, unknown> = {}) {
       name: 'Cliente Ciclo',
       phone: '(44) 99999-9999',
       phoneNormalized: '5544999999999',
+      phoneE164: '+5544999999999',
       email: null,
       reference: 'REF-001',
       planId: plan.id,
@@ -146,6 +148,21 @@ function p2002() {
   });
 }
 
+function p2034() {
+  return new Prisma.PrismaClientKnownRequestError('Transaction write conflict', {
+    clientVersion: 'test',
+    code: 'P2034',
+  });
+}
+
+function p2010(sqlState: string) {
+  return new Prisma.PrismaClientKnownRequestError('Raw query failed', {
+    clientVersion: 'test',
+    code: 'P2010',
+    meta: { code: sqlState, message: 'database error' },
+  });
+}
+
 async function expectConflictCode(promise: Promise<unknown>, code: string) {
   try {
     await promise;
@@ -173,6 +190,30 @@ describe('ReceivableCycleService', () => {
     });
   });
 
+  it.each([false, true])(
+    'allows a canonical international receivable independently from the legacy Billing flag=%s',
+    async (internationalBillingEnabled) => {
+      const fake = fakeService(
+        reference({
+          internationalBillingEnabled,
+          client: {
+            ...reference().client,
+            phone: '+351 912 345 678',
+            phoneNormalized: '351912345678',
+            phoneE164: '+351912345678',
+          },
+        }),
+      );
+
+      await expect(fake.service.canMaterializeReceivable('reference-id')).resolves.toBe(true);
+      await expect(
+        fake.service.ensureCurrentCycleReceivable('reference-id'),
+      ).resolves.toMatchObject({
+        action: 'created',
+      });
+    },
+  );
+
   it('is idempotent when the current cycle already has a pending receivable', async () => {
     const existing = receivable();
     const fake = fakeService(reference({ receivables: [existing] }));
@@ -182,6 +223,28 @@ describe('ReceivableCycleService', () => {
     expect(result.action).toBe('kept');
     expect(result.receivable.id).toBe(existing.id);
     expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing international receivable when the legacy Billing flag is false', async () => {
+    const existing = receivable();
+    const fake = fakeService(
+      reference({
+        internationalBillingEnabled: false,
+        receivables: [existing],
+        client: {
+          ...reference().client,
+          phone: '+971 50 123 4567',
+          phoneNormalized: '971501234567',
+          phoneE164: '+971501234567',
+        },
+      }),
+    );
+
+    const result = await fake.service.ensureCurrentCycleReceivable('reference-id');
+
+    expect(result).toMatchObject({ action: 'kept', receivable: existing });
+    expect(fake.prisma.receivable.create).not.toHaveBeenCalled();
+    expect(fake.prisma.receivable.update).not.toHaveBeenCalled();
   });
 
   it('treats a same-cycle pending receivable with a different amount as divergent', async () => {
@@ -297,6 +360,38 @@ describe('ReceivableCycleService', () => {
     expect(fake.created).toHaveLength(1);
   });
 
+  it('blocks a new receivable for an inactive plan even without a caller option', async () => {
+    const current = reference();
+    const fake = fakeService(
+      reference({
+        plan: { ...current.plan, active: false },
+      }),
+    );
+
+    await expectConflictCode(
+      fake.service.ensureCurrentCycleReceivable('reference-id'),
+      'PLAN_INACTIVE',
+    );
+    expect(fake.created).toHaveLength(0);
+  });
+
+  it('preserves an existing compatible receivable when its plan later becomes inactive', async () => {
+    const existing = receivable();
+    const current = reference();
+    const fake = fakeService(
+      reference({
+        plan: { ...current.plan, active: false },
+        receivables: [existing],
+      }),
+    );
+
+    await expect(fake.service.ensureCurrentCycleReceivable('reference-id')).resolves.toMatchObject({
+      action: 'kept',
+      receivable: { id: existing.id },
+    });
+    expect(fake.created).toHaveLength(0);
+  });
+
   it('blocks cutover creation when the client became inactive before final create', async () => {
     const fake = fakeService(
       reference({
@@ -396,6 +491,50 @@ describe('ReceivableCycleService', () => {
 
     expect(result.action).toBe('kept');
     expect(result.receivable.id).toBe(concurrent.id);
+  });
+
+  it('retries a bounded serializable write conflict and revalidates before creating', async () => {
+    const fake = fakeService();
+    fake.prisma.$transaction.mockRejectedValueOnce(p2034());
+
+    const result = await fake.service.ensureCurrentCycleReceivable('reference-id');
+
+    expect(result.action).toBe('created');
+    expect(fake.prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(fake.created).toHaveLength(1);
+  });
+
+  it('retries a raw PostgreSQL serialization failure and revalidates before creating', async () => {
+    const fake = fakeService();
+    fake.prisma.$transaction.mockRejectedValueOnce(p2010('40001'));
+
+    const result = await fake.service.ensureCurrentCycleReceivable('reference-id');
+
+    expect(result.action).toBe('created');
+    expect(fake.prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(fake.created).toHaveLength(1);
+  });
+
+  it('does not retry unrelated raw query failures', async () => {
+    const fake = fakeService();
+    const error = p2010('42501');
+    fake.prisma.$transaction.mockRejectedValueOnce(error);
+
+    await expect(fake.service.ensureCurrentCycleReceivable('reference-id')).rejects.toBe(error);
+    expect(fake.prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(fake.created).toHaveLength(0);
+  });
+
+  it('returns a controlled conflict after exhausting serializable retries', async () => {
+    const fake = fakeService();
+    fake.prisma.$transaction.mockRejectedValue(p2010('40001'));
+
+    await expectConflictCode(
+      fake.service.ensureCurrentCycleReceivable('reference-id'),
+      'SERIALIZABLE_RETRY_EXHAUSTED',
+    );
+    expect(fake.prisma.$transaction).toHaveBeenCalledTimes(3);
+    expect(fake.created).toHaveLength(0);
   });
 
   it('rejects an incompatible receivable after a P2002 race', async () => {

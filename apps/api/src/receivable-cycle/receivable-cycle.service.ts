@@ -5,6 +5,8 @@ import {
   parseBusinessDate,
   parseSaoPauloBusinessDate,
 } from '../clients/utils/business-date';
+import { resolveBrazilianOperationalPhone } from '../common/phone/brazilian-operational-phone';
+import { resolveCanonicalPhoneIdentity } from '../common/phone/canonical-phone-identity';
 import { PrismaService } from '../common/prisma/prisma.service';
 
 export type CycleIssueCode =
@@ -58,16 +60,13 @@ export class ReceivableCycleService {
     const db = this.isDbClient(dbOrOptions) ? dbOrOptions : this.prisma;
     const options = this.isDbClient(dbOrOptions) ? maybeOptions : dbOrOptions;
 
-    if (this.shouldWrapGuardedOperation(db, options)) {
-      return this.prisma.$transaction<EnsureCurrentCycleReceivableResult>(
-        (tx) => this.ensureCurrentCycleReceivable(clientReferenceId, tx, options),
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    if (db === this.prisma) {
+      return this.runSerializableWithRetry((tx) =>
+        this.ensureCurrentCycleReceivable(clientReferenceId, tx, options),
       );
     }
 
-    if (this.hasFinalGuards(options)) {
-      await this.lockReferenceGraph(clientReferenceId, db);
-    }
+    await this.lockReferenceGraph(clientReferenceId, db);
 
     const reference = await this.findReference(clientReferenceId, db);
 
@@ -104,6 +103,15 @@ export class ReceivableCycleService {
         'Ja existe uma conta a receber pendente com vencimento divergente para esta referencia. Resolva a divergencia antes de gerar uma nova conta.',
       );
     }
+
+    if (!reference.plan.active) {
+      throw new ConflictException({
+        code: 'PLAN_INACTIVE',
+        message: 'Plano da referencia nao esta ativo para gerar conta a receber.',
+      });
+    }
+
+    this.assertFinancialAuthorization(reference);
 
     let receivable: Receivable;
 
@@ -150,7 +158,7 @@ export class ReceivableCycleService {
     const status = this.classifyReference(reference);
 
     return {
-      allowed: this.canCreate(reference, status),
+      allowed: this.canCreate(reference, status) && this.hasFinancialAuthorization(reference),
       status,
       preview: this.isBillable(reference)
         ? {
@@ -163,6 +171,26 @@ export class ReceivableCycleService {
           }
         : null,
     };
+  }
+
+  async canMaterializeReceivable(
+    clientReferenceId: string,
+    db: DbClient = this.prisma,
+  ): Promise<boolean> {
+    if (db === this.prisma) {
+      return this.runSerializableWithRetry((tx) =>
+        this.canMaterializeReceivable(clientReferenceId, tx),
+      );
+    }
+
+    await this.lockReferenceGraph(clientReferenceId, db);
+    const reference = await this.findReference(clientReferenceId, db);
+
+    if (!reference) {
+      throw new NotFoundException('Referencia do cliente nao encontrada.');
+    }
+
+    return this.hasFinancialAuthorization(reference);
   }
 
   async reconcileCurrentCycles(options: { createMissing?: boolean } = {}) {
@@ -403,7 +431,51 @@ export class ReceivableCycleService {
     reference: ReferenceWithRelations,
     status: ReturnType<ReceivableCycleService['classifyReference']>,
   ) {
-    return this.isBillable(reference) && status.code === 'MISSING_RECEIVABLE';
+    return (
+      this.isBillable(reference) &&
+      status.code === 'MISSING_RECEIVABLE' &&
+      this.hasFinancialAuthorization(reference)
+    );
+  }
+
+  private assertFinancialAuthorization(reference: ReferenceWithRelations) {
+    const authorization = this.resolveFinancialAuthorization(reference);
+
+    if (authorization.allowed) return;
+
+    throw new ConflictException({
+      code: authorization.code,
+      message: authorization.message,
+    });
+  }
+
+  private hasFinancialAuthorization(reference: ReferenceWithRelations) {
+    return this.resolveFinancialAuthorization(reference).allowed;
+  }
+
+  private resolveFinancialAuthorization(
+    reference: ReferenceWithRelations,
+  ): { allowed: true } | { allowed: false; code: string; message: string } {
+    const identity = resolveCanonicalPhoneIdentity({
+      phone: reference.client.phone,
+      phoneNormalized: reference.client.phoneNormalized,
+      phoneE164: reference.client.phoneE164,
+    });
+
+    if (identity.status === 'valid') {
+      return { allowed: true };
+    }
+
+    const brazilian = resolveBrazilianOperationalPhone(reference.client);
+    if (brazilian.status === 'valid') {
+      return { allowed: true };
+    }
+
+    return {
+      allowed: false,
+      code: 'PHONE_IDENTITY_INVALID_FOR_FINANCIAL_OPERATION',
+      message: 'Identidade telefonica invalida ou divergente para materializacao financeira.',
+    };
   }
 
   private isBillable(
@@ -503,14 +575,52 @@ export class ReceivableCycleService {
     );
   }
 
-  private shouldWrapGuardedOperation(db: DbClient, options: EnsureCurrentCycleReceivableOptions) {
-    return db === this.prisma && this.hasFinalGuards(options);
-  }
-
   private isDbClient(value: DbClient | EnsureCurrentCycleReceivableOptions): value is DbClient {
     return Boolean(
       value && typeof value === 'object' && 'clientReference' in value && 'receivable' in value,
     );
+  }
+
+  private async runSerializableWithRetry<T>(
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+    maxAttempts = 3,
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        if (!this.isRetryableWriteConflict(error)) {
+          throw error;
+        }
+
+        if (attempt === maxAttempts) {
+          throw new ConflictException({
+            code: 'SERIALIZABLE_RETRY_EXHAUSTED',
+            message: 'Conflito transacional persistente ao materializar conta a receber.',
+          });
+        }
+      }
+    }
+
+    throw new ConflictException('Conflito serializavel ao materializar conta a receber.');
+  }
+
+  private isRetryableWriteConflict(error: unknown) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError)) {
+      return false;
+    }
+
+    if (error.code === 'P2034') {
+      return true;
+    }
+
+    if (error.code !== 'P2010' || !error.meta || typeof error.meta !== 'object') {
+      return false;
+    }
+
+    return (error.meta as { code?: unknown }).code === '40001';
   }
 
   private presentCycle(

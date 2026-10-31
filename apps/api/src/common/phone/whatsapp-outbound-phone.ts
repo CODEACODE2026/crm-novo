@@ -8,6 +8,7 @@ export type WhatsAppOutboundOperation =
   | 'MANUAL_CONVERSATION_ACTION'
   | 'MANUAL_CONVERSATION_MEDIA'
   | 'MANUAL_CONVERSATION_VOICE'
+  | 'AUTO_REPLY'
   | 'MANUAL_PIX';
 
 export type WhatsAppOutboundPhoneInput = {
@@ -35,6 +36,7 @@ export type WhatsAppOutboundPhoneResult =
         | 'INTERNATIONAL_MANUAL_ACTION_ALLOWED'
         | 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
         | 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
+        | 'INTERNATIONAL_AUTO_REPLY_ALLOWED'
         | 'INTERNATIONAL_MANUAL_PIX_ALLOWED';
       digits: string;
       e164: string;
@@ -92,26 +94,11 @@ export function resolveWhatsAppOutboundPhone(
     if (input.operation === 'BR_OPERATIONAL') {
       return { status: 'blocked', reason: 'BLOCKED_UNSUPPORTED_OPERATION' };
     }
-    const legacyEnabled =
-      input.operation === 'MANUAL_CONVERSATION_TEXT'
-        ? input.internationalManualTextEnabled
-        : input.operation === 'MANUAL_CONVERSATION_ACTION'
-          ? input.internationalMessageActionsEnabled
-          : input.operation === 'MANUAL_CONVERSATION_MEDIA'
-            ? input.internationalManualMediaEnabled
-            : input.operation === 'MANUAL_CONVERSATION_VOICE'
-              ? input.internationalManualVoiceEnabled
-              : input.internationalManualPixEnabled;
-    const globalEnabled =
-      input.operation === 'MANUAL_CONVERSATION_TEXT'
-        ? input.globalManualTextEnabled
-        : input.operation === 'MANUAL_CONVERSATION_ACTION'
-          ? input.globalMessageActionsEnabled
-          : input.operation === 'MANUAL_CONVERSATION_MEDIA'
-            ? input.globalManualMediaEnabled
-            : input.operation === 'MANUAL_CONVERSATION_VOICE'
-              ? input.globalManualVoiceEnabled
-              : false;
+    // Operational WhatsApp parity is country-neutral. The legacy international
+    // flags remain accepted by this contract, but only the financial MANUAL_PIX
+    // operation continues to require its explicit authorization flag.
+    const operationEnabled =
+      input.operation === 'MANUAL_PIX' ? input.internationalManualPixEnabled === true : true;
     const operation =
       input.operation === 'MANUAL_CONVERSATION_TEXT'
         ? 'MANUAL_TEXT'
@@ -121,11 +108,13 @@ export function resolveWhatsAppOutboundPhone(
             ? 'MANUAL_MEDIA'
             : input.operation === 'MANUAL_CONVERSATION_VOICE'
               ? 'MANUAL_VOICE'
-              : 'MANUAL_PIX';
+              : input.operation === 'AUTO_REPLY'
+                ? 'AUTO_REPLY'
+                : 'MANUAL_PIX';
     const capability = resolvePhoneOperationCapability({
       operation,
       identityValid: true,
-      operationEnabled: globalEnabled === true || legacyEnabled === true,
+      operationEnabled,
       administrativePermission: true,
       providerSupported: true,
       ...(operation === 'MANUAL_PIX' ? { financialAuthorization: true } : {}),
@@ -145,10 +134,12 @@ export function resolveWhatsAppOutboundPhone(
               ? 'INTERNATIONAL_MANUAL_MEDIA_ALLOWED'
               : input.operation === 'MANUAL_CONVERSATION_VOICE'
                 ? 'INTERNATIONAL_MANUAL_VOICE_ALLOWED'
-                : 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
+                : input.operation === 'AUTO_REPLY'
+                  ? 'INTERNATIONAL_AUTO_REPLY_ALLOWED'
+                  : 'INTERNATIONAL_MANUAL_PIX_ALLOWED',
       digits: canonical.digits,
       e164: canonical.e164,
-      ...(globalEnabled === true ? { globalOperation: true as const } : {}),
+      ...(input.operation !== 'MANUAL_PIX' ? { globalOperation: true as const } : {}),
     };
   }
 

@@ -65,7 +65,7 @@ export class FastDepixApiClient {
     payload: {
       amount: number;
       user: { name: string };
-      payer_phone: string;
+      payer_phone?: string;
       notification_url?: string;
     },
   ) {

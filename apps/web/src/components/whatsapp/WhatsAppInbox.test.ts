@@ -211,7 +211,7 @@ describe('international manual text capability', () => {
     ).toBe(false);
   });
 
-  it('requires one exact canonical identity across E.164, conversation and linked client', () => {
+  it('requires one exact canonical identity and validates the linked client when present', () => {
     const linkedClient = {
       id: 'client-jp',
       name: 'Cliente JP',
@@ -256,13 +256,14 @@ describe('international manual text capability', () => {
         client: { ...linkedClient, phoneE164: null },
       }),
     ).toBe(false);
-    expect(hasLinkedCanonicalGlobalIdentity({ ...canonical, client: null })).toBe(false);
+    expect(hasLinkedCanonicalGlobalIdentity({ ...canonical, client: null })).toBe(true);
   });
 
   it.each([
     ['Brasil', '+5511999991234'],
     ['Estados Unidos', '+14076390665'],
     ['Portugal', '+351912345678'],
+    ['Emirados Arabes', '+971501234567'],
   ])('accepts matching canonical linked identity from %s', (_country, phoneE164) => {
     const phoneNormalized = phoneE164.slice(1);
     const canonical = conversation(`canonical-${phoneNormalized}`, {
@@ -2850,7 +2851,7 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('.conversation-shared-contact');
   });
 
-  it('builds exact Brazilian phone candidates without accepting unsupported international numbers', () => {
+  it('builds exact E.164 candidates while preserving Brazilian ninth-digit aliases', () => {
     expect(sharedContactBrazilPhoneCandidates('+55 44 9821-2815')).toEqual([
       '554498212815',
       '5544998212815',
@@ -2860,12 +2861,14 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       '554498212815',
     ]);
     expect(sharedContactBrazilPhoneCandidates('(44) 3333-2222')).toEqual(['554433332222']);
-    expect(sharedContactBrazilPhoneCandidates('+1 415 555 0100')).toEqual([]);
+    expect(sharedContactBrazilPhoneCandidates('+1 415 555 0100')).toEqual(['14155550100']);
+    expect(sharedContactBrazilPhoneCandidates('+351 912 345 678')).toEqual(['351912345678']);
+    expect(sharedContactBrazilPhoneCandidates('+971 50 123 4567')).toEqual(['971501234567']);
     expect(sharedContactBrazilPhoneCandidates('001 415 555 0100')).toEqual([]);
     expect(sharedContactBrazilPhoneCandidates('123')).toEqual([]);
   });
 
-  it('shows international shared contacts but keeps their operational actions unavailable', () => {
+  it('shows international shared contacts with the same explicit operational actions', () => {
     const markup = renderToStaticMarkup(
       createElement(ConversationContactContent, {
         message: message({
@@ -2879,10 +2882,9 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     );
 
     expect(markup).toContain('+1 (407) 639-0665');
-    expect(markup).toContain(
-      'Ações para telefone internacional ficam indisponíveis até a ativação coordenada.',
-    );
-    expect(markup.match(/disabled=""/g)).toHaveLength(2);
+    expect(markup).toContain('Iniciar conversa');
+    expect(markup).toContain('Ver cliente');
+    expect(markup).not.toContain('disabled=""');
   });
 
   it('matches a shared contact conversation only by exact phone and selected connection', () => {

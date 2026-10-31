@@ -75,6 +75,35 @@ type FinanceDetailedSeriesRow = {
   operationalReceivables: bigint;
 };
 
+type ClientTotalsRow = {
+  newClientsCurrent: bigint;
+  newClientsPrevious: bigint;
+  activeClientsCurrent: bigint;
+  activeClientsPrevious: bigint;
+  clientsWithoutActiveCurrent: bigint;
+  clientsWithoutActivePrevious: bigint;
+  activeReferencesCurrent: bigint;
+  activeReferencesPrevious: bigint;
+  newReferencesCurrent: bigint;
+  newReferencesPrevious: bigint;
+  canceledReferencesCurrent: bigint;
+  canceledReferencesPrevious: bigint;
+  canceledClientsCurrent: bigint;
+  canceledClientsPrevious: bigint;
+};
+
+type ClientReferenceSeriesRow = {
+  businessDate: Date;
+  kind: 'created' | 'canceled';
+  total: bigint;
+};
+type ClientDistributionRow = { key: string; label: string; total: bigint };
+type ActivePortfolioSeriesRow = {
+  businessDate: Date;
+  activeClients: bigint;
+  activeReferences: bigint;
+};
+
 @Injectable()
 export class ReportsIntelligenceService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -312,6 +341,113 @@ export class ReportsIntelligenceService {
     };
   }
 
+  async clients(query: ReportsOverviewDto) {
+    const resolved = resolveReportingPeriod(query);
+    const { period, comparisonPeriod, granularity } = resolved;
+    const [totalsRows, newClientRows, referenceRows, statusRows, planRows, portfolioRows] =
+      await this.prisma.$transaction(async (tx) =>
+        Promise.all([
+          this.clientTotals(tx, period, comparisonPeriod),
+          this.clientSeries(tx, period),
+          this.clientReferenceSeries(tx, period),
+          this.clientStatusDistribution(tx),
+          this.clientPlanDistribution(tx),
+          this.activePortfolioSeries(tx, period, granularity),
+        ]),
+      );
+    const totals = totalsRows[0] ?? this.emptyClientTotals();
+    const bucketCount = reportingBucketKeys(period, 'month').length;
+    const monthlyAverageApplicable = this.daysInRange(period) >= 28;
+
+    return {
+      meta: {
+        preset: resolved.preset,
+        timezone: resolved.timezone,
+        period: this.presentRange(period),
+        comparisonPeriod: this.presentRange(comparisonPeriod),
+        granularity,
+        generatedAt: new Date().toISOString(),
+        dataQuality: [
+          {
+            code: 'CLIENT_REFERENCE_DISTINCT',
+            message:
+              'Clientes e referências são contados separadamente; múltiplos serviços não duplicam clientes.',
+          },
+          {
+            code: 'CURRENT_PLAN_SNAPSHOT',
+            message:
+              'A distribuição por plano é um snapshot atual e não reconstrói planos históricos.',
+          },
+          {
+            code: 'HARD_DELETE_LIMIT',
+            message:
+              'A série histórica usa registros e eventos preservados; exclusões físicas não podem ser reconstruídas.',
+          },
+          {
+            code: 'NO_DEFINITIVE_CHURN',
+            message:
+              'Churn e retenção não são calculados sem denominador histórico integral e confiável.',
+          },
+        ],
+      },
+      kpis: {
+        newClients: this.countMetric(totals.newClientsCurrent, totals.newClientsPrevious),
+        activeClients: this.countMetric(totals.activeClientsCurrent, totals.activeClientsPrevious),
+        clientsWithoutActiveReference: this.countMetric(
+          totals.clientsWithoutActiveCurrent,
+          totals.clientsWithoutActivePrevious,
+        ),
+        activeReferences: this.countMetric(
+          totals.activeReferencesCurrent,
+          totals.activeReferencesPrevious,
+        ),
+        newReferences: this.countMetric(totals.newReferencesCurrent, totals.newReferencesPrevious),
+        canceledReferences: this.countMetric(
+          totals.canceledReferencesCurrent,
+          totals.canceledReferencesPrevious,
+        ),
+        clientsAffectedByCancellation: this.countMetric(
+          totals.canceledClientsCurrent,
+          totals.canceledClientsPrevious,
+        ),
+        monthlyAverageNewClients: {
+          value: monthlyAverageApplicable
+            ? new Prisma.Decimal(totals.newClientsCurrent.toString())
+                .dividedBy(bucketCount)
+                .toFixed(2)
+            : null,
+          applicable: monthlyAverageApplicable,
+          months: bucketCount,
+        },
+        activePortfolioVariation: this.countMetric(
+          totals.activeReferencesCurrent,
+          totals.activeReferencesPrevious,
+        ),
+      },
+      charts: {
+        newClients: this.buildClientSeries(period, granularity, newClientRows),
+        periodComparison: [
+          { label: 'Período atual', value: Number(totals.newClientsCurrent) },
+          { label: 'Período anterior', value: Number(totals.newClientsPrevious) },
+        ],
+        referenceMovement: this.buildReferenceSeries(period, granularity, referenceRows),
+        statusDistribution: statusRows.map((row) => ({
+          status: row.key,
+          label: row.label,
+          total: Number(row.total),
+        })),
+        planDistribution: planRows.map((row) => ({
+          planId: row.key,
+          planName: row.label,
+          total: Number(row.total),
+        })),
+        activePortfolio: this.buildActivePortfolioSeries(period, granularity, portfolioRows),
+        monthlyAcquisition:
+          granularity === 'month' ? this.buildClientSeries(period, 'month', newClientRows) : null,
+      },
+    };
+  }
+
   private financeTotals(
     tx: Prisma.TransactionClient,
     current: ReportingDateRange,
@@ -541,6 +677,146 @@ export class ReportsIntelligenceService {
     `);
   }
 
+  private clientTotals(
+    tx: Prisma.TransactionClient,
+    current: ReportingDateRange,
+    previous: ReportingDateRange,
+  ) {
+    return tx.$queryRaw<ClientTotalsRow[]>(Prisma.sql`
+      WITH current_states AS (
+        SELECT reference."id", reference."clientId",
+          COALESCE(next_change."previousStatus", reference."status")::text AS status_at_cutoff
+        FROM "client_references" reference
+        LEFT JOIN LATERAL (
+          SELECT history."previousStatus"
+          FROM "client_status_history" history
+          WHERE history."clientReferenceId" = reference."id"
+            AND history."createdAt" >= ${current.endExclusiveTimestamp}
+          ORDER BY history."createdAt", history."id"
+          LIMIT 1
+        ) next_change ON true
+        WHERE reference."createdAt" < ${current.endExclusiveTimestamp}
+      ),
+      previous_states AS (
+        SELECT reference."id", reference."clientId",
+          COALESCE(next_change."previousStatus", reference."status")::text AS status_at_cutoff
+        FROM "client_references" reference
+        LEFT JOIN LATERAL (
+          SELECT history."previousStatus"
+          FROM "client_status_history" history
+          WHERE history."clientReferenceId" = reference."id"
+            AND history."createdAt" >= ${previous.endExclusiveTimestamp}
+          ORDER BY history."createdAt", history."id"
+          LIMIT 1
+        ) next_change ON true
+        WHERE reference."createdAt" < ${previous.endExclusiveTimestamp}
+      )
+      SELECT
+        (SELECT COUNT(*) FROM "clients" WHERE "createdAt" >= ${current.startTimestamp} AND "createdAt" < ${current.endExclusiveTimestamp}) AS "newClientsCurrent",
+        (SELECT COUNT(*) FROM "clients" WHERE "createdAt" >= ${previous.startTimestamp} AND "createdAt" < ${previous.endExclusiveTimestamp}) AS "newClientsPrevious",
+        (SELECT COUNT(DISTINCT "clientId") FROM current_states WHERE status_at_cutoff = 'ATIVO') AS "activeClientsCurrent",
+        (SELECT COUNT(DISTINCT "clientId") FROM previous_states WHERE status_at_cutoff = 'ATIVO') AS "activeClientsPrevious",
+        ((SELECT COUNT(*) FROM "clients" WHERE "createdAt" < ${current.endExclusiveTimestamp}) -
+          (SELECT COUNT(DISTINCT "clientId") FROM current_states WHERE status_at_cutoff = 'ATIVO')) AS "clientsWithoutActiveCurrent",
+        ((SELECT COUNT(*) FROM "clients" WHERE "createdAt" < ${previous.endExclusiveTimestamp}) -
+          (SELECT COUNT(DISTINCT "clientId") FROM previous_states WHERE status_at_cutoff = 'ATIVO')) AS "clientsWithoutActivePrevious",
+        (SELECT COUNT(*) FROM current_states WHERE status_at_cutoff = 'ATIVO') AS "activeReferencesCurrent",
+        (SELECT COUNT(*) FROM previous_states WHERE status_at_cutoff = 'ATIVO') AS "activeReferencesPrevious",
+        (SELECT COUNT(*) FROM "client_references" WHERE "createdAt" >= ${current.startTimestamp} AND "createdAt" < ${current.endExclusiveTimestamp}) AS "newReferencesCurrent",
+        (SELECT COUNT(*) FROM "client_references" WHERE "createdAt" >= ${previous.startTimestamp} AND "createdAt" < ${previous.endExclusiveTimestamp}) AS "newReferencesPrevious",
+        (SELECT COUNT(*) FROM "client_references" WHERE "canceledAt" >= ${current.startTimestamp} AND "canceledAt" < ${current.endExclusiveTimestamp}) AS "canceledReferencesCurrent",
+        (SELECT COUNT(*) FROM "client_references" WHERE "canceledAt" >= ${previous.startTimestamp} AND "canceledAt" < ${previous.endExclusiveTimestamp}) AS "canceledReferencesPrevious",
+        (SELECT COUNT(DISTINCT "clientId") FROM "client_references" WHERE "canceledAt" >= ${current.startTimestamp} AND "canceledAt" < ${current.endExclusiveTimestamp}) AS "canceledClientsCurrent",
+        (SELECT COUNT(DISTINCT "clientId") FROM "client_references" WHERE "canceledAt" >= ${previous.startTimestamp} AND "canceledAt" < ${previous.endExclusiveTimestamp}) AS "canceledClientsPrevious"
+    `);
+  }
+
+  private clientReferenceSeries(tx: Prisma.TransactionClient, period: ReportingDateRange) {
+    return tx.$queryRaw<ClientReferenceSeriesRow[]>(Prisma.sql`
+      SELECT ("createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date AS "businessDate",
+        'created'::text AS "kind", COUNT(*) AS "total"
+      FROM "client_references"
+      WHERE "createdAt" >= ${period.startTimestamp} AND "createdAt" < ${period.endExclusiveTimestamp}
+      GROUP BY ("createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date
+      UNION ALL
+      SELECT ("canceledAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date AS "businessDate",
+        'canceled'::text AS "kind", COUNT(*) AS "total"
+      FROM "client_references"
+      WHERE "canceledAt" >= ${period.startTimestamp} AND "canceledAt" < ${period.endExclusiveTimestamp}
+      GROUP BY ("canceledAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date
+      ORDER BY "businessDate", "kind"
+    `);
+  }
+
+  private clientStatusDistribution(tx: Prisma.TransactionClient) {
+    return tx.$queryRaw<ClientDistributionRow[]>(Prisma.sql`
+      SELECT "status"::text AS "key", "status"::text AS "label", COUNT(*) AS "total"
+      FROM "client_references"
+      GROUP BY "status"
+      ORDER BY "status"
+    `);
+  }
+
+  private clientPlanDistribution(tx: Prisma.TransactionClient) {
+    return tx.$queryRaw<ClientDistributionRow[]>(Prisma.sql`
+      SELECT plan."id"::text AS "key", plan."name" AS "label", COUNT(*) AS "total"
+      FROM "client_references" reference
+      JOIN "plans" plan ON plan."id" = reference."planId"
+      WHERE reference."status" = 'ATIVO'
+      GROUP BY plan."id", plan."name"
+      ORDER BY COUNT(*) DESC, plan."name"
+    `);
+  }
+
+  private activePortfolioSeries(
+    tx: Prisma.TransactionClient,
+    period: ReportingDateRange,
+    granularity: ReportingGranularity,
+  ) {
+    const step = Prisma.raw(
+      granularity === 'day'
+        ? "INTERVAL '1 day'"
+        : granularity === 'month'
+          ? "INTERVAL '1 month'"
+          : "INTERVAL '1 year'",
+    );
+    const truncated = Prisma.raw(
+      granularity === 'day' ? 'day' : granularity === 'month' ? 'month' : 'year',
+    );
+    return tx.$queryRaw<ActivePortfolioSeriesRow[]>(Prisma.sql`
+      WITH buckets AS (
+        SELECT bucket_start::date AS "businessDate",
+          ((LEAST(bucket_start + ${step}, CAST(${period.endDate} AS date) + INTERVAL '1 day')::timestamp
+            AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC') AS cutoff
+        FROM generate_series(
+          date_trunc('${truncated}', CAST(${period.startDate} AS date)::timestamp),
+          CAST(${period.endDate} AS date)::timestamp,
+          ${step}
+        ) bucket_start
+      )
+      SELECT bucket."businessDate",
+        COUNT(DISTINCT state."clientId") FILTER (WHERE state.status_at_cutoff = 'ATIVO') AS "activeClients",
+        COUNT(state."id") FILTER (WHERE state.status_at_cutoff = 'ATIVO') AS "activeReferences"
+      FROM buckets bucket
+      LEFT JOIN LATERAL (
+        SELECT reference."id", reference."clientId",
+          COALESCE(next_change."previousStatus", reference."status")::text AS status_at_cutoff
+        FROM "client_references" reference
+        LEFT JOIN LATERAL (
+          SELECT history."previousStatus"
+          FROM "client_status_history" history
+          WHERE history."clientReferenceId" = reference."id"
+            AND history."createdAt" >= bucket.cutoff
+          ORDER BY history."createdAt", history."id"
+          LIMIT 1
+        ) next_change ON true
+        WHERE reference."createdAt" < bucket.cutoff
+      ) state ON true
+      GROUP BY bucket."businessDate"
+      ORDER BY bucket."businessDate"
+    `);
+  }
+
   private financialSeries(tx: Prisma.TransactionClient, period: ReportingDateRange) {
     return tx.$queryRaw<FinancialSeriesRow[]>(Prisma.sql`
       SELECT "transactionDate" AS "businessDate", "origin",
@@ -689,6 +965,44 @@ export class ReportsIntelligenceService {
     }));
   }
 
+  private buildReferenceSeries(
+    period: ReportingDateRange,
+    granularity: ReportingGranularity,
+    rows: ClientReferenceSeriesRow[],
+  ) {
+    const points = new Map(
+      reportingBucketKeys(period, granularity).map((bucket) => [
+        bucket,
+        { bucket, created: 0, canceled: 0 },
+      ]),
+    );
+    for (const row of rows) {
+      const point = points.get(reportingBucketKey(row.businessDate, granularity));
+      if (point) point[row.kind] += Number(row.total);
+    }
+    return [...points.values()];
+  }
+
+  private buildActivePortfolioSeries(
+    period: ReportingDateRange,
+    granularity: ReportingGranularity,
+    rows: ActivePortfolioSeriesRow[],
+  ) {
+    const points = new Map(
+      reportingBucketKeys(period, granularity).map((bucket) => [
+        bucket,
+        { bucket, activeClients: 0, activeReferences: 0, historicalLimitation: true },
+      ]),
+    );
+    for (const row of rows) {
+      const point = points.get(reportingBucketKey(row.businessDate, granularity));
+      if (!point) continue;
+      point.activeClients = Number(row.activeClients);
+      point.activeReferences = Number(row.activeReferences);
+    }
+    return [...points.values()];
+  }
+
   private moneyMetric(current: Prisma.Decimal, previous: Prisma.Decimal) {
     return {
       value: current.toFixed(2),
@@ -773,5 +1087,34 @@ export class ReportsIntelligenceService {
       overdueCurrent: new Prisma.Decimal(0),
       overduePrevious: new Prisma.Decimal(0),
     };
+  }
+
+  private emptyClientTotals(): ClientTotalsRow {
+    return {
+      newClientsCurrent: 0n,
+      newClientsPrevious: 0n,
+      activeClientsCurrent: 0n,
+      activeClientsPrevious: 0n,
+      clientsWithoutActiveCurrent: 0n,
+      clientsWithoutActivePrevious: 0n,
+      activeReferencesCurrent: 0n,
+      activeReferencesPrevious: 0n,
+      newReferencesCurrent: 0n,
+      newReferencesPrevious: 0n,
+      canceledReferencesCurrent: 0n,
+      canceledReferencesPrevious: 0n,
+      canceledClientsCurrent: 0n,
+      canceledClientsPrevious: 0n,
+    };
+  }
+
+  private daysInRange(range: ReportingDateRange) {
+    return (
+      Math.round(
+        (Date.parse(`${range.endDate}T00:00:00.000Z`) -
+          Date.parse(`${range.startDate}T00:00:00.000Z`)) /
+          86_400_000,
+      ) + 1
+    );
   }
 }

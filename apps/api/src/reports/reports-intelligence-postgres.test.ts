@@ -161,6 +161,59 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     expect(result.charts.annualComparison?.every((point) => point.comparisonBucket)).toBe(true);
   });
 
+  it('separates clients from references and reconstructs the preserved active portfolio', async () => {
+    const service = new ReportsIntelligenceService(prisma as never);
+    const startedAt = performance.now();
+    const result = await service.clients({
+      preset: 'custom',
+      startDate: '2026-10-01',
+      endDate: '2026-10-10',
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(result.kpis.newClients.value).toBe(1);
+    expect(result.kpis.activeClients.value).toBe(1);
+    expect(result.kpis.clientsWithoutActiveReference.value).toBe(1);
+    expect(result.kpis.activeReferences.value).toBe(2);
+    expect(result.kpis.newReferences.value).toBe(3);
+    expect(result.kpis.canceledReferences.value).toBe(1);
+    expect(result.kpis.clientsAffectedByCancellation.value).toBe(1);
+    expect(result.kpis.monthlyAverageNewClients).toMatchObject({ applicable: false, value: null });
+    expect(result.charts.newClients).toHaveLength(10);
+    expect(result.charts.referenceMovement).toHaveLength(10);
+    expect(result.charts.statusDistribution).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'ATIVO', total: 2 }),
+        expect.objectContaining({ status: 'CANCELADO', total: 1 }),
+      ]),
+    );
+    expect(result.charts.planDistribution[0]).toMatchObject({ total: 2 });
+    expect(result.charts.activePortfolio).toHaveLength(10);
+    expect(result.charts.activePortfolio.at(-1)).toMatchObject({
+      activeClients: 1,
+      activeReferences: 2,
+      historicalLimitation: true,
+    });
+    expect(result.charts.monthlyAcquisition).toBeNull();
+    expect(elapsedMs).toBeLessThan(3_000);
+    console.info(`reports-intelligence-clients-pg12-ms=${elapsedMs.toFixed(2)}`);
+  });
+
+  it('keeps client growth stable when the previous base is zero', async () => {
+    const service = new ReportsIntelligenceService(prisma as never);
+    const result = await service.clients({
+      preset: 'custom',
+      startDate: '2024-01-01',
+      endDate: '2024-01-02',
+    });
+    expect(result.kpis.newClients).toMatchObject({
+      value: 0,
+      previousValue: 0,
+      changePercent: '0.00',
+      comparison: 'percentage',
+    });
+  });
+
   async function createFixture() {
     const plan = await prisma.plan.create({
       data: {

@@ -27,6 +27,7 @@ import {
   getBillingDispatchSummary,
   getFinancialSummary,
   getReportsIntelligenceFinance,
+  getReportsIntelligenceClients,
   getPaymentIntentPixCopy,
   getPaymentIntentsSummary,
   getReferralSummary,
@@ -163,6 +164,18 @@ describe('CRM UI formatters', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/reports/intelligence/finance?preset=this_year'),
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('requests clients intelligence with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getReportsIntelligenceClients({ preset: 'last_12_months' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/reports/intelligence/clients?preset=last_12_months'),
       expect.objectContaining({ credentials: 'include' }),
     );
   });

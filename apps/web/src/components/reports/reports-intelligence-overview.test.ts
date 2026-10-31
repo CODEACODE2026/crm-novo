@@ -27,6 +27,7 @@ describe('reports intelligence overview UI contract', () => {
   it('loads only intelligence endpoints and contains no CSV or legacy report calls', () => {
     expect(componentSource).toContain('getReportsIntelligenceOverview');
     expect(componentSource).toContain('getReportsIntelligenceFinance');
+    expect(componentSource).toContain('getReportsIntelligenceClients');
     expect(componentSource).not.toContain('downloadReportCsv');
     expect(componentSource).not.toContain('getReport(');
     expect(componentSource).not.toContain('CSV');
@@ -80,6 +81,23 @@ describe('reports intelligence overview UI contract', () => {
     expect(componentSource).toContain('<PieChart accessibilityLayer>');
     expect(componentSource).toContain('<LineChart accessibilityLayer');
     expect(componentSource).toContain("location.section === 'finance'");
+  });
+
+  it('implements Clientes without confusing clients and references', () => {
+    for (const label of [
+      'Novos clientes',
+      'Clientes ativos',
+      'Sem referência ativa',
+      'Referências ativas',
+      'Novas referências',
+      'Clientes com cancelamento',
+      'Evolução da carteira ativa',
+      'Referências ativas por plano',
+    ])
+      expect(componentSource).toContain(label);
+    expect(componentSource).toContain('<ClientsContent');
+    expect(componentSource).toContain("location.section === 'clients'");
+    expect(componentSource).toContain('hard deletes históricos não são recuperáveis');
   });
 
   it('supports loading, retry, no-data and honest unfinished section states', () => {

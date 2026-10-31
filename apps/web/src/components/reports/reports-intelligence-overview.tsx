@@ -42,8 +42,10 @@ import {
   YAxis,
 } from 'recharts';
 import {
+  getReportsIntelligenceClients,
   getReportsIntelligenceFinance,
   getReportsIntelligenceOverview,
+  type ReportsIntelligenceClients,
   type ReportsIntelligenceFinance,
   type ReportsIntelligenceMetric,
   type ReportsIntelligenceOverview,
@@ -73,7 +75,7 @@ const presetOptions = [
 const sectionOptions = [
   { id: 'overview', label: 'Visão geral', description: 'Indicadores executivos' },
   { id: 'finance', label: 'Financeiro', description: 'Receita e recebíveis' },
-  { id: 'clients', label: 'Clientes', description: 'Em desenvolvimento' },
+  { id: 'clients', label: 'Clientes', description: 'Aquisição e carteira' },
   { id: 'renewals', label: 'Renovações', description: 'Em desenvolvimento' },
 ] as const satisfies ReadonlyArray<{
   id: ReportsIntelligenceSection;
@@ -110,6 +112,12 @@ type KpiCardDefinition = Omit<KpiDefinition, 'id'>;
 type FinanceKpiDefinition = KpiCardDefinition & {
   id: keyof ReportsIntelligenceFinance['kpis'];
 };
+
+type ClientsMetricKey = Exclude<
+  keyof ReportsIntelligenceClients['kpis'],
+  'monthlyAverageNewClients'
+>;
+type ClientsKpiDefinition = KpiCardDefinition & { id: ClientsMetricKey };
 
 const kpiDefinitions: KpiDefinition[] = [
   {
@@ -266,6 +274,77 @@ const financeKpiDefinitions: FinanceKpiDefinition[] = [
   },
 ];
 
+const clientsKpiDefinitions: ClientsKpiDefinition[] = [
+  {
+    id: 'newClients',
+    label: 'Novos clientes',
+    description: 'Cadastros criados no período.',
+    icon: UserPlus,
+    kind: 'count',
+    tone: 'teal',
+  },
+  {
+    id: 'activeClients',
+    label: 'Clientes ativos',
+    description: 'Clientes distintos com referência ativa.',
+    icon: Users,
+    kind: 'count',
+    stock: true,
+    tone: 'blue',
+  },
+  {
+    id: 'clientsWithoutActiveReference',
+    label: 'Sem referência ativa',
+    description: 'Clientes sem qualquer serviço ativo no fechamento.',
+    icon: UserRoundCheck,
+    kind: 'count',
+    stock: true,
+    tone: 'neutral',
+  },
+  {
+    id: 'activeReferences',
+    label: 'Referências ativas',
+    description: 'Serviços ativos, sem deduplicar por cliente.',
+    icon: Activity,
+    kind: 'count',
+    stock: true,
+    tone: 'teal',
+  },
+  {
+    id: 'newReferences',
+    label: 'Novas referências',
+    description: 'Serviços criados no período, inclusive para clientes existentes.',
+    icon: Layers3,
+    kind: 'count',
+    tone: 'blue',
+  },
+  {
+    id: 'canceledReferences',
+    label: 'Referências canceladas',
+    description: 'Serviços cancelados no período.',
+    icon: XCircle,
+    kind: 'count',
+    tone: 'danger',
+  },
+  {
+    id: 'clientsAffectedByCancellation',
+    label: 'Clientes com cancelamento',
+    description: 'Clientes distintos afetados; não implica perda total.',
+    icon: XCircle,
+    kind: 'count',
+    tone: 'amber',
+  },
+  {
+    id: 'activePortfolioVariation',
+    label: 'Variação da carteira ativa',
+    description: 'Referências ativas no fechamento versus período anterior.',
+    icon: TrendingUp,
+    kind: 'count',
+    stock: true,
+    tone: 'violet',
+  },
+];
+
 function initialLocation(): ReportsIntelligenceLocation {
   if (typeof window === 'undefined') {
     return { section: 'overview', preset: 'this_month' };
@@ -279,6 +358,7 @@ export function ReportsIntelligenceOverviewView() {
   const [customEnd, setCustomEnd] = useState(location.endDate ?? '');
   const [overview, setOverview] = useState<ReportsIntelligenceOverview | null>(null);
   const [finance, setFinance] = useState<ReportsIntelligenceFinance | null>(null);
+  const [clients, setClients] = useState<ReportsIntelligenceClients | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [customError, setCustomError] = useState('');
@@ -302,6 +382,9 @@ export function ReportsIntelligenceOverviewView() {
         if (location.section === 'finance') {
           const payload = await getReportsIntelligenceFinance(filters, signal);
           if (requestSequence.current === requestId) setFinance(payload);
+        } else if (location.section === 'clients') {
+          const payload = await getReportsIntelligenceClients(filters, signal);
+          if (requestSequence.current === requestId) setClients(payload);
         } else {
           const payload = await getReportsIntelligenceOverview(filters, signal);
           if (requestSequence.current === requestId) setOverview(payload);
@@ -310,6 +393,7 @@ export function ReportsIntelligenceOverviewView() {
         if (signal?.aborted || requestSequence.current !== requestId) return;
         setOverview(null);
         setFinance(null);
+        setClients(null);
         setError(
           cause instanceof Error
             ? cause.message
@@ -324,7 +408,9 @@ export function ReportsIntelligenceOverviewView() {
 
   useEffect(() => {
     if (
-      (location.section !== 'overview' && location.section !== 'finance') ||
+      (location.section !== 'overview' &&
+        location.section !== 'finance' &&
+        location.section !== 'clients') ||
       (location.preset === 'custom' &&
         !isValidCustomReportsPeriod(location.startDate, location.endDate))
     ) {
@@ -369,6 +455,7 @@ export function ReportsIntelligenceOverviewView() {
       setError('');
       setOverview(null);
       setFinance(null);
+      setClients(null);
       setLocation((current) => ({ ...current, preset }));
       return;
     }
@@ -393,7 +480,12 @@ export function ReportsIntelligenceOverviewView() {
     navigate({ ...location, section });
   }
 
-  const reportMeta = location.section === 'finance' ? finance?.meta : overview?.meta;
+  const reportMeta =
+    location.section === 'finance'
+      ? finance?.meta
+      : location.section === 'clients'
+        ? clients?.meta
+        : overview?.meta;
 
   return (
     <section className="reports-intelligence" aria-busy={loading}>
@@ -496,7 +588,7 @@ export function ReportsIntelligenceOverviewView() {
         ) : null}
       </div>
 
-      {location.section === 'clients' || location.section === 'renewals' ? (
+      {location.section === 'renewals' ? (
         <ReportsComingSoon section={location.section} />
       ) : loading ? (
         <ReportsSkeleton />
@@ -504,12 +596,333 @@ export function ReportsIntelligenceOverviewView() {
         <ReportsError message={error} onRetry={() => setReloadSequence((current) => current + 1)} />
       ) : location.section === 'finance' && finance ? (
         <FinanceContent finance={finance} reducedMotion={reducedMotion} />
+      ) : location.section === 'clients' && clients ? (
+        <ClientsContent clients={clients} reducedMotion={reducedMotion} />
       ) : overview ? (
         <OverviewContent overview={overview} reducedMotion={reducedMotion} />
       ) : (
         <ReportsEmptyState />
       )}
     </section>
+  );
+}
+
+function ClientsContent({
+  clients,
+  reducedMotion,
+}: {
+  clients: ReportsIntelligenceClients;
+  reducedMotion: boolean;
+}) {
+  const hasNewClients = clients.charts.newClients.some((point) => point.total);
+  const hasReferenceMovement = clients.charts.referenceMovement.some(
+    (point) => point.created || point.canceled,
+  );
+  const hasPortfolio = clients.charts.activePortfolio.some(
+    (point) => point.activeClients || point.activeReferences,
+  );
+  const monthlyAverage = clients.kpis.monthlyAverageNewClients;
+
+  return (
+    <>
+      <div className="reports-kpi-grid reports-clients-kpi-grid">
+        {clientsKpiDefinitions.map((definition) => (
+          <KpiCard
+            definition={definition}
+            key={definition.id}
+            metric={clients.kpis[definition.id]}
+          />
+        ))}
+        <article className="reports-kpi reports-kpi-blue">
+          <div className="reports-kpi-heading">
+            <span className="reports-kpi-icon">
+              <UserPlus aria-hidden="true" size={18} />
+            </span>
+            <span className="reports-kpi-kind">Média do recorte</span>
+          </div>
+          <div>
+            <span className="reports-kpi-label">Média mensal de novos clientes</span>
+            <strong>
+              {monthlyAverage.applicable && monthlyAverage.value
+                ? Number(monthlyAverage.value).toLocaleString('pt-BR', { maximumFractionDigits: 2 })
+                : '—'}
+            </strong>
+          </div>
+          <div className="reports-kpi-footer">
+            <p>
+              {monthlyAverage.applicable
+                ? `Média em ${monthlyAverage.months} mês(es) do recorte.`
+                : 'Disponível para períodos com pelo menos 28 dias.'}
+            </p>
+          </div>
+        </article>
+      </div>
+
+      <div className="reports-chart-grid">
+        <ChartPanel
+          className="reports-chart-wide"
+          eyebrow="Aquisição"
+          title="Evolução de novos clientes"
+          description="Cadastros reais por bucket, sem contar alterações de status."
+        >
+          {hasNewClients ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart accessibilityLayer data={clients.charts.newClients} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => [
+                    integerFormatter.format(Number(value ?? 0)),
+                    'Novos clientes',
+                  ]}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Bar
+                  dataKey="total"
+                  fill="#2dd4bf"
+                  isAnimationActive={!reducedMotion}
+                  radius={[6, 6, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Período equivalente"
+          title="Novos clientes: atual × anterior"
+          description="Comparação resolvida integralmente pelo backend."
+        >
+          <ResponsiveContainer height="100%" width="100%">
+            <BarChart
+              accessibilityLayer
+              data={clients.charts.periodComparison}
+              margin={chartMargin}
+            >
+              <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+              <XAxis dataKey="label" {...axisProps} />
+              <YAxis allowDecimals={false} {...axisProps} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(value) => integerFormatter.format(Number(value ?? 0))}
+              />
+              <Bar
+                dataKey="value"
+                fill="#38bdf8"
+                isAnimationActive={!reducedMotion}
+                radius={[6, 6, 0, 0]}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Serviços"
+          title="Novas referências × canceladas"
+          description="Contratações de serviços e cancelamentos, sem confundir referência com cliente."
+        >
+          {hasReferenceMovement ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart
+                accessibilityLayer
+                data={clients.charts.referenceMovement}
+                margin={chartMargin}
+              >
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Legend
+                  formatter={(value) => (value === 'created' ? 'Novas referências' : 'Canceladas')}
+                />
+                <Bar
+                  dataKey="created"
+                  fill="#2dd4bf"
+                  isAnimationActive={!reducedMotion}
+                  radius={[5, 5, 0, 0]}
+                />
+                <Bar
+                  dataKey="canceled"
+                  fill="#fb7185"
+                  isAnimationActive={!reducedMotion}
+                  radius={[5, 5, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Snapshot atual"
+          title="Referências por status"
+          description="Distribuição atual; não representa a composição histórica do período."
+        >
+          {clients.charts.statusDistribution.length ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <PieChart accessibilityLayer>
+                <Pie
+                  data={clients.charts.statusDistribution}
+                  dataKey="total"
+                  innerRadius="48%"
+                  isAnimationActive={!reducedMotion}
+                  nameKey="label"
+                  outerRadius="76%"
+                  paddingAngle={3}
+                >
+                  {clients.charts.statusDistribution.map((point, index) => (
+                    <Cell
+                      fill={clientChartColors[index % clientChartColors.length] ?? '#2dd4bf'}
+                      key={point.status}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => integerFormatter.format(Number(value ?? 0))}
+                />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Snapshot atual"
+          title="Referências ativas por plano"
+          description="Planos atuais das referências ativas; sem inferência de plano histórico."
+        >
+          {clients.charts.planDistribution.length ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart
+                accessibilityLayer
+                data={clients.charts.planDistribution}
+                layout="vertical"
+                margin={chartMargin}
+              >
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" horizontal={false} />
+                <XAxis allowDecimals={false} type="number" {...axisProps} />
+                <YAxis dataKey="planName" type="category" width={120} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => integerFormatter.format(Number(value ?? 0))}
+                />
+                <Bar
+                  dataKey="total"
+                  fill="#818cf8"
+                  isAnimationActive={!reducedMotion}
+                  radius={[0, 6, 6, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          className="reports-chart-wide"
+          eyebrow="Carteira preservada"
+          title="Evolução da carteira ativa"
+          description="Reconstrução por eventos preservados; hard deletes históricos não são recuperáveis."
+        >
+          {hasPortfolio ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <LineChart
+                accessibilityLayer
+                data={clients.charts.activePortfolio}
+                margin={chartMargin}
+              >
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Legend
+                  formatter={(value) =>
+                    value === 'activeClients' ? 'Clientes ativos' : 'Referências ativas'
+                  }
+                />
+                <Line
+                  dataKey="activeClients"
+                  dot={false}
+                  isAnimationActive={!reducedMotion}
+                  stroke="#38bdf8"
+                  strokeWidth={2.4}
+                  type="monotone"
+                />
+                <Line
+                  dataKey="activeReferences"
+                  dot={false}
+                  isAnimationActive={!reducedMotion}
+                  stroke="#2dd4bf"
+                  strokeWidth={2.4}
+                  type="monotone"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        {clients.charts.monthlyAcquisition ? (
+          <ChartPanel
+            eyebrow="Período anual"
+            title="Aquisição mensal"
+            description="Novos clientes mês a mês no recorte selecionado."
+          >
+            {hasNewClients ? (
+              <ResponsiveContainer height="100%" width="100%">
+                <AreaChart
+                  accessibilityLayer
+                  data={clients.charts.monthlyAcquisition}
+                  margin={chartMargin}
+                >
+                  <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                  <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                  <YAxis allowDecimals={false} {...axisProps} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(value) => integerFormatter.format(Number(value ?? 0))}
+                  />
+                  <Area
+                    dataKey="total"
+                    fill="rgba(56, 189, 248, 0.18)"
+                    isAnimationActive={!reducedMotion}
+                    stroke="#38bdf8"
+                    strokeWidth={2.4}
+                    type="monotone"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <ChartEmptyState />
+            )}
+          </ChartPanel>
+        ) : null}
+      </div>
+
+      <aside className="reports-quality-note">
+        <Info aria-hidden="true" size={18} />
+        <div>
+          <strong>Leitura responsável da carteira</strong>
+          <p>{clients.meta.dataQuality.map((item) => item.message).join(' ')}</p>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -1331,6 +1744,7 @@ function currencyTooltip(value: unknown, name: unknown) {
 
 const chartMargin = { bottom: 2, left: 0, right: 12, top: 12 };
 const financeChartColors = ['#2dd4bf', '#818cf8', '#38bdf8'];
+const clientChartColors = ['#2dd4bf', '#38bdf8', '#818cf8', '#f59e0b', '#fb7185'];
 const axisProps = {
   axisLine: false,
   tick: { fill: '#94a3b8', fontSize: 11 },

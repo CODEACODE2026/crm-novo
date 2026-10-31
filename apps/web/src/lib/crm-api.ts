@@ -1662,6 +1662,35 @@ export interface ReportsIntelligenceFinance {
   };
 }
 
+export interface ReportsIntelligenceClients {
+  meta: ReportsIntelligenceOverview['meta'];
+  kpis: {
+    newClients: ReportsIntelligenceMetric<number>;
+    activeClients: ReportsIntelligenceMetric<number>;
+    clientsWithoutActiveReference: ReportsIntelligenceMetric<number>;
+    activeReferences: ReportsIntelligenceMetric<number>;
+    newReferences: ReportsIntelligenceMetric<number>;
+    canceledReferences: ReportsIntelligenceMetric<number>;
+    clientsAffectedByCancellation: ReportsIntelligenceMetric<number>;
+    monthlyAverageNewClients: { value: string | null; applicable: boolean; months: number };
+    activePortfolioVariation: ReportsIntelligenceMetric<number>;
+  };
+  charts: {
+    newClients: Array<{ bucket: string; total: number }>;
+    periodComparison: Array<{ label: string; value: number }>;
+    referenceMovement: Array<{ bucket: string; created: number; canceled: number }>;
+    statusDistribution: Array<{ status: string; label: string; total: number }>;
+    planDistribution: Array<{ planId: string; planName: string; total: number }>;
+    activePortfolio: Array<{
+      bucket: string;
+      activeClients: number;
+      activeReferences: number;
+      historicalLimitation: boolean;
+    }>;
+    monthlyAcquisition: Array<{ bucket: string; total: number }> | null;
+  };
+}
+
 export interface PaginatedBillingDispatches {
   items: MessageDispatch[];
   pagination: PaginatedClients['pagination'];
@@ -2522,6 +2551,21 @@ export function getReportsIntelligenceFinance(
 
   return apiFetch<ReportsIntelligenceFinance>(
     `/reports/intelligence/finance?${params}`,
+    signal ? { signal } : undefined,
+  );
+}
+
+export function getReportsIntelligenceClients(
+  filters: { preset: ReportsIntelligencePreset; startDate?: string; endDate?: string },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+  return apiFetch<ReportsIntelligenceClients>(
+    `/reports/intelligence/clients?${params}`,
     signal ? { signal } : undefined,
   );
 }

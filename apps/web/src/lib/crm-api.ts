@@ -1612,6 +1612,56 @@ export interface ReportsIntelligenceOverview {
   };
 }
 
+export interface ReportsIntelligenceFinance {
+  meta: ReportsIntelligenceOverview['meta'];
+  kpis: {
+    received: ReportsIntelligenceMetric<string>;
+    operational: ReportsIntelligenceMetric<string>;
+    legacy: ReportsIntelligenceMetric<string>;
+    manual: ReportsIntelligenceMetric<string>;
+    payments: ReportsIntelligenceMetric<number>;
+    averageTicket: ReportsIntelligenceMetric<string>;
+    pending: ReportsIntelligenceMetric<string>;
+    overdue: ReportsIntelligenceMetric<string>;
+  };
+  charts: {
+    evolution: Array<{
+      bucket: string;
+      received: string;
+      operational: string;
+      legacy: string;
+      manual: string;
+      payments: number;
+      operationalPayments: number;
+      averageTicket: string;
+    }>;
+    periodComparison: Array<{
+      bucket: string;
+      comparisonBucket: string | null;
+      current: string;
+      previous: string;
+    }>;
+    averageTicket: Array<{ bucket: string; value: string; payments: number }>;
+    byOrigin: Array<{
+      origin: 'RECEIVABLE_PAYMENT' | 'LEGACY_IMPORT' | 'MANUAL';
+      label: string;
+      value: string;
+    }>;
+    flowAndStock: Array<{
+      key: 'received' | 'pending' | 'overdue';
+      label: string;
+      semantics: 'flow' | 'stock';
+      value: string;
+    }>;
+    annualComparison: Array<{
+      bucket: string;
+      comparisonBucket: string | null;
+      current: string;
+      previous: string;
+    }> | null;
+  };
+}
+
 export interface PaginatedBillingDispatches {
   items: MessageDispatch[];
   pagination: PaginatedClients['pagination'];
@@ -2452,6 +2502,26 @@ export function getReportsIntelligenceOverview(
 
   return apiFetch<ReportsIntelligenceOverview>(
     `/reports/intelligence/overview?${params}`,
+    signal ? { signal } : undefined,
+  );
+}
+
+export function getReportsIntelligenceFinance(
+  filters: {
+    preset: ReportsIntelligencePreset;
+    startDate?: string;
+    endDate?: string;
+  },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+
+  return apiFetch<ReportsIntelligenceFinance>(
+    `/reports/intelligence/finance?${params}`,
     signal ? { signal } : undefined,
   );
 }

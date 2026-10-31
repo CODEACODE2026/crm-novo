@@ -11,8 +11,10 @@ import {
   Clock3,
   Construction,
   CreditCard,
+  HandCoins,
   Info,
   Layers3,
+  ReceiptText,
   RefreshCw,
   RotateCcw,
   TrendingUp,
@@ -27,15 +29,22 @@ import {
   AreaChart,
   Bar,
   BarChart,
+  Cell,
   CartesianGrid,
   Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import {
+  getReportsIntelligenceFinance,
   getReportsIntelligenceOverview,
+  type ReportsIntelligenceFinance,
   type ReportsIntelligenceMetric,
   type ReportsIntelligenceOverview,
   type ReportsIntelligencePreset,
@@ -63,7 +72,7 @@ const presetOptions = [
 
 const sectionOptions = [
   { id: 'overview', label: 'Visão geral', description: 'Indicadores executivos' },
-  { id: 'finance', label: 'Financeiro', description: 'Em desenvolvimento' },
+  { id: 'finance', label: 'Financeiro', description: 'Receita e recebíveis' },
   { id: 'clients', label: 'Clientes', description: 'Em desenvolvimento' },
   { id: 'renewals', label: 'Renovações', description: 'Em desenvolvimento' },
 ] as const satisfies ReadonlyArray<{
@@ -94,6 +103,12 @@ type KpiDefinition = {
   label: string;
   stock?: boolean;
   tone: 'amber' | 'blue' | 'danger' | 'neutral' | 'teal' | 'violet';
+};
+
+type KpiCardDefinition = Omit<KpiDefinition, 'id'>;
+
+type FinanceKpiDefinition = KpiCardDefinition & {
+  id: keyof ReportsIntelligenceFinance['kpis'];
 };
 
 const kpiDefinitions: KpiDefinition[] = [
@@ -182,6 +197,75 @@ const kpiDefinitions: KpiDefinition[] = [
   },
 ];
 
+const financeKpiDefinitions: FinanceKpiDefinition[] = [
+  {
+    id: 'received',
+    label: 'Total efetivamente recebido',
+    description: 'Receita operacional e histórico importado no período.',
+    icon: CircleDollarSign,
+    kind: 'money',
+    tone: 'teal',
+  },
+  {
+    id: 'operational',
+    label: 'Receita operacional',
+    description: 'Recebíveis operacionais efetivamente liquidados.',
+    icon: HandCoins,
+    kind: 'money',
+    tone: 'teal',
+  },
+  {
+    id: 'legacy',
+    label: 'Histórico importado',
+    description: 'Entradas legadas identificadas separadamente.',
+    icon: Layers3,
+    kind: 'money',
+    tone: 'violet',
+  },
+  {
+    id: 'manual',
+    label: 'Entradas manuais',
+    description: 'Lançamentos manuais fora da receita recebida.',
+    icon: ReceiptText,
+    kind: 'money',
+    tone: 'blue',
+  },
+  {
+    id: 'payments',
+    label: 'Pagamentos recebidos',
+    description: 'Liquidações elegíveis registradas no razão.',
+    icon: CreditCard,
+    kind: 'count',
+    tone: 'teal',
+  },
+  {
+    id: 'averageTicket',
+    label: 'Ticket médio operacional',
+    description: 'Receita operacional por recebível liquidado.',
+    icon: TrendingUp,
+    kind: 'money',
+    tone: 'violet',
+  },
+  {
+    id: 'pending',
+    label: 'Valores pendentes',
+    description: 'Estoque ainda aberto e não vencido no fechamento.',
+    icon: Clock3,
+    kind: 'money',
+    stock: true,
+    tone: 'amber',
+  },
+  {
+    id: 'overdue',
+    label: 'Valores vencidos',
+    description: 'Estoque aberto e vencido no fechamento.',
+    icon: XCircle,
+    kind: 'money',
+    stock: true,
+    tone: 'danger',
+  },
+];
+
 function initialLocation(): ReportsIntelligenceLocation {
   if (typeof window === 'undefined') {
     return { section: 'overview', preset: 'this_month' };
@@ -194,6 +278,7 @@ export function ReportsIntelligenceOverviewView() {
   const [customStart, setCustomStart] = useState(location.startDate ?? '');
   const [customEnd, setCustomEnd] = useState(location.endDate ?? '');
   const [overview, setOverview] = useState<ReportsIntelligenceOverview | null>(null);
+  const [finance, setFinance] = useState<ReportsIntelligenceFinance | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [customError, setCustomError] = useState('');
@@ -201,26 +286,30 @@ export function ReportsIntelligenceOverviewView() {
   const requestSequence = useRef(0);
   const reducedMotion = useReducedMotion();
 
-  const loadOverview = useCallback(
+  const loadReport = useCallback(
     async (signal?: AbortSignal) => {
       const requestId = ++requestSequence.current;
       setLoading(true);
       setError('');
 
       try {
-        const payload = await getReportsIntelligenceOverview(
-          {
-            preset: location.preset,
-            ...(location.preset === 'custom'
-              ? { startDate: location.startDate, endDate: location.endDate }
-              : {}),
-          },
-          signal,
-        );
-        if (requestSequence.current === requestId) setOverview(payload);
+        const filters = {
+          preset: location.preset,
+          ...(location.preset === 'custom'
+            ? { startDate: location.startDate, endDate: location.endDate }
+            : {}),
+        };
+        if (location.section === 'finance') {
+          const payload = await getReportsIntelligenceFinance(filters, signal);
+          if (requestSequence.current === requestId) setFinance(payload);
+        } else {
+          const payload = await getReportsIntelligenceOverview(filters, signal);
+          if (requestSequence.current === requestId) setOverview(payload);
+        }
       } catch (cause) {
         if (signal?.aborted || requestSequence.current !== requestId) return;
         setOverview(null);
+        setFinance(null);
         setError(
           cause instanceof Error
             ? cause.message
@@ -230,22 +319,30 @@ export function ReportsIntelligenceOverviewView() {
         if (requestSequence.current === requestId) setLoading(false);
       }
     },
-    [location.endDate, location.preset, location.startDate],
+    [location.endDate, location.preset, location.section, location.startDate],
   );
 
   useEffect(() => {
     if (
-      location.preset === 'custom' &&
-      !isValidCustomReportsPeriod(location.startDate, location.endDate)
+      (location.section !== 'overview' && location.section !== 'finance') ||
+      (location.preset === 'custom' &&
+        !isValidCustomReportsPeriod(location.startDate, location.endDate))
     ) {
       setLoading(false);
       return undefined;
     }
 
     const controller = new AbortController();
-    void loadOverview(controller.signal);
+    void loadReport(controller.signal);
     return () => controller.abort();
-  }, [loadOverview, location.endDate, location.preset, location.startDate, reloadSequence]);
+  }, [
+    loadReport,
+    location.endDate,
+    location.preset,
+    location.section,
+    location.startDate,
+    reloadSequence,
+  ]);
 
   useEffect(() => {
     function restoreFromHistory() {
@@ -271,6 +368,7 @@ export function ReportsIntelligenceOverviewView() {
     if (preset === 'custom') {
       setError('');
       setOverview(null);
+      setFinance(null);
       setLocation((current) => ({ ...current, preset }));
       return;
     }
@@ -295,6 +393,8 @@ export function ReportsIntelligenceOverviewView() {
     navigate({ ...location, section });
   }
 
+  const reportMeta = location.section === 'finance' ? finance?.meta : overview?.meta;
+
   return (
     <section className="reports-intelligence" aria-busy={loading}>
       <header className="reports-hero">
@@ -313,10 +413,10 @@ export function ReportsIntelligenceOverviewView() {
           <CalendarRange aria-hidden="true" size={18} />
           <div>
             <span>Período analisado</span>
-            <strong>{overview ? formatRange(overview.meta.period) : 'Aguardando dados'}</strong>
+            <strong>{reportMeta ? formatRange(reportMeta.period) : 'Aguardando dados'}</strong>
             <small>
-              {overview
-                ? `Comparado com ${formatRange(overview.meta.comparisonPeriod)}`
+              {reportMeta
+                ? `Comparado com ${formatRange(reportMeta.comparisonPeriod)}`
                 : 'Timezone America/Sao_Paulo'}
             </small>
           </div>
@@ -396,18 +496,364 @@ export function ReportsIntelligenceOverviewView() {
         ) : null}
       </div>
 
-      {location.section !== 'overview' ? (
+      {location.section === 'clients' || location.section === 'renewals' ? (
         <ReportsComingSoon section={location.section} />
       ) : loading ? (
         <ReportsSkeleton />
       ) : error ? (
         <ReportsError message={error} onRetry={() => setReloadSequence((current) => current + 1)} />
+      ) : location.section === 'finance' && finance ? (
+        <FinanceContent finance={finance} reducedMotion={reducedMotion} />
       ) : overview ? (
         <OverviewContent overview={overview} reducedMotion={reducedMotion} />
       ) : (
         <ReportsEmptyState />
       )}
     </section>
+  );
+}
+
+function FinanceContent({
+  finance,
+  reducedMotion,
+}: {
+  finance: ReportsIntelligenceFinance;
+  reducedMotion: boolean;
+}) {
+  const evolution = useMemo(
+    () =>
+      finance.charts.evolution.map((point) => ({
+        ...point,
+        legacy: Number(point.legacy),
+        manual: Number(point.manual),
+        operational: Number(point.operational),
+        received: Number(point.received),
+      })),
+    [finance.charts.evolution],
+  );
+  const comparison = useMemo(
+    () =>
+      finance.charts.periodComparison.map((point) => ({
+        ...point,
+        current: Number(point.current),
+        previous: Number(point.previous),
+      })),
+    [finance.charts.periodComparison],
+  );
+  const averageTicket = useMemo(
+    () => finance.charts.averageTicket.map((point) => ({ ...point, value: Number(point.value) })),
+    [finance.charts.averageTicket],
+  );
+  const origins = useMemo(
+    () => finance.charts.byOrigin.map((point) => ({ ...point, value: Number(point.value) })),
+    [finance.charts.byOrigin],
+  );
+  const flowAndStock = useMemo(
+    () => finance.charts.flowAndStock.map((point) => ({ ...point, value: Number(point.value) })),
+    [finance.charts.flowAndStock],
+  );
+  const annual = useMemo(
+    () =>
+      finance.charts.annualComparison?.map((point) => ({
+        ...point,
+        current: Number(point.current),
+        previous: Number(point.previous),
+      })) ?? [],
+    [finance.charts.annualComparison],
+  );
+  const hasEvolution = evolution.some((point) => point.received !== 0 || point.manual !== 0);
+  const hasComparison = comparison.some((point) => point.current || point.previous);
+  const hasTicket = averageTicket.some((point) => point.value !== 0);
+  const hasOrigins = origins.some((point) => point.value !== 0);
+  const hasFlowAndStock = flowAndStock.some((point) => point.value !== 0);
+
+  return (
+    <>
+      <div className="reports-kpi-grid reports-finance-kpi-grid">
+        {financeKpiDefinitions.map((definition) => (
+          <KpiCard
+            definition={definition}
+            key={definition.id}
+            metric={finance.kpis[definition.id]}
+          />
+        ))}
+      </div>
+
+      <div className="reports-chart-grid">
+        <ChartPanel
+          className="reports-chart-wide"
+          eyebrow="Razão financeiro"
+          title="Evolução da receita"
+          description="Operacional, legado e entradas manuais permanecem visualmente separados."
+        >
+          {hasEvolution ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <AreaChart accessibilityLayer data={evolution} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis
+                  tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                  {...axisProps}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={currencyTooltip}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Legend formatter={(value) => financeSeriesLabel(String(value))} />
+                <Area
+                  dataKey="operational"
+                  fill="rgba(45, 212, 191, 0.2)"
+                  isAnimationActive={!reducedMotion}
+                  name="operational"
+                  stroke="#2dd4bf"
+                  strokeWidth={2.4}
+                  type="monotone"
+                />
+                <Area
+                  dataKey="legacy"
+                  fill="transparent"
+                  isAnimationActive={!reducedMotion}
+                  name="legacy"
+                  stroke="#818cf8"
+                  strokeDasharray="5 5"
+                  strokeWidth={2}
+                  type="monotone"
+                />
+                <Area
+                  dataKey="manual"
+                  fill="transparent"
+                  isAnimationActive={!reducedMotion}
+                  name="manual"
+                  stroke="#38bdf8"
+                  strokeDasharray="3 4"
+                  strokeWidth={2}
+                  type="monotone"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Períodos equivalentes"
+          title="Atual × anterior"
+          description="Buckets alinhados pelo backend, sem recomputar datas no navegador."
+        >
+          {hasComparison ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart accessibilityLayer data={comparison} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis
+                  tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                  {...axisProps}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={currencyTooltip}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Legend
+                  formatter={(value) =>
+                    value === 'current' ? 'Período atual' : 'Período anterior'
+                  }
+                />
+                <Bar
+                  dataKey="current"
+                  fill="#2dd4bf"
+                  isAnimationActive={!reducedMotion}
+                  name="current"
+                  radius={[5, 5, 0, 0]}
+                />
+                <Bar
+                  dataKey="previous"
+                  fill="#475569"
+                  isAnimationActive={!reducedMotion}
+                  name="previous"
+                  radius={[5, 5, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Eficiência comercial"
+          title="Evolução do ticket médio"
+          description="Receita operacional dividida por recebíveis liquidados em cada bucket."
+        >
+          {hasTicket ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <LineChart accessibilityLayer data={averageTicket} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis
+                  tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                  {...axisProps}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => [
+                    currencyFormatter.format(Number(value ?? 0)),
+                    'Ticket médio',
+                  ]}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Line
+                  dataKey="value"
+                  dot={false}
+                  isAnimationActive={!reducedMotion}
+                  name="Ticket médio"
+                  stroke="#a78bfa"
+                  strokeWidth={2.5}
+                  type="monotone"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Composição"
+          title="Recebimentos por origem"
+          description="O total recebido exclui entradas manuais, exibidas separadamente."
+        >
+          {hasOrigins ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <PieChart accessibilityLayer>
+                <Pie
+                  data={origins}
+                  dataKey="value"
+                  innerRadius="48%"
+                  isAnimationActive={!reducedMotion}
+                  nameKey="label"
+                  outerRadius="76%"
+                  paddingAngle={3}
+                >
+                  {origins.map((point, index) => (
+                    <Cell
+                      fill={financeChartColors[index % financeChartColors.length] ?? '#2dd4bf'}
+                      key={point.origin}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => currencyFormatter.format(Number(value ?? 0))}
+                />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Fluxo × estoque"
+          title="Recebido, pendente e vencido"
+          description="Recebido é fluxo; pendente e vencido são posições no fechamento."
+        >
+          {hasFlowAndStock ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart
+                accessibilityLayer
+                data={flowAndStock}
+                layout="vertical"
+                margin={chartMargin}
+              >
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" horizontal={false} />
+                <XAxis
+                  type="number"
+                  tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                  {...axisProps}
+                />
+                <YAxis dataKey="label" type="category" width={132} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => currencyFormatter.format(Number(value ?? 0))}
+                />
+                <Bar
+                  dataKey="value"
+                  fill="#2dd4bf"
+                  isAnimationActive={!reducedMotion}
+                  radius={[0, 6, 6, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        {finance.charts.annualComparison ? (
+          <ChartPanel
+            eyebrow="Visão anual"
+            title="Comparativo anual"
+            description="Meses equivalentes do ano selecionado e do ano anterior."
+          >
+            {annual.some((point) => point.current || point.previous) ? (
+              <ResponsiveContainer height="100%" width="100%">
+                <LineChart accessibilityLayer data={annual} margin={chartMargin}>
+                  <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                  <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                  <YAxis
+                    tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                    {...axisProps}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={currencyTooltip}
+                    labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                  />
+                  <Legend
+                    formatter={(value) =>
+                      value === 'current' ? 'Ano selecionado' : 'Ano anterior'
+                    }
+                  />
+                  <Line
+                    dataKey="current"
+                    dot={false}
+                    isAnimationActive={!reducedMotion}
+                    name="current"
+                    stroke="#2dd4bf"
+                    strokeWidth={2.4}
+                    type="monotone"
+                  />
+                  <Line
+                    dataKey="previous"
+                    dot={false}
+                    isAnimationActive={!reducedMotion}
+                    name="previous"
+                    stroke="#64748b"
+                    strokeDasharray="5 5"
+                    strokeWidth={2}
+                    type="monotone"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <ChartEmptyState />
+            )}
+          </ChartPanel>
+        ) : null}
+      </div>
+
+      <aside className="reports-quality-note">
+        <Info aria-hidden="true" size={18} />
+        <div>
+          <strong>Leitura financeira responsável</strong>
+          <p>{finance.meta.dataQuality.map((item) => item.message).join(' ')}</p>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -661,7 +1107,7 @@ function KpiCard({
   definition,
   metric,
 }: {
-  definition: KpiDefinition;
+  definition: KpiCardDefinition;
   metric: ReportsIntelligenceMetric<number | string>;
 }) {
   const Icon = definition.icon;
@@ -870,7 +1316,21 @@ function chartSeriesLabel(value: string) {
   return labels[value] ?? value;
 }
 
+function financeSeriesLabel(value: string) {
+  const labels: Record<string, string> = {
+    legacy: 'Histórico importado',
+    manual: 'Entradas manuais',
+    operational: 'Receita operacional',
+  };
+  return labels[value] ?? value;
+}
+
+function currencyTooltip(value: unknown, name: unknown) {
+  return [currencyFormatter.format(Number(value ?? 0)), financeSeriesLabel(String(name))];
+}
+
 const chartMargin = { bottom: 2, left: 0, right: 12, top: 12 };
+const financeChartColors = ['#2dd4bf', '#818cf8', '#38bdf8'];
 const axisProps = {
   axisLine: false,
   tick: { fill: '#94a3b8', fontSize: 11 },

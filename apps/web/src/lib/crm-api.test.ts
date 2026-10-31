@@ -26,6 +26,7 @@ import {
   forwardWhatsAppConversationMessage,
   getBillingDispatchSummary,
   getFinancialSummary,
+  getReportsIntelligenceFinance,
   getPaymentIntentPixCopy,
   getPaymentIntentsSummary,
   getReferralSummary,
@@ -149,6 +150,20 @@ describe('CRM UI formatters', () => {
         '/reports/intelligence/overview?preset=custom&startDate=2026-10-01&endDate=2026-10-31',
       ),
       expect.objectContaining({ credentials: 'include', signal: controller.signal }),
+    );
+  });
+
+  it('requests finance intelligence with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getReportsIntelligenceFinance({ preset: 'this_year' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/reports/intelligence/finance?preset=this_year'),
+      expect.objectContaining({ credentials: 'include' }),
     );
   });
 

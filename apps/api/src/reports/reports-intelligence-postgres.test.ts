@@ -108,6 +108,59 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     });
   });
 
+  it('builds Financeiro from ledger truth without duplicating groups or payment intents', async () => {
+    const service = new ReportsIntelligenceService(prisma as never);
+    const startedAt = performance.now();
+    const result = await service.finance({
+      preset: 'custom',
+      startDate: '2026-10-01',
+      endDate: '2026-10-10',
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(result.meta).toMatchObject({
+      timezone: 'America/Sao_Paulo',
+      period: { startDate: '2026-10-01', endDate: '2026-10-10' },
+      comparisonPeriod: { startDate: '2026-09-21', endDate: '2026-09-30' },
+    });
+    expect(result.kpis.received).toMatchObject({ value: '750.00', previousValue: '20.00' });
+    expect(result.kpis.operational.value).toBe('700.00');
+    expect(result.kpis.legacy.value).toBe('50.00');
+    expect(result.kpis.manual.value).toBe('25.00');
+    expect(result.kpis.payments.value).toBe(6);
+    expect(result.kpis.averageTicket.value).toBe('140.00');
+    expect(result.kpis.pending.value).toBe('1079.00');
+    expect(result.kpis.overdue.value).toBe('70.00');
+    expect(result.charts.evolution).toHaveLength(10);
+    expect(result.charts.periodComparison).toHaveLength(10);
+    expect(result.charts.averageTicket).toHaveLength(10);
+    expect(result.charts.byOrigin).toEqual([
+      { origin: 'RECEIVABLE_PAYMENT', label: 'Receita operacional', value: '700.00' },
+      { origin: 'LEGACY_IMPORT', label: 'Histórico importado', value: '50.00' },
+      { origin: 'MANUAL', label: 'Entradas manuais', value: '25.00' },
+    ]);
+    expect(result.charts.flowAndStock).toEqual([
+      { key: 'received', label: 'Recebido no período', semantics: 'flow', value: '750.00' },
+      { key: 'pending', label: 'Pendente no fechamento', semantics: 'stock', value: '1079.00' },
+      { key: 'overdue', label: 'Vencido no fechamento', semantics: 'stock', value: '70.00' },
+    ]);
+    expect(result.charts.annualComparison).toBeNull();
+    expect(
+      result.charts.evolution.reduce((total, point) => total + Number(point.received), 0),
+    ).toBe(750);
+    expect(result.charts.evolution.some((point) => point.received === '0.00')).toBe(true);
+    expect(elapsedMs).toBeLessThan(3_000);
+    console.info(`reports-intelligence-finance-pg12-ms=${elapsedMs.toFixed(2)}`);
+  });
+
+  it('returns aligned monthly annual comparison when the selected preset supports it', async () => {
+    const service = new ReportsIntelligenceService(prisma as never);
+    const result = await service.finance({ preset: 'this_year' });
+    expect(result.meta.granularity).toBe('month');
+    expect(result.charts.annualComparison).not.toBeNull();
+    expect(result.charts.annualComparison?.every((point) => point.comparisonBucket)).toBe(true);
+  });
+
   async function createFixture() {
     const plan = await prisma.plan.create({
       data: {

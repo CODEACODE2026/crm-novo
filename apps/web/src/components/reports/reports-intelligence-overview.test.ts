@@ -24,8 +24,9 @@ describe('reports intelligence overview UI contract', () => {
     expect(dashboardSource).toContain('<ReportsIntelligenceOverviewView />');
   });
 
-  it('loads only the CORE1 endpoint and contains no CSV or legacy report calls', () => {
+  it('loads only intelligence endpoints and contains no CSV or legacy report calls', () => {
     expect(componentSource).toContain('getReportsIntelligenceOverview');
+    expect(componentSource).toContain('getReportsIntelligenceFinance');
     expect(componentSource).not.toContain('downloadReportCsv');
     expect(componentSource).not.toContain('getReport(');
     expect(componentSource).not.toContain('CSV');
@@ -54,13 +55,31 @@ describe('reports intelligence overview UI contract', () => {
 
   it('uses Recharts for four purposeful visualizations with accessible empty states', () => {
     expect(componentSource).toContain('<AreaChart accessibilityLayer');
-    expect(componentSource.match(/<BarChart(?:\s|>)/g)).toHaveLength(3);
+    expect(componentSource.match(/<BarChart(?:\s|>)/g)?.length).toBeGreaterThanOrEqual(3);
     expect(componentSource.match(/accessibilityLayer/g)?.length).toBeGreaterThanOrEqual(4);
     expect(componentSource).toContain('Evolução financeira');
     expect(componentSource).toContain('Atual × anterior');
     expect(componentSource).toContain('Novos clientes');
     expect(componentSource).toContain('Ativações × renovações × reativações');
     expect(componentSource).toContain('<ChartEmptyState />');
+  });
+
+  it('implements Financeiro with real KPIs and purposeful visualizations', () => {
+    for (const label of [
+      'Receita operacional',
+      'Histórico importado',
+      'Entradas manuais',
+      'Pagamentos recebidos',
+      'Evolução do ticket médio',
+      'Recebimentos por origem',
+      'Recebido, pendente e vencido',
+    ]) {
+      expect(componentSource).toContain(label);
+    }
+    expect(componentSource).toContain('<FinanceContent');
+    expect(componentSource).toContain('<PieChart accessibilityLayer>');
+    expect(componentSource).toContain('<LineChart accessibilityLayer');
+    expect(componentSource).toContain("location.section === 'finance'");
   });
 
   it('supports loading, retry, no-data and honest unfinished section states', () => {

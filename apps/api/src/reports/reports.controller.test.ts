@@ -12,11 +12,16 @@ describe('ReportsController intelligence contract', () => {
     ]);
   });
 
-  it('forwards overview filters without changing legacy report methods', async () => {
-    const intelligence = { overview: vi.fn().mockResolvedValue({ meta: {} }) };
+  it('forwards intelligence filters without changing legacy report methods', async () => {
+    const intelligence = {
+      overview: vi.fn().mockResolvedValue({ meta: {} }),
+      finance: vi.fn().mockResolvedValue({ kpis: {} }),
+    };
     const controller = new ReportsController({} as never, intelligence as never);
     const query = { preset: 'last_7_days' as const };
     await expect(controller.overview(query)).resolves.toEqual({ meta: {} });
+    await expect(controller.financeIntelligence(query)).resolves.toEqual({ kpis: {} });
     expect(intelligence.overview).toHaveBeenCalledWith(query);
+    expect(intelligence.finance).toHaveBeenCalledWith(query);
   });
 });

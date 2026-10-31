@@ -21,6 +21,11 @@ export class ReportsController {
     return this.reportsIntelligenceService.overview(query);
   }
 
+  @Get('intelligence/finance')
+  financeIntelligence(@Query() query: ReportsOverviewDto) {
+    return this.reportsIntelligenceService.finance(query);
+  }
+
   @Get(':type.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async csv(

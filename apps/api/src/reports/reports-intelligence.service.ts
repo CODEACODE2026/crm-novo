@@ -59,6 +59,22 @@ type LifecycleSeriesRow = {
   amount: Prisma.Decimal;
 };
 
+type FinanceStockTotalsRow = {
+  pendingCurrent: Prisma.Decimal;
+  pendingPrevious: Prisma.Decimal;
+  overdueCurrent: Prisma.Decimal;
+  overduePrevious: Prisma.Decimal;
+};
+
+type FinanceDetailedSeriesRow = {
+  scope: 'current' | 'previous';
+  businessDate: Date;
+  origin: 'RECEIVABLE_PAYMENT' | 'LEGACY_IMPORT' | 'MANUAL';
+  amount: Prisma.Decimal;
+  payments: bigint;
+  operationalReceivables: bigint;
+};
+
 @Injectable()
 export class ReportsIntelligenceService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -160,6 +176,138 @@ export class ReportsIntelligenceService {
         financialEvolution: this.buildFinancialSeries(period, granularity, financialSeries),
         newClients: this.buildClientSeries(period, granularity, clientSeries),
         paidLifecycle: this.buildLifecycleSeries(period, granularity, lifecycleSeries),
+      },
+    };
+  }
+
+  async finance(query: ReportsOverviewDto) {
+    const resolved = resolveReportingPeriod(query);
+    const { period, comparisonPeriod, granularity } = resolved;
+
+    const [financeRows, stockRows, seriesRows] = await this.prisma.$transaction(async (tx) =>
+      Promise.all([
+        this.financeTotals(tx, period, comparisonPeriod),
+        this.financeStockTotals(tx, period, comparisonPeriod),
+        this.financeDetailedSeries(tx, period, comparisonPeriod),
+      ]),
+    );
+
+    const totals = financeRows[0] ?? this.emptyFinanceTotals();
+    const stock = stockRows[0] ?? this.emptyFinanceStockTotals();
+    const averageTicketCurrent = this.divideMoney(
+      totals.operationalCurrent,
+      totals.operationalReceivablesCurrent,
+    );
+    const averageTicketPrevious = this.divideMoney(
+      totals.operationalPrevious,
+      totals.operationalReceivablesPrevious,
+    );
+    const currentEvolution = this.buildFinanceDetailedSeries(
+      period,
+      granularity,
+      seriesRows.filter((row) => row.scope === 'current'),
+    );
+    const previousEvolution = this.buildFinanceDetailedSeries(
+      comparisonPeriod,
+      granularity,
+      seriesRows.filter((row) => row.scope === 'previous'),
+    );
+
+    return {
+      meta: {
+        preset: resolved.preset,
+        timezone: resolved.timezone,
+        period: this.presentRange(period),
+        comparisonPeriod: this.presentRange(comparisonPeriod),
+        granularity,
+        generatedAt: new Date().toISOString(),
+        dataQuality: [
+          {
+            code: 'LEDGER_IS_SOURCE_OF_TRUTH',
+            message:
+              'Receita usa exclusivamente transações financeiras de entrada; intents, PIX e cobranças agendadas não são receita.',
+          },
+          {
+            code: 'MANUAL_ENTRIES_SEPARATE',
+            message: 'Entradas manuais permanecem separadas da receita recebida.',
+          },
+          {
+            code: 'STOCK_AT_PERIOD_CLOSE',
+            message:
+              'Pendente e vencido são estoques no fechamento; recebido é fluxo dentro do período.',
+          },
+          {
+            code: 'NET_BALANCE_UNAVAILABLE',
+            message:
+              'Saldo líquido não é apresentado porque estornos e ajustes não têm contrapartida contábil completa.',
+          },
+        ],
+      },
+      kpis: {
+        received: this.moneyMetric(totals.receivedCurrent, totals.receivedPrevious),
+        operational: this.moneyMetric(totals.operationalCurrent, totals.operationalPrevious),
+        legacy: this.moneyMetric(totals.legacyCurrent, totals.legacyPrevious),
+        manual: this.moneyMetric(totals.manualCurrent, totals.manualPrevious),
+        payments: this.countMetric(totals.paymentsCurrent, totals.paymentsPrevious),
+        averageTicket: this.moneyMetric(averageTicketCurrent, averageTicketPrevious),
+        pending: this.moneyMetric(stock.pendingCurrent, stock.pendingPrevious),
+        overdue: this.moneyMetric(stock.overdueCurrent, stock.overduePrevious),
+      },
+      charts: {
+        evolution: currentEvolution,
+        periodComparison: currentEvolution.map((point, index) => ({
+          bucket: point.bucket,
+          comparisonBucket: previousEvolution[index]?.bucket ?? null,
+          current: point.received,
+          previous: previousEvolution[index]?.received ?? '0.00',
+        })),
+        averageTicket: currentEvolution.map((point) => ({
+          bucket: point.bucket,
+          value: point.averageTicket,
+          payments: point.operationalPayments,
+        })),
+        byOrigin: [
+          {
+            origin: 'RECEIVABLE_PAYMENT',
+            label: 'Receita operacional',
+            value: totals.operationalCurrent.toFixed(2),
+          },
+          {
+            origin: 'LEGACY_IMPORT',
+            label: 'Histórico importado',
+            value: totals.legacyCurrent.toFixed(2),
+          },
+          { origin: 'MANUAL', label: 'Entradas manuais', value: totals.manualCurrent.toFixed(2) },
+        ],
+        flowAndStock: [
+          {
+            key: 'received',
+            label: 'Recebido no período',
+            semantics: 'flow',
+            value: totals.receivedCurrent.toFixed(2),
+          },
+          {
+            key: 'pending',
+            label: 'Pendente no fechamento',
+            semantics: 'stock',
+            value: stock.pendingCurrent.toFixed(2),
+          },
+          {
+            key: 'overdue',
+            label: 'Vencido no fechamento',
+            semantics: 'stock',
+            value: stock.overdueCurrent.toFixed(2),
+          },
+        ],
+        annualComparison:
+          resolved.preset === 'this_year' || resolved.preset === 'previous_year'
+            ? currentEvolution.map((point, index) => ({
+                bucket: point.bucket,
+                comparisonBucket: previousEvolution[index]?.bucket ?? null,
+                current: point.received,
+                previous: previousEvolution[index]?.received ?? '0.00',
+              }))
+            : null,
       },
     };
   }
@@ -319,6 +467,80 @@ export class ReportsIntelligenceService {
     `);
   }
 
+  private financeStockTotals(
+    tx: Prisma.TransactionClient,
+    current: ReportingDateRange,
+    previous: ReportingDateRange,
+  ) {
+    return tx.$queryRaw<FinanceStockTotalsRow[]>(Prisma.sql`
+      SELECT
+        COALESCE(SUM("amount") FILTER (
+          WHERE "createdAt" < ${current.endExclusiveTimestamp}
+            AND ("paidAt" IS NULL OR "paidAt" > CAST(${current.endDate} AS date))
+            AND ("canceledAt" IS NULL OR "canceledAt" >= ${current.endExclusiveTimestamp})
+            AND NOT ("status" = 'PAGO' AND "paidAt" IS NULL)
+            AND NOT ("status" = 'CANCELADO' AND "canceledAt" IS NULL)
+            AND "dueDate" >= CAST(${current.endDate} AS date)
+        ), 0) AS "pendingCurrent",
+        COALESCE(SUM("amount") FILTER (
+          WHERE "createdAt" < ${previous.endExclusiveTimestamp}
+            AND ("paidAt" IS NULL OR "paidAt" > CAST(${previous.endDate} AS date))
+            AND ("canceledAt" IS NULL OR "canceledAt" >= ${previous.endExclusiveTimestamp})
+            AND NOT ("status" = 'PAGO' AND "paidAt" IS NULL)
+            AND NOT ("status" = 'CANCELADO' AND "canceledAt" IS NULL)
+            AND "dueDate" >= CAST(${previous.endDate} AS date)
+        ), 0) AS "pendingPrevious",
+        COALESCE(SUM("amount") FILTER (
+          WHERE "createdAt" < ${current.endExclusiveTimestamp}
+            AND ("paidAt" IS NULL OR "paidAt" > CAST(${current.endDate} AS date))
+            AND ("canceledAt" IS NULL OR "canceledAt" >= ${current.endExclusiveTimestamp})
+            AND NOT ("status" = 'PAGO' AND "paidAt" IS NULL)
+            AND NOT ("status" = 'CANCELADO' AND "canceledAt" IS NULL)
+            AND "dueDate" < CAST(${current.endDate} AS date)
+        ), 0) AS "overdueCurrent",
+        COALESCE(SUM("amount") FILTER (
+          WHERE "createdAt" < ${previous.endExclusiveTimestamp}
+            AND ("paidAt" IS NULL OR "paidAt" > CAST(${previous.endDate} AS date))
+            AND ("canceledAt" IS NULL OR "canceledAt" >= ${previous.endExclusiveTimestamp})
+            AND NOT ("status" = 'PAGO' AND "paidAt" IS NULL)
+            AND NOT ("status" = 'CANCELADO' AND "canceledAt" IS NULL)
+            AND "dueDate" < CAST(${previous.endDate} AS date)
+        ), 0) AS "overduePrevious"
+      FROM "receivables"
+    `);
+  }
+
+  private financeDetailedSeries(
+    tx: Prisma.TransactionClient,
+    current: ReportingDateRange,
+    previous: ReportingDateRange,
+  ) {
+    return tx.$queryRaw<FinanceDetailedSeriesRow[]>(Prisma.sql`
+      SELECT 'current'::text AS "scope", "transactionDate" AS "businessDate", "origin",
+        SUM("amount") AS "amount", COUNT(*) AS "payments",
+        COUNT(DISTINCT "receivableId") FILTER (
+          WHERE "origin" = 'RECEIVABLE_PAYMENT' AND "receivableId" IS NOT NULL
+        ) AS "operationalReceivables"
+      FROM "financial_transactions"
+      WHERE "type" = 'ENTRADA'
+        AND "origin" IN ('RECEIVABLE_PAYMENT', 'LEGACY_IMPORT', 'MANUAL')
+        AND "transactionDate" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)
+      GROUP BY "transactionDate", "origin"
+      UNION ALL
+      SELECT 'previous'::text AS "scope", "transactionDate" AS "businessDate", "origin",
+        SUM("amount") AS "amount", COUNT(*) AS "payments",
+        COUNT(DISTINCT "receivableId") FILTER (
+          WHERE "origin" = 'RECEIVABLE_PAYMENT' AND "receivableId" IS NOT NULL
+        ) AS "operationalReceivables"
+      FROM "financial_transactions"
+      WHERE "type" = 'ENTRADA'
+        AND "origin" IN ('RECEIVABLE_PAYMENT', 'LEGACY_IMPORT', 'MANUAL')
+        AND "transactionDate" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)
+      GROUP BY "transactionDate", "origin"
+      ORDER BY "scope", "businessDate", "origin"
+    `);
+  }
+
   private financialSeries(tx: Prisma.TransactionClient, period: ReportingDateRange) {
     return tx.$queryRaw<FinancialSeriesRow[]>(Prisma.sql`
       SELECT "transactionDate" AS "businessDate", "origin",
@@ -422,6 +644,51 @@ export class ReportsIntelligenceService {
     return [...points.values()];
   }
 
+  private buildFinanceDetailedSeries(
+    period: ReportingDateRange,
+    granularity: ReportingGranularity,
+    rows: FinanceDetailedSeriesRow[],
+  ) {
+    const points = new Map(
+      reportingBucketKeys(period, granularity).map((bucket) => [
+        bucket,
+        {
+          bucket,
+          operational: new Prisma.Decimal(0),
+          legacy: new Prisma.Decimal(0),
+          manual: new Prisma.Decimal(0),
+          payments: 0,
+          operationalPayments: 0,
+        },
+      ]),
+    );
+    for (const row of rows) {
+      const point = points.get(reportingBucketKey(row.businessDate, granularity));
+      if (!point) continue;
+      if (row.origin === 'RECEIVABLE_PAYMENT') {
+        point.operational = point.operational.plus(row.amount);
+        point.operationalPayments += Number(row.operationalReceivables);
+      } else if (row.origin === 'LEGACY_IMPORT') {
+        point.legacy = point.legacy.plus(row.amount);
+      } else {
+        point.manual = point.manual.plus(row.amount);
+      }
+      if (row.origin !== 'MANUAL') point.payments += Number(row.payments);
+    }
+    return [...points.values()].map((point) => ({
+      bucket: point.bucket,
+      received: point.operational.plus(point.legacy).toFixed(2),
+      operational: point.operational.toFixed(2),
+      legacy: point.legacy.toFixed(2),
+      manual: point.manual.toFixed(2),
+      payments: point.payments,
+      operationalPayments: point.operationalPayments,
+      averageTicket: point.operationalPayments
+        ? point.operational.dividedBy(point.operationalPayments).toFixed(2)
+        : '0.00',
+    }));
+  }
+
   private moneyMetric(current: Prisma.Decimal, previous: Prisma.Decimal) {
     return {
       value: current.toFixed(2),
@@ -492,6 +759,15 @@ export class ReportsIntelligenceService {
       reactivationsPrevious: 0n,
       cancellationsCurrent: 0n,
       cancellationsPrevious: 0n,
+      pendingCurrent: new Prisma.Decimal(0),
+      pendingPrevious: new Prisma.Decimal(0),
+      overdueCurrent: new Prisma.Decimal(0),
+      overduePrevious: new Prisma.Decimal(0),
+    };
+  }
+
+  private emptyFinanceStockTotals(): FinanceStockTotalsRow {
+    return {
       pendingCurrent: new Prisma.Decimal(0),
       pendingPrevious: new Prisma.Decimal(0),
       overdueCurrent: new Prisma.Decimal(0),

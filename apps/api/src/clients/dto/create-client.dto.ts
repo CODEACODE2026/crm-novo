@@ -13,6 +13,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { PaymentProviderCode, ReferralRewardType } from '@prisma/client';
+import { NormalizeOptionalEmail } from './optional-email';
 
 export class CreateClientDto {
   @IsString()
@@ -29,8 +30,9 @@ export class CreateClientDto {
   phoneCountry?: string;
 
   @IsOptional()
+  @NormalizeOptionalEmail()
   @IsEmail()
-  email?: string;
+  email?: string | null;
 
   @IsString()
   @MinLength(2)

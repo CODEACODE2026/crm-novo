@@ -1881,7 +1881,7 @@ export interface ClientPayload {
   name: string;
   phone: string;
   phoneCountry?: string | undefined;
-  email?: string | undefined;
+  email?: string | null | undefined;
   reference: string;
   planId: string;
   recurringValue: number;
@@ -1901,7 +1901,7 @@ export interface ClientUpdatePayload {
   name?: string | undefined;
   phone?: string | undefined;
   phoneCountry?: string | undefined;
-  email?: string | undefined;
+  email?: string | null | undefined;
   notes?: string | undefined;
   preferredPixProvider?: PaymentProviderCode | null | undefined;
 }

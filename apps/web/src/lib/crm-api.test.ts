@@ -26,9 +26,13 @@ import {
   forwardWhatsAppConversationMessage,
   getBillingDispatchSummary,
   getFinancialSummary,
+  getReportsIntelligenceFinance,
+  getReportsIntelligenceClients,
+  getReportsIntelligenceRenewals,
   getPaymentIntentPixCopy,
   getPaymentIntentsSummary,
   getReferralSummary,
+  getReportsIntelligenceOverview,
   getReceivable,
   getReceivablesSummary,
   getWhatsAppAttendanceAnalytics,
@@ -125,6 +129,68 @@ describe('CRM UI formatters', () => {
     expect(canonical?.phoneE164).toBe('+351912345678');
     expect(legacyMissing?.phoneE164).toBeUndefined();
     expect(legacyNull?.phoneE164).toBeNull();
+  });
+
+  it('requests the reports overview with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await getReportsIntelligenceOverview(
+      {
+        preset: 'custom',
+        startDate: '2026-10-01',
+        endDate: '2026-10-31',
+      },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/reports/intelligence/overview?preset=custom&startDate=2026-10-01&endDate=2026-10-31',
+      ),
+      expect.objectContaining({ credentials: 'include', signal: controller.signal }),
+    );
+  });
+
+  it('requests finance intelligence with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getReportsIntelligenceFinance({ preset: 'this_year' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/reports/intelligence/finance?preset=this_year'),
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('requests clients intelligence with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getReportsIntelligenceClients({ preset: 'last_12_months' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/reports/intelligence/clients?preset=last_12_months'),
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('requests renewals intelligence with server-owned period filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ meta: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getReportsIntelligenceRenewals({ preset: 'this_year' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/reports/intelligence/renewals?preset=this_year'),
+      expect.objectContaining({ credentials: 'include' }),
+    );
   });
 
   it('formats business dates without timezone conversion', () => {

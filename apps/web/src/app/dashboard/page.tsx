@@ -132,6 +132,7 @@ import {
   receivableVisualStatus,
 } from '../../components/clients/client-ui-helpers';
 import { PlanForm } from '../../components/plans/plan-form';
+import { ReportsIntelligenceOverviewView } from '../../components/reports/reports-intelligence-overview';
 import { AdminShell, PageHeader } from '../../components/ui/admin-shell';
 import {
   ActionMenu,
@@ -697,12 +698,12 @@ type DeletionDialogTarget =
       preview: Awaited<ReturnType<typeof previewDeleteClientReference>>;
     };
 
-export default function DashboardPage() {
+export default function DashboardPage({ initialView = 'dashboard' }: { initialView?: View }) {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [sessionError, setSessionError] = useState('');
   const [sessionReloadSequence, setSessionReloadSequence] = useState(0);
-  const [view, setView] = useState<View>('dashboard');
+  const [view, setView] = useState<View>(initialView);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [clientsPayload, setClientsPayload] = useState<PaginatedClients | null>(null);
@@ -828,10 +829,10 @@ export default function DashboardPage() {
   }, [sessionReloadSequence]);
 
   useEffect(() => {
-    if (!loadingSession && user) {
+    if (!loadingSession && user && view !== 'reports') {
       void loadData();
     }
-  }, [loadData, loadingSession, user]);
+  }, [loadData, loadingSession, user, view]);
 
   useEffect(() => {
     if (loadingSession || !user || typeof window === 'undefined') return undefined;
@@ -839,6 +840,11 @@ export default function DashboardPage() {
     const params = new URLSearchParams(window.location.search);
     const requestedView = params.get('view');
     let active = true;
+
+    if (window.location.pathname === '/dashboard/relatorios') {
+      setView('reports');
+      return undefined;
+    }
 
     if (requestedView === 'conversations') {
       const conversationId = params.get('conversationId')?.trim();
@@ -918,6 +924,14 @@ export default function DashboardPage() {
     if (loadingSession || !user || typeof window === 'undefined') return undefined;
 
     const handleDashboardPopState = () => {
+      if (window.location.pathname === '/dashboard/relatorios') {
+        setClientDetailTabRequest(null);
+        setSelectedClient(null);
+        setWhatsAppRestoreRequest(null);
+        setView('reports');
+        return;
+      }
+
       const location = parseDashboardLocation(new URLSearchParams(window.location.search));
 
       if (location?.view === 'conversations') {
@@ -1014,6 +1028,20 @@ export default function DashboardPage() {
   }, []);
 
   function handlePrimaryNavigation(nextView: View) {
+    if (nextView === 'reports') {
+      resetClientDetailState();
+      setWhatsAppRestoreRequest(null);
+      if (window.location.pathname !== '/dashboard/relatorios') {
+        window.history.pushState(window.history.state, '', '/dashboard/relatorios');
+      }
+      setView('reports');
+      return;
+    }
+
+    if (view === 'reports' && window.location.pathname === '/dashboard/relatorios') {
+      window.history.pushState(window.history.state, '', '/dashboard');
+    }
+
     if (view === 'conversations' && nextView !== 'conversations') {
       setWhatsAppRestoreRequest(null);
     }
@@ -1587,7 +1615,7 @@ export default function DashboardPage() {
             }}
           />
         ) : null}
-        {view === 'reports' ? <ReportsView clients={clients} plans={plans} /> : null}
+        {view === 'reports' ? <ReportsIntelligenceOverviewView /> : null}
         {view === 'imports' ? <LegacyImportPreviewView plans={plans} /> : null}
         {view === 'settings' ? (
           <SettingsView
@@ -1683,7 +1711,7 @@ function viewSubtitle(view: View) {
     imports: 'Preview temporário da migração legado',
     plans: 'Planos comerciais e recorrências',
     referrals: 'Indicações, benefícios e recompensas',
-    reports: 'Exportações e análises administrativas',
+    reports: 'Inteligência de negócio e indicadores confiáveis',
     settings: 'Configurações técnicas do CRM',
     waitlist: 'Contatos recebidos pelo WhatsApp aguardando atendimento.',
     whatsapp: 'Conexão e mensagens operacionais',
@@ -5535,7 +5563,7 @@ const reportDefinitions = [
   { id: 'referrals', label: 'Indicações' },
 ] satisfies Array<{ id: ReportType; label: string }>;
 
-function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
+export function ReportsView({ clients, plans }: { clients: Client[]; plans: Plan[] }) {
   const [reportType, setReportType] = useState<ReportType>('clients');
   const [filters, setFilters] = useState<ReportFilters>({});
   const [report, setReport] = useState<OperationalReport | null>(null);

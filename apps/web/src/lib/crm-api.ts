@@ -1549,6 +1549,186 @@ export interface ReportFilters {
   referrerClientId?: string;
 }
 
+export type ReportsIntelligencePreset =
+  | 'today'
+  | 'last_7_days'
+  | 'this_month'
+  | 'previous_month'
+  | 'last_3_months'
+  | 'last_6_months'
+  | 'last_12_months'
+  | 'this_year'
+  | 'previous_year'
+  | 'custom';
+
+export interface ReportsIntelligenceMetric<Value extends number | string> {
+  value: Value;
+  previousValue: Value;
+  changePercent: string | null;
+  comparison: 'percentage' | 'new';
+}
+
+export interface ReportsIntelligenceOverview {
+  meta: {
+    preset: ReportsIntelligencePreset;
+    timezone: 'America/Sao_Paulo';
+    period: { startDate: string; endDate: string };
+    comparisonPeriod: { startDate: string; endDate: string };
+    granularity: 'day' | 'month' | 'year';
+    generatedAt: string;
+    dataQuality: Array<{ code: string; message: string }>;
+  };
+  kpis: {
+    received: ReportsIntelligenceMetric<string>;
+    receivedOperational: ReportsIntelligenceMetric<string>;
+    receivedLegacy: ReportsIntelligenceMetric<string>;
+    manualEntries: ReportsIntelligenceMetric<string>;
+    payments: ReportsIntelligenceMetric<number>;
+    averageTicket: ReportsIntelligenceMetric<string>;
+    newClients: ReportsIntelligenceMetric<number>;
+    activeClients: ReportsIntelligenceMetric<number>;
+    paidActivations: ReportsIntelligenceMetric<number>;
+    paidRenewals: ReportsIntelligenceMetric<number>;
+    paidReactivations: ReportsIntelligenceMetric<number>;
+    canceledReferences: ReportsIntelligenceMetric<number>;
+    pendingReceivables: ReportsIntelligenceMetric<string>;
+    overdueReceivables: ReportsIntelligenceMetric<string>;
+  };
+  charts: {
+    financialEvolution: Array<{
+      bucket: string;
+      received: string;
+      operational: string;
+      legacy: string;
+      payments: number;
+    }>;
+    newClients: Array<{ bucket: string; total: number }>;
+    paidLifecycle: Array<{
+      bucket: string;
+      activations: number;
+      renewals: number;
+      reactivations: number;
+    }>;
+  };
+}
+
+export interface ReportsIntelligenceFinance {
+  meta: ReportsIntelligenceOverview['meta'];
+  kpis: {
+    received: ReportsIntelligenceMetric<string>;
+    operational: ReportsIntelligenceMetric<string>;
+    legacy: ReportsIntelligenceMetric<string>;
+    manual: ReportsIntelligenceMetric<string>;
+    payments: ReportsIntelligenceMetric<number>;
+    averageTicket: ReportsIntelligenceMetric<string>;
+    pending: ReportsIntelligenceMetric<string>;
+    overdue: ReportsIntelligenceMetric<string>;
+  };
+  charts: {
+    evolution: Array<{
+      bucket: string;
+      received: string;
+      operational: string;
+      legacy: string;
+      manual: string;
+      payments: number;
+      operationalPayments: number;
+      averageTicket: string;
+    }>;
+    periodComparison: Array<{
+      bucket: string;
+      comparisonBucket: string | null;
+      current: string;
+      previous: string;
+    }>;
+    averageTicket: Array<{ bucket: string; value: string; payments: number }>;
+    byOrigin: Array<{
+      origin: 'RECEIVABLE_PAYMENT' | 'LEGACY_IMPORT' | 'MANUAL';
+      label: string;
+      value: string;
+    }>;
+    flowAndStock: Array<{
+      key: 'received' | 'pending' | 'overdue';
+      label: string;
+      semantics: 'flow' | 'stock';
+      value: string;
+    }>;
+    annualComparison: Array<{
+      bucket: string;
+      comparisonBucket: string | null;
+      current: string;
+      previous: string;
+    }> | null;
+  };
+}
+
+export interface ReportsIntelligenceClients {
+  meta: ReportsIntelligenceOverview['meta'];
+  kpis: {
+    newClients: ReportsIntelligenceMetric<number>;
+    activeClients: ReportsIntelligenceMetric<number>;
+    clientsWithoutActiveReference: ReportsIntelligenceMetric<number>;
+    activeReferences: ReportsIntelligenceMetric<number>;
+    newReferences: ReportsIntelligenceMetric<number>;
+    canceledReferences: ReportsIntelligenceMetric<number>;
+    clientsAffectedByCancellation: ReportsIntelligenceMetric<number>;
+    monthlyAverageNewClients: { value: string | null; applicable: boolean; months: number };
+    activePortfolioVariation: ReportsIntelligenceMetric<number>;
+  };
+  charts: {
+    newClients: Array<{ bucket: string; total: number }>;
+    periodComparison: Array<{ label: string; value: number }>;
+    referenceMovement: Array<{ bucket: string; created: number; canceled: number }>;
+    statusDistribution: Array<{ status: string; label: string; total: number }>;
+    planDistribution: Array<{ planId: string; planName: string; total: number }>;
+    activePortfolio: Array<{
+      bucket: string;
+      activeClients: number;
+      activeReferences: number;
+      historicalLimitation: boolean;
+    }>;
+    monthlyAcquisition: Array<{ bucket: string; total: number }> | null;
+  };
+}
+
+export interface ReportsIntelligenceRenewals {
+  meta: ReportsIntelligenceOverview['meta'];
+  kpis: {
+    paidRenewals: ReportsIntelligenceMetric<number>;
+    renewalRevenue: ReportsIntelligenceMetric<string>;
+    renewalAverageTicket: ReportsIntelligenceMetric<string>;
+    paidActivations: ReportsIntelligenceMetric<number>;
+    activationRevenue: ReportsIntelligenceMetric<string>;
+    paidReactivations: ReportsIntelligenceMetric<number>;
+    reactivationRevenue: ReportsIntelligenceMetric<string>;
+    renewalReversals: ReportsIntelligenceMetric<number>;
+  };
+  charts: {
+    paidRenewals: Array<{ bucket: string; total: number }>;
+    renewalRevenue: Array<{ bucket: string; value: string }>;
+    paidLifecycle: Array<{
+      bucket: string;
+      activations: number;
+      renewals: number;
+      reactivations: number;
+    }>;
+    renewalComparison: Array<{
+      bucket: string;
+      comparisonBucket: string | null;
+      current: number;
+      previous: number;
+    }>;
+    revenueComposition: Array<{
+      purpose: 'INITIAL_ACTIVATION' | 'RENEWAL' | 'REACTIVATION';
+      label: string;
+      value: string;
+      sharePercent: string;
+    }>;
+    renewalAverageTicket: Array<{ bucket: string; value: string; payments: number }>;
+    reversals: Array<{ bucket: string; total: number }>;
+  };
+}
+
 export interface PaginatedBillingDispatches {
   items: MessageDispatch[];
   pagination: PaginatedClients['pagination'];
@@ -2371,6 +2551,76 @@ function reportParams(filters: ReportFilters = {}) {
 export function getReport(type: ReportType, filters: ReportFilters = {}) {
   const query = reportParams(filters);
   return apiFetch<OperationalReport>(`/reports/${type}${query ? `?${query}` : ''}`);
+}
+
+export function getReportsIntelligenceOverview(
+  filters: {
+    preset: ReportsIntelligencePreset;
+    startDate?: string;
+    endDate?: string;
+  },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+
+  return apiFetch<ReportsIntelligenceOverview>(
+    `/reports/intelligence/overview?${params}`,
+    signal ? { signal } : undefined,
+  );
+}
+
+export function getReportsIntelligenceFinance(
+  filters: {
+    preset: ReportsIntelligencePreset;
+    startDate?: string;
+    endDate?: string;
+  },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+
+  return apiFetch<ReportsIntelligenceFinance>(
+    `/reports/intelligence/finance?${params}`,
+    signal ? { signal } : undefined,
+  );
+}
+
+export function getReportsIntelligenceClients(
+  filters: { preset: ReportsIntelligencePreset; startDate?: string; endDate?: string },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+  return apiFetch<ReportsIntelligenceClients>(
+    `/reports/intelligence/clients?${params}`,
+    signal ? { signal } : undefined,
+  );
+}
+
+export function getReportsIntelligenceRenewals(
+  filters: { preset: ReportsIntelligencePreset; startDate?: string; endDate?: string },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+  return apiFetch<ReportsIntelligenceRenewals>(
+    `/reports/intelligence/renewals?${params}`,
+    signal ? { signal } : undefined,
+  );
 }
 
 export function listReferrals(

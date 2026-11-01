@@ -36,6 +36,7 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -1393,6 +1394,7 @@ function FinanceContent({
   const hasTicket = averageTicket.some((point) => point.value !== 0);
   const hasOrigins = origins.some((point) => point.value !== 0);
   const hasFlowAndStock = flowAndStock.some((point) => point.value !== 0);
+  const partialBucket = partialPeriodLabel(finance.meta) ? evolution.at(-1)?.bucket : null;
 
   return (
     <>
@@ -1425,9 +1427,12 @@ function FinanceContent({
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={currencyTooltip}
-                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                  labelFormatter={(label) =>
+                    formatPartialBucketLabel(chartLabel(label), partialBucket)
+                  }
                 />
                 <Legend formatter={(value) => financeSeriesLabel(String(value))} />
+                {partialBucket ? <PartialBucketMarker bucket={partialBucket} /> : null}
                 <Area
                   dataKey="operational"
                   fill="rgba(45, 212, 191, 0.2)"
@@ -1716,6 +1721,7 @@ function OverviewContent({
     (point) => point.activations || point.renewals || point.reactivations,
   );
   const hasComparisonData = comparisonData.some((point) => point.current || point.previous);
+  const partialBucket = partialPeriodLabel(overview.meta) ? financialData.at(-1)?.bucket : null;
 
   return (
     <>
@@ -1757,9 +1763,12 @@ function OverviewContent({
                     currencyFormatter.format(Number(value ?? 0)),
                     chartSeriesLabel(String(name)),
                   ]}
-                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                  labelFormatter={(label) =>
+                    formatPartialBucketLabel(chartLabel(label), partialBucket)
+                  }
                 />
                 <Legend formatter={(value) => chartSeriesLabel(String(value))} />
+                {partialBucket ? <PartialBucketMarker bucket={partialBucket} /> : null}
                 <Area
                   dataKey="operational"
                   fill="url(#reportsOperational)"
@@ -2125,6 +2134,40 @@ function partialPeriodLabel(meta: ReportsIntelligenceOverview['meta']) {
   return meta.preset === 'today'
     ? `O dia considera dados até ${formatBusinessDate(endDate)}.`
     : null;
+}
+
+function PartialBucketMarker({ bucket }: { bucket: string }) {
+  return (
+    <ReferenceLine
+      ifOverflow="extendDomain"
+      label={<PartialBucketMarkerLabel />}
+      stroke="#f59e0b"
+      strokeDasharray="4 4"
+      strokeOpacity={0.78}
+      x={bucket}
+    />
+  );
+}
+
+function PartialBucketMarkerLabel({ viewBox }: { viewBox?: { x?: number; y?: number } }) {
+  if (viewBox?.x === undefined || viewBox.y === undefined) return null;
+  return (
+    <text
+      aria-hidden="true"
+      fill="#fbbf24"
+      fontSize={10}
+      textAnchor="end"
+      x={viewBox.x - 6}
+      y={viewBox.y + 12}
+    >
+      Parcial
+    </text>
+  );
+}
+
+function formatPartialBucketLabel(value: string, partialBucket?: string | null) {
+  const label = formatBucketLong(value);
+  return value === partialBucket ? `${label} · parcial` : label;
 }
 
 function revealActiveControl(

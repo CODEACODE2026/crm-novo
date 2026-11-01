@@ -138,6 +138,9 @@ describe('reports intelligence overview UI contract', () => {
     expect(componentSource).toContain('<Minus aria-hidden="true"');
     expect(stylesSource).toContain('.reports-comparison.neutral');
     expect(stylesSource).toContain('@media (max-width: 359px)');
+    expect(componentSource).toContain('<PartialBucketMarker bucket={partialBucket} />');
+    expect(componentSource).toContain('<PartialBucketMarkerLabel />');
+    expect(componentSource).toContain('`${label} · parcial`');
   });
 
   it('reveals active section and period controls on narrow deep links', () => {

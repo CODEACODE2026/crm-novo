@@ -201,3 +201,39 @@ Mobile:
 - Nao usar cards dentro de cards.
 - Nao deixar status depender apenas de cor.
 - Nao usar regra de negocio no frontend.
+
+## REPORTS-INTELLIGENCE1-UX-REFINE1 — Direção visual
+
+### Princípio
+
+Mais informação útil por dobra, sem transformar o painel em uma interface apertada. O refinamento mantém a personalidade premium, calma e precisa já aprovada.
+
+### Gráficos
+
+- Reduzir espaço morto entre descrição e plotagem.
+- Usar canvas com altura responsiva menor, porém com plotagem interna maior.
+- Diminuir margens Recharts e reservar espaço explícito para legenda.
+- Manter fontes de eixos legíveis e reduzir densidade de ticks quando necessário.
+- Marcar o último bucket em andamento como `parcial` no contexto do painel e no rótulo/tooltip, sem mudar o valor.
+
+### KPIs
+
+- Cards mais baixos e consistentes.
+- Valor principal com contraste e escala maiores que descrição e badge.
+- Descrições com tamanho mínimo legível e até duas linhas.
+- Comparação sem base deve usar linguagem neutra (`Novo no período`), nunca percentual fictício.
+
+### Mobile
+
+- Presets em trilho horizontal compacto com snap e seleção visível.
+- Navegação das seções compacta, também horizontal, preservando os quatro destinos.
+- KPIs em duas colunas sempre que a largura permitir; uma coluna apenas abaixo de 360 px.
+- Gráficos em coluna única, com altura suficiente para leitura e sem canvas desproporcional.
+- Hero e resumo do período devem priorizar o acesso rápido aos indicadores.
+
+### Medidas-alvo
+
+- Hero desktop: padding aproximado de 20–22 px; mobile: 14–16 px.
+- KPI desktop: 142–154 px; mobile: 132–144 px.
+- Card de gráfico desktop: 300–330 px; mobile: 286–310 px.
+- Canvas de gráfico: 210–240 px conforme viewport e presença de legenda.

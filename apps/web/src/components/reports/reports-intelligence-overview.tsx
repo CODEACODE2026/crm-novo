@@ -13,6 +13,7 @@ import {
   HandCoins,
   Info,
   Layers3,
+  Minus,
   ReceiptText,
   RefreshCw,
   RotateCcw,
@@ -436,6 +437,8 @@ export function ReportsIntelligenceOverviewView() {
   const [customError, setCustomError] = useState('');
   const [reloadSequence, setReloadSequence] = useState(0);
   const requestSequence = useRef(0);
+  const sectionNavRef = useRef<HTMLElement>(null);
+  const presetListRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
 
   const loadReport = useCallback(
@@ -520,6 +523,12 @@ export function ReportsIntelligenceOverviewView() {
     return () => window.removeEventListener('popstate', restoreFromHistory);
   }, []);
 
+  useEffect(() => {
+    if (!window.matchMedia('(max-width: 680px)').matches) return;
+    revealActiveControl(sectionNavRef.current, '[aria-current="page"]', reducedMotion);
+    revealActiveControl(presetListRef.current, '[aria-pressed="true"]', reducedMotion);
+  }, [location.preset, location.section, reducedMotion]);
+
   function navigate(next: ReportsIntelligenceLocation, mode: 'push' | 'replace' = 'push') {
     const path = buildReportsIntelligencePath(next);
     window.history[mode === 'push' ? 'pushState' : 'replaceState'](window.history.state, '', path);
@@ -595,7 +604,7 @@ export function ReportsIntelligenceOverviewView() {
         </div>
       </header>
 
-      <nav className="reports-section-nav" aria-label="Seções de Relatórios">
+      <nav ref={sectionNavRef} className="reports-section-nav" aria-label="Seções de Relatórios">
         {sectionOptions.map((section) => (
           <button
             aria-current={location.section === section.id ? 'page' : undefined}
@@ -627,7 +636,12 @@ export function ReportsIntelligenceOverviewView() {
             Atualizar
           </button>
         </div>
-        <div className="reports-preset-list" role="group" aria-label="Atalhos de período">
+        <div
+          ref={presetListRef}
+          className="reports-preset-list"
+          role="group"
+          aria-label="Atalhos de período"
+        >
           {presetOptions.map((preset) => (
             <button
               aria-pressed={location.preset === preset.id}
@@ -667,6 +681,17 @@ export function ReportsIntelligenceOverviewView() {
           </div>
         ) : null}
       </div>
+
+      {reportMeta && partialPeriodLabel(reportMeta) ? (
+        <div className="reports-partial-period-note" role="note">
+          <Clock3 aria-hidden="true" size={15} />
+          <span>
+            <strong>Último bucket parcial.</strong> {partialPeriodLabel(reportMeta)} Os valores
+            exibidos são os realizados até o fechamento do período, não uma projeção nem uma queda
+            de período completo.
+          </span>
+        </div>
+      ) : null}
 
       {loading ? (
         <ReportsSkeleton />
@@ -742,7 +767,7 @@ function RenewalsContent({
               <BarChart accessibilityLayer data={renewals.charts.paidRenewals} margin={chartMargin}>
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value) => [integerFormatter.format(Number(value ?? 0)), 'Renovações']}
@@ -810,7 +835,7 @@ function RenewalsContent({
               >
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   labelFormatter={(label) => formatBucketLong(chartLabel(label))}
@@ -859,7 +884,7 @@ function RenewalsContent({
               <LineChart accessibilityLayer data={comparison} margin={chartMargin}>
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value) => integerFormatter.format(Number(value ?? 0))}
@@ -966,7 +991,7 @@ function RenewalsContent({
               <BarChart accessibilityLayer data={renewals.charts.reversals} margin={chartMargin}>
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value) => integerFormatter.format(Number(value ?? 0))}
@@ -1059,7 +1084,7 @@ function ClientsContent({
               <BarChart accessibilityLayer data={clients.charts.newClients} margin={chartMargin}>
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value) => [
@@ -1094,7 +1119,7 @@ function ClientsContent({
             >
               <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
               <XAxis dataKey="label" {...axisProps} />
-              <YAxis allowDecimals={false} {...axisProps} />
+              <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
               <Tooltip
                 contentStyle={tooltipStyle}
                 formatter={(value) => integerFormatter.format(Number(value ?? 0))}
@@ -1123,7 +1148,7 @@ function ClientsContent({
               >
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   labelFormatter={(label) => formatBucketLong(chartLabel(label))}
@@ -1234,7 +1259,7 @@ function ClientsContent({
               >
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   labelFormatter={(label) => formatBucketLong(chartLabel(label))}
@@ -1282,7 +1307,7 @@ function ClientsContent({
                 >
                   <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                   <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                  <YAxis allowDecimals={false} {...axisProps} />
+                  <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                   <Tooltip
                     contentStyle={tooltipStyle}
                     formatter={(value) => integerFormatter.format(Number(value ?? 0))}
@@ -1818,7 +1843,7 @@ function OverviewContent({
               <BarChart accessibilityLayer data={overview.charts.newClients} margin={chartMargin}>
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value) => [
@@ -1855,7 +1880,7 @@ function OverviewContent({
               >
                 <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
                 <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
-                <YAxis allowDecimals={false} {...axisProps} />
+                <YAxis allowDecimals={false} domain={[0, 'dataMax']} {...axisProps} />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value, name) => [
@@ -1918,6 +1943,7 @@ function KpiCard({
       ? currencyFormatter.format(Number(metric.value))
       : integerFormatter.format(Number(metric.value));
   const positive = metric.changePercent !== null && Number(metric.changePercent) >= 0;
+  const unchanged = metric.changePercent !== null && Number(metric.changePercent) === 0;
 
   return (
     <article className={`reports-kpi reports-kpi-${definition.tone}`}>
@@ -1936,10 +1962,15 @@ function KpiCard({
       <div className="reports-kpi-footer">
         <p>{definition.description}</p>
         <span
-          className={`reports-comparison ${metric.comparison === 'new' ? 'new' : positive ? 'positive' : 'negative'}`}
+          className={`reports-comparison ${metric.comparison === 'new' ? 'new' : unchanged ? 'neutral' : positive ? 'positive' : 'negative'}`}
         >
           {metric.comparison === 'new' ? (
             'Novo no período'
+          ) : unchanged ? (
+            <>
+              <Minus aria-hidden="true" size={13} />
+              {formatPercent(metric.changePercent)}
+            </>
           ) : (
             <>
               {positive ? (
@@ -2080,6 +2111,33 @@ function formatBucketLong(value: string) {
   return value;
 }
 
+function partialPeriodLabel(meta: ReportsIntelligenceOverview['meta']) {
+  const { endDate } = meta.period;
+  if (meta.granularity === 'year') {
+    return endDate.endsWith('-12-31') ? null : `O ano termina em ${formatBusinessDate(endDate)}.`;
+  }
+  if (meta.granularity === 'month') {
+    const [year, month, day] = endDate.split('-').map(Number);
+    if (!year || !month || !day) return null;
+    const monthEnd = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return day === monthEnd ? null : `O mês termina em ${formatBusinessDate(endDate)}.`;
+  }
+  return meta.preset === 'today'
+    ? `O dia considera dados até ${formatBusinessDate(endDate)}.`
+    : null;
+}
+
+function revealActiveControl(
+  container: HTMLElement | null,
+  selector: string,
+  reducedMotion: boolean,
+) {
+  const active = container?.querySelector<HTMLElement>(selector);
+  if (!container || !active) return;
+  const left = active.offsetLeft - (container.clientWidth - active.clientWidth) / 2;
+  container.scrollTo({ behavior: reducedMotion ? 'auto' : 'smooth', left: Math.max(0, left) });
+}
+
 function chartLabel(value: unknown) {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 }
@@ -2108,12 +2166,13 @@ function currencyTooltip(value: unknown, name: unknown) {
   return [currencyFormatter.format(Number(value ?? 0)), financeSeriesLabel(String(name))];
 }
 
-const chartMargin = { bottom: 2, left: 0, right: 12, top: 12 };
+const chartMargin = { bottom: 0, left: -8, right: 4, top: 4 };
 const financeChartColors = ['#2dd4bf', '#818cf8', '#38bdf8'];
 const clientChartColors = ['#2dd4bf', '#38bdf8', '#818cf8', '#f59e0b', '#fb7185'];
 const axisProps = {
   axisLine: false,
-  tick: { fill: '#94a3b8', fontSize: 11 },
+  minTickGap: 14,
+  tick: { fill: '#9fb0c3', fontSize: 10.5 },
   tickLine: false,
 };
 const tooltipStyle = {

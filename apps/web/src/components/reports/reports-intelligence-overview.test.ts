@@ -130,4 +130,22 @@ describe('reports intelligence overview UI contract', () => {
     expect(componentSource).toContain("window.matchMedia('(prefers-reduced-motion: reduce)')");
     expect(componentSource).toContain('isAnimationActive={!reducedMotion}');
   });
+
+  it('marks incomplete buckets and keeps zero comparisons neutral', () => {
+    expect(componentSource).toContain('Último bucket parcial.');
+    expect(componentSource).toContain('partialPeriodLabel(reportMeta)');
+    expect(componentSource).toContain("unchanged ? 'neutral'");
+    expect(componentSource).toContain('<Minus aria-hidden="true"');
+    expect(stylesSource).toContain('.reports-comparison.neutral');
+    expect(stylesSource).toContain('@media (max-width: 359px)');
+  });
+
+  it('reveals active section and period controls on narrow deep links', () => {
+    expect(componentSource).toContain('revealActiveControl(sectionNavRef.current');
+    expect(componentSource).toContain('revealActiveControl(presetListRef.current');
+    expect(componentSource).toContain("window.matchMedia('(max-width: 680px)')");
+    expect(componentSource).toContain(
+      "container.scrollTo({ behavior: reducedMotion ? 'auto' : 'smooth'",
+    );
+  });
 });

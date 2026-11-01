@@ -166,3 +166,35 @@ O projeto deve seguir Sprints:
 12. Sprint 11 - Importacao do Legado.
 
 Nenhuma Sprint tecnica deve iniciar sem aprovacao explicita.
+
+## REPORTS-INTELLIGENCE1-UX-REFINE1 — Master Prompt
+
+### Missão
+
+Melhorar o aproveitamento da área dos gráficos Recharts 3, a hierarquia dos KPIs, a densidade mobile e a altura do hero dos novos Relatórios.
+
+### Arquivos técnicos permitidos
+
+- `apps/web/src/components/reports/reports-intelligence-overview.tsx`
+- `apps/web/src/components/reports/reports-intelligence-overview.test.ts`
+- `apps/web/src/app/globals.css`
+- documentação e evidências desta fase em `docs/project/`
+
+### Regras obrigatórias
+
+- Preservar integralmente payloads, contratos, fórmulas, queries e fontes financeiras.
+- Não criar buckets, interpolar valores ou esconder o bucket atual.
+- Quando o fim do período estiver dentro de um bucket mensal/anual, comunicar `parcial` como estado de apresentação.
+- Manter tooltips, legendas, eixos, acessibilidade Recharts, reduced motion, filtros e URL.
+- Reduzir altura por melhor composição e espaçamento, não por exclusão de conteúdo.
+- Validar visualmente Visão Geral, Financeiro, Clientes e Renovações em desktop, tablet e mobile.
+
+### Critérios de conclusão
+
+- Canvas dos gráficos ocupa materialmente mais área do card.
+- Rótulos e legendas permanecem legíveis sem overflow horizontal.
+- KPIs ganham hierarquia e descrições legíveis em todas as resoluções.
+- Mobile apresenta filtros compactos e menor rolagem sem perda de dados.
+- O último bucket parcial deixa de parecer uma queda de período completo.
+- Testes direcionados, typecheck, lint e build aprovados.
+- Relatório final inclui antes/depois, performance, bundle, commit, tree e veredito.

@@ -170,3 +170,24 @@ Contato pelo WhatsApp
 - Definir se categorias financeiras iniciais serao apenas seeds ou tambem
   editaveis na primeira entrega do financeiro.
 - Definir politica de arquivamento/soft delete por entidade.
+
+## REPORTS-INTELLIGENCE1-UX-REFINE1
+
+### Contexto observado
+
+- O QA VISUAL1 aprovou a identidade dark/teal, os contratos e os números das quatro seções.
+- As evidências reais mostram área de plotagem pequena em cards altos, especialmente por causa da combinação de header, canvas mínimo e margens internas.
+- Em telas pequenas, filtros, KPIs e gráficos permanecem corretos, porém geram rolagem vertical acima do necessário.
+- O preset `this_year` termina na data atual; portanto o último bucket mensal é parcial, não futuro. A queda visual observada representa um mês em andamento e precisa ser identificada como tal, sem omitir nem recalcular valores.
+
+### Objetivo desta fase
+
+Refinar exclusivamente apresentação, densidade e legibilidade de `/dashboard/relatorios`, mantendo API, fórmulas financeiras, filtros, URL, autenticação e fontes de dados inalterados.
+
+### Restrições desta fase
+
+- Nenhuma mudança em backend, schema, migrations ou contratos.
+- Nenhuma mudança em Billing, Recovery, FastDepix, PIX, WhatsApp ou automações.
+- O bucket parcial continua exibindo o valor real devolvido pela API e recebe apenas sinalização visual.
+- Nenhum dado ou indicador pode ser removido para reduzir a altura mobile.
+- Evidências devem ser capturadas em navegador real nas três resoluções já homologadas.

@@ -17,14 +17,17 @@ describe('ReportsController intelligence contract', () => {
       overview: vi.fn().mockResolvedValue({ meta: {} }),
       finance: vi.fn().mockResolvedValue({ kpis: {} }),
       clients: vi.fn().mockResolvedValue({ charts: {} }),
+      renewals: vi.fn().mockResolvedValue({ kpis: {} }),
     };
     const controller = new ReportsController({} as never, intelligence as never);
     const query = { preset: 'last_7_days' as const };
     await expect(controller.overview(query)).resolves.toEqual({ meta: {} });
     await expect(controller.financeIntelligence(query)).resolves.toEqual({ kpis: {} });
     await expect(controller.clientsIntelligence(query)).resolves.toEqual({ charts: {} });
+    await expect(controller.renewalsIntelligence(query)).resolves.toEqual({ kpis: {} });
     expect(intelligence.overview).toHaveBeenCalledWith(query);
     expect(intelligence.finance).toHaveBeenCalledWith(query);
     expect(intelligence.clients).toHaveBeenCalledWith(query);
+    expect(intelligence.renewals).toHaveBeenCalledWith(query);
   });
 });

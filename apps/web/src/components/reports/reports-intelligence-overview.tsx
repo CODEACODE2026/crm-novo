@@ -9,7 +9,6 @@ import {
   CalendarRange,
   CircleDollarSign,
   Clock3,
-  Construction,
   CreditCard,
   HandCoins,
   Info,
@@ -45,10 +44,12 @@ import {
   getReportsIntelligenceClients,
   getReportsIntelligenceFinance,
   getReportsIntelligenceOverview,
+  getReportsIntelligenceRenewals,
   type ReportsIntelligenceClients,
   type ReportsIntelligenceFinance,
   type ReportsIntelligenceMetric,
   type ReportsIntelligenceOverview,
+  type ReportsIntelligenceRenewals,
   type ReportsIntelligencePreset,
 } from '../../lib/crm-api';
 import {
@@ -76,7 +77,7 @@ const sectionOptions = [
   { id: 'overview', label: 'Visão geral', description: 'Indicadores executivos' },
   { id: 'finance', label: 'Financeiro', description: 'Receita e recebíveis' },
   { id: 'clients', label: 'Clientes', description: 'Aquisição e carteira' },
-  { id: 'renewals', label: 'Renovações', description: 'Em desenvolvimento' },
+  { id: 'renewals', label: 'Renovações', description: 'Recorrência e ciclos pagos' },
 ] as const satisfies ReadonlyArray<{
   id: ReportsIntelligenceSection;
   label: string;
@@ -118,6 +119,9 @@ type ClientsMetricKey = Exclude<
   'monthlyAverageNewClients'
 >;
 type ClientsKpiDefinition = KpiCardDefinition & { id: ClientsMetricKey };
+type RenewalsKpiDefinition = KpiCardDefinition & {
+  id: keyof ReportsIntelligenceRenewals['kpis'];
+};
 
 const kpiDefinitions: KpiDefinition[] = [
   {
@@ -345,6 +349,73 @@ const clientsKpiDefinitions: ClientsKpiDefinition[] = [
   },
 ];
 
+const renewalsKpiDefinitions: RenewalsKpiDefinition[] = [
+  {
+    id: 'paidRenewals',
+    label: 'Renovações pagas',
+    description: 'Recebíveis RENEWAL liquidados no período.',
+    icon: RefreshCw,
+    kind: 'count',
+    tone: 'violet',
+  },
+  {
+    id: 'renewalRevenue',
+    label: 'Receita de renovações',
+    description: 'Entradas operacionais vinculadas a renovações.',
+    icon: CircleDollarSign,
+    kind: 'money',
+    tone: 'teal',
+  },
+  {
+    id: 'renewalAverageTicket',
+    label: 'Ticket médio de renovação',
+    description: 'Receita de renovação por recebível liquidado.',
+    icon: CreditCard,
+    kind: 'money',
+    tone: 'blue',
+  },
+  {
+    id: 'paidActivations',
+    label: 'Ativações pagas',
+    description: 'Ativações iniciais efetivamente liquidadas.',
+    icon: UserRoundCheck,
+    kind: 'count',
+    tone: 'blue',
+  },
+  {
+    id: 'activationRevenue',
+    label: 'Receita de ativações',
+    description: 'Entradas operacionais de ativações iniciais.',
+    icon: HandCoins,
+    kind: 'money',
+    tone: 'teal',
+  },
+  {
+    id: 'paidReactivations',
+    label: 'Reativações pagas',
+    description: 'Recebível pago e reativação relacionada PAID.',
+    icon: Activity,
+    kind: 'count',
+    tone: 'violet',
+  },
+  {
+    id: 'reactivationRevenue',
+    label: 'Receita de reativações',
+    description: 'Entradas operacionais de reativações válidas.',
+    icon: ReceiptText,
+    kind: 'money',
+    tone: 'teal',
+  },
+  {
+    id: 'renewalReversals',
+    label: 'Reversões de renovação',
+    description: 'Eventos operacionais separados da receita.',
+    icon: RotateCcw,
+    kind: 'count',
+    tone: 'danger',
+  },
+];
+
 function initialLocation(): ReportsIntelligenceLocation {
   if (typeof window === 'undefined') {
     return { section: 'overview', preset: 'this_month' };
@@ -359,6 +430,7 @@ export function ReportsIntelligenceOverviewView() {
   const [overview, setOverview] = useState<ReportsIntelligenceOverview | null>(null);
   const [finance, setFinance] = useState<ReportsIntelligenceFinance | null>(null);
   const [clients, setClients] = useState<ReportsIntelligenceClients | null>(null);
+  const [renewals, setRenewals] = useState<ReportsIntelligenceRenewals | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [customError, setCustomError] = useState('');
@@ -385,6 +457,9 @@ export function ReportsIntelligenceOverviewView() {
         } else if (location.section === 'clients') {
           const payload = await getReportsIntelligenceClients(filters, signal);
           if (requestSequence.current === requestId) setClients(payload);
+        } else if (location.section === 'renewals') {
+          const payload = await getReportsIntelligenceRenewals(filters, signal);
+          if (requestSequence.current === requestId) setRenewals(payload);
         } else {
           const payload = await getReportsIntelligenceOverview(filters, signal);
           if (requestSequence.current === requestId) setOverview(payload);
@@ -394,6 +469,7 @@ export function ReportsIntelligenceOverviewView() {
         setOverview(null);
         setFinance(null);
         setClients(null);
+        setRenewals(null);
         setError(
           cause instanceof Error
             ? cause.message
@@ -410,7 +486,8 @@ export function ReportsIntelligenceOverviewView() {
     if (
       (location.section !== 'overview' &&
         location.section !== 'finance' &&
-        location.section !== 'clients') ||
+        location.section !== 'clients' &&
+        location.section !== 'renewals') ||
       (location.preset === 'custom' &&
         !isValidCustomReportsPeriod(location.startDate, location.endDate))
     ) {
@@ -456,6 +533,7 @@ export function ReportsIntelligenceOverviewView() {
       setOverview(null);
       setFinance(null);
       setClients(null);
+      setRenewals(null);
       setLocation((current) => ({ ...current, preset }));
       return;
     }
@@ -485,7 +563,9 @@ export function ReportsIntelligenceOverviewView() {
       ? finance?.meta
       : location.section === 'clients'
         ? clients?.meta
-        : overview?.meta;
+        : location.section === 'renewals'
+          ? renewals?.meta
+          : overview?.meta;
 
   return (
     <section className="reports-intelligence" aria-busy={loading}>
@@ -588,9 +668,7 @@ export function ReportsIntelligenceOverviewView() {
         ) : null}
       </div>
 
-      {location.section === 'renewals' ? (
-        <ReportsComingSoon section={location.section} />
-      ) : loading ? (
+      {loading ? (
         <ReportsSkeleton />
       ) : error ? (
         <ReportsError message={error} onRetry={() => setReloadSequence((current) => current + 1)} />
@@ -598,12 +676,323 @@ export function ReportsIntelligenceOverviewView() {
         <FinanceContent finance={finance} reducedMotion={reducedMotion} />
       ) : location.section === 'clients' && clients ? (
         <ClientsContent clients={clients} reducedMotion={reducedMotion} />
+      ) : location.section === 'renewals' && renewals ? (
+        <RenewalsContent renewals={renewals} reducedMotion={reducedMotion} />
       ) : overview ? (
         <OverviewContent overview={overview} reducedMotion={reducedMotion} />
       ) : (
         <ReportsEmptyState />
       )}
     </section>
+  );
+}
+
+function RenewalsContent({
+  renewals,
+  reducedMotion,
+}: {
+  renewals: ReportsIntelligenceRenewals;
+  reducedMotion: boolean;
+}) {
+  const revenue = renewals.charts.renewalRevenue.map((point) => ({
+    ...point,
+    value: Number(point.value),
+  }));
+  const comparison = renewals.charts.renewalComparison;
+  const composition = renewals.charts.revenueComposition.map((point) => ({
+    ...point,
+    label: `${point.label} (${point.sharePercent}%)`,
+    value: Number(point.value),
+  }));
+  const ticket = renewals.charts.renewalAverageTicket.map((point) => ({
+    ...point,
+    value: Number(point.value),
+  }));
+  const hasPaid = renewals.charts.paidRenewals.some((point) => point.total);
+  const hasRevenue = revenue.some((point) => point.value);
+  const hasLifecycle = renewals.charts.paidLifecycle.some(
+    (point) => point.activations || point.renewals || point.reactivations,
+  );
+  const hasComparison = comparison.some((point) => point.current || point.previous);
+  const hasComposition = composition.some((point) => point.value);
+  const hasTicket = ticket.some((point) => point.value);
+  const hasReversals = renewals.charts.reversals.some((point) => point.total);
+
+  return (
+    <>
+      <div className="reports-kpi-grid reports-finance-kpi-grid">
+        {renewalsKpiDefinitions.map((definition) => (
+          <KpiCard
+            definition={definition}
+            key={definition.id}
+            metric={renewals.kpis[definition.id]}
+          />
+        ))}
+      </div>
+
+      <div className="reports-chart-grid">
+        <ChartPanel
+          className="reports-chart-wide"
+          eyebrow="Recorrência"
+          title="Renovações pagas"
+          description="Recebíveis RENEWAL efetivamente liquidados, agrupados no backend."
+        >
+          {hasPaid ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart accessibilityLayer data={renewals.charts.paidRenewals} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => [integerFormatter.format(Number(value ?? 0)), 'Renovações']}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Bar
+                  dataKey="total"
+                  fill="#8b5cf6"
+                  isAnimationActive={!reducedMotion}
+                  radius={[6, 6, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Razão financeiro"
+          title="Receita de renovações"
+          description="Somente entradas operacionais vinculadas a recebíveis de renovação."
+        >
+          {hasRevenue ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <AreaChart accessibilityLayer data={revenue} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis
+                  tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                  {...axisProps}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={currencyTooltip}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Area
+                  dataKey="value"
+                  fill="rgba(45, 212, 191, 0.2)"
+                  isAnimationActive={!reducedMotion}
+                  stroke="#2dd4bf"
+                  strokeWidth={2.4}
+                  type="monotone"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          className="reports-chart-wide"
+          eyebrow="Ciclos pagos"
+          title="Ativações × renovações × reativações"
+          description="Contagens baseadas no recebível pago; reativação também exige relação PAID."
+        >
+          {hasLifecycle ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart
+                accessibilityLayer
+                data={renewals.charts.paidLifecycle}
+                margin={chartMargin}
+              >
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelFormatter={(label) => formatBucketLong(chartLabel(label))}
+                />
+                <Legend
+                  formatter={(value) =>
+                    value === 'activations'
+                      ? 'Ativações'
+                      : value === 'renewals'
+                        ? 'Renovações'
+                        : 'Reativações'
+                  }
+                />
+                <Bar
+                  dataKey="activations"
+                  fill="#38bdf8"
+                  isAnimationActive={!reducedMotion}
+                  radius={[5, 5, 0, 0]}
+                />
+                <Bar
+                  dataKey="renewals"
+                  fill="#8b5cf6"
+                  isAnimationActive={!reducedMotion}
+                  radius={[5, 5, 0, 0]}
+                />
+                <Bar
+                  dataKey="reactivations"
+                  fill="#2dd4bf"
+                  isAnimationActive={!reducedMotion}
+                  radius={[5, 5, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Período equivalente"
+          title="Renovações pagas: atual × anterior"
+          description="Comparação das quantidades liquidadas, resolvida no servidor em America/Sao_Paulo."
+        >
+          {hasComparison ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <LineChart accessibilityLayer data={comparison} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => integerFormatter.format(Number(value ?? 0))}
+                />
+                <Legend
+                  formatter={(value) =>
+                    value === 'current' ? 'Período atual' : 'Período anterior'
+                  }
+                />
+                <Line
+                  dataKey="current"
+                  dot={false}
+                  isAnimationActive={!reducedMotion}
+                  stroke="#2dd4bf"
+                  strokeWidth={2.4}
+                  type="monotone"
+                />
+                <Line
+                  dataKey="previous"
+                  dot={false}
+                  isAnimationActive={!reducedMotion}
+                  stroke="#64748b"
+                  strokeDasharray="5 5"
+                  strokeWidth={2}
+                  type="monotone"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Composição operacional"
+          title="Receita por finalidade"
+          description="Ativações, renovações e reativações sem legado ou entradas manuais."
+        >
+          {hasComposition ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <PieChart accessibilityLayer>
+                <Pie
+                  data={composition}
+                  dataKey="value"
+                  innerRadius="48%"
+                  isAnimationActive={!reducedMotion}
+                  nameKey="label"
+                  outerRadius="76%"
+                  paddingAngle={3}
+                >
+                  {composition.map((point, index) => (
+                    <Cell
+                      fill={clientChartColors[index % clientChartColors.length] ?? '#2dd4bf'}
+                      key={point.purpose}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle} formatter={currencyTooltip} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Eficiência"
+          title="Ticket médio de renovação"
+          description="Receita de renovação por recebível operacional liquidado em cada bucket."
+        >
+          {hasTicket ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <LineChart accessibilityLayer data={ticket} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis
+                  tickFormatter={(value) => compactCurrencyFormatter.format(Number(value))}
+                  {...axisProps}
+                />
+                <Tooltip contentStyle={tooltipStyle} formatter={currencyTooltip} />
+                <Line
+                  dataKey="value"
+                  dot={false}
+                  isAnimationActive={!reducedMotion}
+                  stroke="#38bdf8"
+                  strokeWidth={2.4}
+                  type="monotone"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+
+        <ChartPanel
+          eyebrow="Eventos separados"
+          title="Reversões de renovação"
+          description="Eventos operacionais exibidos sem subtração contábil fictícia."
+        >
+          {hasReversals ? (
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart accessibilityLayer data={renewals.charts.reversals} margin={chartMargin}>
+                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                <XAxis dataKey="bucket" tickFormatter={formatBucket} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value) => integerFormatter.format(Number(value ?? 0))}
+                />
+                <Bar
+                  dataKey="total"
+                  fill="#fb7185"
+                  isAnimationActive={!reducedMotion}
+                  radius={[6, 6, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ChartEmptyState />
+          )}
+        </ChartPanel>
+      </div>
+
+      <aside className="reports-quality-note">
+        <Info aria-hidden="true" size={18} />
+        <div>
+          <strong>Recorrência sem receita presumida</strong>
+          <p>{renewals.meta.dataQuality.map((item) => item.message).join(' ')}</p>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -1598,29 +1987,6 @@ function ChartEmptyState() {
       <BarChart3 aria-hidden="true" size={28} />
       <strong>Sem movimentação neste período</strong>
       <span>Escolha outro recorte para visualizar a evolução.</span>
-    </div>
-  );
-}
-
-function ReportsComingSoon({
-  section,
-}: {
-  section: Exclude<ReportsIntelligenceSection, 'overview'>;
-}) {
-  const label = sectionOptions.find((item) => item.id === section)?.label ?? 'Seção';
-  return (
-    <div className="reports-coming-soon">
-      <span>
-        <Construction aria-hidden="true" size={24} />
-      </span>
-      <div>
-        <small>Próxima etapa</small>
-        <h3>{label} está em desenvolvimento</h3>
-        <p>
-          Esta área será conectada a agregações próprias. Nenhum gráfico ou indicador fictício é
-          exibido enquanto a fonte real ainda não estiver disponível.
-        </p>
-      </div>
     </div>
   );
 }

@@ -104,6 +104,34 @@ type ActivePortfolioSeriesRow = {
   activeReferences: bigint;
 };
 
+type RenewalTotalsRow = {
+  renewalsCurrent: bigint;
+  renewalsPrevious: bigint;
+  renewalRevenueCurrent: Prisma.Decimal;
+  renewalRevenuePrevious: Prisma.Decimal;
+  renewalRevenueReceivablesCurrent: bigint;
+  renewalRevenueReceivablesPrevious: bigint;
+  activationsCurrent: bigint;
+  activationsPrevious: bigint;
+  activationRevenueCurrent: Prisma.Decimal;
+  activationRevenuePrevious: Prisma.Decimal;
+  reactivationsCurrent: bigint;
+  reactivationsPrevious: bigint;
+  reactivationRevenueCurrent: Prisma.Decimal;
+  reactivationRevenuePrevious: Prisma.Decimal;
+  reversalsCurrent: bigint;
+  reversalsPrevious: bigint;
+};
+
+type RenewalRevenueSeriesRow = {
+  businessDate: Date;
+  purpose: 'INITIAL_ACTIVATION' | 'RENEWAL' | 'REACTIVATION';
+  amount: Prisma.Decimal;
+  receivables: bigint;
+};
+
+type RenewalReversalSeriesRow = { businessDate: Date; total: bigint };
+
 @Injectable()
 export class ReportsIntelligenceService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -446,6 +474,233 @@ export class ReportsIntelligenceService {
           granularity === 'month' ? this.buildClientSeries(period, 'month', newClientRows) : null,
       },
     };
+  }
+
+  async renewals(query: ReportsOverviewDto) {
+    const resolved = resolveReportingPeriod(query);
+    const { period, comparisonPeriod, granularity } = resolved;
+    const [totalsRows, paidLifecycleRows, previousLifecycleRows, revenueRows, reversalRows] =
+      await this.prisma.$transaction(async (tx) =>
+        Promise.all([
+          this.renewalTotals(tx, period, comparisonPeriod),
+          this.lifecycleSeries(tx, period),
+          this.lifecycleSeries(tx, comparisonPeriod),
+          this.renewalRevenueSeries(tx, period),
+          this.renewalReversalSeries(tx, period),
+        ]),
+      );
+    const totals = totalsRows[0] ?? this.emptyRenewalTotals();
+    const currentRevenue = this.buildRenewalRevenueSeries(period, granularity, revenueRows);
+    const lifecycle = this.buildLifecycleSeries(period, granularity, paidLifecycleRows);
+    const previousLifecycle = this.buildLifecycleSeries(
+      comparisonPeriod,
+      granularity,
+      previousLifecycleRows,
+    );
+    const operationalRevenue = totals.activationRevenueCurrent
+      .plus(totals.renewalRevenueCurrent)
+      .plus(totals.reactivationRevenueCurrent);
+    const revenueComposition = [
+      {
+        purpose: 'INITIAL_ACTIVATION' as const,
+        label: 'Ativações',
+        value: totals.activationRevenueCurrent,
+      },
+      {
+        purpose: 'RENEWAL' as const,
+        label: 'Renovações',
+        value: totals.renewalRevenueCurrent,
+      },
+      {
+        purpose: 'REACTIVATION' as const,
+        label: 'Reativações',
+        value: totals.reactivationRevenueCurrent,
+      },
+    ].map((item) => ({
+      ...item,
+      value: item.value.toFixed(2),
+      sharePercent: operationalRevenue.isZero()
+        ? '0.00'
+        : item.value.dividedBy(operationalRevenue).times(100).toFixed(2),
+    }));
+
+    return {
+      meta: {
+        preset: resolved.preset,
+        timezone: resolved.timezone,
+        period: this.presentRange(period),
+        comparisonPeriod: this.presentRange(comparisonPeriod),
+        granularity,
+        generatedAt: new Date().toISOString(),
+        dataQuality: [
+          {
+            code: 'LEDGER_REVENUE_ONLY',
+            message:
+              'Valores usam somente ENTRADA/RECEIVABLE_PAYMENT vinculada a recebíveis elegíveis; PIX, intents e grupos não são somados.',
+          },
+          {
+            code: 'PAID_EVENT_DATE',
+            message:
+              'Contagens usam paidAt do recebível; valores usam transactionDate do razão financeiro.',
+          },
+          {
+            code: 'REACTIVATION_REQUIRES_PAID_RELATION',
+            message: 'Reativações exigem recebível PAGO e registro relacionado com status PAID.',
+          },
+          {
+            code: 'REVERSALS_SEPARATE',
+            message:
+              'Reversões são eventos operacionais separados e não reduzem receita sem contrapartida contábil confiável.',
+          },
+        ],
+      },
+      kpis: {
+        paidRenewals: this.countMetric(totals.renewalsCurrent, totals.renewalsPrevious),
+        renewalRevenue: this.moneyMetric(
+          totals.renewalRevenueCurrent,
+          totals.renewalRevenuePrevious,
+        ),
+        renewalAverageTicket: this.moneyMetric(
+          this.divideMoney(totals.renewalRevenueCurrent, totals.renewalRevenueReceivablesCurrent),
+          this.divideMoney(totals.renewalRevenuePrevious, totals.renewalRevenueReceivablesPrevious),
+        ),
+        paidActivations: this.countMetric(totals.activationsCurrent, totals.activationsPrevious),
+        activationRevenue: this.moneyMetric(
+          totals.activationRevenueCurrent,
+          totals.activationRevenuePrevious,
+        ),
+        paidReactivations: this.countMetric(
+          totals.reactivationsCurrent,
+          totals.reactivationsPrevious,
+        ),
+        reactivationRevenue: this.moneyMetric(
+          totals.reactivationRevenueCurrent,
+          totals.reactivationRevenuePrevious,
+        ),
+        renewalReversals: this.countMetric(totals.reversalsCurrent, totals.reversalsPrevious),
+      },
+      charts: {
+        paidRenewals: lifecycle.map((point) => ({ bucket: point.bucket, total: point.renewals })),
+        renewalRevenue: currentRevenue.map((point) => ({
+          bucket: point.bucket,
+          value: point.renewals,
+        })),
+        paidLifecycle: lifecycle,
+        renewalComparison: lifecycle.map((point, index) => ({
+          bucket: point.bucket,
+          comparisonBucket: previousLifecycle[index]?.bucket ?? null,
+          current: point.renewals,
+          previous: previousLifecycle[index]?.renewals ?? 0,
+        })),
+        revenueComposition,
+        renewalAverageTicket: currentRevenue.map((point) => ({
+          bucket: point.bucket,
+          value: point.renewalReceivables
+            ? new Prisma.Decimal(point.renewals).dividedBy(point.renewalReceivables).toFixed(2)
+            : '0.00',
+          payments: point.renewalReceivables,
+        })),
+        reversals: this.buildRenewalReversalSeries(period, granularity, reversalRows),
+      },
+    };
+  }
+
+  private renewalTotals(
+    tx: Prisma.TransactionClient,
+    current: ReportingDateRange,
+    previous: ReportingDateRange,
+  ) {
+    return tx.$queryRaw<RenewalTotalsRow[]>(Prisma.sql`
+      WITH paid_counts AS (
+        SELECT
+          COUNT(*) FILTER (WHERE receivable."purpose" = 'RENEWAL'
+            AND receivable."paidAt" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)) AS "renewalsCurrent",
+          COUNT(*) FILTER (WHERE receivable."purpose" = 'RENEWAL'
+            AND receivable."paidAt" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)) AS "renewalsPrevious",
+          COUNT(*) FILTER (WHERE receivable."purpose" = 'INITIAL_ACTIVATION'
+            AND receivable."paidAt" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)) AS "activationsCurrent",
+          COUNT(*) FILTER (WHERE receivable."purpose" = 'INITIAL_ACTIVATION'
+            AND receivable."paidAt" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)) AS "activationsPrevious",
+          COUNT(*) FILTER (WHERE receivable."purpose" = 'REACTIVATION' AND reactivation."status" = 'PAID'
+            AND receivable."paidAt" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)) AS "reactivationsCurrent",
+          COUNT(*) FILTER (WHERE receivable."purpose" = 'REACTIVATION' AND reactivation."status" = 'PAID'
+            AND receivable."paidAt" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)) AS "reactivationsPrevious"
+        FROM "receivables" receivable
+        LEFT JOIN "client_reference_reactivations" reactivation
+          ON reactivation."receivableId" = receivable."id"
+        WHERE receivable."status" = 'PAGO' AND receivable."paidAt" IS NOT NULL
+          AND receivable."purpose" IN ('INITIAL_ACTIVATION', 'RENEWAL', 'REACTIVATION')
+      ), ledger AS (
+        SELECT receivable."purpose", transaction."amount", transaction."receivableId", transaction."transactionDate"
+        FROM "financial_transactions" transaction
+        JOIN "receivables" receivable ON receivable."id" = transaction."receivableId"
+        LEFT JOIN "client_reference_reactivations" reactivation
+          ON reactivation."receivableId" = receivable."id"
+        WHERE transaction."type" = 'ENTRADA' AND transaction."origin" = 'RECEIVABLE_PAYMENT'
+          AND receivable."status" = 'PAGO' AND receivable."paidAt" IS NOT NULL
+          AND receivable."purpose" IN ('INITIAL_ACTIVATION', 'RENEWAL', 'REACTIVATION')
+          AND (receivable."purpose" <> 'REACTIVATION' OR reactivation."status" = 'PAID')
+      ), revenue AS (
+        SELECT
+          COALESCE(SUM("amount") FILTER (WHERE "purpose" = 'RENEWAL'
+            AND "transactionDate" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)), 0) AS "renewalRevenueCurrent",
+          COALESCE(SUM("amount") FILTER (WHERE "purpose" = 'RENEWAL'
+            AND "transactionDate" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)), 0) AS "renewalRevenuePrevious",
+          COUNT(DISTINCT "receivableId") FILTER (WHERE "purpose" = 'RENEWAL'
+            AND "transactionDate" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)) AS "renewalRevenueReceivablesCurrent",
+          COUNT(DISTINCT "receivableId") FILTER (WHERE "purpose" = 'RENEWAL'
+            AND "transactionDate" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)) AS "renewalRevenueReceivablesPrevious",
+          COALESCE(SUM("amount") FILTER (WHERE "purpose" = 'INITIAL_ACTIVATION'
+            AND "transactionDate" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)), 0) AS "activationRevenueCurrent",
+          COALESCE(SUM("amount") FILTER (WHERE "purpose" = 'INITIAL_ACTIVATION'
+            AND "transactionDate" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)), 0) AS "activationRevenuePrevious",
+          COALESCE(SUM("amount") FILTER (WHERE "purpose" = 'REACTIVATION'
+            AND "transactionDate" BETWEEN CAST(${current.startDate} AS date) AND CAST(${current.endDate} AS date)), 0) AS "reactivationRevenueCurrent",
+          COALESCE(SUM("amount") FILTER (WHERE "purpose" = 'REACTIVATION'
+            AND "transactionDate" BETWEEN CAST(${previous.startDate} AS date) AND CAST(${previous.endDate} AS date)), 0) AS "reactivationRevenuePrevious"
+        FROM ledger
+      ), reversals AS (
+        SELECT
+          COUNT(*) FILTER (WHERE "createdAt" >= ${current.startTimestamp} AND "createdAt" < ${current.endExclusiveTimestamp}) AS "reversalsCurrent",
+          COUNT(*) FILTER (WHERE "createdAt" >= ${previous.startTimestamp} AND "createdAt" < ${previous.endExclusiveTimestamp}) AS "reversalsPrevious"
+        FROM "renewal_reversals"
+      )
+      SELECT paid_counts.*, revenue.*, reversals.* FROM paid_counts, revenue, reversals
+    `);
+  }
+
+  private renewalRevenueSeries(tx: Prisma.TransactionClient, period: ReportingDateRange) {
+    return tx.$queryRaw<RenewalRevenueSeriesRow[]>(Prisma.sql`
+      WITH eligible AS (
+        SELECT transaction."transactionDate" AS "businessDate", receivable."purpose",
+          transaction."amount", transaction."receivableId"
+        FROM "financial_transactions" transaction
+        JOIN "receivables" receivable ON receivable."id" = transaction."receivableId"
+        LEFT JOIN "client_reference_reactivations" reactivation
+          ON reactivation."receivableId" = receivable."id"
+        WHERE transaction."type" = 'ENTRADA' AND transaction."origin" = 'RECEIVABLE_PAYMENT'
+          AND receivable."status" = 'PAGO' AND receivable."paidAt" IS NOT NULL
+          AND receivable."purpose" IN ('INITIAL_ACTIVATION', 'RENEWAL', 'REACTIVATION')
+          AND (receivable."purpose" <> 'REACTIVATION' OR reactivation."status" = 'PAID')
+      )
+      SELECT "businessDate", "purpose",
+        SUM("amount") AS "amount", COUNT(DISTINCT "receivableId") AS "receivables"
+      FROM eligible
+      WHERE "businessDate" BETWEEN CAST(${period.startDate} AS date) AND CAST(${period.endDate} AS date)
+      GROUP BY "businessDate", "purpose"
+      ORDER BY "businessDate", "purpose"
+    `);
+  }
+
+  private renewalReversalSeries(tx: Prisma.TransactionClient, period: ReportingDateRange) {
+    return tx.$queryRaw<RenewalReversalSeriesRow[]>(Prisma.sql`
+      SELECT ("createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date AS "businessDate",
+        COUNT(*) AS "total"
+      FROM "renewal_reversals"
+      WHERE "createdAt" >= ${period.startTimestamp} AND "createdAt" < ${period.endExclusiveTimestamp}
+      GROUP BY ("createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date
+      ORDER BY "businessDate"
+    `);
   }
 
   private financeTotals(
@@ -1003,6 +1258,59 @@ export class ReportsIntelligenceService {
     return [...points.values()];
   }
 
+  private buildRenewalRevenueSeries(
+    period: ReportingDateRange,
+    granularity: ReportingGranularity,
+    rows: RenewalRevenueSeriesRow[],
+  ) {
+    const points = new Map(
+      reportingBucketKeys(period, granularity).map((bucket) => [
+        bucket,
+        {
+          bucket,
+          activations: new Prisma.Decimal(0),
+          renewals: new Prisma.Decimal(0),
+          reactivations: new Prisma.Decimal(0),
+          renewalReceivables: 0,
+        },
+      ]),
+    );
+    for (const row of rows) {
+      const point = points.get(reportingBucketKey(row.businessDate, granularity));
+      if (!point) continue;
+      if (row.purpose === 'INITIAL_ACTIVATION')
+        point.activations = point.activations.plus(row.amount);
+      if (row.purpose === 'RENEWAL') {
+        point.renewals = point.renewals.plus(row.amount);
+        point.renewalReceivables += Number(row.receivables);
+      }
+      if (row.purpose === 'REACTIVATION')
+        point.reactivations = point.reactivations.plus(row.amount);
+    }
+    return [...points.values()].map((point) => ({
+      bucket: point.bucket,
+      activations: point.activations.toFixed(2),
+      renewals: point.renewals.toFixed(2),
+      reactivations: point.reactivations.toFixed(2),
+      renewalReceivables: point.renewalReceivables,
+    }));
+  }
+
+  private buildRenewalReversalSeries(
+    period: ReportingDateRange,
+    granularity: ReportingGranularity,
+    rows: RenewalReversalSeriesRow[],
+  ) {
+    const points = new Map(
+      reportingBucketKeys(period, granularity).map((bucket) => [bucket, { bucket, total: 0 }]),
+    );
+    for (const row of rows) {
+      const point = points.get(reportingBucketKey(row.businessDate, granularity));
+      if (point) point.total += Number(row.total);
+    }
+    return [...points.values()];
+  }
+
   private moneyMetric(current: Prisma.Decimal, previous: Prisma.Decimal) {
     return {
       value: current.toFixed(2),
@@ -1105,6 +1413,27 @@ export class ReportsIntelligenceService {
       canceledReferencesPrevious: 0n,
       canceledClientsCurrent: 0n,
       canceledClientsPrevious: 0n,
+    };
+  }
+
+  private emptyRenewalTotals(): RenewalTotalsRow {
+    return {
+      renewalsCurrent: 0n,
+      renewalsPrevious: 0n,
+      renewalRevenueCurrent: new Prisma.Decimal(0),
+      renewalRevenuePrevious: new Prisma.Decimal(0),
+      renewalRevenueReceivablesCurrent: 0n,
+      renewalRevenueReceivablesPrevious: 0n,
+      activationsCurrent: 0n,
+      activationsPrevious: 0n,
+      activationRevenueCurrent: new Prisma.Decimal(0),
+      activationRevenuePrevious: new Prisma.Decimal(0),
+      reactivationsCurrent: 0n,
+      reactivationsPrevious: 0n,
+      reactivationRevenueCurrent: new Prisma.Decimal(0),
+      reactivationRevenuePrevious: new Prisma.Decimal(0),
+      reversalsCurrent: 0n,
+      reversalsPrevious: 0n,
     };
   }
 

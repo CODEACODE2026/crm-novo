@@ -40,9 +40,11 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     });
     await prisma.financialTransaction.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.clientReferenceReactivation.deleteMany({ where: { clientId: { in: clientIds } } });
+    await prisma.renewalReversal.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.paymentGroupItem.deleteMany({ where: { receivableId: { in: receivableIds } } });
     await prisma.paymentGroup.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.receivable.deleteMany({ where: { id: { in: receivableIds } } });
+    await prisma.renewal.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.clientStatusHistory.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.clientEvent.deleteMany({ where: { clientId: { in: clientIds } } });
     await prisma.clientReference.deleteMany({ where: { clientId: { in: clientIds } } });
@@ -80,7 +82,7 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     expect(result.kpis.paidRenewals.value).toBe(1);
     expect(result.kpis.paidReactivations.value).toBe(1);
     expect(result.kpis.canceledReferences.value).toBe(1);
-    expect(result.kpis.pendingReceivables.value).toBe('1079.00');
+    expect(result.kpis.pendingReceivables.value).toBe('1529.00');
     expect(result.kpis.overdueReceivables.value).toBe('70.00');
     expect(result.charts.financialEvolution).toHaveLength(10);
     expect(result.charts.newClients).toHaveLength(10);
@@ -129,7 +131,7 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     expect(result.kpis.manual.value).toBe('25.00');
     expect(result.kpis.payments.value).toBe(6);
     expect(result.kpis.averageTicket.value).toBe('140.00');
-    expect(result.kpis.pending.value).toBe('1079.00');
+    expect(result.kpis.pending.value).toBe('1529.00');
     expect(result.kpis.overdue.value).toBe('70.00');
     expect(result.charts.evolution).toHaveLength(10);
     expect(result.charts.periodComparison).toHaveLength(10);
@@ -141,7 +143,7 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     ]);
     expect(result.charts.flowAndStock).toEqual([
       { key: 'received', label: 'Recebido no período', semantics: 'flow', value: '750.00' },
-      { key: 'pending', label: 'Pendente no fechamento', semantics: 'stock', value: '1079.00' },
+      { key: 'pending', label: 'Pendente no fechamento', semantics: 'stock', value: '1529.00' },
       { key: 'overdue', label: 'Vencido no fechamento', semantics: 'stock', value: '70.00' },
     ]);
     expect(result.charts.annualComparison).toBeNull();
@@ -214,6 +216,57 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     });
   });
 
+  it('reports only paid cycles and ledger-backed revenue without PIX or group duplication', async () => {
+    const service = new ReportsIntelligenceService(prisma as never);
+    const startedAt = performance.now();
+    const result = await service.renewals({
+      preset: 'custom',
+      startDate: '2026-10-01',
+      endDate: '2026-10-10',
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(result.kpis.paidRenewals.value).toBe(1);
+    expect(result.kpis.renewalRevenue.value).toBe('200.00');
+    expect(result.kpis.renewalAverageTicket.value).toBe('200.00');
+    expect(result.kpis.paidActivations.value).toBe(1);
+    expect(result.kpis.activationRevenue.value).toBe('100.00');
+    expect(result.kpis.paidReactivations.value).toBe(1);
+    expect(result.kpis.reactivationRevenue.value).toBe('300.00');
+    expect(result.kpis.renewalReversals).toMatchObject({ value: 1, previousValue: 1 });
+    expect(result.charts.paidRenewals).toHaveLength(10);
+    expect(result.charts.renewalRevenue).toHaveLength(10);
+    expect(result.charts.paidLifecycle).toHaveLength(10);
+    expect(result.charts.revenueComposition).toEqual([
+      {
+        purpose: 'INITIAL_ACTIVATION',
+        label: 'Ativações',
+        value: '100.00',
+        sharePercent: '16.67',
+      },
+      {
+        purpose: 'RENEWAL',
+        label: 'Renovações',
+        value: '200.00',
+        sharePercent: '33.33',
+      },
+      {
+        purpose: 'REACTIVATION',
+        label: 'Reativações',
+        value: '300.00',
+        sharePercent: '50.00',
+      },
+    ]);
+    expect(result.charts.renewalComparison).toHaveLength(10);
+    expect(result.charts.renewalComparison.reduce((total, point) => total + point.current, 0)).toBe(
+      1,
+    );
+    expect(result.charts.reversals.reduce((total, point) => total + point.total, 0)).toBe(1);
+    expect(result.charts.renewalRevenue.some((point) => point.value === '0.00')).toBe(true);
+    expect(elapsedMs).toBeLessThan(3_000);
+    console.info(`reports-intelligence-renewals-pg12-ms=${elapsedMs.toFixed(2)}`);
+  });
+
   async function createFixture() {
     const plan = await prisma.plan.create({
       data: {
@@ -284,6 +337,60 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
         createdAt: new Date('2026-10-05T15:00:00.000Z'),
       },
     });
+    const reversedRenewal = await prisma.renewal.create({
+      data: {
+        id: randomUUID(),
+        clientId: client.id,
+        clientReferenceId: activeReference.id,
+        planId: plan.id,
+        previousDueDate: new Date('2026-09-10T00:00:00.000Z'),
+        newDueDate: new Date('2026-10-10T00:00:00.000Z'),
+        amount: 100,
+        planName: plan.name,
+        durationMonths: 1,
+        status: 'REVERTED',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date('2026-10-02T12:00:00.000Z'),
+      },
+    });
+    await prisma.renewalReversal.create({
+      data: {
+        id: randomUUID(),
+        renewalId: reversedRenewal.id,
+        clientId: client.id,
+        clientReferenceId: activeReference.id,
+        reason: 'RENEWALS1 test',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date('2026-10-08T15:00:00.000Z'),
+      },
+    });
+    const boundaryRenewal = await prisma.renewal.create({
+      data: {
+        id: randomUUID(),
+        clientId: client.id,
+        clientReferenceId: activeReference.id,
+        planId: plan.id,
+        previousDueDate: new Date('2026-08-10T00:00:00.000Z'),
+        newDueDate: new Date('2026-09-10T00:00:00.000Z'),
+        amount: 100,
+        planName: plan.name,
+        durationMonths: 1,
+        status: 'REVERTED',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date('2026-09-30T12:00:00.000Z'),
+      },
+    });
+    await prisma.renewalReversal.create({
+      data: {
+        id: randomUUID(),
+        renewalId: boundaryRenewal.id,
+        clientId: client.id,
+        clientReferenceId: activeReference.id,
+        reason: 'RENEWALS1 timezone boundary test',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date('2026-10-01T02:30:00.000Z'),
+      },
+    });
     await prisma.clientReference.create({
       data: {
         id: randomUUID(),
@@ -320,6 +427,7 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
     const reactivation = await createReceivable('REACTIVATION', '300.00', '2026-10-04', 'PAGO');
     const groupedA = await createReceivable('MANUAL_CHARGE', '40.00', '2026-10-05', 'PAGO');
     const groupedB = await createReceivable('MANUAL_CHARGE', '60.00', '2026-10-05', 'PAGO');
+    const pendingReactivation = await createReceivable('REACTIVATION', '450.00', null, 'PENDENTE');
     await createReceivable('RENEWAL', '999.00', null, 'PENDENTE');
     await createReceivable('RENEWAL', '80.00', null, 'PENDENTE', '2026-10-15');
     await createReceivable('RENEWAL', '70.00', null, 'PENDENTE', '2026-10-01');
@@ -339,18 +447,32 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
         paidAt: new Date('2026-10-04T00:00:00.000Z'),
       },
     });
+    await prisma.clientReferenceReactivation.create({
+      data: {
+        id: randomUUID(),
+        clientId: client.id,
+        clientReferenceId: activeReference.id,
+        receivableId: pendingReactivation.id,
+        planId: plan.id,
+        activationDate: new Date('2026-10-09T00:00:00.000Z'),
+        billingAnchorDay: 9,
+        recurringValue: 450,
+        status: 'PENDING',
+        idempotencyKey: randomUUID(),
+      },
+    });
 
     const paymentGroup = await prisma.paymentGroup.create({
       data: {
         id: randomUUID(),
         clientId: client.id,
         status: 'PAID',
-        totalAmount: 100,
+        totalAmount: 240,
         paidAt: new Date('2026-10-05T00:00:00.000Z'),
         items: {
           create: [
+            { receivableId: renewal.id, amount: 200 },
             { receivableId: groupedA.id, amount: 40 },
-            { receivableId: groupedB.id, amount: 60 },
           ],
         },
       },
@@ -377,8 +499,23 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
           paymentGroupId: paymentGroup.id,
           provider: 'MOCK',
           status: 'PAID',
-          amount: 100,
+          amount: 240,
           paidAt: new Date('2026-10-05T15:00:00.000Z'),
+        },
+        {
+          id: randomUUID(),
+          receivableId: renewal.id,
+          provider: 'MOCK',
+          status: 'FAILED',
+          amount: 200,
+        },
+        {
+          id: randomUUID(),
+          receivableId: renewal.id,
+          provider: 'MOCK',
+          status: 'PAID',
+          amount: 200,
+          paidAt: new Date('2026-10-03T15:00:00.000Z'),
         },
       ],
     });
@@ -393,7 +530,7 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
           clientId: client.id,
           clientReferenceId: activeReference.id,
           receivableId: receivable.id,
-          paymentGroupId: [groupedA.id, groupedB.id].includes(receivable.id)
+          paymentGroupId: [renewal.id, groupedA.id].includes(receivable.id)
             ? paymentGroup.id
             : null,
           description: 'CORE1 operational payment',

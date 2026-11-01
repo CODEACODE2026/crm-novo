@@ -28,6 +28,7 @@ describe('reports intelligence overview UI contract', () => {
     expect(componentSource).toContain('getReportsIntelligenceOverview');
     expect(componentSource).toContain('getReportsIntelligenceFinance');
     expect(componentSource).toContain('getReportsIntelligenceClients');
+    expect(componentSource).toContain('getReportsIntelligenceRenewals');
     expect(componentSource).not.toContain('downloadReportCsv');
     expect(componentSource).not.toContain('getReport(');
     expect(componentSource).not.toContain('CSV');
@@ -100,11 +101,25 @@ describe('reports intelligence overview UI contract', () => {
     expect(componentSource).toContain('hard deletes históricos não são recuperáveis');
   });
 
-  it('supports loading, retry, no-data and honest unfinished section states', () => {
+  it('implements Renovações from paid lifecycle and ledger-backed revenue', () => {
+    for (const label of [
+      'Receita de renovações',
+      'Ticket médio de renovação',
+      'Ativações pagas',
+      'Reativações pagas',
+      'Reversões de renovação',
+      'Receita por finalidade',
+    ])
+      expect(componentSource).toContain(label);
+    expect(componentSource).toContain('<RenewalsContent');
+    expect(componentSource).toContain("location.section === 'renewals'");
+    expect(componentSource).toContain('sem subtração contábil fictícia');
+  });
+
+  it('supports loading, retry and no-data states', () => {
     expect(componentSource).toContain('<ReportsSkeleton />');
     expect(componentSource).toContain('<ReportsError');
     expect(componentSource).toContain('<ReportsEmptyState />');
-    expect(componentSource).toContain('Nenhum gráfico ou indicador fictício');
     expect(componentSource).toContain('role="alert"');
   });
 

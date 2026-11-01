@@ -31,6 +31,11 @@ export class ReportsController {
     return this.reportsIntelligenceService.clients(query);
   }
 
+  @Get('intelligence/renewals')
+  renewalsIntelligence(@Query() query: ReportsOverviewDto) {
+    return this.reportsIntelligenceService.renewals(query);
+  }
+
   @Get(':type.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async csv(

@@ -1691,6 +1691,44 @@ export interface ReportsIntelligenceClients {
   };
 }
 
+export interface ReportsIntelligenceRenewals {
+  meta: ReportsIntelligenceOverview['meta'];
+  kpis: {
+    paidRenewals: ReportsIntelligenceMetric<number>;
+    renewalRevenue: ReportsIntelligenceMetric<string>;
+    renewalAverageTicket: ReportsIntelligenceMetric<string>;
+    paidActivations: ReportsIntelligenceMetric<number>;
+    activationRevenue: ReportsIntelligenceMetric<string>;
+    paidReactivations: ReportsIntelligenceMetric<number>;
+    reactivationRevenue: ReportsIntelligenceMetric<string>;
+    renewalReversals: ReportsIntelligenceMetric<number>;
+  };
+  charts: {
+    paidRenewals: Array<{ bucket: string; total: number }>;
+    renewalRevenue: Array<{ bucket: string; value: string }>;
+    paidLifecycle: Array<{
+      bucket: string;
+      activations: number;
+      renewals: number;
+      reactivations: number;
+    }>;
+    renewalComparison: Array<{
+      bucket: string;
+      comparisonBucket: string | null;
+      current: number;
+      previous: number;
+    }>;
+    revenueComposition: Array<{
+      purpose: 'INITIAL_ACTIVATION' | 'RENEWAL' | 'REACTIVATION';
+      label: string;
+      value: string;
+      sharePercent: string;
+    }>;
+    renewalAverageTicket: Array<{ bucket: string; value: string; payments: number }>;
+    reversals: Array<{ bucket: string; total: number }>;
+  };
+}
+
 export interface PaginatedBillingDispatches {
   items: MessageDispatch[];
   pagination: PaginatedClients['pagination'];
@@ -2566,6 +2604,21 @@ export function getReportsIntelligenceClients(
   }
   return apiFetch<ReportsIntelligenceClients>(
     `/reports/intelligence/clients?${params}`,
+    signal ? { signal } : undefined,
+  );
+}
+
+export function getReportsIntelligenceRenewals(
+  filters: { preset: ReportsIntelligencePreset; startDate?: string; endDate?: string },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ preset: filters.preset });
+  if (filters.preset === 'custom' && filters.startDate && filters.endDate) {
+    params.set('startDate', filters.startDate);
+    params.set('endDate', filters.endDate);
+  }
+  return apiFetch<ReportsIntelligenceRenewals>(
+    `/reports/intelligence/renewals?${params}`,
     signal ? { signal } : undefined,
   );
 }

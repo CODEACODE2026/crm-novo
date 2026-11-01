@@ -16,6 +16,7 @@ import {
 } from '../../lib/crm-api';
 import { sortPlansByDuration } from '../../lib/plan-utils';
 import { Button } from '../ui/primitives';
+import { normalizeOptionalEmailInput, resolveClientEmailUpdate } from './client-email';
 import { ClientReferralSelect } from './client-referral-select';
 
 interface ClientFormProps {
@@ -226,7 +227,8 @@ export function ClientForm({
             ? preferredPixProvider
             : null;
 
-        if (email) payload.email = email;
+        const nextEmail = resolveClientEmailUpdate(client?.email, email);
+        if (nextEmail !== undefined) payload.email = nextEmail;
         if (notes) payload.notes = notes;
         if (
           preferredPixProviderTouched &&
@@ -255,7 +257,8 @@ export function ClientForm({
       };
       if (internationalPhoneEnabled) payload.phoneCountry = phoneCountry;
 
-      if (email) payload.email = email;
+      const normalizedEmail = normalizeOptionalEmailInput(email);
+      if (normalizedEmail) payload.email = normalizedEmail;
       if (notes) payload.notes = notes;
       if (referrerClientId) {
         payload.referrerClientId = referrerClientId;

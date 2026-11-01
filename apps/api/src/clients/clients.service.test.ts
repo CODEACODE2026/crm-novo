@@ -151,6 +151,40 @@ function manualClientDto(overrides: Partial<Parameters<ClientsService['create']>
   };
 }
 
+describe('Client optional email DTO validation', () => {
+  it('trims a valid email on create before validation', async () => {
+    const dto = plainToInstance(CreateClientDto, {
+      ...manualClientDto(),
+      email: '  maria@example.com  ',
+      planId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
+    expect(dto.email).toBe('maria@example.com');
+  });
+
+  it.each(['', '   '])('normalizes %j to absence on update', async (email) => {
+    const dto = plainToInstance(UpdateClientDto, { email });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
+    expect(dto.email).toBeNull();
+  });
+
+  it('accepts explicit null as absence on update', async () => {
+    const dto = plainToInstance(UpdateClientDto, { email: null });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
+    expect(dto.email).toBeNull();
+  });
+
+  it('rejects an invalid non-empty email', async () => {
+    const errors = await validate(plainToInstance(UpdateClientDto, { email: 'not-an-email' }));
+
+    expect(errors).not.toHaveLength(0);
+    expect(errors[0]?.property).toBe('email');
+  });
+});
+
 function createClientEventsService() {
   const clientAId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const clientBId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -1184,6 +1218,26 @@ describe('ClientsService manual client creation', () => {
     expect(fake.receivables).toHaveLength(0);
   });
 
+  it('stores a trimmed optional email without changing required client data', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(manualClientDto({ email: '  maria@example.com  ' }), 'user-id');
+
+    expect(fake.clients[0]).toMatchObject({
+      name: 'Maria Inicial',
+      phone: '(44) 99999-3030',
+      email: 'maria@example.com',
+    });
+  });
+
+  it('stores a blank optional email as null', async () => {
+    const fake = createClientCreationService();
+
+    await fake.service.create(manualClientDto({ email: '   ' }), 'user-id');
+
+    expect(fake.clients[0]?.email).toBeNull();
+  });
+
   it('creates an initial activation receivable when manual creation waits for payment', async () => {
     const fake = createClientCreationService();
 
@@ -1596,6 +1650,33 @@ describe('ClientsService legacy client updates', () => {
     });
     expect(fake.prisma.clientReference.update).not.toHaveBeenCalled();
     expect(fake.prisma.clientReference.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('clears an existing email when update receives null', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.client.email = 'bruno@example.com';
+
+    await fake.service.update(fake.client.id, { email: null }, 'user-id');
+
+    expect(fake.client.email).toBeNull();
+  });
+
+  it('treats an email containing only spaces as explicit clearing', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.client.email = 'bruno@example.com';
+
+    await fake.service.update(fake.client.id, { email: '   ' }, 'user-id');
+
+    expect(fake.client.email).toBeNull();
+  });
+
+  it('preserves the current email when update omits the field', async () => {
+    const fake = createClientUpdateService({ references: [clientReference()] });
+    fake.client.email = 'bruno@example.com';
+
+    await fake.service.update(fake.client.id, { name: 'Bruno Atualizado' }, 'user-id');
+
+    expect(fake.client.email).toBe('bruno@example.com');
   });
 
   it('updates client phones from old mobile format to the canonical ninth digit', async () => {

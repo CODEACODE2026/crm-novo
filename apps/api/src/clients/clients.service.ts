@@ -1737,7 +1737,7 @@ export class ClientsService {
     }
   }
 
-  private optionalTrim(value: string | undefined) {
+  private optionalTrim(value: string | null | undefined) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
   }

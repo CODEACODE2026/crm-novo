@@ -1,5 +1,6 @@
 import { PaymentProviderCode } from '@prisma/client';
 import { IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { NormalizeOptionalEmail } from './optional-email';
 
 export class UpdateClientDto {
   @IsOptional()
@@ -18,8 +19,9 @@ export class UpdateClientDto {
   phoneCountry?: string;
 
   @IsOptional()
+  @NormalizeOptionalEmail()
   @IsEmail()
-  email?: string;
+  email?: string | null;
 
   @IsOptional()
   @IsString()

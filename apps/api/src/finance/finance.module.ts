@@ -14,6 +14,8 @@ import {
   FastPixPaymentProvider,
 } from './payments/fastdepix-payment.provider';
 import { MockPaymentProvider } from './payments/mock-payment.provider';
+import { MercadoPagoApiClient } from './payments/mercado-pago-api.client';
+import { MercadoPagoPaymentProvider } from './payments/mercado-pago-payment.provider';
 import { PaymentProviderCredentialsService } from './payments/payment-provider-credentials.service';
 import { PaymentProviderRegistryService } from './payments/payment-provider-registry.service';
 import { PAYMENT_PROVIDER } from './payments/payment-provider';
@@ -28,6 +30,8 @@ import { PAYMENT_PROVIDER } from './payments/payment-provider';
     FastPixPaymentProvider,
     FastPayPaymentProvider,
     MockPaymentProvider,
+    MercadoPagoApiClient,
+    MercadoPagoPaymentProvider,
     PaymentProviderCredentialsService,
     PaymentProviderRegistryService,
     TokenEncryptionService,

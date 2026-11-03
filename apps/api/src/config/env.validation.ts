@@ -33,7 +33,26 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');
+  validateOptionalBooleanFlag(config, 'MERCADO_PAGO_ENABLED');
+  validateOptionalBooleanFlag(config, 'MERCADO_PAGO_SANDBOX_APRO_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_BILLING_COUNTRIES');
+  validateOptionalEnum(config, 'MERCADO_PAGO_ENVIRONMENT', ['TEST', 'PRODUCTION']);
+  validateOptionalPositiveInteger(config, 'MERCADO_PAGO_HTTP_TIMEOUT_MS');
+  validateOptionalPositiveInteger(config, 'MERCADO_PAGO_ENVIRONMENT_PROOF_TTL_MINUTES');
+  validateOptionalPositiveInteger(config, 'MERCADO_PAGO_WEBHOOK_MAX_AGE_MS');
+  validateOptionalPositiveInteger(config, 'MERCADO_PAGO_WEBHOOK_FUTURE_TOLERANCE_MS');
+  validateOptionalPositiveInteger(config, 'MERCADO_PAGO_WEBHOOK_LEASE_MS');
+
+  if (config.MERCADO_PAGO_ENABLED === 'true') {
+    requireValue(config, 'MERCADO_PAGO_ENVIRONMENT');
+  }
+
+  if (
+    config.MERCADO_PAGO_SANDBOX_APRO_ENABLED === 'true' &&
+    config.MERCADO_PAGO_ENVIRONMENT !== 'TEST'
+  ) {
+    throw new Error('MERCADO_PAGO_SANDBOX_APRO_ENABLED exige MERCADO_PAGO_ENVIRONMENT=TEST.');
+  }
 
   if (nodeEnv === 'production') {
     requireValue(config, 'DATABASE_URL');
@@ -49,6 +68,11 @@ export function validateEnv(config: EnvConfig) {
     validatePublicUrl(config.CRM_API_PUBLIC_URL, 'CRM_API_PUBLIC_URL');
     validateOptionalPublicUrl(config.CRM_PUBLIC_URL, 'CRM_PUBLIC_URL');
     validateOptionalPublicUrl(config.FASTDEPIX_NOTIFICATION_URL, 'FASTDEPIX_NOTIFICATION_URL');
+    validateOptionalPublicUrl(config.MERCADO_PAGO_API_BASE_URL, 'MERCADO_PAGO_API_BASE_URL');
+    validateOptionalPublicUrl(
+      config.MERCADO_PAGO_IDENTITY_BASE_URL,
+      'MERCADO_PAGO_IDENTITY_BASE_URL',
+    );
   }
 
   return config;
@@ -68,6 +92,21 @@ function validateOptionalBooleanFlag(config: EnvConfig, key: string) {
   const value = config[key];
   if (value !== undefined && value !== 'true' && value !== 'false') {
     throw new Error(`${key} deve ser true ou false.`);
+  }
+}
+
+function validateOptionalEnum(config: EnvConfig, key: string, accepted: string[]) {
+  const value = config[key];
+  if (value !== undefined && !accepted.includes(value)) {
+    throw new Error(`${key} deve ser um de: ${accepted.join(', ')}.`);
+  }
+}
+
+function validateOptionalPositiveInteger(config: EnvConfig, key: string) {
+  const value = config[key];
+  if (value === undefined || value === '') return;
+  if (!/^\d+$/.test(value) || Number(value) < 1_000) {
+    throw new Error(`${key} deve ser inteiro maior ou igual a 1000.`);
   }
 }
 

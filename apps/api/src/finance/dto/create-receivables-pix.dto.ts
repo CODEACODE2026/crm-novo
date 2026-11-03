@@ -1,13 +1,27 @@
 import { PaymentProviderCode } from '@prisma/client';
+import { NormalizeOptionalEmail } from '../../clients/dto/optional-email';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsEmail,
   IsEnum,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
 } from 'class-validator';
+
+export class CreateReceivablePixDto {
+  @IsOptional()
+  @IsEnum(PaymentProviderCode)
+  provider?: PaymentProviderCode;
+
+  @IsOptional()
+  @NormalizeOptionalEmail()
+  @IsEmail()
+  @MaxLength(254)
+  payerEmail?: string;
+}
 
 export class CreateReceivablesPixDto {
   @IsArray()

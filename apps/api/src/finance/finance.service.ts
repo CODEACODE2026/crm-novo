@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import {
   FinancialTransactionOrigin,
   FinancialTransactionType,
@@ -37,6 +37,7 @@ import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto'
 import { CreateManualChargeDto, ManualChargePayerType } from './dto/create-manual-charge.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
 import {
+  CreateReceivablePixDto,
   CreateReceivablesPixDto,
   ReplaceReceivablesPixDto,
 } from './dto/create-receivables-pix.dto';
@@ -136,6 +137,27 @@ type PaymentWebhookStatus = PaymentProviderStatus & {
 type IgnoredPaymentWebhook = {
   ignored: true;
   reason: string;
+};
+
+type PaymentWebhookRequestMetadata = {
+  requestId?: string;
+  dataId?: string;
+  topic?: string;
+};
+
+type VerifiedMercadoPagoWebhookSignature = {
+  signatureDigest: string;
+  timestampMilliseconds: number;
+};
+
+type MercadoPagoWebhookDeliveryIdentity = {
+  accountIdHash: string;
+  environment: 'TEST';
+  paymentIntentId: string;
+  requestId: string;
+  resourceId: string;
+  signatureDigest: string;
+  signatureTimestamp: bigint;
 };
 
 type PixReconciliationBlocker = {
@@ -602,9 +624,13 @@ export class FinanceService {
   async createReceivablePix(
     id: string,
     actorUserId: string | null,
-    dto: { provider?: PaymentProviderCode } = {},
+    dto: CreateReceivablePixDto = {},
     authorization: { allowInternationalManual?: boolean; automatedBilling?: boolean } = {},
   ) {
+    if (dto.provider === 'MERCADO_PAGO') {
+      await this.paymentCredentials.ensureEligiblePixCreationProvider('MERCADO_PAGO');
+    }
+
     try {
       const reservation = await this.prisma.$transaction(async (tx) => {
         await this.acquirePixCreationLocks(tx, [id]);
@@ -685,6 +711,7 @@ export class FinanceService {
         return this.presentPaymentIntent(reservation.intent);
       }
 
+      const payerEmail = dto.payerEmail ?? reservation.receivable.client?.email ?? undefined;
       const providerPix = await this.paymentProvider.createPix({
         ...(reservation.provider ? { provider: reservation.provider } : {}),
         receivableId: reservation.receivable.id,
@@ -692,9 +719,12 @@ export class FinanceService {
         description: reservation.receivable.description,
         expiresAt: reservation.expiresAt,
         clientName: reservation.pixPayer.name,
+        ...(payerEmail ? { payerEmail } : {}),
         ...(reservation.pixPayer.providerPhone
           ? { payerPhone: reservation.pixPayer.providerPhone }
           : {}),
+        idempotencyKey: reservation.intent.id,
+        externalReference: reservation.intent.id,
         notificationUrl: this.getPaymentNotificationUrl(),
       });
 
@@ -703,9 +733,18 @@ export class FinanceService {
           where: { id: reservation.intent.id },
           data: {
             provider: providerPix.provider,
+            providerEnvironment: providerPix.providerEnvironment ?? null,
+            providerCredentialId: providerPix.providerCredentialId ?? null,
+            providerCredentialFingerprint: providerPix.providerCredentialFingerprint ?? null,
+            providerAccountIdHash: providerPix.providerAccountIdHash ?? null,
+            providerApplicationId: providerPix.providerApplicationId ?? null,
             providerTransactionId: this.normalizeCreatedProviderTransactionId(
               providerPix.providerTransactionId,
             ),
+            providerExternalReference:
+              providerPix.provider === 'MERCADO_PAGO'
+                ? (providerPix.externalReference ?? reservation.intent.id)
+                : null,
             externalStatus: providerPix.externalStatus,
             externalDepixId: providerPix.externalDepixId,
             blockchainTxId: providerPix.blockchainTxId,
@@ -844,6 +883,7 @@ export class FinanceService {
           receivable,
           authorization.allowInternationalManual === true,
         );
+        const payerEmail = dto.payerEmail ?? receivable.client?.email ?? undefined;
         const providerPix = await this.paymentProvider.createPix({
           provider: dto.provider,
           receivableId: receivable.id,
@@ -851,7 +891,11 @@ export class FinanceService {
           description: receivable.description,
           expiresAt,
           clientName: pixPayer.name,
+          ...(payerEmail ? { payerEmail } : {}),
           ...(pixPayer.providerPhone ? { payerPhone: pixPayer.providerPhone } : {}),
+          idempotencyKey:
+            dto.idempotencyKey?.trim() || `pix-replace-${currentIntent.id}-${dto.provider}`,
+          externalReference: `pix-replace-${currentIntent.id}-${dto.provider}`,
           notificationUrl: this.getPaymentNotificationUrl(),
         });
 
@@ -864,9 +908,19 @@ export class FinanceService {
           data: {
             receivableId: receivable.id,
             provider: providerPix.provider,
+            providerEnvironment: providerPix.providerEnvironment ?? null,
+            providerCredentialId: providerPix.providerCredentialId ?? null,
+            providerCredentialFingerprint: providerPix.providerCredentialFingerprint ?? null,
+            providerAccountIdHash: providerPix.providerAccountIdHash ?? null,
+            providerApplicationId: providerPix.providerApplicationId ?? null,
             providerTransactionId: this.normalizeCreatedProviderTransactionId(
               providerPix.providerTransactionId,
             ),
+            providerExternalReference:
+              providerPix.provider === 'MERCADO_PAGO'
+                ? (providerPix.externalReference ??
+                  `pix-replace-${currentIntent.id}-${dto.provider}`)
+                : null,
             externalStatus: providerPix.externalStatus,
             externalDepixId: providerPix.externalDepixId,
             blockchainTxId: providerPix.blockchainTxId,
@@ -1036,7 +1090,13 @@ export class FinanceService {
         data: {
           receivableId: id,
           provider: dto.provider,
+          providerEnvironment: providerTransaction.environment ?? null,
+          providerCredentialId: providerTransaction.providerCredentialId ?? null,
+          providerCredentialFingerprint: providerTransaction.providerCredentialFingerprint ?? null,
+          providerAccountIdHash: providerTransaction.providerAccountIdHash ?? null,
+          providerApplicationId: providerTransaction.providerApplicationId ?? null,
           providerTransactionId,
+          providerExternalReference: providerTransaction.externalReference ?? null,
           externalStatus: providerTransaction.externalStatus,
           externalDepixId: providerTransaction.externalDepixId,
           blockchainTxId: providerTransaction.blockchainTxId,
@@ -1096,6 +1156,7 @@ export class FinanceService {
     actorUserId: string | null,
     authorization: { allowInternationalManual?: boolean; automatedBilling?: boolean } = {},
   ) {
+    this.assertMercadoPagoGroupPhase(dto.provider);
     const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
 
     try {
@@ -1125,6 +1186,7 @@ export class FinanceService {
           explicitProvider: dto.provider,
           client,
         });
+        this.assertMercadoPagoGroupPhase(provider);
 
         const paymentGroup = await tx.paymentGroup.create({
           data: {
@@ -1274,6 +1336,7 @@ export class FinanceService {
     actorUserId: string,
     authorization: { allowInternationalManual?: boolean } = {},
   ) {
+    this.assertMercadoPagoGroupPhase(dto.provider);
     const receivableIds = this.uniqueReceivableIds(dto.receivableIds);
 
     try {
@@ -1641,7 +1704,13 @@ export class FinanceService {
       const intentData = {
         receivableId,
         provider: dto.provider,
+        providerEnvironment: providerTransaction.environment ?? null,
+        providerCredentialId: providerTransaction.providerCredentialId ?? null,
+        providerCredentialFingerprint: providerTransaction.providerCredentialFingerprint ?? null,
+        providerAccountIdHash: providerTransaction.providerAccountIdHash ?? null,
+        providerApplicationId: providerTransaction.providerApplicationId ?? null,
         providerTransactionId,
+        providerExternalReference: providerTransaction.externalReference ?? null,
         externalStatus: providerTransaction.externalStatus,
         externalDepixId: providerTransaction.externalDepixId,
         blockchainTxId: providerTransaction.blockchainTxId,
@@ -1717,11 +1786,19 @@ export class FinanceService {
       throw new ConflictException('Intencao de pagamento sem transacao do provider.');
     }
 
+    if (intent.provider === 'MERCADO_PAGO') {
+      const transaction = await this.fetchProviderTransaction(
+        intent.provider,
+        intent.providerTransactionId,
+      );
+      this.validateMercadoPagoTransaction(intent, transaction);
+      return this.applyProviderStatus(intent.id, transaction, actorUserId);
+    }
+
     const providerStatus = await this.paymentProvider.getPixStatus(
       intent.providerTransactionId,
       intent.provider,
     );
-
     return this.applyProviderStatus(intent.id, providerStatus, actorUserId);
   }
 
@@ -1789,8 +1866,13 @@ export class FinanceService {
     signature: string | undefined,
     rawBody: Buffer | undefined,
     payload: unknown,
+    metadata: PaymentWebhookRequestMetadata = {},
   ) {
     this.ensureWebhookProvider(provider);
+
+    if (provider === 'MERCADO_PAGO') {
+      return this.processMercadoPagoWebhook(signature, payload, metadata);
+    }
 
     if (!rawBody?.length) {
       throw new BadRequestException('Raw body obrigatorio para validar webhook.');
@@ -2084,6 +2166,19 @@ export class FinanceService {
         current.providerTransactionId !== providerStatus.providerTransactionId
       ) {
         throw new ConflictException('Status do provider nao corresponde a intencao de pagamento.');
+      }
+
+      if (
+        current.provider === 'MERCADO_PAGO' &&
+        ((current.status === 'PAID' &&
+          providerStatus.status !== 'PAID' &&
+          providerStatus.status !== 'REFUNDED') ||
+          (current.status === 'REFUNDED' && providerStatus.status === 'PAID'))
+      ) {
+        return tx.paymentIntent.update({
+          where: { id },
+          data: { lastSyncAt: new Date() },
+        });
       }
 
       if (providerStatus.status !== 'PAID') {
@@ -3710,7 +3805,12 @@ export class FinanceService {
   }
 
   private ensureWebhookProvider(provider: PaymentProviderCode) {
-    if (provider !== 'FASTFLOW' && provider !== 'FASTPIX' && provider !== 'FASTPAY') {
+    if (
+      provider !== 'FASTFLOW' &&
+      provider !== 'FASTPIX' &&
+      provider !== 'FASTPAY' &&
+      provider !== 'MERCADO_PAGO'
+    ) {
       throw new BadRequestException('Provider de webhook de pagamento nao suportado.');
     }
   }
@@ -4224,6 +4324,418 @@ export class FinanceService {
     return normalized === 'pending' || normalized === 'approved' || normalized === 'under_review';
   }
 
+  private async processMercadoPagoWebhook(
+    signature: string | undefined,
+    payload: unknown,
+    metadata: PaymentWebhookRequestMetadata,
+  ) {
+    const requestId = metadata.requestId?.trim();
+    const orderId = metadata.dataId?.trim();
+    const topic = metadata.topic?.trim().toLowerCase();
+
+    if (!requestId || !orderId || topic !== 'order') {
+      throw new BadRequestException('Webhook Mercado Pago sem identificadores obrigatorios.');
+    }
+
+    const secret = await this.getConfiguredWebhookSecret('MERCADO_PAGO');
+    const verifiedSignature = this.verifyMercadoPagoWebhookSignature(
+      signature,
+      requestId,
+      orderId,
+      secret,
+    );
+
+    const body = this.asRecord(payload);
+    const data = this.asRecord(body?.data);
+    const payloadOrderId = this.stringFrom(data?.id)?.trim();
+    const payloadType = this.stringFrom(body?.type)?.trim().toLowerCase();
+    const action = this.stringFrom(body?.action)?.trim().toLowerCase();
+    const liveMode = body?.live_mode;
+    const expectedEnvironment = this.currentMercadoPagoEnvironment();
+
+    if (
+      !body ||
+      payloadOrderId !== orderId ||
+      payloadType !== 'order' ||
+      !action?.startsWith('order.')
+    ) {
+      throw new BadRequestException('Payload de webhook Mercado Pago invalido.');
+    }
+
+    if (typeof liveMode === 'boolean' && liveMode !== (expectedEnvironment === 'PRODUCTION')) {
+      throw new BadRequestException('Ambiente do webhook Mercado Pago divergente.');
+    }
+
+    const intent = await this.prisma.paymentIntent.findFirst({
+      where: { provider: 'MERCADO_PAGO', providerTransactionId: orderId },
+    });
+
+    if (!intent) {
+      throw new NotFoundException('Intencao de pagamento nao encontrada para webhook.');
+    }
+
+    if (intent.paymentGroupId) {
+      throw new ConflictException('Mercado Pago agrupado nao esta habilitado nesta fase.');
+    }
+
+    if (intent.providerEnvironment !== expectedEnvironment) {
+      throw new ConflictException('Ambiente da intencao Mercado Pago divergente.');
+    }
+
+    if (expectedEnvironment !== 'TEST') {
+      throw new ConflictException(
+        'Liquidacao Mercado Pago PRODUCTION bloqueada ate homologacao especifica.',
+      );
+    }
+
+    const credentialAccess = await this.paymentCredentials.getActiveMercadoPagoAccess();
+
+    if (
+      credentialAccess.environment !== 'TEST' ||
+      credentialAccess.credentialId !== intent.providerCredentialId ||
+      credentialAccess.credentialFingerprint !== intent.providerCredentialFingerprint ||
+      credentialAccess.accountIdHash !== intent.providerAccountIdHash
+    ) {
+      throw new ConflictException('Prova de ambiente TEST Mercado Pago invalida ou expirada.');
+    }
+
+    const deliveryIdentity: MercadoPagoWebhookDeliveryIdentity = {
+      accountIdHash: credentialAccess.accountIdHash,
+      environment: 'TEST',
+      paymentIntentId: intent.id,
+      requestId,
+      resourceId: orderId,
+      signatureDigest: verifiedSignature.signatureDigest,
+      signatureTimestamp: BigInt(verifiedSignature.timestampMilliseconds),
+    };
+    const delivery = await this.reserveMercadoPagoWebhookDelivery(deliveryIdentity);
+
+    if (delivery.status === 'COMPLETED') {
+      return this.prisma.paymentIntent.findUniqueOrThrow({ where: { id: intent.id } });
+    }
+
+    if (delivery.status !== 'PROCESSING') {
+      throw new ConflictException('Webhook Mercado Pago ja esta em processamento.');
+    }
+
+    try {
+      const transaction = await this.fetchProviderTransaction('MERCADO_PAGO', orderId);
+      this.validateMercadoPagoTransaction(intent, transaction);
+      const settled = await this.applyProviderStatus(intent.id, transaction, null);
+      const eventKey = `mercado-pago:${action}`;
+
+      try {
+        await this.prisma.paymentWebhookEvent.create({
+          data: {
+            provider: 'MERCADO_PAGO',
+            providerTransactionId: orderId,
+            status: transaction.externalStatus ?? transaction.status,
+            eventKey,
+            paymentIntentId: intent.id,
+          },
+        });
+      } catch (error) {
+        if (!this.isUniqueConstraint(error)) throw error;
+      }
+
+      await this.completeMercadoPagoWebhookDelivery(delivery.id);
+      return settled;
+    } catch (error) {
+      await this.failMercadoPagoWebhookDelivery(delivery.id, error);
+      throw error;
+    }
+  }
+
+  private async reserveMercadoPagoWebhookDelivery(identity: MercadoPagoWebhookDeliveryIdentity) {
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + this.mercadoPagoWebhookLeaseMs());
+
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.paymentWebhookDelivery.upsert({
+        where: {
+          provider_environment_accountIdHash_requestId_resourceId: {
+            provider: 'MERCADO_PAGO',
+            environment: identity.environment,
+            accountIdHash: identity.accountIdHash,
+            requestId: identity.requestId,
+            resourceId: identity.resourceId,
+          },
+        },
+        create: {
+          provider: 'MERCADO_PAGO',
+          environment: identity.environment,
+          accountIdHash: identity.accountIdHash,
+          requestId: identity.requestId,
+          resourceId: identity.resourceId,
+          signatureTimestamp: identity.signatureTimestamp,
+          signatureDigest: identity.signatureDigest,
+          paymentIntentId: identity.paymentIntentId,
+          status: 'RECEIVED',
+        },
+        update: {},
+      });
+
+      const claimed = await transaction.paymentWebhookDelivery.updateMany({
+        where: {
+          provider: 'MERCADO_PAGO',
+          environment: identity.environment,
+          accountIdHash: identity.accountIdHash,
+          requestId: identity.requestId,
+          resourceId: identity.resourceId,
+          paymentIntentId: identity.paymentIntentId,
+          OR: [
+            { status: { in: ['RECEIVED', 'FAILED'] } },
+            { status: 'PROCESSING', leaseExpiresAt: { lte: now } },
+          ],
+        },
+        data: {
+          status: 'PROCESSING',
+          attemptCount: { increment: 1 },
+          signatureTimestamp: identity.signatureTimestamp,
+          signatureDigest: identity.signatureDigest,
+          leaseExpiresAt,
+          lastErrorCode: null,
+          lastErrorAt: null,
+        },
+      });
+
+      const delivery = await transaction.paymentWebhookDelivery.findFirstOrThrow({
+        where: {
+          provider: 'MERCADO_PAGO',
+          environment: identity.environment,
+          accountIdHash: identity.accountIdHash,
+          requestId: identity.requestId,
+          resourceId: identity.resourceId,
+        },
+      });
+
+      if (claimed.count === 1) return delivery;
+      if (delivery.status === 'COMPLETED') return delivery;
+
+      return { ...delivery, status: 'RECEIVED' as const };
+    });
+  }
+
+  private async completeMercadoPagoWebhookDelivery(deliveryId: string) {
+    const completed = await this.prisma.paymentWebhookDelivery.updateMany({
+      where: { id: deliveryId, status: 'PROCESSING' },
+      data: {
+        status: 'COMPLETED',
+        leaseExpiresAt: null,
+        completedAt: new Date(),
+        lastErrorCode: null,
+        lastErrorAt: null,
+      },
+    });
+
+    if (completed.count !== 1) {
+      throw new ConflictException('Lease do webhook Mercado Pago nao esta mais vigente.');
+    }
+  }
+
+  private async failMercadoPagoWebhookDelivery(deliveryId: string, error: unknown) {
+    await this.prisma.paymentWebhookDelivery.updateMany({
+      where: { id: deliveryId, status: 'PROCESSING' },
+      data: {
+        status: 'FAILED',
+        leaseExpiresAt: null,
+        lastErrorCode: error instanceof Error ? error.constructor.name : 'UnknownError',
+        lastErrorAt: new Date(),
+      },
+    });
+  }
+
+  private validateMercadoPagoTransaction(
+    intent: {
+      id: string;
+      provider: PaymentProviderCode;
+      providerEnvironment: 'TEST' | 'PRODUCTION' | null;
+      providerTransactionId: string | null;
+      providerExternalReference: string | null;
+      providerCredentialId: string | null;
+      providerCredentialFingerprint: string | null;
+      providerAccountIdHash: string | null;
+      providerApplicationId: string | null;
+      externalDepixId: string | null;
+      paymentGroupId: string | null;
+      amount: Prisma.Decimal;
+    },
+    transaction: PaymentProviderTransaction,
+  ) {
+    if (intent.paymentGroupId) {
+      throw new ConflictException('Mercado Pago agrupado nao esta habilitado nesta fase.');
+    }
+
+    if (
+      transaction.provider !== 'MERCADO_PAGO' ||
+      intent.provider !== 'MERCADO_PAGO' ||
+      transaction.providerTransactionId !== intent.providerTransactionId
+    ) {
+      throw new ConflictException('Order Mercado Pago nao corresponde a intencao de pagamento.');
+    }
+
+    if (
+      !transaction.externalDepixId ||
+      !intent.externalDepixId ||
+      transaction.externalDepixId !== intent.externalDepixId
+    ) {
+      throw new ConflictException('Payment ID Mercado Pago divergente.');
+    }
+
+    if (
+      !transaction.externalReference ||
+      !intent.providerExternalReference ||
+      transaction.externalReference !== intent.providerExternalReference
+    ) {
+      throw new ConflictException('Referencia externa Mercado Pago divergente.');
+    }
+
+    if (!transaction.amount.equals(intent.amount)) {
+      throw new ConflictException('Valor da order Mercado Pago divergente.');
+    }
+
+    if (transaction.paymentCount !== 1 || !transaction.orderTotalAmount?.equals(intent.amount)) {
+      throw new ConflictException('Total da order Mercado Pago divergente.');
+    }
+
+    if (
+      transaction.status === 'PAID' &&
+      (!transaction.orderTotalPaidAmount?.equals(intent.amount) ||
+        transaction.orderStatus?.toLowerCase() !== 'processed' ||
+        transaction.orderStatusDetail?.toLowerCase() !== 'accredited' ||
+        transaction.paymentStatus?.toLowerCase() !== 'processed' ||
+        transaction.paymentStatusDetail?.toLowerCase() !== 'accredited')
+    ) {
+      throw new ConflictException('Confirmacao canonica da order Mercado Pago divergente.');
+    }
+
+    if (transaction.currency !== 'BRL') {
+      throw new ConflictException('Moeda da order Mercado Pago divergente.');
+    }
+
+    if (transaction.countryCode !== 'BRA') {
+      throw new ConflictException('Pais da order Mercado Pago divergente.');
+    }
+
+    if (
+      transaction.environment !== this.currentMercadoPagoEnvironment() ||
+      intent.providerEnvironment !== transaction.environment
+    ) {
+      throw new ConflictException('Ambiente da order Mercado Pago divergente.');
+    }
+
+    if (intent.providerEnvironment !== 'TEST') {
+      throw new ConflictException(
+        'Liquidacao Mercado Pago PRODUCTION bloqueada ate homologacao especifica.',
+      );
+    }
+
+    if (
+      !intent.providerCredentialId ||
+      !intent.providerCredentialFingerprint ||
+      !intent.providerAccountIdHash ||
+      !intent.providerApplicationId ||
+      !transaction.providerCredentialId ||
+      !transaction.providerCredentialFingerprint ||
+      !transaction.providerAccountIdHash ||
+      !transaction.providerApplicationId ||
+      !transaction.environmentProofExpiresAt ||
+      transaction.environmentProofExpiresAt <= new Date() ||
+      transaction.providerCredentialId !== intent.providerCredentialId ||
+      transaction.providerCredentialFingerprint !== intent.providerCredentialFingerprint ||
+      transaction.providerAccountIdHash !== intent.providerAccountIdHash ||
+      transaction.providerApplicationId !== intent.providerApplicationId
+    ) {
+      throw new ConflictException('Prova de ambiente TEST Mercado Pago invalida ou expirada.');
+    }
+
+    if (transaction.liveMode === true) {
+      throw new ConflictException('Modo da order Mercado Pago divergente.');
+    }
+
+    if (
+      transaction.paymentMethodId !== 'pix' ||
+      transaction.paymentMethodType !== 'bank_transfer'
+    ) {
+      throw new ConflictException('Meio de pagamento da order Mercado Pago divergente.');
+    }
+  }
+
+  private verifyMercadoPagoWebhookSignature(
+    signature: string | undefined,
+    requestId: string,
+    dataId: string,
+    secret: string,
+  ): VerifiedMercadoPagoWebhookSignature {
+    const parts = new Map(
+      signature
+        ?.split(',')
+        .map((part) => part.trim().split('=', 2))
+        .filter((part): part is [string, string] => part.length === 2) ?? [],
+    );
+    const timestamp = parts.get('ts');
+    const versionOne = parts.get('v1');
+
+    if (
+      !timestamp ||
+      !/^(?:\d{10}|\d{13})$/.test(timestamp) ||
+      !versionOne ||
+      !/^[a-fA-F0-9]{64}$/.test(versionOne)
+    ) {
+      throw new UnauthorizedException('Assinatura do webhook Mercado Pago invalida.');
+    }
+
+    const timestampMilliseconds =
+      timestamp.length === 10 ? Number(timestamp) * 1_000 : Number(timestamp);
+    const now = Date.now();
+
+    if (
+      !Number.isSafeInteger(timestampMilliseconds) ||
+      timestampMilliseconds > now + this.mercadoPagoWebhookFutureToleranceMs() ||
+      timestampMilliseconds < now - this.mercadoPagoWebhookMaxAgeMs()
+    ) {
+      throw new UnauthorizedException('Timestamp do webhook Mercado Pago invalido ou expirado.');
+    }
+
+    const manifest = `id:${dataId};request-id:${requestId};ts:${timestamp};`;
+    const received = Buffer.from(versionOne, 'hex');
+    const expected = createHmac('sha256', secret).update(manifest).digest();
+
+    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+      throw new UnauthorizedException('Assinatura do webhook Mercado Pago invalida.');
+    }
+
+    return {
+      signatureDigest: createHash('sha256')
+        .update(signature ?? '')
+        .digest('hex'),
+      timestampMilliseconds,
+    };
+  }
+
+  private mercadoPagoWebhookMaxAgeMs() {
+    return this.configuredMilliseconds('MERCADO_PAGO_WEBHOOK_MAX_AGE_MS', 86_400_000);
+  }
+
+  private mercadoPagoWebhookFutureToleranceMs() {
+    return this.configuredMilliseconds('MERCADO_PAGO_WEBHOOK_FUTURE_TOLERANCE_MS', 300_000);
+  }
+
+  private mercadoPagoWebhookLeaseMs() {
+    return this.configuredMilliseconds('MERCADO_PAGO_WEBHOOK_LEASE_MS', 120_000);
+  }
+
+  private configuredMilliseconds(key: string, fallback: number) {
+    const value = Number(this.config.get<string>(key));
+    return Number.isInteger(value) && value >= 1_000 ? value : fallback;
+  }
+
+  private currentMercadoPagoEnvironment() {
+    return this.config.get<string>('MERCADO_PAGO_ENVIRONMENT') === 'PRODUCTION'
+      ? ('PRODUCTION' as const)
+      : ('TEST' as const);
+  }
+
   private verifyWebhookSignature(signature: string | undefined, rawBody: Buffer, secret: string) {
     if (!signature?.startsWith('sha256=')) {
       throw new UnauthorizedException('Assinatura do webhook de pagamento invalida.');
@@ -4641,8 +5153,10 @@ export class FinanceService {
           .map((intent) => this.presentPaymentIntent(intent))[0] ?? null,
       client: receivable.client
         ? {
+            email: receivable.client.email,
             id: receivable.client.id,
             name: receivable.client.name,
+            preferredPixProvider: receivable.client.preferredPixProvider,
             reference: receivable.clientReference?.reference ?? receivable.client.reference,
           }
         : null,
@@ -4820,6 +5334,14 @@ export class FinanceService {
     }
 
     return null;
+  }
+
+  private assertMercadoPagoGroupPhase(provider: PaymentProviderCode | undefined) {
+    if (provider === 'MERCADO_PAGO') {
+      throw new BadRequestException(
+        'Pix agrupado Mercado Pago sera habilitado somente na fase MERCADOPAGO-PIX-GROUP1.',
+      );
+    }
   }
 
   private optionalTrim(value: string | undefined) {

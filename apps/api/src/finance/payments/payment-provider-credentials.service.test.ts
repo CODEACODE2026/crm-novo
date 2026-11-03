@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { TokenEncryptionService } from '../../whatsapp/security/token-encryption.service';
 import { FastDepixApiClient } from './fastdepix-api.client';
+import { MercadoPagoApiClient } from './mercado-pago-api.client';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
 
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
@@ -21,6 +22,7 @@ function createService(
   },
 ) {
   const records: Array<Record<string, unknown>> = [];
+  const decryptedValues = new Map<string, string>();
   const prisma = {
     paymentProviderCredential: {
       findMany: vi.fn().mockResolvedValue(records),
@@ -32,9 +34,15 @@ function createService(
           ).length,
         ),
       ),
-      updateMany: vi.fn(({ data }) => {
-        records.forEach((record) => Object.assign(record, data));
-        return Promise.resolve({ count: records.length });
+      updateMany: vi.fn(({ where, data }) => {
+        const matching = records.filter(
+          (record) =>
+            (where.provider === undefined || record.provider === where.provider) &&
+            (where.environment === undefined || record.environment === where.environment) &&
+            (where.active === undefined || record.active === where.active),
+        );
+        matching.forEach((record) => Object.assign(record, data));
+        return Promise.resolve({ count: matching.length });
       }),
       create: vi.fn(({ data }) => {
         const record = {
@@ -49,7 +57,10 @@ function createService(
       findFirst: vi.fn(({ where }) =>
         Promise.resolve(
           records.find(
-            (record) => record.provider === where.provider && record.active === where.active,
+            (record) =>
+              record.provider === where.provider &&
+              record.active === where.active &&
+              (where.environment === undefined || record.environment === where.environment),
           ) ?? null,
         ),
       ),
@@ -62,8 +73,14 @@ function createService(
     },
   };
   const encryption = {
-    encrypt: vi.fn((value: string) => `encrypted:${value.slice(-4)}`),
-    decrypt: vi.fn((value: string) => value.replace('encrypted:', 'token-')),
+    encrypt: vi.fn((value: string) => {
+      const encrypted = `encrypted:${value.slice(-4)}`;
+      decryptedValues.set(encrypted, value);
+      return encrypted;
+    }),
+    decrypt: vi.fn(
+      (value: string) => decryptedValues.get(value) ?? value.replace('encrypted:', 'token-'),
+    ),
   };
   const apiClient = {
     authMe: vi.fn().mockResolvedValue({
@@ -80,12 +97,23 @@ function createService(
     }),
     listWebhooks: vi.fn().mockResolvedValue([]),
   };
+  const mercadoPagoApiClient = {
+    getCurrentUser: vi.fn().mockResolvedValue({
+      id: 123,
+      nickname: 'TEST_USER',
+      site_id: 'MLB',
+      email: 'testuser123@testuser.com',
+      tags: ['test_user'],
+      test_data: { sandbox: true },
+    }),
+  };
 
   return {
     service: new PaymentProviderCredentialsService(
       prisma as never,
       encryption as never,
       apiClient as never,
+      mercadoPagoApiClient as never,
       {
         get: (key: string) => configValues[key],
       } as never,
@@ -93,6 +121,7 @@ function createService(
     prisma,
     encryption,
     apiClient,
+    mercadoPagoApiClient,
     records,
   };
 }
@@ -110,9 +139,15 @@ function createPaymentCredentialDeps() {
           ).length,
         ),
       ),
-      updateMany: vi.fn(({ data }) => {
-        records.forEach((record) => Object.assign(record, data));
-        return Promise.resolve({ count: records.length });
+      updateMany: vi.fn(({ where, data }) => {
+        const matching = records.filter(
+          (record) =>
+            (where.provider === undefined || record.provider === where.provider) &&
+            (where.environment === undefined || record.environment === where.environment) &&
+            (where.active === undefined || record.active === where.active),
+        );
+        matching.forEach((record) => Object.assign(record, data));
+        return Promise.resolve({ count: matching.length });
       }),
       create: vi.fn(({ data }) => {
         const record = {
@@ -127,7 +162,10 @@ function createPaymentCredentialDeps() {
       findFirst: vi.fn(({ where }) =>
         Promise.resolve(
           records.find(
-            (record) => record.provider === where.provider && record.active === where.active,
+            (record) =>
+              record.provider === where.provider &&
+              record.active === where.active &&
+              (where.environment === undefined || record.environment === where.environment),
           ) ?? null,
         ),
       ),
@@ -154,6 +192,7 @@ const nestCredentialDeps = createPaymentCredentialDeps();
   providers: [
     PaymentProviderCredentialsService,
     FastDepixApiClient,
+    MercadoPagoApiClient,
     { provide: PrismaService, useValue: nestCredentialDeps.prisma },
     { provide: TokenEncryptionService, useValue: nestCredentialDeps.encryption },
   ],
@@ -211,6 +250,160 @@ describe('PaymentProviderCredentialsService', () => {
       defaultForPix: false,
     });
     expect(JSON.stringify(result)).not.toContain('fdpx_fastpix_token_B8P9');
+  });
+
+  it('stores a Mercado Pago TEST credential and keeps it non-default', async () => {
+    const fake = createService('fastflow', {
+      CRM_API_PUBLIC_URL: 'https://crm.example.test',
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+      MERCADO_PAGO_ENABLED: 'true',
+    });
+
+    await fake.service.save({
+      provider: 'MERCADO_PAGO',
+      environment: 'TEST',
+      name: 'Mercado Pago teste',
+      token: 'APP_USR_test_token_T3ST',
+    });
+    expect(fake.mercadoPagoApiClient.getCurrentUser).toHaveBeenCalledTimes(1);
+    expect(fake.records[0]).toEqual(
+      expect.objectContaining({
+        provider: 'MERCADO_PAGO',
+        environment: 'TEST',
+        active: true,
+        defaultForPix: false,
+        environmentProofStatus: 'VERIFIED_TEST',
+        environmentProofEnvironment: 'TEST',
+        environmentProofAccountIdHash: expect.stringMatching(/^sha256:/),
+        environmentProofCredentialFingerprint: expect.stringMatching(/^sha256:/),
+        environmentProofVerifiedAt: expect.any(Date),
+        environmentProofExpiresAt: expect.any(Date),
+      }),
+    );
+    await expect(fake.service.getActiveToken('MERCADO_PAGO')).resolves.toBe(
+      'APP_USR_test_token_T3ST',
+    );
+  });
+
+  it('binds active Mercado Pago access to a valid TEST proof and rejects token rotation or expiry', async () => {
+    const fake = createService('fastflow', {
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+      MERCADO_PAGO_ENABLED: 'true',
+      MERCADO_PAGO_ENVIRONMENT_PROOF_TTL_MINUTES: '60',
+    });
+    await fake.service.save({
+      provider: 'MERCADO_PAGO',
+      environment: 'TEST',
+      name: 'Mercado Pago teste',
+      token: 'APP_USR_test_token_T3ST',
+    });
+
+    await expect(fake.service.getActiveMercadoPagoAccess()).resolves.toMatchObject({
+      credentialId: 'credential-1',
+      environment: 'TEST',
+      credentialFingerprint: expect.stringMatching(/^sha256:/),
+      accountIdHash: expect.stringMatching(/^sha256:/),
+    });
+
+    fake.records[0]!.tokenEncrypted = 'encrypted:ROTATED';
+    await expect(fake.service.getActiveMercadoPagoAccess()).rejects.toThrow(
+      'sem prova TEST valida e vigente',
+    );
+
+    fake.records[0]!.tokenEncrypted = 'encrypted:T3ST';
+    fake.records[0]!.environmentProofExpiresAt = new Date(Date.now() - 1);
+    await expect(fake.service.getActiveMercadoPagoAccess()).rejects.toThrow(
+      'sem prova TEST valida e vigente',
+    );
+  });
+
+  it('rejects TEST proof when the authenticated seller identity lacks official sandbox evidence', async () => {
+    const fake = createService('fastflow', {
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+      MERCADO_PAGO_ENABLED: 'true',
+    });
+    fake.mercadoPagoApiClient.getCurrentUser.mockResolvedValueOnce({
+      id: 456,
+      nickname: 'SELLER_REAL',
+      site_id: 'MLB',
+      email: 'seller@example.com',
+      tags: [],
+    });
+
+    await expect(
+      fake.service.save({
+        provider: 'MERCADO_PAGO',
+        environment: 'TEST',
+        name: 'Credencial divergente',
+        token: 'APP_USR_not_test_PR0D',
+      }),
+    ).rejects.toThrow('nao comprovou identidade oficial de vendedor TEST');
+    expect(fake.records).toHaveLength(0);
+  });
+
+  it('blocks a PRODUCTION credential before validation or persistence', async () => {
+    const fake = createService('fastflow', {
+      MERCADO_PAGO_ENVIRONMENT: 'PRODUCTION',
+      MERCADO_PAGO_ENABLED: 'true',
+    });
+    await expect(
+      fake.service.save({
+        provider: 'MERCADO_PAGO',
+        environment: 'PRODUCTION',
+        name: 'Mercado Pago producao',
+        token: 'APP_USR_prod_token_PR0D',
+      }),
+    ).rejects.toThrow('PRODUCTION permanece bloqueado');
+    expect(fake.mercadoPagoApiClient.getCurrentUser).not.toHaveBeenCalled();
+    expect(fake.prisma.paymentProviderCredential.updateMany).not.toHaveBeenCalled();
+    expect(fake.prisma.paymentProviderCredential.create).not.toHaveBeenCalled();
+    expect(fake.records).toHaveLength(0);
+  });
+
+  it('stores a Mercado Pago webhook secret for the active environment without automatic registration', async () => {
+    const fake = createService('fastflow', {
+      CRM_API_PUBLIC_URL: 'https://crm.example.test',
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+      MERCADO_PAGO_ENABLED: 'false',
+    });
+    await fake.service.save({
+      provider: 'MERCADO_PAGO',
+      environment: 'TEST',
+      name: 'Mercado Pago teste',
+      token: 'APP_USR_test_token_T3ST',
+    });
+
+    const result = await fake.service.saveWebhookSecret('MERCADO_PAGO', {
+      secret: 'mercado_pago_webhook_secret_TEST',
+    });
+
+    expect(fake.records.at(0)).toMatchObject({
+      provider: 'MERCADO_PAGO',
+      environment: 'TEST',
+      webhookSecretEncrypted: 'encrypted:TEST',
+      webhookSecretLastFour: 'TEST',
+    });
+    expect(result.webhookSecretConfigured).toBe(true);
+    expect(fake.apiClient.registerWebhook).not.toHaveBeenCalled();
+  });
+
+  it('keeps automatic Mercado Pago webhook registration blocked from the FastDepix client', async () => {
+    const fake = createService('fastflow', {
+      CRM_API_PUBLIC_URL: 'https://crm.example.test',
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+      MERCADO_PAGO_ENABLED: 'true',
+    });
+    await fake.service.save({
+      provider: 'MERCADO_PAGO',
+      environment: 'TEST',
+      name: 'Mercado Pago teste',
+      token: 'APP_USR_test_token_T3ST',
+    });
+
+    await expect(fake.service.registerWebhook('MERCADO_PAGO')).rejects.toThrow(
+      'Webhook Mercado Pago deve ser configurado no painel oficial nesta fase.',
+    );
+    expect(fake.apiClient.registerWebhook).not.toHaveBeenCalled();
   });
 
   it('does not allow FastPIX to become the default PIX provider', async () => {
@@ -434,7 +627,7 @@ describe('PaymentProviderCredentialsService', () => {
 
     const result = await fake.service.registerWebhook('FASTFLOW');
 
-    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('token-A7F2', {
+    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('fdpx_test_token_A7F2', {
       url: 'https://crm.example.test/payment-webhooks/fastflow',
       events: [
         'transaction.created',
@@ -471,7 +664,7 @@ describe('PaymentProviderCredentialsService', () => {
 
     const result = await fake.service.registerWebhook('FASTPIX');
 
-    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('token-B8P9', {
+    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('fdpx_fastpix_token_B8P9', {
       url: 'https://crm.example.test/payment-webhooks/fastpix',
       events: [
         'transaction.created',
@@ -502,7 +695,7 @@ describe('PaymentProviderCredentialsService', () => {
 
     await fake.service.registerWebhook('FASTFLOW');
 
-    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('token-A7F2', {
+    expect(fake.apiClient.registerWebhook).toHaveBeenCalledWith('fdpx_test_token_A7F2', {
       url: 'https://legacy-crm.example.test/payment-webhooks/fastflow',
       events: [
         'transaction.created',
@@ -559,7 +752,7 @@ describe('PaymentProviderCredentialsService', () => {
 
     await fake.service.registerWebhook('FASTFLOW');
 
-    expect(fake.apiClient.listWebhooks).toHaveBeenCalledWith('token-A7F2');
+    expect(fake.apiClient.listWebhooks).toHaveBeenCalledWith('fdpx_test_token_A7F2');
     expect(fake.records.at(0)).toMatchObject({
       webhookSecretEncrypted: 'encrypted:_456',
       webhookSecretLastFour: '_456',

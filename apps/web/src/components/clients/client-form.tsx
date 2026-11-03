@@ -14,6 +14,7 @@ import {
   type PaymentProviderCredentialStatus,
   type Plan,
 } from '../../lib/crm-api';
+import { isOperationalPixProviderCredential } from '../../lib/payment-provider-readiness';
 import { sortPlansByDuration } from '../../lib/plan-utils';
 import { Button } from '../ui/primitives';
 import { normalizeOptionalEmailInput, resolveClientEmailUpdate } from './client-email';
@@ -48,6 +49,7 @@ const clientPreferredPixProviders = [
   'FASTFLOW',
   'FASTPAY',
   'FASTPIX',
+  'MERCADO_PAGO',
 ] satisfies ConfigurablePaymentProvider[];
 const unavailableProviderValue = '__UNAVAILABLE__';
 
@@ -527,14 +529,6 @@ export function ClientForm({
   );
 }
 
-function isOperationalPixProviderCredential(credential: PaymentProviderCredentialStatus) {
-  return (
-    credential.configured &&
-    credential.active !== false &&
-    (credential.status === 'CONFIGURADO' || credential.status === 'VALIDO')
-  );
-}
-
 function isConfigurablePixProvider(provider: unknown): provider is ConfigurablePaymentProvider {
   return clientPreferredPixProviders.includes(provider as ConfigurablePaymentProvider);
 }
@@ -543,5 +537,6 @@ function paymentProviderLabel(provider: PaymentProviderCode) {
   if (provider === 'FASTFLOW') return 'FastFlow';
   if (provider === 'FASTPAY') return 'FastPay';
   if (provider === 'FASTPIX') return 'FastPIX';
+  if (provider === 'MERCADO_PAGO') return 'Mercado Pago';
   return provider;
 }

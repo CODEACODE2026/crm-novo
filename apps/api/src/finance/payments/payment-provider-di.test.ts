@@ -3,6 +3,7 @@ import { SELF_DECLARED_DEPS_METADATA } from '@nestjs/common/constants';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { PaymentProviderCode, Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FinanceService } from '../finance.service';
@@ -13,6 +14,8 @@ import {
   FastPixPaymentProvider,
 } from './fastdepix-payment.provider';
 import { MockPaymentProvider } from './mock-payment.provider';
+import { MercadoPagoApiClient } from './mercado-pago-api.client';
+import { MercadoPagoPaymentProvider } from './mercado-pago-payment.provider';
 import { PAYMENT_PROVIDER } from './payment-provider';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
 import { PaymentProviderRegistryService } from './payment-provider-registry.service';
@@ -21,8 +24,10 @@ import { TokenEncryptionService } from '../../whatsapp/security/token-encryption
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
 const fixedNow = new Date('2026-09-24T00:00:00.000Z');
-let configuredProvider: Extract<PaymentProviderCode, 'FASTFLOW' | 'FASTPIX' | 'FASTPAY'> =
-  'FASTFLOW';
+let configuredProvider: Extract<
+  PaymentProviderCode,
+  'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'MERCADO_PAGO'
+> = 'FASTFLOW';
 let credentialActive = true;
 
 const apiClient = {
@@ -34,17 +39,26 @@ const apiClient = {
   listWebhooks: vi.fn(),
 };
 
+const mercadoPagoApiClient = {
+  createOrder: vi.fn(),
+  getOrder: vi.fn(),
+  getCurrentUser: vi.fn(),
+};
+
 const encryption = {
   encrypt: vi.fn((value: string) => `encrypted:${value}`),
   decrypt: vi.fn((value: string) => value.replace('encrypted:', '')),
 };
 
 const config = {
-  get: vi.fn((key: string) =>
-    key === 'FASTDEPIX_NOTIFICATION_URL'
-      ? 'https://crm.example.test/payment-webhooks/fastflow'
-      : undefined,
-  ),
+  get: vi.fn((key: string): string | undefined => {
+    if (key === 'FASTDEPIX_NOTIFICATION_URL') {
+      return 'https://crm.example.test/payment-webhooks/fastflow';
+    }
+    if (key === 'MERCADO_PAGO_ENABLED') return 'true';
+    if (key === 'MERCADO_PAGO_ENVIRONMENT') return 'TEST';
+    return undefined;
+  }),
 };
 
 type TransactionCallback = (tx: typeof prisma) => Promise<unknown>;
@@ -86,10 +100,12 @@ const prisma = {
     FastPixPaymentProvider,
     FastPayPaymentProvider,
     MockPaymentProvider,
+    MercadoPagoPaymentProvider,
     PaymentProviderCredentialsService,
     PaymentProviderRegistryService,
     { provide: PAYMENT_PROVIDER, useExisting: PaymentProviderRegistryService },
     { provide: FastDepixApiClient, useValue: apiClient },
+    { provide: MercadoPagoApiClient, useValue: mercadoPagoApiClient },
     { provide: PrismaService, useValue: prisma },
     { provide: TokenEncryptionService, useValue: encryption },
     { provide: ConfigService, useValue: config },
@@ -98,13 +114,27 @@ const prisma = {
 class PaymentProviderDiTestModule {}
 
 function activeCredential() {
+  const token = `${configuredProvider.toLowerCase()}-active-token`;
   return {
     id: `credential-${configuredProvider.toLowerCase()}`,
     provider: configuredProvider,
+    environment: configuredProvider === 'MERCADO_PAGO' ? 'TEST' : 'PRODUCTION',
     active: credentialActive,
     defaultForPix: true,
     companyId: null,
-    tokenEncrypted: `encrypted:${configuredProvider.toLowerCase()}-active-token`,
+    tokenEncrypted: `encrypted:${token}`,
+    environmentProofStatus: configuredProvider === 'MERCADO_PAGO' ? 'VERIFIED_TEST' : null,
+    environmentProofEnvironment: configuredProvider === 'MERCADO_PAGO' ? 'TEST' : null,
+    environmentProofAccountIdHash: configuredProvider === 'MERCADO_PAGO' ? 'sha256:account' : null,
+    environmentProofCredentialFingerprint:
+      configuredProvider === 'MERCADO_PAGO'
+        ? `sha256:${createHash('sha256').update(`credential:${token}`).digest('hex')}`
+        : null,
+    environmentProofVerifiedAt: configuredProvider === 'MERCADO_PAGO' ? fixedNow : null,
+    environmentProofExpiresAt:
+      configuredProvider === 'MERCADO_PAGO'
+        ? new Date(fixedNow.getTime() + 24 * 60 * 60 * 1000)
+        : null,
     createdAt: fixedNow,
     updatedAt: fixedNow,
   };
@@ -133,6 +163,9 @@ function pixInput(provider: PaymentProviderCode = 'FASTFLOW') {
     description: 'Mensalidade setembro',
     expiresAt: new Date('2026-09-24T00:30:00.000Z'),
     clientName: 'Cliente Teste',
+    payerEmail: 'cliente@example.com',
+    idempotencyKey: 'intent-1',
+    externalReference: 'intent-1',
     payerPhone: '5544999999999',
     notificationUrl:
       provider === 'FASTPAY'
@@ -249,6 +282,31 @@ describe('Payment provider DI pipeline', () => {
     prisma.receivableAuditEvent.create.mockResolvedValue({ id: 'audit-event-1' });
     prisma.receivableAuditEvent.findFirst.mockResolvedValue(null);
     mockProviderPixResponse();
+    mercadoPagoApiClient.createOrder.mockResolvedValue({
+      id: 'ORD-1',
+      integration_data: { application_id: 'sandbox-application-1' },
+      total_amount: '123.45',
+      external_reference: 'intent-1',
+      status: 'action_required',
+      status_detail: 'waiting_transfer',
+      transactions: {
+        payments: [
+          {
+            id: 'PAY-1',
+            amount: '123.45',
+            status: 'action_required',
+            status_detail: 'waiting_transfer',
+            payment_method: {
+              id: 'pix',
+              type: 'bank_transfer',
+              qr_code: 'mp-pix-copy-paste',
+              qr_code_base64:
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+            },
+          },
+        ],
+      },
+    });
     mockReceivable();
     mockCreatedIntent();
   });
@@ -556,6 +614,35 @@ describe('Payment provider DI pipeline', () => {
         notification_url: 'https://crm.example.test/payment-webhooks/fastpay',
       }),
     );
+  });
+
+  it('resolves Mercado Pago explicitly without changing the default provider path', async () => {
+    configuredProvider = 'MERCADO_PAGO';
+    app = await NestFactory.createApplicationContext(PaymentProviderDiTestModule, {
+      logger: false,
+    });
+    const registry = app.get(PaymentProviderRegistryService);
+
+    await expect(
+      registry.createPix({ ...pixInput('MERCADO_PAGO'), provider: 'MERCADO_PAGO' }),
+    ).resolves.toMatchObject({
+      provider: 'MERCADO_PAGO',
+      providerTransactionId: 'ORD-1',
+      externalDepixId: 'PAY-1',
+      pixCopyPaste: 'mp-pix-copy-paste',
+      qrCodeData:
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    });
+
+    expect(mercadoPagoApiClient.createOrder).toHaveBeenCalledWith(
+      'mercado_pago-active-token',
+      'intent-1',
+      expect.objectContaining({
+        external_reference: 'intent-1',
+        payer: { email: 'cliente@example.com' },
+      }),
+    );
+    expect(apiClient.createTransaction).not.toHaveBeenCalled();
   });
 
   it('runs FinanceService.createReceivablePix through registry, credentials and mocked provider client', async () => {

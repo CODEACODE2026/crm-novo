@@ -1,5 +1,6 @@
-import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { PaymentProviderCode } from '@prisma/client';
+import { NormalizeOptionalEmail } from '../../clients/dto/optional-email';
 
 export class ReplaceReceivablePixPreviewDto {
   @IsEnum(PaymentProviderCode)
@@ -19,6 +20,12 @@ export class ReplaceReceivablePixDto extends ReplaceReceivablePixPreviewDto {
   @IsString()
   @MaxLength(120)
   idempotencyKey?: string;
+
+  @IsOptional()
+  @NormalizeOptionalEmail()
+  @IsEmail()
+  @MaxLength(254)
+  payerEmail?: string;
 }
 
 export class RecoverReceivablePixReplacementPreviewDto extends ReplaceReceivablePixPreviewDto {

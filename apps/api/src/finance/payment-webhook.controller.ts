@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Headers, Param, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { PaymentProviderCode } from '@prisma/client';
 import { FinanceService } from './finance.service';
@@ -12,7 +12,11 @@ export class PaymentWebhookController {
   @Post(':provider')
   processWebhook(
     @Param('provider') provider: PaymentProviderCode,
-    @Headers('x-webhook-signature') signature: string | undefined,
+    @Headers('x-webhook-signature') legacySignature: string | undefined,
+    @Headers('x-signature') mercadoPagoSignature: string | undefined,
+    @Headers('x-request-id') requestId: string | undefined,
+    @Query('data.id') dataId: string | undefined,
+    @Query('type') topic: string | undefined,
     @Req() request: RawBodyRequest,
     @Body() payload: unknown,
   ) {
@@ -20,9 +24,14 @@ export class PaymentWebhookController {
 
     return this.financeService.processPaymentWebhook(
       providerCode,
-      signature,
+      providerCode === 'MERCADO_PAGO' ? mercadoPagoSignature : legacySignature,
       request.rawBody,
       payload,
+      {
+        ...(requestId ? { requestId } : {}),
+        ...(dataId ? { dataId } : {}),
+        ...(topic ? { topic } : {}),
+      },
     );
   }
 }

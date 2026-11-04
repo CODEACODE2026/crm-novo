@@ -25,6 +25,7 @@ describe('payment integrations workspace polish', () => {
     expect(dashboardSource).toContain("'FASTFLOW',");
     expect(dashboardSource).toContain("'FASTPIX',");
     expect(dashboardSource).toContain("'FASTPAY',");
+    expect(dashboardSource).toContain("'MERCADO_PAGO',");
     expect(settingsSource).toContain('configurablePaymentProviders.map((provider)');
     expect(settingsSource).toContain("if (provider === 'FASTPIX') return 'FastPIX';");
     expect(settingsSource).not.toContain("'DEPIX'");
@@ -50,17 +51,18 @@ describe('payment integrations workspace polish', () => {
     expect(paymentCardSource).toContain(
       "credential.webhookSecretConfigured ? 'Configurado' : 'Não configurado'",
     );
-    expect(paymentCardSource).toContain("placeholder={configured ? 'Chave configurada'");
+    expect(paymentCardSource).toContain("? 'Credencial configurada'");
     expect(paymentCardSource).not.toContain('tokenEncrypted');
     expect(paymentCardSource).not.toContain('webhookSecretEncrypted');
   });
 
-  it('opens a compact configuration modal with only contract-supported fields', () => {
+  it('opens compact credential and provider-specific webhook configuration', () => {
     expect(paymentCardSource).toContain('className="modal payment-provider-config-modal"');
     expect(paymentCardSource).toContain('Configurar {providerName}');
     expect(paymentCardSource).toContain('Nome da integração');
     expect(paymentCardSource).toContain('Chave API');
-    expect(paymentCardSource).not.toContain('value={webhookSecret}');
+    expect(paymentCardSource).toContain('value={webhookSecret}');
+    expect(paymentCardSource).toContain('type="password"');
     expect(paymentCardSource).toContain('Cancelar');
     expect(paymentCardSource).toContain('Salvar configuração');
     expect(stylesSource).toContain('.payment-provider-config-modal');
@@ -71,7 +73,9 @@ describe('payment integrations workspace polish', () => {
 
   it('does not submit empty existing credentials and guards double submit/test', () => {
     expect(paymentCardSource).toContain('const canSaveCredential = token.trim().length >= 12;');
-    expect(paymentCardSource).toContain('const canSubmitConfig = canSaveCredential;');
+    expect(paymentCardSource).toContain(
+      "const canSubmitConfig = canSaveCredential && (!isMercadoPago || environment === 'TEST');",
+    );
     expect(paymentCardSource).toContain('if (actionRef.current) return false;');
     expect(paymentCardSource).toContain('await guardedAction(async () =>');
     expect(paymentCardSource).toContain('if (!saved) return;');
@@ -95,10 +99,14 @@ describe('payment integrations workspace polish', () => {
   it('keeps action semantics in the global ActionMenu', () => {
     expect(paymentCardSource).toContain('<ActionMenu');
     expect(paymentCardSource).toContain("label: configured ? 'Editar configuração' : 'Configurar'");
-    expect(paymentCardSource).toContain("label: 'Ver webhook'");
+    expect(paymentCardSource).toContain("label: isMercadoPago ? 'Ver assinatura' : 'Ver webhook'");
     expect(paymentCardSource).toContain("label: 'Definir como padrão'");
-    expect(paymentCardSource).toContain("const canSetDefault = provider !== 'FASTPIX';");
-    expect(paymentCardSource).toContain("label: 'Configurar webhook'");
+    expect(paymentCardSource).toContain(
+      "const canSetDefault = provider !== 'FASTPIX' && !isMercadoPago;",
+    );
+    expect(paymentCardSource).toContain(
+      "label: isMercadoPago ? 'Configurar assinatura' : 'Configurar webhook'",
+    );
     expect(paymentCardSource).toContain("label: 'Desativar'");
     expect(paymentCardSource).toContain('danger: true');
   });

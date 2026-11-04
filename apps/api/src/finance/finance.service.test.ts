@@ -14,6 +14,7 @@ import { parseBusinessDate } from '../clients/utils/business-date';
 import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto';
 import { ManualChargePayerType } from './dto/create-manual-charge.dto';
 import { FinanceService } from './finance.service';
+import type { PaymentProviderPix } from './payments/payment-provider';
 
 const actorUserId = '22222222-2222-4222-8222-222222222222';
 
@@ -187,6 +188,7 @@ function createFinancePrisma() {
   const auditEvents: Array<Record<string, unknown>> = [];
   const paymentIntents: Array<Record<string, unknown>> = [];
   const webhookEvents: Array<Record<string, unknown>> = [];
+  const webhookDeliveries: Array<Record<string, unknown>> = [];
   const reactivation = {
     id: 'abababab-abab-4bab-8bab-abababababab',
     clientId: client.id,
@@ -219,7 +221,7 @@ function createFinancePrisma() {
     return 0;
   });
   const provider = {
-    createPix: vi.fn((input?: { provider?: PaymentProviderCode }) => {
+    createPix: vi.fn((input?: { provider?: PaymentProviderCode }): Promise<PaymentProviderPix> => {
       const providerTransactionId = `mock-provider-${paymentIntents.length + 1}`;
 
       return Promise.resolve({
@@ -622,6 +624,112 @@ function createFinancePrisma() {
         return Promise.resolve(data);
       },
     },
+    paymentWebhookDelivery: {
+      upsert: ({
+        where,
+        create,
+      }: {
+        where: {
+          provider_environment_accountIdHash_requestId_resourceId: Record<string, unknown>;
+        };
+        create: Record<string, unknown>;
+        update: Record<string, unknown>;
+      }) => {
+        const identity = where.provider_environment_accountIdHash_requestId_resourceId;
+        const existing = webhookDeliveries.find(
+          (delivery) =>
+            delivery.provider === identity.provider &&
+            delivery.environment === identity.environment &&
+            delivery.accountIdHash === identity.accountIdHash &&
+            delivery.requestId === identity.requestId &&
+            delivery.resourceId === identity.resourceId,
+        );
+
+        if (existing) return Promise.resolve(existing);
+
+        const delivery = {
+          id: `webhook-delivery-${webhookDeliveries.length + 1}`,
+          attemptCount: 0,
+          leaseExpiresAt: null,
+          lastErrorCode: null,
+          lastErrorAt: null,
+          completedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...create,
+        };
+        webhookDeliveries.push(delivery);
+        return Promise.resolve(delivery);
+      },
+      updateMany: ({
+        where,
+        data,
+      }: {
+        where: Record<string, unknown> & {
+          OR?: Array<Record<string, unknown>>;
+          status?: string;
+        };
+        data: Record<string, unknown> & { attemptCount?: { increment: number } };
+      }) => {
+        const matchesStatus = (
+          delivery: Record<string, unknown>,
+          condition: Record<string, unknown>,
+        ) => {
+          if (typeof condition.status === 'string') {
+            if (delivery.status !== condition.status) return false;
+          } else if (condition.status && typeof condition.status === 'object') {
+            const statuses = (condition.status as { in?: string[] }).in;
+            if (statuses && !statuses.includes(String(delivery.status))) return false;
+          }
+
+          const lease = condition.leaseExpiresAt as { lte?: Date } | undefined;
+          if (lease?.lte) {
+            if (!(delivery.leaseExpiresAt instanceof Date)) return false;
+            if (delivery.leaseExpiresAt > lease.lte) return false;
+          }
+
+          return true;
+        };
+        const matches = webhookDeliveries.filter((delivery) => {
+          for (const key of [
+            'id',
+            'provider',
+            'environment',
+            'accountIdHash',
+            'requestId',
+            'resourceId',
+            'paymentIntentId',
+          ]) {
+            if (where[key] !== undefined && delivery[key] !== where[key]) return false;
+          }
+
+          if (where.status !== undefined && delivery.status !== where.status) return false;
+          if (where.OR && !where.OR.some((condition) => matchesStatus(delivery, condition))) {
+            return false;
+          }
+          return true;
+        });
+
+        for (const delivery of matches) {
+          const increment = data.attemptCount?.increment;
+          Object.assign(delivery, data, {
+            ...(increment === undefined
+              ? {}
+              : { attemptCount: Number(delivery.attemptCount) + increment }),
+            updatedAt: new Date(),
+          });
+        }
+
+        return Promise.resolve({ count: matches.length });
+      },
+      findFirstOrThrow: ({ where }: { where: Record<string, unknown> }) => {
+        const delivery = webhookDeliveries.find((candidate) =>
+          Object.entries(where).every(([key, value]) => candidate[key] === value),
+        );
+        if (!delivery) throw new Error('Webhook delivery not found');
+        return Promise.resolve(delivery);
+      },
+    },
     receivableAuditEvent: {
       findFirst: ({
         where,
@@ -693,6 +801,7 @@ function createFinancePrisma() {
       receivable: tx.receivable,
       paymentIntent: tx.paymentIntent,
       paymentWebhookEvent: tx.paymentWebhookEvent,
+      paymentWebhookDelivery: tx.paymentWebhookDelivery,
       receivableAuditEvent: tx.receivableAuditEvent,
       $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) => {
         const releaseLocks: Array<() => void> = [];
@@ -707,6 +816,7 @@ function createFinancePrisma() {
           auditEvents: auditEvents.map((event) => ({ ...event })),
           paymentIntents: paymentIntents.map((intent) => ({ ...intent })),
           webhookEvents: webhookEvents.map((event) => ({ ...event })),
+          webhookDeliveries: webhookDeliveries.map((delivery) => ({ ...delivery })),
         };
         return lockContext.run(releaseLocks, async () => {
           try {
@@ -722,6 +832,7 @@ function createFinancePrisma() {
             auditEvents.splice(0, auditEvents.length, ...snapshots.auditEvents);
             paymentIntents.splice(0, paymentIntents.length, ...snapshots.paymentIntents);
             webhookEvents.splice(0, webhookEvents.length, ...snapshots.webhookEvents);
+            webhookDeliveries.splice(0, webhookDeliveries.length, ...snapshots.webhookDeliveries);
             throw error;
           } finally {
             releaseLocks.reverse().forEach((release) => release());
@@ -733,17 +844,156 @@ function createFinancePrisma() {
     credentials: {
       ensureEligiblePixCreationProvider: vi.fn().mockResolvedValue(undefined),
       getWebhookSecret: vi.fn().mockResolvedValue('webhook-secret'),
+      getActiveMercadoPagoAccess: vi.fn().mockResolvedValue({
+        token: 'not-a-real-token',
+        credentialId: '11111111-1111-4111-8111-111111111111',
+        environment: 'TEST',
+        credentialFingerprint: 'sha256:credential',
+        accountIdHash: 'sha256:account',
+        proofExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      }),
     },
     config: {
       get: vi.fn((key: string): string | undefined => new Map<string, string>().get(key)),
     },
     webhookEvents,
+    webhookDeliveries,
     tx,
   };
 }
 
 function createWebhookSignature(payload: string, secret = 'webhook-secret') {
   return `sha256=${createHmac('sha256', secret).update(Buffer.from(payload)).digest('hex')}`;
+}
+
+function createMercadoPagoWebhookSignature(
+  dataId: string,
+  requestId = 'mp-request-1',
+  timestamp = String(Date.now()),
+  secret = 'webhook-secret',
+) {
+  const manifest = `id:${dataId};request-id:${requestId};ts:${timestamp};`;
+  return `ts=${timestamp},v1=${createHmac('sha256', secret).update(manifest).digest('hex')}`;
+}
+
+function mercadoPagoTransaction(
+  overrides: Partial<{
+    provider: 'MERCADO_PAGO' | 'FASTFLOW';
+    providerTransactionId: string;
+    externalReference: string | null;
+    externalDepixId: string | null;
+    externalStatus: string | null;
+    status: 'WAITING_PAYMENT' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED' | 'REFUNDED';
+    amount: Prisma.Decimal;
+    currency: string | null;
+    environment: 'TEST' | 'PRODUCTION';
+    paymentMethodId: string | null;
+    paymentMethodType: string | null;
+    liveMode: boolean | null;
+    paymentCount: number;
+    orderTotalAmount: Prisma.Decimal | null;
+    orderTotalPaidAmount: Prisma.Decimal | null;
+    countryCode: string | null;
+    orderStatus: string | null;
+    orderStatusDetail: string | null;
+    paymentStatus: string | null;
+    paymentStatusDetail: string | null;
+    providerCredentialId: string | null;
+    providerCredentialFingerprint: string | null;
+    providerAccountIdHash: string | null;
+    providerApplicationId: string | null;
+    environmentProofExpiresAt: Date | null;
+    paidAt: Date | null;
+  }> = {},
+) {
+  return {
+    provider: overrides.provider ?? ('MERCADO_PAGO' as const),
+    providerTransactionId: overrides.providerTransactionId ?? 'mp-order-1',
+    externalReference: overrides.externalReference ?? 'mp-intent-1',
+    externalDepixId: overrides.externalDepixId ?? 'mp-payment-1',
+    externalStatus: overrides.externalStatus ?? 'processed/accredited',
+    blockchainTxId: null,
+    status: overrides.status ?? ('PAID' as const),
+    amount: overrides.amount ?? new Prisma.Decimal('50.00'),
+    pixCopyPaste: null,
+    qrCodeData: null,
+    expiresAt: null,
+    paidAt: overrides.paidAt ?? new Date('2026-10-10T12:00:00.000Z'),
+    failureCode: null,
+    failureMessage: null,
+    currency: overrides.currency ?? 'BRL',
+    environment: overrides.environment ?? ('TEST' as const),
+    paymentMethodId: overrides.paymentMethodId ?? 'pix',
+    paymentMethodType: overrides.paymentMethodType ?? 'bank_transfer',
+    liveMode: overrides.liveMode !== undefined ? overrides.liveMode : false,
+    paymentCount: overrides.paymentCount ?? 1,
+    orderTotalAmount: overrides.orderTotalAmount ?? new Prisma.Decimal('50.00'),
+    orderTotalPaidAmount:
+      overrides.orderTotalPaidAmount !== undefined
+        ? overrides.orderTotalPaidAmount
+        : (overrides.amount ?? new Prisma.Decimal('50.00')),
+    countryCode: overrides.countryCode !== undefined ? overrides.countryCode : 'BRA',
+    orderStatus: overrides.orderStatus ?? 'processed',
+    orderStatusDetail: overrides.orderStatusDetail ?? 'accredited',
+    paymentStatus: overrides.paymentStatus ?? 'processed',
+    paymentStatusDetail: overrides.paymentStatusDetail ?? 'accredited',
+    providerCredentialId:
+      overrides.providerCredentialId !== undefined
+        ? overrides.providerCredentialId
+        : '11111111-1111-4111-8111-111111111111',
+    providerCredentialFingerprint:
+      overrides.providerCredentialFingerprint !== undefined
+        ? overrides.providerCredentialFingerprint
+        : 'sha256:credential',
+    providerAccountIdHash:
+      overrides.providerAccountIdHash !== undefined
+        ? overrides.providerAccountIdHash
+        : 'sha256:account',
+    providerApplicationId:
+      overrides.providerApplicationId !== undefined
+        ? overrides.providerApplicationId
+        : 'sandbox-application-1',
+    environmentProofExpiresAt:
+      overrides.environmentProofExpiresAt !== undefined
+        ? overrides.environmentProofExpiresAt
+        : new Date(Date.now() + 60 * 60 * 1000),
+  };
+}
+
+function seedMercadoPagoIntent(
+  fake: ReturnType<typeof createFinancePrisma>,
+  overrides: Record<string, unknown> = {},
+) {
+  const intent = {
+    id: 'mp-intent-1',
+    receivableId: fake.receivable.id,
+    paymentGroupId: null,
+    provider: 'MERCADO_PAGO',
+    providerEnvironment: 'TEST',
+    providerTransactionId: 'mp-order-1',
+    providerExternalReference: 'mp-intent-1',
+    providerCredentialId: '11111111-1111-4111-8111-111111111111',
+    providerCredentialFingerprint: 'sha256:credential',
+    providerAccountIdHash: 'sha256:account',
+    providerApplicationId: 'sandbox-application-1',
+    externalStatus: 'action_required/waiting_transfer',
+    externalDepixId: 'mp-payment-1',
+    blockchainTxId: null,
+    status: 'WAITING_PAYMENT',
+    amount: new Prisma.Decimal('50.00'),
+    pixCopyPaste: 'pix-copy-paste',
+    qrCodeData: null,
+    expiresAt: new Date('2026-10-10T13:00:00.000Z'),
+    paidAt: null,
+    lastSyncAt: null,
+    failureCode: null,
+    failureMessage: null,
+    createdAt: new Date('2026-10-10T11:00:00.000Z'),
+    updatedAt: new Date('2026-10-10T11:00:00.000Z'),
+    ...overrides,
+  };
+  fake.paymentIntents.push(intent);
+  return intent;
 }
 
 function reconciliationTransaction(
@@ -5429,6 +5679,133 @@ describe('FinanceService', () => {
     );
   });
 
+  it('forwards client email and durable intent identifiers to Mercado Pago', async () => {
+    const fake = createFinancePrisma();
+    Object.assign(fake.client, { email: 'cliente@example.com' });
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'MERCADO_PAGO',
+      providerEnvironment: 'TEST',
+      providerTransactionId: 'mp-order-1',
+      externalReference: 'intent-1',
+      externalStatus: 'action_required/waiting_transfer',
+      externalDepixId: 'mp-payment-1',
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('50.00'),
+      pixCopyPaste: 'mp-pix-copy',
+      qrCodeData: 'mp-qr-code',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    });
+    const service = createFinanceService(fake);
+
+    await service.createReceivablePix(fake.receivable.id, actorUserId, {
+      provider: 'MERCADO_PAGO',
+    });
+
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'MERCADO_PAGO',
+        payerEmail: 'cliente@example.com',
+        idempotencyKey: 'intent-1',
+        externalReference: 'intent-1',
+      }),
+    );
+    expect(fake.paymentIntents.at(0)).toMatchObject({
+      provider: 'MERCADO_PAGO',
+      providerEnvironment: 'TEST',
+      providerTransactionId: 'mp-order-1',
+      providerExternalReference: 'intent-1',
+      externalDepixId: 'mp-payment-1',
+    });
+  });
+
+  it('uses a validated transient payer email without changing the client record', async () => {
+    const fake = createFinancePrisma();
+    Object.assign(fake.client, { email: null });
+    fake.provider.createPix.mockResolvedValueOnce({
+      provider: 'MERCADO_PAGO',
+      providerEnvironment: 'TEST',
+      providerTransactionId: 'mp-order-transient-email',
+      externalReference: 'intent-1',
+      externalStatus: 'action_required/waiting_transfer',
+      externalDepixId: 'mp-payment-transient-email',
+      blockchainTxId: null,
+      status: 'WAITING_PAYMENT',
+      amount: new Prisma.Decimal('50.00'),
+      pixCopyPaste: 'mp-pix-copy',
+      qrCodeData: 'mp-qr-code',
+      expiresAt: new Date('2026-10-10T00:30:00.000Z'),
+    });
+    const service = createFinanceService(fake);
+
+    await service.createReceivablePix(fake.receivable.id, actorUserId, {
+      provider: 'MERCADO_PAGO',
+      payerEmail: 'transitorio@example.com',
+    });
+
+    expect(fake.credentials.ensureEligiblePixCreationProvider).toHaveBeenCalledWith('MERCADO_PAGO');
+    expect(fake.provider.createPix).toHaveBeenCalledWith(
+      expect.objectContaining({ payerEmail: 'transitorio@example.com' }),
+    );
+    expect(fake.client.email).toBeNull();
+  });
+
+  it('rejects explicit Mercado Pago before reserving an intent when the environment is blocked', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+    fake.credentials.ensureEligiblePixCreationProvider.mockRejectedValueOnce(
+      new BadRequestException(
+        'Mercado Pago PRODUCTION permanece bloqueado ate homologacao separada.',
+      ),
+    );
+
+    await expect(
+      service.createReceivablePix(fake.receivable.id, actorUserId, {
+        provider: 'MERCADO_PAGO',
+        payerEmail: 'transitorio@example.com',
+      }),
+    ).rejects.toThrow('PRODUCTION permanece bloqueado');
+
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+    expect(fake.paymentIntents).toHaveLength(0);
+  });
+
+  it('blocks grouped Mercado Pago creation until GROUP1 without touching the provider', async () => {
+    const fake = createFinancePrisma();
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.createReceivablesPix(
+        { receivableIds: [fake.receivable.id], provider: 'MERCADO_PAGO' },
+        actorUserId,
+      ),
+    ).rejects.toThrow(
+      'Pix agrupado Mercado Pago sera habilitado somente na fase MERCADOPAGO-PIX-GROUP1.',
+    );
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
+  it('blocks grouped Mercado Pago selected from the client preference', async () => {
+    const fake = createGroupedFinancePrisma();
+    fake.client.preferredPixProvider = 'MERCADO_PAGO';
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+    );
+
+    await expect(
+      service.createReceivablesPix(
+        { receivableIds: [fake.receivables[0]!.id, fake.receivables[1]!.id] },
+        actorUserId,
+      ),
+    ).rejects.toThrow(
+      'Pix agrupado Mercado Pago sera habilitado somente na fase MERCADOPAGO-PIX-GROUP1.',
+    );
+    expect(fake.provider.createPix).not.toHaveBeenCalled();
+  });
+
   it.each(['FASTFLOW', 'FASTPAY', 'FASTPIX'] as const)(
     'uses client preferred provider %s for individual PIX without explicit provider',
     async (preferredProvider) => {
@@ -9052,6 +9429,727 @@ describe('FinanceService', () => {
       providerTransactionId: '22116',
       status: 'paid',
     });
+  });
+
+  it('rejects an invalid Mercado Pago signature before consulting the Orders API', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    const service = createFinanceService(fake);
+    const payload = {
+      action: 'order.processed',
+      type: 'order',
+      live_mode: false,
+      data: { id: 'mp-order-1' },
+    };
+
+    await expect(
+      service.processPaymentWebhook('MERCADO_PAGO', 'ts=1742505638683,v1=00', undefined, payload, {
+        requestId: 'mp-request-1',
+        dataId: 'mp-order-1',
+        topic: 'order',
+      }),
+    ).rejects.toThrow('Assinatura do webhook Mercado Pago invalida.');
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    ['missing', 'v1=00'],
+    ['malformed', createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-1', 'abc')],
+    [
+      'expired',
+      createMercadoPagoWebhookSignature(
+        'mp-order-1',
+        'mp-request-1',
+        String(Date.now() - 86_400_001),
+      ),
+    ],
+    [
+      'future',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-1', String(Date.now() + 600_001)),
+    ],
+  ])('rejects a %s Mercado Pago timestamp before reservation or GET', async (_label, signature) => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        signature,
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: false,
+          data: { id: 'mp-order-1' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+    ).rejects.toThrow();
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+    expect(fake.webhookDeliveries).toHaveLength(0);
+  });
+
+  it.each([
+    ['milliseconds inside max age', String(Date.now() - 80_000_000)],
+    ['seconds with clock tolerance', String(Math.floor(Date.now() / 1_000))],
+  ])('accepts a legitimate Mercado Pago timestamp in %s', async (_label, timestamp) => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction());
+    const service = createFinanceService(fake);
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-1', timestamp),
+      undefined,
+      {
+        action: 'order.processed',
+        type: 'order',
+        live_mode: false,
+        data: { id: 'mp-order-1' },
+      },
+      { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+    );
+
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(1);
+    expect(fake.webhookDeliveries).toHaveLength(1);
+  });
+
+  it('rejects a Mercado Pago webhook whose body order differs from the signed query', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        createMercadoPagoWebhookSignature('mp-order-1'),
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: false,
+          data: { id: 'different-order' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+    ).rejects.toThrow('Payload de webhook Mercado Pago invalido.');
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps local state unchanged when the authenticated Mercado Pago order does not exist', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockRejectedValue(
+      new NotFoundException('Order Mercado Pago nao encontrada.'),
+    );
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        createMercadoPagoWebhookSignature('mp-order-1'),
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: false,
+          data: { id: 'mp-order-1' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+    ).rejects.toThrow('Order Mercado Pago nao encontrada.');
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+  });
+
+  it('rejects Mercado Pago grouped intents before consulting the provider', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake, { paymentGroupId: 'group-1', receivableId: null });
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        createMercadoPagoWebhookSignature('mp-order-1'),
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: false,
+          data: { id: 'mp-order-1' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+    ).rejects.toThrow('Mercado Pago agrupado nao esta habilitado nesta fase.');
+    expect(fake.provider.getPixTransaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps a confirmed Mercado Pago webhook idempotent and settles only once', async () => {
+    const fake = createFinancePrisma();
+    const intent = seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction());
+    const service = createFinanceService(fake);
+    const payload = {
+      action: 'order.processed',
+      type: 'order',
+      live_mode: false,
+      data: { id: 'mp-order-1', status: 'processed' },
+    };
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+
+    await service.processPaymentWebhook('MERCADO_PAGO', signature, undefined, payload, metadata);
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-1', String(Date.now() + 1_000)),
+      undefined,
+      payload,
+      metadata,
+    );
+
+    expect(intent.status).toBe('PAID');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookEvents).toHaveLength(1);
+    expect(fake.webhookEvents.at(0)).toMatchObject({
+      provider: 'MERCADO_PAGO',
+      providerTransactionId: 'mp-order-1',
+      eventKey: 'mercado-pago:order.processed',
+    });
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(1);
+    expect(fake.webhookDeliveries).toHaveLength(1);
+    expect(fake.webhookDeliveries[0]).toMatchObject({
+      status: 'COMPLETED',
+      attemptCount: 1,
+      accountIdHash: 'sha256:account',
+      environment: 'TEST',
+      requestId: 'mp-request-1',
+      resourceId: 'mp-order-1',
+    });
+  });
+
+  it('allows only one GET when identical Mercado Pago webhooks race', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    let releaseProvider!: (transaction: ReturnType<typeof mercadoPagoTransaction>) => void;
+    fake.provider.getPixTransaction.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseProvider = resolve;
+        }),
+    );
+    const service = createFinanceService(fake);
+    const payload = {
+      action: 'order.processed',
+      type: 'order',
+      live_mode: false,
+      data: { id: 'mp-order-1' },
+    };
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+
+    const first = service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      signature,
+      undefined,
+      payload,
+      metadata,
+    );
+    await vi.waitFor(() => expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(1));
+    const duplicate = service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      signature,
+      undefined,
+      payload,
+      metadata,
+    );
+
+    await expect(duplicate).rejects.toThrow('ja esta em processamento');
+    releaseProvider(mercadoPagoTransaction());
+    await expect(first).resolves.toMatchObject({ status: 'PAID' });
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(1);
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('retries a failed Mercado Pago GET with the same authenticated delivery', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction
+      .mockRejectedValueOnce(new Error('transient provider timeout'))
+      .mockResolvedValueOnce(mercadoPagoTransaction());
+    const service = createFinanceService(fake);
+    const payload = {
+      action: 'order.processed',
+      type: 'order',
+      live_mode: false,
+      data: { id: 'mp-order-1' },
+    };
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+
+    await expect(
+      service.processPaymentWebhook('MERCADO_PAGO', signature, undefined, payload, metadata),
+    ).rejects.toThrow('transient provider timeout');
+    expect(fake.webhookDeliveries[0]).toMatchObject({
+      status: 'FAILED',
+      attemptCount: 1,
+      lastErrorCode: 'Error',
+    });
+
+    await expect(
+      service.processPaymentWebhook('MERCADO_PAGO', signature, undefined, payload, metadata),
+    ).resolves.toMatchObject({ status: 'PAID' });
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(2);
+    expect(fake.webhookDeliveries[0]).toMatchObject({ status: 'COMPLETED', attemptCount: 2 });
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('recovers an interrupted Mercado Pago delivery after its lease expires', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.webhookDeliveries.push({
+      id: 'webhook-delivery-interrupted',
+      provider: 'MERCADO_PAGO',
+      environment: 'TEST',
+      accountIdHash: 'sha256:account',
+      requestId: 'mp-request-1',
+      resourceId: 'mp-order-1',
+      signatureTimestamp: BigInt(Date.now()),
+      signatureDigest: 'sha256:interrupted',
+      status: 'PROCESSING',
+      attemptCount: 1,
+      leaseExpiresAt: new Date(Date.now() - 1),
+      lastErrorCode: null,
+      lastErrorAt: null,
+      completedAt: null,
+      paymentIntentId: 'mp-intent-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction());
+    const service = createFinanceService(fake);
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1'),
+      undefined,
+      {
+        action: 'order.processed',
+        type: 'order',
+        live_mode: false,
+        data: { id: 'mp-order-1' },
+      },
+      { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+    );
+
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(1);
+    expect(fake.webhookDeliveries[0]).toMatchObject({ status: 'COMPLETED', attemptCount: 2 });
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('recovers safely when persisting webhook completion fails after settlement', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction());
+    const updateMany = fake.prisma.paymentWebhookDelivery.updateMany;
+    let failCompletion = true;
+    fake.prisma.paymentWebhookDelivery.updateMany = vi.fn(
+      async (args: Parameters<typeof updateMany>[0]) => {
+        if (args.data.status === 'COMPLETED' && failCompletion) {
+          failCompletion = false;
+          throw new Error('webhook delivery database unavailable');
+        }
+        return updateMany(args);
+      },
+    );
+    const service = createFinanceService(fake);
+    const payload = {
+      action: 'order.processed',
+      type: 'order',
+      live_mode: false,
+      data: { id: 'mp-order-1' },
+    };
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+
+    await expect(
+      service.processPaymentWebhook('MERCADO_PAGO', signature, undefined, payload, metadata),
+    ).rejects.toThrow('webhook delivery database unavailable');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookDeliveries[0]).toMatchObject({ status: 'FAILED', attemptCount: 1 });
+
+    await service.processPaymentWebhook('MERCADO_PAGO', signature, undefined, payload, metadata);
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(2);
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.webhookDeliveries[0]).toMatchObject({ status: 'COMPLETED', attemptCount: 2 });
+  });
+
+  it('uses the authenticated order state instead of stale Mercado Pago webhook actions', async () => {
+    const fake = createFinancePrisma();
+    const intent = seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction());
+    const service = createFinanceService(fake);
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      signature,
+      undefined,
+      { action: 'order.failed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      metadata,
+    );
+
+    expect(intent.status).toBe('PAID');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('does not regress a paid Mercado Pago intent when a delayed snapshot is pending', async () => {
+    const fake = createFinancePrisma();
+    const intent = seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction
+      .mockResolvedValueOnce(mercadoPagoTransaction())
+      .mockResolvedValueOnce(
+        mercadoPagoTransaction({
+          status: 'WAITING_PAYMENT',
+          externalStatus: 'action_required/waiting_transfer',
+          paidAt: null,
+        }),
+      );
+    const service = createFinanceService(fake);
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      signature,
+      undefined,
+      { action: 'order.processed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      metadata,
+    );
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-2'),
+      undefined,
+      { action: 'order.failed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { ...metadata, requestId: 'mp-request-2' },
+    );
+
+    expect(intent.status).toBe('PAID');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.provider.getPixTransaction).toHaveBeenCalledTimes(2);
+    expect(fake.webhookDeliveries).toHaveLength(2);
+  });
+
+  it('records a confirmed refund without duplicating or reversing the existing settlement', async () => {
+    const fake = createFinancePrisma();
+    const intent = seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction
+      .mockResolvedValueOnce(mercadoPagoTransaction())
+      .mockResolvedValueOnce(
+        mercadoPagoTransaction({
+          status: 'REFUNDED',
+          externalStatus: 'refunded/refunded',
+          paidAt: null,
+        }),
+      );
+    const service = createFinanceService(fake);
+    const signature = createMercadoPagoWebhookSignature('mp-order-1');
+    const metadata = { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' };
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      signature,
+      undefined,
+      { action: 'order.processed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      metadata,
+    );
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-2'),
+      undefined,
+      { action: 'order.refunded', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { ...metadata, requestId: 'mp-request-2' },
+    );
+
+    expect(intent.status).toBe('REFUNDED');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it.each([
+    ['payment id', mercadoPagoTransaction({ externalDepixId: 'wrong-payment' })],
+    ['amount', mercadoPagoTransaction({ amount: new Prisma.Decimal('49.99') })],
+    ['order total', mercadoPagoTransaction({ orderTotalAmount: new Prisma.Decimal('49.99') })],
+    ['paid total', mercadoPagoTransaction({ orderTotalPaidAmount: new Prisma.Decimal('49.99') })],
+    ['missing paid total', mercadoPagoTransaction({ orderTotalPaidAmount: null })],
+    ['currency', mercadoPagoTransaction({ currency: 'USD' })],
+    ['country', mercadoPagoTransaction({ countryCode: 'USA' })],
+    ['missing country', mercadoPagoTransaction({ countryCode: null })],
+    ['provider', mercadoPagoTransaction({ provider: 'FASTFLOW' })],
+    ['external reference', mercadoPagoTransaction({ externalReference: 'wrong-reference' })],
+    ['environment', mercadoPagoTransaction({ environment: 'PRODUCTION' })],
+    ['live mode', mercadoPagoTransaction({ liveMode: true })],
+    ['missing credential proof', mercadoPagoTransaction({ providerCredentialId: null })],
+    [
+      'credential changed after creation',
+      mercadoPagoTransaction({
+        providerCredentialId: '22222222-2222-4222-8222-222222222222',
+      }),
+    ],
+    [
+      'credential fingerprint',
+      mercadoPagoTransaction({ providerCredentialFingerprint: 'sha256:changed' }),
+    ],
+    ['seller identity', mercadoPagoTransaction({ providerAccountIdHash: 'sha256:other-account' })],
+    ['application', mercadoPagoTransaction({ providerApplicationId: 'other-application' })],
+    [
+      'expired environment proof',
+      mercadoPagoTransaction({ environmentProofExpiresAt: new Date(Date.now() - 1) }),
+    ],
+    ['payment count', mercadoPagoTransaction({ paymentCount: 2 })],
+    ['payment method', mercadoPagoTransaction({ paymentMethodId: 'visa' })],
+    ['payment status', mercadoPagoTransaction({ paymentStatus: 'action_required' })],
+  ])('rejects Mercado Pago %s divergence without settling', async (_label, transaction) => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(transaction);
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        createMercadoPagoWebhookSignature('mp-order-1'),
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: false,
+          data: { id: 'mp-order-1' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+    ).rejects.toThrow();
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+    expect(fake.webhookEvents).toHaveLength(0);
+  });
+
+  it('accepts missing live_mode only with a valid TEST credential proof and canonical paid state', async () => {
+    const fake = createFinancePrisma();
+    const intent = seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction({ liveMode: null }));
+    const service = createFinanceService(fake);
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1'),
+      undefined,
+      {
+        action: 'order.processed',
+        type: 'order',
+        data: { id: 'mp-order-1' },
+      },
+      { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+    );
+
+    expect(intent.status).toBe('PAID');
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+  });
+
+  it('keeps Mercado Pago PRODUCTION liquidation blocked without a separate environment proof', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake, { providerEnvironment: 'PRODUCTION' });
+    fake.config.get.mockImplementation((key: string) =>
+      key === 'MERCADO_PAGO_ENVIRONMENT' ? 'PRODUCTION' : undefined,
+    );
+    fake.provider.getPixTransaction.mockResolvedValue(
+      mercadoPagoTransaction({ environment: 'PRODUCTION', liveMode: true }),
+    );
+    const service = createFinanceService(fake);
+
+    await expect(
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        createMercadoPagoWebhookSignature('mp-order-1'),
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: true,
+          data: { id: 'mp-order-1' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+    ).rejects.toThrow('PRODUCTION bloqueada');
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it.each([
+    ['pending', 'WAITING_PAYMENT' as const, 'action_required/waiting_transfer'],
+    ['expired', 'EXPIRED' as const, 'canceled/expired'],
+    ['canceled', 'CANCELED' as const, 'canceled/canceled'],
+    ['rejected', 'FAILED' as const, 'failed/rejected'],
+    ['refunded', 'REFUNDED' as const, 'refunded/refunded'],
+  ])('does not settle a valid Mercado Pago %s order', async (_label, status, externalStatus) => {
+    const fake = createFinancePrisma();
+    const intent = seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(
+      mercadoPagoTransaction({ status, externalStatus, paidAt: null }),
+    );
+    const service = createFinanceService(fake);
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1'),
+      undefined,
+      { action: 'order.failed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+    );
+
+    expect(intent.status).toBe(status);
+    expect(fake.receivable.status).toBe('PENDENTE');
+    expect(fake.transactions).toHaveLength(0);
+  });
+
+  it('advances renewal only after an authenticated Mercado Pago paid snapshot', async () => {
+    const fake = createFinancePrisma();
+    fake.clientReference.dueDate = parseBusinessDate('2026-09-14');
+    fake.clientReference.billingAnchorDay = 14;
+    fake.receivable.dueDate = parseBusinessDate('2026-09-14');
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction
+      .mockResolvedValueOnce(
+        mercadoPagoTransaction({
+          status: 'WAITING_PAYMENT',
+          externalStatus: 'action_required/waiting_transfer',
+          paidAt: null,
+        }),
+      )
+      .mockResolvedValueOnce(mercadoPagoTransaction());
+    const { cycle } = createCycleRecorder(fake);
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1'),
+      undefined,
+      { action: 'order.created', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+    );
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-09-14'));
+    expect(cycle.ensureCurrentCycleReceivable).not.toHaveBeenCalled();
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-2'),
+      undefined,
+      { action: 'order.processed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { requestId: 'mp-request-2', dataId: 'mp-order-1', topic: 'order' },
+    );
+    expect(fake.clientReference.dueDate).toEqual(parseBusinessDate('2026-11-10'));
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+  });
+
+  it('reactivates a reference only after an authenticated Mercado Pago paid snapshot', async () => {
+    const fake = createFinancePrisma();
+    fake.client.status = 'CANCELADO';
+    fake.clientReference.status = 'CANCELADO';
+    fake.receivable.purpose = 'REACTIVATION';
+    fake.receivable.renewalId = null;
+    fake.receivable.amount = new Prisma.Decimal('30.00');
+    fake.receivable.dueDate = parseBusinessDate('2026-09-30');
+    fake.reactivation.planId = fake.plan.id;
+    fake.reactivation.recurringValue = new Prisma.Decimal('30.00');
+    fake.reactivation.activationDate = parseBusinessDate('2026-09-30');
+    fake.reactivation.billingAnchorDay = 30;
+    seedMercadoPagoIntent(fake, { amount: new Prisma.Decimal('30.00') });
+    const pending = mercadoPagoTransaction({
+      status: 'WAITING_PAYMENT',
+      externalStatus: 'action_required/waiting_transfer',
+      amount: new Prisma.Decimal('30.00'),
+      orderTotalAmount: new Prisma.Decimal('30.00'),
+      paidAt: null,
+    });
+    const paid = mercadoPagoTransaction({
+      amount: new Prisma.Decimal('30.00'),
+      orderTotalAmount: new Prisma.Decimal('30.00'),
+    });
+    fake.provider.getPixTransaction.mockResolvedValueOnce(pending).mockResolvedValueOnce(paid);
+    const cycle = {
+      ensureCurrentCycleReceivable: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const service = new FinanceService(
+      fake.prisma as never,
+      fake.provider,
+      fake.credentials as never,
+      fake.config as never,
+      undefined,
+      cycle as never,
+    );
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1'),
+      undefined,
+      { action: 'order.created', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+    );
+    expect(fake.clientReference.status).toBe('CANCELADO');
+    expect(fake.reactivation.status).toBe('PENDING');
+
+    await service.processPaymentWebhook(
+      'MERCADO_PAGO',
+      createMercadoPagoWebhookSignature('mp-order-1', 'mp-request-2'),
+      undefined,
+      { action: 'order.processed', type: 'order', live_mode: false, data: { id: 'mp-order-1' } },
+      { requestId: 'mp-request-2', dataId: 'mp-order-1', topic: 'order' },
+    );
+    expect(fake.clientReference.status).toBe('ATIVO');
+    expect(fake.reactivation.status).toBe('PAID');
+    expect(cycle.ensureCurrentCycleReceivable).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles once when Mercado Pago webhook and manual sync race', async () => {
+    const fake = createFinancePrisma();
+    seedMercadoPagoIntent(fake);
+    fake.provider.getPixTransaction.mockResolvedValue(mercadoPagoTransaction());
+    const service = createFinanceService(fake);
+
+    await Promise.all([
+      service.processPaymentWebhook(
+        'MERCADO_PAGO',
+        createMercadoPagoWebhookSignature('mp-order-1'),
+        undefined,
+        {
+          action: 'order.processed',
+          type: 'order',
+          live_mode: false,
+          data: { id: 'mp-order-1' },
+        },
+        { requestId: 'mp-request-1', dataId: 'mp-order-1', topic: 'order' },
+      ),
+      service.syncPaymentIntent('mp-intent-1', actorUserId),
+    ]);
+
+    expect(fake.receivable.status).toBe('PAGO');
+    expect(fake.transactions).toHaveLength(1);
+    expect(fake.events.filter((event) => event.type === 'PAYMENT_REGISTERED')).toHaveLength(1);
   });
 
   it('accepts FastPIX HMAC with FastPIX secret and rejects the FastFlow secret', async () => {

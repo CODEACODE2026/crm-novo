@@ -21,6 +21,7 @@ import { CreateFinancialCategoryDto } from './dto/create-financial-category.dto'
 import { CreateManualChargeDto } from './dto/create-manual-charge.dto';
 import { CreateManualTransactionDto } from './dto/create-manual-transaction.dto';
 import {
+  CreateReceivablePixDto,
   CreateReceivablesPixDto,
   ReplaceReceivablesPixDto,
 } from './dto/create-receivables-pix.dto';
@@ -122,7 +123,7 @@ export class FinanceController {
   @Post('receivables/:id/pix')
   createReceivablePix(
     @Param('id') id: string,
-    @Body() dto: { provider?: PaymentProviderCode },
+    @Body() dto: CreateReceivablePixDto,
     @Req() request: AuthenticatedRequest,
   ) {
     return this.financeService.createReceivablePix(id, request.user.id, dto, {

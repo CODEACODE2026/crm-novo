@@ -1,0 +1,93 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Reject newly introduced vulnerable dependencies
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Download and verify TruffleHog 3.99.8
+        env:
+          TRUFFLEHOG_SHA256: 7c3b02f160f28929a467e29e20fba98746e0729f6e37c3c25761e4f8789abe08
+        run: |
+          set -Eeuo pipefail
+          archive="$RUNNER_TEMP/trufflehog_3.99.8_linux_amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/trufflehog-bin"
+          curl --fail --silent --show-error --location \
+            https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.8/trufflehog_3.99.8_linux_amd64.tar.gz \
+            --output "$archive"
+          printf '%s  %s\n' "$TRUFFLEHOG_SHA256" "$archive" | sha256sum --check --strict
+          install -d -m 0700 "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" trufflehog
+          chmod 0700 "$install_dir/trufflehog"
+      - name: Scan pull request without external credential verification
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          results="$RUNNER_TEMP/trufflehog-results.jsonl"
+          set +e
+          "$RUNNER_TEMP/trufflehog-bin/trufflehog" git "file://$GITHUB_WORKSPACE" \
+            --since-commit "$BASE_SHA" \
+            --branch "$HEAD_SHA" \
+            --no-verification \
+            --no-update \
+            --fail \
+            --fail-on-scan-errors \
+            --results=verified,unknown,unverified \
+            --json >"$results"
+          scan_status=$?
+          set -e
+          finding_count="$(wc -l <"$results" | tr -d ' ')"
+          if [ "$scan_status" -ne 0 ]; then
+            echo "::error::TruffleHog failed; sensitive result details withheld. Result count: $finding_count"
+            exit "$scan_status"
+          fi
+          echo "TruffleHog completed without findings. Result count: $finding_count"
+
+  codeql:
+    name: CodeQL JavaScript/TypeScript
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - name: Analyze
+        uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2

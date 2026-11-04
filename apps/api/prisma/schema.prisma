@@ -129,6 +129,12 @@ enum PaymentProviderCode {
   FASTPIX
   FASTPAY
   DEPIX
+  MERCADO_PAGO
+}
+
+enum PaymentProviderEnvironment {
+  TEST
+  PRODUCTION
 }
 
 enum PaymentIntentStatus {
@@ -140,6 +146,13 @@ enum PaymentIntentStatus {
   CANCELED
   FAILED
   REFUNDED
+}
+
+enum PaymentWebhookDeliveryStatus {
+  RECEIVED
+  PROCESSING
+  COMPLETED
+  FAILED
 }
 
 enum PaymentGroupStatus {
@@ -1179,37 +1192,73 @@ model ClientReferenceReactivation {
 }
 
 model PaymentIntent {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  receivableId          String?                @db.Uuid
-  paymentGroupId        String?                @db.Uuid
-  provider              PaymentProviderCode
-  providerTransactionId String?
-  externalStatus        String?
-  externalDepixId       String?
-  blockchainTxId        String?
-  status                PaymentIntentStatus    @default(CREATED)
-  amount                Decimal                @db.Decimal(12, 2)
-  pixCopyPaste          String?
-  qrCodeData            String?
-  expiresAt             DateTime?
-  paidAt                DateTime?
-  lastSyncAt            DateTime?
-  failureCode           String?
-  failureMessage        String?
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
-  receivable            Receivable?            @relation(fields: [receivableId], references: [id], onDelete: Restrict)
-  paymentGroup          PaymentGroup?          @relation(fields: [paymentGroupId], references: [id], onDelete: Restrict)
-  webhookEvents         PaymentWebhookEvent[]
-  receivableAuditEvents ReceivableAuditEvent[]
+  id                        String                      @id @default(uuid()) @db.Uuid
+  receivableId              String?                     @db.Uuid
+  paymentGroupId            String?                     @db.Uuid
+  provider                  PaymentProviderCode
+  providerEnvironment       PaymentProviderEnvironment?
+  providerTransactionId     String?
+  providerExternalReference String?
+  providerCredentialId       String?                     @db.Uuid
+  providerCredentialFingerprint String?
+  providerAccountIdHash      String?
+  providerApplicationId      String?
+  externalStatus            String?
+  externalDepixId           String?
+  blockchainTxId            String?
+  status                    PaymentIntentStatus         @default(CREATED)
+  amount                    Decimal                     @db.Decimal(12, 2)
+  pixCopyPaste              String?
+  qrCodeData                String?
+  expiresAt                 DateTime?
+  paidAt                    DateTime?
+  lastSyncAt                DateTime?
+  failureCode               String?
+  failureMessage            String?
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
+  receivable                Receivable?                 @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  paymentGroup              PaymentGroup?               @relation(fields: [paymentGroupId], references: [id], onDelete: Restrict)
+  webhookEvents             PaymentWebhookEvent[]
+  webhookDeliveries         PaymentWebhookDelivery[]
+  receivableAuditEvents     ReceivableAuditEvent[]
+  providerCredential        PaymentProviderCredential?  @relation(fields: [providerCredentialId], references: [id], onDelete: Restrict)
 
   @@unique([provider, providerTransactionId])
   @@index([receivableId])
   @@index([paymentGroupId])
   @@index([provider])
+  @@index([providerCredentialId])
   @@index([status])
   @@index([expiresAt])
   @@map("payment_intents")
+}
+
+model PaymentWebhookDelivery {
+  id                 String                       @id @default(uuid()) @db.Uuid
+  provider           PaymentProviderCode
+  environment        PaymentProviderEnvironment
+  accountIdHash      String
+  requestId          String
+  resourceId         String
+  signatureTimestamp BigInt
+  signatureDigest    String
+  status             PaymentWebhookDeliveryStatus @default(RECEIVED)
+  attemptCount       Int                          @default(0)
+  leaseExpiresAt     DateTime?
+  lastErrorCode      String?
+  lastErrorAt        DateTime?
+  completedAt        DateTime?
+  paymentIntentId    String                       @db.Uuid
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+  paymentIntent      PaymentIntent                @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, environment, accountIdHash, requestId, resourceId])
+  @@index([status, leaseExpiresAt])
+  @@index([paymentIntentId])
+  @@index([createdAt])
+  @@map("payment_webhook_deliveries")
 }
 
 model PaymentGroup {
@@ -1249,8 +1298,9 @@ model PaymentGroupItem {
 }
 
 model PaymentProviderCredential {
-  id                     String              @id @default(uuid()) @db.Uuid
+  id                     String                     @id @default(uuid()) @db.Uuid
   provider               PaymentProviderCode
+  environment            PaymentProviderEnvironment @default(PRODUCTION)
   name                   String
   tokenEncrypted         String
   tokenLastFour          String
@@ -1259,15 +1309,23 @@ model PaymentProviderCredential {
   webhookConfiguredAt    DateTime?
   webhookUrl             String?
   webhookRegisteredAt    DateTime?
-  defaultForPix          Boolean             @default(false)
-  active                 Boolean             @default(true)
+  defaultForPix          Boolean                    @default(false)
+  active                 Boolean                    @default(true)
   validatedAt            DateTime?
   lastValidationStatus   String?
-  companyId              String?             @db.Uuid
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
+  environmentProofStatus String?
+  environmentProofEnvironment PaymentProviderEnvironment?
+  environmentProofAccountIdHash String?
+  environmentProofCredentialFingerprint String?
+  environmentProofVerifiedAt DateTime?
+  environmentProofExpiresAt DateTime?
+  companyId              String?                    @db.Uuid
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+  paymentIntents         PaymentIntent[]
 
   @@index([provider])
+  @@index([provider, environment, active])
   @@index([active])
   @@index([defaultForPix])
   @@index([companyId])

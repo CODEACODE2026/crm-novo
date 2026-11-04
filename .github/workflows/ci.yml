@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality-test-build:
+    name: Quality, tests and builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+        with:
+          version: 12.3.4
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Generate Prisma Client
+        run: pnpm --filter @crm-novo/api prisma:generate
+
+      - name: Validate Prisma schema
+        run: pnpm --filter @crm-novo/api exec prisma validate --schema prisma/schema.prisma
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci?schema=public
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Run unit and regression tests
+        run: pnpm test
+
+      - name: Build API and Web
+        run: pnpm build

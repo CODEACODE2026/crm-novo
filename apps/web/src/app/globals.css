@@ -13538,6 +13538,11 @@ tbody tr:hover,
   color: var(--danger);
 }
 
+.integration-status.desabilitado {
+  border-color: rgb(255 184 77 / 45%);
+  color: var(--warning);
+}
+
 .payment-provider-secret-summary {
   display: flex;
   align-items: center;
@@ -13571,6 +13576,19 @@ tbody tr:hover,
   display: grid;
   gap: 14px;
   margin-top: 16px;
+}
+
+.mercado-pago-email-backdrop {
+  z-index: 30;
+}
+
+.mercado-pago-email-modal {
+  width: min(100%, 520px);
+}
+
+.pix-create-provider-field {
+  min-width: 190px;
+  text-align: left;
 }
 
 .integration-details {

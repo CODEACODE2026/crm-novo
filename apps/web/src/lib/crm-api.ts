@@ -185,11 +185,14 @@ export type PaymentIntentStatus =
   | 'CANCELED'
   | 'FAILED'
   | 'REFUNDED';
-export type PaymentProviderCode = 'MOCK' | 'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'DEPIX';
+export type PaymentProviderCode =
+  'MOCK' | 'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'DEPIX' | 'MERCADO_PAGO';
+export type PaymentProviderEnvironment = 'TEST' | 'PRODUCTION';
 export type ConfigurablePaymentProvider = Extract<
   PaymentProviderCode,
-  'FASTFLOW' | 'FASTPIX' | 'FASTPAY'
+  'FASTFLOW' | 'FASTPIX' | 'FASTPAY' | 'MERCADO_PAGO'
 >;
+export type GroupedPaymentProvider = Exclude<ConfigurablePaymentProvider, 'MERCADO_PAGO'>;
 export type ReferralStatus = 'PENDING' | 'QUALIFIED' | 'REWARDED' | 'CANCELED';
 export type ReferralRewardType = 'FREE_MONTH' | 'CREDIT' | 'CUSTOM';
 export type ReferralOrigin = 'AUTOMATIC' | 'MANUAL';
@@ -244,7 +247,7 @@ export interface Receivable {
   manualChargeIdempotencyKey?: string | null;
   createdAt: string;
   updatedAt: string;
-  client?: Pick<Client, 'id' | 'name' | 'reference' | 'preferredPixProvider'> | null;
+  client?: Pick<Client, 'email' | 'id' | 'name' | 'reference' | 'preferredPixProvider'> | null;
   clientReference?:
     | (Pick<ClientReference, 'id' | 'reference' | 'status'> & {
         planName?: string;
@@ -516,6 +519,7 @@ export interface ReferralSummary {
 export interface PaymentProviderCredentialStatus {
   id?: string;
   provider: ConfigurablePaymentProvider;
+  environment?: PaymentProviderEnvironment | null;
   name?: string;
   configured: boolean;
   active?: boolean;
@@ -528,7 +532,10 @@ export interface PaymentProviderCredentialStatus {
   defaultForPix?: boolean;
   validatedAt?: string | null;
   lastValidationStatus?: string | null;
-  status: 'NAO_CONFIGURADO' | 'CONFIGURADO' | 'VALIDO' | 'ERRO';
+  environmentProofStatus?: string | null;
+  environmentProofVerifiedAt?: string | null;
+  environmentProofExpiresAt?: string | null;
+  status: 'NAO_CONFIGURADO' | 'CONFIGURADO' | 'VALIDO' | 'ERRO' | 'DESABILITADO';
   providerLabel?: string | null;
   partner?: { id?: string; name?: string; email?: string } | null;
 }
@@ -2812,10 +2819,19 @@ export function payReceivables(payload: {
   });
 }
 
-export function createReceivablePix(id: string, provider?: PaymentProviderCode) {
+export function createReceivablePix(
+  id: string,
+  provider?: PaymentProviderCode,
+  payerEmail?: string,
+) {
+  const payload = {
+    ...(provider ? { provider } : {}),
+    ...(payerEmail ? { payerEmail } : {}),
+  };
+
   return apiFetch<PaymentIntent>(`/receivables/${id}/pix`, {
     method: 'POST',
-    ...(provider ? { body: JSON.stringify({ provider }) } : {}),
+    ...(Object.keys(payload).length ? { body: JSON.stringify(payload) } : {}),
   });
 }
 
@@ -2836,6 +2852,7 @@ export function replaceReceivablePix(
     expectedCurrentIntentId: string;
     reason?: string;
     idempotencyKey?: string;
+    payerEmail?: string;
   },
 ) {
   return apiFetch<PaymentIntent>(`/receivables/${id}/pix/replace`, {
@@ -2901,10 +2918,7 @@ export function reconcileReceivablePix(
   });
 }
 
-export function createReceivablesPix(
-  receivableIds: string[],
-  provider?: ConfigurablePaymentProvider,
-) {
+export function createReceivablesPix(receivableIds: string[], provider?: GroupedPaymentProvider) {
   return apiFetch<PaymentIntent>('/receivables/pix', {
     method: 'POST',
     body: JSON.stringify({ receivableIds, ...(provider ? { provider } : {}) }),
@@ -2913,7 +2927,7 @@ export function createReceivablesPix(
 
 export function replaceReceivablesPix(payload: {
   receivableIds: string[];
-  provider: ConfigurablePaymentProvider;
+  provider: GroupedPaymentProvider;
   expectedCurrentIntentId: string;
   reason?: string;
   idempotencyKey?: string;
@@ -2992,6 +3006,7 @@ export function savePaymentProviderCredential(payload: {
   provider: ConfigurablePaymentProvider;
   name: string;
   token: string;
+  environment?: PaymentProviderEnvironment;
 }) {
   return apiFetch<PaymentProviderCredentialStatus>('/payment-provider-credentials', {
     method: 'POST',

@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const dashboardSource = readFileSync(join(currentDir, 'page.tsx'), 'utf8');
+const providerReadinessSource = readFileSync(
+  join(currentDir, '../../lib/payment-provider-readiness.ts'),
+  'utf8',
+);
 const stylesSource = readFileSync(join(currentDir, '../globals.css'), 'utf8');
 const pixModalSource = dashboardSource.slice(
   dashboardSource.indexOf('function PixReceivableModal'),
@@ -60,11 +64,14 @@ describe('PIX reconciliation UI contract', () => {
   });
 
   it('derives manual replacement providers from configured active credentials', () => {
-    expect(dashboardSource).toContain('function isOperationalPixProviderCredential');
-    expect(dashboardSource).toContain('credential.configured &&');
-    expect(dashboardSource).toContain('credential.active !== false');
-    expect(dashboardSource).toContain("credential.status === 'CONFIGURADO'");
-    expect(dashboardSource).toContain("credential.status === 'VALIDO'");
+    expect(dashboardSource).toContain("from '../../lib/payment-provider-readiness'");
+    expect(providerReadinessSource).toContain('credential.configured');
+    expect(providerReadinessSource).toContain('credential.active === false');
+    expect(providerReadinessSource).toContain("credential.status === 'CONFIGURADO'");
+    expect(providerReadinessSource).toContain("credential.status === 'VALIDO'");
+    expect(providerReadinessSource).toContain(
+      "credential.environmentProofStatus !== 'VERIFIED_TEST'",
+    );
     expect(pixModalSource).toContain('configurablePaymentProviders.filter((provider)');
     expect(pixModalSource).toContain(
       'paymentProviderCredentials.find((item) => item.provider === provider)',
@@ -225,8 +232,8 @@ describe('PIX reconciliation UI contract', () => {
     expect(pixModalSource).toContain("!['PAID', 'SUPERSEDED', 'CANCELED', 'EXPIRED', 'REFUNDED']");
     expect(pixModalSource).toContain("receivable.status !== 'PAGO'");
     expect(pixModalSource).toContain('{canCreateNew ? (');
-    expect(pixModalSource).toContain('() => createReceivablePix(receivable.id)');
-    expect(pixModalSource).not.toContain('await createReceivablePix(receivable.id)');
+    expect(pixModalSource).toContain('onClick={() => void createNewPix()}');
+    expect(pixModalSource).toContain('createReceivablePix(');
   });
 
   it('maps technical PIX statuses to friendly labels and visual tones', () => {
@@ -317,7 +324,8 @@ describe('PIX reconciliation UI contract', () => {
     expect(groupedPixModalSource).toContain('const [selectedProvider, setSelectedProvider] =');
     expect(groupedPixModalSource).toContain('listPaymentProviderCredentials()');
     expect(groupedPixModalSource).toContain('const eligiblePixProviders = useMemo(');
-    expect(groupedPixModalSource).toContain('configurablePaymentProviders.filter((provider)');
+    expect(groupedPixModalSource).toContain('groupedPaymentProviders.filter((provider)');
+    expect(groupedPixModalSource).not.toContain("'MERCADO_PAGO'");
     expect(groupedPixModalSource).toContain('isOperationalPixProviderCredential(credential)');
     expect(groupedPixModalSource).toContain('const defaultPixProvider =');
     expect(groupedPixModalSource).toContain('credential.defaultForPix');

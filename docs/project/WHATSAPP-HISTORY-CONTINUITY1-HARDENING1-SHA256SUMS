@@ -1,0 +1,5 @@
+5cb03350f2d089cbd4beae568fd3e8e330c8b255f2661ccfb295fd39ba7bcf8c  apps/api/src/whatsapp/whatsapp.service.ts
+d289f64514c0beca7a25b5f8f0794ae7b7660cbbe299517c26fa8d5aae8c9f57  apps/api/src/whatsapp/whatsapp.service.test.ts
+caed67e814218bf900a11afc59909163eff57cf1c3f1cd3d64d9961120253c17  apps/api/src/whatsapp/whatsapp-conversation-continuity-postgres.test.ts
+779da602b06e9bb814219b2243b663ef2be0c73a2366039bd15f6fbdd5b4b728  apps/api/prisma/migrations/20261111190000_add_whatsapp_conversation_continuity/migration.sql
+c3562152bdbc1363514e0afbe49c735d4483f826ee03bb6d69c3e48cedbb9d37  docs/project/WHATSAPP-HISTORY-CONTINUITY1-HARDENING1-REPORT.md

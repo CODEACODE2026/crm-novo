@@ -8,7 +8,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -774,6 +774,7 @@ function serviceFactory({
             prisma.whatsAppPendingContact.updateMany ?? vi.fn().mockResolvedValue({ count: 1 }),
           upsert: prisma.whatsAppPendingContact.upsert,
         },
+        whatsAppConnection: prisma.whatsAppConnection,
         whatsAppConversation: prisma.whatsAppConversation,
         whatsAppConversationContinuity: prisma.whatsAppConversationContinuity,
         whatsAppAttendance: prisma.whatsAppAttendance,
@@ -14998,6 +14999,7 @@ describe('WhatsAppService', () => {
 
   it('starts a new client conversation and sends the first outbound without unread increment', async () => {
     const activeConnection = connection({
+      phone: '5544999990000',
       status: 'CONNECTED',
       connected: true,
       loggedIn: true,
@@ -15015,6 +15017,10 @@ describe('WhatsAppService', () => {
       whatsAppConnectionId: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
       clientId: client().id,
       client: client(),
+      whatsAppConnection: connection({
+        id: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+        phone: '5544999990000',
+      }),
       createdAt: new Date('2026-09-10T00:00:00.000Z'),
     });
     const continuityCreate = vi.fn().mockResolvedValue({ id: 'continuity-id' });
@@ -16507,6 +16513,7 @@ describe('WhatsApp conversation continuity', () => {
   });
 
   it('links a safe predecessor after an inbound webhook without blocking message persistence', async () => {
+    const businessPhone = '5544999990000';
     const active = conversation({
       clientId: client().id,
       createdAt: new Date('2026-11-11T18:00:00.000Z'),
@@ -16515,10 +16522,15 @@ describe('WhatsApp conversation continuity', () => {
       id: predecessorId,
       whatsAppConnectionId: predecessorConnectionId,
       clientId: active.clientId,
+      whatsAppConnection: connection({
+        id: predecessorConnectionId,
+        phone: businessPhone,
+      }),
       createdAt: new Date('2026-11-10T18:00:00.000Z'),
     });
     const continuityCreate = vi.fn().mockResolvedValue({ id: 'continuity-id' });
     const { service, normalizer } = serviceFactory({
+      currentConnection: connection({ phone: businessPhone }),
       prismaOverrides: {
         whatsAppConversation: {
           findUnique: vi.fn().mockResolvedValue(null),
@@ -16564,6 +16576,10 @@ describe('WhatsApp conversation continuity', () => {
       id: predecessorId,
       whatsAppConnectionId: predecessorConnectionId,
       clientId: active.clientId,
+      whatsAppConnection: connection({
+        id: predecessorConnectionId,
+        phone: '5544999990000',
+      }),
       createdAt: new Date('2026-11-10T18:00:00.000Z'),
     });
     const continuityCreate = vi.fn().mockResolvedValue({ id: 'continuity-id' });
@@ -16575,6 +16591,7 @@ describe('WhatsApp conversation continuity', () => {
             status: 'CONNECTED',
             connected: true,
             loggedIn: true,
+            phone: '5544999990000',
           }),
         },
         whatsAppConversation: {
@@ -16597,6 +16614,14 @@ describe('WhatsApp conversation continuity', () => {
       { successorConnectionId: active.whatsAppConnectionId, apply: false },
       '99999999-9999-4999-8999-999999999999',
     );
+    expect(preview.results).toEqual([
+      expect.objectContaining({
+        successorConversationId: active.id,
+        predecessorConversationId: predecessor.id,
+        status: 'ELIGIBLE',
+        reason: 'ELIGIBLE',
+      }),
+    ]);
     expect(preview.summary).toMatchObject({ eligible: 1, linked: 0, ambiguous: 0 });
     expect(continuityCreate).not.toHaveBeenCalled();
 
@@ -16628,6 +16653,7 @@ describe('WhatsApp conversation continuity', () => {
             status: 'CONNECTED',
             connected: true,
             loggedIn: true,
+            phone: '5544999990000',
           }),
         },
         whatsAppConversation: {
@@ -16664,6 +16690,168 @@ describe('WhatsApp conversation continuity', () => {
     expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { successorLink: { is: null } } }),
     );
+  });
+
+  it('blocks every new outbound modality on a predecessor with a stable safe conflict', async () => {
+    const successorConversationId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const activeConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(activeConversation),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: vi.fn().mockResolvedValue({ successorConversationId }),
+          create: vi.fn(),
+        },
+      },
+    });
+    const expected = {
+      response: {
+        code: 'WHATSAPP_CONVERSATION_SUPERSEDED',
+        message: 'Esta conversa pertence ao historico e nao aceita novos envios.',
+        successorConversationId,
+      },
+      status: 409,
+    };
+
+    await expect(
+      service.sendConversationTextMessage(activeConversation.id, {
+        body: 'nao enviar pela antiga',
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      service.sendConversationMediaMessage(activeConversation.id, {
+        file: {
+          buffer: Buffer.from('jpeg-bytes'),
+          mimetype: 'image/jpeg',
+          originalname: 'foto.jpg',
+          size: 10,
+        },
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      service.sendConversationVoiceMessage(activeConversation.id, {
+        file: {
+          buffer: Buffer.from('webm-opus-bytes'),
+          mimetype: 'audio/webm; codecs=opus',
+          originalname: 'voz.webm',
+          size: 15,
+        },
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      service.sendConversationMediaMessage(activeConversation.id, {
+        file: {
+          buffer: Buffer.from('RIFF0000WEBPvp8-data'),
+          mimetype: 'image/webp',
+          originalname: 'figurinha.webp',
+          size: 21,
+        },
+        mediaKind: 'STICKER',
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject(expected);
+
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(provider.sendImage).not.toHaveBeenCalled();
+    expect(provider.sendAudio).not.toHaveBeenCalled();
+    expect(provider.sendSticker).not.toHaveBeenCalled();
+  });
+
+  it('rechecks continuity immediately before dispatch and fails a raced pending send', async () => {
+    const successorConversationId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const activeConversation = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const continuityFindUnique = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ successorConversationId });
+    const { service, provider, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(activeConversation),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: continuityFindUnique,
+          create: vi.fn(),
+        },
+        whatsAppMessage: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue(
+            conversationMessage({
+              conversationId: activeConversation.id,
+              status: 'PENDING',
+              direction: 'OUTBOUND',
+            }),
+          ),
+          update: vi.fn().mockResolvedValue(
+            conversationMessage({
+              conversationId: activeConversation.id,
+              status: 'FAILED',
+              direction: 'OUTBOUND',
+            }),
+          ),
+        },
+      },
+    });
+
+    await expect(
+      service.sendConversationTextMessage(activeConversation.id, {
+        body: 'corrida controlada',
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'WHATSAPP_CONVERSATION_SUPERSEDED',
+        successorConversationId,
+      }),
+    });
+
+    expect(continuityFindUnique).toHaveBeenCalledTimes(2);
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'FAILED' }),
+      }),
+    );
+  });
+
+  it('keeps every backend conversation action behind the centralized predecessor guard', () => {
+    const segment = (start: string, end: string) =>
+      whatsAppServiceSource.slice(
+        whatsAppServiceSource.indexOf(start),
+        whatsAppServiceSource.indexOf(end),
+      );
+
+    expect(segment('async sendConversationTextMessage', 'async setConversationPresence')).toContain(
+      'assertConversationIsCurrentOutboundTarget',
+    );
+    expect(
+      segment('async setConversationPresence', 'async updateConversationMessageReaction'),
+    ).toContain('assertConversationIsCurrentOutboundTarget');
+    expect(
+      segment('async sendConversationMediaMessage', 'async sendConversationVoiceMessage'),
+    ).toContain('assertConversationIsCurrentOutboundTarget');
+    expect(
+      segment('async sendConversationVoiceMessage', 'async retryConversationMessage'),
+    ).toContain('assertConversationIsCurrentOutboundTarget');
+    expect(segment('async retryConversationMessage', 'async linkConversationClient')).toContain(
+      'assertConversationIsCurrentOutboundTarget',
+    );
+    expect(
+      segment(
+        'private async revalidateConversationMessageActionTarget',
+        'private async failPendingConversationMessage',
+      ),
+    ).toContain('assertConversationIsCurrentOutboundTarget');
   });
 });
 

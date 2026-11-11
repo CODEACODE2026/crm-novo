@@ -37,6 +37,7 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     await prisma.whatsAppConnection.deleteMany({
       where: { id: { in: [...created.connections] } },
     });
+    await prisma.clientEvent.deleteMany({ where: { clientId: { in: [...created.clients] } } });
     await prisma.client.deleteMany({ where: { id: { in: [...created.clients] } } });
     await prisma.plan.deleteMany({ where: { id: { in: [...created.plans] } } });
     await prisma.user.deleteMany({ where: { id: { in: [...created.users] } } });
@@ -106,13 +107,18 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     return client;
   }
 
-  async function createConnection(name: string, active = false) {
+  async function createConnection(
+    name: string,
+    active = false,
+    phone: string | null = '5544999990000',
+  ) {
     const connection = await prisma.whatsAppConnection.create({
       data: {
         name,
         providerUserId: `hml-user-${randomUUID()}`,
         providerInstanceName: `hml-instance-${randomUUID()}`,
         providerTokenEncrypted: 'hml-encrypted-token',
+        phone,
         status: active ? 'CONNECTED' : 'ERROR',
         connected: active,
         loggedIn: active,
@@ -125,7 +131,7 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
 
   async function createConversation(
     connectionId: string,
-    clientId: string,
+    clientId: string | null,
     phone: string,
     createdAt: Date,
   ) {
@@ -259,6 +265,200 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     expect(stored).toMatchObject({
       conversationId: firstPair.successor.id,
       whatsAppConnectionId: successorConnection.id,
+    });
+  });
+
+  it('requires the same valid normalized business identity and reports every blocked reason', async () => {
+    const actor = await createActor();
+    const { service } = serviceFactory();
+
+    const sameClient = await createClient('554499991101');
+    const sameOldConnection = await createConnection(
+      'HML identidade formatada antiga',
+      false,
+      '+55 44 99999-0000',
+    );
+    const sameNewConnection = await createConnection(
+      'HML identidade formatada nova',
+      true,
+      '5544999990000',
+    );
+    await createConversation(
+      sameOldConnection.id,
+      sameClient.id,
+      sameClient.phoneNormalized,
+      new Date('2026-11-09T10:00:00.000Z'),
+    );
+    const sameSuccessor = await createConversation(
+      sameNewConnection.id,
+      sameClient.id,
+      sameClient.phoneNormalized,
+      new Date('2026-11-10T10:00:00.000Z'),
+    );
+    const sameResult = await service.reconcileConversationContinuities(
+      { successorConnectionId: sameNewConnection.id, apply: true },
+      actor.id,
+    );
+    expect(sameResult.results).toEqual([
+      expect.objectContaining({
+        successorConversationId: sameSuccessor.id,
+        status: 'LINKED',
+        reason: 'LINKED',
+      }),
+    ]);
+
+    const differentClient = await createClient('554499991102');
+    const differentOldConnection = await createConnection(
+      'HML identidade divergente antiga',
+      false,
+      '5544999990000',
+    );
+    const differentNewConnection = await createConnection(
+      'HML identidade divergente nova',
+      true,
+      '5544888880000',
+    );
+    const differentPredecessor = await createConversation(
+      differentOldConnection.id,
+      differentClient.id,
+      differentClient.phoneNormalized,
+      new Date('2026-11-09T11:00:00.000Z'),
+    );
+    const differentSuccessor = await createConversation(
+      differentNewConnection.id,
+      differentClient.id,
+      differentClient.phoneNormalized,
+      new Date('2026-11-10T11:00:00.000Z'),
+    );
+    const differentResult = await service.reconcileConversationContinuities(
+      { successorConnectionId: differentNewConnection.id, apply: true },
+      actor.id,
+    );
+    expect(differentResult.results).toEqual([
+      expect.objectContaining({
+        successorConversationId: differentSuccessor.id,
+        predecessorConversationId: differentPredecessor.id,
+        status: 'NO_MATCH',
+        reason: 'BUSINESS_IDENTITY_MISMATCH',
+      }),
+    ]);
+
+    for (const [label, phone] of [
+      ['ausente', null],
+      ['invalida', 'not-a-phone'],
+    ] as const) {
+      const blockedClient = await createClient(
+        label === 'ausente' ? '554499991103' : '554499991104',
+      );
+      const blockedOldConnection = await createConnection(
+        `HML identidade ${label} antiga`,
+        false,
+        '5544999990000',
+      );
+      const blockedNewConnection = await createConnection(
+        `HML identidade ${label} nova`,
+        true,
+        phone,
+      );
+      await createConversation(
+        blockedOldConnection.id,
+        blockedClient.id,
+        blockedClient.phoneNormalized,
+        new Date('2026-11-09T12:00:00.000Z'),
+      );
+      const blockedSuccessor = await createConversation(
+        blockedNewConnection.id,
+        blockedClient.id,
+        blockedClient.phoneNormalized,
+        new Date('2026-11-10T12:00:00.000Z'),
+      );
+      const blockedResult = await service.reconcileConversationContinuities(
+        { successorConnectionId: blockedNewConnection.id, apply: true },
+        actor.id,
+      );
+      expect(blockedResult.results).toEqual([
+        expect.objectContaining({
+          successorConversationId: blockedSuccessor.id,
+          predecessorConversationId: null,
+          status: 'NO_MATCH',
+          reason: 'SUCCESSOR_BUSINESS_IDENTITY_MISSING_OR_INVALID',
+        }),
+      ]);
+    }
+
+    for (const [label, phone] of [
+      ['ausente', null],
+      ['invalida', 'not-a-phone'],
+    ] as const) {
+      const blockedClient = await createClient(
+        label === 'ausente' ? '554499991105' : '554499991106',
+      );
+      const blockedOldConnection = await createConnection(
+        `HML identidade predecessora ${label}`,
+        false,
+        phone,
+      );
+      const blockedNewConnection = await createConnection(
+        `HML identidade sucessora valida ${label}`,
+        true,
+        '5544999990000',
+      );
+      const blockedPredecessor = await createConversation(
+        blockedOldConnection.id,
+        blockedClient.id,
+        blockedClient.phoneNormalized,
+        new Date('2026-11-09T13:00:00.000Z'),
+      );
+      const blockedSuccessor = await createConversation(
+        blockedNewConnection.id,
+        blockedClient.id,
+        blockedClient.phoneNormalized,
+        new Date('2026-11-10T13:00:00.000Z'),
+      );
+      const blockedResult = await service.reconcileConversationContinuities(
+        { successorConnectionId: blockedNewConnection.id, apply: true },
+        actor.id,
+      );
+      expect(blockedResult.results).toEqual([
+        expect.objectContaining({
+          successorConversationId: blockedSuccessor.id,
+          predecessorConversationId: blockedPredecessor.id,
+          status: 'NO_MATCH',
+          reason: 'PREDECESSOR_BUSINESS_IDENTITY_MISSING_OR_INVALID',
+        }),
+      ]);
+    }
+  });
+
+  it('reconciles a preexisting successor immediately after a safe client link', async () => {
+    const actor = await createActor();
+    const client = await createClient('554499991105');
+    const predecessorConnection = await createConnection('HML link tardio antiga');
+    const successorConnection = await createConnection('HML link tardio nova', true);
+    const predecessor = await createConversation(
+      predecessorConnection.id,
+      client.id,
+      client.phoneNormalized,
+      new Date('2026-11-09T13:00:00.000Z'),
+    );
+    const successor = await createConversation(
+      successorConnection.id,
+      null,
+      client.phoneNormalized,
+      new Date('2026-11-10T13:00:00.000Z'),
+    );
+    const { service } = serviceFactory();
+
+    await service.linkConversationClient(successor.id, { clientId: client.id }, actor.id);
+
+    await expect(
+      prisma.whatsAppConversationContinuity.findUnique({
+        where: { successorConversationId: successor.id },
+      }),
+    ).resolves.toMatchObject({
+      predecessorConversationId: predecessor.id,
+      successorConversationId: successor.id,
+      createdByUserId: actor.id,
     });
   });
 

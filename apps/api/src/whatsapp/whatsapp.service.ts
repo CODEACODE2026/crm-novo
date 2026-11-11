@@ -114,6 +114,25 @@ const pageSizeLimit = 100;
 const messageSearchMinLength = 2;
 const messageSearchSnippetRadius = 56;
 const conversationContinuityMaxDepth = 32;
+type ConversationContinuityStatus =
+  'ELIGIBLE' | 'LINKED' | 'ALREADY_LINKED' | 'NO_MATCH' | 'AMBIGUOUS';
+type ConversationContinuityReason =
+  | 'ELIGIBLE'
+  | 'LINKED'
+  | 'ALREADY_LINKED'
+  | 'SUCCESSOR_CLIENT_MISSING'
+  | 'SUCCESSOR_BUSINESS_IDENTITY_MISSING_OR_INVALID'
+  | 'NO_SAFE_PREDECESSOR'
+  | 'AMBIGUOUS_PREDECESSOR'
+  | 'PREDECESSOR_BUSINESS_IDENTITY_MISSING_OR_INVALID'
+  | 'BUSINESS_IDENTITY_MISMATCH'
+  | 'CONTACT_IDENTITY_MISMATCH';
+type ConversationContinuityResult = {
+  successorConversationId: string;
+  predecessorConversationId: string | null;
+  status: ConversationContinuityStatus;
+  reason: ConversationContinuityReason;
+};
 const allowedImageMimeTypes = new Set(['image/jpeg', 'image/png']);
 const allowedDocumentMimeTypes = new Set([
   'application/pdf',
@@ -1203,11 +1222,7 @@ export class WhatsAppService {
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
-    const results: Array<{
-      successorConversationId: string;
-      predecessorConversationId: string | null;
-      status: 'ELIGIBLE' | 'LINKED' | 'ALREADY_LINKED' | 'NO_MATCH' | 'AMBIGUOUS';
-    }> = [];
+    const results: ConversationContinuityResult[] = [];
 
     for (const successor of successors) {
       const result = await this.prisma.$transaction((tx) =>
@@ -2092,6 +2107,8 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+
     const operation: WhatsAppOutboundOperation = dto.replyToMessageId
       ? 'MANUAL_CONVERSATION_ACTION'
       : 'MANUAL_CONVERSATION_TEXT';
@@ -2205,6 +2222,16 @@ export class WhatsAppService {
         code: 'WHATSAPP_REPLY_TARGET_CHANGED',
         message: 'A mensagem citada mudou antes do envio. Tente novamente.',
       });
+    }
+    try {
+      await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+    } catch (error) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A conversa foi substituida antes do envio.',
+      );
+      throw error;
     }
     let result: { providerMessageId: string | null; sentAt?: Date | null };
 
@@ -2500,6 +2527,8 @@ export class WhatsAppService {
     if (!conversation) {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
+
+    await this.assertConversationIsCurrentOutboundTarget(conversation.id);
 
     if (conversation.provider !== 'KIRAGO') {
       throw new BadRequestException('Provider WhatsApp da conversa nao suportado para presence.');
@@ -2946,6 +2975,8 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+
     const operation: WhatsAppOutboundOperation = 'MANUAL_CONVERSATION_MEDIA';
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
@@ -3003,6 +3034,16 @@ export class WhatsAppService {
       }
     }
 
+    try {
+      await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+    } catch (error) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A conversa foi substituida antes do envio de midia.',
+      );
+      throw error;
+    }
     const latestConnection = latest.conversation.whatsAppConnection;
     const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
     let result: { providerMessageId: string | null; sentAt?: Date | null };
@@ -3202,6 +3243,8 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+
     const operation: WhatsAppOutboundOperation = 'MANUAL_CONVERSATION_VOICE';
     const recipient = this.resolveWhatsAppOutboundRecipient(conversation, operation);
     this.assertLinkedClientIdentity(conversation, recipient.e164, recipient.kind);
@@ -3250,6 +3293,16 @@ export class WhatsAppService {
       }
     }
 
+    try {
+      await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+    } catch (error) {
+      await this.failPendingConversationMessage(
+        pending.id,
+        conversation.id,
+        'A conversa foi substituida antes do envio de voz.',
+      );
+      throw error;
+    }
     const latestConnection = latest.conversation.whatsAppConnection;
     const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
     let result: { providerMessageId: string | null };
@@ -3387,6 +3440,8 @@ export class WhatsAppService {
       throw new NotFoundException('Mensagem WhatsApp nao encontrada.');
     }
 
+    await this.assertConversationIsCurrentOutboundTarget(message.conversationId);
+
     this.assertInternationalWhatsAppOutboundBlocked(message.conversation);
     if (message.direction !== 'OUTBOUND') {
       throw new ConflictException('Somente mensagens outbound podem ser reenviadas.');
@@ -3434,6 +3489,7 @@ export class WhatsAppService {
     let result: { providerMessageId: string | null };
 
     try {
+      await this.assertConversationIsCurrentOutboundTarget(message.conversationId);
       result = await this.mapConnectionProviderError(connection, () =>
         prepared.send(instanceToken, retryAttemptId),
       );
@@ -3602,6 +3658,21 @@ export class WhatsAppService {
 
       return this.presentConversation(linked!);
     });
+
+    const continuityCandidate = await this.prisma.whatsAppConversation.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        whatsAppConnectionId: true,
+        clientId: true,
+        phoneNormalized: true,
+        phoneE164: true,
+        createdAt: true,
+      },
+    });
+    if (continuityCandidate?.clientId) {
+      await this.tryReconcileConversationContinuity(this.prisma, continuityCandidate, actorUserId);
+    }
 
     this.emitConversationUpdated(id);
     return linked;
@@ -6263,11 +6334,7 @@ export class WhatsAppService {
         'id' | 'whatsAppConnectionId' | 'clientId' | 'phoneNormalized' | 'phoneE164' | 'createdAt'
       >;
     },
-  ): Promise<{
-    successorConversationId: string;
-    predecessorConversationId: string | null;
-    status: 'ELIGIBLE' | 'LINKED' | 'ALREADY_LINKED' | 'NO_MATCH' | 'AMBIGUOUS';
-  }> {
+  ): Promise<ConversationContinuityResult> {
     const existingLink = await tx.whatsAppConversationContinuity.findUnique({
       where: { successorConversationId: input.successorConversationId },
       select: { predecessorConversationId: true },
@@ -6277,6 +6344,7 @@ export class WhatsAppService {
         successorConversationId: input.successorConversationId,
         predecessorConversationId: existingLink.predecessorConversationId,
         status: 'ALREADY_LINKED',
+        reason: 'ALREADY_LINKED',
       };
     }
 
@@ -6300,6 +6368,23 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: null,
         status: 'NO_MATCH',
+        reason: 'SUCCESSOR_CLIENT_MISSING',
+      };
+    }
+
+    const successorConnection = await tx.whatsAppConnection.findUnique({
+      where: { id: successor.whatsAppConnectionId },
+      select: { phone: true },
+    });
+    const successorBusinessIdentity = this.normalizeBusinessWhatsAppIdentity(
+      successorConnection?.phone ?? null,
+    );
+    if (!successorBusinessIdentity) {
+      return {
+        successorConversationId: successor.id,
+        predecessorConversationId: null,
+        status: 'NO_MATCH',
+        reason: 'SUCCESSOR_BUSINESS_IDENTITY_MISSING_OR_INVALID',
       };
     }
 
@@ -6316,7 +6401,11 @@ export class WhatsAppService {
           ? { OR: [{ phoneE164: successor.phoneE164 }, { phoneE164: null }] }
           : { phoneE164: null }),
       },
-      select: { id: true, phoneE164: true },
+      select: {
+        id: true,
+        phoneE164: true,
+        whatsAppConnection: { select: { phone: true } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 2,
     });
@@ -6326,6 +6415,7 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: null,
         status: 'NO_MATCH',
+        reason: 'NO_SAFE_PREDECESSOR',
       };
     }
     if (candidates.length > 1) {
@@ -6333,6 +6423,7 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: null,
         status: 'AMBIGUOUS',
+        reason: 'AMBIGUOUS_PREDECESSOR',
       };
     }
 
@@ -6349,6 +6440,26 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: null,
         status: 'NO_MATCH',
+        reason: 'CONTACT_IDENTITY_MISMATCH',
+      };
+    }
+    const predecessorBusinessIdentity = this.normalizeBusinessWhatsAppIdentity(
+      predecessor.whatsAppConnection.phone,
+    );
+    if (!predecessorBusinessIdentity) {
+      return {
+        successorConversationId: successor.id,
+        predecessorConversationId: predecessor.id,
+        status: 'NO_MATCH',
+        reason: 'PREDECESSOR_BUSINESS_IDENTITY_MISSING_OR_INVALID',
+      };
+    }
+    if (predecessorBusinessIdentity !== successorBusinessIdentity) {
+      return {
+        successorConversationId: successor.id,
+        predecessorConversationId: predecessor.id,
+        status: 'NO_MATCH',
+        reason: 'BUSINESS_IDENTITY_MISMATCH',
       };
     }
     if (!input.apply) {
@@ -6356,6 +6467,7 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: predecessor.id,
         status: 'ELIGIBLE',
+        reason: 'ELIGIBLE',
       };
     }
 
@@ -6371,6 +6483,7 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: predecessor.id,
         status: 'LINKED',
+        reason: 'LINKED',
       };
     } catch (error) {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
@@ -6385,8 +6498,38 @@ export class WhatsAppService {
         successorConversationId: successor.id,
         predecessorConversationId: existing.predecessorConversationId,
         status: 'ALREADY_LINKED',
+        reason: 'ALREADY_LINKED',
       };
     }
+  }
+
+  private normalizeBusinessWhatsAppIdentity(phone: string | null) {
+    if (!phone) return null;
+    const trimmed = phone.trim();
+    const directIdentity = normalizePhone(trimmed);
+    if (directIdentity.status === 'valid') return directIdentity.e164;
+
+    // KiraGo status returns the authenticated JID phone as E.164 digits without the leading +.
+    if (!/^\d{8,15}$/.test(trimmed)) return null;
+    const providerIdentity = normalizePhone(`+${trimmed}`);
+    return providerIdentity.status === 'valid' ? providerIdentity.e164 : null;
+  }
+
+  private async assertConversationIsCurrentOutboundTarget(
+    conversationId: string,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const link = await db.whatsAppConversationContinuity.findUnique({
+      where: { predecessorConversationId: conversationId },
+      select: { successorConversationId: true },
+    });
+    if (!link) return;
+
+    throw new ConflictException({
+      code: 'WHATSAPP_CONVERSATION_SUPERSEDED',
+      message: 'Esta conversa pertence ao historico e nao aceita novos envios.',
+      successorConversationId: link.successorConversationId,
+    });
   }
 
   private async resolveConversationHistoryIds(activeConversationId: string) {
@@ -7883,6 +8026,8 @@ export class WhatsAppService {
     if (connection.status !== 'CONNECTED' || !connection.connected || !connection.loggedIn) {
       throw new ConflictException('Conexao WhatsApp da conversa nao esta mais operacional.');
     }
+
+    await this.assertConversationIsCurrentOutboundTarget(conversation.id);
 
     return { connection, conversation, recipient, target };
   }
